@@ -4,7 +4,8 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use std::path::Path;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
@@ -893,6 +894,7 @@ pub(super) async fn open_persistent_iroh_control_channel(
                 client.forwarder(),
                 compression,
                 policy.x11.setup_timeout,
+                paths.root().join("x11-client.diagnostics.log"),
             ))
         }
         (None, None) => None,
@@ -917,13 +919,20 @@ pub(super) async fn open_persistent_iroh_control_channel(
     );
     let event_task = AbortOnDropTask::new(event_task);
     let x11_task = x11_worker.map(
-        |(incoming_streams, route, forwarder, compression, setup_timeout)| {
+        |(incoming_streams, route, forwarder, compression, setup_timeout, diagnostic_path)| {
             connection
                 .set_max_concurrent_bi_streams(iroh::endpoint::VarInt::from_u32(incoming_streams));
             let connection = connection.clone();
             AbortOnDropTask::new(tokio::spawn(async move {
-                serve_client_x11_streams(connection, route, forwarder, compression, setup_timeout)
-                    .await;
+                serve_client_x11_streams(
+                    connection,
+                    route,
+                    forwarder,
+                    compression,
+                    setup_timeout,
+                    diagnostic_path,
+                )
+                .await;
             }))
         },
     );
@@ -953,6 +962,7 @@ async fn serve_client_x11_streams(
     forwarder: super::x11::X11ClientForwarder,
     compression: IrohCompressionPolicy,
     setup_timeout: std::time::Duration,
+    diagnostic_path: PathBuf,
 ) {
     let mut workers = tokio::task::JoinSet::new();
     loop {
@@ -961,8 +971,9 @@ async fn serve_client_x11_streams(
                 Ok((send, recv)) => {
                     let route = route.clone();
                     let forwarder = forwarder.clone();
+                    let diagnostic_path = diagnostic_path.clone();
                     workers.spawn(async move {
-                        let _ = relay_client_x11_stream(
+                        if let Err(failure) = relay_client_x11_stream(
                             send,
                             recv,
                             route,
@@ -970,7 +981,10 @@ async fn serve_client_x11_streams(
                             compression,
                             setup_timeout,
                         )
-                        .await;
+                        .await
+                        {
+                            append_client_x11_diagnostic(&diagnostic_path, &failure);
+                        }
                     });
                 }
                 Err(_) => break,
@@ -988,6 +1002,60 @@ async fn serve_client_x11_streams(
     while workers.join_next().await.is_some() {}
 }
 
+/// Maximum retained attaching-side X11 diagnostic log size before rotation.
+const X11_CLIENT_DIAGNOSTIC_MAX_BYTES: u64 = 256 * 1024;
+
+/// One stage-classified client X11 relay failure with local-only detail.
+#[derive(Debug)]
+struct ClientX11RelayFailure {
+    stage: crate::runtime::x11::X11StreamFailureStage,
+    error: MezError,
+}
+
+impl ClientX11RelayFailure {
+    /// Associates one detailed local error with a privacy-safe stream stage.
+    fn new(stage: crate::runtime::x11::X11StreamFailureStage, error: MezError) -> Self {
+        Self { stage, error }
+    }
+
+    /// Returns the QUIC reset code carrying only the fixed failure stage.
+    fn application_code(&self) -> iroh::endpoint::VarInt {
+        iroh::endpoint::VarInt::from_u32(self.stage.application_code())
+    }
+}
+
+/// Appends one sanitized client-local failure to an owner-private bounded log.
+fn append_client_x11_diagnostic(path: &Path, failure: &ClientX11RelayFailure) {
+    if std::fs::metadata(path)
+        .is_ok_and(|metadata| metadata.len() >= X11_CLIENT_DIAGNOSTIC_MAX_BYTES)
+    {
+        let _ = std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(path);
+    }
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(path)
+    else {
+        return;
+    };
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs());
+    let message = failure.error.message().replace(['\r', '\n'], " ");
+    let _ = writeln!(
+        file,
+        "timestamp_unix={timestamp} stage={} kind={:?} io_kind={:?} error={message}",
+        failure.stage.as_str(),
+        failure.error.kind(),
+        failure.error.io_kind(),
+    );
+}
+
 /// Authenticates one route preface, rewrites setup locally, and relays X11 records.
 async fn relay_client_x11_stream(
     mut send: iroh::endpoint::SendStream,
@@ -996,66 +1064,124 @@ async fn relay_client_x11_stream(
     forwarder: super::x11::X11ClientForwarder,
     compression: IrohCompressionPolicy,
     setup_timeout: std::time::Duration,
-) -> Result<()> {
-    let prepared = tokio::time::timeout(setup_timeout, async {
+) -> std::result::Result<(), ClientX11RelayFailure> {
+    use crate::runtime::x11::X11StreamFailureStage as Stage;
+
+    let setup_deadline = tokio::time::Instant::now() + setup_timeout;
+    let prepared = async {
         let mut encoded = Zeroizing::new([0u8; crate::runtime::x11::X11_STREAM_PREFACE_BYTES]);
-        recv.read_exact(&mut *encoded)
+        tokio::time::timeout_at(setup_deadline, recv.read_exact(&mut *encoded))
             .await
-            .map_err(|_| MezError::forbidden("incomplete X11 stream preface"))?;
-        let preface = crate::runtime::x11::X11StreamPreface::decode(&*encoded)
-            .map_err(|error| MezError::forbidden(error.to_string()))?;
+            .map_err(|_| {
+                ClientX11RelayFailure::new(
+                    Stage::ClientPreface,
+                    MezError::invalid_state("X11 client stream preface timed out"),
+                )
+            })?
+            .map_err(|error| {
+                ClientX11RelayFailure::new(
+                    Stage::ClientPreface,
+                    MezError::forbidden(format!("incomplete X11 stream preface: {error}")),
+                )
+            })?;
+        let preface =
+            crate::runtime::x11::X11StreamPreface::decode(&*encoded).map_err(|error| {
+                ClientX11RelayFailure::new(
+                    Stage::ClientPreface,
+                    MezError::forbidden(error.to_string()),
+                )
+            })?;
         if preface.generation != route.generation || preface.route_token != route.route_token {
-            return Err(MezError::forbidden(
-                "X11 stream does not authenticate the negotiated route",
+            return Err(ClientX11RelayFailure::new(
+                Stage::ClientRouteAuthentication,
+                MezError::forbidden("X11 stream does not authenticate the negotiated route"),
             ));
         }
-        let mut decoder = crate::runtime::x11::X11IrohDecoder::new(compression)?;
-        let mut setup = if decoder.is_raw() {
-            read_client_x11_setup(&mut recv).await?
-        } else {
-            decoder.read_setup(&mut recv).await?
+        let mut decoder = crate::runtime::x11::X11IrohDecoder::new(compression)
+            .map_err(|error| ClientX11RelayFailure::new(Stage::ClientSetupDecode, error))?;
+        let setup_read = async {
+            if decoder.is_raw() {
+                read_client_x11_setup(&mut recv).await
+            } else {
+                decoder.read_setup(&mut recv).await
+            }
         };
-        forwarder.rewrite_setup(&mut setup)?;
-        let mut local = forwarder.connect(setup_timeout).await?;
-        local.write_all(&setup).await?;
-        local.flush().await?;
-        Ok::<_, MezError>((local, decoder))
-    })
-    .await
-    .map_err(|_| MezError::invalid_state("X11 client stream setup timed out"))?;
+        let mut setup = tokio::time::timeout_at(setup_deadline, setup_read)
+            .await
+            .map_err(|_| {
+                ClientX11RelayFailure::new(
+                    Stage::ClientSetupDecode,
+                    MezError::invalid_state("X11 client setup decode timed out"),
+                )
+            })?
+            .map_err(|error| ClientX11RelayFailure::new(Stage::ClientSetupDecode, error))?;
+        forwarder
+            .rewrite_setup(&mut setup)
+            .map_err(|error| ClientX11RelayFailure::new(Stage::ClientCredentialRewrite, error))?;
+        let remaining = setup_deadline.saturating_duration_since(tokio::time::Instant::now());
+        let mut local = forwarder
+            .connect(remaining)
+            .await
+            .map_err(|error| ClientX11RelayFailure::new(Stage::ClientLocalConnect, error))?;
+        tokio::time::timeout_at(setup_deadline, async {
+            local.write_all(&setup).await?;
+            local.flush().await
+        })
+        .await
+        .map_err(|_| {
+            ClientX11RelayFailure::new(
+                Stage::ClientLocalSetupWrite,
+                MezError::invalid_state("local X11 setup write timed out"),
+            )
+        })?
+        .map_err(|error| ClientX11RelayFailure::new(Stage::ClientLocalSetupWrite, error.into()))?;
+        Ok((local, decoder))
+    }
+    .await;
     let (local, mut downstream_decoder) = match prepared {
         Ok(prepared) => prepared,
-        Err(error) => {
-            let code = iroh::endpoint::VarInt::from_u32(1);
+        Err(failure) => {
+            let code = failure.application_code();
             let _ = send.reset(code);
             let _ = recv.stop(code);
-            return Err(error);
+            return Err(failure);
         }
     };
 
     let (mut local_read, mut local_write) = tokio::io::split(local);
-    let mut upstream_encoder = crate::runtime::x11::X11IrohEncoder::new(compression)?;
+    let mut upstream_encoder = crate::runtime::x11::X11IrohEncoder::new(compression)
+        .map_err(|error| ClientX11RelayFailure::new(Stage::ClientUpstreamRelay, error))?;
     let upstream = async {
         let result = upstream_encoder
             .relay(&mut local_read, &mut send, None)
             .await;
-        if result.is_err() {
-            let _ = send.reset(iroh::endpoint::VarInt::from_u32(1));
+        if let Err(error) = result {
+            return Err(ClientX11RelayFailure::new(
+                Stage::ClientUpstreamRelay,
+                error,
+            ));
         }
-        result?;
         let _ = send.finish();
-        Ok::<(), MezError>(())
+        Ok::<(), ClientX11RelayFailure>(())
     };
     let downstream = async {
         let result = downstream_decoder
             .relay(&mut recv, &mut local_write, None)
             .await;
-        if result.is_err() {
-            let _ = recv.stop(iroh::endpoint::VarInt::from_u32(1));
+        if let Err(error) = result {
+            return Err(ClientX11RelayFailure::new(
+                Stage::ClientDownstreamRelay,
+                error,
+            ));
         }
-        result
+        Ok::<(), ClientX11RelayFailure>(())
     };
-    tokio::try_join!(upstream, downstream)?;
+    if let Err(failure) = tokio::try_join!(upstream, downstream) {
+        let code = failure.application_code();
+        let _ = send.reset(code);
+        let _ = recv.stop(code);
+        return Err(failure);
+    }
     Ok(())
 }
 
@@ -2721,12 +2847,12 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use super::{
-        AbortOnDropTask, RemoteRoleCeiling, ensure_iroh_attach_role_allowed,
-        iroh_client_clipboard_negotiated, iroh_event_stream_version_candidates,
-        iroh_initialize_rejected_event_stream_version, iroh_pushed_render_negotiated,
-        relay_client_x11_stream, validate_iroh_host_only_initialize_response,
-        validate_iroh_initialize_response, validate_iroh_x11_initialize_response,
-        validate_persistent_iroh_initialize_response,
+        AbortOnDropTask, ClientX11RelayFailure, RemoteRoleCeiling, append_client_x11_diagnostic,
+        ensure_iroh_attach_role_allowed, iroh_client_clipboard_negotiated,
+        iroh_event_stream_version_candidates, iroh_initialize_rejected_event_stream_version,
+        iroh_pushed_render_negotiated, relay_client_x11_stream,
+        validate_iroh_host_only_initialize_response, validate_iroh_initialize_response,
+        validate_iroh_x11_initialize_response, validate_persistent_iroh_initialize_response,
     };
     use iroh::endpoint::{PortmapperConfig, QuicTransportConfig, VarInt, presets};
     use iroh::{Endpoint, RelayMode};
@@ -2856,6 +2982,33 @@ mod tests {
             .await
             .expect("bounded join should abort a worker that remains pending")
             .unwrap();
+    }
+
+    /// Client X11 failures must retain useful local detail in an owner-private
+    /// log while replacing line breaks that could forge additional records.
+    #[test]
+    fn x11_client_diagnostic_log_is_private_and_line_bounded() {
+        let root = x11_test_root("client-diagnostic-log");
+        let path = root.join("x11-client.diagnostics.log");
+        let failure = ClientX11RelayFailure::new(
+            crate::runtime::x11::X11StreamFailureStage::ClientLocalConnect,
+            crate::error::MezError::invalid_state("connection refused\nforged record"),
+        );
+
+        append_client_x11_diagnostic(&path, &failure);
+
+        let text = fs::read_to_string(&path).unwrap();
+        assert_eq!(text.lines().count(), 1, "{text:?}");
+        assert!(text.contains("stage=client_local_connect"), "{text:?}");
+        assert!(
+            text.contains("connection refused forged record"),
+            "{text:?}"
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let _ = fs::remove_dir_all(root);
     }
 
     /// Explicit X11 negotiation must retain exact version, mode, generation,

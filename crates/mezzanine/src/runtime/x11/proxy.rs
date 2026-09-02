@@ -28,7 +28,7 @@ use super::authority::{
 };
 use super::contracts::{
     X11_FORWARDING_VERSION, X11AuthProtocol, X11Cookie, X11ForwardingMode, X11ForwardingOffer,
-    X11ForwardingResult, X11RouteToken, X11StreamPreface,
+    X11ForwardingResult, X11RouteToken, X11StreamFailureStage, X11StreamPreface,
 };
 use super::protocol::{
     X11_MAX_SETUP_BYTES, X11SetupProgress, parse_x11_setup, validate_x11_setup_cookie,
@@ -167,6 +167,7 @@ pub(crate) struct RuntimeX11ProxyDiagnosticsSnapshot {
     pub(crate) streams_completed: u64,
     pub(crate) streams_cancelled: u64,
     pub(crate) streams_failed: u64,
+    pub(crate) last_failure_stage: X11StreamFailureStage,
 }
 
 /// Shared atomic counters for one stable session proxy.
@@ -186,6 +187,7 @@ struct RuntimeX11ProxyDiagnostics {
     streams_completed: AtomicU64,
     streams_cancelled: AtomicU64,
     streams_failed: AtomicU64,
+    last_failure_stage: AtomicU64,
 }
 
 impl RuntimeX11ProxyDiagnostics {
@@ -207,7 +209,17 @@ impl RuntimeX11ProxyDiagnostics {
             streams_completed: self.streams_completed.load(Ordering::Relaxed),
             streams_cancelled: self.streams_cancelled.load(Ordering::Relaxed),
             streams_failed: self.streams_failed.load(Ordering::Relaxed),
+            last_failure_stage: X11StreamFailureStage::from_application_code(
+                self.last_failure_stage.load(Ordering::Relaxed) as u32,
+            )
+            .unwrap_or_default(),
         }
+    }
+
+    /// Retains only the latest fixed failure class, never stream data or endpoint state.
+    fn record_failure_stage(&self, stage: X11StreamFailureStage) {
+        self.last_failure_stage
+            .store(u64::from(stage.application_code()), Ordering::Relaxed);
     }
 }
 
@@ -691,7 +703,17 @@ impl RuntimeX11Proxy {
                             let result = relay_server_x11_socket(stream, route, permit).await;
                             diagnostics.finish(match result {
                                 Ok(outcome) => outcome,
-                                Err(_) => RuntimeX11StreamOutcome::Failed,
+                                Err(failure) => {
+                                    diagnostics
+                                        .diagnostics
+                                        .record_failure_stage(failure.stage);
+                                    eprintln!(
+                                        "mez host: X11 forwarding stream failed: stage={} error={}",
+                                        failure.stage.as_str(),
+                                        failure.error.message(),
+                                    );
+                                    RuntimeX11StreamOutcome::Failed
+                                }
                             });
                         });
                     }
@@ -716,12 +738,27 @@ impl RuntimeX11Proxy {
     }
 }
 
+/// Host-side X11 failure carrying one safe stage and one local diagnostic.
+struct ServerX11RelayFailure {
+    stage: X11StreamFailureStage,
+    error: MezError,
+}
+
+impl ServerX11RelayFailure {
+    /// Associates a host-local error with its stable diagnostic stage.
+    fn new(stage: X11StreamFailureStage, error: MezError) -> Self {
+        Self { stage, error }
+    }
+}
+
 /// Authenticates one local setup, opens one host-initiated stream, and relays raw bytes.
 async fn relay_server_x11_socket(
     mut local: tokio::net::TcpStream,
     mut route: RuntimeX11ActiveRoute,
     _permit: OwnedSemaphorePermit,
-) -> Result<RuntimeX11StreamOutcome> {
+) -> std::result::Result<RuntimeX11StreamOutcome, ServerX11RelayFailure> {
+    use X11StreamFailureStage as Stage;
+
     let setup_deadline = tokio::time::Instant::now() + route.setup_timeout;
     let setup = tokio::select! {
         biased;
@@ -732,7 +769,7 @@ async fn relay_server_x11_socket(
             &mut local,
             &route.fake_cookie,
             setup_deadline,
-        ) => result?,
+        ) => result.map_err(|error| ServerX11RelayFailure::new(Stage::HostSetupValidation, error))?,
     };
     let open = tokio::time::timeout_at(setup_deadline, route.transport.connection.open_bi());
     let (mut send, mut recv) = tokio::select! {
@@ -741,8 +778,14 @@ async fn relay_server_x11_socket(
             return Ok(RuntimeX11StreamOutcome::Cancelled);
         }
         result = open => result
-            .map_err(|_| MezError::invalid_state("X11 Iroh stream setup timed out"))?
-            .map_err(|_| MezError::invalid_state("failed to open X11 Iroh stream"))?,
+            .map_err(|_| ServerX11RelayFailure::new(
+                Stage::HostStreamOpen,
+                MezError::invalid_state("X11 Iroh stream setup timed out"),
+            ))?
+            .map_err(|error| ServerX11RelayFailure::new(
+                Stage::HostStreamOpen,
+                MezError::invalid_state(format!("failed to open X11 Iroh stream: {error}")),
+            ))?,
     };
     let preface = Zeroizing::new(
         X11StreamPreface {
@@ -751,8 +794,10 @@ async fn relay_server_x11_socket(
         }
         .encode(),
     );
-    let mut upstream_encoder = X11IrohEncoder::new(route.transport.compression)?;
-    let mut downstream_decoder = X11IrohDecoder::new(route.transport.compression)?;
+    let mut upstream_encoder = X11IrohEncoder::new(route.transport.compression)
+        .map_err(|error| ServerX11RelayFailure::new(Stage::HostStreamSetup, error))?;
+    let mut downstream_decoder = X11IrohDecoder::new(route.transport.compression)
+        .map_err(|error| ServerX11RelayFailure::new(Stage::HostStreamSetup, error))?;
     let publish = tokio::time::timeout_at(setup_deadline, async {
         send.write_all(&*preface)
             .await
@@ -771,10 +816,15 @@ async fn relay_server_x11_socket(
             return Ok(RuntimeX11StreamOutcome::Cancelled);
         }
         result = publish => result
-            .map_err(|_| MezError::invalid_state("X11 Iroh stream preface timed out"))??,
+            .map_err(|_| ServerX11RelayFailure::new(
+                Stage::HostStreamSetup,
+                MezError::invalid_state("X11 Iroh stream preface timed out"),
+            ))?
+            .map_err(|error| ServerX11RelayFailure::new(Stage::HostStreamSetup, error))?,
     }
 
     let (mut local_read, mut local_write) = local.into_split();
+    let stopped = send.stopped();
     let relay = async move {
         let upstream = async {
             let result = upstream_encoder
@@ -808,7 +858,24 @@ async fn relay_server_x11_socket(
         Ok::<(), MezError>(())
     };
     tokio::select! {
-        result = relay => result.map(|()| RuntimeX11StreamOutcome::Completed),
+        result = relay => result
+            .map(|()| RuntimeX11StreamOutcome::Completed)
+            .map_err(|error| ServerX11RelayFailure::new(Stage::HostRelay, error)),
+        stopped = stopped => {
+            let stage = stopped
+                .ok()
+                .flatten()
+                .and_then(|code| u32::try_from(code.into_inner()).ok())
+                .and_then(X11StreamFailureStage::from_application_code)
+                .unwrap_or(Stage::Unknown);
+            Err(ServerX11RelayFailure::new(
+                stage,
+                MezError::invalid_state(format!(
+                    "attaching X11 client reported {}",
+                    stage.as_str()
+                )),
+            ))
+        }
         () = wait_for_route_cancellation(&mut route.cancellation) => {
             Ok(RuntimeX11StreamOutcome::Cancelled)
         },
@@ -1269,6 +1336,60 @@ mod tests {
 
         drop(client_connection);
         lease.deactivate().unwrap();
+        proxy_task.abort();
+        let _ = proxy_task.await;
+        client_endpoint.close().await;
+        server_endpoint.close().await;
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A client reset with a reserved X11 application code must terminate only
+    /// that stream and expose its fixed failure stage through host diagnostics.
+    #[tokio::test]
+    async fn client_reset_reports_precise_failure_stage() {
+        const TEST_ALPN: &[u8] = b"mezzanine/x11-failure-stage-test/1";
+        let (server_endpoint, client_endpoint, server_connection, client_connection) =
+            test_connection_pair(TEST_ALPN, 1).await;
+        let root = test_root("client-failure-stage");
+        let proxy = RuntimeX11Proxy::prepare(&root).unwrap();
+        let handle = proxy.handle();
+        let owner = route_owner(
+            "client-failure-stage",
+            &format!("iroh-{}", server_connection.stable_id()),
+        );
+        let (route, lease) = handle
+            .reserve_route(owner, route_offer([0x64; 16], false))
+            .unwrap();
+        activate_test_route(&lease, server_connection);
+        let proxy_task = tokio::spawn(proxy.serve());
+
+        let mut local = connect_proxy(&handle).await;
+        local
+            .write_all(&setup_packet(b'l', &[0x64; 16]))
+            .await
+            .unwrap();
+        let (_client_send, mut client_recv) =
+            accept_proxy_stream(&client_connection, &route, [0x64; 16]).await;
+        client_recv
+            .stop(VarInt::from_u32(
+                X11StreamFailureStage::ClientLocalConnect.application_code(),
+            ))
+            .unwrap();
+
+        wait_for_proxy_metrics(&handle, |metrics| {
+            metrics.streams_failed == 1
+                && metrics.last_failure_stage == X11StreamFailureStage::ClientLocalConnect
+        })
+        .await;
+        let mut byte = [0u8; 1];
+        let read = tokio::time::timeout(Duration::from_secs(2), local.read(&mut byte))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(read, 0);
+
+        assert!(lease.deactivate().unwrap());
+        drop(client_connection);
         proxy_task.abort();
         let _ = proxy_task.await;
         client_endpoint.close().await;

@@ -20,6 +20,110 @@ pub(crate) const X11_ROUTE_TOKEN_BYTES: usize = 32;
 /// Encoded fixed stream-preface length.
 pub(crate) const X11_STREAM_PREFACE_BYTES: usize = 56;
 
+/// First application error code reserved for privacy-safe X11 stream failures.
+const X11_STREAM_FAILURE_CODE_BASE: u32 = 0x4d_58_00;
+
+/// Privacy-safe stage identifying where one forwarded X11 stream failed.
+///
+/// These values may cross the Iroh boundary as QUIC application error codes,
+/// so they must never contain display targets, paths, credentials, or X11
+/// payload bytes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum X11StreamFailureStage {
+    /// No stream failure has been observed.
+    #[default]
+    None,
+    /// The client could not read or decode the authenticated stream preface.
+    ClientPreface,
+    /// The stream did not authenticate the negotiated route generation.
+    ClientRouteAuthentication,
+    /// The client could not decode the forwarded X11 setup packet.
+    ClientSetupDecode,
+    /// The client rejected or could not rewrite the fake setup credential.
+    ClientCredentialRewrite,
+    /// The client could not connect to the frozen local X server endpoint.
+    ClientLocalConnect,
+    /// The client could not write the rewritten setup to the local X server.
+    ClientLocalSetupWrite,
+    /// Relay from the local X server toward the host failed.
+    ClientUpstreamRelay,
+    /// Relay from the host toward the local X server failed.
+    ClientDownstreamRelay,
+    /// The host rejected the session-local X11 setup packet.
+    HostSetupValidation,
+    /// The host could not open an Iroh stream for the accepted X11 socket.
+    HostStreamOpen,
+    /// The host could not publish the stream preface or setup packet.
+    HostStreamSetup,
+    /// The host-side application relay failed after setup.
+    HostRelay,
+    /// A failure was observed but did not match a stable stage.
+    Unknown,
+}
+
+impl X11StreamFailureStage {
+    /// Returns the stable diagnostics label for this failure stage.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::ClientPreface => "client_preface",
+            Self::ClientRouteAuthentication => "client_route_authentication",
+            Self::ClientSetupDecode => "client_setup_decode",
+            Self::ClientCredentialRewrite => "client_credential_rewrite",
+            Self::ClientLocalConnect => "client_local_connect",
+            Self::ClientLocalSetupWrite => "client_local_setup_write",
+            Self::ClientUpstreamRelay => "client_upstream_relay",
+            Self::ClientDownstreamRelay => "client_downstream_relay",
+            Self::HostSetupValidation => "host_setup_validation",
+            Self::HostStreamOpen => "host_stream_open",
+            Self::HostStreamSetup => "host_stream_setup",
+            Self::HostRelay => "host_relay",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    /// Encodes one client-observed failure as a QUIC application error code.
+    pub(crate) const fn application_code(self) -> u32 {
+        X11_STREAM_FAILURE_CODE_BASE
+            + match self {
+                Self::None => 0,
+                Self::ClientPreface => 1,
+                Self::ClientRouteAuthentication => 2,
+                Self::ClientSetupDecode => 3,
+                Self::ClientCredentialRewrite => 4,
+                Self::ClientLocalConnect => 5,
+                Self::ClientLocalSetupWrite => 6,
+                Self::ClientUpstreamRelay => 7,
+                Self::ClientDownstreamRelay => 8,
+                Self::HostSetupValidation => 9,
+                Self::HostStreamOpen => 10,
+                Self::HostStreamSetup => 11,
+                Self::HostRelay => 12,
+                Self::Unknown => 255,
+            }
+    }
+
+    /// Decodes a privacy-safe QUIC application error code when recognized.
+    pub(crate) const fn from_application_code(code: u32) -> Option<Self> {
+        match code.checked_sub(X11_STREAM_FAILURE_CODE_BASE) {
+            Some(1) => Some(Self::ClientPreface),
+            Some(2) => Some(Self::ClientRouteAuthentication),
+            Some(3) => Some(Self::ClientSetupDecode),
+            Some(4) => Some(Self::ClientCredentialRewrite),
+            Some(5) => Some(Self::ClientLocalConnect),
+            Some(6) => Some(Self::ClientLocalSetupWrite),
+            Some(7) => Some(Self::ClientUpstreamRelay),
+            Some(8) => Some(Self::ClientDownstreamRelay),
+            Some(9) => Some(Self::HostSetupValidation),
+            Some(10) => Some(Self::HostStreamOpen),
+            Some(11) => Some(Self::HostStreamSetup),
+            Some(12) => Some(Self::HostRelay),
+            Some(255) => Some(Self::Unknown),
+            _ => None,
+        }
+    }
+}
+
 /// Fixed stream magic, separate from every control/event framing prefix.
 const X11_STREAM_MAGIC: [u8; 8] = *b"MZX11STR";
 /// Reserved bytes in the v2 preface that must remain zero.
@@ -266,6 +370,33 @@ fn constant_time_eq<const N: usize>(left: &[u8; N], right: &[u8; N]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every failure stage must round-trip through its reserved QUIC
+    /// application code without encoding diagnostics text or secret state.
+    #[test]
+    fn failure_stages_round_trip_application_codes() {
+        for stage in [
+            X11StreamFailureStage::ClientPreface,
+            X11StreamFailureStage::ClientRouteAuthentication,
+            X11StreamFailureStage::ClientSetupDecode,
+            X11StreamFailureStage::ClientCredentialRewrite,
+            X11StreamFailureStage::ClientLocalConnect,
+            X11StreamFailureStage::ClientLocalSetupWrite,
+            X11StreamFailureStage::ClientUpstreamRelay,
+            X11StreamFailureStage::ClientDownstreamRelay,
+            X11StreamFailureStage::HostSetupValidation,
+            X11StreamFailureStage::HostStreamOpen,
+            X11StreamFailureStage::HostStreamSetup,
+            X11StreamFailureStage::HostRelay,
+            X11StreamFailureStage::Unknown,
+        ] {
+            assert_eq!(
+                X11StreamFailureStage::from_application_code(stage.application_code()),
+                Some(stage)
+            );
+        }
+        assert_eq!(X11StreamFailureStage::from_application_code(1), None);
+    }
 
     /// The stream preface must round-trip its generation and secret token while
     /// keeping both secret wrapper debug representations redacted.

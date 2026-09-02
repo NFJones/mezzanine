@@ -3156,6 +3156,13 @@ offending X11 stream. Successful encoded and decoded X11 records MUST be
 included exactly once in the owning connection's aggregate compression
 metrics; the raw preface MUST remain excluded.
 
+X11 stream failures MUST retain a privacy-safe stage classification. Client
+failures MUST communicate only that fixed class through a reserved QUIC
+application error code; they MUST NOT send error text, display targets, paths,
+credentials, or X11 bytes. Session diagnostics MUST expose the latest class as
+`last_failure_stage`. The attaching client MAY retain the detailed local error
+in a bounded owner-private local diagnostic log that is never sent to the host.
+
 Both forwarding endpoints MUST parse the X11 setup request incrementally,
 support byte-order markers `l` and `B`, require protocol 11.0, use checked
 four-byte padding arithmetic, and reject a complete setup prefix larger than

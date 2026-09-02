@@ -233,6 +233,10 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
         format!("streams_completed = {}", x11_metrics.streams_completed),
         format!("streams_cancelled = {}", x11_metrics.streams_cancelled),
         format!("streams_failed = {}", x11_metrics.streams_failed),
+        format!(
+            "last_failure_stage = {}",
+            x11_metrics.last_failure_stage.as_str()
+        ),
         "".to_string(),
         "[runtime counts]".to_string(),
         format!(

@@ -21,7 +21,8 @@ pub(crate) use authority::{
 pub(crate) use contracts::{
     X11_AUTH_PROTOCOL_NAME, X11_COOKIE_BYTES, X11_FORWARDING_VERSION, X11_ROUTE_TOKEN_BYTES,
     X11_STREAM_PREFACE_BYTES, X11AuthProtocol, X11Cookie, X11ForwardingMode, X11ForwardingOffer,
-    X11ForwardingResult, X11RouteToken, X11StreamPreface, X11StreamPrefaceError,
+    X11ForwardingResult, X11RouteToken, X11StreamFailureStage, X11StreamPreface,
+    X11StreamPrefaceError,
 };
 pub(crate) use protocol::{
     X11_MAX_SETUP_BYTES, X11_PROTOCOL_MAJOR, X11_PROTOCOL_MINOR, X11ByteOrder, X11SetupError,

@@ -460,6 +460,37 @@ impl RuntimeSessionService {
                 let x11 = self.runtime_x11_proxy_diagnostics();
                 let applied_x11 = self.applied_runtime_x11_policy();
                 let configured_x11 = &policy.x11;
+                let x11_status = serde_json::json!({
+                    "enabled": applied_x11.enabled,
+                    "restart_pending": applied_x11 != configured_x11,
+                    "applied": {
+                        "enabled": applied_x11.enabled,
+                        "allow_trusted": applied_x11.allow_trusted,
+                        "max_connections_per_route": applied_x11.max_connections_per_route,
+                        "setup_timeout_ms": applied_x11.setup_timeout.as_millis(),
+                    },
+                    "configured": {
+                        "enabled": configured_x11.enabled,
+                        "allow_trusted": configured_x11.allow_trusted,
+                        "max_connections_per_route": configured_x11.max_connections_per_route,
+                        "setup_timeout_ms": configured_x11.setup_timeout.as_millis(),
+                    },
+                    "route_active": x11.route_active,
+                    "authority_repair_pending": x11.authority_repair_pending,
+                    "active_streams": x11.active_streams,
+                    "route_activations": x11.route_activations,
+                    "route_deactivations": x11.route_deactivations,
+                    "route_takeovers": x11.route_takeovers,
+                    "authority_publication_failures": x11.authority_publication_failures,
+                    "sockets_accepted": x11.sockets_accepted,
+                    "sockets_rejected_no_route": x11.sockets_rejected_no_route,
+                    "sockets_rejected_capacity": x11.sockets_rejected_capacity,
+                    "streams_started": x11.streams_started,
+                    "streams_completed": x11.streams_completed,
+                    "streams_cancelled": x11.streams_cancelled,
+                    "streams_failed": x11.streams_failed,
+                    "last_failure_stage": x11.last_failure_stage.as_str(),
+                });
                 Ok(serde_json::json!({
                     "enabled": policy.enabled,
                     "listener_active": diagnostics.listener_active,
@@ -488,36 +519,7 @@ impl RuntimeSessionService {
                         "custom": diagnostics.custom_connections,
                         "unknown": diagnostics.unknown_connections,
                     },
-                    "x11": {
-                        "enabled": applied_x11.enabled,
-                        "restart_pending": applied_x11 != configured_x11,
-                        "applied": {
-                            "enabled": applied_x11.enabled,
-                            "allow_trusted": applied_x11.allow_trusted,
-                            "max_connections_per_route": applied_x11.max_connections_per_route,
-                            "setup_timeout_ms": applied_x11.setup_timeout.as_millis(),
-                        },
-                        "configured": {
-                            "enabled": configured_x11.enabled,
-                            "allow_trusted": configured_x11.allow_trusted,
-                            "max_connections_per_route": configured_x11.max_connections_per_route,
-                            "setup_timeout_ms": configured_x11.setup_timeout.as_millis(),
-                        },
-                        "route_active": x11.route_active,
-                        "authority_repair_pending": x11.authority_repair_pending,
-                        "active_streams": x11.active_streams,
-                        "route_activations": x11.route_activations,
-                        "route_deactivations": x11.route_deactivations,
-                        "route_takeovers": x11.route_takeovers,
-                        "authority_publication_failures": x11.authority_publication_failures,
-                        "sockets_accepted": x11.sockets_accepted,
-                        "sockets_rejected_no_route": x11.sockets_rejected_no_route,
-                        "sockets_rejected_capacity": x11.sockets_rejected_capacity,
-                        "streams_started": x11.streams_started,
-                        "streams_completed": x11.streams_completed,
-                        "streams_cancelled": x11.streams_cancelled,
-                        "streams_failed": x11.streams_failed,
-                    },
+                    "x11": x11_status,
                 })
                 .to_string())
             }

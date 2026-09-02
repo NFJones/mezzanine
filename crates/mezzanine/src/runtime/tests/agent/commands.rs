@@ -179,6 +179,7 @@ fn runtime_show_metrics_reports_privacy_safe_iroh_diagnostics() {
         "authority_publication_failures = 0",
         "streams_cancelled = 0",
         "streams_failed = 0",
+        "last_failure_stage = none",
     ] {
         assert!(body.contains(expected), "missing {expected:?} in {body}");
     }

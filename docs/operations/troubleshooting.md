@@ -120,14 +120,22 @@ contain session X11 counters. A rising
 `sockets_rejected_capacity` indicates the configured per-route cap;
 `streams_cancelled` covers detach, takeover, revocation, and shutdown of an
 owned route; `streams_failed` covers malformed credentials, setup/connect
-timeout, and transport failures. Every started stream contributes to exactly
-one of completed, cancelled, or failed. These diagnostics intentionally omit
-cookies, route tokens, local display targets, authority paths, and X11 bytes.
+timeout, and transport failures. `last_failure_stage` identifies the latest
+privacy-safe failure class, such as `client_local_connect`,
+`client_local_setup_write`, or `host_stream_open`. Every started stream
+contributes to exactly one of completed, cancelled, or failed. These
+diagnostics intentionally omit cookies, route tokens, local display targets,
+authority paths, and X11 bytes.
 `authority_repair_pending = true` means logical route ownership has already
 been revoked but the private Xauthority file could not be atomically replaced;
 repair the session Xauthority directory or storage. A later successful route
 publication clears the flag, while `authority_publication_failures` retains the
 aggregate failure count.
+
+The attaching client also appends the exact local relay error to
+`~/.config/mezzanine/x11-client.diagnostics.log`. The file is owner-private,
+bounded, and local to the attaching machine; it is not sent to the Mez host.
+Inspect its latest line when `last_failure_stage` begins with `client_`.
 
 If `x11.restart_pending` is true, compare `x11.applied` with
 `x11.configured`; the applied values govern current route admission. Restart

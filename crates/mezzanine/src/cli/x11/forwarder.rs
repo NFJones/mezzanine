@@ -33,14 +33,18 @@ pub(crate) async fn connect_local_x11(
                 .await
                 .map_err(|_| MezError::invalid_state("local X11 socket connection timed out"))?
                 .map(|stream| Box::new(stream) as X11LocalStream)
-                .map_err(|_| MezError::invalid_state("local X11 socket connection failed"))
+                .map_err(|error| {
+                    MezError::invalid_state(format!("local X11 socket connection failed: {error}"))
+                })
         }
         X11LocalTarget::Tcp(address) => {
             tokio::time::timeout(timeout, tokio::net::TcpStream::connect(address))
                 .await
                 .map_err(|_| MezError::invalid_state("local X11 socket connection timed out"))?
                 .map(|stream| Box::new(stream) as X11LocalStream)
-                .map_err(|_| MezError::invalid_state("local X11 socket connection failed"))
+                .map_err(|error| {
+                    MezError::invalid_state(format!("local X11 socket connection failed: {error}"))
+                })
         }
     }
 }
