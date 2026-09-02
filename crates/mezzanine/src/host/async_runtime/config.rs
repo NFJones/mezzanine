@@ -576,11 +576,52 @@ pub struct AsyncRuntimeActorExit {
     pub metrics: AsyncRuntimeActorMetrics,
 }
 
+/// Drop-safe publication fence for a terminal lifecycle transition.
+///
+/// The actor installs this fence when a control request makes the session
+/// terminal. The connection acknowledges it only after the response flushes;
+/// dropping an unacknowledged fence still publishes shutdown so failed or
+/// cancelled transports cannot leave the runtime services alive indefinitely.
+#[derive(Debug)]
+pub(super) struct AsyncTerminalLifecycleFlushGuard {
+    lifecycle_state_tx: watch::Sender<RuntimeLifecycleState>,
+    state: RuntimeLifecycleState,
+    armed: bool,
+}
+
+impl AsyncTerminalLifecycleFlushGuard {
+    /// Arms one exact terminal lifecycle publication.
+    pub(super) fn new(
+        lifecycle_state_tx: watch::Sender<RuntimeLifecycleState>,
+        state: RuntimeLifecycleState,
+    ) -> Self {
+        Self {
+            lifecycle_state_tx,
+            state,
+            armed: true,
+        }
+    }
+
+    /// Publishes the terminal state after the owning response was flushed.
+    pub(super) fn acknowledge(mut self) {
+        let _ = self.lifecycle_state_tx.send(self.state);
+        self.armed = false;
+    }
+}
+
+impl Drop for AsyncTerminalLifecycleFlushGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = self.lifecycle_state_tx.send(self.state);
+        }
+    }
+}
+
 /// Carries Async Control Input Result state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct AsyncControlInputResult {
     /// Stores the output value for this data structure.
     ///
@@ -597,6 +638,21 @@ pub struct AsyncControlInputResult {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub connection: ControlConnectionState,
+    /// Terminal lifecycle publication deferred until this response flushes.
+    pub(super) terminal_lifecycle_flush: Option<AsyncTerminalLifecycleFlushGuard>,
+}
+
+impl AsyncControlInputResult {
+    /// Moves response bytes, connection state, and any flush fence to the adapter.
+    pub(super) fn into_parts(
+        self,
+    ) -> (
+        Vec<u8>,
+        ControlConnectionState,
+        Option<AsyncTerminalLifecycleFlushGuard>,
+    ) {
+        (self.output, self.connection, self.terminal_lifecycle_flush)
+    }
 }
 
 /// Carries Async Message Input Result state for this subsystem.

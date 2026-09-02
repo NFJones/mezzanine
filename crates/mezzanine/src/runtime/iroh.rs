@@ -1652,14 +1652,8 @@ async fn serve_runtime_iroh_control_connection(
     sample_task.abort();
     let _ = (&mut sample_task).await;
     let _ = event_stop_tx.send(true);
-    if tokio::time::timeout(setup_timeout, &mut event_task)
-        .await
-        .is_err()
-    {
-        event_task.abort();
-        let _ = event_task.await;
-    }
-    let bridge_result = bridge.shutdown(setup_timeout).await;
+    let shutdown_deadline = tokio::time::Instant::now() + setup_timeout;
+    let bridge_finish_result = bridge.finish_outbound_until(shutdown_deadline).await;
     connection.close(
         VarInt::from_u32(u32::from(result.is_err())),
         if result.is_ok() {
@@ -1668,8 +1662,17 @@ async fn serve_runtime_iroh_control_connection(
             b"control failed"
         },
     );
+    if tokio::time::timeout_at(shutdown_deadline, &mut event_task)
+        .await
+        .is_err()
+    {
+        event_task.abort();
+        let _ = event_task.await;
+    }
+    let bridge_result = bridge.settle_until(shutdown_deadline).await;
     let served = result?;
     x11_route_result?;
+    bridge_finish_result?;
     bridge_result?;
     Ok(served)
 }
@@ -4643,6 +4646,227 @@ mod tests {
         let _ = proxy_task.await;
         actor_task.abort();
         let _ = actor_task.await;
+        client_endpoint.close().await;
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A direct-Iroh primary with an active X11 stream must receive the
+    /// terminal `:exit` response before route, socket, and control teardown.
+    #[tokio::test(flavor = "current_thread")]
+    async fn direct_iroh_x11_exit_flushes_response_before_teardown() {
+        use secrecy::ExposeSecret;
+
+        use crate::control::encode_control_body;
+        use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionActor};
+        use crate::security::remote::RemoteRoleCeiling;
+        use crate::test_support::runtime::RuntimeServiceFixture;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let root = std::env::temp_dir().join(format!(
+            "mez-iroh-x11-exit-flush-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let mut service = RuntimeServiceFixture::new().build();
+        service.set_config_root(root.clone());
+        let session_id = service.session().id.to_string();
+        let (server_secret, server_endpoint_id) = {
+            let identity = service
+                .integration
+                .ensure_remote_endpoint_identity(&session_id)
+                .unwrap();
+            (
+                identity.secret_key().clone(),
+                identity.endpoint_id().to_string(),
+            )
+        };
+        let trust = service
+            .integration
+            .ensure_remote_trust_store(&session_id)
+            .unwrap()
+            .clone();
+        let invitation = trust
+            .create_invitation(
+                &server_endpoint_id,
+                RemoteRoleCeiling::Primary,
+                600,
+                crate::runtime::current_unix_seconds(),
+            )
+            .unwrap();
+        let proxy = crate::runtime::x11::RuntimeX11Proxy::prepare(&root).unwrap();
+        let proxy_handle = proxy.handle();
+        service.set_runtime_x11_proxy(proxy_handle.clone());
+
+        let policy = RuntimeIrohTransportPolicy {
+            enabled: true,
+            max_connections: 1,
+            max_streams_per_connection: 1,
+            setup_timeout: IROH_ENDPOINT_TEST_SETUP_TIMEOUT,
+            idle_timeout: std::time::Duration::from_secs(5),
+            ..RuntimeIrohTransportPolicy::default()
+        };
+        let mut server = bind_runtime_iroh_endpoint(policy, server_secret)
+            .await
+            .unwrap()
+            .unwrap();
+        server.authority = Some(RuntimeIrohAuthority {
+            trust,
+            server_endpoint_id,
+        });
+        let server_addr = server.endpoint().addr();
+        let (handle, actor) =
+            AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        let actor_task = tokio::spawn(actor.run());
+        let proxy_task = tokio::spawn(proxy.serve());
+        let listener_handle = handle.clone();
+        let listener = tokio::spawn(async move {
+            let served = serve_runtime_iroh_control_listener(
+                &server,
+                &listener_handle,
+                AsyncRuntimeControlConnectionConfig::new(1024 * 1024, 0).unwrap(),
+                None,
+            )
+            .await
+            .unwrap();
+            server.close().await;
+            served
+        });
+
+        let client_endpoint = Endpoint::builder(presets::Minimal)
+            .secret_key(SecretKey::generate())
+            .transport_config(
+                QuicTransportConfig::builder()
+                    .max_concurrent_bidi_streams(VarInt::from_u32(2))
+                    .build(),
+            )
+            .relay_mode(RelayMode::Disabled)
+            .clear_address_lookup()
+            .portmapper_config(PortmapperConfig::Disabled)
+            .bind()
+            .await
+            .unwrap();
+        let connection = client_endpoint
+            .connect(server_addr, MEZZANINE_IROH_ALPN)
+            .await
+            .unwrap();
+        let (mut send, mut recv) = connection.open_bi().await.unwrap();
+        let initialize = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "init",
+            "method": "control/initialize",
+            "params": {
+                "client_name": "exit-primary",
+                "requested_version": 2,
+                "requested_role": "primary",
+                "x11_forwarding": {
+                    "version": 2,
+                    "mode": "untrusted",
+                    "auth_protocol": "MIT-MAGIC-COOKIE-1",
+                    "fake_cookie_base64": "EREREREREREREREREREREQ==",
+                    "takeover": false
+                },
+                "client": {
+                    "name": "exit-primary",
+                    "interactive": true,
+                    "terminal": {
+                        "columns": 80,
+                        "rows": 24,
+                        "term": "xterm-256color"
+                    }
+                },
+                "authentication": {
+                    "mechanism": "extension:iroh_invitation",
+                    "token": invitation.token.expose_secret()
+                }
+            }
+        })
+        .to_string();
+        send.write_all(&encode_control_body(&initialize))
+            .await
+            .unwrap();
+        send.flush().await.unwrap();
+        let initialize_body = read_test_control_body(&mut recv).await;
+        assert!(
+            initialize_body.contains(r#""x11_forwarding":true"#),
+            "{initialize_body}"
+        );
+        assert!(proxy_handle.diagnostics().route_active);
+
+        let mut setup = vec![0u8; 48];
+        setup[0] = b'l';
+        setup[2..4].copy_from_slice(&11u16.to_le_bytes());
+        setup[4..6].copy_from_slice(&0u16.to_le_bytes());
+        setup[6..8].copy_from_slice(&18u16.to_le_bytes());
+        setup[8..10].copy_from_slice(&16u16.to_le_bytes());
+        setup[12..30].copy_from_slice(b"MIT-MAGIC-COOKIE-1");
+        setup[32..48].copy_from_slice(&[0x11; 16]);
+        let mut remote_x = tokio::net::TcpStream::connect((
+            std::net::Ipv4Addr::LOCALHOST,
+            6000 + proxy_handle.display_number(),
+        ))
+        .await
+        .unwrap();
+        remote_x.write_all(&setup).await.unwrap();
+        remote_x.flush().await.unwrap();
+        let (_x11_send, mut x11_recv) =
+            tokio::time::timeout(std::time::Duration::from_secs(3), connection.accept_bi())
+                .await
+                .unwrap()
+                .unwrap();
+        let mut forwarded_setup = vec![0u8; crate::runtime::x11::X11_STREAM_PREFACE_BYTES + 48];
+        x11_recv.read_exact(&mut forwarded_setup).await.unwrap();
+        assert_eq!(proxy_handle.diagnostics().active_streams, 1);
+
+        let exit = encode_control_body(
+            r#"{"jsonrpc":"2.0","id":"exit","method":"terminal/step","params":{"idempotency_key":"direct-iroh-x11-exit","client_size":{"columns":80,"rows":24},"render":false,"input_bytes":[1,58,101,120,105,116,13]}}"#,
+        );
+        send.write_all(&exit).await.unwrap();
+        send.flush().await.unwrap();
+        let exit_body = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            read_test_control_body(&mut recv),
+        )
+        .await
+        .expect("terminal exit response must precede direct-Iroh control teardown");
+        assert!(
+            exit_body.contains(r#""session_terminated":true"#),
+            "{exit_body}"
+        );
+
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let diagnostics = proxy_handle.diagnostics();
+                if !diagnostics.route_active && diagnostics.active_streams == 0 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("X11 teardown must follow the terminal exit response");
+        let mut byte = [0u8; 1];
+        let x11_closed =
+            tokio::time::timeout(std::time::Duration::from_secs(3), remote_x.read(&mut byte))
+                .await
+                .expect("terminal exit must close the active X11 socket");
+        assert!(matches!(x11_closed, Ok(0) | Err(_)));
+
+        drop(handle);
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(3), listener)
+                .await
+                .expect("direct-Iroh listener must drain after terminal exit")
+                .unwrap(),
+            1
+        );
+        proxy_task.abort();
+        let _ = proxy_task.await;
+        actor_task.abort();
+        let _ = actor_task.await;
+        connection.close(VarInt::from_u32(0), b"test complete");
         client_endpoint.close().await;
         let _ = std::fs::remove_dir_all(root);
     }

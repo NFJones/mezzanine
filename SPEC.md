@@ -3193,6 +3193,11 @@ diagnostics MUST report repair-pending state, and serialized stale cleanup MUST
 NOT overwrite a newer generation's credential. Detach, control or transport
 loss, trust or lease revocation, takeover, and session shutdown MUST
 immediately prevent new connections and close streams from the old generation.
+When a terminal control request terminates the session, the server MUST flush
+the response that reports `session_terminated = true` before revoking the
+connection-owned X11 route or publishing terminal lifecycle state to service
+supervision. A failed or cancelled response delivery MUST release that shutdown
+fence through drop-safe cleanup so teardown cannot remain deferred indefinitely.
 When host route teardown stops the client-to-host stream, the attaching client
 MUST cancel both copy directions and close the corresponding local X socket
 without waiting for the local X server to cooperate. Ordinary upstream EOF

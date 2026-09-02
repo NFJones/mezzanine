@@ -5,12 +5,13 @@ use super::coalesce::{
     runtime_timer_kind_is_shell_transaction, side_effects_include_registry_persistence,
 };
 use super::{
-    AgentId, AgentProviderEvent, AsyncHookEvent, AsyncRuntimeSessionActor, ClientEvent, ClientId,
-    ClientState, MezError, PaneEvent, PersistenceEvent, ProviderErrorRetryClass,
-    RenderInvalidationReason, Result, RuntimeEvent, RuntimeEventBatch, RuntimeEventIngressReport,
-    RuntimeLifecycleState, RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition,
-    ShutdownEvent, Size, TimerEvent, provider_error_retry_class_from_parts,
-    provider_event_error_from_parts, provider_event_error_kind,
+    AgentId, AgentProviderEvent, AsyncControlInputResult, AsyncHookEvent, AsyncRuntimeSessionActor,
+    AsyncTerminalLifecycleFlushGuard, ClientEvent, ClientId, ClientState, MezError, PaneEvent,
+    PersistenceEvent, ProviderErrorRetryClass, RenderInvalidationReason, Result, RuntimeEvent,
+    RuntimeEventBatch, RuntimeEventIngressReport, RuntimeLifecycleState, RuntimeSideEffect,
+    RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition, ShutdownEvent, Size, TimerEvent,
+    provider_error_retry_class_from_parts, provider_event_error_from_parts,
+    provider_event_error_kind,
 };
 use crate::runtime::PaneProcessEvent;
 
@@ -73,6 +74,35 @@ impl AsyncRuntimeSessionActor {
         self.metrics.lifecycle_state_notifications =
             self.metrics.lifecycle_state_notifications.saturating_add(1);
         let _ = self.lifecycle_state_tx.send(current);
+    }
+
+    /// Defers terminal lifecycle publication until one control response flushes.
+    pub(super) fn defer_terminal_lifecycle_until_response_flush(
+        &mut self,
+        previous: RuntimeLifecycleState,
+        result: &mut Result<AsyncControlInputResult>,
+    ) -> bool {
+        let current = self.service.lifecycle_state();
+        if current == previous
+            || !matches!(
+                current,
+                RuntimeLifecycleState::Stopping
+                    | RuntimeLifecycleState::Killed
+                    | RuntimeLifecycleState::Failed
+            )
+        {
+            return false;
+        }
+        let Ok(result) = result else {
+            return false;
+        };
+        self.metrics.lifecycle_state_notifications =
+            self.metrics.lifecycle_state_notifications.saturating_add(1);
+        result.terminal_lifecycle_flush = Some(AsyncTerminalLifecycleFlushGuard::new(
+            self.lifecycle_state_tx.clone(),
+            current,
+        ));
+        true
     }
 
     /// Runs the apply runtime event batch operation for this subsystem.

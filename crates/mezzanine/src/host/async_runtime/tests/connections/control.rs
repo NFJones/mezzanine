@@ -678,6 +678,122 @@ async fn authenticated_control_loop_times_out_blocked_response_write() {
     let ((), (), _exit) = tokio::join!(client, server, actor.run());
 }
 
+/// A terminal `:exit` response must flush before supervisor-visible shutdown
+/// revokes the connection-owned X11 route and permits service teardown.
+#[tokio::test(flavor = "current_thread")]
+async fn terminal_exit_flushes_before_x11_route_and_lifecycle_teardown() {
+    use crate::control::{AuthenticatedPeer, decode_control_frame, encode_control_body};
+    use crate::runtime::x11::{
+        RuntimeX11Proxy, RuntimeX11RouteOwner, X11_FORWARDING_VERSION, X11AuthProtocol, X11Cookie,
+        X11ForwardingMode, X11ForwardingOffer,
+    };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-x11-exit-flush-{}-{}",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("x11-exit-owner", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let mut lifecycle = handle.lifecycle_state_watcher();
+
+    let proxy = RuntimeX11Proxy::prepare(&root).unwrap();
+    let proxy_handle = proxy.handle();
+    let (_route, lease) = proxy_handle
+        .reserve_route(
+            RuntimeX11RouteOwner {
+                session_id: "$exit-flush".to_string(),
+                client_id: primary.to_string(),
+                endpoint_id: "endpoint-exit-flush".to_string(),
+                principal_id: Some("principal-exit-flush".to_string()),
+                connection_id: "connection-exit-flush".to_string(),
+            },
+            X11ForwardingOffer {
+                version: X11_FORWARDING_VERSION,
+                mode: X11ForwardingMode::Untrusted,
+                auth_protocol: X11AuthProtocol::MitMagicCookie1,
+                fake_cookie: X11Cookie::new([0x61; 16]),
+                takeover: false,
+            },
+        )
+        .unwrap();
+    lease.activate_without_transport().unwrap();
+
+    let mut connection = ControlConnectionState::trusted_existing_client(primary);
+    connection.install_x11_route_lease_for_test(lease);
+    let (mut client_stream, mut server_stream) = tokio::io::duplex(64);
+    let exit = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":"exit","method":"terminal/step","params":{"idempotency_key":"exit-flush","client_size":{"columns":80,"rows":24},"render":false,"input_bytes":[1,58,101,120,105,116,13]}}"#,
+    );
+
+    let client = async {
+        client_stream.write_all(&exit).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(*lifecycle.borrow(), RuntimeLifecycleState::Running);
+        assert!(proxy_handle.diagnostics().route_active);
+
+        let mut response = Vec::new();
+        let body = loop {
+            let mut buffer = [0u8; 64];
+            let read =
+                tokio::time::timeout(Duration::from_secs(2), client_stream.read(&mut buffer))
+                    .await
+                    .expect("terminal exit response must precede control EOF")
+                    .unwrap();
+            assert!(read > 0, "terminal exit response must precede control EOF");
+            response.extend_from_slice(&buffer[..read]);
+            if let Ok((body, consumed)) = decode_control_frame(&response, 4096) {
+                assert_eq!(consumed, response.len());
+                break body;
+            }
+        };
+        assert!(body.contains(r#""session_terminated":true"#), "{body}");
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while *lifecycle.borrow() != RuntimeLifecycleState::Killed {
+                lifecycle.changed().await.unwrap();
+            }
+        })
+        .await
+        .expect("terminal lifecycle must publish after the response flush");
+        assert!(!proxy_handle.diagnostics().route_active);
+    };
+    let server = async {
+        let served = serve_authenticated_async_runtime_control_connection_loop_with_snapshots(
+            &mut server_stream,
+            AuthenticatedPeer::iroh_endpoint("endpoint-exit-flush"),
+            &handle,
+            &mut connection,
+            AsyncRuntimeControlConnectionConfig::new(4096, current_effective_uid()).unwrap(),
+            None,
+            |_, state| {
+                matches!(
+                    state,
+                    RuntimeLifecycleState::Killed | RuntimeLifecycleState::Failed
+                )
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(served, 1);
+        assert!(!connection.deactivate_x11_route().unwrap());
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), (), _exit) = tokio::join!(client, server, actor.run());
+    drop(proxy);
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Verifies control EOF invalidates the exact X11 generation before waiting
 /// for an unavailable actor to apply the ordinary client-disconnect event.
 /// Resuming actor processing must complete delayed cleanup without reviving or

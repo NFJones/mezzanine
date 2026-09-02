@@ -440,7 +440,7 @@ impl AsyncRuntimeSessionActor {
             } => {
                 self.record_terminal_control_request_metrics(&input, max_content_length);
                 let previous_lifecycle_state = self.service.lifecycle_state();
-                let result = self
+                let mut result = self
                     .service
                     .handle_control_input_for_connection_transition(
                         &input,
@@ -461,14 +461,22 @@ impl AsyncRuntimeSessionActor {
                             output,
                             consumed,
                             connection,
+                            terminal_lifecycle_flush: None,
                         })
                     });
+                let terminal_lifecycle_deferred = self
+                    .defer_terminal_lifecycle_until_response_flush(
+                        previous_lifecycle_state,
+                        &mut result,
+                    );
                 let should_notify = result.as_ref().is_ok_and(|result| result.consumed > 0);
                 let _ = reply.send(result);
                 if should_notify {
                     self.notify_event_delivery();
                 }
-                self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
+                if !terminal_lifecycle_deferred {
+                    self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
+                }
                 false
             }
             AsyncRuntimeRequest::HandleControlInputWithSnapshots {
@@ -523,6 +531,7 @@ impl AsyncRuntimeSessionActor {
                                     output: output_prefix,
                                     consumed: consumed_prefix,
                                     connection,
+                                    terminal_lifecycle_flush: None,
                                 }));
                                 self.notify_event_delivery();
                             } else {
@@ -576,16 +585,24 @@ impl AsyncRuntimeSessionActor {
                         }
                         Ok(consumed)
                     });
+                let mut terminal_lifecycle_deferred = false;
                 match result {
                     Err(error) => {
                         let _ = reply.send(Err(error));
                     }
                     Ok(consumed) if remaining_input.is_empty() => {
-                        let _ = reply.send(Ok(AsyncControlInputResult {
+                        let mut result = Ok(AsyncControlInputResult {
                             output: output_prefix,
                             consumed: consumed_prefix.saturating_add(consumed),
                             connection,
-                        }));
+                            terminal_lifecycle_flush: None,
+                        });
+                        terminal_lifecycle_deferred = self
+                            .defer_terminal_lifecycle_until_response_flush(
+                                previous_lifecycle_state,
+                                &mut result,
+                            );
+                        let _ = reply.send(result);
                         self.notify_event_delivery();
                     }
                     Ok(consumed) => {
@@ -610,7 +627,9 @@ impl AsyncRuntimeSessionActor {
                         std::mem::drop(join_handle);
                     }
                 }
-                self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
+                if !terminal_lifecycle_deferred {
+                    self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
+                }
                 false
             }
             AsyncRuntimeRequest::CompleteSnapshotControlInput {
@@ -636,14 +655,22 @@ impl AsyncRuntimeSessionActor {
                 let queued = self
                     .queue_deferred_pane_io_side_effects_from_service()
                     .and_then(|_| self.queue_runtime_side_effects(transition.side_effects));
+                let mut terminal_lifecycle_deferred = false;
                 if let Err(error) = queued {
                     let _ = reply.send(Err(error));
                 } else if remaining_input.is_empty() {
-                    let _ = reply.send(Ok(AsyncControlInputResult {
+                    let mut result = Ok(AsyncControlInputResult {
                         output: output_prefix,
                         consumed: consumed_prefix,
                         connection,
-                    }));
+                        terminal_lifecycle_flush: None,
+                    });
+                    terminal_lifecycle_deferred = self
+                        .defer_terminal_lifecycle_until_response_flush(
+                            previous_lifecycle_state,
+                            &mut result,
+                        );
+                    let _ = reply.send(result);
                     self.notify_event_delivery();
                 } else {
                     let sender = self.sender.clone();
@@ -665,7 +692,9 @@ impl AsyncRuntimeSessionActor {
                     });
                     std::mem::drop(join_handle);
                 }
-                self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
+                if !terminal_lifecycle_deferred {
+                    self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
+                }
                 false
             }
             AsyncRuntimeRequest::HandleMessageInput {

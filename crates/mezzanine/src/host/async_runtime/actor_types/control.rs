@@ -312,20 +312,22 @@ where
                         return Err(error);
                     }
                 };
-                *connection = result.connection;
+                let (output, next_connection, mut terminal_lifecycle_flush) = result.into_parts();
+                *connection = next_connection;
                 let write_result = match config.application_idle_timeout {
                     Some(timeout) => match tokio::time::timeout(
                         timeout,
-                        framed.get_mut().write_all(&result.output),
+                        framed.get_mut().write_all(&output),
                     )
                     .await
                     {
                         Ok(result) => result.map_err(Into::into),
                         Err(_) => Err(control_application_idle_error("writing a control response")),
                     },
-                    None => framed.get_mut().write_all(&result.output).await.map_err(Into::into),
+                    None => framed.get_mut().write_all(&output).await.map_err(Into::into),
                 };
                 if let Err(error) = write_result {
+                    drop(terminal_lifecycle_flush.take());
                     submit_control_connection_disconnect_event(handle, connection).await?;
                     return Err(error);
                 }
@@ -337,10 +339,17 @@ where
                     None => framed.get_mut().flush().await.map_err(Into::into),
                 };
                 if let Err(error) = flush_result {
+                    drop(terminal_lifecycle_flush.take());
                     submit_control_connection_disconnect_event(handle, connection).await?;
                     return Err(error);
                 }
+                if terminal_lifecycle_flush.is_some() {
+                    connection.deactivate_x11_route()?;
+                }
                 post_flush(connection)?;
+                if let Some(terminal_lifecycle_flush) = terminal_lifecycle_flush.take() {
+                    terminal_lifecycle_flush.acknowledge();
+                }
                 served = served.saturating_add(1);
             }
             changed = lifecycle.changed() => {

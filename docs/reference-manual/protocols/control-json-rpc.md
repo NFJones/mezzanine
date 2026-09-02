@@ -164,6 +164,12 @@ lease revocation, and session shutdown perform the same exact-generation
 cleanup. Reattach preserves the remote `DISPLAY` and `XAUTHORITY` paths but
 rotates credentials and does not migrate existing X connections.
 
+A terminal request that reports `session_terminated = true` is flushed before
+the connection-owned X11 route is revoked and before terminal lifecycle state
+is published to service supervision. This response fence is drop-safe: write
+failure, transport loss, or task cancellation still releases teardown rather
+than leaving the session services alive indefinitely.
+
 Schema v71 defines two compressed application-framing ALPNs:
 `mezzanine/transport/2/zstd` and
 `mezzanine/transport/2/lz4`. This is not Iroh or QUIC compression. On either

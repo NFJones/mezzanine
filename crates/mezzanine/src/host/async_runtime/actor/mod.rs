@@ -4,6 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 use super::actor_types::{AsyncTerminalClientConfigInput, AsyncTerminalClientConfigSnapshot};
+use super::config::AsyncTerminalLifecycleFlushGuard;
 use super::{
     AgentId, AgentProviderEvent, Arc, AsyncControlInputResult, AsyncHookEvent,
     AsyncIrohRenderSnapshot, AsyncMessageFanout, AsyncMessageInputResult, AsyncRenderedClientFlush,

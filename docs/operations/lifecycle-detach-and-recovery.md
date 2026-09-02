@@ -50,6 +50,12 @@ the endpoint; those stages do not each receive a fresh timeout. Shutdown sends
 the control-stream FIN before closing the connection, then settles or aborts
 the remaining workers concurrently within that shared budget.
 
+When `:exit` terminates a remotely attached session, Mez flushes the terminal
+response containing `session_terminated = true` before revoking that
+connection's X11 route or allowing service supervision to tear down the
+control task. If response delivery fails, drop-safe cleanup still releases the
+shutdown fence and proceeds with bounded teardown.
+
 Remote terminal input is not retried after an ambiguous connection failure. If
 Mez reports that an input outcome is unknown, treat the command as possibly
 applied, inspect the session through a new explicit attach, and do not assume
