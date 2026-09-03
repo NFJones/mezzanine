@@ -156,6 +156,9 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
 # Active settings below materialize Mezzanine's built-in defaults. Optional
 # settings and dynamic-map examples remain commented so the first launch is
 # behaviorally unchanged while the complete configuration surface is visible.
+# Lines prefixed with `#? ` are directly activatable: remove that prefix from
+# every such line at once and the result remains a valid configuration.
+# Plain commented snippets document alternatives that replace a marked choice.
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
@@ -239,8 +242,8 @@ bracketed_paste = true
 clipboard = "external"
 # Optional explicit host clipboard commands. Copy commands receive content on
 # stdin; paste commands return clipboard text on stdout.
-# clipboard_copy_command = "xclip -selection clipboard"
-# clipboard_paste_command = "xclip -selection clipboard -out"
+#? clipboard_copy_command = "xclip -selection clipboard"
+#? clipboard_paste_command = "xclip -selection clipboard -out"
 # Maximum time to wait for a host clipboard read.
 clipboard_read_timeout_ms = 250
 # Maximum bytes accepted from a host clipboard read.
@@ -292,50 +295,50 @@ fallback = [["vim", "{file}"], ["nano", "{file}"], ["vi", "{file}"]]
 escape = "C-a"
 # Prefix suffix for external prompt editing (`Ctrl+A e` by default). Set to
 # another chord to remap it or `null` to disable it.
-# edit_prompt = "e"
+#? edit_prompt = "e"
 # Direct bindings are disabled by default. Uncommenting a chord replaces that
 # action's built-in prefix binding; setting a field to null disables both paths.
-# split_vertical = "A-\\"
-# split_horizontal = "A--"
-# new_window = "A-="
-# new_group = "A-S-="
-# agent_shell = "A-]"
-# focus_up = "C-A-Up"
-# focus_down = "C-A-Down"
-# focus_left = "C-A-Left"
-# focus_right = "C-A-Right"
-# focus_previous_window = "C-A-PageUp"
-# focus_next_window = "C-A-PageDown"
-# focus_previous_group = "C-A-S-PageUp"
-# focus_next_group = "C-A-S-PageDown"
+#? split_vertical = "A-\\"
+#? split_horizontal = "A--"
+#? new_window = "A-="
+#? new_group = "A-S-="
+#? agent_shell = "A-]"
+#? focus_up = "C-A-Up"
+#? focus_down = "C-A-Down"
+#? focus_left = "C-A-Left"
+#? focus_right = "C-A-Right"
+#? focus_previous_window = "C-A-PageUp"
+#? focus_next_window = "C-A-PageDown"
+#? focus_previous_group = "C-A-S-PageUp"
+#? focus_next_group = "C-A-S-PageDown"
 
 # Map arbitrary key chords to command-prompt command sequences.
 [keys.command_bindings]
-# "A-t" = "new-window"
+#? "A-t" = "new-window"
 
 # Select a built-in or user-defined key preset.
 [key_preset]
 active = "default"
 
 # Optional custom presets inherit omitted bindings from the default preset.
-# [key_presets.custom]
-# escape = "C-a"
-# edit_prompt = "e"
-# split_vertical = "A-\\"
-# split_horizontal = "A--"
-# new_window = "A-="
-# new_group = "A-S-="
-# agent_shell = "A-]"
-# focus_up = "C-A-Up"
-# focus_down = "C-A-Down"
-# focus_left = "C-A-Left"
-# focus_right = "C-A-Right"
-# focus_previous_window = "C-A-PageUp"
-# focus_next_window = "C-A-PageDown"
-# focus_previous_group = "C-A-S-PageUp"
-# focus_next_group = "C-A-S-PageDown"
-# [key_presets.custom.command_bindings]
-# "A-t" = "new-window"
+#? [key_presets.custom]
+#? escape = "C-a"
+#? edit_prompt = "e"
+#? split_vertical = "A-\\"
+#? split_horizontal = "A--"
+#? new_window = "A-="
+#? new_group = "A-S-="
+#? agent_shell = "A-]"
+#? focus_up = "C-A-Up"
+#? focus_down = "C-A-Down"
+#? focus_left = "C-A-Left"
+#? focus_right = "C-A-Right"
+#? focus_previous_window = "C-A-PageUp"
+#? focus_next_window = "C-A-PageDown"
+#? focus_previous_group = "C-A-S-PageUp"
+#? focus_next_group = "C-A-S-PageDown"
+#? [key_presets.custom.command_bindings]
+#? "A-t" = "new-window"
 
 # Window status frame shown at the bottom of the terminal.
 [frames.window]
@@ -348,16 +351,16 @@ visible_fields = ["window.list", "window.index", "window.name", "window.id", "pa
 
 [frames.window.pills]
 # Optional asynchronously refreshed right-status pill.
-# [frames.window.pills.example]
-# label = "Build"
-# command = "git status --short"
-# interval_seconds = 30
-# initial = "checking"
-# timeout_ms = 2000
-# empty_behavior = "hide"
-# error_behavior = "show_error"
-# max_output_chars = 80
-# style = "default"
+#? [frames.window.pills.example]
+#? label = "Build"
+#? command = "git status --short"
+#? interval_seconds = 30
+#? initial = "checking"
+#? timeout_ms = 2000
+#? empty_behavior = "hide"
+#? error_behavior = "show_error"
+#? max_output_chars = 80
+#? style = "default"
 
 # Pane title frame rendered on each pane border.
 [frames.pane]
@@ -479,12 +482,12 @@ syntax_operator_fg = "muted"
 syntax_operator_bg = "surface"
 
 # Optional custom themes inherit omitted aliases and slots from deepforest.
-# [themes.custom.aliases]
-# primary = "#88ccff"
-# secondary = "#6699cc"
-# [themes.custom.colors]
-# window_active_bg = "primary"
-# pane_border_active_fg = "secondary"
+#? [themes.custom.aliases]
+#? primary = "#88ccff"
+#? secondary = "#6699cc"
+#? [themes.custom.colors]
+#? window_active_bg = "primary"
+#? pane_border_active_fg = "secondary"
 
 # Terminal scrollback, rotation, saved-agent-session retention, and persistence.
 [history]
@@ -585,32 +588,6 @@ large_model_profile = "auto-size-large"
 allowed_reasoning_efforts = ["low", "medium", "high", "xhigh"]
 fallback_policy = "use-default-profile"
 
-# Named subagent profiles. Built-in roles remain available when this table is empty.
-[subagents]
-# [subagents.reviewer]
-# name = "Reviewer"
-# description = "Reviews changes without modifying files."
-# developer_instructions = "Focus on correctness, regressions, and missing tests."
-# model_profile = "default"
-# permission_preset = "read-only"
-# mcp_servers = []
-# default_cooperation_mode = "explore-only"
-# default_read_scopes = ["."]
-# default_write_scopes = []
-# [subagents.reviewer.shell_env]
-# REVIEW_MODE = "strict"
-
-# Optional named prompt/style profiles are selectable by agents.default_personality.
-# [personalities.concise]
-# name = "Concise"
-# system_prompt = "Prefer direct answers and compact status reports."
-# response_style = "concise"
-# model_profile = "default"
-# planning_enabled = false
-# routing_enabled = false
-
-[personalities]
-
 [providers.openai]
 kind = "openai"
 api = "openai-responses"
@@ -659,8 +636,8 @@ context_window_tokens = 400000
 
 [providers.openai.options]
 # Optional documented OpenAI routing headers for multi-organization/project API keys.
-# organization_id = "org_..."
-# project_id = "proj_..."
+#? organization_id = "org_..."
+#? project_id = "proj_..."
 
 [providers.anthropic]
 kind = "anthropic"
@@ -696,46 +673,59 @@ max_input_tokens = 100000
 max_output_tokens = 16000
 
 [providers.anthropic.options]
-# anthropic_version = "2023-06-01"
-# default_max_tokens = 4096
+#? anthropic_version = "2023-06-01"
+#? default_max_tokens = 4096
 
 # Example local OpenAI-compatible Chat Completions backend, such as LM Studio.
 # Uncomment and select this provider from a model profile when a local server is
 # listening on the configured base URL. Missing stored auth metadata is allowed;
 # Mezzanine sends no Authorization header in that case.
-# [providers.lmstudio]
-# kind = "openai-compatible"
-# api = "openai-chat-completions"
-# auth_profile = "default"
-# base_url = "http://localhost:1234/v1"
-# default_model = "local-model"
+#? [providers.lmstudio]
+#? kind = "openai-compatible"
+#? api = "openai-chat-completions"
+#? auth_profile = "default"
+#? base_url = "http://localhost:1234/v1"
+#? default_model = "local-model"
 #
-# [providers.lmstudio.models.local-model]
-# id = "local-model"
-# display_name = "Local model"
-# context_window_tokens = 32768
+#? [providers.lmstudio.models.local-model]
+#? id = "local-model"
+#? display_name = "Local model"
+#? aliases = ["local"]
+#? context_window_tokens = 32768
+#? max_input_tokens = 28672
+#? max_output_tokens = 4096
+#? reasoning_levels = ["low", "medium", "high"]
+#? capabilities = ["text"]
+#? [providers.lmstudio.models.local-model.provider_options]
+#? runtime = "local"
 #
-# [providers.lmstudio.options]
-# maap_output = "structured_json"
-# structured_output = "json_schema"
-# tool_calls = "auto"
-# tool_choice = "required" # only used when maap_output selects native tools
-# parallel_tool_calls = "disabled"
-# output_token_field = "max_tokens"
-# maap_surface = "canonical_batch"
+#? [providers.lmstudio.options]
+#? maap_output = "structured_json"
+#? structured_output = "json_schema"
+#? tool_calls = "auto"
+#? tool_choice = "required" # only used when maap_output selects native tools
+#? parallel_tool_calls = "disabled"
+#? output_token_field = "max_tokens"
+#? maap_surface = "canonical_batch"
 #
-# [model_profiles.local-lmstudio]
-# provider = "lmstudio"
-# model = "local-model"
-# reasoning_profile = "medium"
-# latency_preference = "default"
-# multimodal_required = false
-# context_window_tokens = 32768
-# safety_tier = "basic"
-# privacy_tier = "local"
-# residency = "local"
-# approval_policy = "ask"
-# fallback_profiles = []
+#? [model_profiles.local-lmstudio]
+#? provider = "lmstudio"
+#? model = "local-model"
+#? reasoning_profile = "medium"
+#? latency_preference = "default"
+#? multimodal_required = false
+#? context_window_tokens = 32768
+#? max_input_tokens = 28672
+#? max_output_tokens = 4096
+#? safety_tier = "basic"
+#? privacy_tier = "local"
+#? residency = "local"
+#? approval_policy = "ask"
+#? fallback_profiles = []
+#? [model_profiles.local-lmstudio.provider_options]
+#? runtime = "local"
+# Compatibility aliases replace canonical profile fields above:
+# `reasoning_effort`, `multimodal`, and `context_limit_tokens`.
 
 [providers.deepseek]
 kind = "deepseek"
@@ -803,7 +793,7 @@ fallback_profiles = []
 # For OpenAI-compatible Chat Completions backends that support the modern
 # developer role, set developer_role = "developer". It defaults to
 # "system" for older compatible servers.
-# developer_role = "developer"
+#? developer_role = "developer"
 
 [model_profiles.auto-size-router]
 provider = "openai"
@@ -907,6 +897,36 @@ auto_sizing_medium_model_profile = "anthropic-default"
 auto_sizing_large_model_profile = "anthropic-default"
 allowed_reasoning_efforts = ["high"]
 
+# Optional named prompt/style profiles are selectable by agents.default_personality.
+[personalities]
+#? [personalities.concise]
+#? name = "Concise"
+#? system_prompt = "Prefer direct answers and compact status reports."
+#? response_style = "concise"
+#? model_profile = "default"
+#? planning_enabled = false
+#? routing_enabled = false
+# Compatibility aliases replace their canonical counterparts above:
+# `instructions`, `style`, `planning`, and `routing`.
+
+# Named subagent profiles. Built-in roles remain available when this table is empty.
+[subagents]
+#? [subagents.reviewer]
+#? name = "Reviewer"
+#? description = "Reviews changes without modifying files."
+#? developer_instructions = "Focus on correctness, regressions, and missing tests."
+#? model_profile = "default"
+#? permission_preset = "read-only"
+#? mcp_servers = []
+#? default_cooperation_mode = "explore-only"
+#? default_read_scopes = ["."]
+#? default_write_scopes = []
+#? [subagents.reviewer.shell_env]
+#? REVIEW_MODE = "strict"
+# Compatibility aliases replace their canonical counterparts above:
+# `developer_prompt`, `model_profile_override`, `permission_override`, and
+# `default_mode`.
+
 [permissions]
 # Generated Linux and macOS configuration selects full-access when the fixed
 # Bubblewrap or Seatbelt executable is present, and auto-allow otherwise.
@@ -917,7 +937,7 @@ allowed_reasoning_efforts = ["high"]
 # trusted project overlays may not change this execution boundary.
 approval_policy = "ask"
 # Optional named permission preset applied before explicit settings.
-# preset = "default"
+#? preset = "read-only"
 # Generated Linux configuration selects Bubblewrap when /usr/bin/bwrap is an
 # executable regular file. Generated macOS configuration selects Seatbelt when
 # /usr/bin/sandbox-exec is executable. Either platform uses policy-only when its
@@ -926,53 +946,28 @@ sandbox = "bubblewrap"
 # Scope paths may name files or directories. A Unix-domain socket may also be
 # placed in read_scopes for an explicitly trusted service endpoint; a read-only
 # mount does not make requests sent through that socket read-only.
-# read_scopes = ["/var/run/docker.sock"]
 # Installed SDKs use the same generic authority. Every required loader or
 # library root must be listed explicitly; read scopes never grant write access.
-# read_scopes = ["/opt/acme-sdk"]
+#? read_scopes = ["/var/run/docker.sock", "/opt/acme-sdk"]
 # Writable host paths projected into Bubblewrap; omitted by default.
-# write_scopes = ["."]
+#? write_scopes = ["."]
 # Optional sanitized Git identity for Bubblewrap commits. Configure both fields;
 # Mezzanine never imports the host global Git configuration.
-# [permissions.bubblewrap]
-# Absolute Bubblewrap executable and fail-closed isolation defaults.
-# executable = "/usr/bin/bwrap"
-# unavailable = "fail"
-# network = "isolated"
-# environment = "minimal"
-# Exact host supplementary groups to project. The primary group is automatic;
-# an empty list strips all ambient supplementary groups.
-# group_whitelist = []
-# Optional variable names are read from the active pane and always redacted.
-# When this field is omitted, PATH is forwarded by default. An explicit list
-# replaces that default, so include PATH when sandboxed command lookup should
-# use the pane's safely resolved path. Forwarding never grants filesystem authority.
-# env_whitelist = ["ACME_HOME"]
-# git_user_name = "Your Name"
-# git_user_email = "you@example.invalid"
-# macOS Seatbelt uses the same fail-closed policy surface without exposing raw
-# SBPL or launcher arguments. Executable presence selects generated defaults
-# and guided setup, but every workload still requires its runtime capability
-# probe and never falls back to policy-only or host execution.
-# [permissions.seatbelt]
-# executable = "/usr/bin/sandbox-exec"
-# unavailable = "fail"
-# network = "isolated"
-# environment = "minimal"
-# env_whitelist = ["PATH"]
-# git_user_name = "Your Name"
-# git_user_email = "you@example.invalid"
 # Command-rule arrays are empty by default. A rule may classify matching shell
 # commands and declare their complete effects for deterministic authorization.
 command_rules = []
 session_command_rules = []
 global_command_rules = []
+# The rule below is a copy/replace example, not a directly activatable block:
+# remove `command_rules = []` before copying it into the configuration.
 # [[permissions.command_rules]]
 # id = "cargo-check"
 # pattern = "cargo check"
 # decision = "allow"
 # scope = "managed"
 # shell_classification = "simple"
+# Optional advanced match fields are `exact_sha256`, `argument_policy`, and
+# `executable_policy`; use only the one appropriate to the rule's match mode.
 # justification = "Permit the bounded Rust type-check command."
 # examples = ["cargo check --workspace"]
 # match_examples = ["cargo check"]
@@ -995,39 +990,70 @@ destructive_action_policy = "prompt"
 # Approval bypass cannot be enabled from config; false documents the safe default.
 bypass_mode = false
 
+# Optional sanitized Git identity for sandboxed commits. Configure both fields;
+# Mezzanine never imports the host global Git configuration.
+#? [permissions.bubblewrap]
+# Absolute Bubblewrap executable and fail-closed isolation defaults.
+#? executable = "/usr/bin/bwrap"
+#? unavailable = "fail"
+#? network = "isolated"
+#? environment = "minimal"
+# Exact host supplementary groups to project. The primary group is automatic;
+# an empty list strips all ambient supplementary groups.
+#? group_whitelist = []
+# Optional variable names are read from the active pane and always redacted.
+# When this field is omitted, PATH is forwarded by default. An explicit list
+# replaces that default, so include PATH when sandboxed command lookup should
+# use the pane's safely resolved path. Forwarding never grants filesystem authority.
+#? env_whitelist = ["PATH", "ACME_HOME"]
+#? git_user_name = "Your Name"
+#? git_user_email = "you@example.invalid"
+# macOS Seatbelt uses the same fail-closed policy surface without exposing raw
+# SBPL or launcher arguments. Executable presence selects generated defaults
+# and guided setup, but every workload still requires its runtime capability
+# probe and never falls back to policy-only or host execution.
+#? [permissions.seatbelt]
+#? executable = "/usr/bin/sandbox-exec"
+#? unavailable = "fail"
+#? network = "isolated"
+#? environment = "minimal"
+#? env_whitelist = ["PATH"]
+#? git_user_name = "Your Name"
+#? git_user_email = "you@example.invalid"
+
 # Named MCP server definitions. No server is configured by default.
 [mcp_servers]
-# Example stdio server; use url instead of command/args for streamable HTTP.
-# [mcp_servers.example]
-# name = "Example tools"
-# command = "example-mcp-server"
-# args = ["--stdio"]
+# Directly activatable stdio example. For streamable HTTP, remove `command`
+# and `args`, then add this replacement assignment:
 # url = "https://example.invalid/mcp"
-# env_vars = ["EXAMPLE_TOKEN"]
-# cwd = "."
-# bearer_token_env = "EXAMPLE_TOKEN"
-# enabled_tools = ["read_file"]
-# disabled_tools = ["delete_file"]
-# Timeout aliases accept seconds or milliseconds; configure only one form.
-# startup_timeout_sec = 10
-# startup_timeout_ms = 10000
-# tool_timeout_sec = 60
-# tool_timeout_ms = 60000
-# enabled = true
-# approval = "prompt"
-# [mcp_servers.example.env]
-# LOG_LEVEL = "info"
-# [mcp_servers.example.http_headers]
-# X_Client = "mez"
-# [mcp_servers.example.tool_approvals]
-# read_file = "allow"
+#? [mcp_servers.example]
+#? name = "Example tools"
+#? command = "example-mcp-server"
+#? args = ["--stdio"]
+#? env_vars = ["EXAMPLE_TOKEN"]
+#? cwd = "."
+#? bearer_token_env = "EXAMPLE_TOKEN"
+#? enabled_tools = ["read_file"]
+#? disabled_tools = ["delete_file"]
+# Timeout aliases accept seconds or milliseconds; this example selects
+# milliseconds. Replace with `startup_timeout_sec` or `tool_timeout_sec` if preferred.
+#? startup_timeout_ms = 10000
+#? tool_timeout_ms = 60000
+#? enabled = true
+#? approval = "prompt"
+#? [mcp_servers.example.env]
+#? LOG_LEVEL = "info"
+#? [mcp_servers.example.http_headers]
+#? X_Client = "mez"
+#? [mcp_servers.example.tool_approvals]
+#? read_file = "allow"
 # Model-visible purpose and safety metadata for effects outside shell mediation.
-# [mcp_servers.example.external_capability]
-# purpose = "Issue and pull request operations"
-# usage_instructions = "Use for issue triage and pull request review tasks."
-# mutates_filesystem_outside_shell = false
-# executes_processes_outside_shell = false
-# accesses_credentials_outside_shell = false
+#? [mcp_servers.example.external_capability]
+#? purpose = "Issue and pull request operations"
+#? usage_instructions = "Use for issue triage and pull request review tasks."
+#? mutates_filesystem_outside_shell = false
+#? executes_processes_outside_shell = false
+#? accesses_credentials_outside_shell = false
 
 # Authentication refresh policy. Credentials themselves are never stored here.
 [auth]
@@ -1048,31 +1074,29 @@ on_truncation = "summarize"
 
 # Named lifecycle hooks. No external command executes by default.
 [hooks]
-# [hooks.example]
-# event = "post_shell_command"
-# events = ["post_shell_command"]
-# program = "/usr/bin/logger"
-# command = "printf hook"
-# args = ["mez hook completed"]
-# shell = "focused"
-# kind = "program"
-# enabled = true
-# required = false
-# agent_hook = false
-# timeout_sec = 5
-# timeout_ms = 5000
-# on_failure = "warn"
-# cwd = "."
-# working_directory = "."
-# inject_instructions = ""
-# mutates_policy = false
-# alters_action = false
-# [hooks.example.env]
-# HOOK_MODE = "audit"
-# [hooks.example.match]
-# path = "action_type"
-# equals = "shell_command"
-# `matches` accepts an array of matcher groups when one group is insufficient.
+# Directly activatable program hook. Replace `event` with `events`, `program`
+# and `args` with `command` plus `shell`, `timeout_ms` with `timeout_sec`, or
+# `cwd` with `working_directory` to use those compatibility forms.
+#? [hooks.example]
+#? event = "post_shell_command"
+#? program = "/usr/bin/logger"
+#? args = ["mez hook completed"]
+#? kind = "program"
+#? enabled = true
+#? required = false
+#? agent_hook = false
+#? timeout_ms = 5000
+#? on_failure = "warn"
+#? cwd = "."
+#? inject_instructions = ""
+#? mutates_policy = false
+#? alters_action = false
+#? [hooks.example.env]
+#? HOOK_MODE = "audit"
+#? [hooks.example.match]
+#? path = "action_type"
+#? equals = "shell_command"
+# When one matcher group is insufficient, remove the `match` table and add:
 # matches = [{ path = "status", equals = "failed" }]
 
 # Append-only security audit log and retention policy.

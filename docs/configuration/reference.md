@@ -55,6 +55,14 @@ configuration error; remove or relocate all but the intended file. See
 [Configuration overview](overview.md) for mutation examples and the layer
 selection workflow.
 
+The generated TOML is a complete, uncomment-safe inventory of the public
+first-launch surface. Lines prefixed with `#? ` are directly activatable: all
+of those prefixes may be removed at once and the result still parses and
+validates. Plain commented snippets document mutually exclusive aliases,
+copy/replace examples such as command-rule arrays, or provider catalog fields
+that are materialized only after authentication; they are not activation
+markers.
+
 The current config schema version is `81`. On launch, Mezzanine migrates an
 older supported primary user config to the current schema before validation,
 backfilling missing defaults, rewriting renamed settings, and removing settings

@@ -3,6 +3,15 @@
 use super::*;
 use crate::config::defaults::{GeneratedConfigPlatform, initial_config_toml_for_platform};
 use crate::config::initial_config_toml;
+use crate::config::{
+    AGENT_AUTO_SIZING_KEYS, AGENT_KEYS, AUDIT_KEYS, AUTH_KEYS, BUBBLEWRAP_PERMISSION_KEYS,
+    COMMAND_RULE_EFFECT_KEYS, COMMAND_RULE_KEYS, EXTERNAL_EDITOR_KEYS, HISTORY_KEYS, HOOK_KEYS,
+    HOST_KEYS, HOST_LEASE_KEYS, INSTRUCTION_KEYS, IROH_TRANSPORT_KEYS, IROH_X11_KEYS, ISSUE_KEYS,
+    KEY_BINDING_KEYS, KEY_PRESET_KEYS, MCP_SERVER_KEYS, MEMORY_KEYS, MODEL_PRESET_KEYS,
+    MODEL_PROFILE_KEYS, PANE_FRAME_KEYS, PERMISSION_KEYS, PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS,
+    PROVIDER_MODEL_KEYS, RUNTIME_KEYS, SEATBELT_PERMISSION_KEYS, SUBAGENT_PROFILE_KEYS,
+    TERMINAL_KEYS, THEME_KEYS, WINDOW_FRAME_KEYS,
+};
 
 /// Verifies creates default config file.
 ///
@@ -410,6 +419,36 @@ fn default_config_matches_documented_example() {
     assert_eq!(initial_config_toml().unwrap().trim(), documented.trim());
 }
 
+/// Verifies every advertised optional assignment or table can be enabled at
+/// once without producing invalid TOML or an invalid Mezzanine configuration.
+#[test]
+fn default_config_advertised_options_are_uncomment_safe() {
+    let config = initial_config_toml().unwrap();
+    let advertised = config
+        .lines()
+        .filter(|line| line.starts_with("#? "))
+        .count();
+    assert!(
+        advertised >= 50,
+        "expected a substantial activatable inventory"
+    );
+    let activated = config
+        .lines()
+        .map(|line| line.strip_prefix("#? ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    toml::from_str::<toml::Value>(&activated).unwrap_or_else(|error| {
+        panic!("activated default config is invalid TOML: {error}\n{activated}")
+    });
+    let validation = validate_config_text(ConfigFormat::Toml, &activated, ConfigScope::Primary);
+    assert!(
+        validation.valid,
+        "{:?}\n{activated}",
+        validation.diagnostics
+    );
+}
+
 /// Verifies first-launch configuration documents every supported non-provider
 /// surface while keeping provider catalogs reserved for successful auth login.
 ///
@@ -434,34 +473,34 @@ fn initial_config_is_complete_annotated_and_provider_free() {
         "[keys]",
         "[keys.command_bindings]",
         "[key_preset]",
-        "# [key_presets.custom]",
+        "#? [key_presets.custom]",
         "[frames.window]",
         "[frames.window.pills]",
-        "# [frames.window.pills.example]",
+        "#? [frames.window.pills.example]",
         "[frames.pane]",
         "[theme]",
         "[theme.aliases]",
         "[theme.colors]",
-        "# [themes.custom.aliases]",
-        "# [themes.custom.colors]",
+        "#? [themes.custom.aliases]",
+        "#? [themes.custom.colors]",
         "[history]",
         "[memory]",
         "[issues]",
         "[agents]",
         "[agents.auto_sizing]",
         "[subagents]",
-        "# [subagents.reviewer]",
+        "#? [subagents.reviewer]",
         "[personalities]",
-        "# [personalities.concise]",
+        "#? [personalities.concise]",
         "[permissions]",
-        "# [permissions.bubblewrap]",
+        "#? [permissions.bubblewrap]",
         "# [[permissions.command_rules]]",
         "[mcp_servers]",
-        "# [mcp_servers.example]",
+        "#? [mcp_servers.example]",
         "[auth]",
         "[instructions]",
         "[hooks]",
-        "# [hooks.example]",
+        "#? [hooks.example]",
         "[audit]",
         "[extensions]",
     ] {
@@ -470,28 +509,28 @@ fn initial_config_is_complete_annotated_and_provider_free() {
 
     for setting in [
         "command = [\"editor\", \"{file}\"]",
-        "# edit_prompt =",
-        "# split_vertical =",
-        "# focus_next_group =",
-        "# clipboard_copy_command =",
-        "# read_scopes =",
-        "# write_scopes =",
-        "# preset =",
-        "# executable =",
-        "# unavailable =",
-        "# group_whitelist =",
-        "# git_user_email =",
-        "# default_cooperation_mode =",
-        "# planning_enabled =",
-        "# startup_timeout_sec =",
-        "# startup_timeout_ms =",
-        "# tool_timeout_sec =",
-        "# tool_timeout_ms =",
-        "# read_file =",
-        "# timeout_sec =",
-        "# inject_instructions =",
-        "# mutates_policy =",
-        "# alters_action =",
+        "#? edit_prompt =",
+        "#? split_vertical =",
+        "#? focus_next_group =",
+        "#? clipboard_copy_command =",
+        "#? read_scopes =",
+        "#? write_scopes =",
+        "#? preset =",
+        "#? executable =",
+        "#? unavailable =",
+        "#? group_whitelist =",
+        "#? git_user_email =",
+        "#? default_cooperation_mode =",
+        "#? planning_enabled =",
+        "startup_timeout_sec",
+        "#? startup_timeout_ms =",
+        "tool_timeout_sec",
+        "#? tool_timeout_ms =",
+        "#? read_file =",
+        "timeout_sec",
+        "#? inject_instructions =",
+        "#? mutates_policy =",
+        "#? alters_action =",
     ] {
         assert!(config.contains(setting), "missing {setting} in:\n{config}");
     }
@@ -504,6 +543,75 @@ fn initial_config_is_complete_annotated_and_provider_free() {
         annotation_count >= 100,
         "expected comprehensive annotations, found {annotation_count}"
     );
+}
+
+/// Verifies every accepted public field is represented by an active default,
+/// a directly activatable example, or an explicitly named alternative.
+#[test]
+fn default_config_documents_every_public_schema_key() {
+    let config = DEFAULT_CONFIG_TOML;
+    let groups: &[(&str, &[&str])] = &[
+        ("host", HOST_KEYS),
+        ("host.leases", HOST_LEASE_KEYS),
+        ("runtime", RUNTIME_KEYS),
+        ("transport.iroh", IROH_TRANSPORT_KEYS),
+        ("transport.iroh.x11", IROH_X11_KEYS),
+        ("terminal", TERMINAL_KEYS),
+        ("external_editor", EXTERNAL_EDITOR_KEYS),
+        ("keys", KEY_BINDING_KEYS),
+        ("key_preset", KEY_PRESET_KEYS),
+        ("frames.window", WINDOW_FRAME_KEYS),
+        ("frames.pane", PANE_FRAME_KEYS),
+        ("theme", THEME_KEYS),
+        ("history", HISTORY_KEYS),
+        ("memory", MEMORY_KEYS),
+        ("issues", ISSUE_KEYS),
+        ("agents", AGENT_KEYS),
+        ("agents.auto_sizing", AGENT_AUTO_SIZING_KEYS),
+        ("providers.<name>", PROVIDER_KEYS),
+        ("providers.<name>.models.<name>", PROVIDER_MODEL_KEYS),
+        ("model_profiles.<name>", MODEL_PROFILE_KEYS),
+        ("model_presets.<name>", MODEL_PRESET_KEYS),
+        ("subagents.<name>", SUBAGENT_PROFILE_KEYS),
+        ("personalities.<name>", PERSONALITY_PROFILE_KEYS),
+        ("permissions", PERMISSION_KEYS),
+        ("permissions.bubblewrap", BUBBLEWRAP_PERMISSION_KEYS),
+        ("permissions.seatbelt", SEATBELT_PERMISSION_KEYS),
+        ("permissions.command_rules", COMMAND_RULE_KEYS),
+        (
+            "permissions.command_rules.effects",
+            COMMAND_RULE_EFFECT_KEYS,
+        ),
+        ("mcp_servers.<name>", MCP_SERVER_KEYS),
+        ("auth", AUTH_KEYS),
+        ("instructions", INSTRUCTION_KEYS),
+        ("hooks.<name>", HOOK_KEYS),
+        ("audit", AUDIT_KEYS),
+    ];
+
+    for (group, keys) in groups {
+        for key in *keys {
+            let assignment = format!("{key} =");
+            let quoted = format!("`{key}`");
+            let table_component = format!(".{key}]");
+            let nested_table_component = format!(".{key}.");
+            assert!(
+                config.lines().any(|line| {
+                    let candidate = line
+                        .strip_prefix("#? ")
+                        .or_else(|| line.strip_prefix("# "))
+                        .unwrap_or(line)
+                        .trim();
+                    candidate.starts_with(&assignment)
+                        || candidate.starts_with(&format!("\"{key}\" ="))
+                        || candidate.contains(&table_component)
+                        || candidate.contains(&nested_table_component)
+                        || line.contains(&quoted)
+                }),
+                "generated config does not document `{group}.{key}`"
+            );
+        }
+    }
 }
 
 /// Verifies generated defaults include the built-in Anthropic provider entry
