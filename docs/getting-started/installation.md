@@ -26,6 +26,11 @@ Cargo usually places the executable in `~/.cargo/bin`. Ensure that directory
 is on `PATH`, or invoke `~/.cargo/bin/mez` explicitly. Confirm the installed
 command with `mez --version` and inspect top-level operations with `mez --help`.
 
+The repository's `just install` recipe performs the same locked installation.
+When Cargo's default install root is read-only, the recipe installs under
+`target/mez-install/bin` instead and prints that destination. Add the printed
+directory to `PATH` or invoke its `mez` executable directly.
+
 Without a subcommand, `mez` attaches to the first session that accepts a
 primary client; when none is available, it creates a session. Use `mez new`
 when creating a session is intentional. Use `mez list` and `mez attach` to

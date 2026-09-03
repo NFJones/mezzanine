@@ -12,7 +12,7 @@ build-release:
 
 # Install mez
 install:
-    cargo install --path crates/mezzanine
+    if [ -n "${CARGO_INSTALL_ROOT:-}" ] || [ -w "${CARGO_HOME:-$HOME/.cargo}" ]; then cargo install --path crates/mezzanine --locked; else install_root="$(pwd)/target/mez-install"; printf '%s\n' "Cargo install root is read-only; installing mez under $install_root/bin"; CARGO_INSTALL_ROOT="$install_root" cargo install --path crates/mezzanine --locked; fi
 
 # Run (release by default)
 run *args:
