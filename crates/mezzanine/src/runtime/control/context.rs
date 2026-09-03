@@ -60,6 +60,22 @@ pub(super) fn runtime_agent_transcript_context_blocks(
             continue;
         }
         if entry.role == TranscriptRole::System
+            && let Some(TranscriptContextEvent::PromptBoundary {
+                source,
+                label,
+                content,
+                ..
+            }) = TranscriptContextEvent::from_transcript_content(&entry.content)
+        {
+            blocks.push(ContextBlock {
+                source,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label,
+                content,
+            });
+            continue;
+        }
+        if entry.role == TranscriptRole::System
             && let Some(TranscriptContextEvent::RoutedHandoff { content }) =
                 TranscriptContextEvent::from_transcript_content(&entry.content)
         {

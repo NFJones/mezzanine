@@ -4670,6 +4670,19 @@ resolved-skill hints, permission policy, and duplicate MCP schemas MUST stay out
 of model context. Session and cache lineage travel as typed non-model-visible
 request metadata.
 
+Prompt-boundary plan policy, explicit skill instructions, invocation-time
+configuration snapshots, and unread local messages that precede a user event
+MUST be persisted as bounded typed chronology before that user event and replayed
+with byte-identical source, label, content, and order. Persistent plan mode MUST
+append only when its enabled/disabled state changes; unchanged prompts MUST reuse
+the prior transition. A skill activation governs only its owning prompt boundary:
+historical activations MUST remain visible as causal history but MUST NOT suppress
+skill discovery or loading for a later ordinary prompt. Interrupted-turn and
+compaction refresh paths MUST preserve the same prompt-boundary chronology without
+duplication. Pane directives and other stable instruction-profile settings remain
+stable-prefix state; changing them is an intentional profile transition rather
+than regenerated task prelude.
+
 Provider cache diagnostics and cache breakpoints MUST consume explicit
 placement and semantic metadata rather than infer lifecycle from sources,
 labels, or text. OpenAI Responses MAY keep a stable action-schema superset and
@@ -4697,6 +4710,10 @@ NOT be rewritten as an explicit zero. Retained continuity baselines and latest
 conversation samples MUST be bounded with deterministic eviction, and stale
 observations MUST be rejected unless background compaction or memory work still
 belongs to the pane's current conversation.
+Per-wire diagnostics MUST report request-local MCP-manifest bytes and expanded
+same-turn action-detail bytes separately from the durable provider prefix, while
+retaining complete callable MCP schemas whenever the active provider requires
+them.
 
 Capability continuation, MAAP repair, output-limit retry, failure summary,
 routed handoff and repair, routed presentation and failure explanation,

@@ -76,7 +76,7 @@ impl RuntimeSessionService {
         self.record_agent_pane_trace_log_text(
             &observation.pane_id,
             &format!(
-                "agent trace: turn {}: provider wire request id={} attempt={} retry={} purpose={} provider={} model={} interaction={} succeeded={} failure={} stable_bytes={} volatile_bytes={} cache={} continuity={}",
+                "agent trace: turn {}: provider wire request id={} attempt={} retry={} purpose={} provider={} model={} interaction={} succeeded={} failure={} stable_bytes={} volatile_bytes={} mcp_bytes={} action_detail_bytes={} cache={} continuity={}",
                 observation.turn_id,
                 status.request_id,
                 observation.attempt_index,
@@ -89,6 +89,8 @@ impl RuntimeSessionService {
                 observation.failure_kind.as_deref().unwrap_or("none"),
                 status.stable_input_bytes.map_or_else(|| "unknown".to_string(), |value| value.to_string()),
                 status.volatile_input_bytes.map_or_else(|| "unknown".to_string(), |value| value.to_string()),
+                status.mcp_live_state_bytes,
+                status.action_detail_bytes,
                 usage,
                 continuity,
             ),

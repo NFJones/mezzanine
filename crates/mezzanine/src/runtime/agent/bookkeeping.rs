@@ -244,13 +244,15 @@ impl RuntimeSessionService {
             next_transcript_sequence(&store, &turn.conversation_id)?
         };
         let first_persistence = first_sequence == 1;
+        let mut entries = self.prompt_boundary_transcript_entries_for_turn(
+            &turn.conversation_id,
+            first_sequence,
+            created_at_unix_seconds,
+            turn,
+        )?;
         let interrupted_entry = TranscriptEntry {
             conversation_id: turn.conversation_id.clone(),
-            sequence: first_sequence.saturating_add(u64::from(
-                self.agent
-                    .agent_turn_environment_snapshots
-                    .contains_key(&turn.turn_id),
-            )),
+            sequence: first_sequence.saturating_add(entries.len() as u64),
             created_at_unix_seconds,
             role: TranscriptRole::System,
             turn_id: turn.turn_id.clone(),
@@ -264,29 +266,6 @@ impl RuntimeSessionService {
             .to_transcript_content(),
         };
         interrupted_entry.validate()?;
-        let mut entries = Vec::new();
-        if let Some(content) = self
-            .agent
-            .agent_turn_environment_snapshots
-            .get(&turn.turn_id)
-            .cloned()
-        {
-            let event = TranscriptContextEvent::environment_snapshot(content).ok_or_else(|| {
-                MezError::invalid_state("turn environment snapshot is empty or oversized")
-            })?;
-            let entry = TranscriptEntry {
-                conversation_id: turn.conversation_id.clone(),
-                sequence: first_sequence,
-                created_at_unix_seconds,
-                role: TranscriptRole::System,
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
-                pane_id: turn.pane_id.clone(),
-                content: event.to_transcript_content(),
-            };
-            entry.validate()?;
-            entries.push(entry);
-        }
         entries.push(interrupted_entry);
         if self.persistence.transcript_uses_adapter() {
             self.persistence.set_deferred_transcript_next_sequence(
@@ -455,26 +434,18 @@ impl RuntimeSessionService {
             turn,
             execution,
         )?;
+        self.insert_prompt_boundary_transcript_events(
+            &mut execution_entries,
+            conversation_id,
+            created_at_unix_seconds,
+            turn,
+        )?;
         self.append_exact_execution_block_transcript_events(
             &mut execution_entries,
             conversation_id,
             created_at_unix_seconds,
             turn,
         )?;
-        if let Some(content) = self
-            .agent
-            .agent_turn_environment_snapshots
-            .get(&turn.turn_id)
-            .cloned()
-        {
-            Self::insert_environment_snapshot_transcript_event(
-                &mut execution_entries,
-                conversation_id,
-                created_at_unix_seconds,
-                turn,
-                content,
-            )?;
-        }
         if execution.terminal_state == mez_agent::AgentTurnState::Completed
             && self.routed_presentation_turn(&turn.turn_id)
             && let Some(content) = self.routed_handoff_transcript_content(&turn.turn_id)
@@ -488,6 +459,104 @@ impl RuntimeSessionService {
             )?;
         }
         entries.extend(execution_entries);
+        Ok(entries)
+    }
+
+    /// Inserts exact prompt-boundary context before its owning user entry.
+    fn insert_prompt_boundary_transcript_events(
+        &self,
+        entries: &mut Vec<TranscriptEntry>,
+        conversation_id: &str,
+        created_at_unix_seconds: u64,
+        turn: &AgentTurnRecord,
+    ) -> Result<()> {
+        let Some(insertion_index) = entries
+            .iter()
+            .position(|entry| entry.role == TranscriptRole::User)
+        else {
+            return Ok(());
+        };
+        let first_sequence = entries[insertion_index].sequence;
+        let prompt_entries = self.prompt_boundary_transcript_entries_for_turn(
+            conversation_id,
+            first_sequence,
+            created_at_unix_seconds,
+            turn,
+        )?;
+        if prompt_entries.is_empty() {
+            return Ok(());
+        }
+        let inserted = prompt_entries.len() as u64;
+        for entry in &mut entries[insertion_index..] {
+            entry.sequence = entry.sequence.saturating_add(inserted);
+        }
+        entries.splice(insertion_index..insertion_index, prompt_entries);
+        Ok(())
+    }
+
+    /// Builds exact durable events for newly introduced context before a user prompt.
+    fn prompt_boundary_transcript_entries_for_turn(
+        &self,
+        conversation_id: &str,
+        first_sequence: u64,
+        created_at_unix_seconds: u64,
+        turn: &AgentTurnRecord,
+    ) -> Result<Vec<TranscriptEntry>> {
+        let Some(context) = self.agent_turn_contexts().get(&turn.turn_id) else {
+            return Ok(Vec::new());
+        };
+        let imported_history_events = self.agent_turn_imported_history_events(&turn.turn_id);
+        let mut sequence = first_sequence;
+        let mut entries = Vec::new();
+        for block in context
+            .chronology()
+            .iter()
+            .skip(imported_history_events)
+            .map(|event| event.block())
+        {
+            if block.source == ContextSourceKind::UserInstruction && block.label == "user prompt" {
+                break;
+            }
+            let event = if block.source == ContextSourceKind::Configuration
+                && block.label == "task environment snapshot"
+            {
+                TranscriptContextEvent::environment_snapshot(block.content.clone()).ok_or_else(
+                    || MezError::invalid_state("turn environment snapshot is empty or oversized"),
+                )?
+            } else if matches!(
+                block.source,
+                ContextSourceKind::SkillInstruction
+                    | ContextSourceKind::LocalMessage
+                    | ContextSourceKind::Policy
+                    | ContextSourceKind::Configuration
+            ) {
+                TranscriptContextEvent::prompt_boundary(
+                    block.source,
+                    block.label.clone(),
+                    block.content.clone(),
+                )
+                .ok_or_else(|| {
+                    MezError::invalid_state(
+                        "turn prompt-boundary context is empty, oversized, or unsupported",
+                    )
+                })?
+            } else {
+                continue;
+            };
+            let entry = TranscriptEntry {
+                conversation_id: conversation_id.to_string(),
+                sequence,
+                created_at_unix_seconds,
+                role: TranscriptRole::System,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                pane_id: turn.pane_id.clone(),
+                content: event.to_transcript_content(),
+            };
+            entry.validate()?;
+            entries.push(entry);
+            sequence = sequence.saturating_add(1);
+        }
         Ok(entries)
     }
 
@@ -544,42 +613,6 @@ impl RuntimeSessionService {
             entries.push(entry);
             sequence = sequence.saturating_add(1);
         }
-        Ok(())
-    }
-
-    /// Inserts one typed environment snapshot immediately before its user turn.
-    fn insert_environment_snapshot_transcript_event(
-        entries: &mut Vec<TranscriptEntry>,
-        conversation_id: &str,
-        created_at_unix_seconds: u64,
-        turn: &AgentTurnRecord,
-        content: String,
-    ) -> Result<()> {
-        let insertion_index = entries
-            .iter()
-            .position(|entry| entry.role == TranscriptRole::User)
-            .unwrap_or(0);
-        let sequence = entries
-            .get(insertion_index)
-            .map_or(1, |entry| entry.sequence);
-        for entry in &mut entries[insertion_index..] {
-            entry.sequence = entry.sequence.saturating_add(1);
-        }
-        let event = TranscriptContextEvent::environment_snapshot(content).ok_or_else(|| {
-            MezError::invalid_state("turn environment snapshot is empty or oversized")
-        })?;
-        let entry = TranscriptEntry {
-            conversation_id: conversation_id.to_string(),
-            sequence,
-            created_at_unix_seconds,
-            role: TranscriptRole::System,
-            turn_id: turn.turn_id.clone(),
-            agent_id: turn.agent_id.clone(),
-            pane_id: turn.pane_id.clone(),
-            content: event.to_transcript_content(),
-        };
-        entry.validate()?;
-        entries.insert(insertion_index, entry);
         Ok(())
     }
 

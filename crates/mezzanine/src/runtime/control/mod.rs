@@ -91,6 +91,13 @@ use protocol::{
 /// boundary and avoids relying on call-site inference.
 const RUNTIME_CONTROL_LIVE_OVERRIDE_LAYER: &str = "runtime-control-live-override";
 
+/// Durable prompt-boundary identity for pane-local plan mode.
+const AGENT_PLAN_MODE_CONTEXT_LABEL: &str = "agent shell plan-only mode";
+/// Persistent plan-mode activation visible until a later deactivation event.
+const AGENT_PLAN_MODE_ENABLED_CONTEXT: &str = "[plan-only mode]\nstate=enabled\nPlan only for this and subsequent user prompts until a later plan-mode event disables this policy. Do not edit, create, delete, or otherwise modify any files. Do not implement the plan or perform any write-capable actions; only inspect and describe the changes that would be needed.";
+/// Persistent plan-mode deactivation superseding an earlier activation.
+const AGENT_PLAN_MODE_DISABLED_CONTEXT: &str = "[plan-only mode]\nstate=disabled\nNormal task execution is restored for this and subsequent user prompts.";
+
 /// Prompt-boundary context plus the runtime ownership facts derived with it.
 pub(super) struct RuntimeAgentPromptContext {
     /// Complete durable context assembled for the new turn.
@@ -276,14 +283,26 @@ impl RuntimeSessionService {
                 );
             }
         }
-        if self.agent_planning_enabled(pane_id) {
+        let planning_enabled = self.agent_planning_enabled(pane_id);
+        let previous_plan_mode = blocks
+            .iter()
+            .rev()
+            .find(|block| {
+                block.source == ContextSourceKind::Policy
+                    && block.label == AGENT_PLAN_MODE_CONTEXT_LABEL
+            })
+            .map(|block| block.content.as_str());
+        let current_plan_mode = planning_enabled
+            .then_some(AGENT_PLAN_MODE_ENABLED_CONTEXT)
+            .or_else(|| previous_plan_mode.map(|_| AGENT_PLAN_MODE_DISABLED_CONTEXT));
+        if current_plan_mode.is_some_and(|content| previous_plan_mode != Some(content)) {
             insert_context_block_by_placement(
                 &mut blocks,
                 ContextBlock {
                     source: ContextSourceKind::Policy,
                     placement: mez_agent::ContextPlacement::ConversationAppend,
-                    label: "agent shell plan-only mode".to_string(),
-                    content: "[plan-only mode]\nPlan only for the following user prompt. Do not edit, create, delete, or otherwise modify any files. Do not implement the plan or perform any write-capable actions; only inspect and describe the changes that would be needed.".to_string(),
+                    label: AGENT_PLAN_MODE_CONTEXT_LABEL.to_string(),
+                    content: current_plan_mode.unwrap_or_default().to_string(),
                 },
             );
         }

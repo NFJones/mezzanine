@@ -837,6 +837,7 @@ fn runtime_interrupted_turn_pending_transcript_is_visible_to_immediate_continuat
     let mut service = test_runtime_service();
     service.set_agent_transcript_store(transcript_store.clone());
     service.persistence.enable_transcript_adapter();
+    service.set_agent_planning_enabled("%1", true);
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
@@ -883,6 +884,13 @@ fn runtime_interrupted_turn_pending_transcript_is_visible_to_immediate_continuat
         "{:#?}",
         context.blocks()
     );
+    let plan_blocks = context
+        .blocks()
+        .iter()
+        .filter(|block| block.label == "agent shell plan-only mode")
+        .collect::<Vec<_>>();
+    assert_eq!(plan_blocks.len(), 1, "{:#?}", context.blocks());
+    assert!(plan_blocks[0].content.contains("state=enabled"));
     let side_effects = service
         .drain_transcript_persistence_transition()
         .side_effects;

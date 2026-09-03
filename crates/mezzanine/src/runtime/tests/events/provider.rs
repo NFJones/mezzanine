@@ -1410,6 +1410,16 @@ fn runtime_terminal_execution_transcript_persistence_is_idempotent() {
     let transcript_root = temp_root("runtime-terminal-transcript-idempotent");
     let transcript_store = AgentTranscriptStore::new(transcript_root.clone());
     service.set_agent_transcript_store(transcript_store.clone());
+    let skill_root = temp_root("runtime-terminal-transcript-skill");
+    let skill_dir = skill_root.join("skills/review");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: review\ndescription: Review workflow\n---\n\nPreserve exact skill guidance.\n",
+    )
+    .unwrap();
+    service.set_config_root(skill_root.clone());
+    service.set_agent_planning_enabled("%1", true);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -1426,7 +1436,7 @@ fn runtime_terminal_execution_transcript_persistence_is_idempotent() {
         .session_id
         .clone();
     let started = service
-        .start_agent_prompt_turn("%1", "persist this result once")
+        .start_agent_prompt_turn("%1", "$review persist this result once")
         .unwrap();
     let turn = service
         .agent_turn_ledger()
@@ -1501,10 +1511,31 @@ fn runtime_terminal_execution_transcript_persistence_is_idempotent() {
         .iter()
         .position(|entry| entry.role == TranscriptRole::User)
         .expect("user prompt should be persisted");
+    let plan_index = entries
+        .iter()
+        .position(|entry| {
+            entry.role == TranscriptRole::System
+                && entry.content.contains("agent shell plan-only mode")
+                && entry.content.contains("Plan only")
+        })
+        .expect("plan-only prompt boundary should be persisted");
+    let skill_index = entries
+        .iter()
+        .position(|entry| {
+            matches!(
+                mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
+                Some(mez_agent::TranscriptContextEvent::PromptBoundary {
+                    source: ContextSourceKind::SkillInstruction,
+                    ..
+                })
+            )
+        })
+        .expect("explicit skill prompt boundary should be persisted");
     let assistant_index = entries
         .iter()
         .position(|entry| entry.role == TranscriptRole::Assistant)
         .expect("assistant response should be persisted");
+    assert!(skill_index < plan_index && plan_index < user_index);
     assert!(environment_index < user_index);
     assert!(user_index < assistant_index);
     assert_eq!(
@@ -1525,8 +1556,44 @@ fn runtime_terminal_execution_transcript_persistence_is_idempotent() {
             .transcript_entries,
         u64::try_from(first).unwrap()
     );
+    let replayed = service
+        .agent_context_for_pane_prompt("%1", "inspect the next change", 0)
+        .unwrap();
+    let plan_blocks = replayed
+        .blocks()
+        .iter()
+        .filter(|block| block.label == "agent shell plan-only mode")
+        .collect::<Vec<_>>();
+    assert_eq!(plan_blocks.len(), 1, "{:#?}", replayed.blocks());
+    assert!(plan_blocks[0].content.contains("state=enabled"));
+    let skill_blocks = replayed
+        .blocks()
+        .iter()
+        .filter(|block| block.label == "explicit skill review")
+        .collect::<Vec<_>>();
+    assert_eq!(skill_blocks.len(), 1, "{:#?}", replayed.blocks());
+    assert!(
+        skill_blocks[0]
+            .content
+            .contains("Preserve exact skill guidance.")
+    );
+
+    service.set_agent_planning_enabled("%1", false);
+    let disabled = service
+        .agent_context_for_pane_prompt("%1", "implement the next change", 0)
+        .unwrap();
+    let plan_states = disabled
+        .blocks()
+        .iter()
+        .filter(|block| block.label == "agent shell plan-only mode")
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(plan_states.len(), 2, "{:#?}", disabled.blocks());
+    assert!(plan_states[0].contains("state=enabled"));
+    assert!(plan_states[1].contains("state=disabled"));
     let _ = std::fs::remove_dir_all(transcript_root);
     let _ = std::fs::remove_dir_all(environment_root);
+    let _ = std::fs::remove_dir_all(skill_root);
 }
 
 /// Verifies a turn persisted while blocked can append newly settled evidence

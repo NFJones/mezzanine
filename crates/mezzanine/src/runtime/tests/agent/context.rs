@@ -294,8 +294,8 @@ fn runtime_compaction_refresh_reintroduces_frozen_environment_snapshot() {
     let _ = fs::remove_dir_all(environment_root);
 }
 
-/// Verifies pane plan mode adds a plan-only tag immediately before the newest
-/// user prompt without changing the stored user content or another pane.
+/// Verifies pane plan mode appends one persistent state transition before the
+/// newest prompt, skips unchanged state, and records deactivation explicitly.
 #[test]
 fn runtime_plan_mode_tags_only_the_active_pane_newest_prompt() {
     let mut service = test_runtime_service();
@@ -313,6 +313,7 @@ fn runtime_plan_mode_tags_only_the_active_pane_newest_prompt() {
     assert_eq!(blocks[user_index].content, "inspect the sandbox policy");
     assert_eq!(blocks[user_index - 1].label, "agent shell plan-only mode");
     assert!(blocks[user_index - 1].content.contains("Plan only"));
+    assert!(blocks[user_index - 1].content.contains("state=enabled"));
     assert!(
         blocks[user_index - 1]
             .content
@@ -960,6 +961,8 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
                 .iter()
                 .map(|message| message.content.len())
                 .sum(),
+            mcp_live_state_bytes: 0,
+            action_detail_bytes: 0,
             openai_diagnostics: Some(diagnostics.clone()),
             diagnostics_failed: false,
             usage,
@@ -1010,11 +1013,13 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
     assert!(status.contains("request=wire-status-1"), "{status}");
     assert!(!status.contains("request=wire-auxiliary"), "{status}");
 
-    let omitted = observation(
+    let mut omitted = observation(
         "wire-status-2",
         crate::integrations::agent::provider::ProviderRequestPurpose::Execution,
         None,
     );
+    omitted.mcp_live_state_bytes = 23;
+    omitted.action_detail_bytes = 17;
     assert!(
         service
             .apply_provider_wire_request_observation(omitted)
@@ -1032,9 +1037,15 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
         status.contains("| Stable provider prefix | request=wire-status-2"),
         "{status}"
     );
+    assert!(
+        status.contains("| Request-local input | request=wire-status-2 total_volatile_bytes=")
+            && status.contains("mcp_bytes=23 action_detail_bytes=17"),
+        "{status}"
+    );
     let trace = service.agent_pane_trace_log_text("%1").unwrap();
     assert!(
-        trace.contains("id=wire-status-2 attempt=1 retry=none"),
+        trace.contains("id=wire-status-2 attempt=1 retry=none")
+            && trace.contains("mcp_bytes=23 action_detail_bytes=17"),
         "{trace}"
     );
     assert!(!trace.contains("PRIVATE_PROVIDER_PROMPT_MARKER"), "{trace}");

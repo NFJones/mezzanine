@@ -134,6 +134,10 @@ pub struct ProviderWireRequestObservation {
     pub message_count: usize,
     /// Total provider-neutral message content bytes.
     pub message_bytes: usize,
+    /// Request-local MCP manifest and availability bytes.
+    pub mcp_live_state_bytes: usize,
+    /// Same-turn expanded action-result detail bytes.
+    pub action_detail_bytes: usize,
     /// OpenAI Responses cache diagnostics, when applicable.
     pub openai_diagnostics: Option<mez_agent::OpenAiPromptCacheDiagnostics>,
     /// Whether OpenAI diagnostic construction failed independently of send.
@@ -254,6 +258,27 @@ impl<'a> ProviderWireObservationContext<'a> {
             message_bytes: request.messages.iter().fold(0usize, |total, message| {
                 total.saturating_add(message.content.len())
             }),
+            mcp_live_state_bytes: request
+                .messages
+                .iter()
+                .filter(|message| {
+                    message.placement == mez_agent::ContextPlacement::EphemeralTail
+                        && message.source == mez_agent::ContextSourceKind::RuntimeHint
+                        && message.content.starts_with("[mcp integrations]\n")
+                })
+                .fold(0usize, |total, message| {
+                    total.saturating_add(message.content.len())
+                }),
+            action_detail_bytes: request
+                .messages
+                .iter()
+                .filter(|message| {
+                    message.placement == mez_agent::ContextPlacement::EphemeralTail
+                        && message.source == mez_agent::ContextSourceKind::ActionDetail
+                })
+                .fold(0usize, |total, message| {
+                    total.saturating_add(message.content.len())
+                }),
             openai_diagnostics: self.openai_diagnostics.clone(),
             diagnostics_failed: self.diagnostics_failed,
             usage,
