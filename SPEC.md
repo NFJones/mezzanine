@@ -4610,6 +4610,11 @@ neutral references, and compaction-summary epochs. `EphemeralTail` contains only
 factual request-local live state that can change the correctness of the next
 provider response and is not already represented by a typed provider field or
 durable event.
+Ordinary provider preparation MUST NOT duplicate a frozen prompt-boundary
+working directory in `EphemeralTail`. OpenAI request assembly MUST recognize a
+chronological request-state transition after runtime promotion from
+`RuntimeHint` to `CommittedEvidence` and MUST NOT append a duplicate generated
+request-state tail.
 
 Direct user prompts and mid-turn steering MUST be exact `UserEvent` chronology.
 The initial prompt MUST be appended once before the assistant actions and

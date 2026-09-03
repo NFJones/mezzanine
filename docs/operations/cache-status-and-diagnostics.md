@@ -43,6 +43,9 @@ request-local state message is regenerated after newly settled chronology.
 Pane environment facts are frozen as typed prompt-boundary snapshots: an
 unchanged environment adds no message, while a changed or unavailable
 environment appends a new snapshot without rewriting the prior prefix.
+Ordinary requests therefore do not repeat the frozen working directory in the
+volatile suffix. A non-empty volatile byte count should come from an explicitly
+request-local producer such as selected MCP metadata or recovery guidance.
 
 `action_result_bytes` reports exact durable action-result content in the
 observed request. Those bytes are cold when first appended, then remain in the

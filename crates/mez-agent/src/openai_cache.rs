@@ -23,8 +23,10 @@ pub(super) fn openai_render_request_messages(
 ) -> ProviderRequestAssemblyResult<OpenAiRenderedMessages> {
     let mut messages = request.messages.clone();
     let has_chronological_request_state = messages.iter().any(|message| {
-        message.source == ContextSourceKind::RuntimeHint
-            && message.placement == crate::ContextPlacement::ConversationAppend
+        matches!(
+            message.source,
+            ContextSourceKind::RuntimeHint | ContextSourceKind::CommittedEvidence
+        ) && message.placement == crate::ContextPlacement::ConversationAppend
             && message.content.starts_with("[Mezzanine request state]")
     });
     if request.interaction_kind.expects_maap_batch() && !has_chronological_request_state {

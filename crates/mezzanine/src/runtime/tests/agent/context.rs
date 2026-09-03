@@ -547,30 +547,35 @@ fn runtime_action_results_split_canonical_history_from_same_turn_detail() {
     assert_eq!(prepared_result.content, canonical.content);
 }
 
-/// Verifies ordinary provider preparation emits only the working directory in
-/// its request-local suffix.
+/// Verifies ordinary provider preparation does not duplicate the immutable
+/// prompt-boundary environment snapshot in its request-local suffix.
 ///
 /// Readiness, scheduler occupancy, write-scope inventories, and retry counters
 /// are enforced or consumed by the controller. Exposing them to the model
 /// would change a cache-sensitive suffix without changing the model's correct
-/// next decision. Explicit MCP invocation is covered separately because it is
-/// the only other allowlisted tail producer.
+/// next decision. CWD is already frozen in durable prompt-boundary chronology;
+/// explicit MCP invocation is covered separately as an allowlisted tail.
 #[test]
-fn runtime_provider_preparation_allowlists_only_cwd_for_ordinary_turns() {
+fn runtime_provider_preparation_reuses_durable_environment_snapshot() {
     let mut service = test_runtime_service();
     service.set_pane_current_working_directory("%1".to_string(), PathBuf::from("/repo/work"));
     service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
-    let durable = mez_agent::AgentContext::new_durable(vec![ContextBlock::user_event(
-        "active user prompt",
-        "inspect the repository",
-    )])
+    let durable = mez_agent::AgentContext::new_durable(vec![
+        ContextBlock::reference_event(
+            ContextSourceKind::Transcript,
+            "task environment snapshot",
+            "environment_state=known\ncwd=/repo/work",
+        ),
+        ContextBlock::user_event("active user prompt", "inspect the repository"),
+    ])
     .unwrap();
 
     let prepared = prepared_context_for_prompt(&service, durable);
 
-    assert_eq!(prepared.live_state().len(), 1);
-    assert_eq!(prepared.live_state()[0].label, "runtime state");
-    assert_eq!(prepared.live_state()[0].content, "cwd=/repo/work");
+    assert!(prepared.live_state().is_empty());
+    assert!(prepared.durable().blocks().iter().any(|block| {
+        block.label == "task environment snapshot" && block.content.contains("cwd=/repo/work")
+    }));
 }
 
 /// Verifies session and cache-lineage identity travel as typed request metadata

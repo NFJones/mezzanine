@@ -239,6 +239,73 @@ fn openai_settled_controller_state_is_chronological_developer_input() {
 }
 
 #[test]
+/// Verifies persisted request-state evidence suppresses the generated OpenAI
+/// request-state tail just as the original runtime-owned transition does.
+///
+/// Runtime chronology promotes accepted request state to committed evidence.
+/// Reassembly must recognize that equivalent provenance or it duplicates the
+/// state in a volatile suffix and needlessly reduces prompt-cache reuse.
+fn openai_committed_request_state_does_not_add_volatile_duplicate() {
+    let profile = ModelProfile {
+        provider: "openai".to_string(),
+        model: "gpt-test".to_string(),
+        reasoning_profile: None,
+        latency_preference: None,
+        multimodal_required: false,
+        provider_options: std::collections::BTreeMap::new(),
+        safety_tier: None,
+    };
+    let request = assemble_model_request(
+        &profile,
+        &turn(),
+        &AgentContext::new(vec![
+            ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: "user".to_string(),
+                content: "inspect the repo".to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::CommittedEvidence,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: "Mezzanine request state".to_string(),
+                content: "generation=1\ninteraction_kind=capability_decision\nallowed_actions=say,request_capability"
+                    .to_string(),
+            },
+        ])
+        .unwrap(),
+    )
+    .unwrap();
+
+    let body: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&request).unwrap()).unwrap();
+    let request_state_messages = body["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|message| {
+            message["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("request state]"))
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        request_state_messages.len(),
+        1,
+        "{request_state_messages:#?}"
+    );
+    assert!(
+        request_state_messages[0]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("[Mezzanine request state]")
+    );
+    let diagnostics = openai_prompt_cache_diagnostics_for_request(&request).unwrap();
+    assert_eq!(diagnostics.volatile_input_bytes, 2);
+}
+
+#[test]
 /// Verifies historical tool transcript entries replay as ordinary append-only
 /// provider input inside the reusable prefix.
 ///

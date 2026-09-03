@@ -67,20 +67,6 @@ impl RuntimeSessionService {
         durable.validate_durable()?;
         let mut request_context = durable.clone();
 
-        if let Some(current_directory) = self.pane_current_working_directory(&turn.pane_id) {
-            request_context
-                .insert_typed_block(
-                    ContextBlock::live_state(
-                        ContextSourceKind::RuntimeHint,
-                        "runtime state",
-                        format!("cwd={}", current_directory.to_string_lossy()),
-                    ),
-                    ContextSemanticKind::LiveState,
-                    ContextRetention::RequestLocal,
-                    false,
-                )
-                .map_err(|error| MezError::invalid_state(error.to_string()))?;
-        }
         if let Some(state) = self.agent.agent_turn_output_limit_states.get(&turn.turn_id) {
             request_context
                 .insert_typed_block(
