@@ -455,11 +455,11 @@ pub(crate) struct RuntimePresentationComponent {
     mouse_resize_drag_window_id: Option<String>,
     /// Whether the active divider gesture has changed layout geometry.
     mouse_resize_drag_changed: bool,
-    /// Exact pre-drag client view retained while only divider cells move.
+    /// Exact pre-drag client view retained for outer chrome during divider movement.
     mouse_resize_drag_baseline_view: Option<RenderedClientView>,
-    /// Absolute divider cells that must be erased from the pre-drag view.
+    /// Absolute divider cells retained for drag-origin and cleanup bookkeeping.
     mouse_resize_drag_baseline_border_cells: Vec<MouseBorderCell>,
-    /// Pane geometry represented by the retained pre-drag content projection.
+    /// Pane geometry represented by the retained pre-drag layout.
     mouse_resize_drag_baseline_geometries: Vec<crate::runtime::PaneGeometry>,
     /// Released divider outcome awaiting the client's resize debounce timer.
     pending_divider_layout_commit: Option<RuntimePendingDividerLayoutCommit>,

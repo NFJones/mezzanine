@@ -210,10 +210,10 @@ fn runtime_structural_step_targets_affected_window_projections_only() {
     assert_eq!(rendered_client_ids, vec![source, observer, same_window]);
 }
 
-/// Verifies a changed divider is projected only to its drag owner while pane
-/// content remains frozen, then commits once to every client projecting the
-/// resized window. The owner's rendered divider and mouse hit cells must use
-/// the same live geometry throughout the deferred content redraw.
+/// Verifies a changed divider is projected only to its drag owner over a blank
+/// window body, then commits once to every client projecting the resized
+/// window. The owner's rendered divider and mouse hit cells must use the same
+/// live geometry throughout the deferred content redraw.
 #[test]
 fn runtime_divider_commit_targets_projecting_clients_after_debounce() {
     let mut service = test_runtime_service();
@@ -252,6 +252,17 @@ fn runtime_divider_commit_targets_projecting_clients_after_debounce() {
         )
         .unwrap()
         .expect("split window should render");
+    let presentation_plan = mez_mux::presentation::plan_window_presentation(
+        service.session.active_window().unwrap(),
+        mez_mux::presentation::WindowPresentationOptions {
+            group_frame_visible: service.session.window_groups().len() > 1,
+            window_frame_visible: service.window_frames_enabled(),
+            window_frame_position: service.window_frame_position(),
+            pane_frames_visible: service.pane_frames_enabled(),
+            pane_frame_position: service.pane_frame_position(),
+        },
+    )
+    .expect("split window should have a presentation plan");
     let moved_column = border.column.saturating_add(3);
     let drag = |column| AttachedTerminalClientStepPlan {
         actions: vec![TerminalClientLoopAction::HandleMouse(
@@ -311,11 +322,10 @@ fn runtime_divider_commit_targets_projecting_clients_after_debounce() {
         .render_client_view(ClientViewRole::Primary, size, &live_config)
         .unwrap()
         .expect("drag owner should receive a provisional divider view");
-    let baseline_row = &baseline.lines[usize::from(border.row)];
     let provisional_row = &provisional.lines[usize::from(border.row)];
     assert_eq!(
         mez_mux::render::line_slice(
-            baseline_row,
+            &baseline.lines[usize::from(border.row)],
             usize::from(border.column),
             usize::from(border.column).saturating_add(1),
         ),
@@ -337,16 +347,45 @@ fn runtime_divider_commit_targets_projecting_clients_after_debounce() {
         ),
         "│"
     );
-    for column in 0..usize::from(size.columns) {
-        if column == usize::from(border.column) || column == usize::from(moved_column) {
-            continue;
+    let body_row_start = usize::from(presentation_plan.body_row_offset);
+    let body_row_end = body_row_start.saturating_add(usize::from(presentation_plan.body_size.rows));
+    let body_columns = usize::from(presentation_plan.body_size.columns);
+    for row in body_row_start..body_row_end {
+        for column in 0..body_columns {
+            if column == usize::from(moved_column) {
+                continue;
+            }
+            assert_eq!(
+                mez_mux::render::line_slice(
+                    &provisional.lines[row],
+                    column,
+                    column.saturating_add(1),
+                ),
+                " ",
+                "provisional body was not blank at row {row}, column {column}"
+            );
         }
         assert_eq!(
-            mez_mux::render::line_slice(baseline_row, column, column.saturating_add(1)),
-            mez_mux::render::line_slice(provisional_row, column, column.saturating_add(1)),
-            "non-divider content changed at column {column}"
+            provisional.line_style_spans[row]
+                .iter()
+                .filter(|span| span.start != usize::from(moved_column))
+                .count(),
+            0,
+            "provisional body retained non-divider styles at row {row}"
         );
     }
+    for row in 0..provisional.lines.len() {
+        if (body_row_start..body_row_end).contains(&row) {
+            continue;
+        }
+        assert_eq!(provisional.lines[row], baseline.lines[row]);
+        assert_eq!(
+            provisional.line_style_spans[row],
+            baseline.line_style_spans[row]
+        );
+    }
+    assert!(!provisional.cursor_visible);
+    assert_eq!(provisional.selection, None);
 
     let mut output_effects = service
         .apply_pane_output_transition("%1", b"output during drag".to_vec())
@@ -399,6 +438,109 @@ fn runtime_divider_commit_targets_projecting_clients_after_debounce() {
     assert!(rendered_client_ids.contains(&observer));
     assert!(rendered_client_ids.contains(&same_window));
     assert!(!rendered_client_ids.contains(&unrelated));
+}
+
+/// Verifies horizontal divider movement also blanks the complete window body
+/// except for the live divider projection.
+#[test]
+fn runtime_horizontal_divider_drag_projects_blank_body() {
+    let mut service = test_runtime_service();
+    let size = Size::new(80, 24).unwrap();
+    let primary = service.attach_primary("primary", true, size, 120).unwrap();
+    service
+        .session
+        .split_active_pane(&primary, SplitDirection::Horizontal)
+        .unwrap();
+    let border = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap()
+        .mouse_border_cells
+        .into_iter()
+        .next()
+        .expect("horizontal split should expose a divider");
+    let presentation_plan = mez_mux::presentation::plan_window_presentation(
+        service.session.active_window().unwrap(),
+        mez_mux::presentation::WindowPresentationOptions {
+            group_frame_visible: service.session.window_groups().len() > 1,
+            window_frame_visible: service.window_frames_enabled(),
+            window_frame_position: service.window_frame_position(),
+            pane_frames_visible: service.pane_frames_enabled(),
+            pane_frame_position: service.pane_frame_position(),
+        },
+    )
+    .expect("split window should have a presentation plan");
+    let moved_row = border.row.saturating_add(2);
+    let drag = |row| AttachedTerminalClientStepPlan {
+        actions: vec![TerminalClientLoopAction::HandleMouse(
+            MouseAction::ResizePane {
+                column: border.column,
+                row,
+            },
+        )],
+        output_lines: Vec::new(),
+        output_line_style_spans: Vec::new(),
+        input_hangup: false,
+        output_hangup: false,
+        error_roles: Vec::new(),
+    };
+    for row in [border.row, moved_row] {
+        service
+            .apply_attached_terminal_step_transition(&primary, &drag(row))
+            .unwrap();
+    }
+
+    let live_config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let provisional = service
+        .render_client_view(ClientViewRole::Primary, size, &live_config)
+        .unwrap()
+        .expect("drag owner should receive a provisional divider view");
+    assert_eq!(
+        mez_mux::render::line_slice(
+            &provisional.lines[usize::from(border.row)],
+            usize::from(border.column),
+            usize::from(border.column).saturating_add(1),
+        ),
+        " "
+    );
+    assert_eq!(
+        mez_mux::render::line_slice(
+            &provisional.lines[usize::from(moved_row)],
+            usize::from(border.column),
+            usize::from(border.column).saturating_add(1),
+        ),
+        "─"
+    );
+    let body_row_start = usize::from(presentation_plan.body_row_offset);
+    let body_row_end = body_row_start.saturating_add(usize::from(presentation_plan.body_size.rows));
+    let body_columns = usize::from(presentation_plan.body_size.columns);
+    for row in body_row_start..body_row_end {
+        for column in 0..body_columns {
+            if live_config
+                .mouse_border_cells
+                .iter()
+                .any(|cell| usize::from(cell.row) == row && usize::from(cell.column) == column)
+            {
+                continue;
+            }
+            assert_eq!(
+                mez_mux::render::line_slice(
+                    &provisional.lines[row],
+                    column,
+                    column.saturating_add(1),
+                ),
+                " ",
+                "provisional body was not blank at row {row}, column {column}"
+            );
+        }
+        if row != usize::from(moved_row) {
+            assert!(
+                provisional.line_style_spans[row].is_empty(),
+                "provisional body retained styles at row {row}"
+            );
+        }
+    }
 }
 
 /// Verifies returning a divider to its starting position and detaching a drag

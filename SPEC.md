@@ -1324,11 +1324,12 @@ After terminal-size changes, attached clients SHOULD wait for the configured
 `terminal.resize_debounce_ms` period before forcing one full-surface redraw.
 Pane-divider movement MUST update canonical layout geometry and pane PTY sizes
 while the pointer is held. The acting client SHOULD receive rate-limited
-divider-only presentation updates during the gesture: pane content MUST remain
-at its pre-drag projection while the old divider cells are erased and the live
-divider cells are drawn. Mouse hit-testing MUST use the same live divider
-geometry presented to that client. Releasing a changed divider drag MUST
-restart that debounce period. Exactly one current post-release timer MUST
+divider-only presentation updates during the gesture: the complete window body
+MUST be blank except for live divider cells, while outer session chrome remains
+at its pre-drag projection. The provisional frame MUST hide the cursor and omit
+selection metadata. Mouse hit-testing MUST use the same live divider geometry
+presented to that client. Releasing a changed divider drag MUST restart that
+debounce period. Exactly one current post-release timer MUST
 consume the pending layout commit and issue a full redraw for the layout
 owner's projection and its observers; stale timers and timers that fire while
 the divider is held MUST be no-ops. Releasing an unchanged drag MUST NOT redraw.

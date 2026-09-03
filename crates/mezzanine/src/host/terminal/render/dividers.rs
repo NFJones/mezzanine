@@ -4,25 +4,24 @@
 //! lower divider cells to product mouse-hit records and applies configured
 //! Mezzanine theme renditions to merged frame boundaries.
 
-use mez_mux::input::MouseBorderCell;
-use mez_mux::layout::PaneGeometry;
+use mez_mux::layout::{PaneGeometry, Size};
 use mez_mux::presentation::RenderedClientView;
 use mez_mux::theme::UiTheme;
 use mez_terminal::{GraphicRendition, TerminalStyleSpan};
 
-/// Replaces the drag-start divider cells in a retained view with the current
-/// canonical divider cells, leaving all pane content at its pre-drag position.
-pub(crate) fn overlay_provisional_pane_dividers(
+/// Blanks the retained window body and projects the current canonical divider
+/// cells while preserving outer session chrome during a resize drag.
+pub(crate) fn project_provisional_pane_resize(
     view: &mut RenderedClientView,
-    baseline_cells: &[MouseBorderCell],
     geometries: &[PaneGeometry],
     body_row_offset: u16,
+    body_size: Size,
     active_pane_index: usize,
     ui_theme: &UiTheme,
 ) {
-    for cell in baseline_cells {
-        let row = usize::from(cell.row);
-        let column = usize::from(cell.column);
+    let body_columns = usize::from(body_size.columns);
+    for body_row in 0..body_size.rows {
+        let row = usize::from(body_row.saturating_add(body_row_offset));
         let Some((line, spans)) = view
             .lines
             .get_mut(row)
@@ -30,9 +29,11 @@ pub(crate) fn overlay_provisional_pane_dividers(
         else {
             continue;
         };
-        mez_mux::render::overlay_text_cells(line, column, 1, " ");
-        mez_mux::render::overlay_fixed_column_style_spans(spans, column, 1, &[]);
+        mez_mux::render::overlay_text_cells(line, 0, body_columns, "");
+        mez_mux::render::overlay_fixed_column_style_spans(spans, 0, body_columns, &[]);
     }
+    view.cursor_visible = false;
+    view.selection = None;
 
     for cell in mez_mux::presentation::pane_divider_cells(geometries, true) {
         let row = usize::from(cell.row.saturating_add(body_row_offset));

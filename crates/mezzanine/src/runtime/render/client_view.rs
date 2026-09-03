@@ -26,7 +26,7 @@ use super::{
     window_frame_action_pillbox_cells, window_frame_pillbox_cells,
     window_group_frame_pillbox_cells,
 };
-use crate::host::terminal::overlay_provisional_pane_dividers;
+use crate::host::terminal::project_provisional_pane_resize;
 
 /// Runs the apply copy mode selection spans operation for this subsystem.
 ///
@@ -265,11 +265,11 @@ impl RuntimeSessionService {
             let plan = self.window_presentation_plan(window).ok_or_else(|| {
                 MezError::invalid_state("cannot plan a window with no visible panes")
             })?;
-            overlay_provisional_pane_dividers(
+            project_provisional_pane_resize(
                 &mut view,
-                &self.presentation.mouse_resize_drag_baseline_border_cells,
                 &plan.pane_geometries(),
                 plan.body_row_offset,
+                plan.body_size,
                 window.active_pane_index(),
                 &config.ui_theme,
             );
