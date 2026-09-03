@@ -43,6 +43,16 @@ fn mcp_context_content(context: &AgentContext) -> &str {
         .content
 }
 
+/// Returns the immutable configured MCP catalog snapshot.
+fn mcp_catalog_snapshot_content(context: &AgentContext) -> &str {
+    &context
+        .blocks()
+        .iter()
+        .find(|block| block.label == MCP_CATALOG_SNAPSHOT_CONTEXT_LABEL)
+        .expect("configured MCP catalog snapshot should be present")
+        .content
+}
+
 #[test]
 /// Verifies configured MCP exposure selects callable metadata without requiring
 /// an explicit user mention or adding duplicate tools for repeated names.
@@ -62,9 +72,90 @@ fn mcp_context_exposes_configured_servers_without_explicit_mentions() {
 
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0].server_id, "GitHub_2");
-    let content = mcp_context_content(&context);
+    let content = mcp_catalog_snapshot_content(&context);
     assert_eq!(content.matches("available_tool=GitHub_2/lookup").count(), 1);
+    assert!(content.contains("configured_exposure=\"GitHub_2\""));
+    assert!(context.blocks().iter().all(|block| {
+        block.placement != crate::ContextPlacement::EphemeralTail
+            && block.label != MCP_INTEGRATIONS_CONTEXT_LABEL
+    }));
     assert!(!content.contains("Use GitHub_2"), "{content}");
+}
+
+#[test]
+/// Verifies configured catalog refreshes append only on a real transition.
+///
+/// An unchanged catalog must remain at its original chronological position.
+/// Changed metadata and removal append authoritative snapshots without
+/// replacing the exact bytes already presented to the model.
+fn mcp_configured_catalog_snapshots_append_only_on_transition() {
+    let context =
+        AgentContext::new(vec![ContextBlock::user_event("user", "inspect the issue")]).unwrap();
+    let configured = vec!["state".to_string()];
+    let first_summary = mcp_summary_for_server_ids(&["state"]);
+    let first = append_mcp_context_with_configured(context, &first_summary, &configured).unwrap();
+    let first_content = mcp_catalog_snapshot_content(&first).to_string();
+
+    let unchanged = append_mcp_context_with_configured(first, &first_summary, &configured).unwrap();
+    let unchanged_snapshots = unchanged
+        .blocks()
+        .iter()
+        .filter(|block| block.source == ContextSourceKind::McpCatalogSnapshot)
+        .collect::<Vec<_>>();
+    assert_eq!(unchanged_snapshots.len(), 1, "{:#?}", unchanged.blocks());
+    assert_eq!(unchanged_snapshots[0].content, first_content);
+
+    let mut changed_summary = first_summary;
+    changed_summary.available_tools[0].description = "Changed lookup contract".to_string();
+    let changed =
+        append_mcp_context_with_configured(unchanged, &changed_summary, &configured).unwrap();
+    let changed_snapshots = changed
+        .blocks()
+        .iter()
+        .filter(|block| block.source == ContextSourceKind::McpCatalogSnapshot)
+        .collect::<Vec<_>>();
+    assert_eq!(changed_snapshots.len(), 2, "{:#?}", changed.blocks());
+    assert_eq!(changed_snapshots[0].content, first_content);
+    assert!(
+        changed_snapshots[1]
+            .content
+            .contains("Changed lookup contract")
+    );
+
+    let removed = append_mcp_context_with_configured(changed, &changed_summary, &[]).unwrap();
+    let removed_snapshots = removed
+        .blocks()
+        .iter()
+        .filter(|block| block.source == ContextSourceKind::McpCatalogSnapshot)
+        .collect::<Vec<_>>();
+    assert_eq!(removed_snapshots.len(), 3, "{:#?}", removed.blocks());
+    assert_eq!(removed_snapshots[0].content, first_content);
+    assert_eq!(removed_snapshots[2].content, MCP_CATALOG_REMOVED_CONTEXT);
+}
+
+#[test]
+/// Verifies configured ownership wins when the same canonical server is also
+/// explicitly named with different casing.
+///
+/// The complete server and tool contract must appear once in stable chronology
+/// and must not be duplicated in the request-local explicit manifest.
+fn mcp_configured_catalog_deduplicates_explicit_overlap_by_canonical_id() {
+    let context = AgentContext::new(vec![ContextBlock::user_event(
+        "user",
+        "use @GitHub_2 to inspect the issue",
+    )])
+    .unwrap();
+    let summary = mcp_summary_for_server_ids(&["GitHub_2"]);
+    let configured = vec!["github_2".to_string()];
+
+    let context = append_mcp_context_with_configured(context, &summary, &configured).unwrap();
+    let stable = mcp_catalog_snapshot_content(&context);
+
+    assert_eq!(stable.matches("available_tool=GitHub_2/lookup").count(), 1);
+    assert!(context.blocks().iter().all(|block| {
+        block.placement != crate::ContextPlacement::EphemeralTail
+            && block.label != MCP_INTEGRATIONS_CONTEXT_LABEL
+    }));
 }
 
 #[test]
@@ -91,13 +182,28 @@ fn mcp_context_merges_configured_and_explicit_servers_deterministically() {
             .collect::<Vec<_>>(),
         vec!["GitHub_2", "state"]
     );
-    let content = mcp_context_content(&context);
-    assert_eq!(content.matches("available_tool=GitHub_2/lookup").count(), 1);
-    assert_eq!(content.matches("available_tool=state/lookup").count(), 1);
-    assert!(content.contains("unavailable_server=missing"), "{content}");
+    let explicit = mcp_context_content(&context);
+    let configured = mcp_catalog_snapshot_content(&context);
+    assert_eq!(
+        explicit.matches("available_tool=GitHub_2/lookup").count(),
+        1
+    );
     assert!(
-        content.contains("configured MCP server name did not match a configured server"),
-        "{content}"
+        !explicit.contains("available_tool=state/lookup"),
+        "{explicit}"
+    );
+    assert_eq!(configured.matches("available_tool=state/lookup").count(), 1);
+    assert!(
+        !configured.contains("available_tool=GitHub_2/lookup"),
+        "{configured}"
+    );
+    assert!(
+        configured.contains("unavailable_server=missing"),
+        "{configured}"
+    );
+    assert!(
+        configured.contains("configured MCP server name did not match a configured server"),
+        "{configured}"
     );
 }
 

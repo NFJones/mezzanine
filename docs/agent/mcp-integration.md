@@ -30,7 +30,13 @@ re-enable can attempt discovery again.
 Start a prompt with `@<server-id>` to resolve and expose that server's callable
 tools and argument contracts for the current turn. Unknown, disabled,
 ambiguous, or unavailable identifiers expose no substitute tools. Configured
-always-exposed servers use the same validation rules.
+always-exposed servers use the same validation rules, but their complete
+model-safe catalogs are stored as append-only conversation snapshots rather
+than regenerated request-local context. Catalog and availability changes append
+an authoritative transition; older snapshots remain causal history, while the
+live MCP registry remains authoritative for whether a call can run. If an
+explicit mention names an always-exposed server, Mez emits only the stable
+catalog entry instead of a duplicate request-local manifest.
 
 MCP calls are external actions. A tool that reads or changes local files,
 reaches the network, accesses credentials, or executes processes requires

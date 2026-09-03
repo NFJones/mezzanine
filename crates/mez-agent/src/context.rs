@@ -51,6 +51,8 @@ pub enum ContextSourceKind {
     LocalMessage,
     /// Runtime-generated controller guidance or state.
     RuntimeHint,
+    /// An immutable snapshot of configured always-exposed MCP metadata.
+    McpCatalogSnapshot,
     /// Repository or project guidance.
     ProjectGuidance,
     /// Retrieved durable memory context.
@@ -95,7 +97,8 @@ impl TrustDomain {
             ContextSourceKind::System
             | ContextSourceKind::DeveloperInstruction
             | ContextSourceKind::Policy
-            | ContextSourceKind::Configuration => Self::Configuration,
+            | ContextSourceKind::Configuration
+            | ContextSourceKind::McpCatalogSnapshot => Self::Configuration,
             ContextSourceKind::UserInstruction | ContextSourceKind::LocalMessage => Self::UserInput,
             ContextSourceKind::SkillInstruction | ContextSourceKind::ProjectGuidance => {
                 Self::ProjectFile
@@ -803,7 +806,8 @@ impl ContextBlock {
             ContextSourceKind::LocalMessage
             | ContextSourceKind::Memory
             | ContextSourceKind::Transcript
-            | ContextSourceKind::RoutedHandoff => ContextSemanticKind::ReferenceEvent,
+            | ContextSourceKind::RoutedHandoff
+            | ContextSourceKind::McpCatalogSnapshot => ContextSemanticKind::ReferenceEvent,
             ContextSourceKind::System
             | ContextSourceKind::DeveloperInstruction
             | ContextSourceKind::ProjectGuidance
@@ -840,7 +844,8 @@ impl ContextBlock {
             | ContextSourceKind::ProjectGuidance
             | ContextSourceKind::PersistedContextDocument
             | ContextSourceKind::RuntimeHint
-            | ContextSourceKind::RoutedHandoff => ContextRetention::Exact,
+            | ContextSourceKind::RoutedHandoff
+            | ContextSourceKind::McpCatalogSnapshot => ContextRetention::Exact,
             ContextSourceKind::TranscriptAssistant
             | ContextSourceKind::TranscriptTool
             | ContextSourceKind::CommittedEvidence
@@ -868,6 +873,7 @@ impl ContextBlock {
                 | ContextSourceKind::RuntimeHint
                 | ContextSourceKind::ActionResult
                 | ContextSourceKind::LocalMessage
+                | ContextSourceKind::McpCatalogSnapshot
         )
     }
 }

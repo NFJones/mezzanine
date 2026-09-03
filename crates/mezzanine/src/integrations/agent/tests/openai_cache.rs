@@ -92,6 +92,93 @@ fn openai_current_action_results_remain_append_only_before_volatile_suffix() {
 }
 
 #[test]
+/// Verifies a large configured MCP catalog remains at one stable position as
+/// later assistant and action-result chronology appends after it.
+///
+/// The configured manifest is ordinary OpenAI input, so complete cache reuse
+/// depends on preserving its exact message index and bytes. Explicit-only MCP
+/// metadata remains outside this regression as request-local state.
+fn openai_configured_mcp_catalog_remains_in_append_only_stable_input() {
+    let profile = ModelProfile {
+        provider: "openai".to_string(),
+        model: "gpt-test".to_string(),
+        reasoning_profile: None,
+        latency_preference: None,
+        multimodal_required: false,
+        provider_options: std::collections::BTreeMap::new(),
+        safety_tier: None,
+    };
+    let catalog = format!(
+        "available_servers=1 available_tools=1 unavailable_servers=0\nconfigured_exposure=\"catalog\" action=mcp_call\navailable_tool=catalog/lookup input_schema={{\"type\":\"object\"}} description=\"{}\"",
+        "stable catalog detail ".repeat(256)
+    );
+    let first = assemble_model_request(
+        &profile,
+        &turn(),
+        &AgentContext::new(vec![
+            ContextBlock::reference_event(
+                ContextSourceKind::McpCatalogSnapshot,
+                mez_agent::MCP_CATALOG_SNAPSHOT_CONTEXT_LABEL,
+                catalog.clone(),
+            ),
+            ContextBlock::user_event("user", "inspect the catalog"),
+        ])
+        .unwrap(),
+    )
+    .unwrap();
+    let second = assemble_model_request(
+        &profile,
+        &turn(),
+        &AgentContext::new(vec![
+            ContextBlock::reference_event(
+                ContextSourceKind::McpCatalogSnapshot,
+                mez_agent::MCP_CATALOG_SNAPSHOT_CONTEXT_LABEL,
+                catalog.clone(),
+            ),
+            ContextBlock::user_event("user", "inspect the catalog"),
+            ContextBlock::assistant_event("assistant", "run the lookup"),
+            ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: "action result".to_string(),
+                content: "lookup completed".to_string(),
+            },
+        ])
+        .unwrap(),
+    )
+    .unwrap();
+
+    let first_diagnostics = openai_prompt_cache_diagnostics_for_request(&first).unwrap();
+    let second_diagnostics = openai_prompt_cache_diagnostics_for_request(&second).unwrap();
+    let continuity = mez_agent::compare_openai_request_continuity(
+        &first_diagnostics.continuity_snapshot,
+        &second_diagnostics.continuity_snapshot,
+    );
+
+    assert!(continuity.stable_messages_append_only, "{continuity:#?}");
+    assert!(second_diagnostics.stable_input_bytes > first_diagnostics.stable_input_bytes);
+    assert_eq!(
+        second
+            .messages
+            .iter()
+            .filter(|message| message.source == ContextSourceKind::McpCatalogSnapshot)
+            .count(),
+        1
+    );
+    let stable_catalog = second
+        .messages
+        .iter()
+        .find(|message| message.source == ContextSourceKind::McpCatalogSnapshot)
+        .unwrap();
+    assert!(stable_catalog.content.ends_with(&catalog));
+    assert!(
+        openai_stable_projection_material_for_request(&second)
+            .unwrap()
+            .contains("stable catalog detail")
+    );
+}
+
+#[test]
 /// Verifies user prompts and action results keep their exact OpenAI wire
 /// representation when current-turn context is promoted into transcript history.
 ///

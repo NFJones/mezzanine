@@ -173,6 +173,213 @@ fn runtime_environment_snapshots_are_append_only_and_skip_unchanged_state() {
     let _ = fs::remove_dir_all(second_root);
 }
 
+/// Verifies configured MCP catalog snapshots persist and replay as
+/// append-only chronology while the live registry remains authoritative.
+///
+/// Unchanged catalogs must not duplicate model context. Tool metadata changes
+/// and configured-list removal append transitions without rewriting the prior
+/// bytes or rotating the conversation cache lineage, and stale historical
+/// snapshots must not keep a removed tool callable.
+#[test]
+fn runtime_configured_mcp_catalog_snapshots_persist_replay_and_remove() {
+    let mut service = test_runtime_service();
+    let transcript_root = temp_root("configured-mcp-catalog-snapshots");
+    let transcript_store = AgentTranscriptStore::new(transcript_root.clone());
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .integration
+        .replace_always_exposed_mcp_servers(vec!["state".to_string()]);
+    service
+        .mcp_registry_mut()
+        .add_server(mez_agent::mcp::McpServerConfig::stdio(
+            "state",
+            "State",
+            "mcp-state",
+            Vec::new(),
+        ))
+        .unwrap();
+    let state_tool = |description: &str| mez_agent::mcp::McpToolState {
+        server_id: String::new(),
+        name: "list".to_string(),
+        available: true,
+        blacklisted: false,
+        permission_required: false,
+        effects: mez_agent::mcp::McpToolEffects::none(),
+        approval: mez_agent::mcp::McpApprovalSetting::Allow,
+        description: description.to_string(),
+        input_schema_json: r#"{"type":"object","properties":{"limit":{"type":"integer"}}}"#
+            .to_string(),
+    };
+    service
+        .mcp_registry_mut()
+        .mark_available("state", vec![state_tool("List state records")], 1)
+        .unwrap();
+    let lineage = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .prompt_cache_lineage_id
+        .clone();
+
+    let first = service
+        .start_agent_prompt_turn("%1", "inspect the configured state service")
+        .unwrap();
+    let first_context = service.agent_turn_contexts().get(&first.turn_id).unwrap();
+    let first_snapshot = first_context
+        .blocks()
+        .iter()
+        .find(|block| block.source == ContextSourceKind::McpCatalogSnapshot)
+        .expect("configured server should append one MCP catalog snapshot")
+        .content
+        .clone();
+    let first_snapshot_index = first_context
+        .blocks()
+        .iter()
+        .position(|block| block.source == ContextSourceKind::McpCatalogSnapshot)
+        .unwrap();
+    let first_user_index = first_context
+        .blocks()
+        .iter()
+        .position(|block| block.source == ContextSourceKind::UserInstruction)
+        .unwrap();
+    assert!(first_snapshot_index < first_user_index);
+    assert!(first_snapshot.contains("available_tool=state/list"));
+    assert!(first_snapshot.contains("input_schema="), "{first_snapshot}");
+    assert!(first_snapshot.contains(r#""limit""#), "{first_snapshot}");
+    assert!(
+        first_snapshot.contains(r#""type":"integer""#),
+        "{first_snapshot}"
+    );
+    service.stop_agent_turn_for_pane("%1").unwrap();
+
+    service
+        .mcp_registry_mut()
+        .mark_available("state", vec![state_tool("List changed state records")], 2)
+        .unwrap();
+    let changed = service.start_agent_prompt_turn("%1", "Continue").unwrap();
+    let changed_turn = service
+        .agent_turn_ledger()
+        .turn(&changed.turn_id)
+        .cloned()
+        .unwrap();
+    let changed_context = service.agent_turn_contexts().get(&changed.turn_id).unwrap();
+    let changed_snapshots = changed_context
+        .blocks()
+        .iter()
+        .filter(|block| block.source == ContextSourceKind::McpCatalogSnapshot)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        changed_snapshots.len(),
+        2,
+        "{:#?}",
+        changed_context.blocks()
+    );
+    assert_eq!(changed_snapshots[0].content, first_snapshot);
+    assert!(
+        changed_snapshots[1]
+            .content
+            .contains("List changed state records")
+    );
+    let (prepared, available_tools) = service
+        .prepare_agent_turn_model_context(
+            &changed_turn,
+            changed_context.clone(),
+            &service.mcp_registry().prompt_summary(),
+            &runtime_model_profile("openai", "test"),
+        )
+        .unwrap();
+    assert_eq!(available_tools.len(), 1);
+    assert!(
+        prepared
+            .live_state()
+            .iter()
+            .all(|block| { block.label != mez_agent::MCP_INTEGRATIONS_CONTEXT_LABEL })
+    );
+    service.stop_agent_turn_for_pane("%1").unwrap();
+
+    service
+        .integration
+        .replace_always_exposed_mcp_servers(Vec::new());
+    let removed = service.start_agent_prompt_turn("%1", "Continue").unwrap();
+    let removed_turn = service
+        .agent_turn_ledger()
+        .turn(&removed.turn_id)
+        .cloned()
+        .unwrap();
+    let removed_context = service.agent_turn_contexts().get(&removed.turn_id).unwrap();
+    let removed_snapshots = removed_context
+        .blocks()
+        .iter()
+        .filter(|block| block.source == ContextSourceKind::McpCatalogSnapshot)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        removed_snapshots.len(),
+        3,
+        "{:#?}",
+        removed_context.blocks()
+    );
+    assert_eq!(
+        removed_snapshots[2].content,
+        mez_agent::MCP_CATALOG_REMOVED_CONTEXT
+    );
+    let (_, available_tools) = service
+        .prepare_agent_turn_model_context(
+            &removed_turn,
+            removed_context.clone(),
+            &service.mcp_registry().prompt_summary(),
+            &runtime_model_profile("openai", "test"),
+        )
+        .unwrap();
+    assert!(available_tools.is_empty());
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .prompt_cache_lineage_id,
+        lineage
+    );
+    service.stop_agent_turn_for_pane("%1").unwrap();
+
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let persisted = transcript_store.inspect(&conversation_id).unwrap();
+    let persisted_snapshots = persisted
+        .iter()
+        .filter_map(|entry| {
+            match mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content) {
+                Some(mez_agent::TranscriptContextEvent::McpCatalogSnapshot {
+                    event_sequence,
+                    content,
+                    ..
+                }) => Some((event_sequence, content)),
+                _ => None,
+            }
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(persisted_snapshots.len(), 3, "{persisted:#?}");
+    assert!(
+        persisted_snapshots
+            .windows(2)
+            .all(|pair| pair[0].0 != pair[1].0)
+    );
+    assert_eq!(persisted_snapshots[0].1, first_snapshot);
+    assert_eq!(
+        persisted_snapshots[2].1,
+        mez_agent::MCP_CATALOG_REMOVED_CONTEXT
+    );
+
+    let _ = fs::remove_dir_all(transcript_root);
+}
+
 /// Verifies same-turn compaction refresh preserves the environment sampled at
 /// the prompt boundary even when the retained raw transcript drops its event.
 ///
@@ -969,6 +1176,7 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
                 .map(|message| message.content.len())
                 .sum(),
             mcp_live_state_bytes: 0,
+            mcp_catalog_bytes: 0,
             action_result_bytes: 0,
             openai_diagnostics: Some(diagnostics.clone()),
             diagnostics_failed: false,
@@ -1026,6 +1234,7 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
         None,
     );
     omitted.mcp_live_state_bytes = 23;
+    omitted.mcp_catalog_bytes = 41;
     omitted.action_result_bytes = 17;
     assert!(
         service
@@ -1047,13 +1256,13 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
     assert!(
         status
             .contains("| Request input composition | request=wire-status-2 total_volatile_bytes=")
-            && status.contains("mcp_bytes=23 action_result_bytes=17"),
+            && status.contains("stable_mcp_bytes=41 explicit_mcp_bytes=23 action_result_bytes=17"),
         "{status}"
     );
     let trace = service.agent_pane_trace_log_text("%1").unwrap();
     assert!(
         trace.contains("id=wire-status-2 attempt=1 retry=none")
-            && trace.contains("mcp_bytes=23 action_result_bytes=17"),
+            && trace.contains("stable_mcp_bytes=41 explicit_mcp_bytes=23 action_result_bytes=17"),
         "{trace}"
     );
     assert!(!trace.contains("PRIVATE_PROVIDER_PROMPT_MARKER"), "{trace}");

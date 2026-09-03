@@ -697,7 +697,7 @@ description.
 | `agents.loop_limit` | integer | `8` | Maximum iterations for a `/loop`; must be positive. |
 | `agents.custom_system_prompt` | string | `""` | User-owned system prompt appended after built-in prompt content. |
 | `agents.default_personality` | string | `""` | Default personality profile id; empty means none. |
-| `agents.always_exposed_mcp_servers` | string array | `[]` | MCP server ids whose model-safe metadata and callable tools are exposed on every applicable model turn; availability alone does not instruct the model to use them. |
+| `agents.always_exposed_mcp_servers` | string array | `[]` | MCP server ids whose complete model-safe metadata and callable tool schemas are exposed through append-only catalog snapshots on every applicable model turn. Unchanged catalogs are reused; configuration, discovery, schema, or availability changes append an authoritative transition. Availability alone does not instruct the model to use a server, and the live registry still controls callability. |
 | `agents.auto_sizing` | table | see below | Model auto-sizing settings. |
 | `agents.subagent_placement` | string | `"new-window"` | Where root-spawned subagents are placed. |
 | `agents.max_concurrent_agents` | integer | `4` | Global active-agent limit; parents waiting for routed, joined, or macro dependencies release capacity and reacquire it fairly before continuing. |

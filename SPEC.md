@@ -4100,8 +4100,10 @@ provider system context, not as a user message. `agents.default_personality` MAY
 name a profile from the `personalities` table and MUST fail validation if the
 named profile is absent. `agents.always_exposed_mcp_servers` MUST be a string
 array of configured MCP server identifiers and MUST default to an empty array.
-It controls turn-local availability only and MUST NOT add instructions that
-encourage or require the model to use any listed server.
+Its complete model-safe catalog MUST be represented by append-only typed
+conversation snapshots rather than regenerated request-local context. It MUST
+NOT add instructions that encourage or require the model to use any listed
+server.
 
 The `personalities` table MUST be a map keyed by user-defined personality
 profile identity. Mezzanine MUST NOT define built-in personality profiles. Each
@@ -9026,8 +9028,18 @@ resolution and model-visible metadata contracts as explicit invocations.
 Configured names and explicit mentions MUST be merged deterministically and
 deduplicated by canonical server identity. Unknown, disabled, unavailable, or
 case-ambiguous configured names MUST expose no fabricated tools and MUST produce
-a bounded model-visible diagnostic. Configuration reload MUST replace the list
-for subsequent turns rather than retaining stale exposure state.
+a bounded model-visible diagnostic. The complete configured catalog MUST occupy
+an immutable cache-eligible chronological snapshot. An unchanged catalog MUST
+not append another snapshot. Configuration, discovery, schema, guidance, or
+availability changes MUST append a latest-authoritative transition without
+rewriting prior model-visible bytes or rotating the conversation cache lineage.
+Removing the configured list MUST append an explicit removed transition when a
+prior configured snapshot exists. Equal catalog content separated by another
+transition MUST retain distinct chronological identities in durable storage.
+The live MCP registry, not historical snapshots, MUST remain authoritative for
+call authorization and schema validation. Information selected only by an
+explicit `@<server-id>` invocation MAY remain request-local, and overlap with a
+configured server MUST be represented only by the configured snapshot.
 For a resolved explicit invocation, the turn-local model context MUST identify the invoked server, state that matching callable `mcp_call` actions are the direct execution route, and make clear that memory lookup or unrelated discovery is not a substitute. It MUST present every callable tool identity and description together with its complete validated input-schema contract, including required and optional fields, descriptions, nested structures, arrays, enums, and validation constraints, without silent truncation or omission. Mezzanine MUST preserve complete model-safe initialization instructions advertised by the MCP server as non-authoritative guidance, SHOULD derive a complete purpose from discovered tool metadata when operator-configured purpose is absent, and MUST preserve complete operator-configured purpose and usage guidance as higher-priority context. Credentials, transport configuration, environment variables, headers, approval internals, and other runtime-only metadata MUST remain excluded. If a provider context limit cannot accommodate the complete selected-server metadata, Mezzanine MUST fail the invocation explicitly rather than present a partial manifest. For cache-stable provider schemas that use a generic `mcp_call` variant, the turn-local context MUST instead identify callable server/tool pairs and their complete argument contracts, while controller and runtime validation MUST enforce those requirements before execution.
 
 Mezzanine MUST support stdio MCP servers with `command`, optional `args`,

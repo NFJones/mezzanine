@@ -68,7 +68,10 @@ fn runtime_resume_directory_from_summary(summary: &ConversationSummary) -> Optio
 fn runtime_resume_system_display_content(content: &str) -> String {
     if matches!(
         mez_agent::TranscriptContextEvent::from_transcript_content(content),
-        Some(mez_agent::TranscriptContextEvent::ExecutionBlock { .. })
+        Some(
+            mez_agent::TranscriptContextEvent::ExecutionBlock { .. }
+                | mez_agent::TranscriptContextEvent::McpCatalogSnapshot { .. }
+        )
     ) {
         return String::new();
     }

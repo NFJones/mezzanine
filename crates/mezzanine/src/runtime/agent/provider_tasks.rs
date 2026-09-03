@@ -744,6 +744,7 @@ impl RuntimeSessionService {
                     Vec::new(),
                 )
             } else {
+                self.refresh_agent_turn_mcp_catalog_context(&turn)?;
                 self.refresh_agent_turn_project_guidance_context(&turn)?;
                 let durable = self
                     .agent_turn_contexts()

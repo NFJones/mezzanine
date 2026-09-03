@@ -168,7 +168,15 @@ impl RuntimeSessionService {
             TranscriptRole::Tool => 2,
             TranscriptRole::System => 3,
         };
-        (entry.turn_id.clone(), role, entry.content.clone())
+        let owner = if matches!(
+            TranscriptContextEvent::from_transcript_content(&entry.content),
+            Some(TranscriptContextEvent::McpCatalogSnapshot { .. })
+        ) {
+            String::new()
+        } else {
+            entry.turn_id.clone()
+        };
+        (owner, role, entry.content.clone())
     }
 
     /// Persists the originating prompt and available settled observations when
@@ -274,6 +282,19 @@ impl RuntimeSessionService {
         };
         interrupted_entry.validate()?;
         entries.push(interrupted_entry);
+        let mut existing_entries = match store.inspect(&turn.conversation_id) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error),
+        };
+        existing_entries.extend(
+            self.persistence
+                .pending_transcript_entries(&turn.conversation_id),
+        );
+        entries = Self::new_runtime_transcript_entries(entries, &existing_entries, first_sequence);
+        if entries.is_empty() {
+            return Ok(0);
+        }
         if self.persistence.transcript_uses_adapter() {
             self.persistence.set_deferred_transcript_next_sequence(
                 turn.conversation_id.clone(),
@@ -516,12 +537,8 @@ impl RuntimeSessionService {
         let imported_history_events = self.agent_turn_imported_history_events(&turn.turn_id);
         let mut sequence = first_sequence;
         let mut entries = Vec::new();
-        for block in context
-            .chronology()
-            .iter()
-            .skip(imported_history_events)
-            .map(|event| event.block())
-        {
+        for event in context.chronology().iter().skip(imported_history_events) {
+            let block = event.block();
             if block.source == ContextSourceKind::UserInstruction && block.label == "user prompt" {
                 break;
             }
@@ -531,6 +548,16 @@ impl RuntimeSessionService {
                 TranscriptContextEvent::environment_snapshot(block.content.clone()).ok_or_else(
                     || MezError::invalid_state("turn environment snapshot is empty or oversized"),
                 )?
+            } else if block.source == ContextSourceKind::McpCatalogSnapshot
+                && block.label == mez_agent::MCP_CATALOG_SNAPSHOT_CONTEXT_LABEL
+            {
+                TranscriptContextEvent::mcp_catalog_snapshot(
+                    block.content.clone(),
+                    event.sequence().get(),
+                )
+                .ok_or_else(|| {
+                    MezError::invalid_state("turn MCP catalog snapshot is empty or oversized")
+                })?
             } else if matches!(
                 block.source,
                 ContextSourceKind::SkillInstruction
@@ -586,22 +613,29 @@ impl RuntimeSessionService {
             .last()
             .map_or(first_sequence, |entry| entry.sequence.saturating_add(1));
         let mut group_ordinals = BTreeMap::<String, u64>::new();
-        for event in context
-            .chronology()
-            .iter()
-            .skip(imported_history_events)
-            .filter(|event| {
-                matches!(
-                    event.block().source,
-                    ContextSourceKind::CommittedEvidence
-                        | ContextSourceKind::TranscriptAssistant
-                        | ContextSourceKind::TranscriptTool
-                        | ContextSourceKind::ActionResult
-                )
-            })
-        {
+        let mut active_user_seen = false;
+        for event in context.chronology().iter().skip(imported_history_events) {
             let block = event.block();
-            let transcript_event = if let Some(group) = event.execution_group_id() {
+            if block.source == ContextSourceKind::UserInstruction && block.label == "user prompt" {
+                active_user_seen = true;
+                continue;
+            }
+            let transcript_event = if block.source == ContextSourceKind::McpCatalogSnapshot
+                && active_user_seen
+            {
+                TranscriptContextEvent::mcp_catalog_snapshot(
+                    block.content.clone(),
+                    event.sequence().get(),
+                )
+            } else if !matches!(
+                block.source,
+                ContextSourceKind::CommittedEvidence
+                    | ContextSourceKind::TranscriptAssistant
+                    | ContextSourceKind::TranscriptTool
+                    | ContextSourceKind::ActionResult
+            ) {
+                continue;
+            } else if let Some(group) = event.execution_group_id() {
                 let ordinal = group_ordinals
                     .entry(group.as_str().to_string())
                     .or_default();

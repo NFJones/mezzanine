@@ -50,8 +50,11 @@ request-local producer such as selected MCP metadata or recovery guidance.
 `action_result_bytes` reports exact durable action-result content in the
 observed request. Those bytes are cold when first appended, then remain in the
 same chronological position for later requests and turns until compaction.
-`mcp_bytes` reports request-local MCP manifest content; an explicitly selected
-integration can still move with the volatile suffix.
+`stable_mcp_bytes` reports configured always-exposed MCP catalog snapshots in
+append-only chronology. `explicit_mcp_bytes` reports request-local manifests
+for integrations selected only with `@server`; those bytes can still move with
+the volatile suffix. An unchanged always-exposed catalog should not increase
+the snapshot count or create an MCP-caused stable-prefix divergence.
 
 ## Escalate a diagnostic safely
 

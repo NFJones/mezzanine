@@ -136,6 +136,8 @@ pub struct ProviderWireRequestObservation {
     pub message_bytes: usize,
     /// Request-local MCP manifest and availability bytes.
     pub mcp_live_state_bytes: usize,
+    /// Stable configured always-exposed MCP catalog bytes.
+    pub mcp_catalog_bytes: usize,
     /// Exact durable action-result bytes included in this request.
     pub action_result_bytes: usize,
     /// OpenAI Responses cache diagnostics, when applicable.
@@ -265,6 +267,16 @@ impl<'a> ProviderWireObservationContext<'a> {
                     message.placement == mez_agent::ContextPlacement::EphemeralTail
                         && message.source == mez_agent::ContextSourceKind::RuntimeHint
                         && message.content.starts_with("[mcp integrations]\n")
+                })
+                .fold(0usize, |total, message| {
+                    total.saturating_add(message.content.len())
+                }),
+            mcp_catalog_bytes: request
+                .messages
+                .iter()
+                .filter(|message| {
+                    message.placement == mez_agent::ContextPlacement::ConversationAppend
+                        && message.source == mez_agent::ContextSourceKind::McpCatalogSnapshot
                 })
                 .fold(0usize, |total, message| {
                     total.saturating_add(message.content.len())

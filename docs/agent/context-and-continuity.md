@@ -26,6 +26,13 @@ exports can contain sensitive task data. Later results append after earlier
 ones; they do not move or replace prior output. Only explicit conversation
 compaction may summarize complete older execution groups.
 
+Servers listed in `agents.always_exposed_mcp_servers` use the same append-only
+model. Mez stores their complete model-safe catalog as typed conversation
+snapshots. An unchanged catalog is reused in place; configuration, discovery,
+schema, guidance, availability, or removal changes append an authoritative
+transition. Explicit-only `@server` metadata remains request-local, and the
+live MCP registry—not historical snapshots—controls whether a call may run.
+
 The pane conversation can survive hiding the agent shell, detaching and
 reattaching the client, and ordinary session persistence. A forked or routed
 conversation uses its captured source boundary and does not absorb later parent

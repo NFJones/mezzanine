@@ -170,6 +170,7 @@ fn runtime_agent_context_dump_for_pane(
             message,
         });
     };
+    service.refresh_agent_turn_mcp_catalog_context(&turn)?;
     service.refresh_agent_turn_project_guidance_context(&turn)?;
     let durable = service
         .agent_turn_contexts()
@@ -615,6 +616,7 @@ fn runtime_context_source_name(source: ContextSourceKind) -> &'static str {
         ContextSourceKind::CommittedEvidence => "committed-evidence",
         ContextSourceKind::RoutedHandoff => "routed-handoff",
         ContextSourceKind::ActionResult => "action-result",
+        ContextSourceKind::McpCatalogSnapshot => "mcp-catalog-snapshot",
     }
 }
 

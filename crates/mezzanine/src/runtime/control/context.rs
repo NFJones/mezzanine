@@ -84,6 +84,18 @@ pub(super) fn runtime_agent_transcript_context(
             continue;
         }
         if entry.role == TranscriptRole::System
+            && let Some(TranscriptContextEvent::McpCatalogSnapshot { content, .. }) =
+                TranscriptContextEvent::from_transcript_content(&entry.content)
+        {
+            blocks.push(ContextBlock {
+                source: ContextSourceKind::McpCatalogSnapshot,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: mez_agent::MCP_CATALOG_SNAPSHOT_CONTEXT_LABEL.to_string(),
+                content,
+            });
+            continue;
+        }
+        if entry.role == TranscriptRole::System
             && let Some(TranscriptContextEvent::PromptBoundary {
                 source,
                 label,

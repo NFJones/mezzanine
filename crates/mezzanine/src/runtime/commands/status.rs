@@ -457,12 +457,13 @@ impl RuntimeSessionService {
                     || "unknown".to_string(),
                     |status| {
                         format!(
-                            "request={} total_volatile_bytes={} mcp_bytes={} action_result_bytes={}",
+                            "request={} total_volatile_bytes={} stable_mcp_bytes={} explicit_mcp_bytes={} action_result_bytes={}",
                             status.request_id,
                             status.volatile_input_bytes.map_or_else(
                                 || "unknown".to_string(),
                                 |value| value.to_string()
                             ),
+                            status.mcp_catalog_bytes,
                             status.mcp_live_state_bytes,
                             status.action_result_bytes,
                         )

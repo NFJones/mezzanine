@@ -306,7 +306,15 @@ async fn observed_async_provider_records_each_attempt_and_exact_usage_presence()
     request.provider = "batch".to_string();
     request.interaction_kind = mez_agent::ModelInteractionKind::CapabilityContinuation;
     let mcp_live_state = "[mcp integrations]\navailable_servers=1 available_tools=1";
+    let mcp_catalog =
+        "[always-exposed MCP catalog snapshot]\navailable_servers=1 available_tools=1";
     let action_result = "exact durable action result";
+    request.messages.push(ModelMessage {
+        role: ModelMessageRole::Context,
+        source: ContextSourceKind::McpCatalogSnapshot,
+        placement: mez_agent::ContextPlacement::ConversationAppend,
+        content: mcp_catalog.to_string(),
+    });
     request.messages.push(ModelMessage {
         role: ModelMessageRole::Context,
         source: ContextSourceKind::RuntimeHint,
@@ -337,6 +345,7 @@ async fn observed_async_provider_records_each_attempt_and_exact_usage_presence()
     assert_eq!(omitted.interaction_kind, "capability_continuation");
     assert_eq!(omitted.usage, None);
     assert_eq!(omitted.mcp_live_state_bytes, mcp_live_state.len());
+    assert_eq!(omitted.mcp_catalog_bytes, mcp_catalog.len());
     assert_eq!(omitted.action_result_bytes, action_result.len());
     assert_eq!(zero.interaction_kind, "maap_repair");
     assert_eq!(zero.usage, Some(explicit_zero));

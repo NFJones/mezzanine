@@ -146,6 +146,7 @@ impl RuntimeSessionService {
         model_profile: &ModelProfile,
         error: &MezError,
     ) -> Result<()> {
+        self.refresh_agent_turn_mcp_catalog_context(turn)?;
         self.refresh_agent_turn_project_guidance_context(turn)?;
         let context = self
             .agent_turn_contexts()
@@ -609,6 +610,7 @@ impl RuntimeSessionService {
         model_profile: &ModelProfile,
         block: &RuntimeHookPipelineBlock,
     ) -> Result<()> {
+        self.refresh_agent_turn_mcp_catalog_context(turn)?;
         self.refresh_agent_turn_project_guidance_context(turn)?;
         let context = self
             .agent_turn_contexts()

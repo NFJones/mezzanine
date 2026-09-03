@@ -55,6 +55,44 @@ incomplete_native_items={}
 }
 
 impl RuntimeSessionService {
+    /// Appends a changed configured MCP catalog to immutable turn chronology.
+    ///
+    /// Provider preparation may run repeatedly while one turn is active. The
+    /// exact configured catalog is appended only when its canonical projection
+    /// changes; explicit-only server metadata remains request-local.
+    pub(crate) fn refresh_agent_turn_mcp_catalog_context(
+        &mut self,
+        turn: &AgentTurnRecord,
+    ) -> Result<()> {
+        let configured_server_names = self.integration.always_exposed_mcp_servers().to_vec();
+        let current = mez_agent::configured_mcp_catalog_snapshot_content(
+            &self.mcp_registry().prompt_summary(),
+            &configured_server_names,
+        );
+        let context = self
+            .agent_turn_contexts_mut()
+            .get_mut(&turn.turn_id)
+            .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
+        let previous = context
+            .chronology()
+            .iter()
+            .rev()
+            .find(|event| event.block().source == ContextSourceKind::McpCatalogSnapshot)
+            .map(|event| event.block().content.as_str());
+        let current = current
+            .or_else(|| previous.map(|_| mez_agent::MCP_CATALOG_REMOVED_CONTEXT.to_string()));
+        if let Some(content) = current.filter(|content| previous != Some(content.as_str())) {
+            context
+                .append_reference_event(
+                    ContextSourceKind::McpCatalogSnapshot,
+                    mez_agent::MCP_CATALOG_SNAPSHOT_CONTEXT_LABEL,
+                    content,
+                )
+                .map_err(|error| MezError::invalid_state(error.to_string()))?;
+        }
+        Ok(())
+    }
+
     /// Prepares the next provider request from durable chronology and a fresh
     /// allowlisted live-state suffix without mutating stored turn context.
     pub(crate) fn prepare_agent_turn_model_context(

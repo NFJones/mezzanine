@@ -70,12 +70,12 @@ pub fn memory_context_blocks(
         .collect()
 }
 
-/// Replaces MCP availability context with turn-local explicitly invoked servers.
-///
-/// MCP server metadata is injected only when the submitted prompt or an already
-/// loaded skill names a server with `@<server-id>`. The injected block is
-/// model-visible turn context, not a durable prompt catalog.
-const MCP_INTEGRATIONS_CONTEXT_LABEL: &str = "mcp integrations";
+/// Label for request-local explicitly invoked MCP metadata.
+pub const MCP_INTEGRATIONS_CONTEXT_LABEL: &str = "mcp integrations";
+/// Label for immutable configured always-exposed MCP catalog snapshots.
+pub const MCP_CATALOG_SNAPSHOT_CONTEXT_LABEL: &str = "always-exposed MCP catalog snapshot";
+/// Authoritative transition used when no servers remain always exposed.
+pub const MCP_CATALOG_REMOVED_CONTEXT: &str = "available_servers=0 available_tools=0 unavailable_servers=0\nconfigured_exposure=\"\" action=mcp_call\nstate=removed";
 /// Runtime-owned label for the original task copied into a routed worker.
 const ROUTED_CONTROLLER_TASK_LABEL: &str = "routed controller task";
 
@@ -93,14 +93,23 @@ pub fn append_mcp_context_with_configured(
     configured_server_names: &[String],
 ) -> AgentContextResult<AgentContext> {
     context.retain_blocks(|block| !is_mcp_context_block(block))?;
-    let invocation = mcp_invocation_summary(&context, summary, configured_server_names);
-    if invocation.available_servers.is_empty()
-        && invocation.available_tools.is_empty()
-        && invocation.unavailable_servers.is_empty()
-    {
-        return context.revalidate();
+    let previous = context
+        .chronology()
+        .iter()
+        .rev()
+        .find(|event| event.block().source == ContextSourceKind::McpCatalogSnapshot)
+        .map(|event| event.block().content.as_str());
+    let current = configured_mcp_catalog_snapshot_content(summary, configured_server_names)
+        .or_else(|| previous.map(|_| MCP_CATALOG_REMOVED_CONTEXT.to_string()));
+    if let Some(content) = current.filter(|content| previous != Some(content.as_str())) {
+        context.append_reference_event(
+            ContextSourceKind::McpCatalogSnapshot,
+            MCP_CATALOG_SNAPSHOT_CONTEXT_LABEL,
+            content,
+        )?;
     }
-    append_filtered_mcp_context(context, &invocation, true)
+    let invocation = explicit_mcp_invocation_summary(&context, summary, configured_server_names);
+    append_filtered_mcp_context(context, &invocation, true, McpExposureKind::Explicit)
 }
 
 /// Replaces MCP live state using only information absent from the provider's
@@ -126,8 +135,13 @@ pub fn append_mcp_context_for_provider_with_configured(
     configured_server_names: &[String],
 ) -> AgentContextResult<AgentContext> {
     context.retain_blocks(|block| !is_mcp_context_block(block))?;
-    let invocation = mcp_invocation_summary(&context, summary, configured_server_names);
-    append_filtered_mcp_context(context, &invocation, provider == "openai")
+    let invocation = explicit_mcp_invocation_summary(&context, summary, configured_server_names);
+    append_filtered_mcp_context(
+        context,
+        &invocation,
+        provider == "openai",
+        McpExposureKind::Explicit,
+    )
 }
 
 /// Replaces MCP live state according to the resolved provider wire API.
@@ -142,12 +156,33 @@ pub fn append_mcp_context_for_api_with_configured(
     configured_server_names: &[String],
 ) -> AgentContextResult<AgentContext> {
     context.retain_blocks(|block| !is_mcp_context_block(block))?;
-    let invocation = mcp_invocation_summary(&context, summary, configured_server_names);
+    let invocation = explicit_mcp_invocation_summary(&context, summary, configured_server_names);
     append_filtered_mcp_context(
         context,
         &invocation,
         api == ProviderApiCompatibility::OpenAiResponses,
+        McpExposureKind::Explicit,
     )
+}
+
+/// Renders the complete deterministic catalog selected by configuration.
+///
+/// The returned bytes are provider-neutral and suitable for immutable
+/// prompt-boundary chronology. Runtime authorization must still use the live
+/// MCP registry rather than this historical model-facing snapshot.
+pub fn configured_mcp_catalog_snapshot_content(
+    summary: &McpPromptSummary,
+    configured_server_names: &[String],
+) -> Option<String> {
+    if configured_server_names.is_empty() {
+        return None;
+    }
+    let selected = mcp_summary_for_requested_names(
+        configured_server_names,
+        summary,
+        "configured MCP server name",
+    );
+    render_filtered_mcp_context(&selected, true, McpExposureKind::Configured)
 }
 
 /// Returns the MCP tools that should be callable for this turn.
@@ -172,12 +207,44 @@ fn append_filtered_mcp_context(
     mut context: AgentContext,
     summary: &McpPromptSummary,
     include_available_manifest: bool,
+    exposure: McpExposureKind,
 ) -> AgentContextResult<AgentContext> {
+    let Some(content) = render_filtered_mcp_context(summary, include_available_manifest, exposure)
+    else {
+        return context.revalidate();
+    };
+    context.insert_typed_block(
+        ContextBlock {
+            source: ContextSourceKind::RuntimeHint,
+            placement: crate::ContextPlacement::EphemeralTail,
+            label: MCP_INTEGRATIONS_CONTEXT_LABEL.to_string(),
+            content,
+        },
+        ContextSemanticKind::LiveState,
+        ContextRetention::RequestLocal,
+        false,
+    )?;
+    context.revalidate()
+}
+
+/// MCP catalog ownership used only to label otherwise identical manifest data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum McpExposureKind {
+    Configured,
+    Explicit,
+}
+
+/// Renders one complete deterministic MCP manifest without choosing placement.
+fn render_filtered_mcp_context(
+    summary: &McpPromptSummary,
+    include_available_manifest: bool,
+    exposure: McpExposureKind,
+) -> Option<String> {
     if summary.unavailable_servers.is_empty()
         && (!include_available_manifest
             || summary.available_servers.is_empty() && summary.available_tools.is_empty())
     {
-        return context.revalidate();
+        return None;
     }
     let mut lines = if include_available_manifest {
         vec![format!(
@@ -208,14 +275,18 @@ fn append_filtered_mcp_context(
             .map(|server| server.server_id.as_str())
             .collect::<Vec<_>>()
             .join(",");
+        let selection = match exposure {
+            McpExposureKind::Configured => "configured_exposure",
+            McpExposureKind::Explicit => "explicit_invocation",
+        };
         lines.push(format!(
-            "explicit_invocation={} action=mcp_call",
+            "{selection}={} action=mcp_call",
             mcp_context_quoted_value(&invoked_servers)
         ));
     }
     if include_available_manifest {
         let detailed_tools = mcp_context_selected_tool_details(
-            &context,
+            &AgentContext::empty(),
             &available_servers,
             &available_tools,
             usize::MAX,
@@ -244,26 +315,99 @@ fn append_filtered_mcp_context(
             mcp_context_quoted_value(&server.reason)
         ));
     }
-    context.insert_typed_block(
-        ContextBlock {
-            source: ContextSourceKind::RuntimeHint,
-            placement: crate::ContextPlacement::EphemeralTail,
-            label: MCP_INTEGRATIONS_CONTEXT_LABEL.to_string(),
-            content: lines.join("\n"),
-        },
-        ContextSemanticKind::LiveState,
-        ContextRetention::RequestLocal,
-        false,
-    )?;
-    context.revalidate()
+    Some(lines.join("\n"))
 }
 
 /// Returns true when a context block is runtime-injected MCP prompt context.
 fn is_mcp_context_block(block: &ContextBlock) -> bool {
-    matches!(
-        block.source,
-        ContextSourceKind::Configuration | ContextSourceKind::RuntimeHint
-    ) && block.label == MCP_INTEGRATIONS_CONTEXT_LABEL
+    block.source == ContextSourceKind::RuntimeHint && block.label == MCP_INTEGRATIONS_CONTEXT_LABEL
+}
+
+/// Filters MCP state to explicit names not already owned by configuration.
+fn explicit_mcp_invocation_summary(
+    context: &AgentContext,
+    summary: &McpPromptSummary,
+    configured_server_names: &[String],
+) -> McpPromptSummary {
+    let explicit = explicit_mcp_invocations_from_context(context);
+    let configured = mcp_summary_for_requested_names(
+        configured_server_names,
+        summary,
+        "configured MCP server name",
+    );
+    let configured_ids = configured
+        .available_servers
+        .iter()
+        .map(|server| server.server_id.as_str())
+        .chain(
+            configured
+                .unavailable_servers
+                .iter()
+                .map(|server| server.server_id.as_str()),
+        )
+        .collect::<Vec<_>>();
+    let mut selected =
+        mcp_summary_for_requested_names(&explicit, summary, "explicit MCP server mention");
+    selected
+        .available_servers
+        .retain(|server| !configured_ids.iter().any(|id| id == &server.server_id));
+    selected
+        .available_tools
+        .retain(|tool| !configured_ids.iter().any(|id| id == &tool.server_id));
+    selected.unavailable_servers.retain(|server| {
+        !configured_ids
+            .iter()
+            .any(|configured| configured == &server.server_id)
+    });
+    selected
+}
+
+/// Filters MCP state to one requested-name set with deterministic diagnostics.
+fn mcp_summary_for_requested_names(
+    requested: &[String],
+    summary: &McpPromptSummary,
+    request_kind: &str,
+) -> McpPromptSummary {
+    if requested.is_empty() {
+        return McpPromptSummary {
+            available_servers: Vec::new(),
+            available_tools: Vec::new(),
+            unavailable_servers: Vec::new(),
+        };
+    }
+    let (resolved, mut unavailable_servers) =
+        resolve_mcp_server_names(requested, summary, request_kind);
+    let mut available_servers = summary
+        .available_servers
+        .iter()
+        .filter(|server| resolved.iter().any(|name| name == &server.server_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut available_tools = summary
+        .available_tools
+        .iter()
+        .filter(|tool| resolved.iter().any(|name| name == &tool.server_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    unavailable_servers.extend(
+        summary
+            .unavailable_servers
+            .iter()
+            .filter(|server| resolved.iter().any(|name| name == &server.server_id))
+            .cloned(),
+    );
+    available_servers.sort_by(|left, right| left.server_id.cmp(&right.server_id));
+    available_tools.sort_by(|left, right| {
+        left.server_id
+            .cmp(&right.server_id)
+            .then_with(|| left.tool_name.cmp(&right.tool_name))
+    });
+    unavailable_servers.sort_by(|left, right| left.server_id.cmp(&right.server_id));
+    McpPromptSummary {
+        available_servers,
+        available_tools,
+        unavailable_servers,
+    }
 }
 
 /// Filters live MCP state to configured servers and turn-local explicit names.

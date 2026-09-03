@@ -25,6 +25,8 @@ const ROUTED_HANDOFF_KIND: &str = "routed_handoff";
 const INTERRUPTED_TURN_KIND: &str = "interrupted_turn";
 /// Event kind for one immutable pane-environment projection.
 const ENVIRONMENT_SNAPSHOT_KIND: &str = "environment_snapshot";
+/// Event kind for one immutable configured MCP catalog projection.
+const MCP_CATALOG_SNAPSHOT_KIND: &str = "mcp_catalog_snapshot";
 /// Event kind for one exact context block immediately preceding a user event.
 const PROMPT_BOUNDARY_KIND: &str = "prompt_boundary";
 /// Event kind for one exact cache-visible execution block.
@@ -53,6 +55,15 @@ pub enum TranscriptContextEvent {
         /// SHA-256 digest of the exact model-visible projection.
         projection_sha256: String,
         /// Exact model-visible environment projection.
+        content: String,
+    },
+    /// Configured always-exposed MCP catalog sampled at a chronology boundary.
+    McpCatalogSnapshot {
+        /// SHA-256 digest of the exact model-visible catalog projection.
+        projection_sha256: String,
+        /// Original non-zero chronological event sequence.
+        event_sequence: u64,
+        /// Exact model-visible configured MCP catalog projection.
         content: String,
     },
     /// One exact pre-user context event retained in chronological order.
@@ -110,6 +121,23 @@ impl TranscriptContextEvent {
             .collect();
         Some(Self::EnvironmentSnapshot {
             projection_sha256,
+            content,
+        })
+    }
+
+    /// Builds one validated immutable configured MCP catalog snapshot.
+    pub fn mcp_catalog_snapshot(content: impl Into<String>, event_sequence: u64) -> Option<Self> {
+        let content = content.into();
+        if content.trim().is_empty()
+            || content.len() > EXECUTION_BLOCK_CONTENT_LIMIT_BYTES
+            || event_sequence == 0
+        {
+            return None;
+        }
+        let projection_sha256 = mcp_catalog_snapshot_sha256(&content, event_sequence);
+        Some(Self::McpCatalogSnapshot {
+            projection_sha256,
+            event_sequence,
             content,
         })
     }
@@ -215,6 +243,17 @@ impl TranscriptContextEvent {
                 "projection_sha256": projection_sha256,
                 "content": content,
             }),
+            Self::McpCatalogSnapshot {
+                projection_sha256,
+                event_sequence,
+                content,
+            } => serde_json::json!({
+                "version": TRANSCRIPT_CONTEXT_EVENT_VERSION,
+                "kind": MCP_CATALOG_SNAPSHOT_KIND,
+                "projection_sha256": projection_sha256,
+                "event_sequence": event_sequence,
+                "content": content,
+            }),
             Self::PromptBoundary {
                 source,
                 projection_sha256,
@@ -296,6 +335,19 @@ impl TranscriptContextEvent {
                 }
                 Some(Self::EnvironmentSnapshot {
                     projection_sha256: projection_sha256.to_string(),
+                    content: content.to_string(),
+                })
+            }
+            MCP_CATALOG_SNAPSHOT_KIND => {
+                let projection_sha256 = value.get("projection_sha256")?.as_str()?;
+                let event_sequence = value.get("event_sequence")?.as_u64()?;
+                let content = value.get("content")?.as_str()?;
+                if !valid_mcp_catalog_snapshot(projection_sha256, content, event_sequence) {
+                    return None;
+                }
+                Some(Self::McpCatalogSnapshot {
+                    projection_sha256: projection_sha256.to_string(),
+                    event_sequence,
                     content: content.to_string(),
                 })
             }
@@ -416,6 +468,30 @@ fn valid_environment_snapshot(projection_sha256: &str, content: &str) -> bool {
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
     projection_sha256 == expected
+}
+
+/// Validates one configured MCP catalog snapshot before durable replay.
+fn valid_mcp_catalog_snapshot(projection_sha256: &str, content: &str, event_sequence: u64) -> bool {
+    if content.trim().is_empty()
+        || content.len() > EXECUTION_BLOCK_CONTENT_LIMIT_BYTES
+        || event_sequence == 0
+        || projection_sha256.len() != 64
+        || !projection_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return false;
+    }
+    projection_sha256 == mcp_catalog_snapshot_sha256(content, event_sequence)
+}
+
+/// Digests exact catalog bytes together with their chronological identity.
+fn mcp_catalog_snapshot_sha256(content: &str, event_sequence: u64) -> String {
+    let material = format!("{event_sequence}\0{content}");
+    Sha256::digest(material.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 /// Returns the durable wire name for an allowlisted prompt-boundary source.
@@ -573,6 +649,27 @@ mod tests {
             TranscriptContextEvent::from_transcript_content(&encoded),
             Some(event)
         );
+    }
+
+    /// Verifies a configured MCP catalog snapshot retains exact manifest bytes
+    /// and rejects content rewritten after its digest was committed.
+    #[test]
+    fn mcp_catalog_snapshot_transcript_context_event_round_trips() {
+        let event = TranscriptContextEvent::mcp_catalog_snapshot(
+            "available_servers=1 available_tools=1 unavailable_servers=0\nconfigured_exposure=\"state\" action=mcp_call\navailable_tool=state/list",
+            42,
+        )
+        .unwrap();
+        let encoded = event.to_transcript_content();
+
+        assert_eq!(
+            TranscriptContextEvent::from_transcript_content(&encoded),
+            Some(event)
+        );
+        let tampered = encoded.replace("state/list", "state/delete");
+        assert!(TranscriptContextEvent::from_transcript_content(&tampered).is_none());
+        let tampered = encoded.replace("\"event_sequence\":42", "\"event_sequence\":43");
+        assert!(TranscriptContextEvent::from_transcript_content(&tampered).is_none());
     }
 
     /// Verifies every allowlisted pre-user source round-trips exactly and a

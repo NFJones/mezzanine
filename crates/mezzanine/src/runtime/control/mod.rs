@@ -216,6 +216,31 @@ impl RuntimeSessionService {
                 },
             );
         }
+        let previous_mcp_catalog_snapshot = blocks
+            .iter()
+            .rev()
+            .find(|block| block.source == ContextSourceKind::McpCatalogSnapshot)
+            .map(|block| block.content.as_str());
+        let current_mcp_catalog_snapshot = mez_agent::configured_mcp_catalog_snapshot_content(
+            &self.mcp_registry().prompt_summary(),
+            self.integration.always_exposed_mcp_servers(),
+        )
+        .or_else(|| {
+            previous_mcp_catalog_snapshot
+                .map(|_| mez_agent::MCP_CATALOG_REMOVED_CONTEXT.to_string())
+        });
+        if let Some(content) = current_mcp_catalog_snapshot
+            .filter(|content| previous_mcp_catalog_snapshot != Some(content.as_str()))
+        {
+            insert_context_block_by_placement(
+                &mut blocks,
+                ContextBlock::reference_event(
+                    ContextSourceKind::McpCatalogSnapshot,
+                    mez_agent::MCP_CATALOG_SNAPSHOT_CONTEXT_LABEL,
+                    content,
+                ),
+            );
+        }
         let instruction_files = self
             .pane_agent_instruction_files(pane_id)
             .map(<[_]>::to_vec);
