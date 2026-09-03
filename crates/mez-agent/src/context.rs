@@ -2288,6 +2288,7 @@ fn compatibility_execution_group_ranges(blocks: &[&ContextBlock]) -> Vec<Range<u
 pub struct PreparedModelContext {
     durable: AgentContext,
     live_state: Vec<ContextBlock>,
+    previous_request: Option<ModelRequest>,
 }
 
 impl PreparedModelContext {
@@ -2297,6 +2298,7 @@ impl PreparedModelContext {
         let prepared = Self {
             durable,
             live_state,
+            previous_request: None,
         };
         let ordered = prepared.ordered_blocks();
         validate_context_placement_order(&ordered)?;
@@ -2309,6 +2311,13 @@ impl PreparedModelContext {
         Self::new(durable, Vec::new())
     }
 
+    /// Carries the last concrete request emitted for this turn into the next
+    /// provider worker without making it model-visible or transcript-durable.
+    pub fn with_previous_request(mut self, previous_request: Option<ModelRequest>) -> Self {
+        self.previous_request = previous_request;
+        self
+    }
+
     /// Returns the immutable stored portion of the request context.
     pub fn durable(&self) -> &AgentContext {
         &self.durable
@@ -2317,6 +2326,11 @@ impl PreparedModelContext {
     /// Returns the request-local live-state suffix.
     pub fn live_state(&self) -> &[ContextBlock] {
         &self.live_state
+    }
+
+    /// Returns the last concrete request emitted for this turn, when present.
+    pub fn previous_request(&self) -> Option<&ModelRequest> {
+        self.previous_request.as_ref()
     }
 
     /// Returns the number of blocks visible to the provider.
@@ -2642,6 +2656,19 @@ pub struct ModelMessage {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ModelMessages {
     items: std::sync::Arc<Vec<std::sync::Arc<ModelMessage>>>,
+    openai_input_chain: Option<OpenAiInputChain>,
+}
+
+/// Exact OpenAI input retained across one append-only request chain.
+///
+/// The effective input is the sequence sent on the wire. Canonical stable and
+/// volatile partitions describe the latest source-level request so the next
+/// continuation can append new chronology without relocating its prior tail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OpenAiInputChain {
+    pub(crate) effective_input: std::sync::Arc<Vec<serde_json::Value>>,
+    pub(crate) cache_namespace: String,
+    pub(crate) stream: bool,
 }
 
 impl ModelMessages {
@@ -2667,17 +2694,30 @@ impl ModelMessages {
 
     /// Appends one request-local message using copy-on-write pointer storage.
     pub fn push(&mut self, message: ModelMessage) {
+        self.openai_input_chain = None;
         std::sync::Arc::make_mut(&mut self.items).push(std::sync::Arc::new(message));
     }
 
     /// Inserts one request-local message at the requested chronological index.
     pub fn insert(&mut self, index: usize, message: ModelMessage) {
+        self.openai_input_chain = None;
         std::sync::Arc::make_mut(&mut self.items).insert(index, std::sync::Arc::new(message));
     }
 
     /// Retains only messages accepted by `predicate`.
     pub fn retain(&mut self, mut predicate: impl FnMut(&ModelMessage) -> bool) {
+        self.openai_input_chain = None;
         std::sync::Arc::make_mut(&mut self.items).retain(|message| predicate(message.as_ref()));
+    }
+
+    /// Returns the exact OpenAI request-chain state, when one has been prepared.
+    pub(crate) fn openai_input_chain(&self) -> Option<&OpenAiInputChain> {
+        self.openai_input_chain.as_ref()
+    }
+
+    /// Installs the exact OpenAI input sequence prepared for the next send.
+    pub(crate) fn set_openai_input_chain(&mut self, chain: OpenAiInputChain) {
+        self.openai_input_chain = Some(chain);
     }
 
     /// Reports whether two collections share the same immutable backing store.
@@ -2691,6 +2731,7 @@ impl From<Vec<ModelMessage>> for ModelMessages {
     fn from(messages: Vec<ModelMessage>) -> Self {
         Self {
             items: std::sync::Arc::new(messages.into_iter().map(std::sync::Arc::new).collect()),
+            openai_input_chain: None,
         }
     }
 }

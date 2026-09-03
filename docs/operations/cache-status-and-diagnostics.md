@@ -37,9 +37,10 @@ state, and a classification such as `new_turn`, `compaction`,
 The last classification indicates a settled-context consistency signal, not a
 provider cache decision.
 
-`Stable provider prefix` compares only cache-eligible OpenAI input. It can
-remain append-only even when complete-message continuity is false because a
-request-local state message is regenerated after newly settled chronology.
+`Provider wire prefix` compares the complete ordered OpenAI input sent on the
+wire, together with cache-affecting request-envelope components. Ordinary
+within-turn continuations retain every previously sent input item byte-for-byte
+and append newly settled chronology or superseding live state after it.
 Pane environment facts are frozen as typed prompt-boundary snapshots: an
 unchanged environment adds no message, while a changed or unavailable
 environment appends a new snapshot without rewriting the prior prefix.
@@ -52,9 +53,16 @@ observed request. Those bytes are cold when first appended, then remain in the
 same chronological position for later requests and turns until compaction.
 `stable_mcp_bytes` reports configured always-exposed MCP catalog snapshots in
 append-only chronology. `explicit_mcp_bytes` reports request-local manifests
-for integrations selected only with `@server`; those bytes can still move with
-the volatile suffix. An unchanged always-exposed catalog should not increase
-the snapshot count or create an MCP-caused stable-prefix divergence.
+for integrations selected only with `@server`; once sent, those exact wire
+items remain in the turn's request chain and changed state appends a superseding
+item. An unchanged always-exposed catalog should not increase the snapshot
+count or create an MCP-caused provider-prefix divergence.
+
+Changes to the model, provider routing namespace, prompt-cache lineage, stream
+shape, compaction epoch, or an explicitly exceptional interaction start a new
+cache epoch. Other changes to cache-affecting instructions, tools, tool choice,
+response format, reasoning controls, or request controls fail closed before an
+ordinary continuation is sent.
 
 ## Escalate a diagnostic safely
 

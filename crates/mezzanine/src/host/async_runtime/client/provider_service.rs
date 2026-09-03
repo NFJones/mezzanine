@@ -1098,6 +1098,7 @@ async fn execute_runtime_agent_provider_dispatch(
         issue_actions_enabled,
         loop_turn: _,
     } = dispatch;
+    let previous_request = context.previous_request().cloned();
     let context = context.into_agent_context();
     let routing_token_usage_by_model = std::collections::BTreeMap::new();
     let execution_observer = ProviderWireRequestObserver::new(
@@ -1174,12 +1175,13 @@ async fn execute_runtime_agent_provider_dispatch(
                 issue_actions_enabled,
             };
             let execution = runner
-                .run_turn_async_ref_with_allowed_actions_and_progress(
+                .run_turn_async_ref_with_previous_request_and_progress(
                     &mut ledger,
                     turn.clone(),
                     &context,
                     allowed_actions.clone(),
                     interaction_kind,
+                    previous_request.as_ref(),
                     output_progress_sender.clone(),
                 )
                 .await?;

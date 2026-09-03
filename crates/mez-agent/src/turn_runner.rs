@@ -74,6 +74,20 @@ pub trait AgentTurnEnvironment {
         context: &AgentContext,
     ) -> Result<ModelRequest, Self::Error>;
 
+    /// Returns the last concrete request emitted for this logical turn.
+    fn previous_request(&self) -> Option<&ModelRequest> {
+        None
+    }
+
+    /// Applies provider-specific request-chain invariants immediately before send.
+    fn prepare_request(
+        &self,
+        _request: &mut ModelRequest,
+        _previous: Option<&ModelRequest>,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
     /// Returns MCP tools exposed to default action-gating policy.
     fn available_mcp_tools(&self) -> &[McpPromptTool];
 
@@ -194,6 +208,7 @@ pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
         AgentTurnNegotiation::new(request.clone(), DEFAULT_MAAP_REPAIR_ATTEMPT_LIMIT);
     let mut provider_interactions = 0usize;
     let mut continuation_signatures = BTreeSet::new();
+    let mut previous_request = environment.previous_request().cloned();
 
     let mut response = loop {
         if provider_interactions >= limits.max_provider_interactions {
@@ -205,7 +220,9 @@ pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
         }
         provider_interactions = provider_interactions.saturating_add(1);
         append_request_state_transition(&mut request);
+        environment.prepare_request(&mut request, previous_request.as_ref())?;
         let response_request = request.clone();
+        previous_request = Some(response_request.clone());
         let mut response = match environment.send_request(&request).await {
             Ok(response) => response,
             Err(error) => {

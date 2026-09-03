@@ -398,18 +398,18 @@ impl RuntimeSessionService {
                 ),
             ],
             vec![
-                "Stable provider prefix".to_string(),
+                "Provider wire prefix".to_string(),
                 provider_wire_status.map_or_else(
                     || {
                         self.runtime_metrics()
-                            .last_provider_request_stable_messages_append_only
+                            .last_provider_request_messages_append_only
                             .map_or_else(
                                 || "unknown".to_string(),
                                 |append_only| {
                                     format!(
                                         "common_messages={} append_only={append_only}",
                                         self.runtime_metrics()
-                                            .last_provider_request_common_stable_message_prefix
+                                            .last_provider_request_common_message_prefix
                                             .unwrap_or(0),
                                     )
                                 },
@@ -435,8 +435,8 @@ impl RuntimeSessionService {
                             format!(
                                     "request={} common_messages={} append_only={} stable_bytes={} volatile_bytes={}",
                                     status.request_id,
-                                    continuity.common_stable_message_prefix,
-                                    continuity.stable_messages_append_only,
+                                    continuity.common_message_prefix,
+                                    continuity.messages_append_only,
                                     status.stable_input_bytes.map_or_else(
                                         || "unknown".to_string(),
                                         |value| value.to_string()

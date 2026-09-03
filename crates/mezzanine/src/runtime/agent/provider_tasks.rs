@@ -33,7 +33,7 @@ struct RuntimeProviderRetrySchedule {
 /// Returns the complete serialized OpenAI Responses body size for one dispatch.
 fn runtime_openai_dispatch_request_shape(
     dispatch: &RuntimeAgentProviderDispatch,
-) -> Result<Option<(usize, bool)>> {
+) -> Result<Option<(mez_agent::ModelRequest, usize, bool)>> {
     let RuntimeAgentProviderDispatchProvider::OpenAi(provider) = &dispatch.provider else {
         return Ok(None);
     };
@@ -61,9 +61,16 @@ fn runtime_openai_dispatch_request_shape(
         dispatch.memory_actions_enabled,
         dispatch.issue_actions_enabled,
     );
+    mez_agent::append_request_state_transition(&mut request);
     let stream = provider.streams_responses();
+    mez_agent::prepare_openai_request_prefix_extension_with_context(
+        &mut request,
+        dispatch.context.previous_request(),
+        &crate::integrations::agent::provider::AsyncModelProvider::cache_namespace(provider),
+        stream,
+    )?;
     let body = mez_agent::openai_responses_request_body_with_stream(&request, stream)?;
-    Ok(Some((body.len(), stream)))
+    Ok(Some((request, body.len(), stream)))
 }
 
 #[cfg(test)]
@@ -1598,7 +1605,19 @@ impl RuntimeSessionService {
         timeout_ms: u64,
     ) -> Result<RuntimeTransition> {
         let turn = &dispatch.turn;
+        let retain_request_chain = dispatch.auto_sizing.is_none()
+            && dispatch.macro_judge_request.is_none()
+            && dispatch.sandbox_failure_assessment_request.is_none();
         let openai_request_shape = runtime_openai_dispatch_request_shape(dispatch)?;
+        let openai_request_bytes = openai_request_shape
+            .as_ref()
+            .map(|(_, request_bytes, _)| *request_bytes);
+        let openai_request_stream = openai_request_shape.as_ref().map(|(_, _, stream)| *stream);
+        if retain_request_chain && let Some((request, _, _)) = openai_request_shape {
+            self.agent
+                .agent_turn_provider_request_chains
+                .insert(turn.turn_id.clone(), request);
+        }
         self.agent.claimed_agent_provider_tasks.insert(
             turn.turn_id.clone(),
             RuntimeAgentProviderClaim {
@@ -1612,8 +1631,8 @@ impl RuntimeSessionService {
                     .context
                     .durable()
                     .event_sequence_high_water_mark(),
-                openai_request_bytes: openai_request_shape.map(|shape| shape.0),
-                openai_request_stream: openai_request_shape.map(|shape| shape.1),
+                openai_request_bytes,
+                openai_request_stream,
             },
         );
         self.append_agent_trace_turn_event(

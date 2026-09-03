@@ -153,16 +153,28 @@ impl RuntimeSessionService {
             ));
         }
         Ok((
-            super::PreparedModelContext::new(durable, live_state)?,
+            super::PreparedModelContext::new(durable, live_state)?.with_previous_request(
+                self.agent
+                    .agent_turn_provider_request_chains
+                    .get(&turn.turn_id)
+                    .cloned()
+                    .or_else(|| {
+                        self.agent_turn_executions()
+                            .get(&turn.turn_id)
+                            .map(|execution| execution.request.clone())
+                    }),
+            ),
             available_mcp_tools,
         ))
     }
 
     /// Refreshes project guidance blocks on a stored turn context.
     ///
-    /// Provider continuations can happen after file mutations and shell output
-    /// observations. This keeps discovered repository instruction content in
-    /// every provider-bound context without duplicating stale guidance blocks.
+    /// Before the first accepted provider response, discovery may refresh the
+    /// stable slot and establish a new cache lineage. Once a provider request
+    /// has been accepted, the turn's front-loaded instructions are frozen;
+    /// changed guidance is deferred to the next turn rather than rewriting the
+    /// active OpenAI request chain.
     pub(crate) fn refresh_agent_turn_project_guidance_context(
         &mut self,
         turn: &AgentTurnRecord,
@@ -186,6 +198,20 @@ impl RuntimeSessionService {
             .stable_slot_source_fingerprint("project-guidance")
             .map(|fingerprint| fingerprint.as_str().to_string());
         if previous_fingerprint == current_fingerprint && context == previous {
+            return Ok(());
+        }
+
+        if self
+            .agent
+            .agent_turn_provider_request_chains
+            .contains_key(&turn.turn_id)
+            || self.agent_turn_executions().contains_key(&turn.turn_id)
+        {
+            self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                &turn.turn_id,
+                "project_guidance refresh_deferred reason=active_provider_cache_epoch",
+            )?;
             return Ok(());
         }
 

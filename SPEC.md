@@ -4592,10 +4592,14 @@ OpenAI request diagnostics SHOULD record non-model-visible fingerprints for the
 front-loaded instructions, response-format schema, tool schema, stable input
 prefix, volatile input suffix, and complete observable cacheable prefix so cache
 misses can be diagnosed without inserting diagnostic text into model context.
-Diagnostics SHOULD compare the cache-eligible input sequence separately from
-the complete provider-visible message sequence, because a request-local
-volatile tail can legitimately move after newly settled chronology even when
-the reusable prefix remains append-only.
+For ordinary requests in one turn and cache epoch, the complete rendered input
+sent by each prior request MUST be a byte-identical prefix of the next request.
+Request-local model-visible state that was already sent MUST remain in that
+wire sequence; changed live state MUST append a superseding item rather than
+replace or relocate the prior item. Diagnostics MUST report complete-wire
+append continuity as the provider-prefix result. A logical stable-only
+projection MAY be retained as a secondary diagnostic but MUST NOT be presented
+as proof of provider cache continuity.
 Static invariant agent behavior SHOULD remain in the front-loaded OpenAI
 `instructions` field. Dynamic model-relevant facts such as compaction notices
 and current OpenAI action eligibility SHOULD be rendered as later
@@ -4616,7 +4620,13 @@ Ordinary provider preparation MUST NOT duplicate a frozen prompt-boundary
 working directory in `EphemeralTail`. OpenAI request assembly MUST recognize a
 chronological request-state transition after runtime promotion from
 `RuntimeHint` to `CommittedEvidence` and MUST NOT append a duplicate generated
-request-state tail.
+request-state tail. The first ordinary OpenAI request in a turn MUST establish
+a request chain containing its exact rendered input and cache-affecting
+envelope. Later ordinary requests in the same provider, model, routing
+namespace, stream shape, and prompt-cache lineage MUST preserve that complete
+input as an exact prefix. Model, namespace, stream, lineage, compaction, and
+explicitly exceptional interaction transitions establish a new cache epoch;
+unclassified envelope rewrites MUST fail before provider dispatch.
 
 Direct user prompts and mid-turn steering MUST be exact `UserEvent` chronology.
 The initial prompt MUST be appended once before the assistant actions and

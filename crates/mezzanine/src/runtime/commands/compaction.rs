@@ -725,6 +725,7 @@ impl RuntimeSessionService {
                 }
                 self.agent_turn_contexts_mut()
                     .insert(turn_id.clone(), compacted);
+                self.clear_agent_turn_provider_request_chain(&turn_id);
                 match trigger {
                     RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. } => {
                         self.queue_agent_provider_recovery_task_after_context_compaction(

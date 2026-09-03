@@ -363,7 +363,8 @@ pub use network_action::{
 pub use openai_cache::{
     openai_prompt_cache_diagnostics_for_request,
     openai_prompt_cache_diagnostics_for_request_with_stream,
-    openai_stable_projection_material_for_request,
+    openai_stable_projection_material_for_request, prepare_openai_request_prefix_extension,
+    prepare_openai_request_prefix_extension_with_context,
 };
 pub use openai_chat_completions::{
     ChatCompletionsResponseEnvelope, OpenAiChatCompletionsOptions, OpenAiChatCompletionsResponse,

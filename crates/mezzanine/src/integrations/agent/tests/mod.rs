@@ -53,8 +53,8 @@ use mez_agent::{
     TranscriptRole, action_result_context_content, action_result_transcript_content,
     openai_prompt_cache_diagnostics_for_request, openai_responses_endpoint_for_base_url,
     openai_responses_request_body, openai_stable_projection_material_for_request,
-    postprocess_shell_action_success_output, provider_quota_usage_from_headers,
-    transcript_entries_for_execution,
+    postprocess_shell_action_success_output, prepare_openai_request_prefix_extension,
+    provider_quota_usage_from_headers, transcript_entries_for_execution,
 };
 use mez_agent::{
     DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME,

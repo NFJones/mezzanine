@@ -66,8 +66,10 @@ impl RuntimeSessionService {
             || "initial".to_string(),
             |value| {
                 format!(
-                    "{} stable_append_only={} common_stable_messages={}",
+                    "{} wire_append_only={} common_messages={} logical_stable_append_only={} common_stable_messages={}",
                     value.category,
+                    value.messages_append_only,
+                    value.common_message_prefix,
                     value.stable_messages_append_only,
                     value.common_stable_message_prefix
                 )

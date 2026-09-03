@@ -197,7 +197,7 @@ fn openai_promoted_conversation_entries_keep_complete_input_bytes() {
         provider_options: std::collections::BTreeMap::new(),
         safety_tier: None,
     };
-    let first = assemble_model_request(
+    let mut first = assemble_model_request(
         &profile,
         &turn(),
         &AgentContext::new(vec![ContextBlock {
@@ -209,7 +209,8 @@ fn openai_promoted_conversation_entries_keep_complete_input_bytes() {
         .unwrap(),
     )
     .unwrap();
-    let second = assemble_model_request(
+    prepare_openai_request_prefix_extension(&mut first, None).unwrap();
+    let mut second = assemble_model_request(
         &profile,
         &turn(),
         &AgentContext::new(vec![
@@ -235,6 +236,7 @@ fn openai_promoted_conversation_entries_keep_complete_input_bytes() {
         .unwrap(),
     )
     .unwrap();
+    prepare_openai_request_prefix_extension(&mut second, Some(&first)).unwrap();
 
     let first_body: serde_json::Value =
         serde_json::from_str(&openai_responses_request_body(&first).unwrap()).unwrap();
@@ -243,19 +245,18 @@ fn openai_promoted_conversation_entries_keep_complete_input_bytes() {
     let first_input = first_body["input"].as_array().unwrap();
     let second_input = second_body["input"].as_array().unwrap();
 
-    assert_eq!(second_input[0], first_input[0]);
+    assert_eq!(first_input, &second_input[..first_input.len()]);
     assert!(
         first_input.last().unwrap()["content"][0]["text"]
             .as_str()
             .unwrap()
             .contains("[OpenAI request state]")
     );
-    assert!(
-        second_input.last().unwrap()["content"][0]["text"]
+    assert!(second_input[..first_input.len()].iter().any(|message| {
+        message["content"][0]["text"]
             .as_str()
-            .unwrap()
-            .contains("[OpenAI request state]")
-    );
+            .is_some_and(|text| text.contains("[OpenAI request state]"))
+    }));
 
     let first_diagnostics = openai_prompt_cache_diagnostics_for_request(&first).unwrap();
     let second_diagnostics = openai_prompt_cache_diagnostics_for_request(&second).unwrap();
@@ -264,9 +265,9 @@ fn openai_promoted_conversation_entries_keep_complete_input_bytes() {
         &second_diagnostics.continuity_snapshot,
     );
     assert_eq!(continuity.category, "messages");
-    assert_eq!(continuity.message_index, Some(1));
-    assert_eq!(continuity.common_message_prefix, 1);
-    assert!(!continuity.messages_append_only);
+    assert_eq!(continuity.message_index, Some(first_input.len()));
+    assert_eq!(continuity.common_message_prefix, first_input.len());
+    assert!(continuity.messages_append_only);
     assert_eq!(continuity.common_stable_message_prefix, 1);
     assert!(continuity.stable_messages_append_only);
 }

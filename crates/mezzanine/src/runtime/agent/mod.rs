@@ -333,6 +333,12 @@ pub(crate) struct RuntimeAgentComponent {
     agent_pre_shell_hook_completions: BTreeSet<RuntimeAgentPreShellHookCompletion>,
     /// Effective provider model profile retained for each active turn.
     agent_turn_model_profiles: BTreeMap<String, ModelProfile>,
+    /// Last concrete provider request prepared for each active turn.
+    ///
+    /// OpenAI uses this actor-owned ledger to preserve the exact wire prefix
+    /// across worker failures and later action continuations. Other providers
+    /// may be retained here without changing their request behavior.
+    agent_turn_provider_request_chains: BTreeMap<String, mez_agent::ModelRequest>,
     /// Configured profile identities retained separately from display labels.
     agent_turn_configured_model_profiles: BTreeMap<String, String>,
     /// Number of proactive configured-input-limit compaction passes per turn.
@@ -1982,9 +1988,20 @@ impl RuntimeSessionService {
         self.agent.agent_turn_model_profiles.remove(turn_id)
     }
 
+    /// Clears the exact provider request retained for one active turn.
+    ///
+    /// Compaction starts a new cache epoch, so its replacement context must not
+    /// extend the pre-compaction OpenAI wire sequence.
+    pub(crate) fn clear_agent_turn_provider_request_chain(&mut self, turn_id: &str) {
+        self.agent
+            .agent_turn_provider_request_chains
+            .remove(turn_id);
+    }
+
     /// Clears all retained turn model profiles for session replacement.
     pub(crate) fn clear_agent_turn_model_profiles(&mut self) {
         self.agent.agent_turn_model_profiles.clear();
+        self.agent.agent_turn_provider_request_chains.clear();
         self.agent.agent_turn_configured_model_profiles.clear();
         self.agent.agent_turn_routing_applied.clear();
     }

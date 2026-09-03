@@ -665,6 +665,40 @@ max_input_tokens = 20000
             .iter()
             .any(|block| block.content.contains("proactively compacted summary"))
     );
+
+    assert!(service.agent_turn_executions().get(&task.turn_id).is_none());
+    service
+        .record_claimed_agent_provider_task(&dispatch, 1, 30_000)
+        .unwrap();
+    let retained_context = service
+        .agent_turn_contexts()
+        .get(&task.turn_id)
+        .cloned()
+        .unwrap();
+    let (prepared, _) = service
+        .prepare_agent_turn_model_context(
+            &dispatch.turn,
+            retained_context.clone(),
+            &service.mcp_registry().prompt_summary(),
+            &dispatch.model_profile,
+        )
+        .unwrap();
+    let retained_request = prepared
+        .previous_request()
+        .expect("claim should retain the exact OpenAI request for the next worker");
+    assert_eq!(retained_request.provider, "runtime-batch");
+    assert_eq!(retained_request.model, "test");
+
+    service.clear_agent_turn_provider_request_chain(&task.turn_id);
+    let (new_epoch, _) = service
+        .prepare_agent_turn_model_context(
+            &dispatch.turn,
+            retained_context,
+            &service.mcp_registry().prompt_summary(),
+            &dispatch.model_profile,
+        )
+        .unwrap();
+    assert!(new_epoch.previous_request().is_none());
 }
 
 /// Verifies an explicit input cap fails before provider dispatch when only

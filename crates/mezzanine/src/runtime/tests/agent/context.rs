@@ -539,8 +539,8 @@ fn runtime_plan_mode_tags_only_the_active_pane_newest_prompt() {
 }
 
 /// Verifies project-guidance discovery is an exact no-op until source content
-/// changes, then rewrites only the reserved stable slot and records a new cache
-/// lineage with an attributable diagnostic.
+/// changes before the first provider response, then rewrites only the reserved
+/// stable slot and records a new cache lineage with an attributable diagnostic.
 #[test]
 fn runtime_project_guidance_refresh_preserves_or_rewrites_cache_lineage_by_fingerprint() {
     let mut service = test_runtime_service();
@@ -600,6 +600,90 @@ fn runtime_project_guidance_refresh_preserves_or_rewrites_cache_lineage_by_finge
     let trace = service.agent_pane_trace_log_text("%1").unwrap();
     assert!(
         trace.contains("context lineage changed") && trace.contains("project guidance"),
+        "{trace}"
+    );
+}
+
+/// Verifies project-guidance changes cannot rewrite front-loaded instructions
+/// after the turn has accepted its first provider response.
+///
+/// The current turn keeps its original stable slot and cache lineage. A later
+/// user turn will rebuild context from the newly discovered instruction file.
+#[test]
+fn runtime_project_guidance_refresh_defers_changes_during_active_cache_epoch() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .set_pane_agent_instruction_files("%1", vec![project_instruction("Preserve chronology.")]);
+    let started = service
+        .start_agent_prompt_turn("%1", "inspect context ordering")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turn(&started.turn_id)
+        .cloned()
+        .unwrap();
+    let original = service
+        .agent_turn_contexts()
+        .get(&turn.turn_id)
+        .cloned()
+        .unwrap();
+    let request = crate::integrations::agent::context::assemble_model_request(
+        &runtime_model_profile("openai", "gpt-test"),
+        &turn,
+        &original,
+    )
+    .unwrap();
+    service.agent_turn_executions_mut().insert(
+        turn.turn_id.clone(),
+        mez_agent::AgentTurnExecution {
+            request: request.clone(),
+            response: mez_agent::ModelResponse {
+                provider: "openai".to_string(),
+                model: "gpt-test".to_string(),
+                raw_text: "accepted response".to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Vec::new(),
+                action_batch: None,
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: Default::default(),
+            action_results: Vec::new(),
+            final_turn: false,
+            terminal_state: mez_agent::AgentTurnState::Running,
+        },
+    );
+    let (prepared, _) = service
+        .prepare_agent_turn_model_context(
+            &turn,
+            original.clone(),
+            &service.mcp_registry().prompt_summary(),
+            &runtime_model_profile("openai", "gpt-test"),
+        )
+        .unwrap();
+    assert_eq!(prepared.previous_request(), Some(&request));
+
+    service.set_pane_agent_instruction_files(
+        "%1",
+        vec![project_instruction("Changed instructions apply next turn.")],
+    );
+    service
+        .refresh_agent_turn_project_guidance_context(&turn)
+        .unwrap();
+
+    assert_eq!(
+        service.agent_turn_contexts().get(&turn.turn_id),
+        Some(&original)
+    );
+    let trace = service.agent_pane_trace_log_text("%1").unwrap();
+    assert!(
+        trace.contains("project guidance refresh deferred")
+            && trace.contains("active provider cache epoch"),
         "{trace}"
     );
 }
@@ -1104,7 +1188,7 @@ fn runtime_status_reports_provider_context_continuity_diagnostics() {
     );
     assert!(trace.contains("\"immutable_token_estimate\""), "{trace}");
     assert!(
-        status.contains("| Stable provider prefix | unknown |"),
+        status.contains("| Provider wire prefix | unknown |"),
         "{status}"
     );
 }
@@ -1205,7 +1289,7 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
         "{status}"
     );
     assert!(
-        status.contains("| Stable provider prefix | request=wire-status-1"),
+        status.contains("| Provider wire prefix | request=wire-status-1"),
         "{status}"
     );
 
@@ -1250,7 +1334,8 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
         "{status}"
     );
     assert!(
-        status.contains("| Stable provider prefix | request=wire-status-2"),
+        status.contains("| Provider wire prefix | request=wire-status-2")
+            && status.contains("append_only=true"),
         "{status}"
     );
     assert!(

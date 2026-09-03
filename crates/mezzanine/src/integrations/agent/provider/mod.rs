@@ -597,6 +597,15 @@ pub trait AsyncModelProvider: Send + Sync {
     ) -> Result<Option<mez_agent::OpenAiPromptCacheDiagnostics>> {
         Ok(None)
     }
+
+    /// Applies provider-specific cache-prefix invariants before one send.
+    fn prepare_request_prefix_extension(
+        &self,
+        _request: &mut ModelRequest,
+        _previous: Option<&ModelRequest>,
+    ) -> Result<()> {
+        Ok(())
+    }
     /// Runs the send request async operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -665,6 +674,15 @@ impl<P: AsyncModelProvider> AsyncModelProvider for ObservedAsyncModelProvider<'_
         request: &ModelRequest,
     ) -> Result<Option<mez_agent::OpenAiPromptCacheDiagnostics>> {
         self.provider.prompt_cache_diagnostics(request)
+    }
+
+    fn prepare_request_prefix_extension(
+        &self,
+        request: &mut ModelRequest,
+        previous: Option<&ModelRequest>,
+    ) -> Result<()> {
+        self.provider
+            .prepare_request_prefix_extension(request, previous)
     }
 
     fn send_request_async<'a>(
@@ -1365,6 +1383,20 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
         mez_agent::openai_prompt_cache_diagnostics_for_request_with_stream(request, self.stream)
             .map(Some)
             .map_err(MezError::from)
+    }
+
+    fn prepare_request_prefix_extension(
+        &self,
+        request: &mut ModelRequest,
+        previous: Option<&ModelRequest>,
+    ) -> Result<()> {
+        mez_agent::prepare_openai_request_prefix_extension_with_context(
+            request,
+            previous,
+            &self.cache_namespace(),
+            self.stream,
+        )
+        .map_err(MezError::from)
     }
 
     /// Runs the list models async operation for this subsystem.

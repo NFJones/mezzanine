@@ -369,6 +369,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
 /// Product effects supplied to the canonical lower production turn loop.
 struct ProductAgentTurnEnvironment<'runner, 'config, P> {
     runner: &'runner AgentTurnRunner<'config, P>,
+    previous_request: Option<&'runner ModelRequest>,
     progress: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
     provider_interaction_index: std::sync::atomic::AtomicUsize,
 }
@@ -390,6 +391,20 @@ impl<P: AsyncModelProvider> AgentTurnEnvironment for ProductAgentTurnEnvironment
             turn,
             context,
         )?)
+    }
+
+    fn previous_request(&self) -> Option<&ModelRequest> {
+        self.previous_request
+    }
+
+    fn prepare_request(
+        &self,
+        request: &mut ModelRequest,
+        previous: Option<&ModelRequest>,
+    ) -> Result<()> {
+        self.runner
+            .provider
+            .prepare_request_prefix_extension(request, previous)
     }
 
     fn available_mcp_tools(&self) -> &[McpPromptTool] {
@@ -544,8 +559,37 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
         interaction_kind: Option<mez_agent::ModelInteractionKind>,
         progress: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
     ) -> Result<AgentTurnExecution> {
+        self.run_turn_async_ref_with_previous_request_and_progress(
+            ledger,
+            turn,
+            context,
+            allowed_actions,
+            interaction_kind,
+            None,
+            progress,
+        )
+        .await
+    }
+
+    /// Executes a borrowed-context turn against the exact prior provider request.
+    ///
+    /// OpenAI Responses uses the prior request to preserve every already sent
+    /// input item across actor-separated action continuations. Other providers
+    /// ignore the optional baseline through their default preparation hook.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_turn_async_ref_with_previous_request_and_progress(
+        &self,
+        ledger: &mut AgentTurnLedger,
+        turn: AgentTurnRecord,
+        context: &AgentContext,
+        allowed_actions: Option<AllowedActionSet>,
+        interaction_kind: Option<mez_agent::ModelInteractionKind>,
+        previous_request: Option<&ModelRequest>,
+        progress: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
+    ) -> Result<AgentTurnExecution> {
         let environment = ProductAgentTurnEnvironment {
             runner: self,
+            previous_request,
             progress,
             provider_interaction_index: std::sync::atomic::AtomicUsize::new(0),
         };
