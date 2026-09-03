@@ -19,6 +19,83 @@ use mez_agent::{
 };
 
 impl RuntimeSessionService {
+    /// Applies one content-free provider request observation in actor order.
+    pub(crate) fn apply_provider_wire_request_observation(
+        &mut self,
+        observation: crate::integrations::agent::provider::ProviderWireRequestObservation,
+    ) -> Result<crate::runtime::RuntimeTransition> {
+        let conversation_current = self
+            .agent_shell_store()
+            .get(&observation.pane_id)
+            .is_some_and(|session| {
+                session.session_id == observation.conversation_id
+                    || observation.conversation_id == format!("pane:{}", observation.pane_id)
+            });
+        let turn_current = self
+            .agent_turn_ledger()
+            .turn(&observation.turn_id)
+            .is_some_and(|turn| {
+                turn.agent_id == observation.agent_id && turn.pane_id == observation.pane_id
+            });
+        let current = conversation_current
+            && (turn_current
+                || matches!(
+                    observation.purpose,
+                    crate::integrations::agent::provider::ProviderRequestPurpose::Compaction
+                        | crate::integrations::agent::provider::ProviderRequestPurpose::Memory
+                ));
+        if !current {
+            return Ok(self.runtime_transition_with_render(false, None));
+        }
+        let status = self
+            .integration
+            .runtime_metrics_mut()
+            .record_provider_wire_request_observation(&observation);
+        let usage = status.usage.map_or_else(
+            || "unknown".to_string(),
+            |usage| {
+                format!(
+                    "{} cached_input={} input={}",
+                    usage.cached_input_hit_ratio_display(),
+                    usage.cached_input_tokens_display(),
+                    usage.input_tokens
+                )
+            },
+        );
+        let continuity = status.continuity.as_ref().map_or_else(
+            || "initial".to_string(),
+            |value| {
+                format!(
+                    "{} stable_append_only={} common_stable_messages={}",
+                    value.category,
+                    value.stable_messages_append_only,
+                    value.common_stable_message_prefix
+                )
+            },
+        );
+        self.record_agent_pane_trace_log_text(
+            &observation.pane_id,
+            &format!(
+                "agent trace: turn {}: provider wire request id={} attempt={} retry={} purpose={} provider={} model={} interaction={} succeeded={} failure={} stable_bytes={} volatile_bytes={} cache={} continuity={}",
+                observation.turn_id,
+                status.request_id,
+                observation.attempt_index,
+                observation.retry_reason.as_deref().unwrap_or("none"),
+                status.purpose,
+                status.provider,
+                status.model,
+                status.interaction_kind,
+                observation.succeeded,
+                observation.failure_kind.as_deref().unwrap_or("none"),
+                status.stable_input_bytes.map_or_else(|| "unknown".to_string(), |value| value.to_string()),
+                status.volatile_input_bytes.map_or_else(|| "unknown".to_string(), |value| value.to_string()),
+                usage,
+                continuity,
+            ),
+        );
+        Ok(self.runtime_transition_with_render(true, None))
+    }
+
     /// Records text in the bounded hidden per-pane trace log.
     fn record_agent_pane_trace_log_text(&mut self, pane_id: &str, text: &str) {
         let Some(log) = (!text.trim().is_empty()).then(|| {
@@ -222,17 +299,6 @@ impl RuntimeSessionService {
             request.interaction_kind,
         );
         self.record_agent_context_continuity(&conversation_id, continuity);
-        let (diagnostics, diagnostics_failed) = if request.provider == "openai" {
-            match openai_prompt_cache_diagnostics_for_request(&request) {
-                Ok(diagnostics) => (Some(diagnostics), false),
-                Err(_) => (None, true),
-            }
-        } else {
-            (None, false)
-        };
-        self.integration
-            .runtime_metrics_mut()
-            .record_provider_request_shape(&request, diagnostics.as_ref(), diagnostics_failed);
     }
 
     /// Appends the model response returned for one agent turn to trace output.

@@ -91,7 +91,37 @@ fn runtime_show_metrics_reports_provider_tokens_by_model() {
     service
         .integration
         .runtime_metrics_mut()
-        .record_provider_request_shape(&request, None, false);
+        .record_provider_wire_request_observation(
+            &crate::integrations::agent::provider::ProviderWireRequestObservation {
+                request_id: "wire-output-budget".to_string(),
+                attempt_index: 1,
+                retry_reason: None,
+                conversation_id: "conversation-output-budget".to_string(),
+                turn_id: request.turn_id.clone(),
+                agent_id: request.agent_id.clone(),
+                pane_id: "%1".to_string(),
+                provider: request.provider.clone(),
+                cache_namespace: request.provider.clone(),
+                model: request.model.clone(),
+                prompt_cache_lineage_id: request.prompt_cache_lineage_id.clone(),
+                interaction_kind: request.interaction_kind.as_str().to_string(),
+                allowed_actions: request.allowed_actions.action_type_names().join(","),
+                max_output_tokens: request.max_output_tokens,
+                output_limit_retry_override_tokens: request.max_output_tokens,
+                purpose: crate::integrations::agent::provider::ProviderRequestPurpose::Execution,
+                message_count: request.messages.len(),
+                message_bytes: request
+                    .messages
+                    .iter()
+                    .map(|message| message.content.len())
+                    .sum(),
+                openai_diagnostics: None,
+                diagnostics_failed: false,
+                usage: None,
+                succeeded: true,
+                failure_kind: None,
+            },
+        );
 
     let response = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"show-metrics","method":"terminal/command","params":{"idempotency_key":"show-metrics","input":"show-metrics"}}"#,

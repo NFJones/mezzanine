@@ -10,8 +10,8 @@
 use super::{
     AsyncModelProvider, AsyncProviderHttpTransport, DEFAULT_PROVIDER_TIMEOUT_MS, ExposeSecret,
     MezError, ModelRequest, ModelResponse, ProviderHttpRequest, ProviderHttpResponse,
-    ProviderModelCatalog, Result, SecretString, bounded_streaming_say_events,
-    parse_openai_models_http_body, provider_maap_stream_fragment,
+    ProviderModelCatalog, ProviderWireObservationContext, Result, SecretString,
+    bounded_streaming_say_events, parse_openai_models_http_body, provider_maap_stream_fragment,
     provider_quota_usage_from_headers, validate_non_empty,
 };
 #[cfg(test)]
@@ -387,6 +387,10 @@ where
         self.provider_id()
     }
 
+    fn cache_namespace(&self) -> String {
+        super::provider_cache_namespace(self.provider_id(), &self.endpoint)
+    }
+
     fn list_models_async<'a>(
         &'a self,
     ) -> Pin<Box<dyn Future<Output = Result<ProviderModelCatalog>> + Send + 'a>> {
@@ -416,6 +420,15 @@ where
         request: &'a ModelRequest,
         progress: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
     ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
+        self.send_request_async_with_progress_and_observation(request, progress, None)
+    }
+
+    fn send_request_async_with_progress_and_observation<'a>(
+        &'a self,
+        request: &'a ModelRequest,
+        progress: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
+        observation: Option<ProviderWireObservationContext<'a>>,
+    ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
         Box::pin(async move {
             if request.provider != AsyncModelProvider::provider_id(self) {
                 return Err(self.provider_mismatch_error());
@@ -435,7 +448,7 @@ where
             };
             let mut streaming_say_extractor = mez_agent::StreamingSayExtractor::default();
             let mut stream_error = None;
-            let response = if let Some(decoder) = stream_decoder.as_mut() {
+            let response_result = if let Some(decoder) = stream_decoder.as_mut() {
                 let mut on_event = |event| {
                     let mut progress_events = Vec::new();
                     if stream_error.is_none() {
@@ -464,51 +477,137 @@ where
                 };
                 self.transport
                     .send_async_with_sse_events(&http_request, &mut on_event)
-                    .await?
+                    .await
             } else {
-                self.transport.send_async(&http_request).await?
+                self.transport.send_async(&http_request).await
+            };
+            let response = match response_result {
+                Ok(response) => response,
+                Err(error) => {
+                    let result = Err(error.into());
+                    if let Some(observation) = observation.as_ref() {
+                        observation.observe(request, 1, None, &result).await;
+                    }
+                    return result;
+                }
             };
             if !(200..300).contains(&response.status_code) {
-                return Err(self.provider_status_error("Chat Completions", &response));
+                let result = Err(self.provider_status_error("Chat Completions", &response));
+                if let Some(observation) = observation.as_ref() {
+                    observation.observe(request, 1, None, &result).await;
+                }
+                return result;
             }
             if let Some(error) = stream_error {
-                return Err(error);
+                let result = Err(error);
+                if let Some(observation) = observation.as_ref() {
+                    observation.observe(request, 1, None, &result).await;
+                }
+                return result;
             }
-            let mut parsed = if let Some(decoder) = stream_decoder {
+            let parsed_result = if let Some(decoder) = stream_decoder {
                 decoder.finish(
                     response.headers,
                     request,
                     AsyncModelProvider::provider_id(self),
-                )?
+                )
             } else {
                 self.dialect.parse_chat_response(
                     response,
                     request,
                     AsyncModelProvider::provider_id(self),
                     effective_stream,
-                )?
+                )
             };
-            if let Some(retry) = self.dialect.build_retry_chat_request(
+            let mut parsed = match parsed_result {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    let result = Err(error);
+                    if let Some(observation) = observation.as_ref() {
+                        observation.observe(request, 1, None, &result).await;
+                    }
+                    return result;
+                }
+            };
+            let retry = match self.dialect.build_retry_chat_request(
                 request,
                 self.api_key_secret(),
                 &self.endpoint,
                 self.stream,
                 self.timeout_ms,
                 &parsed,
-            )? {
-                let retry_response = self.transport.send_async(&retry.request).await?;
-                if !(200..300).contains(&retry_response.status_code) {
-                    return Err(self.provider_status_error("Chat Completions", &retry_response));
+            ) {
+                Ok(retry) => retry,
+                Err(error) => {
+                    if let Some(observation) = observation.as_ref() {
+                        let first_result = Ok(parsed);
+                        observation.observe(request, 1, None, &first_result).await;
+                    }
+                    return Err(error);
                 }
-                let retry_parsed = self.dialect.parse_chat_response(
+            };
+            if let Some(retry) = retry {
+                if let Some(observation) = observation.as_ref() {
+                    let first_result = Ok(parsed.clone());
+                    observation
+                        .observe(request, 1, Some("provider_forced_maap"), &first_result)
+                        .await;
+                }
+                let retry_response = match self.transport.send_async(&retry.request).await {
+                    Ok(response) => response,
+                    Err(error) => {
+                        let result = Err(error.into());
+                        if let Some(observation) = observation.as_ref() {
+                            observation
+                                .observe(request, 2, Some("provider_forced_maap"), &result)
+                                .await;
+                        }
+                        return result;
+                    }
+                };
+                if !(200..300).contains(&retry_response.status_code) {
+                    let result =
+                        Err(self.provider_status_error("Chat Completions", &retry_response));
+                    if let Some(observation) = observation.as_ref() {
+                        observation
+                            .observe(request, 2, Some("provider_forced_maap"), &result)
+                            .await;
+                    }
+                    return result;
+                }
+                let retry_result = self.dialect.parse_chat_response(
                     retry_response,
                     request,
                     AsyncModelProvider::provider_id(self),
                     retry.stream,
-                )?;
+                );
+                let retry_parsed = match retry_result {
+                    Ok(parsed) => parsed,
+                    Err(error) => {
+                        let result = Err(error);
+                        if let Some(observation) = observation.as_ref() {
+                            observation
+                                .observe(request, 2, Some("provider_forced_maap"), &result)
+                                .await;
+                        }
+                        return result;
+                    }
+                };
                 parsed = self.merge_retry_usage(retry_parsed, parsed);
+                let result = self.dialect.require_action_batch(parsed, request);
+                if let Some(observation) = observation.as_ref() {
+                    observation
+                        .observe(request, 2, Some("provider_forced_maap"), &result)
+                        .await;
+                }
+                result
+            } else {
+                let result = self.dialect.require_action_batch(parsed, request);
+                if let Some(observation) = observation.as_ref() {
+                    observation.observe(request, 1, None, &result).await;
+                }
+                result
             }
-            self.dialect.require_action_batch(parsed, request)
         })
     }
 }

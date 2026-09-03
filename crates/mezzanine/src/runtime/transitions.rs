@@ -347,6 +347,11 @@ pub enum ProcessEvent {
 /// Event emitted by an async agent provider worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentProviderEvent {
+    /// One concrete provider request completed and published content-free diagnostics.
+    WireRequestObserved {
+        /// Request shape and exact response usage observed by the worker.
+        observation: Box<crate::integrations::agent::provider::ProviderWireRequestObservation>,
+    },
     /// Auto-sizing completed and awaits policy-specific runtime application.
     RoutingSelected {
         /// Routed agent identity.

@@ -1,11 +1,39 @@
 //! Runtime constants, pane-title state, metrics snapshots, and patch records.
 
 use super::{
-    AgentTurnState, ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey,
-    SubagentWaitPolicy,
+    AgentTurnState, ModelResponse, ModelTokenUsage, ModelTokenUsageKey, SubagentWaitPolicy,
 };
 use mez_mux::layout::PaneTitleSource;
 use std::collections::BTreeMap;
+
+/// Maximum cache-routing scopes and conversation statuses retained in metrics.
+const PROVIDER_WIRE_DIAGNOSTIC_SCOPE_LIMIT: usize = 4096;
+
+/// Cache namespace used to compare only provider requests that can actually
+/// share one backend prefix cache.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ProviderWireContinuityKey {
+    conversation_id: String,
+    cache_namespace: String,
+    provider: String,
+    model: String,
+    prompt_cache_lineage_id: Option<String>,
+}
+
+/// Latest concrete execution request and matching cache diagnostics for one
+/// conversation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeProviderWireRequestStatus {
+    pub(crate) request_id: String,
+    pub(crate) provider: String,
+    pub(crate) model: String,
+    pub(crate) interaction_kind: String,
+    pub(crate) purpose: String,
+    pub(crate) usage: Option<ModelTokenUsage>,
+    pub(crate) stable_input_bytes: Option<usize>,
+    pub(crate) volatile_input_bytes: Option<usize>,
+    pub(crate) continuity: Option<mez_agent::OpenAiRequestContinuity>,
+}
 
 /// Prior pane title state for a title emitted by a foreground program.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -205,6 +233,11 @@ pub(crate) struct RuntimeMetricsSnapshot {
     /// Previous OpenAI request snapshot retained only for continuity comparison.
     pub(crate) last_openai_request_continuity_snapshot:
         Option<mez_agent::OpenAiRequestContinuitySnapshot>,
+    /// OpenAI request baselines isolated by actual cache-routing scope.
+    provider_wire_continuity_by_scope:
+        BTreeMap<ProviderWireContinuityKey, mez_agent::OpenAiRequestContinuitySnapshot>,
+    /// Latest execution request and matching usage per conversation.
+    provider_wire_status_by_conversation: BTreeMap<String, RuntimeProviderWireRequestStatus>,
     /// Most recent tool-choice digest observed by runtime metrics.
     pub(crate) last_tool_choice_sha256: Option<String>,
     /// Most recent provider output-token budget source observed by runtime metrics.
@@ -224,6 +257,183 @@ pub(crate) struct RuntimeMetricsSnapshot {
 }
 
 impl RuntimeMetricsSnapshot {
+    /// Returns the latest concrete execution request diagnostics for a conversation.
+    pub(crate) fn provider_wire_status(
+        &self,
+        conversation_id: &str,
+    ) -> Option<&RuntimeProviderWireRequestStatus> {
+        self.provider_wire_status_by_conversation
+            .get(conversation_id)
+    }
+
+    /// Records one concrete provider send with its matching response usage.
+    ///
+    /// OpenAI continuity baselines are isolated by conversation, endpoint
+    /// namespace, provider, model, and prompt-cache lineage. Auxiliary calls
+    /// participate in aggregate request metrics but do not replace the latest
+    /// user-visible execution request shown by `/status`.
+    pub(crate) fn record_provider_wire_request_observation(
+        &mut self,
+        observation: &crate::integrations::agent::provider::ProviderWireRequestObservation,
+    ) -> RuntimeProviderWireRequestStatus {
+        self.provider_requests_started = self.provider_requests_started.saturating_add(1);
+        match observation.interaction_kind.as_str() {
+            "capability_decision" => {
+                self.provider_request_capability_decision =
+                    self.provider_request_capability_decision.saturating_add(1);
+            }
+            "action_execution" | "capability_continuation" => {
+                self.provider_request_action_execution =
+                    self.provider_request_action_execution.saturating_add(1);
+            }
+            "maap_repair" => {
+                self.provider_request_repair = self.provider_request_repair.saturating_add(1);
+            }
+            "auto_sizing" => {
+                self.provider_request_auto_sizing =
+                    self.provider_request_auto_sizing.saturating_add(1);
+            }
+            _ => {}
+        }
+        self.provider_request_message_counts
+            .record(observation.message_count as u64);
+        self.provider_request_message_bytes
+            .record(observation.message_bytes as u64);
+        self.last_provider = Some(observation.provider.clone());
+        self.last_model = Some(observation.model.clone());
+        self.last_interaction_kind = Some(observation.interaction_kind.clone());
+        self.last_allowed_actions = Some(observation.allowed_actions.clone());
+        self.last_provider_output_token_budget_tokens = observation.max_output_tokens;
+        self.last_provider_output_limit_retry_override_tokens =
+            observation.output_limit_retry_override_tokens;
+        self.last_provider_output_token_budget_source = Some(
+            match (
+                observation.max_output_tokens,
+                observation.output_limit_retry_override_tokens,
+            ) {
+                (Some(_), Some(_)) => "temporary_output_limit_retry_override".to_string(),
+                (Some(_), None) => "configured".to_string(),
+                (None, _) => "omitted_provider_default".to_string(),
+            },
+        );
+
+        let continuity = observation
+            .openai_diagnostics
+            .as_ref()
+            .and_then(|diagnostics| {
+                self.provider_prompt_cache_diagnostics_available = self
+                    .provider_prompt_cache_diagnostics_available
+                    .saturating_add(1);
+                self.provider_prompt_instructions_bytes
+                    .record(diagnostics.instructions_bytes as u64);
+                self.provider_prompt_response_format_bytes
+                    .record(diagnostics.response_format_bytes as u64);
+                self.provider_prompt_tools_bytes
+                    .record(diagnostics.tools_bytes as u64);
+                self.provider_prompt_tool_choice_bytes
+                    .record(diagnostics.tool_choice_bytes as u64);
+                self.provider_prompt_stable_input_bytes
+                    .record(diagnostics.stable_input_bytes as u64);
+                self.provider_prompt_volatile_input_bytes
+                    .record(diagnostics.volatile_input_bytes as u64);
+                self.provider_prompt_stable_projection_bytes
+                    .record(diagnostics.stable_projection_bytes as u64);
+                self.provider_request_shape_bytes
+                    .record(diagnostics.provider_request_shape_bytes as u64);
+                self.last_prompt_cache_key = Some(diagnostics.prompt_cache_key.clone());
+                self.last_stable_projection_sha256 =
+                    Some(diagnostics.stable_projection_sha256.clone());
+                self.last_provider_request_shape_sha256 =
+                    Some(diagnostics.provider_request_shape_sha256.clone());
+                self.last_tool_choice_sha256 = Some(diagnostics.tool_choice_sha256.clone());
+                self.last_provider_request_sha256 =
+                    Some(diagnostics.continuity_snapshot.request_sha256.clone());
+                self.last_provider_request_bytes =
+                    Some(diagnostics.continuity_snapshot.request_bytes);
+
+                let key = ProviderWireContinuityKey {
+                    conversation_id: observation.conversation_id.clone(),
+                    cache_namespace: observation.cache_namespace.clone(),
+                    provider: observation.provider.clone(),
+                    model: observation.model.clone(),
+                    prompt_cache_lineage_id: observation.prompt_cache_lineage_id.clone(),
+                };
+                let continuity = self
+                    .provider_wire_continuity_by_scope
+                    .get(&key)
+                    .map(|previous| {
+                        mez_agent::compare_openai_request_continuity(
+                            previous,
+                            &diagnostics.continuity_snapshot,
+                        )
+                    });
+                self.provider_wire_continuity_by_scope
+                    .insert(key, diagnostics.continuity_snapshot.clone());
+                while self.provider_wire_continuity_by_scope.len()
+                    > PROVIDER_WIRE_DIAGNOSTIC_SCOPE_LIMIT
+                {
+                    let _ = self.provider_wire_continuity_by_scope.pop_first();
+                }
+                continuity
+            });
+        if observation.diagnostics_failed {
+            self.provider_prompt_cache_diagnostics_failed = self
+                .provider_prompt_cache_diagnostics_failed
+                .saturating_add(1);
+        }
+
+        self.last_provider_request_continuity_category = Some(
+            continuity
+                .as_ref()
+                .map_or_else(|| "initial".to_string(), |value| value.category.clone()),
+        );
+        self.last_provider_request_continuity_message_index =
+            continuity.as_ref().and_then(|value| value.message_index);
+        self.last_provider_request_common_message_prefix =
+            continuity.as_ref().map(|value| value.common_message_prefix);
+        self.last_provider_request_common_component_prefix = continuity
+            .as_ref()
+            .map(|value| value.common_component_prefix);
+        self.last_provider_request_messages_append_only =
+            continuity.as_ref().map(|value| value.messages_append_only);
+        self.last_provider_request_common_stable_message_prefix = continuity
+            .as_ref()
+            .map(|value| value.common_stable_message_prefix);
+        self.last_provider_request_stable_messages_append_only = continuity
+            .as_ref()
+            .map(|value| value.stable_messages_append_only);
+
+        let status = RuntimeProviderWireRequestStatus {
+            request_id: observation.request_id.clone(),
+            provider: observation.provider.clone(),
+            model: observation.model.clone(),
+            interaction_kind: observation.interaction_kind.clone(),
+            purpose: observation.purpose.as_str().to_string(),
+            usage: observation.usage,
+            stable_input_bytes: observation
+                .openai_diagnostics
+                .as_ref()
+                .map(|diagnostics| diagnostics.stable_input_bytes),
+            volatile_input_bytes: observation
+                .openai_diagnostics
+                .as_ref()
+                .map(|diagnostics| diagnostics.volatile_input_bytes),
+            continuity,
+        };
+        if observation.purpose
+            == crate::integrations::agent::provider::ProviderRequestPurpose::Execution
+        {
+            self.provider_wire_status_by_conversation
+                .insert(observation.conversation_id.clone(), status.clone());
+            while self.provider_wire_status_by_conversation.len()
+                > PROVIDER_WIRE_DIAGNOSTIC_SCOPE_LIMIT
+            {
+                let _ = self.provider_wire_status_by_conversation.pop_first();
+            }
+        }
+        status
+    }
+
     /// Records that one runtime-owned agent turn started execution.
     #[cfg(test)]
     pub(crate) fn record_agent_turn_started(&mut self) {
@@ -246,121 +456,6 @@ impl RuntimeMetricsSnapshot {
                 self.agent_turns_blocked = self.agent_turns_blocked.saturating_add(1);
             }
             AgentTurnState::Queued | AgentTurnState::Running => {}
-        }
-    }
-
-    /// Records one provider request shape and prompt-cache diagnostic snapshot.
-    pub(crate) fn record_provider_request_shape(
-        &mut self,
-        request: &ModelRequest,
-        diagnostics: Option<&mez_agent::OpenAiPromptCacheDiagnostics>,
-        diagnostics_failed: bool,
-    ) {
-        self.provider_requests_started = self.provider_requests_started.saturating_add(1);
-        match request.interaction_kind.as_str() {
-            "capability_decision" => {
-                self.provider_request_capability_decision =
-                    self.provider_request_capability_decision.saturating_add(1);
-            }
-            "action_execution" => {
-                self.provider_request_action_execution =
-                    self.provider_request_action_execution.saturating_add(1);
-            }
-            "repair" => {
-                self.provider_request_repair = self.provider_request_repair.saturating_add(1);
-            }
-            "auto_sizing" => {
-                self.provider_request_auto_sizing =
-                    self.provider_request_auto_sizing.saturating_add(1);
-            }
-            _ => {}
-        }
-        self.provider_request_message_counts
-            .record(request.messages.len() as u64);
-        let message_bytes = request.messages.iter().fold(0u64, |sum, message| {
-            sum.saturating_add(message.content.len() as u64)
-        });
-        self.provider_request_message_bytes.record(message_bytes);
-        self.last_provider = Some(request.provider.clone());
-        self.last_model = Some(request.model.clone());
-        self.last_interaction_kind = Some(request.interaction_kind.as_str().to_string());
-        self.last_allowed_actions = Some(request.allowed_actions.action_type_names().join(","));
-        self.last_provider_output_token_budget_tokens = request.max_output_tokens;
-        let output_limit_retry_override = provider_request_output_limit_retry_override(request);
-        self.last_provider_output_limit_retry_override_tokens = output_limit_retry_override;
-        self.last_provider_output_token_budget_source = Some(
-            match (request.max_output_tokens, output_limit_retry_override) {
-                (Some(_), Some(_)) => "temporary_output_limit_retry_override".to_string(),
-                (Some(_), None) => "configured".to_string(),
-                (None, _) => "omitted_provider_default".to_string(),
-            },
-        );
-        if let Some(diagnostics) = diagnostics {
-            self.provider_prompt_cache_diagnostics_available = self
-                .provider_prompt_cache_diagnostics_available
-                .saturating_add(1);
-            self.provider_prompt_instructions_bytes
-                .record(diagnostics.instructions_bytes as u64);
-            self.provider_prompt_response_format_bytes
-                .record(diagnostics.response_format_bytes as u64);
-            self.provider_prompt_tools_bytes
-                .record(diagnostics.tools_bytes as u64);
-            self.provider_prompt_tool_choice_bytes
-                .record(diagnostics.tool_choice_bytes as u64);
-            self.provider_prompt_stable_input_bytes
-                .record(diagnostics.stable_input_bytes as u64);
-            self.provider_prompt_volatile_input_bytes
-                .record(diagnostics.volatile_input_bytes as u64);
-            self.provider_prompt_stable_projection_bytes
-                .record(diagnostics.stable_projection_bytes as u64);
-            self.provider_request_shape_bytes
-                .record(diagnostics.provider_request_shape_bytes as u64);
-            self.last_prompt_cache_key = Some(diagnostics.prompt_cache_key.clone());
-            self.last_stable_projection_sha256 = Some(diagnostics.stable_projection_sha256.clone());
-            self.last_provider_request_shape_sha256 =
-                Some(diagnostics.provider_request_shape_sha256.clone());
-            self.last_tool_choice_sha256 = Some(diagnostics.tool_choice_sha256.clone());
-            self.last_provider_request_sha256 =
-                Some(diagnostics.continuity_snapshot.request_sha256.clone());
-            self.last_provider_request_bytes = Some(diagnostics.continuity_snapshot.request_bytes);
-            let continuity =
-                self.last_openai_request_continuity_snapshot
-                    .as_ref()
-                    .map(|previous| {
-                        mez_agent::compare_openai_request_continuity(
-                            previous,
-                            &diagnostics.continuity_snapshot,
-                        )
-                    });
-            self.last_provider_request_continuity_category = Some(
-                continuity
-                    .as_ref()
-                    .map_or_else(|| "initial".to_string(), |value| value.category.clone()),
-            );
-            self.last_provider_request_continuity_message_index =
-                continuity.as_ref().and_then(|value| value.message_index);
-            self.last_provider_request_common_message_prefix =
-                continuity.as_ref().map(|value| value.common_message_prefix);
-            self.last_provider_request_common_component_prefix = continuity
-                .as_ref()
-                .map(|value| value.common_component_prefix);
-            self.last_provider_request_messages_append_only =
-                continuity.as_ref().map(|value| value.messages_append_only);
-            self.last_provider_request_common_stable_message_prefix = continuity
-                .as_ref()
-                .map(|value| value.common_stable_message_prefix);
-            self.last_provider_request_stable_messages_append_only = continuity
-                .as_ref()
-                .map(|value| value.stable_messages_append_only);
-            self.last_openai_request_continuity_snapshot =
-                Some(diagnostics.continuity_snapshot.clone());
-        } else if diagnostics_failed {
-            self.provider_prompt_cache_diagnostics_failed = self
-                .provider_prompt_cache_diagnostics_failed
-                .saturating_add(1);
-            self.last_openai_request_continuity_snapshot = None;
-        } else {
-            self.last_openai_request_continuity_snapshot = None;
         }
     }
 
@@ -549,13 +644,297 @@ impl RuntimeMetricsSnapshot {
     }
 }
 
-/// Returns the output-limit retry override token value when the provider
-/// request carries the second-stage request-local recovery mode that raises
-/// the provider-visible budget.
-pub(super) fn provider_request_output_limit_retry_override(
-    request: &ModelRequest,
-) -> Option<usize> {
-    request
-        .max_output_tokens
-        .filter(|_| request.interaction_kind == mez_agent::ModelInteractionKind::OutputLimitRetry)
+#[cfg(test)]
+mod provider_wire_tests {
+    use super::*;
+    use crate::integrations::agent::provider::{
+        ProviderRequestPurpose, ProviderWireRequestObservation,
+    };
+
+    fn request(model: &str, lineage: &str) -> mez_agent::ModelRequest {
+        mez_agent::ModelRequest {
+            provider: "openai".to_string(),
+            model: model.to_string(),
+            reasoning_effort: None,
+            thinking_enabled: None,
+            latency_preference: None,
+            prompt_cache_retention: None,
+            max_output_tokens: None,
+            temperature: None,
+            stop: None,
+            prompt_cache_session_id: Some("cache-session".to_string()),
+            prompt_cache_lineage_id: Some(lineage.to_string()),
+            turn_id: "turn-wire".to_string(),
+            agent_id: "agent-wire".to_string(),
+            available_mcp_tools: Vec::new(),
+            memory_actions_enabled: false,
+            issue_actions_enabled: false,
+            interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
+            allowed_actions: mez_agent::AllowedActionSet::say_only(),
+            recovery_input: None,
+            messages: vec![
+                mez_agent::ModelMessage {
+                    role: mez_agent::ModelMessageRole::System,
+                    source: mez_agent::ContextSourceKind::System,
+                    placement: mez_agent::ContextPlacement::StablePrefix,
+                    content: "stable instructions".to_string(),
+                },
+                mez_agent::ModelMessage {
+                    role: mez_agent::ModelMessageRole::User,
+                    source: mez_agent::ContextSourceKind::UserInstruction,
+                    placement: mez_agent::ContextPlacement::ConversationAppend,
+                    content: "user request".to_string(),
+                },
+            ]
+            .into(),
+        }
+    }
+
+    fn observation(
+        request_id: &str,
+        conversation_id: &str,
+        namespace: &str,
+        provider: &str,
+        request: &mez_agent::ModelRequest,
+        purpose: ProviderRequestPurpose,
+        usage: Option<ModelTokenUsage>,
+    ) -> ProviderWireRequestObservation {
+        ProviderWireRequestObservation {
+            request_id: request_id.to_string(),
+            attempt_index: 1,
+            retry_reason: None,
+            conversation_id: conversation_id.to_string(),
+            turn_id: request.turn_id.clone(),
+            agent_id: request.agent_id.clone(),
+            pane_id: "%wire".to_string(),
+            provider: provider.to_string(),
+            cache_namespace: namespace.to_string(),
+            model: request.model.clone(),
+            prompt_cache_lineage_id: request.prompt_cache_lineage_id.clone(),
+            interaction_kind: request.interaction_kind.as_str().to_string(),
+            allowed_actions: request.allowed_actions.action_type_names().join(","),
+            max_output_tokens: request.max_output_tokens,
+            output_limit_retry_override_tokens: None,
+            purpose,
+            message_count: request.messages.len(),
+            message_bytes: request
+                .messages
+                .iter()
+                .map(|message| message.content.len())
+                .sum(),
+            openai_diagnostics: Some(
+                mez_agent::openai_prompt_cache_diagnostics_for_request(request).unwrap(),
+            ),
+            diagnostics_failed: false,
+            usage,
+            succeeded: true,
+            failure_kind: None,
+        }
+    }
+
+    /// Verifies continuity comparisons never cross an actual provider-cache
+    /// routing boundary.
+    #[test]
+    fn continuity_is_isolated_by_every_cache_routing_key() {
+        let mut metrics = RuntimeMetricsSnapshot::default();
+        let base_request = request("gpt-wire", "lineage-a");
+        let base = observation(
+            "wire-base",
+            "conversation-a",
+            "namespace-a",
+            "openai",
+            &base_request,
+            ProviderRequestPurpose::Execution,
+            None,
+        );
+        assert_eq!(
+            metrics
+                .record_provider_wire_request_observation(&base)
+                .continuity,
+            None
+        );
+        let mut repeated = base.clone();
+        repeated.request_id = "wire-repeated".to_string();
+        let repeated = metrics.record_provider_wire_request_observation(&repeated);
+        assert_eq!(
+            repeated
+                .continuity
+                .as_ref()
+                .map(|value| value.category.as_str()),
+            Some("identical")
+        );
+
+        let mut variants = Vec::new();
+        let mut different_conversation = base.clone();
+        different_conversation.request_id = "wire-conversation".to_string();
+        different_conversation.conversation_id = "conversation-b".to_string();
+        variants.push(different_conversation);
+        let mut different_namespace = base.clone();
+        different_namespace.request_id = "wire-namespace".to_string();
+        different_namespace.cache_namespace = "namespace-b".to_string();
+        variants.push(different_namespace);
+        let mut different_provider = base.clone();
+        different_provider.request_id = "wire-provider".to_string();
+        different_provider.provider = "openai-compatible".to_string();
+        variants.push(different_provider);
+        let different_model_request = request("gpt-wire-b", "lineage-a");
+        variants.push(observation(
+            "wire-model",
+            "conversation-a",
+            "namespace-a",
+            "openai",
+            &different_model_request,
+            ProviderRequestPurpose::Execution,
+            None,
+        ));
+        let different_lineage_request = request("gpt-wire", "lineage-b");
+        variants.push(observation(
+            "wire-lineage",
+            "conversation-a",
+            "namespace-a",
+            "openai",
+            &different_lineage_request,
+            ProviderRequestPurpose::Execution,
+            None,
+        ));
+
+        for variant in variants {
+            assert_eq!(
+                metrics
+                    .record_provider_wire_request_observation(&variant)
+                    .continuity,
+                None,
+                "scope leaked for {}",
+                variant.request_id
+            );
+        }
+    }
+
+    /// Verifies execution status retains the exact request's usage and is not
+    /// replaced by auxiliary traffic.
+    #[test]
+    fn execution_status_pairs_exact_usage_and_ignores_auxiliary_calls() {
+        let mut metrics = RuntimeMetricsSnapshot::default();
+        let request = request("gpt-wire", "lineage-a");
+        let warm_usage = ModelTokenUsage {
+            input_tokens: 100,
+            cached_input_tokens: Some(80),
+            ..ModelTokenUsage::default()
+        };
+        let execution = observation(
+            "wire-execution",
+            "conversation-a",
+            "namespace-a",
+            "openai",
+            &request,
+            ProviderRequestPurpose::Execution,
+            Some(warm_usage),
+        );
+        metrics.record_provider_wire_request_observation(&execution);
+
+        let mut auxiliary = execution.clone();
+        auxiliary.request_id = "wire-auxiliary".to_string();
+        auxiliary.purpose = ProviderRequestPurpose::Auxiliary;
+        auxiliary.usage = Some(ModelTokenUsage {
+            input_tokens: 20,
+            cached_input_tokens: Some(0),
+            ..ModelTokenUsage::default()
+        });
+        metrics.record_provider_wire_request_observation(&auxiliary);
+        let status = metrics.provider_wire_status("conversation-a").unwrap();
+        assert_eq!(status.request_id, "wire-execution");
+        assert_eq!(status.usage, Some(warm_usage));
+
+        let mut omitted = execution.clone();
+        omitted.request_id = "wire-omitted".to_string();
+        omitted.usage = None;
+        metrics.record_provider_wire_request_observation(&omitted);
+        let status = metrics.provider_wire_status("conversation-a").unwrap();
+        assert_eq!(status.request_id, "wire-omitted");
+        assert_eq!(status.usage, None);
+
+        let explicit_zero = ModelTokenUsage {
+            cached_input_tokens: Some(0),
+            ..ModelTokenUsage::default()
+        };
+        let mut zero = execution;
+        zero.request_id = "wire-zero".to_string();
+        zero.usage = Some(explicit_zero);
+        metrics.record_provider_wire_request_observation(&zero);
+        assert_eq!(
+            metrics
+                .provider_wire_status("conversation-a")
+                .unwrap()
+                .usage,
+            Some(explicit_zero)
+        );
+    }
+
+    /// Verifies long-running hosts retain bounded continuity and status maps
+    /// with deterministic oldest-key eviction.
+    #[test]
+    fn provider_wire_diagnostic_maps_are_bounded() {
+        let mut metrics = RuntimeMetricsSnapshot::default();
+        let request = request("gpt-wire", "lineage-a");
+        let mut status = observation(
+            "wire-status",
+            "conversation-00000",
+            "namespace-status",
+            "openai",
+            &request,
+            ProviderRequestPurpose::Execution,
+            None,
+        );
+        status.openai_diagnostics = None;
+        let continuity = observation(
+            "wire-continuity",
+            "conversation-continuity",
+            "namespace-00000",
+            "openai",
+            &request,
+            ProviderRequestPurpose::Auxiliary,
+            None,
+        );
+        for index in 0..=PROVIDER_WIRE_DIAGNOSTIC_SCOPE_LIMIT {
+            status.request_id = format!("wire-status-{index}");
+            status.conversation_id = format!("conversation-{index:05}");
+            metrics.record_provider_wire_request_observation(&status);
+
+            let mut continuity = continuity.clone();
+            continuity.request_id = format!("wire-continuity-{index}");
+            continuity.cache_namespace = format!("namespace-{index:05}");
+            metrics.record_provider_wire_request_observation(&continuity);
+        }
+
+        assert_eq!(
+            metrics.provider_wire_status_by_conversation.len(),
+            PROVIDER_WIRE_DIAGNOSTIC_SCOPE_LIMIT
+        );
+        assert!(
+            !metrics
+                .provider_wire_status_by_conversation
+                .contains_key("conversation-00000")
+        );
+        assert!(
+            metrics
+                .provider_wire_status_by_conversation
+                .contains_key(&format!(
+                    "conversation-{:05}",
+                    PROVIDER_WIRE_DIAGNOSTIC_SCOPE_LIMIT
+                ))
+        );
+        assert_eq!(
+            metrics.provider_wire_continuity_by_scope.len(),
+            PROVIDER_WIRE_DIAGNOSTIC_SCOPE_LIMIT
+        );
+        assert!(!metrics.provider_wire_continuity_by_scope.contains_key(
+            &ProviderWireContinuityKey {
+                conversation_id: "conversation-continuity".to_string(),
+                cache_namespace: "namespace-00000".to_string(),
+                provider: "openai".to_string(),
+                model: "gpt-wire".to_string(),
+                prompt_cache_lineage_id: Some("lineage-a".to_string()),
+            }
+        ));
+    }
 }

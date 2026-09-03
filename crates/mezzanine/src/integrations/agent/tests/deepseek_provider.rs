@@ -757,7 +757,7 @@ fn deepseek_provider_rejects_missing_maap_after_strict_retry() {
     assert_eq!(failure_json["type"], "malformed_model_output");
 }
 
-#[test]
+#[tokio::test]
 /// Verifies DeepSeek thinking MAAP requests fall back to strict non-thinking
 /// MAAP when the provider returns prose instead of a tool call.
 ///
@@ -765,7 +765,7 @@ fn deepseek_provider_rejects_missing_maap_after_strict_retry() {
 /// tools without forced `tool_choice`. If the model declines to call the MAAP
 /// function, the adapter retries once with thinking disabled and a forced MAAP
 /// function so the runtime still receives a structured action batch.
-fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_prose() {
+async fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_prose() {
     let mut request = assemble_model_request(
         &ModelProfile {
             provider: "deepseek".to_string(),
@@ -795,7 +795,7 @@ fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_prose()
         "text": "hello"
     })
     .to_string();
-    let transport = SequencedFakeProviderHttpTransport::new(vec![
+    let transport = AsyncSequencedFakeProviderHttpTransport::new(vec![
         ProviderHttpResponse {
             status_code: 200,
             headers: Default::default(),
@@ -856,20 +856,33 @@ fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_prose()
         transport,
     )
     .unwrap();
-
-    let response = provider.send_request(&request).unwrap();
-
-    let requests = provider.transport.requests.borrow();
-    assert_eq!(requests.len(), 2);
-    let first_body: serde_json::Value = serde_json::from_str(&requests[0].body).unwrap();
-    let second_body: serde_json::Value = serde_json::from_str(&requests[1].body).unwrap();
-    assert_eq!(first_body["thinking"]["type"], "enabled");
-    assert!(first_body.get("tool_choice").is_none());
-    assert_eq!(second_body["thinking"]["type"], "disabled");
-    assert_eq!(
-        second_body["tool_choice"]["function"]["name"],
-        DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(4);
+    let observer = crate::integrations::agent::provider::ProviderWireRequestObserver::new(
+        "conversation-deepseek-retry",
+        "%deepseek-retry",
+        sender,
     );
+    let observed = crate::integrations::agent::provider::ObservedAsyncModelProvider::new(
+        &provider,
+        &observer,
+        crate::integrations::agent::provider::ProviderRequestPurpose::Execution,
+    );
+
+    let response = observed.send_request_async(&request).await.unwrap();
+
+    {
+        let requests = provider.transport.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        let first_body: serde_json::Value = serde_json::from_str(&requests[0].body).unwrap();
+        let second_body: serde_json::Value = serde_json::from_str(&requests[1].body).unwrap();
+        assert_eq!(first_body["thinking"]["type"], "enabled");
+        assert!(first_body.get("tool_choice").is_none());
+        assert_eq!(second_body["thinking"]["type"], "disabled");
+        assert_eq!(
+            second_body["tool_choice"]["function"]["name"],
+            DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME
+        );
+    }
     assert_eq!(response.usage.input_tokens, 22);
     assert_eq!(response.usage.output_tokens, 10);
     assert_eq!(response.usage.reasoning_tokens, 3);
@@ -883,6 +896,25 @@ fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_prose()
             cache_write_input_tokens: None,
         })
     );
+    let first_observation = receiver.recv().await.unwrap();
+    let retry_observation = receiver.recv().await.unwrap();
+    let sequence = |id: &str| id.strip_prefix("wire-").unwrap().parse::<u64>().unwrap();
+    assert!(sequence(&first_observation.request_id) < sequence(&retry_observation.request_id));
+    assert_eq!(first_observation.attempt_index, 1);
+    assert_eq!(retry_observation.attempt_index, 2);
+    assert_eq!(
+        first_observation.retry_reason.as_deref(),
+        Some("provider_forced_maap")
+    );
+    assert_eq!(
+        retry_observation.retry_reason.as_deref(),
+        Some("provider_forced_maap")
+    );
+    assert_eq!(first_observation.usage.unwrap().input_tokens, 10);
+    assert_eq!(retry_observation.usage.unwrap().input_tokens, 12);
+    assert!(first_observation.succeeded);
+    assert!(retry_observation.succeeded);
+    assert!(receiver.try_recv().is_err());
     let batch = response.action_batch.unwrap();
     assert_eq!(batch.rationale, "fallback produced structured output");
     assert!(batch.final_turn);

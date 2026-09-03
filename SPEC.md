@@ -4678,6 +4678,26 @@ interaction kind and allowed subset. Providers with dynamic tool schemas MUST
 not duplicate complete action or MCP descriptions in text. All provider families, including auto-sizing, MUST preserve canonical order
 and MUST NOT manufacture a late user restatement.
 
+Every concrete provider wire send, including capability continuations,
+repairs, output-limit retries, adapter-internal retries, routing, auxiliary
+judging, compaction, and durable-memory generation, MUST emit one content-free
+observation with a process-monotonic request id, attempt/retry classification,
+request purpose, provider/model/cache-routing identity, interaction/action
+surface, request size, exact response-usage presence, and success or bounded
+failure classification. Observations MUST NOT retain prompt, tool-result,
+provider-output, credential, or error-message content. Cache continuity MUST be
+compared only within one conversation, provider endpoint/account namespace,
+provider, model, and prompt-cache lineage. Namespace identity MAY hash endpoint
+and documented non-secret organization, project, or account-routing headers,
+but MUST NOT hash bearer credentials or unrelated headers. User-visible latest
+execution cache usage and stable-prefix diagnostics MUST come from the same
+concrete request; routing, auxiliary, compaction, and memory observations MUST
+NOT replace that execution sample. Omitted usage MUST remain unknown and MUST
+NOT be rewritten as an explicit zero. Retained continuity baselines and latest
+conversation samples MUST be bounded with deterministic eviction, and stale
+observations MUST be rejected unless background compaction or memory work still
+belongs to the pane's current conversation.
+
 Capability continuation, MAAP repair, output-limit retry, failure summary,
 routed handoff and repair, routed presentation and failure explanation,
 auto-sizing, and macro judging MUST be represented by typed interaction modes.

@@ -267,6 +267,45 @@ impl ProviderHttpTransport for SequencedFakeProviderHttpTransport {
     }
 }
 
+/// Async sequence transport used to verify adapter-internal wire retries.
+#[derive(Debug)]
+struct AsyncSequencedFakeProviderHttpTransport {
+    /// Provider requests issued during the test.
+    requests: std::sync::Mutex<Vec<ProviderHttpRequest>>,
+    /// Responses returned to the provider adapter in FIFO order.
+    responses: std::sync::Mutex<std::collections::VecDeque<ProviderHttpResponse>>,
+}
+
+impl AsyncSequencedFakeProviderHttpTransport {
+    /// Creates an asynchronous fake transport from ordered responses.
+    fn new(responses: Vec<ProviderHttpResponse>) -> Self {
+        Self {
+            requests: std::sync::Mutex::new(Vec::new()),
+            responses: std::sync::Mutex::new(responses.into()),
+        }
+    }
+}
+
+impl AsyncProviderHttpTransport for AsyncSequencedFakeProviderHttpTransport {
+    fn send_async<'a>(
+        &'a self,
+        request: &'a ProviderHttpRequest,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = mez_agent::ProviderHttpResult<ProviderHttpResponse>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            self.requests.lock().unwrap().push(request.clone());
+            self.responses.lock().unwrap().pop_front().ok_or_else(|| {
+                mez_agent::ProviderHttpError::invalid_state("fake provider response queue is empty")
+            })
+        })
+    }
+}
+
 /// Carries Async Fake Provider Http Transport state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move

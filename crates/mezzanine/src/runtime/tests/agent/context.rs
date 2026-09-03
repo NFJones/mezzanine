@@ -889,9 +889,183 @@ fn runtime_status_reports_provider_context_continuity_diagnostics() {
     );
     assert!(trace.contains("\"immutable_token_estimate\""), "{trace}");
     assert!(
-        status.contains("| Stable provider prefix | common_messages=1 append_only=true |"),
+        status.contains("| Stable provider prefix | unknown |"),
         "{status}"
     );
+}
+
+/// Verifies provider-wire status and trace data stay request-correlated,
+/// content-free, and guarded by current conversation/turn ownership.
+#[test]
+fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "PRIVATE_PROVIDER_PROMPT_MARKER")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turn(&started.turn_id)
+        .cloned()
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let mut request = runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id);
+    request.provider = "openai".to_string();
+    request.model = "gpt-wire".to_string();
+    request.prompt_cache_lineage_id = Some("lineage-wire".to_string());
+    request.messages = vec![mez_agent::ModelMessage {
+        role: mez_agent::ModelMessageRole::User,
+        source: ContextSourceKind::UserInstruction,
+        placement: mez_agent::ContextPlacement::ConversationAppend,
+        content: "PRIVATE_PROVIDER_PROMPT_MARKER".to_string(),
+    }]
+    .into();
+    let diagnostics = mez_agent::openai_prompt_cache_diagnostics_for_request(&request).unwrap();
+    let usage = mez_agent::ModelTokenUsage {
+        input_tokens: 100,
+        cached_input_tokens: Some(75),
+        ..mez_agent::ModelTokenUsage::default()
+    };
+    let observation = |request_id: &str,
+                       purpose: crate::integrations::agent::provider::ProviderRequestPurpose,
+                       usage: Option<mez_agent::ModelTokenUsage>| {
+        crate::integrations::agent::provider::ProviderWireRequestObservation {
+            request_id: request_id.to_string(),
+            attempt_index: 1,
+            retry_reason: None,
+            conversation_id: conversation_id.clone(),
+            turn_id: turn.turn_id.clone(),
+            agent_id: turn.agent_id.clone(),
+            pane_id: "%1".to_string(),
+            provider: request.provider.clone(),
+            cache_namespace: "openai:namespace-wire".to_string(),
+            model: request.model.clone(),
+            prompt_cache_lineage_id: request.prompt_cache_lineage_id.clone(),
+            interaction_kind: request.interaction_kind.as_str().to_string(),
+            allowed_actions: request.allowed_actions.action_type_names().join(","),
+            max_output_tokens: None,
+            output_limit_retry_override_tokens: None,
+            purpose,
+            message_count: request.messages.len(),
+            message_bytes: request
+                .messages
+                .iter()
+                .map(|message| message.content.len())
+                .sum(),
+            openai_diagnostics: Some(diagnostics.clone()),
+            diagnostics_failed: false,
+            usage,
+            succeeded: true,
+            failure_kind: None,
+        }
+    };
+
+    let execution = observation(
+        "wire-status-1",
+        crate::integrations::agent::provider::ProviderRequestPurpose::Execution,
+        Some(usage),
+    );
+    assert!(
+        service
+            .apply_provider_wire_request_observation(execution)
+            .unwrap()
+            .applied
+    );
+    let status = service.runtime_agent_status_display("%1").unwrap();
+    assert!(
+        status.contains(
+            "| Latest request cache hit | 75.00% (gpt-wire via openai; request=wire-status-1"
+        ),
+        "{status}"
+    );
+    assert!(
+        status.contains("| Stable provider prefix | request=wire-status-1"),
+        "{status}"
+    );
+
+    let auxiliary = observation(
+        "wire-auxiliary",
+        crate::integrations::agent::provider::ProviderRequestPurpose::Auxiliary,
+        Some(mez_agent::ModelTokenUsage {
+            input_tokens: 10,
+            cached_input_tokens: Some(0),
+            ..mez_agent::ModelTokenUsage::default()
+        }),
+    );
+    assert!(
+        service
+            .apply_provider_wire_request_observation(auxiliary)
+            .unwrap()
+            .applied
+    );
+    let status = service.runtime_agent_status_display("%1").unwrap();
+    assert!(status.contains("request=wire-status-1"), "{status}");
+    assert!(!status.contains("request=wire-auxiliary"), "{status}");
+
+    let omitted = observation(
+        "wire-status-2",
+        crate::integrations::agent::provider::ProviderRequestPurpose::Execution,
+        None,
+    );
+    assert!(
+        service
+            .apply_provider_wire_request_observation(omitted)
+            .unwrap()
+            .applied
+    );
+    let status = service.runtime_agent_status_display("%1").unwrap();
+    assert!(
+        status.contains(
+            "| Latest request cache hit | unknown (gpt-wire via openai; request=wire-status-2"
+        ),
+        "{status}"
+    );
+    assert!(
+        status.contains("| Stable provider prefix | request=wire-status-2"),
+        "{status}"
+    );
+    let trace = service.agent_pane_trace_log_text("%1").unwrap();
+    assert!(
+        trace.contains("id=wire-status-2 attempt=1 retry=none"),
+        "{trace}"
+    );
+    assert!(!trace.contains("PRIVATE_PROVIDER_PROMPT_MARKER"), "{trace}");
+
+    for purpose in [
+        crate::integrations::agent::provider::ProviderRequestPurpose::Execution,
+        crate::integrations::agent::provider::ProviderRequestPurpose::Routing,
+        crate::integrations::agent::provider::ProviderRequestPurpose::Auxiliary,
+    ] {
+        let mut stale = observation("wire-stale", purpose, None);
+        stale.turn_id = "stale-turn".to_string();
+        assert!(
+            !service
+                .apply_provider_wire_request_observation(stale)
+                .unwrap()
+                .applied
+        );
+    }
+    for purpose in [
+        crate::integrations::agent::provider::ProviderRequestPurpose::Compaction,
+        crate::integrations::agent::provider::ProviderRequestPurpose::Memory,
+    ] {
+        let mut background = observation("wire-background", purpose, None);
+        background.turn_id = "completed-background-turn".to_string();
+        assert!(
+            service
+                .apply_provider_wire_request_observation(background)
+                .unwrap()
+                .applied
+        );
+    }
 }
 
 /// Verifies the pane frame retains same-model provider context usage across an

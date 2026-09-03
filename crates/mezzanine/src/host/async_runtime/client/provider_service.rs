@@ -15,7 +15,10 @@ use super::{
     is_terminal_runtime_lifecycle_state, provider_error_retry_class,
     runtime_execute_auto_sizing_with_async_provider, sleep, watch,
 };
-use crate::integrations::agent::provider::STREAMING_SAY_TEXT_CHUNK_LIMIT_BYTES;
+use crate::integrations::agent::provider::{
+    ObservedAsyncModelProvider, ProviderRequestPurpose, ProviderWireRequestObservation,
+    ProviderWireRequestObserver, STREAMING_SAY_TEXT_CHUNK_LIMIT_BYTES,
+};
 use crate::runtime::RuntimeAgentProviderWorkerOutcome;
 use std::time::{Duration, Instant};
 
@@ -649,10 +652,13 @@ async fn monitor_runtime_agent_provider_dispatch(
     let pane_id = dispatch.turn.pane_id.clone();
     let (progress_sender, mut progress_receiver) =
         tokio::sync::mpsc::channel(STREAMING_SAY_PROGRESS_CHANNEL_CAPACITY);
+    let (observation_sender, mut observation_receiver) =
+        tokio::sync::mpsc::channel(STREAMING_SAY_PROGRESS_CHANNEL_CAPACITY);
     let mut latency = ProviderLatencyTracker::new(Instant::now());
     let mut worker = tokio::spawn(execute_runtime_agent_provider_dispatch(
         dispatch,
         Some(progress_sender),
+        observation_sender,
     ));
     let mut projection_workers = JoinSet::new();
     let mut projection_dirty = false;
@@ -663,6 +669,15 @@ async fn monitor_runtime_agent_provider_dispatch(
                     crate::host::async_runtime::AsyncRuntimeLatencyPhase::ProviderTotal,
                     latency.total_elapsed_ms(Instant::now()),
                 );
+                while let Ok(observation) = observation_receiver.try_recv() {
+                    let mut batch = RuntimeEventBatch::new();
+                    batch.push(RuntimeEvent::AgentProvider(
+                        AgentProviderEvent::WireRequestObserved {
+                            observation: Box::new(observation),
+                        },
+                    ));
+                    handle.submit_runtime_events(batch).await?;
+                }
                 loop {
                     let mut events = Vec::new();
                     let mut drained = 0usize;
@@ -700,6 +715,15 @@ async fn monitor_runtime_agent_provider_dispatch(
                     }
                 }
                 return Ok(Some(provider_worker_event(agent_id, turn_id, result)));
+            }
+            Some(observation) = observation_receiver.recv() => {
+                let mut batch = RuntimeEventBatch::new();
+                batch.push(RuntimeEvent::AgentProvider(
+                    AgentProviderEvent::WireRequestObserved {
+                        observation: Box::new(observation),
+                    },
+                ));
+                handle.submit_runtime_events(batch).await?;
             }
             Some(event) = progress_receiver.recv() => {
                 let (phase, elapsed_ms) = latency.observe_progress(Instant::now());
@@ -816,12 +840,23 @@ async fn monitor_runtime_agent_compaction_dispatch(
 ) -> Result<AsyncAgentProviderWorkerResult> {
     let mut lifecycle = handle.lifecycle_state_watcher();
     let mut side_effect_watcher = handle.side_effect_delivery_watcher();
-    let worker = execute_runtime_agent_compaction_dispatch(dispatch);
+    let conversation_id = dispatch.task.conversation_id.clone();
+    let (observation_sender, mut observation_receiver) =
+        tokio::sync::mpsc::channel(STREAMING_SAY_PROGRESS_CHANNEL_CAPACITY);
+    let observer =
+        ProviderWireRequestObserver::new(conversation_id, pane_id.clone(), observation_sender);
+    let worker = execute_runtime_agent_compaction_dispatch(dispatch, &observer);
     tokio::pin!(worker);
     loop {
         tokio::select! {
             result = &mut worker => {
+                while let Ok(observation) = observation_receiver.try_recv() {
+                    submit_provider_wire_request_observation(&handle, observation).await?;
+                }
                 return Ok(Some(compaction_worker_event(pane_id, Ok(result))));
+            }
+            Some(observation) = observation_receiver.recv() => {
+                submit_provider_wire_request_observation(&handle, observation).await?;
             }
             _ = handle.wait_for_event_delivery() => {}
             changed = side_effect_watcher.changed() => {
@@ -847,12 +882,28 @@ async fn monitor_runtime_agent_remember_dispatch(
 ) -> Result<AsyncAgentProviderWorkerResult> {
     let mut lifecycle = handle.lifecycle_state_watcher();
     let mut side_effect_watcher = handle.side_effect_delivery_watcher();
-    let worker = execute_runtime_agent_remember_dispatch(dispatch);
+    let conversation_id = dispatch
+        .task
+        .request
+        .prompt_cache_session_id
+        .clone()
+        .unwrap_or_else(|| format!("pane:{pane_id}"));
+    let (observation_sender, mut observation_receiver) =
+        tokio::sync::mpsc::channel(STREAMING_SAY_PROGRESS_CHANNEL_CAPACITY);
+    let observer =
+        ProviderWireRequestObserver::new(conversation_id, pane_id.clone(), observation_sender);
+    let worker = execute_runtime_agent_remember_dispatch(dispatch, &observer);
     tokio::pin!(worker);
     loop {
         tokio::select! {
             result = &mut worker => {
+                while let Ok(observation) = observation_receiver.try_recv() {
+                    submit_provider_wire_request_observation(&handle, observation).await?;
+                }
                 return Ok(Some(remember_worker_event(pane_id, Ok(result))));
+            }
+            Some(observation) = observation_receiver.recv() => {
+                submit_provider_wire_request_observation(&handle, observation).await?;
             }
             _ = handle.wait_for_event_delivery() => {}
             changed = side_effect_watcher.changed() => {
@@ -868,6 +919,21 @@ async fn monitor_runtime_agent_remember_dispatch(
             return Ok(None);
         }
     }
+}
+
+/// Delivers one content-free provider observation to actor-owned metrics.
+async fn submit_provider_wire_request_observation(
+    handle: &AsyncRuntimeSessionHandle,
+    observation: ProviderWireRequestObservation,
+) -> Result<()> {
+    let mut batch = RuntimeEventBatch::new();
+    batch.push(RuntimeEvent::AgentProvider(
+        AgentProviderEvent::WireRequestObserved {
+            observation: Box::new(observation),
+        },
+    ));
+    handle.submit_runtime_events(batch).await?;
+    Ok(())
 }
 
 /// Runs the provider worker event operation for this subsystem.
@@ -1007,6 +1073,7 @@ fn remember_worker_event(
 async fn execute_runtime_agent_provider_dispatch(
     dispatch: RuntimeAgentProviderDispatch,
     output_progress_sender: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
+    observation_sender: tokio::sync::mpsc::Sender<ProviderWireRequestObservation>,
 ) -> Result<RuntimeAgentProviderWorkerOutcome> {
     let RuntimeAgentProviderDispatch {
         turn,
@@ -1033,21 +1100,19 @@ async fn execute_runtime_agent_provider_dispatch(
     } = dispatch;
     let context = context.into_agent_context();
     let routing_token_usage_by_model = std::collections::BTreeMap::new();
+    let execution_observer = ProviderWireRequestObserver::new(
+        turn.conversation_id.clone(),
+        turn.pane_id.clone(),
+        observation_sender,
+    );
     if let Some(request) = sandbox_failure_assessment_request.or(macro_judge_request) {
-        let response = match provider {
-            RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
-                provider.send_request_async(&request).await?
-            }
-            RuntimeAgentProviderDispatchProvider::Anthropic(provider) => {
-                provider.send_request_async(&request).await?
-            }
-            RuntimeAgentProviderDispatchProvider::DeepSeek(provider) => {
-                provider.send_request_async(&request).await?
-            }
-            RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider) => {
-                provider.send_request_async(&request).await?
-            }
-        };
+        let response = observed_dispatch_provider_request(
+            &provider,
+            &execution_observer,
+            ProviderRequestPurpose::Auxiliary,
+            &request,
+        )
+        .await?;
         return Ok(RuntimeAgentProviderWorkerOutcome::Execution(Box::new(
             super::AgentTurnExecution {
                 request,
@@ -1061,90 +1126,24 @@ async fn execute_runtime_agent_provider_dispatch(
         )));
     }
     if let Some(auto_sizing) = auto_sizing.as_ref() {
-        let auto_sizing_execution = if let Some(router_provider) = auto_sizing_provider.as_ref() {
-            match router_provider {
-                RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
-                    runtime_execute_auto_sizing_with_async_provider(
-                        provider,
-                        auto_sizing,
-                        &turn,
-                        &context,
-                    )
-                    .await?
-                }
-                RuntimeAgentProviderDispatchProvider::DeepSeek(provider) => {
-                    runtime_execute_auto_sizing_with_async_provider(
-                        provider,
-                        auto_sizing,
-                        &turn,
-                        &context,
-                    )
-                    .await?
-                }
-                RuntimeAgentProviderDispatchProvider::Anthropic(provider) => {
-                    runtime_execute_auto_sizing_with_async_provider(
-                        provider,
-                        auto_sizing,
-                        &turn,
-                        &context,
-                    )
-                    .await?
-                }
-                RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider) => {
-                    runtime_execute_auto_sizing_with_async_provider(
-                        provider,
-                        auto_sizing,
-                        &turn,
-                        &context,
-                    )
-                    .await?
-                }
-            }
+        let router_provider = if let Some(router_provider) = auto_sizing_provider.as_ref() {
+            router_provider
         } else if auto_sizing.router_profile.provider == provider.provider_id() {
-            match &provider {
-                RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
-                    runtime_execute_auto_sizing_with_async_provider(
-                        provider,
-                        auto_sizing,
-                        &turn,
-                        &context,
-                    )
-                    .await?
-                }
-                RuntimeAgentProviderDispatchProvider::DeepSeek(provider) => {
-                    runtime_execute_auto_sizing_with_async_provider(
-                        provider,
-                        auto_sizing,
-                        &turn,
-                        &context,
-                    )
-                    .await?
-                }
-                RuntimeAgentProviderDispatchProvider::Anthropic(provider) => {
-                    runtime_execute_auto_sizing_with_async_provider(
-                        provider,
-                        auto_sizing,
-                        &turn,
-                        &context,
-                    )
-                    .await?
-                }
-                RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider) => {
-                    runtime_execute_auto_sizing_with_async_provider(
-                        provider,
-                        auto_sizing,
-                        &turn,
-                        &context,
-                    )
-                    .await?
-                }
-            }
+            &provider
         } else {
             return Err(MezError::invalid_state(format!(
                 "auto-sizing router provider `{}` is unavailable",
                 auto_sizing.router_profile.provider
             )));
         };
+        let auto_sizing_execution = runtime_execute_observed_auto_sizing(
+            router_provider,
+            &execution_observer,
+            auto_sizing,
+            &turn,
+            &context,
+        )
+        .await?;
         return Ok(RuntimeAgentProviderWorkerOutcome::RoutingSelected(
             Box::new(auto_sizing_execution.into_routing_selection()),
         ));
@@ -1152,6 +1151,11 @@ async fn execute_runtime_agent_provider_dispatch(
     match provider {
         RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
             let mut ledger = AgentTurnLedger::new(false);
+            let provider = ObservedAsyncModelProvider::new(
+                &provider,
+                &execution_observer,
+                ProviderRequestPurpose::Execution,
+            );
             let runner = AgentTurnRunner {
                 provider: &provider,
                 model_profile,
@@ -1187,6 +1191,11 @@ async fn execute_runtime_agent_provider_dispatch(
         }
         RuntimeAgentProviderDispatchProvider::Anthropic(provider) => {
             let mut ledger = AgentTurnLedger::new(false);
+            let provider = ObservedAsyncModelProvider::new(
+                &provider,
+                &execution_observer,
+                ProviderRequestPurpose::Execution,
+            );
             let runner = AgentTurnRunner {
                 provider: &provider,
                 model_profile,
@@ -1222,6 +1231,11 @@ async fn execute_runtime_agent_provider_dispatch(
         }
         RuntimeAgentProviderDispatchProvider::DeepSeek(provider) => {
             let mut ledger = AgentTurnLedger::new(false);
+            let provider = ObservedAsyncModelProvider::new(
+                &provider,
+                &execution_observer,
+                ProviderRequestPurpose::Execution,
+            );
             let runner = AgentTurnRunner {
                 provider: &provider,
                 model_profile,
@@ -1257,6 +1271,11 @@ async fn execute_runtime_agent_provider_dispatch(
         }
         RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider) => {
             let mut ledger = AgentTurnLedger::new(false);
+            let provider = ObservedAsyncModelProvider::new(
+                &provider,
+                &execution_observer,
+                ProviderRequestPurpose::Execution,
+            );
             let runner = AgentTurnRunner {
                 provider: &provider,
                 model_profile,
@@ -1346,10 +1365,16 @@ pub(in crate::host::async_runtime) async fn execute_provider_worker_network_acti
 /// Executes one model-backed conversation compaction request.
 async fn execute_runtime_agent_compaction_dispatch(
     dispatch: RuntimeAgentCompactionDispatch,
+    observer: &ProviderWireRequestObserver,
 ) -> Result<mez_agent::ModelResponse> {
     let RuntimeAgentCompactionDispatch { task, provider } = dispatch;
     match provider {
         RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
+            let provider = ObservedAsyncModelProvider::new(
+                &provider,
+                observer,
+                ProviderRequestPurpose::Compaction,
+            );
             runtime_send_compaction_request_with_output_limit_retry(
                 &provider,
                 task.request,
@@ -1358,6 +1383,11 @@ async fn execute_runtime_agent_compaction_dispatch(
             .await
         }
         RuntimeAgentProviderDispatchProvider::DeepSeek(provider) => {
+            let provider = ObservedAsyncModelProvider::new(
+                &provider,
+                observer,
+                ProviderRequestPurpose::Compaction,
+            );
             runtime_send_compaction_request_with_output_limit_retry(
                 &provider,
                 task.request,
@@ -1366,6 +1396,11 @@ async fn execute_runtime_agent_compaction_dispatch(
             .await
         }
         RuntimeAgentProviderDispatchProvider::Anthropic(provider) => {
+            let provider = ObservedAsyncModelProvider::new(
+                &provider,
+                observer,
+                ProviderRequestPurpose::Compaction,
+            );
             runtime_send_compaction_request_with_output_limit_retry(
                 &provider,
                 task.request,
@@ -1374,6 +1409,11 @@ async fn execute_runtime_agent_compaction_dispatch(
             .await
         }
         RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider) => {
+            let provider = ObservedAsyncModelProvider::new(
+                &provider,
+                observer,
+                ProviderRequestPurpose::Compaction,
+            );
             runtime_send_compaction_request_with_output_limit_retry(
                 &provider,
                 task.request,
@@ -1387,20 +1427,128 @@ async fn execute_runtime_agent_compaction_dispatch(
 /// Executes one model-backed durable memory generation request.
 async fn execute_runtime_agent_remember_dispatch(
     dispatch: RuntimeAgentRememberDispatch,
+    observer: &ProviderWireRequestObserver,
 ) -> Result<mez_agent::ModelResponse> {
     let RuntimeAgentRememberDispatch { task, provider } = dispatch;
     match provider {
         RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
-            provider.send_request_async(&task.request).await
+            observed_provider_request(
+                &provider,
+                observer,
+                ProviderRequestPurpose::Memory,
+                &task.request,
+            )
+            .await
         }
         RuntimeAgentProviderDispatchProvider::Anthropic(provider) => {
-            provider.send_request_async(&task.request).await
+            observed_provider_request(
+                &provider,
+                observer,
+                ProviderRequestPurpose::Memory,
+                &task.request,
+            )
+            .await
         }
         RuntimeAgentProviderDispatchProvider::DeepSeek(provider) => {
-            provider.send_request_async(&task.request).await
+            observed_provider_request(
+                &provider,
+                observer,
+                ProviderRequestPurpose::Memory,
+                &task.request,
+            )
+            .await
         }
         RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider) => {
-            provider.send_request_async(&task.request).await
+            observed_provider_request(
+                &provider,
+                observer,
+                ProviderRequestPurpose::Memory,
+                &task.request,
+            )
+            .await
+        }
+    }
+}
+
+/// Sends one provider request through the content-free observation wrapper.
+async fn observed_provider_request<P: AsyncModelProvider>(
+    provider: &P,
+    observer: &ProviderWireRequestObserver,
+    purpose: ProviderRequestPurpose,
+    request: &ModelRequest,
+) -> Result<ModelResponse> {
+    ObservedAsyncModelProvider::new(provider, observer, purpose)
+        .send_request_async(request)
+        .await
+}
+
+/// Sends one request through any configured provider with observation enabled.
+async fn observed_dispatch_provider_request(
+    provider: &RuntimeAgentProviderDispatchProvider,
+    observer: &ProviderWireRequestObserver,
+    purpose: ProviderRequestPurpose,
+    request: &ModelRequest,
+) -> Result<ModelResponse> {
+    match provider {
+        RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
+            observed_provider_request(provider, observer, purpose, request).await
+        }
+        RuntimeAgentProviderDispatchProvider::Anthropic(provider) => {
+            observed_provider_request(provider, observer, purpose, request).await
+        }
+        RuntimeAgentProviderDispatchProvider::DeepSeek(provider) => {
+            observed_provider_request(provider, observer, purpose, request).await
+        }
+        RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider) => {
+            observed_provider_request(provider, observer, purpose, request).await
+        }
+    }
+}
+
+/// Executes one observed automatic-sizing request through any provider.
+async fn runtime_execute_observed_auto_sizing(
+    provider: &RuntimeAgentProviderDispatchProvider,
+    observer: &ProviderWireRequestObserver,
+    auto_sizing: &mez_agent::AutoSizingDispatch,
+    turn: &AgentTurnRecord,
+    context: &mez_agent::AgentContext,
+) -> Result<mez_agent::AutoSizingExecution> {
+    match provider {
+        RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
+            let provider = ObservedAsyncModelProvider::new(
+                provider,
+                observer,
+                ProviderRequestPurpose::Routing,
+            );
+            runtime_execute_auto_sizing_with_async_provider(&provider, auto_sizing, turn, context)
+                .await
+        }
+        RuntimeAgentProviderDispatchProvider::Anthropic(provider) => {
+            let provider = ObservedAsyncModelProvider::new(
+                provider,
+                observer,
+                ProviderRequestPurpose::Routing,
+            );
+            runtime_execute_auto_sizing_with_async_provider(&provider, auto_sizing, turn, context)
+                .await
+        }
+        RuntimeAgentProviderDispatchProvider::DeepSeek(provider) => {
+            let provider = ObservedAsyncModelProvider::new(
+                provider,
+                observer,
+                ProviderRequestPurpose::Routing,
+            );
+            runtime_execute_auto_sizing_with_async_provider(&provider, auto_sizing, turn, context)
+                .await
+        }
+        RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider) => {
+            let provider = ObservedAsyncModelProvider::new(
+                provider,
+                observer,
+                ProviderRequestPurpose::Routing,
+            );
+            runtime_execute_auto_sizing_with_async_provider(&provider, auto_sizing, turn, context)
+                .await
         }
     }
 }

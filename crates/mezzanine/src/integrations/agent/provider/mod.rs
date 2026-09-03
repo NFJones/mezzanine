@@ -5,6 +5,7 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{BTreeMap, ExposeSecret, MaapBatch, MezError, Result, SecretString};
+use sha2::{Digest, Sha256};
 use std::future::Future;
 use std::pin::Pin;
 
@@ -62,6 +63,311 @@ use mez_agent::{CHATGPT_RESPONSES_ENDPOINT, OPENAI_RESPONSES_ENDPOINT};
 
 /// Maximum decoded `say.text` bytes delivered in one progress event.
 pub(crate) const STREAMING_SAY_TEXT_CHUNK_LIMIT_BYTES: usize = 16 * 1024;
+
+/// Classifies one concrete provider request for cache and cost diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderRequestPurpose {
+    /// User-visible agent execution, including capability and repair rounds.
+    Execution,
+    /// Automatic model or reasoning-profile selection.
+    Routing,
+    /// Internal macro, sandbox, or failure-assessment work.
+    Auxiliary,
+    /// Model-backed conversation compaction.
+    Compaction,
+    /// Model-backed durable-memory generation.
+    Memory,
+}
+
+impl ProviderRequestPurpose {
+    /// Returns the stable diagnostic name for this request class.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Execution => "execution",
+            Self::Routing => "routing",
+            Self::Auxiliary => "auxiliary",
+            Self::Compaction => "compaction",
+            Self::Memory => "memory",
+        }
+    }
+}
+
+/// Content-free observation of one concrete provider request and its outcome.
+///
+/// Prompt and tool-result bytes never enter this record. OpenAI-specific data
+/// consists only of sizes, hashes, routing-key identity, and message digests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderWireRequestObservation {
+    /// Monotonic identity within the owning worker dispatch.
+    pub request_id: String,
+    /// One-based wire-attempt ordinal within the logical provider call.
+    pub attempt_index: usize,
+    /// Content-free reason for an adapter-internal retry, when applicable.
+    pub retry_reason: Option<String>,
+    /// Conversation that owns the request.
+    pub conversation_id: String,
+    /// Runtime turn that owns the request.
+    pub turn_id: String,
+    /// Agent identity that owns the request.
+    pub agent_id: String,
+    /// Pane associated with the conversation.
+    pub pane_id: String,
+    /// Configured provider identity.
+    pub provider: String,
+    /// Hashed provider endpoint/account routing namespace.
+    pub cache_namespace: String,
+    /// Concrete model identity.
+    pub model: String,
+    /// Prompt-cache lineage identity, when available.
+    pub prompt_cache_lineage_id: Option<String>,
+    /// Provider interaction mode.
+    pub interaction_kind: String,
+    /// Current concrete action surface.
+    pub allowed_actions: String,
+    /// Provider output-token budget sent with this exact request.
+    pub max_output_tokens: Option<usize>,
+    /// Temporary output-limit retry override carried by this exact request.
+    pub output_limit_retry_override_tokens: Option<usize>,
+    /// Execution, routing, or other auxiliary request class.
+    pub purpose: ProviderRequestPurpose,
+    /// Number of provider-neutral request messages.
+    pub message_count: usize,
+    /// Total provider-neutral message content bytes.
+    pub message_bytes: usize,
+    /// OpenAI Responses cache diagnostics, when applicable.
+    pub openai_diagnostics: Option<mez_agent::OpenAiPromptCacheDiagnostics>,
+    /// Whether OpenAI diagnostic construction failed independently of send.
+    pub diagnostics_failed: bool,
+    /// Exact usage returned by this request, when provider accounting exists.
+    pub usage: Option<mez_agent::ModelTokenUsage>,
+    /// Whether the provider request returned a usable response.
+    pub succeeded: bool,
+    /// Content-free failure classification when the request failed.
+    pub failure_kind: Option<String>,
+}
+
+/// Actor-bound observation sink shared by every provider call in one worker.
+pub struct ProviderWireRequestObserver {
+    conversation_id: String,
+    pane_id: String,
+    sender: tokio::sync::mpsc::Sender<ProviderWireRequestObservation>,
+}
+
+/// Process-local monotonic identity for concrete provider requests.
+static NEXT_PROVIDER_WIRE_REQUEST_ID: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(1);
+
+impl ProviderWireRequestObserver {
+    /// Creates one sequential observation owner for a provider worker.
+    pub fn new(
+        conversation_id: impl Into<String>,
+        pane_id: impl Into<String>,
+        sender: tokio::sync::mpsc::Sender<ProviderWireRequestObservation>,
+    ) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            pane_id: pane_id.into(),
+            sender,
+        }
+    }
+
+    /// Allocates the next process-local request identity.
+    fn next_request_id(&self) -> String {
+        let sequence = NEXT_PROVIDER_WIRE_REQUEST_ID
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            .max(1);
+        format!("wire-{sequence}")
+    }
+}
+
+/// Observation state passed through one logical provider call.
+pub struct ProviderWireObservationContext<'a> {
+    observer: &'a ProviderWireRequestObserver,
+    purpose: ProviderRequestPurpose,
+    cache_namespace: String,
+    openai_diagnostics: Option<mez_agent::OpenAiPromptCacheDiagnostics>,
+    diagnostics_failed: bool,
+}
+
+impl<'a> ProviderWireObservationContext<'a> {
+    /// Creates context for every concrete send made by one provider call.
+    fn new(
+        observer: &'a ProviderWireRequestObserver,
+        purpose: ProviderRequestPurpose,
+        cache_namespace: String,
+        diagnostics: Result<Option<mez_agent::OpenAiPromptCacheDiagnostics>>,
+    ) -> Self {
+        let (openai_diagnostics, diagnostics_failed) = match diagnostics {
+            Ok(diagnostics) => (diagnostics, false),
+            Err(_) => (None, true),
+        };
+        Self {
+            observer,
+            purpose,
+            cache_namespace,
+            openai_diagnostics,
+            diagnostics_failed,
+        }
+    }
+
+    /// Emits one content-free observation for one concrete wire attempt.
+    pub async fn observe(
+        &self,
+        request: &ModelRequest,
+        attempt_index: usize,
+        retry_reason: Option<&str>,
+        result: &Result<ModelResponse>,
+    ) {
+        let usage = result.as_ref().ok().and_then(|response| {
+            response.latest_request_usage.or_else(|| {
+                let usage = response.usage;
+                (!usage.is_zero()
+                    || usage.cached_input_tokens.is_some()
+                    || usage.cache_write_input_tokens.is_some())
+                .then_some(usage)
+            })
+        });
+        let failure_kind = result
+            .as_ref()
+            .err()
+            .map(|error| provider_wire_failure_kind(error).to_string());
+        let observation = ProviderWireRequestObservation {
+            request_id: self.observer.next_request_id(),
+            attempt_index,
+            retry_reason: retry_reason.map(str::to_string),
+            conversation_id: self.observer.conversation_id.clone(),
+            turn_id: request.turn_id.clone(),
+            agent_id: request.agent_id.clone(),
+            pane_id: self.observer.pane_id.clone(),
+            provider: request.provider.clone(),
+            cache_namespace: self.cache_namespace.clone(),
+            model: request.model.clone(),
+            prompt_cache_lineage_id: request.prompt_cache_lineage_id.clone(),
+            interaction_kind: request.interaction_kind.as_str().to_string(),
+            allowed_actions: request.allowed_actions.action_type_names().join(","),
+            max_output_tokens: request.max_output_tokens,
+            output_limit_retry_override_tokens: request.max_output_tokens.filter(|_| {
+                request.interaction_kind == mez_agent::ModelInteractionKind::OutputLimitRetry
+            }),
+            purpose: self.purpose,
+            message_count: request.messages.len(),
+            message_bytes: request.messages.iter().fold(0usize, |total, message| {
+                total.saturating_add(message.content.len())
+            }),
+            openai_diagnostics: self.openai_diagnostics.clone(),
+            diagnostics_failed: self.diagnostics_failed,
+            usage,
+            succeeded: result.is_ok(),
+            failure_kind,
+        };
+        let _ = self.observer.sender.send(observation).await;
+    }
+}
+
+/// Returns a stable content-free provider failure classification.
+fn provider_wire_failure_kind(error: &MezError) -> &'static str {
+    match error.kind() {
+        crate::error::MezErrorKind::InvalidArgs => "invalid_args",
+        crate::error::MezErrorKind::InvalidState => "invalid_state",
+        crate::error::MezErrorKind::Config => "config",
+        crate::error::MezErrorKind::Io => "io",
+        crate::error::MezErrorKind::Conflict => "conflict",
+        crate::error::MezErrorKind::NotFound => "not_found",
+        crate::error::MezErrorKind::Forbidden => "forbidden",
+        crate::error::MezErrorKind::RateLimited => "rate_limited",
+        crate::error::MezErrorKind::NotImplemented => "not_implemented",
+    }
+}
+
+/// Provider adapter that records every concrete request without retaining prompt bytes.
+pub struct ObservedAsyncModelProvider<'a, P> {
+    provider: &'a P,
+    observer: &'a ProviderWireRequestObserver,
+    purpose: ProviderRequestPurpose,
+}
+
+impl<'a, P> ObservedAsyncModelProvider<'a, P> {
+    /// Wraps one concrete provider with a worker-owned diagnostic observer.
+    pub fn new(
+        provider: &'a P,
+        observer: &'a ProviderWireRequestObserver,
+        purpose: ProviderRequestPurpose,
+    ) -> Self {
+        Self {
+            provider,
+            observer,
+            purpose,
+        }
+    }
+}
+
+/// Builds a stable, non-secret provider cache namespace from endpoint routing.
+pub(super) fn provider_cache_namespace(provider_id: &str, endpoint: &str) -> String {
+    provider_cache_namespace_with_headers(provider_id, endpoint, &BTreeMap::new())
+}
+
+/// Builds a cache namespace that includes non-secret account-routing headers.
+fn provider_cache_namespace_with_headers(
+    provider_id: &str,
+    endpoint: &str,
+    routing_headers: &BTreeMap<String, String>,
+) -> String {
+    let mut material = endpoint.to_string();
+    for (name, value) in routing_headers.iter().filter(|(name, _)| {
+        name.eq_ignore_ascii_case(OPENAI_ORGANIZATION_HEADER)
+            || name.eq_ignore_ascii_case(OPENAI_PROJECT_HEADER)
+            || name.eq_ignore_ascii_case(CHATGPT_ACCOUNT_ID_HEADER)
+    }) {
+        material.push('\0');
+        material.push_str(&name.to_ascii_lowercase());
+        material.push('=');
+        material.push_str(value);
+    }
+    let digest = Sha256::digest(material.as_bytes());
+    let endpoint_digest = digest
+        .iter()
+        .take(8)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("{provider_id}:{endpoint_digest}")
+}
+
+#[cfg(test)]
+mod provider_wire_namespace_tests {
+    use super::*;
+
+    /// Verifies cache namespaces include only non-secret provider routing
+    /// identity and ignore credentials and unrelated request headers.
+    #[test]
+    fn cache_namespace_hashes_only_allowlisted_routing_headers() {
+        let endpoint = "https://api.openai.test/v1/responses";
+        let base = provider_cache_namespace_with_headers("openai", endpoint, &BTreeMap::new());
+        let mut unrelated = BTreeMap::new();
+        unrelated.insert(
+            "Authorization".to_string(),
+            "Bearer private-token".to_string(),
+        );
+        unrelated.insert("X-Diagnostic".to_string(), "changed".to_string());
+        assert_eq!(
+            provider_cache_namespace_with_headers("openai", endpoint, &unrelated),
+            base
+        );
+
+        for header in [
+            OPENAI_ORGANIZATION_HEADER,
+            OPENAI_PROJECT_HEADER,
+            CHATGPT_ACCOUNT_ID_HEADER,
+        ] {
+            let mut routed = unrelated.clone();
+            routed.insert(header.to_ascii_lowercase(), "route-a".to_string());
+            let first = provider_cache_namespace_with_headers("openai", endpoint, &routed);
+            routed.insert(header.to_ascii_uppercase(), "route-b".to_string());
+            let second = provider_cache_namespace_with_headers("openai", endpoint, &routed);
+            assert_ne!(first, base, "{header} must affect cache routing scope");
+            assert_ne!(second, first, "{header} value changes must isolate scope");
+        }
+    }
+}
 
 /// Returns one MAAP-bearing text or native-argument fragment from an SSE event.
 pub(super) fn provider_maap_stream_fragment(event: &mez_agent::SseEvent) -> Option<String> {
@@ -241,6 +547,19 @@ pub trait AsyncModelProvider: Send + Sync {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn provider_id(&self) -> &str;
+
+    /// Returns a non-secret identity for the provider's cache-routing namespace.
+    fn cache_namespace(&self) -> String {
+        self.provider_id().to_string()
+    }
+
+    /// Builds provider-native prompt-cache diagnostics for one concrete send.
+    fn prompt_cache_diagnostics(
+        &self,
+        _request: &ModelRequest,
+    ) -> Result<Option<mez_agent::OpenAiPromptCacheDiagnostics>> {
+        Ok(None)
+    }
     /// Runs the send request async operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -260,6 +579,24 @@ pub trait AsyncModelProvider: Send + Sync {
         self.send_request_async(request)
     }
 
+    /// Sends one logical request while observing each concrete wire attempt.
+    fn send_request_async_with_progress_and_observation<'a>(
+        &'a self,
+        request: &'a ModelRequest,
+        progress: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
+        observation: Option<ProviderWireObservationContext<'a>>,
+    ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            let result = self
+                .send_request_async_with_progress(request, progress)
+                .await;
+            if let Some(observation) = observation.as_ref() {
+                observation.observe(request, 1, None, &result).await;
+            }
+            result
+        })
+    }
+
     /// Runs the list models async operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -274,6 +611,45 @@ pub trait AsyncModelProvider: Send + Sync {
                 self.provider_id()
             )))
         })
+    }
+}
+
+impl<P: AsyncModelProvider> AsyncModelProvider for ObservedAsyncModelProvider<'_, P> {
+    fn provider_id(&self) -> &str {
+        self.provider.provider_id()
+    }
+
+    fn cache_namespace(&self) -> String {
+        self.provider.cache_namespace()
+    }
+
+    fn prompt_cache_diagnostics(
+        &self,
+        request: &ModelRequest,
+    ) -> Result<Option<mez_agent::OpenAiPromptCacheDiagnostics>> {
+        self.provider.prompt_cache_diagnostics(request)
+    }
+
+    fn send_request_async<'a>(
+        &'a self,
+        request: &'a ModelRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
+        self.send_request_async_with_progress(request, None)
+    }
+
+    fn send_request_async_with_progress<'a>(
+        &'a self,
+        request: &'a ModelRequest,
+        progress: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
+    ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
+        let observation = ProviderWireObservationContext::new(
+            self.observer,
+            self.purpose,
+            self.provider.cache_namespace(),
+            self.provider.prompt_cache_diagnostics(request),
+        );
+        self.provider
+            .send_request_async_with_progress_and_observation(request, progress, Some(observation))
     }
 }
 
@@ -935,6 +1311,23 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
     /// on duplicated control-flow logic.
     fn provider_id(&self) -> &str {
         self.provider_id()
+    }
+
+    fn cache_namespace(&self) -> String {
+        provider_cache_namespace_with_headers(
+            self.provider_id(),
+            &self.endpoint,
+            &self.extra_headers,
+        )
+    }
+
+    fn prompt_cache_diagnostics(
+        &self,
+        request: &ModelRequest,
+    ) -> Result<Option<mez_agent::OpenAiPromptCacheDiagnostics>> {
+        mez_agent::openai_prompt_cache_diagnostics_for_request_with_stream(request, self.stream)
+            .map(Some)
+            .map_err(MezError::from)
     }
 
     /// Runs the list models async operation for this subsystem.

@@ -189,6 +189,9 @@ impl RuntimeSessionService {
             .unwrap_or(0);
         let token_usage_by_model = self.agent_token_usage_for_pane(pane_id);
         let latest_request_usage = self.agent_latest_request_usage(&session.session_id);
+        let provider_wire_status = self
+            .runtime_metrics()
+            .provider_wire_status(&session.session_id);
         let context_continuity = self.agent_context_continuity(&session.session_id);
         let instance_token_usage_by_model =
             self.runtime_agent_instance_provider_token_usage_by_model();
@@ -317,15 +320,38 @@ impl RuntimeSessionService {
             ],
             vec![
                 "Latest request cache hit".to_string(),
-                latest_request_usage.map_or_else(
-                    || "unknown".to_string(),
-                    |sample| {
-                        format!(
-                            "{} ({}; cached_input={} input={})",
-                            sample.usage.cached_input_hit_ratio_display(),
-                            sample.model.display_name(),
-                            sample.usage.cached_input_tokens_display(),
-                            sample.usage.input_tokens,
+                provider_wire_status.map_or_else(
+                    || latest_request_usage.map_or_else(
+                        || "unknown".to_string(),
+                        |sample| {
+                            format!(
+                                "{} ({}; cached_input={} input={})",
+                                sample.usage.cached_input_hit_ratio_display(),
+                                sample.model.display_name(),
+                                sample.usage.cached_input_tokens_display(),
+                                sample.usage.input_tokens,
+                            )
+                        },
+                    ),
+                    |status| {
+                        status.usage.map_or_else(
+                            || format!(
+                                "unknown ({} via {}; request={} interaction={})",
+                                status.model,
+                                status.provider,
+                                status.request_id,
+                                status.interaction_kind,
+                            ),
+                            |usage| format!(
+                                "{} ({} via {}; request={} interaction={}; cached_input={} input={})",
+                                usage.cached_input_hit_ratio_display(),
+                                status.model,
+                                status.provider,
+                                status.request_id,
+                                status.interaction_kind,
+                                usage.cached_input_tokens_display(),
+                                usage.input_tokens,
+                            ),
                         )
                     },
                 ),
@@ -373,19 +399,57 @@ impl RuntimeSessionService {
             ],
             vec![
                 "Stable provider prefix".to_string(),
-                self.runtime_metrics()
-                    .last_provider_request_stable_messages_append_only
-                    .map_or_else(
-                        || "unknown".to_string(),
-                        |append_only| {
-                            format!(
-                                "common_messages={} append_only={append_only}",
-                                self.runtime_metrics()
-                                    .last_provider_request_common_stable_message_prefix
-                                    .unwrap_or(0),
+                provider_wire_status.map_or_else(
+                    || {
+                        self.runtime_metrics()
+                            .last_provider_request_stable_messages_append_only
+                            .map_or_else(
+                                || "unknown".to_string(),
+                                |append_only| {
+                                    format!(
+                                        "common_messages={} append_only={append_only}",
+                                        self.runtime_metrics()
+                                            .last_provider_request_common_stable_message_prefix
+                                            .unwrap_or(0),
+                                    )
+                                },
                             )
-                        },
-                    ),
+                    },
+                    |status| {
+                        status.continuity.as_ref().map_or_else(
+                            || {
+                                format!(
+                                    "request={} initial stable_bytes={} volatile_bytes={}",
+                                    status.request_id,
+                                    status.stable_input_bytes.map_or_else(
+                                        || "unknown".to_string(),
+                                        |value| value.to_string()
+                                    ),
+                                    status.volatile_input_bytes.map_or_else(
+                                        || "unknown".to_string(),
+                                        |value| value.to_string()
+                                    ),
+                                )
+                            },
+                            |continuity| {
+                            format!(
+                                    "request={} common_messages={} append_only={} stable_bytes={} volatile_bytes={}",
+                                    status.request_id,
+                                    continuity.common_stable_message_prefix,
+                                    continuity.stable_messages_append_only,
+                                    status.stable_input_bytes.map_or_else(
+                                        || "unknown".to_string(),
+                                        |value| value.to_string()
+                                    ),
+                                    status.volatile_input_bytes.map_or_else(
+                                        || "unknown".to_string(),
+                                        |value| value.to_string()
+                                    ),
+                            )
+                            },
+                        )
+                    },
+                ),
             ],
             vec![
                 "Latest turn".to_string(),

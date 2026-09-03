@@ -265,3 +265,76 @@ fn provider_effective_payloads_omit_foreign_native_events_without_reordering() {
         }
     }
 }
+
+/// Verifies the observation wrapper emits one content-free record for every
+/// concrete asynchronous provider call while preserving exact usage presence.
+#[tokio::test]
+async fn observed_async_provider_records_each_attempt_and_exact_usage_presence() {
+    let response = |usage: ModelTokenUsage| ModelResponse {
+        provider: "batch".to_string(),
+        model: "test-model".to_string(),
+        raw_text: "provider output must not enter observations".to_string(),
+        usage,
+        latest_request_usage: None,
+        quota_usage: Vec::new(),
+        action_batch: None,
+        provider_transcript_events: Vec::new(),
+    };
+    let explicit_zero = ModelTokenUsage {
+        cached_input_tokens: Some(0),
+        ..ModelTokenUsage::default()
+    };
+    let provider = SequencedProvider::new(vec![
+        Ok(response(ModelTokenUsage::default())),
+        Ok(response(explicit_zero)),
+        Err(crate::MezError::invalid_state(
+            "PRIVATE_PROVIDER_FAILURE_MARKER",
+        )),
+    ]);
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(4);
+    let observer = crate::integrations::agent::provider::ProviderWireRequestObserver::new(
+        "conversation-observed",
+        "%observed",
+        sender,
+    );
+    let provider = crate::integrations::agent::provider::ObservedAsyncModelProvider::new(
+        &provider,
+        &observer,
+        crate::integrations::agent::provider::ProviderRequestPurpose::Execution,
+    );
+    let mut request = openai_prompt_cache_retention_test_request("test-model");
+    request.provider = "batch".to_string();
+    request.interaction_kind = mez_agent::ModelInteractionKind::CapabilityContinuation;
+    provider.send_request_async(&request).await.unwrap();
+    let omitted = receiver.recv().await.unwrap();
+
+    request.interaction_kind = mez_agent::ModelInteractionKind::MaapRepair;
+    provider.send_request_async(&request).await.unwrap();
+    let zero = receiver.recv().await.unwrap();
+
+    request.interaction_kind = mez_agent::ModelInteractionKind::OutputLimitRetry;
+    request.max_output_tokens = Some(16_384);
+    provider.send_request_async(&request).await.unwrap_err();
+    let failed = receiver.recv().await.unwrap();
+
+    let sequence = |id: &str| id.strip_prefix("wire-").unwrap().parse::<u64>().unwrap();
+    assert!(sequence(&omitted.request_id) < sequence(&zero.request_id));
+    assert!(sequence(&zero.request_id) < sequence(&failed.request_id));
+    assert_eq!(omitted.interaction_kind, "capability_continuation");
+    assert_eq!(omitted.usage, None);
+    assert_eq!(zero.interaction_kind, "maap_repair");
+    assert_eq!(zero.usage, Some(explicit_zero));
+    assert_eq!(failed.interaction_kind, "output_limit_retry");
+    assert_eq!(failed.output_limit_retry_override_tokens, Some(16_384));
+    assert_eq!(failed.failure_kind.as_deref(), Some("invalid_state"));
+    assert!(!failed.succeeded);
+    assert_eq!(omitted.attempt_index, 1);
+    assert_eq!(zero.attempt_index, 1);
+    assert_eq!(failed.attempt_index, 1);
+    assert!(receiver.try_recv().is_err());
+
+    let observations = format!("{omitted:?}{zero:?}{failed:?}");
+    assert!(!observations.contains("debug this failing test"));
+    assert!(!observations.contains("provider output must not enter observations"));
+    assert!(!observations.contains("PRIVATE_PROVIDER_FAILURE_MARKER"));
+}

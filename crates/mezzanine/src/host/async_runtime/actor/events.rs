@@ -1050,6 +1050,9 @@ impl AsyncRuntimeSessionActor {
         provider_event: AgentProviderEvent,
     ) -> Result<RuntimeTransition> {
         match provider_event {
+            AgentProviderEvent::WireRequestObserved { observation } => self
+                .service
+                .apply_provider_wire_request_observation(*observation),
             AgentProviderEvent::RoutingSelected {
                 agent_id,
                 turn_id,
