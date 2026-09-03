@@ -2374,9 +2374,9 @@ fn runtime_pane_write_failure_fails_running_file_action() {
     );
     assert_eq!(service.pending_agent_provider_tasks().len(), 1);
     assert!(!service.agent_turn_executions().contains_key("turn-1"));
-    let context = service.agent_turn_contexts().get("turn-1").unwrap();
+    let context = runtime_prepared_context_for_turn(&service, "turn-1");
     assert!(context.blocks().iter().any(|block| {
-        block.source == ContextSourceKind::ActionResult
+        block.source == ContextSourceKind::ActionDetail
             && block
                 .content
                 .contains("[action_result patch-fail apply_patch failed]")

@@ -11,6 +11,8 @@ use sha2::{Digest, Sha256};
 
 const CAPABILITY_DECISION_LABEL: &str = "controller capability decision";
 const CAPABILITY_DECISION_PREFIX: &str = "[controller capability decision]\n";
+const REQUEST_STATE_LABEL: &str = "Mezzanine request state";
+const REQUEST_STATE_PREFIX: &str = "[Mezzanine request state]\n";
 const PROVIDER_ACTION_EXECUTION_SEPARATOR: &str = "~mez~";
 const PROVIDER_ACTION_EXECUTION_DIGEST_LEN: usize = 16;
 
@@ -92,17 +94,20 @@ impl RuntimeSessionService {
             .cloned()
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
 
-        let mut retained_decision_counts = BTreeMap::<String, usize>::new();
+        let mut retained_decision_counts = BTreeMap::<(String, String), usize>::new();
         for block in context.blocks().iter().filter(|block| {
             block.source == ContextSourceKind::CommittedEvidence
-                && block.label == CAPABILITY_DECISION_LABEL
+                && matches!(
+                    block.label.as_str(),
+                    CAPABILITY_DECISION_LABEL | REQUEST_STATE_LABEL
+                )
         }) {
             *retained_decision_counts
-                .entry(block.content.clone())
+                .entry((block.label.clone(), block.content.clone()))
                 .or_default() += 1;
         }
 
-        let mut request_decision_counts = BTreeMap::<String, usize>::new();
+        let mut request_decision_counts = BTreeMap::<(String, String), usize>::new();
         let mut new_decisions = Vec::new();
         for message in &execution.request.messages {
             if message.role != ModelMessageRole::Context
@@ -114,11 +119,17 @@ impl RuntimeSessionService {
             {
                 continue;
             }
-            let Some(content) = message.content.strip_prefix(CAPABILITY_DECISION_PREFIX) else {
-                continue;
-            };
+            let (label, content) =
+                if let Some(content) = message.content.strip_prefix(CAPABILITY_DECISION_PREFIX) {
+                    (CAPABILITY_DECISION_LABEL, content)
+                } else if let Some(content) = message.content.strip_prefix(REQUEST_STATE_PREFIX) {
+                    (REQUEST_STATE_LABEL, content)
+                } else {
+                    continue;
+                };
+            let key = (label.to_string(), content.to_string());
             let occurrence = request_decision_counts
-                .entry(content.to_string())
+                .entry(key.clone())
                 .and_modify(|count| *count = count.saturating_add(1))
                 .or_insert(1);
             if message.source == ContextSourceKind::CommittedEvidence {
@@ -126,13 +137,13 @@ impl RuntimeSessionService {
             }
             if *occurrence
                 <= retained_decision_counts
-                    .get(content)
+                    .get(&key)
                     .copied()
                     .unwrap_or_default()
             {
                 continue;
             }
-            new_decisions.push(content.to_string());
+            new_decisions.push(key);
         }
 
         let identity_content = provider_execution_identity_content(execution);
@@ -186,11 +197,11 @@ impl RuntimeSessionService {
                 "provider execution ownership exists without its assistant event",
             ));
         }
-        for decision in new_decisions {
+        for (label, decision) in new_decisions {
             context
                 .append_evidence_event(
                     ContextSourceKind::CommittedEvidence,
-                    CAPABILITY_DECISION_LABEL,
+                    label,
                     decision,
                     group_id.clone(),
                     None,

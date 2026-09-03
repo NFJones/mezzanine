@@ -148,14 +148,11 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
         )
         .unwrap();
 
-    let context = service
-        .agent_turn_contexts()
-        .get("turn-1")
-        .unwrap()
+    let context = runtime_prepared_context_for_turn(&service, "turn-1")
         .blocks()
         .iter()
         .find(|block| {
-            block.source == ContextSourceKind::ActionResult
+            block.source == ContextSourceKind::ActionDetail
                 && block.content.contains("diff -- apply patch")
         })
         .map(|block| block.content.clone())
@@ -1032,15 +1029,16 @@ fn runtime_apply_patch_pane_input_failure_queues_model_self_correction() {
             .collect::<Vec<_>>(),
         vec![1]
     );
-    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    let durable = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    let context = runtime_prepared_context_for_turn(&service, &turn.turn_id);
     assert!(context.blocks().iter().any(|block| {
-        block.source == ContextSourceKind::ActionResult
+        block.source == ContextSourceKind::ActionDetail
             && block
                 .content
                 .contains("[action_result patch-transport apply_patch failed]")
             && block.content.contains("pane_input_write_failed")
     }));
-    assert!(context.blocks().iter().all(|block| {
+    assert!(durable.blocks().iter().all(|block| {
         block.source != ContextSourceKind::RuntimeHint || block.label != "action failure feedback"
     }));
     service.terminate_all_pane_processes().unwrap();

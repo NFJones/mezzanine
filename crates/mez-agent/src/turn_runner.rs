@@ -484,8 +484,10 @@ pub fn append_request_state_transition(request: &mut ModelRequest) {
         request.allowed_actions.action_type_names().join(",")
     );
     let latest_state = request.messages.iter().rev().find(|message| {
-        message.source == crate::ContextSourceKind::RuntimeHint
-            && message.placement == crate::ContextPlacement::ConversationAppend
+        matches!(
+            message.source,
+            crate::ContextSourceKind::RuntimeHint | crate::ContextSourceKind::CommittedEvidence
+        ) && message.placement == crate::ContextPlacement::ConversationAppend
             && message.content.starts_with(REQUEST_STATE_HEADER)
     });
     if latest_state.is_some_and(|message| message.content.ends_with(&state)) {
@@ -495,8 +497,10 @@ pub fn append_request_state_transition(request: &mut ModelRequest) {
         .messages
         .iter()
         .filter(|message| {
-            message.source == crate::ContextSourceKind::RuntimeHint
-                && message.placement == crate::ContextPlacement::ConversationAppend
+            matches!(
+                message.source,
+                crate::ContextSourceKind::RuntimeHint | crate::ContextSourceKind::CommittedEvidence
+            ) && message.placement == crate::ContextPlacement::ConversationAppend
                 && message.content.starts_with(REQUEST_STATE_HEADER)
         })
         .count()

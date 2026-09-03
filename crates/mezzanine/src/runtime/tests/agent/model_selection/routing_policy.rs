@@ -1351,19 +1351,20 @@ fn runtime_shell_pane_not_ready_queues_model_self_correction() {
 
     assert!(queued);
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
-    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    let durable = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    let context = runtime_prepared_context_for_turn(&service, &turn.turn_id);
     assert!(context.blocks().iter().any(|block| {
-        block.source == ContextSourceKind::ActionResult
+        block.source == ContextSourceKind::ActionDetail
             && block
                 .content
                 .contains("[action_result shell-not-ready shell_command failed]")
             && block.content.contains("interactive-blocked")
     }));
-    assert!(!context.blocks().iter().any(|block| {
+    assert!(!durable.blocks().iter().any(|block| {
         block.source == ContextSourceKind::RuntimeHint
             && block.content.contains("Shell-readiness recovery")
     }));
-    assert!(context.validate_durable().is_ok());
+    assert!(durable.validate_durable().is_ok());
     let pane_text = service
         .pane_screen("%1")
         .unwrap()

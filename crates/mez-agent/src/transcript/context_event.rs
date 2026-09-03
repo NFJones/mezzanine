@@ -10,6 +10,8 @@
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use crate::ContextSourceKind;
+
 /// Marker prefix for provider-independent transcript context events.
 pub const TRANSCRIPT_CONTEXT_EVENT_MARKER: &str = "[mez-transcript-context-event/v1]\n";
 
@@ -21,8 +23,14 @@ const ROUTED_HANDOFF_KIND: &str = "routed_handoff";
 const INTERRUPTED_TURN_KIND: &str = "interrupted_turn";
 /// Event kind for one immutable pane-environment projection.
 const ENVIRONMENT_SNAPSHOT_KIND: &str = "environment_snapshot";
+/// Event kind for one exact cache-visible execution block.
+const EXECUTION_BLOCK_KIND: &str = "execution_block";
 /// Maximum serialized environment projection accepted from durable storage.
 const ENVIRONMENT_SNAPSHOT_CONTENT_LIMIT_BYTES: usize = 64 * 1024;
+/// Maximum exact execution-block content accepted from durable storage.
+const EXECUTION_BLOCK_CONTENT_LIMIT_BYTES: usize = crate::http::DEFAULT_PROVIDER_MAX_RESPONSE_BYTES;
+/// Maximum exact execution-block label accepted from durable storage.
+const EXECUTION_BLOCK_LABEL_LIMIT_BYTES: usize = 4 * 1024;
 
 /// Provider-independent context that is durable across conversation turns.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +45,15 @@ pub enum TranscriptContextEvent {
         /// SHA-256 digest of the exact model-visible projection.
         projection_sha256: String,
         /// Exact model-visible environment projection.
+        content: String,
+    },
+    /// One exact cache-visible block from a completed execution group.
+    ExecutionBlock {
+        /// Original provider-neutral context provenance.
+        source: ContextSourceKind,
+        /// Exact model-visible block label.
+        label: String,
+        /// Exact canonical model-visible content.
         content: String,
     },
     /// Original intent and settled observations retained when a turn stops.
@@ -70,6 +87,28 @@ impl TranscriptContextEvent {
         })
     }
 
+    /// Builds one validated exact execution-block event.
+    ///
+    /// Only execution-group source kinds are accepted. Labels and canonical
+    /// content are bounded before durable storage so replay never has to
+    /// rewrite bytes that previously entered cache-eligible context.
+    pub fn execution_block(
+        source: ContextSourceKind,
+        label: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Option<Self> {
+        let label = label.into();
+        let content = content.into();
+        if !valid_execution_block(source, &label, &content) {
+            return None;
+        }
+        Some(Self::ExecutionBlock {
+            source,
+            label,
+            content,
+        })
+    }
+
     /// Encodes one event as a reserved system transcript entry.
     pub fn to_transcript_content(&self) -> String {
         let payload = match self {
@@ -85,6 +124,17 @@ impl TranscriptContextEvent {
                 "version": TRANSCRIPT_CONTEXT_EVENT_VERSION,
                 "kind": ENVIRONMENT_SNAPSHOT_KIND,
                 "projection_sha256": projection_sha256,
+                "content": content,
+            }),
+            Self::ExecutionBlock {
+                source,
+                label,
+                content,
+            } => serde_json::json!({
+                "version": TRANSCRIPT_CONTEXT_EVENT_VERSION,
+                "kind": EXECUTION_BLOCK_KIND,
+                "source": execution_block_source_name(*source),
+                "label": label,
                 "content": content,
             }),
             Self::InterruptedTurn {
@@ -139,6 +189,19 @@ impl TranscriptContextEvent {
                     content: content.to_string(),
                 })
             }
+            EXECUTION_BLOCK_KIND => {
+                let source = execution_block_source(value.get("source")?.as_str()?)?;
+                let label = value.get("label")?.as_str()?;
+                let content = value.get("content")?.as_str()?;
+                if !valid_execution_block(source, label, content) {
+                    return None;
+                }
+                Some(Self::ExecutionBlock {
+                    source,
+                    label: label.to_string(),
+                    content: content.to_string(),
+                })
+            }
             INTERRUPTED_TURN_KIND => {
                 let prompt = value.get("prompt")?.as_str()?.trim();
                 let reason = value.get("reason")?.as_str()?.trim();
@@ -181,6 +244,39 @@ fn valid_environment_snapshot(projection_sha256: &str, content: &str) -> bool {
     projection_sha256 == expected
 }
 
+/// Returns the durable wire name for an execution-block source.
+fn execution_block_source_name(source: ContextSourceKind) -> &'static str {
+    match source {
+        ContextSourceKind::CommittedEvidence => "committed_evidence",
+        ContextSourceKind::TranscriptAssistant => "transcript_assistant",
+        ContextSourceKind::TranscriptTool => "transcript_tool",
+        ContextSourceKind::ActionResult => "action_result",
+        _ => "unsupported",
+    }
+}
+
+/// Decodes one allowlisted execution-block source.
+fn execution_block_source(source: &str) -> Option<ContextSourceKind> {
+    match source {
+        "committed_evidence" => Some(ContextSourceKind::CommittedEvidence),
+        "transcript_assistant" => Some(ContextSourceKind::TranscriptAssistant),
+        "transcript_tool" => Some(ContextSourceKind::TranscriptTool),
+        "action_result" => Some(ContextSourceKind::ActionResult),
+        _ => None,
+    }
+}
+
+/// Validates exact execution-block fields before they become model-visible.
+fn valid_execution_block(source: ContextSourceKind, label: &str, content: &str) -> bool {
+    execution_block_source_name(source) != "unsupported"
+        && !label.trim().is_empty()
+        && label.len() <= EXECUTION_BLOCK_LABEL_LIMIT_BYTES
+        && !content.trim().is_empty()
+        && content.len() <= EXECUTION_BLOCK_CONTENT_LIMIT_BYTES
+        && !label.bytes().any(|byte| byte == 0)
+        && !content.bytes().any(|byte| byte == 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,6 +317,33 @@ mod tests {
         assert_eq!(
             TranscriptContextEvent::from_transcript_content(&encoded),
             Some(event)
+        );
+    }
+
+    /// Verifies one canonical execution block preserves provenance, label, and
+    /// model-visible bytes across durable transcript encoding and replay.
+    #[test]
+    fn execution_block_transcript_context_event_round_trips() {
+        let event = TranscriptContextEvent::execution_block(
+            ContextSourceKind::ActionResult,
+            "action result shell-1",
+            "[action_result shell-1 shell_command succeeded]\nhistorical_output: omitted",
+        )
+        .unwrap();
+
+        let encoded = event.to_transcript_content();
+
+        assert_eq!(
+            TranscriptContextEvent::from_transcript_content(&encoded),
+            Some(event)
+        );
+        assert!(
+            TranscriptContextEvent::execution_block(
+                ContextSourceKind::UserInstruction,
+                "user prompt",
+                "must not become an execution block",
+            )
+            .is_none()
         );
     }
 

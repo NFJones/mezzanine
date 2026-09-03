@@ -4701,6 +4701,15 @@ the default capability-decision surface merely because the previous action was
 executed outside the provider worker. Live MCP, memory, and issue availability
 MUST still remove retained actions that are no longer executable before the
 next provider request.
+Settled action evidence MUST use its bounded, secret-safe durable projection
+before it first enters cache-eligible chronology. Any expanded output required
+for same-turn reasoning MUST be isolated in request-local live state and MUST
+be discarded with the owning turn. Every closed execution-group block consumed
+by a provider request, including controller state, assistant response, native
+provider continuity, and canonical action evidence, MUST persist and replay
+with byte-identical source, label, content, and order. Display-oriented
+transcript rows MAY coexist for audit and resume UX, but MUST NOT create a
+second model-context projection when exact execution-block records are present.
 Once deterministic action evidence settles, it MUST be committed exactly once
 to append-only `ConversationAppend` chronology and any volatile copy MUST be
 removed atomically. A settlement batch containing a running action or blocked

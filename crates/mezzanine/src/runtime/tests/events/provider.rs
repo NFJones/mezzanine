@@ -216,8 +216,28 @@ async fn runtime_routed_presentation_retries_correctable_patch_failure() {
         Some(AgentTurnState::Running)
     );
     let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
-    assert!(context.blocks().iter().any(|block| {
-        block.source == ContextSourceKind::ActionResult && block.content.contains(diagnostic)
+    let canonical_failure = context
+        .blocks()
+        .iter()
+        .find(|block| block.source == ContextSourceKind::ActionResult)
+        .unwrap();
+    assert!(
+        canonical_failure
+            .content
+            .contains("historical_output: omitted")
+    );
+    assert!(!canonical_failure.content.contains(diagnostic));
+    let (prepared, _) = service
+        .prepare_agent_turn_model_context(
+            &turn,
+            context.clone(),
+            &service.mcp_registry().prompt_summary(),
+            &runtime_model_profile("openai", "test"),
+        )
+        .unwrap();
+    assert!(prepared.live_state().iter().any(|block| {
+        block.label == "current action detail malformed-routed-patch"
+            && block.content.contains(diagnostic)
     }));
 
     service.remove_pending_agent_provider_task(&turn.turn_id);
@@ -1509,6 +1529,152 @@ fn runtime_terminal_execution_transcript_persistence_is_idempotent() {
     let _ = std::fs::remove_dir_all(environment_root);
 }
 
+/// Verifies a turn persisted while blocked can append newly settled evidence
+/// and a later execution group without duplicating its original transcript.
+///
+/// Approval and other blocked lifecycles may persist more than once. Exact
+/// execution-block records must therefore use restart-safe delta persistence,
+/// not one turn-wide suppression key that drops later cache-visible history.
+#[test]
+fn runtime_blocked_execution_transcript_persists_later_group_delta() {
+    let mut service = test_runtime_service();
+    let transcript_root = temp_root("runtime-blocked-transcript-delta");
+    let transcript_store = AgentTranscriptStore::new(transcript_root.clone());
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "run two execution groups")
+        .unwrap();
+    service.remove_pending_agent_provider_task(&started.turn_id);
+    let turn = service
+        .agent_turn_ledger()
+        .turn(&started.turn_id)
+        .cloned()
+        .unwrap();
+    let first_group = mez_agent::ContextExecutionGroupId::new("blocked-first-group").unwrap();
+    service
+        .agent_turn_contexts_mut()
+        .get_mut(&turn.turn_id)
+        .unwrap()
+        .append_assistant_event("assistant first group", "first response", first_group)
+        .unwrap();
+    let first_action = mez_agent::AgentAction {
+        id: "first-action".to_string(),
+        rationale: "complete the first action".to_string(),
+        payload: mez_agent::AgentActionPayload::Say {
+            status: mez_agent::SayStatus::Progress,
+            text: "first".to_string(),
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+    };
+    let mut first_execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture(&turn.turn_id),
+        response: mez_agent::ModelResponse {
+            provider: "openai".to_string(),
+            model: "test".to_string(),
+            raw_text: "first response".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Vec::new(),
+            action_batch: None,
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: Vec::new(),
+        final_turn: false,
+        terminal_state: AgentTurnState::Blocked,
+    };
+    let first_count = service
+        .persist_runtime_agent_turn_execution_transcript(&turn, &first_execution)
+        .unwrap();
+    assert!(first_count > 0);
+
+    let first_result = mez_agent::ActionResult::succeeded(
+        &turn,
+        &first_action,
+        vec!["first action settled".to_string()],
+        None,
+    );
+    service
+        .commit_settled_action_results_context(&turn.turn_id, std::slice::from_ref(&first_result))
+        .unwrap();
+    let second_group = mez_agent::ContextExecutionGroupId::new("terminal-second-group").unwrap();
+    service
+        .agent_turn_contexts_mut()
+        .get_mut(&turn.turn_id)
+        .unwrap()
+        .append_assistant_event("assistant second group", "second response", second_group)
+        .unwrap();
+    let second_action = mez_agent::AgentAction {
+        id: "second-action".to_string(),
+        rationale: "complete the second action".to_string(),
+        payload: mez_agent::AgentActionPayload::Say {
+            status: mez_agent::SayStatus::Final,
+            text: "done".to_string(),
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+    };
+    let second_result = mez_agent::ActionResult::succeeded(
+        &turn,
+        &second_action,
+        vec!["second action settled".to_string()],
+        None,
+    );
+    service
+        .commit_settled_action_results_context(&turn.turn_id, std::slice::from_ref(&second_result))
+        .unwrap();
+    first_execution.response.raw_text = "second response".to_string();
+    first_execution.action_results = vec![first_result, second_result];
+    first_execution.final_turn = true;
+    first_execution.terminal_state = AgentTurnState::Completed;
+
+    let delta_count = service
+        .persist_runtime_agent_turn_execution_transcript(&turn, &first_execution)
+        .unwrap();
+    let replay_count = service
+        .persist_runtime_agent_turn_execution_transcript(&turn, &first_execution)
+        .unwrap();
+    let entries = transcript_store.inspect(&turn.conversation_id).unwrap();
+    let exact_blocks = entries
+        .iter()
+        .filter(|entry| {
+            matches!(
+                mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
+                Some(mez_agent::TranscriptContextEvent::ExecutionBlock { .. })
+            )
+        })
+        .count();
+
+    assert!(delta_count > 0);
+    assert_eq!(replay_count, 0);
+    assert_eq!(exact_blocks, 4);
+    let exact_labels = entries
+        .iter()
+        .filter_map(|entry| {
+            match mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content) {
+                Some(mez_agent::TranscriptContextEvent::ExecutionBlock { label, .. }) => {
+                    Some(label)
+                }
+                _ => None,
+            }
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        exact_labels,
+        [
+            "assistant first group",
+            "action result first-action",
+            "assistant second group",
+            "action result second-action",
+        ]
+    );
+    let _ = std::fs::remove_dir_all(transcript_root);
+}
+
 /// Verifies a routed presentation persists exactly one typed handoff summary
 /// before the visible parent answer and rehydrates both on the next turn.
 ///
@@ -1699,15 +1865,18 @@ fn runtime_routed_handoff_summary_persists_once_and_rehydrates_with_parent_answe
             runtime_model_profile("runtime-batch", "test"),
         )
         .unwrap();
-    let event_count = transcript_store
+    let routed_handoff_count = transcript_store
         .inspect(&conversation_id)
         .unwrap()
         .iter()
         .filter(|entry| {
-            mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content).is_some()
+            matches!(
+                mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
+                Some(mez_agent::TranscriptContextEvent::RoutedHandoff { .. })
+            )
         })
         .count();
-    assert_eq!(event_count, 1);
+    assert_eq!(routed_handoff_count, 1);
     let _ = std::fs::remove_dir_all(transcript_root);
 }
 
@@ -2600,13 +2769,31 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
             && block
                 .content
                 .contains("[action_result fetch-ok fetch_url succeeded]")
-            && block.content.contains("provider document body")
+            && block.content.contains("historical_output: omitted")
+            && !block.content.contains("provider document body")
     }));
     assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block
                 .content
                 .contains("[action_result fetch-404 fetch_url failed]")
+            && block.content.contains("historical_output: omitted")
+            && !block.content.contains("network request returned HTTP 404")
+    }));
+    let (prepared, _) = service
+        .prepare_agent_turn_model_context(
+            &turn,
+            context.clone(),
+            &service.mcp_registry().prompt_summary(),
+            &runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    assert!(prepared.live_state().iter().any(|block| {
+        block.label == "current action detail fetch-ok"
+            && block.content.contains("provider document body")
+    }));
+    assert!(prepared.live_state().iter().any(|block| {
+        block.label == "current action detail fetch-404"
             && block.content.contains("network request returned HTTP 404")
     }));
     let history = service

@@ -119,15 +119,16 @@ fn runtime_apply_patch_invalid_params_queues_model_self_correction() {
             .collect::<Vec<_>>(),
         vec![1]
     );
-    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    let durable = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    let context = runtime_prepared_context_for_turn(&service, &turn.turn_id);
     assert!(context.blocks().iter().any(|block| {
-        block.source == ContextSourceKind::ActionResult
+        block.source == ContextSourceKind::ActionDetail
             && block
                 .content
                 .contains("[action_result patch-invalid apply_patch failed]")
             && block.content.contains("Mezzanine patch blocks starting")
     }));
-    assert_no_persisted_failure_feedback(context);
+    assert_no_persisted_failure_feedback(durable);
     let pane_text = service
         .pane_screen("%1")
         .unwrap()
@@ -238,10 +239,11 @@ fn runtime_apply_patch_hunk_mismatch_recovery_preserves_failure_evidence() {
         .unwrap();
 
     assert!(queued);
-    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
-    assert_no_persisted_failure_feedback(context);
+    let durable = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    assert_no_persisted_failure_feedback(durable);
+    let context = runtime_prepared_context_for_turn(&service, &turn.turn_id);
     assert!(context.blocks().iter().any(|block| {
-        block.source == ContextSourceKind::ActionResult
+        block.source == ContextSourceKind::ActionDetail
             && block
                 .content
                 .contains("apply_patch: hunk did not match: src/driver/mod.rs")
@@ -947,10 +949,11 @@ fn runtime_apply_patch_unsafe_path_recovery_preserves_diagnostic() {
             .iter()
             .any(|task| task.turn_id == turn.turn_id)
     );
-    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
-    assert_no_persisted_failure_feedback(context);
+    let durable = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    assert_no_persisted_failure_feedback(durable);
+    let context = runtime_prepared_context_for_turn(&service, &turn.turn_id);
     assert!(context.blocks().iter().any(|block| {
-        block.source == ContextSourceKind::ActionResult
+        block.source == ContextSourceKind::ActionDetail
             && block
                 .content
                 .contains("apply_patch: unsafe patch path: /home/neil/Documents/repos/chimera/src/conf/document.rs")

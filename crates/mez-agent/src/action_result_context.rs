@@ -97,7 +97,7 @@ pub fn action_result_transcript_content(result: &ActionResult) -> String {
     }
     if matches!(
         result.action_type,
-        "shell_command" | "apply_patch" | "mcp_call"
+        "shell_command" | "apply_patch" | "mcp_call" | "web_search" | "fetch_url"
     ) {
         return durable_tool_result_summary(result);
     }

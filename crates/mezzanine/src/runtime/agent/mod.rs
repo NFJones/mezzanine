@@ -504,6 +504,13 @@ pub(crate) struct RuntimeAgentComponent {
     /// live pane state when the retained raw transcript no longer has a
     /// snapshot baseline.
     agent_turn_current_environment_snapshots: BTreeMap<String, String>,
+    /// Expanded action-result context retained only for same-turn reasoning.
+    ///
+    /// Durable chronology receives the bounded canonical transcript projection
+    /// before it first becomes cache eligible. This map supplies any additional
+    /// command or tool output as request-local live state and is cleared with
+    /// the owning turn.
+    agent_turn_action_result_details: BTreeMap<String, BTreeMap<String, String>>,
     /// Interrupted canonical contexts awaiting one pane-local continuation.
     interrupted_agent_continuations: BTreeMap<String, RuntimeInterruptedAgentContinuation>,
     /// Terminal execution transcript groups already accepted for persistence.
@@ -2045,6 +2052,7 @@ impl RuntimeSessionService {
         self.agent.agent_turn_failure_feedback_attempts.clear();
         self.agent.agent_turn_output_limit_recovery_attempts.clear();
         self.agent.agent_turn_interaction_kinds.clear();
+        self.agent.agent_turn_action_result_details.clear();
         self.agent.sandbox_failure_assessments.clear();
         self.agent.sandbox_fallback_audits.clear();
         self.agent.agent_execution_groups_by_turn.clear();

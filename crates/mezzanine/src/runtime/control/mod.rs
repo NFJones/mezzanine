@@ -1549,6 +1549,115 @@ mod tests {
         assert!(context.chronology()[2].provider_owner().is_some());
     }
 
+    /// Verifies typed execution-block records supersede display-oriented rows
+    /// and restore the original cache-visible source, label, content, and order.
+    #[test]
+    fn runtime_transcript_restoration_replays_exact_execution_blocks() {
+        let request_state = TranscriptContextEvent::execution_block(
+            mez_agent::ContextSourceKind::CommittedEvidence,
+            "Mezzanine request state",
+            "generation=1\ninteraction_kind=action_execution\nallowed_actions=say",
+        )
+        .unwrap();
+        let decision = TranscriptContextEvent::execution_block(
+            mez_agent::ContextSourceKind::CommittedEvidence,
+            "controller capability decision",
+            "[capability continuation]\ncontinue with the granted surface",
+        )
+        .unwrap();
+        let assistant = TranscriptContextEvent::execution_block(
+            mez_agent::ContextSourceKind::TranscriptAssistant,
+            "assistant response for turn-1 execution abc123",
+            "rationale: inspect the repository",
+        )
+        .unwrap();
+        let result = TranscriptContextEvent::execution_block(
+            mez_agent::ContextSourceKind::ActionResult,
+            "action result shell-1",
+            "[action_result shell-1 shell_command succeeded]\nhistorical_output: omitted",
+        )
+        .unwrap();
+        let contents = [
+            (TranscriptRole::User, "inspect the repository".to_string()),
+            (
+                TranscriptRole::Assistant,
+                "display-oriented assistant row".to_string(),
+            ),
+            (
+                TranscriptRole::Tool,
+                "[action_result shell-1 shell_command succeeded]".to_string(),
+            ),
+            (
+                TranscriptRole::System,
+                request_state.to_transcript_content(),
+            ),
+            (TranscriptRole::System, decision.to_transcript_content()),
+            (TranscriptRole::System, assistant.to_transcript_content()),
+            (TranscriptRole::System, result.to_transcript_content()),
+        ];
+        let entries = contents
+            .into_iter()
+            .enumerate()
+            .map(|(index, (role, content))| TranscriptEntry {
+                conversation_id: "conv1".to_string(),
+                sequence: u64::try_from(index).unwrap().saturating_add(1),
+                created_at_unix_seconds: 100,
+                role,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-1".to_string(),
+                pane_id: "%1".to_string(),
+                content,
+            })
+            .collect::<Vec<_>>();
+
+        let blocks = runtime_agent_transcript_context_blocks("%1", &entries);
+
+        assert_eq!(blocks.len(), 5, "{blocks:#?}");
+        assert_eq!(
+            blocks[0].source,
+            mez_agent::ContextSourceKind::TranscriptUser
+        );
+        assert_eq!(
+            blocks[1].source,
+            mez_agent::ContextSourceKind::CommittedEvidence
+        );
+        assert_eq!(blocks[1].label, "Mezzanine request state");
+        assert_eq!(
+            blocks[2].source,
+            mez_agent::ContextSourceKind::CommittedEvidence
+        );
+        assert_eq!(blocks[2].label, "controller capability decision");
+        assert_eq!(
+            blocks[3].source,
+            mez_agent::ContextSourceKind::TranscriptAssistant
+        );
+        assert_eq!(
+            blocks[3].label,
+            "assistant response for turn-1 execution abc123"
+        );
+        assert_eq!(blocks[3].content, "rationale: inspect the repository");
+        assert_eq!(blocks[4].source, mez_agent::ContextSourceKind::ActionResult);
+        assert_eq!(blocks[4].label, "action result shell-1");
+        assert_eq!(
+            blocks[4].content,
+            "[action_result shell-1 shell_command succeeded]\nhistorical_output: omitted"
+        );
+        assert!(
+            blocks
+                .iter()
+                .all(|block| { !block.content.contains("display-oriented assistant row") })
+        );
+        let context = AgentContext::import_durable_blocks(blocks).unwrap();
+        context.validate_durable().unwrap();
+        let group = context.chronology()[1].execution_group_id().cloned();
+        assert!(group.is_some());
+        assert!(
+            context.chronology()[1..]
+                .iter()
+                .all(|event| event.execution_group_id() == group.as_ref())
+        );
+    }
+
     /// Verifies a legacy raw-MAAP owner cannot collapse its result into the
     /// preceding canonical assistant execution group.
     ///

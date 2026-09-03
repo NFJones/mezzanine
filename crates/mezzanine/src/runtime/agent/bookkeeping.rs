@@ -51,13 +51,15 @@ impl RuntimeSessionService {
             return Ok(0);
         };
         let persistence_key = (conversation_id.clone(), turn.turn_id.clone());
-        if self
-            .agent
-            .agent_persisted_execution_transcripts
-            .contains(&persistence_key)
-        {
-            return Ok(0);
-        }
+        let mut existing_entries = match store.inspect(&conversation_id) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error),
+        };
+        existing_entries.extend(
+            self.persistence
+                .pending_transcript_entries(&conversation_id),
+        );
         let created_at_unix_seconds = current_unix_seconds().max(1);
         let entries = if self.persistence.transcript_uses_adapter() {
             let first_sequence = self
@@ -73,6 +75,11 @@ impl RuntimeSessionService {
                 turn,
                 execution,
             )?;
+            let entries =
+                Self::new_runtime_transcript_entries(entries, &existing_entries, first_sequence);
+            if entries.is_empty() {
+                return Ok(0);
+            }
             if let Some(next_sequence) =
                 entries.last().map(|entry| entry.sequence.saturating_add(1))
             {
@@ -98,6 +105,11 @@ impl RuntimeSessionService {
                 turn,
                 execution,
             )?;
+            let entries =
+                Self::new_runtime_transcript_entries(entries, &existing_entries, first_sequence);
+            if entries.is_empty() {
+                return Ok(0);
+            }
             store.append_many(&entries)?;
             entries
         };
@@ -116,6 +128,47 @@ impl RuntimeSessionService {
             format!("transcript:{}:{conversation_id}", turn.pane_id),
         )?;
         Ok(entries.len())
+    }
+
+    /// Keeps only transcript records that have not already been stored or
+    /// queued for the same turn, then assigns one contiguous fresh sequence.
+    ///
+    /// A blocked turn can persist before approval and later acquire additional
+    /// execution groups. Content identity makes that later persistence a delta
+    /// while also making exact retries and process-restored writes idempotent.
+    fn new_runtime_transcript_entries(
+        entries: Vec<TranscriptEntry>,
+        existing_entries: &[TranscriptEntry],
+        first_sequence: u64,
+    ) -> Vec<TranscriptEntry> {
+        let mut identities = existing_entries
+            .iter()
+            .map(Self::runtime_transcript_entry_identity)
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut sequence = first_sequence;
+        entries
+            .into_iter()
+            .filter_map(|mut entry| {
+                if !identities.insert(Self::runtime_transcript_entry_identity(&entry)) {
+                    return None;
+                }
+                entry.sequence = sequence;
+                sequence = sequence.saturating_add(1);
+                Some(entry)
+            })
+            .collect()
+    }
+
+    /// Returns the durable identity of one transcript row without volatile
+    /// sequence or timestamp fields.
+    fn runtime_transcript_entry_identity(entry: &TranscriptEntry) -> (String, u8, String) {
+        let role = match entry.role {
+            TranscriptRole::User => 0,
+            TranscriptRole::Assistant => 1,
+            TranscriptRole::Tool => 2,
+            TranscriptRole::System => 3,
+        };
+        (entry.turn_id.clone(), role, entry.content.clone())
     }
 
     /// Persists the originating prompt and available settled observations when
@@ -402,6 +455,12 @@ impl RuntimeSessionService {
             turn,
             execution,
         )?;
+        self.append_exact_execution_block_transcript_events(
+            &mut execution_entries,
+            conversation_id,
+            created_at_unix_seconds,
+            turn,
+        )?;
         if let Some(content) = self
             .agent
             .agent_turn_environment_snapshots
@@ -430,6 +489,62 @@ impl RuntimeSessionService {
         }
         entries.extend(execution_entries);
         Ok(entries)
+    }
+
+    /// Appends exact cache-visible execution blocks after the ordinary display
+    /// transcript projection for one completed turn.
+    fn append_exact_execution_block_transcript_events(
+        &self,
+        entries: &mut Vec<TranscriptEntry>,
+        conversation_id: &str,
+        created_at_unix_seconds: u64,
+        turn: &AgentTurnRecord,
+    ) -> Result<()> {
+        let Some(context) = self.agent_turn_contexts().get(&turn.turn_id) else {
+            return Ok(());
+        };
+        let imported_history_events = self.agent_turn_imported_history_events(&turn.turn_id);
+        let mut sequence = entries
+            .last()
+            .map_or(1, |entry| entry.sequence.saturating_add(1));
+        for block in context
+            .chronology()
+            .iter()
+            .skip(imported_history_events)
+            .map(|event| event.block())
+            .filter(|block| {
+                matches!(
+                    block.source,
+                    ContextSourceKind::CommittedEvidence
+                        | ContextSourceKind::TranscriptAssistant
+                        | ContextSourceKind::TranscriptTool
+                        | ContextSourceKind::ActionResult
+                )
+            })
+        {
+            let event = TranscriptContextEvent::execution_block(
+                block.source,
+                block.label.clone(),
+                block.content.clone(),
+            )
+            .ok_or_else(|| {
+                MezError::invalid_state("turn execution block is empty, oversized, or unsupported")
+            })?;
+            let entry = TranscriptEntry {
+                conversation_id: conversation_id.to_string(),
+                sequence,
+                created_at_unix_seconds,
+                role: TranscriptRole::System,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                pane_id: turn.pane_id.clone(),
+                content: event.to_transcript_content(),
+            };
+            entry.validate()?;
+            entries.push(entry);
+            sequence = sequence.saturating_add(1);
+        }
+        Ok(())
     }
 
     /// Inserts one typed environment snapshot immediately before its user turn.

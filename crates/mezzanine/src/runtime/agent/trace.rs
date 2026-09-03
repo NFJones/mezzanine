@@ -340,6 +340,7 @@ pub(super) fn runtime_context_source_kind_name(source: ContextSourceKind) -> &'s
         ContextSourceKind::CommittedEvidence => "committed_evidence",
         ContextSourceKind::RoutedHandoff => "routed_handoff",
         ContextSourceKind::ActionResult => "action_result",
+        ContextSourceKind::ActionDetail => "action_detail",
     }
 }
 

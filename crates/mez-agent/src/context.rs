@@ -17,7 +17,7 @@ use std::ops::Range;
 use sha2::{Digest, Sha256};
 
 use crate::action_result::ActionResult;
-use crate::action_result_context::action_result_context_content;
+use crate::action_result_context::action_result_transcript_content;
 use crate::mcp::McpPromptTool;
 use crate::surface::{AllowedActionSet, ModelInteractionKind};
 use crate::{AgentPromptError, AgentPromptErrorKind, ProviderTranscriptEvent};
@@ -72,6 +72,8 @@ pub enum ContextSourceKind {
     RoutedHandoff,
     /// A current-turn action result.
     ActionResult,
+    /// Expanded current-turn action output retained only in request-local state.
+    ActionDetail,
 }
 
 /// Trust domain assigned to one model-context block.
@@ -110,7 +112,8 @@ impl TrustDomain {
             | ContextSourceKind::TranscriptTool
             | ContextSourceKind::CommittedEvidence
             | ContextSourceKind::RoutedHandoff
-            | ContextSourceKind::ActionResult => Self::ModelOutput,
+            | ContextSourceKind::ActionResult
+            | ContextSourceKind::ActionDetail => Self::ModelOutput,
         }
     }
 
@@ -712,6 +715,7 @@ impl ContextBlock {
             ContextSourceKind::TranscriptTool
             | ContextSourceKind::CommittedEvidence
             | ContextSourceKind::ActionResult => ContextSemanticKind::EvidenceEvent,
+            ContextSourceKind::ActionDetail => ContextSemanticKind::LiveState,
             ContextSourceKind::SkillInstruction => ContextSemanticKind::TaskPrelude,
             ContextSourceKind::LocalMessage
             | ContextSourceKind::Memory
@@ -758,6 +762,7 @@ impl ContextBlock {
             | ContextSourceKind::TranscriptTool
             | ContextSourceKind::CommittedEvidence
             | ContextSourceKind::ActionResult => ContextRetention::ExecutionGroup,
+            ContextSourceKind::ActionDetail => ContextRetention::RequestLocal,
             ContextSourceKind::Memory
             | ContextSourceKind::Transcript
             | ContextSourceKind::TranscriptUser => ContextRetention::Summarizable,
@@ -1960,7 +1965,7 @@ impl AgentContext {
         let mut committed = 0usize;
         for result in results {
             let label = format!("action result {}", result.action_id);
-            let content = action_result_context_content(result);
+            let content = action_result_transcript_content(result);
             let exact_block = candidate
                 .blocks
                 .iter()
@@ -2107,6 +2112,15 @@ fn compatibility_execution_group_ranges(blocks: &[&ContextBlock]) -> Vec<Range<u
     for (index, block) in blocks.iter().enumerate() {
         let protected = block.retention() == ContextRetention::Exact;
         let attaches_to_previous = match block.source {
+            ContextSourceKind::CommittedEvidence => {
+                !has_assistant
+                    && blocks[start..index]
+                        .iter()
+                        .all(|candidate| candidate.source == ContextSourceKind::CommittedEvidence)
+            }
+            ContextSourceKind::TranscriptAssistant => blocks[start..index]
+                .iter()
+                .all(|candidate| candidate.source == ContextSourceKind::CommittedEvidence),
             ContextSourceKind::TranscriptTool => has_assistant,
             ContextSourceKind::ActionResult => has_assistant || has_native_tool,
             _ => false,

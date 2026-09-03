@@ -747,9 +747,9 @@ async fn runtime_mcp_tool_error_queues_continuation_without_disabling_server() {
         "echo"
     );
     assert_eq!(service.pending_agent_provider_tasks().len(), 1);
-    let context = service.agent_turn_contexts().get("turn-1").unwrap();
+    let context = runtime_prepared_context_for_turn(&service, "turn-1");
     assert!(context.blocks().iter().any(|block| {
-        block.source == ContextSourceKind::ActionResult
+        block.source == ContextSourceKind::ActionDetail
             && block
                 .content
                 .contains("[action_result m1 mcp_call succeeded]")

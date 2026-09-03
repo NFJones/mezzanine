@@ -455,6 +455,95 @@ fn runtime_provider_preparation_does_not_mutate_or_grow_durable_context() {
     );
 }
 
+/// Verifies settled action evidence is canonical before it becomes reusable,
+/// while expanded output remains available only in the same turn's live tail.
+///
+/// Replaying the durable result on a later turn must not replace raw output
+/// with a summary at an earlier cache-prefix position.
+#[test]
+fn runtime_action_results_split_canonical_history_from_same_turn_detail() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "inspect a private file")
+        .unwrap();
+    service.remove_pending_agent_provider_task(&started.turn_id);
+    let turn = service
+        .agent_turn_ledger()
+        .turn(&started.turn_id)
+        .cloned()
+        .unwrap();
+    let group = mez_agent::ContextExecutionGroupId::new("canonical-result-test").unwrap();
+    service
+        .agent_turn_contexts_mut()
+        .get_mut(&turn.turn_id)
+        .unwrap()
+        .append_assistant_event("assistant action", "inspect the file", group)
+        .unwrap();
+    let action = mez_agent::AgentAction {
+        id: "shell-private".to_string(),
+        rationale: "inspect exact content".to_string(),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: "Inspect the file".to_string(),
+            command: "cat private.txt".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    let result = mez_agent::ActionResult::succeeded(
+        &turn,
+        &action,
+        vec!["shell command exited with status 0".to_string()],
+        Some(
+            serde_json::json!({
+                "command": "cat private.txt",
+                "execution_transport": "spawned_shell",
+                "terminal_observation": {
+                    "exit_code": 0,
+                    "combined_output_preview": "same-turn-secret-sentinel"
+                }
+            })
+            .to_string(),
+        ),
+    );
+
+    service
+        .commit_settled_action_results_context(&turn.turn_id, &[result])
+        .unwrap();
+
+    let durable = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    let canonical = durable
+        .blocks()
+        .iter()
+        .find(|block| block.label == "action result shell-private")
+        .unwrap();
+    assert!(canonical.content.contains("historical_output: omitted"));
+    assert!(!canonical.content.contains("same-turn-secret-sentinel"));
+    let (prepared, _) = service
+        .prepare_agent_turn_model_context(
+            &turn,
+            durable.clone(),
+            &service.mcp_registry().prompt_summary(),
+            &runtime_model_profile("openai", "test"),
+        )
+        .unwrap();
+    let detail = prepared
+        .live_state()
+        .iter()
+        .find(|block| block.label == "current action detail shell-private")
+        .unwrap();
+    assert_eq!(detail.source, ContextSourceKind::ActionDetail);
+    assert_eq!(
+        detail.semantic_kind(),
+        mez_agent::ContextSemanticKind::LiveState
+    );
+    assert!(detail.content.contains("same-turn-secret-sentinel"));
+}
+
 /// Verifies ordinary provider preparation emits only the working directory in
 /// its request-local suffix.
 ///

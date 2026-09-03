@@ -1247,10 +1247,7 @@ fn runtime_agent_shell_command_output_keeps_decoded_context() {
     let mut context_text = String::new();
     for _ in 0..900 {
         let _ = service.poll_pane_outputs(8192).unwrap();
-        context_text = service
-            .agent_turn_contexts()
-            .get("turn-1")
-            .unwrap()
+        context_text = runtime_prepared_context_for_turn(&service, "turn-1")
             .blocks()
             .iter()
             .map(|block| block.content.as_str())
@@ -1298,10 +1295,7 @@ fn runtime_agent_shell_command_output_keeps_decoded_context() {
     );
     assert!(!pane_text.contains("MEZ_MARKER_TOKEN"), "{pane_text}");
     assert!(!pane_text.contains("unset MEZ_MARKER_TOKEN"), "{pane_text}");
-    let context_text = service
-        .agent_turn_contexts()
-        .get("turn-1")
-        .unwrap()
+    let context_text = runtime_prepared_context_for_turn(&service, "turn-1")
         .blocks()
         .iter()
         .map(|block| block.content.as_str())
@@ -1415,10 +1409,7 @@ fn runtime_agent_shell_command_without_output_keeps_mez_framing_out_of_logs() {
     assert!(!pane_text.contains("MEZ_STATUS"), "{pane_text}");
     assert!(!pane_text.contains("MEZ_COMMAND_"), "{pane_text}");
     assert!(!pane_text.contains("unset MEZ_MARKER_TOKEN"), "{pane_text}");
-    let context_text = service
-        .agent_turn_contexts()
-        .get("turn-1")
-        .unwrap()
+    let context_text = runtime_prepared_context_for_turn(&service, "turn-1")
         .blocks()
         .iter()
         .map(|block| block.content.as_str())
@@ -1919,8 +1910,8 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
             .agent_failure_feedback_attempts_for_tests()
             .is_empty()
     );
-    let context = service.agent_turn_contexts().get("turn-1").unwrap();
-    assert!(context.blocks().iter().any(|block| {
+    let durable = service.agent_turn_contexts().get("turn-1").unwrap();
+    assert!(durable.blocks().iter().any(|block| {
         block.source == ContextSourceKind::TranscriptAssistant
             && block.content.contains("failing shell")
             && block
@@ -1930,15 +1921,16 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
                 .content
                 .contains("action rationale shell-fail (shell_command): exercise failure feedback")
     }));
+    let context = runtime_prepared_context_for_turn(&service, "turn-1");
     assert!(context.blocks().iter().any(|block| {
-        block.source == ContextSourceKind::ActionResult
+        block.source == ContextSourceKind::ActionDetail
             && block
                 .content
                 .contains("[action_result shell-fail shell_command succeeded]")
             && block.content.contains("exit_code: 2")
             && block.content.contains("model-visible failure output")
     }));
-    assert!(!context.blocks().iter().any(|block| {
+    assert!(!durable.blocks().iter().any(|block| {
         block.source == ContextSourceKind::RuntimeHint
             && block.content.contains("action failure feedback")
     }));
@@ -1971,7 +1963,7 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
                 .contains("[action_result shell-fail shell_command succeeded]")
     }));
     assert!(request.messages.iter().any(|message| {
-        message.source == ContextSourceKind::ActionResult
+        message.source == ContextSourceKind::ActionDetail
             && message
                 .content
                 .contains("[action_result shell-next shell_command succeeded]")
@@ -2077,9 +2069,9 @@ fn runtime_shell_action_timeout_queues_model_self_correction() {
             .iter()
             .any(|task| task.turn_id == turn.turn_id)
     );
-    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    let context = runtime_prepared_context_for_turn(&service, &turn.turn_id);
     assert!(context.blocks().iter().any(|block| {
-        block.source == ContextSourceKind::ActionResult
+        block.source == ContextSourceKind::ActionDetail
             && block
                 .content
                 .contains("[action_result patch-timeout apply_patch timed_out]")

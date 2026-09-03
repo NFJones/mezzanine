@@ -767,6 +767,37 @@ fn runtime_model_profile(provider: &str, model: &str) -> ModelProfile {
     }
 }
 
+/// Builds the complete provider-bound context for one active runtime test turn.
+///
+/// Durable chronology remains cache eligible while expanded action output is
+/// added only through the request-local suffix. Tests that verify what the
+/// next model call can observe must inspect this prepared projection rather
+/// than the durable context alone.
+fn runtime_prepared_context_for_turn(
+    service: &RuntimeSessionService,
+    turn_id: &str,
+) -> mez_agent::AgentContext {
+    let turn = service
+        .agent_turn_ledger()
+        .turn(turn_id)
+        .cloned()
+        .expect("runtime test turn should exist");
+    let durable = service
+        .agent_turn_contexts()
+        .get(turn_id)
+        .cloned()
+        .expect("runtime test turn context should exist");
+    let (prepared, _) = service
+        .prepare_agent_turn_model_context(
+            &turn,
+            durable,
+            &service.mcp_registry().prompt_summary(),
+            &runtime_model_profile("runtime-batch", "test"),
+        )
+        .expect("runtime test provider context should prepare");
+    prepared.to_agent_context()
+}
+
 impl ModelProvider for RuntimeBatchProvider {
     /// Runs the provider id operation for this subsystem.
     ///

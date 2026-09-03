@@ -615,6 +615,7 @@ fn runtime_context_source_name(source: ContextSourceKind) -> &'static str {
         ContextSourceKind::CommittedEvidence => "committed-evidence",
         ContextSourceKind::RoutedHandoff => "routed-handoff",
         ContextSourceKind::ActionResult => "action-result",
+        ContextSourceKind::ActionDetail => "action-detail",
     }
 }
 

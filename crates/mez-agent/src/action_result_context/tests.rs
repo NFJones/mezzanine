@@ -317,10 +317,17 @@ fn durable_tool_transcripts_omit_shell_and_mcp_bodies() {
         vec!["mcp-secret-sentinel".to_string()],
         Some(r#"{"result":"mcp-secret-sentinel"}"#.to_string()),
     );
+    let fetch = succeeded_result(
+        "fetch-1",
+        "fetch_url",
+        vec!["web-secret-sentinel".to_string()],
+        Some(r#"{"content":"web-secret-sentinel"}"#.to_string()),
+    );
 
     let live_shell = action_result_context_content(&shell);
     let durable_shell = action_result_transcript_content(&shell);
     let durable_mcp = action_result_transcript_content(&mcp);
+    let durable_fetch = action_result_transcript_content(&fetch);
 
     assert!(live_shell.contains("shell-secret-sentinel"));
     assert!(!durable_shell.contains("shell-secret-sentinel"));
@@ -329,6 +336,8 @@ fn durable_tool_transcripts_omit_shell_and_mcp_bodies() {
     assert!(durable_shell.contains("historical_output: omitted"));
     assert!(!durable_mcp.contains("mcp-secret-sentinel"));
     assert!(durable_mcp.contains("[action_result mcp-1 mcp_call succeeded]"));
+    assert!(!durable_fetch.contains("web-secret-sentinel"));
+    assert!(durable_fetch.contains("[action_result fetch-1 fetch_url succeeded]"));
 }
 
 #[test]

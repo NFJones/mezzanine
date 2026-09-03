@@ -66,6 +66,12 @@ fn runtime_resume_directory_from_summary(summary: &ConversationSummary) -> Optio
 /// # Parameters
 /// - `content`: The saved system transcript entry body.
 fn runtime_resume_system_display_content(content: &str) -> String {
+    if matches!(
+        mez_agent::TranscriptContextEvent::from_transcript_content(content),
+        Some(mez_agent::TranscriptContextEvent::ExecutionBlock { .. })
+    ) {
+        return String::new();
+    }
     let entry = TranscriptEntry {
         conversation_id: "resume-display".to_string(),
         sequence: 1,

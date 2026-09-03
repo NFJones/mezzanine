@@ -7,6 +7,7 @@
 
 use super::super::{ContextBlock, ContextSourceKind, Envelope, TranscriptEntry, TranscriptRole};
 use mez_agent::{ProviderTranscriptEvent, TranscriptContextEvent};
+use std::collections::BTreeSet;
 
 const AGENT_LOCAL_MESSAGE_CONTEXT_PAYLOAD_CHARS: usize = 256 * 1024;
 const AGENT_TRANSCRIPT_TOOL_CONTEXT_LIMIT_BYTES: usize = 256 * 1024;
@@ -19,7 +20,33 @@ pub(super) fn runtime_agent_transcript_context_blocks(
     entries: &[TranscriptEntry],
 ) -> Vec<ContextBlock> {
     let mut blocks = Vec::new();
+    let exact_execution_turns = entries
+        .iter()
+        .filter_map(|entry| {
+            (entry.role == TranscriptRole::System
+                && matches!(
+                    TranscriptContextEvent::from_transcript_content(&entry.content),
+                    Some(TranscriptContextEvent::ExecutionBlock { .. })
+                ))
+            .then_some(entry.turn_id.as_str())
+        })
+        .collect::<BTreeSet<_>>();
     for entry in entries {
+        if entry.role == TranscriptRole::System
+            && let Some(TranscriptContextEvent::ExecutionBlock {
+                source,
+                label,
+                content,
+            }) = TranscriptContextEvent::from_transcript_content(&entry.content)
+        {
+            blocks.push(ContextBlock {
+                source,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label,
+                content,
+            });
+            continue;
+        }
         if entry.role == TranscriptRole::System
             && let Some(TranscriptContextEvent::EnvironmentSnapshot { content, .. }) =
                 TranscriptContextEvent::from_transcript_content(&entry.content)
@@ -64,6 +91,13 @@ pub(super) fn runtime_agent_transcript_context_blocks(
                     "The prior turn was interrupted before completion. Continue or redirect that work using its original user intent:\n{prompt}\n\nreason={reason}\nobserved action state:\n{evidence}"
                 ),
             });
+            continue;
+        }
+        if exact_execution_turns.contains(entry.turn_id.as_str())
+            && (matches!(entry.role, TranscriptRole::Assistant | TranscriptRole::Tool)
+                || entry.role == TranscriptRole::System
+                    && ProviderTranscriptEvent::from_transcript_content(&entry.content).is_some())
+        {
             continue;
         }
         let Some(content) = runtime_transcript_entry_context_content(entry) else {
