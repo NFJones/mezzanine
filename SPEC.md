@@ -4592,7 +4592,7 @@ OpenAI request diagnostics SHOULD record non-model-visible fingerprints for the
 front-loaded instructions, response-format schema, tool schema, stable input
 prefix, volatile input suffix, and complete observable cacheable prefix so cache
 misses can be diagnosed without inserting diagnostic text into model context.
-For ordinary requests in one turn and cache epoch, the complete rendered input
+For ordinary requests in one conversation and cache epoch, the complete rendered input
 sent by each prior request MUST be a byte-identical prefix of the next request.
 Request-local model-visible state that was already sent MUST remain in that
 wire sequence; changed live state MUST append a superseding item rather than

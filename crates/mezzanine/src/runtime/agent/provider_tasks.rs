@@ -1614,9 +1614,7 @@ impl RuntimeSessionService {
             .map(|(_, request_bytes, _)| *request_bytes);
         let openai_request_stream = openai_request_shape.as_ref().map(|(_, _, stream)| *stream);
         if retain_request_chain && let Some((request, _, _)) = openai_request_shape {
-            self.agent
-                .agent_turn_provider_request_chains
-                .insert(turn.turn_id.clone(), request);
+            self.retain_agent_provider_request_chain(turn, request);
         }
         self.agent.claimed_agent_provider_tasks.insert(
             turn.turn_id.clone(),

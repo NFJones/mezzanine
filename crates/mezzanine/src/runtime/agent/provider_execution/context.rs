@@ -261,9 +261,7 @@ impl RuntimeSessionService {
         }
         self.agent_turn_contexts_mut()
             .insert(turn.turn_id.clone(), context);
-        self.agent
-            .agent_turn_provider_request_chains
-            .insert(turn.turn_id.clone(), execution.request.clone());
+        self.retain_agent_provider_request_chain(turn, execution.request.clone());
         let groups = self
             .agent
             .agent_execution_groups_by_turn

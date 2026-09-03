@@ -226,9 +226,7 @@ impl RuntimeSessionService {
         self.integration
             .pending_program_hook_continuations_mut()
             .retain(|continuation| continuation.turn_id != turn_id);
-        self.agent
-            .agent_turn_provider_request_chains
-            .remove(turn_id);
+        self.remove_agent_turn_provider_request_chain(turn_id);
         self.agent
             .agent_turn_configured_input_compaction_passes
             .remove(turn_id);

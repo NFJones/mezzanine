@@ -688,6 +688,134 @@ fn runtime_project_guidance_refresh_defers_changes_during_active_cache_epoch() {
     );
 }
 
+/// Verifies terminal turn cleanup preserves the exact OpenAI wire chain for
+/// the next ordinary request in the same conversation and cache epoch.
+///
+/// The first request includes request-local live state that is absent from the
+/// second request. Its complete rendered input must remain a byte-identical
+/// prefix, followed by new chronology and an explicit live-state transition.
+#[test]
+fn runtime_openai_request_chain_survives_completed_turn_boundary() {
+    let mut service = test_runtime_service();
+    let session = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .clone();
+    let first_turn = mez_agent::AgentTurnRecord {
+        turn_id: "turn-cache-first".to_string(),
+        conversation_id: session.session_id.clone(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 200,
+        deadline_at_unix_millis: 0,
+        policy_profile: "default".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        cooperation_mode: None,
+        state: mez_agent::AgentTurnState::Running,
+        initial_capability: None,
+    };
+    service.start_agent_turn(first_turn.clone()).unwrap();
+
+    let mut first_request = runtime_model_request_fixture(&first_turn.turn_id);
+    first_request.provider = "openai".to_string();
+    first_request.model = "gpt-test".to_string();
+    first_request.prompt_cache_lineage_id = Some(session.prompt_cache_lineage_id.clone());
+    first_request.messages.push(mez_agent::ModelMessage {
+        role: mez_agent::ModelMessageRole::Context,
+        source: ContextSourceKind::RuntimeHint,
+        placement: mez_agent::ContextPlacement::EphemeralTail,
+        content: "state=first-turn-live".to_string(),
+    });
+    mez_agent::append_request_state_transition(&mut first_request);
+    mez_agent::prepare_openai_request_prefix_extension(&mut first_request, None).unwrap();
+    service.retain_agent_provider_request_chain(&first_turn, first_request.clone());
+    let mut exceptional_request = first_request.clone();
+    exceptional_request.interaction_kind = mez_agent::ModelInteractionKind::MaapRepair;
+    service.retain_agent_provider_request_chain(&first_turn, exceptional_request);
+    let first_body: serde_json::Value =
+        serde_json::from_str(&mez_agent::openai_responses_request_body(&first_request).unwrap())
+            .unwrap();
+    service
+        .finish_agent_turn(
+            "%1",
+            &first_turn.turn_id,
+            mez_agent::AgentTurnState::Completed,
+        )
+        .unwrap();
+
+    let second_turn = mez_agent::AgentTurnRecord {
+        turn_id: "turn-cache-second".to_string(),
+        ..first_turn
+    };
+    let context = mez_agent::AgentContext::new(vec![mez_agent::ContextBlock::user_event(
+        "user prompt",
+        "continue cache inspection",
+    )])
+    .unwrap()
+    .with_metadata(mez_agent::ModelContextMetadata::new(
+        Some(session.session_id),
+        Some(session.prompt_cache_lineage_id),
+    ));
+    let (prepared, _) = service
+        .prepare_agent_turn_model_context(
+            &second_turn,
+            context,
+            &service.mcp_registry().prompt_summary(),
+            &runtime_model_profile("openai", "gpt-test"),
+        )
+        .unwrap();
+    let previous = prepared
+        .previous_request()
+        .expect("completed turn should retain its conversation-scoped request");
+    assert_eq!(previous, &first_request);
+
+    let mut second_request = first_request.clone();
+    second_request.turn_id = second_turn.turn_id;
+    second_request
+        .messages
+        .retain(|message| message.placement != mez_agent::ContextPlacement::EphemeralTail);
+    second_request.messages.push(mez_agent::ModelMessage {
+        role: mez_agent::ModelMessageRole::Assistant,
+        source: ContextSourceKind::TranscriptAssistant,
+        placement: mez_agent::ContextPlacement::ConversationAppend,
+        content: "first turn completed".to_string(),
+    });
+    second_request.messages.push(mez_agent::ModelMessage {
+        role: mez_agent::ModelMessageRole::User,
+        source: ContextSourceKind::UserInstruction,
+        placement: mez_agent::ContextPlacement::ConversationAppend,
+        content: "continue cache inspection".to_string(),
+    });
+    mez_agent::prepare_openai_request_prefix_extension(&mut second_request, Some(previous))
+        .unwrap();
+    let second_body: serde_json::Value =
+        serde_json::from_str(&mez_agent::openai_responses_request_body(&second_request).unwrap())
+            .unwrap();
+    let first_input = first_body["input"].as_array().unwrap();
+    let second_input = second_body["input"].as_array().unwrap();
+
+    assert_eq!(first_input, &second_input[..first_input.len()]);
+    assert!(second_input.len() > first_input.len());
+    assert!(second_input.iter().any(|message| {
+        message["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("[Mezzanine live state transition]"))
+    }));
+    let first_diagnostics =
+        mez_agent::openai_prompt_cache_diagnostics_for_request(&first_request).unwrap();
+    let second_diagnostics =
+        mez_agent::openai_prompt_cache_diagnostics_for_request(&second_request).unwrap();
+    let continuity = mez_agent::compare_openai_request_continuity(
+        &first_diagnostics.continuity_snapshot,
+        &second_diagnostics.continuity_snapshot,
+    );
+    assert!(continuity.messages_append_only, "{continuity:#?}");
+    assert_eq!(continuity.common_message_prefix, first_input.len());
+}
+
 /// Prepares one synthetic provider request from prompt chronology without
 /// starting a scheduler-owned turn.
 fn prepared_context_for_prompt(

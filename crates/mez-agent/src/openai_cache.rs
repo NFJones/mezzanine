@@ -121,8 +121,9 @@ pub fn prepare_openai_request_prefix_extension_with_context(
     effective.extend_from_slice(&canonical.stable_input[previous_canonical.stable_input.len()..]);
     if canonical.volatile_input != previous_canonical.volatile_input {
         if canonical.volatile_input.len() < previous_canonical.volatile_input.len() {
-            return Err(ProviderRequestAssemblyError::invalid_state(
-                "OpenAI request chain removed canonical volatile input without superseding state",
+            effective.push(openai_removed_live_state_transition(
+                previous_canonical.volatile_input.len(),
+                canonical.volatile_input.len(),
             ));
         }
         effective.extend(
@@ -140,6 +141,23 @@ pub fn prepare_openai_request_prefix_extension_with_context(
         .messages
         .set_openai_input_chain(openai_input_chain(effective, cache_namespace, stream));
     Ok(())
+}
+
+/// Builds an append-only transition when the latest live-state snapshot omits
+/// provider-visible items that appeared in the prior request.
+fn openai_removed_live_state_transition(
+    previous_items: usize,
+    current_items: usize,
+) -> serde_json::Value {
+    serde_json::json!({
+        "role": "developer",
+        "content": [{
+            "type": "input_text",
+            "text": format!(
+                "[Mezzanine live state transition]\nPrior request-local live state is historical. Items omitted from the current snapshot are no longer active.\nprevious_items={previous_items}\ncurrent_items={current_items}"
+            )
+        }]
+    })
 }
 
 /// Returns whether two requests belong to one ordinary OpenAI cache epoch.
@@ -450,9 +468,17 @@ mod tests {
         assert_eq!(changed_tail_input.len(), first_input.len() + 1);
 
         let mut removed_tail = request_chain_fixture(messages[..2].to_vec());
-        let error =
-            prepare_openai_request_prefix_extension(&mut removed_tail, Some(&first)).unwrap_err();
-        assert!(error.message().contains("without superseding state"));
+        prepare_openai_request_prefix_extension(&mut removed_tail, Some(&first)).unwrap();
+        let removed_tail_body: serde_json::Value =
+            serde_json::from_str(&crate::openai_responses_request_body(&removed_tail).unwrap())
+                .unwrap();
+        let removed_tail_input = removed_tail_body["input"].as_array().unwrap();
+        assert_eq!(first_input, &removed_tail_input[..first_input.len()]);
+        assert!(removed_tail_input.iter().any(|message| {
+            message["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("[Mezzanine live state transition]"))
+        }));
 
         let mut changed_instructions = request_chain_fixture(messages);
         changed_instructions.messages = vec![

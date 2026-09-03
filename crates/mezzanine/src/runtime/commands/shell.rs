@@ -379,6 +379,14 @@ impl RuntimeSessionService {
             ));
         }
         let slash_invocation = parse_slash_command(input).ok().flatten();
+        let replaced_conversation_id = slash_invocation
+            .as_ref()
+            .filter(|invocation| matches!(invocation.name.as_str(), "new" | "clear"))
+            .and_then(|_| {
+                self.agent_shell_store()
+                    .get(&pane_id)
+                    .map(|session| session.session_id.clone())
+            });
         if slash_invocation
             .as_ref()
             .is_some_and(|invocation| invocation.name == "list-mcp")
@@ -906,6 +914,9 @@ impl RuntimeSessionService {
         if let Some(AgentShellCommandOutcome::Mutated { command, .. }) = outcome.as_ref()
             && matches!(command.as_str(), "new" | "clear")
         {
+            if let Some(conversation_id) = replaced_conversation_id.as_deref() {
+                self.clear_agent_conversation_provider_request_chain(conversation_id);
+            }
             self.clear_agent_modified_files(&pane_id);
             self.reload_agent_prompt_history_for_pane(&pane_id)?;
         }

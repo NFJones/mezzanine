@@ -30,6 +30,26 @@ fn runtime_agent_shell_new_command_starts_fresh_conversation() {
         .unwrap()
         .session_id
         .clone();
+    let retained_turn = AgentTurnRecord {
+        turn_id: "turn-retained-cache-chain".to_string(),
+        conversation_id: old_session.clone(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 1,
+        deadline_at_unix_millis: 0,
+        policy_profile: "default".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        cooperation_mode: None,
+        state: AgentTurnState::Completed,
+        initial_capability: None,
+    };
+    service.retain_agent_provider_request_chain(
+        &retained_turn,
+        runtime_model_request_fixture(&retained_turn.turn_id),
+    );
+    assert!(service.agent_conversation_has_provider_request_chain_for_tests(&old_session));
 
     let response = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"agent-new","method":"agent/shell/command","params":{"idempotency_key":"agent-new","input":"/new"}}"#,
@@ -45,6 +65,7 @@ fn runtime_agent_shell_new_command_starts_fresh_conversation() {
     assert_ne!(session.session_id, old_session);
     assert_eq!(session.transcript_entries, 0);
     assert_eq!(session.visibility, AgentShellVisibility::Visible);
+    assert!(!service.agent_conversation_has_provider_request_chain_for_tests(&old_session));
 }
 
 /// Verifies default `/loop` reuses the current pane conversation for the first

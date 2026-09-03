@@ -162,6 +162,12 @@ impl RuntimeSessionService {
                         self.agent_turn_executions()
                             .get(&turn.turn_id)
                             .map(|execution| execution.request.clone())
+                    })
+                    .or_else(|| {
+                        self.agent
+                            .agent_conversation_provider_request_chains
+                            .get(&turn.conversation_id)
+                            .cloned()
                     }),
             ),
             available_mcp_tools,

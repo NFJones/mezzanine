@@ -204,6 +204,9 @@ use presentation::{
     runtime_agent_execution_prompt_display_lines, runtime_agent_provider_context_usage_display,
 };
 
+/// Maximum conversation-scoped provider request chains retained in memory.
+const AGENT_PROVIDER_REQUEST_CHAIN_LIMIT: usize = 4096;
+
 /// Owns application-side agent execution state and lifecycle invariants.
 ///
 /// The component begins with visible agent-subshell lifecycle state and grows
@@ -339,6 +342,13 @@ pub(crate) struct RuntimeAgentComponent {
     /// across worker failures and later action continuations. Other providers
     /// may be retained here without changing their request behavior.
     agent_turn_provider_request_chains: BTreeMap<String, mez_agent::ModelRequest>,
+    /// Last ordinary provider request retained for each active conversation.
+    ///
+    /// OpenAI uses this bounded ledger to preserve the exact wire prefix when
+    /// a completed turn is followed by another turn in the same cache epoch.
+    /// Provider preparation still validates the complete epoch identity before
+    /// extending a retained request.
+    agent_conversation_provider_request_chains: BTreeMap<String, mez_agent::ModelRequest>,
     /// Configured profile identities retained separately from display labels.
     agent_turn_configured_model_profiles: BTreeMap<String, String>,
     /// Number of proactive configured-input-limit compaction passes per turn.
@@ -1988,20 +1998,80 @@ impl RuntimeSessionService {
         self.agent.agent_turn_model_profiles.remove(turn_id)
     }
 
-    /// Clears the exact provider request retained for one active turn.
+    /// Retains one exact provider request for active-turn and conversation use.
+    pub(crate) fn retain_agent_provider_request_chain(
+        &mut self,
+        turn: &AgentTurnRecord,
+        request: mez_agent::ModelRequest,
+    ) {
+        if request
+            .interaction_kind
+            .expected_cache_break_reason()
+            .is_some()
+        {
+            return;
+        }
+        self.agent
+            .agent_turn_provider_request_chains
+            .insert(turn.turn_id.clone(), request.clone());
+        self.agent
+            .agent_conversation_provider_request_chains
+            .insert(turn.conversation_id.clone(), request);
+        while self.agent.agent_conversation_provider_request_chains.len()
+            > AGENT_PROVIDER_REQUEST_CHAIN_LIMIT
+        {
+            let _ = self
+                .agent
+                .agent_conversation_provider_request_chains
+                .pop_first();
+        }
+    }
+
+    /// Removes only the active-turn alias for a retained provider request.
+    pub(crate) fn remove_agent_turn_provider_request_chain(&mut self, turn_id: &str) {
+        self.agent
+            .agent_turn_provider_request_chains
+            .remove(turn_id);
+    }
+
+    /// Removes the exact provider request retained for one replaced conversation.
+    pub(crate) fn clear_agent_conversation_provider_request_chain(
+        &mut self,
+        conversation_id: &str,
+    ) {
+        self.agent
+            .agent_conversation_provider_request_chains
+            .remove(conversation_id);
+    }
+
+    /// Clears the exact provider request retained for one cache epoch.
     ///
     /// Compaction starts a new cache epoch, so its replacement context must not
     /// extend the pre-compaction OpenAI wire sequence.
     pub(crate) fn clear_agent_turn_provider_request_chain(&mut self, turn_id: &str) {
+        let conversation_id = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == turn_id)
+            .map(|turn| turn.conversation_id.clone());
         self.agent
             .agent_turn_provider_request_chains
             .remove(turn_id);
+        if let Some(conversation_id) = conversation_id {
+            self.agent
+                .agent_conversation_provider_request_chains
+                .remove(&conversation_id);
+        }
     }
 
     /// Clears all retained turn model profiles for session replacement.
     pub(crate) fn clear_agent_turn_model_profiles(&mut self) {
         self.agent.agent_turn_model_profiles.clear();
         self.agent.agent_turn_provider_request_chains.clear();
+        self.agent
+            .agent_conversation_provider_request_chains
+            .clear();
         self.agent.agent_turn_configured_model_profiles.clear();
         self.agent.agent_turn_routing_applied.clear();
     }
@@ -2864,6 +2934,16 @@ impl RuntimeSessionService {
         &self,
     ) -> &BTreeMap<String, AgentNetworkActionHistory> {
         &self.agent.agent_turn_network_action_history
+    }
+
+    /// Returns whether one conversation retains a provider request baseline.
+    pub(crate) fn agent_conversation_has_provider_request_chain_for_tests(
+        &self,
+        conversation_id: &str,
+    ) -> bool {
+        self.agent
+            .agent_conversation_provider_request_chains
+            .contains_key(conversation_id)
     }
 
     /// Returns loop-owned turn metadata for integration-test observation.
