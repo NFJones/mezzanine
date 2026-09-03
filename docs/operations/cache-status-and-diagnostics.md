@@ -39,14 +39,22 @@ provider cache decision.
 
 `Provider wire prefix` compares the complete ordered OpenAI input sent on the
 wire, together with cache-affecting request-envelope components. Ordinary
-within-turn continuations retain every previously sent input item byte-for-byte
-and append newly settled chronology or superseding live state after it.
+requests in one conversation and cache epoch retain every previously sent input
+item byte-for-byte and append newly settled chronology or superseding live state
+after it. The reported `input_bytes` is the canonical serialized size of the
+effective input array actually sent. `common_bytes` is the corresponding size
+of the identical leading item array, while `envelope_unchanged` confirms that
+instructions, response format, tools, tool choice, cache key, and request
+controls did not change. `append_only=true` requires both conditions.
 Pane environment facts are frozen as typed prompt-boundary snapshots: an
 unchanged environment adds no message, while a changed or unavailable
 environment appends a new snapshot without rewriting the prior prefix.
 Ordinary requests therefore do not repeat the frozen working directory in the
-volatile suffix. A non-empty volatile byte count should come from an explicitly
-request-local producer such as selected MCP metadata or recovery guidance.
+volatile suffix. `logical_stable_bytes` and `logical_volatile_bytes` describe
+the latest source-level partition only; they are not provider wire-prefix sizes
+and need not grow monotonically. A non-empty logical volatile byte count should
+come from an explicitly request-local producer such as selected MCP metadata or
+recovery guidance.
 
 `action_result_bytes` reports exact durable action-result content in the
 observed request. Those bytes are cold when first appended, then remain in the

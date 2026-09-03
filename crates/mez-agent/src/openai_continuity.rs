@@ -25,6 +25,10 @@ pub struct OpenAiRequestContinuitySnapshot {
     pub request_bytes: usize,
     /// SHA-256 of all provider-visible cache-affecting request material.
     pub request_sha256: String,
+    /// Canonical serialized byte count of the effective OpenAI `input` array.
+    pub input_bytes: usize,
+    /// Number of items in the effective OpenAI `input` array.
+    pub input_items: usize,
     /// SHA-256 of the front-loaded instructions.
     pub instructions_sha256: String,
     /// SHA-256 of the response format.
@@ -50,12 +54,22 @@ pub struct OpenAiRequestContinuity {
     pub category: String,
     /// First divergent provider input message index, when message content diverged.
     pub message_index: Option<usize>,
+    /// Effective input bytes in the preceding comparable request.
+    pub previous_input_bytes: usize,
+    /// Effective input bytes in the current request.
+    pub current_input_bytes: usize,
     /// Number of identical ordered input messages at the front.
     pub common_message_prefix: usize,
+    /// Canonical serialized item bytes shared at the front of both inputs.
+    pub common_message_prefix_bytes: usize,
     /// Number of identical diagnostic components before the first divergence.
     pub common_component_prefix: usize,
+    /// Whether every cache-affecting request-envelope component is unchanged.
+    pub cache_envelope_unchanged: bool,
     /// Whether the current input messages only append to the previous sequence.
     pub messages_append_only: bool,
+    /// Whether the complete provider cache prefix extends without a rewrite.
+    pub request_prefix_append_only: bool,
     /// Number of identical cache-eligible input messages at the front.
     pub common_stable_message_prefix: usize,
     /// Whether cache-eligible input only appended after the previous prefix.
@@ -75,6 +89,14 @@ pub fn compare_openai_request_continuity(
         .count();
     let messages_append_only = common_message_prefix == previous.messages.len()
         && current.messages.len() >= previous.messages.len();
+    let common_message_prefix_bytes = previous
+        .messages
+        .iter()
+        .take(common_message_prefix)
+        .map(|message| message.bytes)
+        .sum::<usize>()
+        .saturating_add(2)
+        .saturating_add(common_message_prefix.saturating_sub(1));
     let common_stable_message_prefix = previous
         .stable_messages
         .iter()
@@ -104,6 +126,8 @@ pub fn compare_openai_request_continuity(
     .into_iter()
     .take_while(|(previous, current)| previous == current)
     .count();
+    let cache_envelope_unchanged = common_component_prefix == 6;
+    let request_prefix_append_only = cache_envelope_unchanged && messages_append_only;
     let (category, message_index) = if previous.instructions_sha256 != current.instructions_sha256 {
         ("instructions", None)
     } else if previous.response_format_sha256 != current.response_format_sha256 {
@@ -124,9 +148,14 @@ pub fn compare_openai_request_continuity(
     OpenAiRequestContinuity {
         category: category.to_string(),
         message_index,
+        previous_input_bytes: previous.input_bytes,
+        current_input_bytes: current.input_bytes,
         common_message_prefix,
+        common_message_prefix_bytes,
         common_component_prefix,
+        cache_envelope_unchanged,
         messages_append_only,
+        request_prefix_append_only,
         common_stable_message_prefix,
         stable_messages_append_only,
     }
@@ -149,6 +178,8 @@ mod tests {
             |instructions: &str, tools: &str, messages: &[&str]| OpenAiRequestContinuitySnapshot {
                 request_bytes: 128,
                 request_sha256: "request".to_string(),
+                input_bytes: messages.iter().map(|message| message.len()).sum(),
+                input_items: messages.len(),
                 instructions_sha256: instructions.to_string(),
                 response_format_sha256: "format".to_string(),
                 tools_sha256: tools.to_string(),
@@ -187,9 +218,14 @@ mod tests {
             OpenAiRequestContinuity {
                 category: "messages".to_string(),
                 message_index: Some(1),
+                previous_input_bytes: 9,
+                current_input_bytes: 18,
                 common_message_prefix: 1,
+                common_message_prefix_bytes: 11,
                 common_component_prefix: 6,
+                cache_envelope_unchanged: true,
                 messages_append_only: true,
+                request_prefix_append_only: true,
                 common_stable_message_prefix: 1,
                 stable_messages_append_only: true,
             }
@@ -199,9 +235,14 @@ mod tests {
             OpenAiRequestContinuity {
                 category: "messages".to_string(),
                 message_index: Some(0),
+                previous_input_bytes: 9,
+                current_input_bytes: 9,
                 common_message_prefix: 0,
+                common_message_prefix_bytes: 2,
                 common_component_prefix: 6,
+                cache_envelope_unchanged: true,
                 messages_append_only: false,
+                request_prefix_append_only: false,
                 common_stable_message_prefix: 0,
                 stable_messages_append_only: false,
             }
@@ -209,6 +250,9 @@ mod tests {
         assert_eq!(
             compare_openai_request_continuity(&initial, &changed_tools).category,
             "tools"
+        );
+        assert!(
+            !compare_openai_request_continuity(&initial, &changed_tools).request_prefix_append_only
         );
         assert_eq!(
             compare_openai_request_continuity(&initial, &changed_instructions).category,

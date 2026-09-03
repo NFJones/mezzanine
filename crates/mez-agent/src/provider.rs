@@ -255,6 +255,10 @@ impl std::error::Error for ProviderRequestAssemblyError {}
 pub struct OpenAiPromptCacheDiagnostics {
     /// Stable routing key sent to the OpenAI Responses API.
     pub prompt_cache_key: String,
+    /// Canonical serialized bytes in the effective OpenAI `input` array.
+    pub effective_input_bytes: usize,
+    /// Number of items in the effective OpenAI `input` array.
+    pub effective_input_items: usize,
     /// Bytes in the front-loaded OpenAI `instructions` field.
     pub instructions_bytes: usize,
     /// SHA-256 of the front-loaded OpenAI `instructions` field.
@@ -271,13 +275,13 @@ pub struct OpenAiPromptCacheDiagnostics {
     pub tool_choice_bytes: usize,
     /// SHA-256 of the OpenAI request-level `tool_choice` value.
     pub tool_choice_sha256: String,
-    /// Bytes in the stable input prefix following system instructions.
+    /// Bytes in the source-level logical stable input partition.
     pub stable_input_bytes: usize,
-    /// SHA-256 of the stable input prefix following system instructions.
+    /// SHA-256 of the source-level logical stable input partition.
     pub stable_input_sha256: String,
-    /// Bytes in volatile input suffix material.
+    /// Bytes in the source-level logical volatile input partition.
     pub volatile_input_bytes: usize,
-    /// SHA-256 of volatile input suffix material.
+    /// SHA-256 of the source-level logical volatile input partition.
     pub volatile_input_sha256: String,
     /// Bytes in Mezzanine's instructions-and-stable-input projection.
     pub stable_projection_bytes: usize,
@@ -333,10 +337,14 @@ pub fn openai_prompt_cache_diagnostics(
         &provider_request_shape,
         complete_request,
     )?;
+    let effective_input_bytes = continuity_snapshot.input_bytes;
+    let effective_input_items = continuity_snapshot.input_items;
 
     let stable_projection_sha256 = sha256_hex(stable_projection.as_bytes());
     Ok(OpenAiPromptCacheDiagnostics {
         prompt_cache_key,
+        effective_input_bytes,
+        effective_input_items,
         instructions_bytes: rendered.instructions.len(),
         instructions_sha256: sha256_hex(rendered.instructions.as_bytes()),
         response_format_bytes: response_format_text.len(),
@@ -393,6 +401,10 @@ fn openai_request_continuity_snapshot(
         &rendered.stable_input,
         "OpenAI stable-message continuity diagnostics failed",
     )?;
+    let input_text = openai_diagnostic_json(
+        &rendered.input,
+        "OpenAI effective-input continuity diagnostics failed",
+    )?;
     let request_text = openai_diagnostic_json(
         complete_request,
         "OpenAI complete-request continuity diagnostics failed",
@@ -400,6 +412,8 @@ fn openai_request_continuity_snapshot(
     Ok(OpenAiRequestContinuitySnapshot {
         request_bytes: request_text.len(),
         request_sha256: sha256_hex(request_text.as_bytes()),
+        input_bytes: input_text.len(),
+        input_items: messages.len(),
         instructions_sha256: sha256_hex(rendered.instructions.as_bytes()),
         response_format_sha256: sha256_hex(response_format.as_bytes()),
         tools_sha256: sha256_hex(tools.as_bytes()),

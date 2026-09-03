@@ -66,10 +66,14 @@ impl RuntimeSessionService {
             || "initial".to_string(),
             |value| {
                 format!(
-                    "{} wire_append_only={} common_messages={} logical_stable_append_only={} common_stable_messages={}",
+                    "{} wire_append_only={} envelope_unchanged={} previous_input_bytes={} current_input_bytes={} common_messages={} common_bytes={} logical_stable_append_only={} common_stable_messages={}",
                     value.category,
-                    value.messages_append_only,
+                    value.request_prefix_append_only,
+                    value.cache_envelope_unchanged,
+                    value.previous_input_bytes,
+                    value.current_input_bytes,
                     value.common_message_prefix,
+                    value.common_message_prefix_bytes,
                     value.stable_messages_append_only,
                     value.common_stable_message_prefix
                 )
@@ -78,7 +82,7 @@ impl RuntimeSessionService {
         self.record_agent_pane_trace_log_text(
             &observation.pane_id,
             &format!(
-                "agent trace: turn {}: provider wire request id={} attempt={} retry={} purpose={} provider={} model={} interaction={} succeeded={} failure={} stable_bytes={} volatile_bytes={} stable_mcp_bytes={} explicit_mcp_bytes={} action_result_bytes={} cache={} continuity={}",
+                "agent trace: turn {}: provider wire request id={} attempt={} retry={} purpose={} provider={} model={} interaction={} succeeded={} failure={} input_bytes={} input_items={} logical_stable_bytes={} logical_volatile_bytes={} stable_mcp_bytes={} explicit_mcp_bytes={} action_result_bytes={} cache={} continuity={}",
                 observation.turn_id,
                 status.request_id,
                 observation.attempt_index,
@@ -89,6 +93,8 @@ impl RuntimeSessionService {
                 status.interaction_kind,
                 observation.succeeded,
                 observation.failure_kind.as_deref().unwrap_or("none"),
+                status.effective_input_bytes.map_or_else(|| "unknown".to_string(), |value| value.to_string()),
+                status.effective_input_items.map_or_else(|| "unknown".to_string(), |value| value.to_string()),
                 status.stable_input_bytes.map_or_else(|| "unknown".to_string(), |value| value.to_string()),
                 status.volatile_input_bytes.map_or_else(|| "unknown".to_string(), |value| value.to_string()),
                 status.mcp_catalog_bytes,
@@ -1046,6 +1052,8 @@ pub(super) fn runtime_openai_prompt_cache_diagnostics_trace_json(
 ) -> serde_json::Value {
     serde_json::json!({
         "prompt_cache_key": diagnostics.prompt_cache_key,
+        "effective_input_bytes": diagnostics.effective_input_bytes,
+        "effective_input_items": diagnostics.effective_input_items,
         "instructions_bytes": diagnostics.instructions_bytes,
         "instructions_sha256": diagnostics.instructions_sha256,
         "response_format_bytes": diagnostics.response_format_bytes,
@@ -1054,9 +1062,9 @@ pub(super) fn runtime_openai_prompt_cache_diagnostics_trace_json(
         "tools_sha256": diagnostics.tools_sha256,
         "tool_choice_bytes": diagnostics.tool_choice_bytes,
         "tool_choice_sha256": diagnostics.tool_choice_sha256,
-        "stable_input_bytes": diagnostics.stable_input_bytes,
+        "logical_stable_input_bytes": diagnostics.stable_input_bytes,
         "stable_input_sha256": diagnostics.stable_input_sha256,
-        "volatile_input_bytes": diagnostics.volatile_input_bytes,
+        "logical_volatile_input_bytes": diagnostics.volatile_input_bytes,
         "volatile_input_sha256": diagnostics.volatile_input_sha256,
         "stable_projection_bytes": diagnostics.stable_projection_bytes,
         "stable_projection_sha256": diagnostics.stable_projection_sha256,
@@ -1065,6 +1073,8 @@ pub(super) fn runtime_openai_prompt_cache_diagnostics_trace_json(
         "continuity_snapshot": {
             "request_bytes": diagnostics.continuity_snapshot.request_bytes,
             "request_sha256": diagnostics.continuity_snapshot.request_sha256,
+            "input_bytes": diagnostics.continuity_snapshot.input_bytes,
+            "input_items": diagnostics.continuity_snapshot.input_items,
             "instructions_sha256": diagnostics.continuity_snapshot.instructions_sha256,
             "response_format_sha256": diagnostics.continuity_snapshot.response_format_sha256,
             "tools_sha256": diagnostics.continuity_snapshot.tools_sha256,

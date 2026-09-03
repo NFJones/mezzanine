@@ -450,6 +450,18 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
                 .map_or_else(|| "none".to_string(), |value| value.to_string())
         ),
         format!(
+            "last_provider_request_input_bytes = {}",
+            runtime_metrics
+                .last_provider_request_input_bytes
+                .map_or_else(|| "none".to_string(), |value| value.to_string())
+        ),
+        format!(
+            "last_provider_request_input_items = {}",
+            runtime_metrics
+                .last_provider_request_input_items
+                .map_or_else(|| "none".to_string(), |value| value.to_string())
+        ),
+        format!(
             "last_provider_request_continuity_category = {}",
             runtime_metrics
                 .last_provider_request_continuity_category
@@ -469,6 +481,12 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
                 .map_or_else(|| "none".to_string(), |value| value.to_string())
         ),
         format!(
+            "last_provider_request_common_message_prefix_bytes = {}",
+            runtime_metrics
+                .last_provider_request_common_message_prefix_bytes
+                .map_or_else(|| "none".to_string(), |value| value.to_string())
+        ),
+        format!(
             "last_provider_request_common_component_prefix = {}",
             runtime_metrics
                 .last_provider_request_common_component_prefix
@@ -478,6 +496,18 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
             "last_provider_request_messages_append_only = {}",
             runtime_metrics
                 .last_provider_request_messages_append_only
+                .map_or_else(|| "none".to_string(), |value| value.to_string())
+        ),
+        format!(
+            "last_provider_request_cache_envelope_unchanged = {}",
+            runtime_metrics
+                .last_provider_request_cache_envelope_unchanged
+                .map_or_else(|| "none".to_string(), |value| value.to_string())
+        ),
+        format!(
+            "last_provider_request_prefix_append_only = {}",
+            runtime_metrics
+                .last_provider_request_prefix_append_only
                 .map_or_else(|| "none".to_string(), |value| value.to_string())
         ),
         format!(
@@ -570,11 +600,19 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
             &runtime_metrics.provider_prompt_tool_choice_bytes,
         ),
         (
-            "provider_prompt_stable_input_bytes",
+            "provider_prompt_effective_input_bytes",
+            &runtime_metrics.provider_prompt_effective_input_bytes,
+        ),
+        (
+            "provider_prompt_effective_input_items",
+            &runtime_metrics.provider_prompt_effective_input_items,
+        ),
+        (
+            "provider_prompt_logical_stable_input_bytes",
             &runtime_metrics.provider_prompt_stable_input_bytes,
         ),
         (
-            "provider_prompt_volatile_input_bytes",
+            "provider_prompt_logical_volatile_input_bytes",
             &runtime_metrics.provider_prompt_volatile_input_bytes,
         ),
         (

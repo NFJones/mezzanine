@@ -534,6 +534,14 @@ async fn async_terminal_show_metrics_command_renders_actor_metrics() {
         assert!(output.contains("provider_requests_started ="), "{output}");
         assert!(output.contains("[runtime histograms]"), "{output}");
         assert!(
+            output.contains("provider_prompt_effective_input_bytes"),
+            "{output}"
+        );
+        assert!(
+            output.contains("provider_prompt_logical_stable_input_bytes"),
+            "{output}"
+        );
+        assert!(
             output.contains("provider_prompt_stable_projection_bytes"),
             "{output}"
         );

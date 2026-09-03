@@ -402,15 +402,27 @@ impl RuntimeSessionService {
                 provider_wire_status.map_or_else(
                     || {
                         self.runtime_metrics()
-                            .last_provider_request_messages_append_only
+                            .last_provider_request_prefix_append_only
                             .map_or_else(
                                 || "unknown".to_string(),
                                 |append_only| {
                                     format!(
-                                        "common_messages={} append_only={append_only}",
+                                        "input_bytes={} input_items={} common_messages={} common_bytes={} envelope_unchanged={} append_only={append_only}",
+                                        self.runtime_metrics()
+                                            .last_provider_request_input_bytes
+                                            .map_or_else(|| "unknown".to_string(), |value| value.to_string()),
+                                        self.runtime_metrics()
+                                            .last_provider_request_input_items
+                                            .map_or_else(|| "unknown".to_string(), |value| value.to_string()),
                                         self.runtime_metrics()
                                             .last_provider_request_common_message_prefix
                                             .unwrap_or(0),
+                                        self.runtime_metrics()
+                                            .last_provider_request_common_message_prefix_bytes
+                                            .unwrap_or(0),
+                                        self.runtime_metrics()
+                                            .last_provider_request_cache_envelope_unchanged
+                                            .map_or_else(|| "unknown".to_string(), |value| value.to_string()),
                                     )
                                 },
                             )
@@ -419,8 +431,16 @@ impl RuntimeSessionService {
                         status.continuity.as_ref().map_or_else(
                             || {
                                 format!(
-                                    "request={} initial stable_bytes={} volatile_bytes={}",
+                                    "request={} initial input_bytes={} input_items={} logical_stable_bytes={} logical_volatile_bytes={}",
                                     status.request_id,
+                                    status.effective_input_bytes.map_or_else(
+                                        || "unknown".to_string(),
+                                        |value| value.to_string()
+                                    ),
+                                    status.effective_input_items.map_or_else(
+                                        || "unknown".to_string(),
+                                        |value| value.to_string()
+                                    ),
                                     status.stable_input_bytes.map_or_else(
                                         || "unknown".to_string(),
                                         |value| value.to_string()
@@ -433,10 +453,18 @@ impl RuntimeSessionService {
                             },
                             |continuity| {
                             format!(
-                                    "request={} common_messages={} append_only={} stable_bytes={} volatile_bytes={}",
+                                    "request={} previous_input_bytes={} current_input_bytes={} input_items={} common_messages={} common_bytes={} envelope_unchanged={} append_only={} logical_stable_bytes={} logical_volatile_bytes={}",
                                     status.request_id,
+                                    continuity.previous_input_bytes,
+                                    continuity.current_input_bytes,
+                                    status.effective_input_items.map_or_else(
+                                        || "unknown".to_string(),
+                                        |value| value.to_string()
+                                    ),
                                     continuity.common_message_prefix,
-                                    continuity.messages_append_only,
+                                    continuity.common_message_prefix_bytes,
+                                    continuity.cache_envelope_unchanged,
+                                    continuity.request_prefix_append_only,
                                     status.stable_input_bytes.map_or_else(
                                         || "unknown".to_string(),
                                         |value| value.to_string()
@@ -457,7 +485,7 @@ impl RuntimeSessionService {
                     || "unknown".to_string(),
                     |status| {
                         format!(
-                            "request={} total_volatile_bytes={} stable_mcp_bytes={} explicit_mcp_bytes={} action_result_bytes={}",
+                            "request={} logical_volatile_input_bytes={} stable_mcp_bytes={} explicit_mcp_bytes={} action_result_bytes={}",
                             status.request_id,
                             status.volatile_input_bytes.map_or_else(
                                 || "unknown".to_string(),

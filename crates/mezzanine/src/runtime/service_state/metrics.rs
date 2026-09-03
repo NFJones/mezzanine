@@ -30,6 +30,8 @@ pub(crate) struct RuntimeProviderWireRequestStatus {
     pub(crate) interaction_kind: String,
     pub(crate) purpose: String,
     pub(crate) usage: Option<ModelTokenUsage>,
+    pub(crate) effective_input_bytes: Option<usize>,
+    pub(crate) effective_input_items: Option<usize>,
     pub(crate) stable_input_bytes: Option<usize>,
     pub(crate) volatile_input_bytes: Option<usize>,
     pub(crate) mcp_live_state_bytes: usize,
@@ -171,9 +173,13 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub(crate) provider_prompt_tools_bytes: crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of OpenAI tool-choice bytes in cache diagnostics.
     pub(crate) provider_prompt_tool_choice_bytes: crate::host::async_runtime::RuntimeHistogram,
-    /// Histogram of stable input bytes in cache diagnostics.
+    /// Histogram of effective provider-visible OpenAI input bytes.
+    pub(crate) provider_prompt_effective_input_bytes: crate::host::async_runtime::RuntimeHistogram,
+    /// Histogram of effective provider-visible OpenAI input items.
+    pub(crate) provider_prompt_effective_input_items: crate::host::async_runtime::RuntimeHistogram,
+    /// Histogram of logical stable input bytes in cache diagnostics.
     pub(crate) provider_prompt_stable_input_bytes: crate::host::async_runtime::RuntimeHistogram,
-    /// Histogram of volatile input bytes in cache diagnostics.
+    /// Histogram of logical volatile input bytes in cache diagnostics.
     pub(crate) provider_prompt_volatile_input_bytes: crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of local instructions-and-stable-input projection bytes.
     pub(crate) provider_prompt_stable_projection_bytes:
@@ -219,16 +225,26 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub(crate) last_provider_request_sha256: Option<String>,
     /// Most recent complete provider-visible request byte count.
     pub(crate) last_provider_request_bytes: Option<usize>,
+    /// Most recent effective provider-visible OpenAI input byte count.
+    pub(crate) last_provider_request_input_bytes: Option<usize>,
+    /// Most recent effective provider-visible OpenAI input item count.
+    pub(crate) last_provider_request_input_items: Option<usize>,
     /// First divergence category from the preceding comparable request.
     pub(crate) last_provider_request_continuity_category: Option<String>,
     /// First divergent provider input message index, when applicable.
     pub(crate) last_provider_request_continuity_message_index: Option<usize>,
     /// Number of unchanged provider input messages at the request front.
     pub(crate) last_provider_request_common_message_prefix: Option<usize>,
+    /// Canonical serialized bytes in the unchanged provider input front.
+    pub(crate) last_provider_request_common_message_prefix_bytes: Option<usize>,
     /// Number of unchanged request components before the first divergence.
     pub(crate) last_provider_request_common_component_prefix: Option<usize>,
+    /// Whether every cache-affecting request-envelope component is unchanged.
+    pub(crate) last_provider_request_cache_envelope_unchanged: Option<bool>,
     /// Whether provider input messages only appended after the previous request.
     pub(crate) last_provider_request_messages_append_only: Option<bool>,
+    /// Whether the complete provider cache prefix extends without a rewrite.
+    pub(crate) last_provider_request_prefix_append_only: Option<bool>,
     /// Number of unchanged cache-eligible input messages at the request front.
     pub(crate) last_provider_request_common_stable_message_prefix: Option<usize>,
     /// Whether cache-eligible input only appended after the previous prefix.
@@ -335,6 +351,10 @@ impl RuntimeMetricsSnapshot {
                     .record(diagnostics.tools_bytes as u64);
                 self.provider_prompt_tool_choice_bytes
                     .record(diagnostics.tool_choice_bytes as u64);
+                self.provider_prompt_effective_input_bytes
+                    .record(diagnostics.effective_input_bytes as u64);
+                self.provider_prompt_effective_input_items
+                    .record(diagnostics.effective_input_items as u64);
                 self.provider_prompt_stable_input_bytes
                     .record(diagnostics.stable_input_bytes as u64);
                 self.provider_prompt_volatile_input_bytes
@@ -353,6 +373,10 @@ impl RuntimeMetricsSnapshot {
                     Some(diagnostics.continuity_snapshot.request_sha256.clone());
                 self.last_provider_request_bytes =
                     Some(diagnostics.continuity_snapshot.request_bytes);
+                self.last_provider_request_input_bytes =
+                    Some(diagnostics.continuity_snapshot.input_bytes);
+                self.last_provider_request_input_items =
+                    Some(diagnostics.continuity_snapshot.input_items);
 
                 let key = ProviderWireContinuityKey {
                     conversation_id: observation.conversation_id.clone(),
@@ -394,11 +418,20 @@ impl RuntimeMetricsSnapshot {
             continuity.as_ref().and_then(|value| value.message_index);
         self.last_provider_request_common_message_prefix =
             continuity.as_ref().map(|value| value.common_message_prefix);
+        self.last_provider_request_common_message_prefix_bytes = continuity
+            .as_ref()
+            .map(|value| value.common_message_prefix_bytes);
         self.last_provider_request_common_component_prefix = continuity
             .as_ref()
             .map(|value| value.common_component_prefix);
+        self.last_provider_request_cache_envelope_unchanged = continuity
+            .as_ref()
+            .map(|value| value.cache_envelope_unchanged);
         self.last_provider_request_messages_append_only =
             continuity.as_ref().map(|value| value.messages_append_only);
+        self.last_provider_request_prefix_append_only = continuity
+            .as_ref()
+            .map(|value| value.request_prefix_append_only);
         self.last_provider_request_common_stable_message_prefix = continuity
             .as_ref()
             .map(|value| value.common_stable_message_prefix);
@@ -413,6 +446,14 @@ impl RuntimeMetricsSnapshot {
             interaction_kind: observation.interaction_kind.clone(),
             purpose: observation.purpose.as_str().to_string(),
             usage: observation.usage,
+            effective_input_bytes: observation
+                .openai_diagnostics
+                .as_ref()
+                .map(|diagnostics| diagnostics.effective_input_bytes),
+            effective_input_items: observation
+                .openai_diagnostics
+                .as_ref()
+                .map(|diagnostics| diagnostics.effective_input_items),
             stable_input_bytes: observation
                 .openai_diagnostics
                 .as_ref()

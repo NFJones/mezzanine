@@ -843,6 +843,14 @@ fn openai_prompt_cache_diagnostics_fingerprint_provider_prefix_parts() {
     }));
     assert!(diagnostics.prompt_cache_key.starts_with("mez-"));
     assert_eq!(diagnostics.prompt_cache_key.len(), "mez-".len() + 32);
+    assert_eq!(
+        diagnostics.effective_input_bytes,
+        serde_json::to_string(&body["input"]).unwrap().len()
+    );
+    assert_eq!(
+        diagnostics.effective_input_items,
+        body["input"].as_array().unwrap().len()
+    );
     assert!(diagnostics.instructions_bytes > 1024);
     assert_eq!(diagnostics.instructions_sha256.len(), 64);
     assert!(diagnostics.response_format_bytes > 0);

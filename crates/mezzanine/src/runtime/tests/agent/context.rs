@@ -813,7 +813,10 @@ fn runtime_openai_request_chain_survives_completed_turn_boundary() {
         &second_diagnostics.continuity_snapshot,
     );
     assert!(continuity.messages_append_only, "{continuity:#?}");
+    assert!(continuity.request_prefix_append_only, "{continuity:#?}");
     assert_eq!(continuity.common_message_prefix, first_input.len());
+    assert!(second_diagnostics.effective_input_bytes > first_diagnostics.effective_input_bytes);
+    assert!(second_diagnostics.volatile_input_bytes < first_diagnostics.volatile_input_bytes);
 }
 
 /// Prepares one synthetic provider request from prompt chronology without
@@ -1417,7 +1420,9 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
         "{status}"
     );
     assert!(
-        status.contains("| Provider wire prefix | request=wire-status-1"),
+        status.contains("| Provider wire prefix | request=wire-status-1 initial input_bytes=")
+            && status.contains("logical_stable_bytes=")
+            && status.contains("logical_volatile_bytes="),
         "{status}"
     );
 
@@ -1463,18 +1468,23 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
     );
     assert!(
         status.contains("| Provider wire prefix | request=wire-status-2")
-            && status.contains("append_only=true"),
+            && status.contains("previous_input_bytes=")
+            && status.contains("current_input_bytes=")
+            && status.contains("common_bytes=")
+            && status.contains("envelope_unchanged=true append_only=true"),
         "{status}"
     );
     assert!(
-        status
-            .contains("| Request input composition | request=wire-status-2 total_volatile_bytes=")
-            && status.contains("stable_mcp_bytes=41 explicit_mcp_bytes=23 action_result_bytes=17"),
+        status.contains(
+            "| Request input composition | request=wire-status-2 logical_volatile_input_bytes="
+        ) && status.contains("stable_mcp_bytes=41 explicit_mcp_bytes=23 action_result_bytes=17"),
         "{status}"
     );
     let trace = service.agent_pane_trace_log_text("%1").unwrap();
     assert!(
         trace.contains("id=wire-status-2 attempt=1 retry=none")
+            && trace.contains("input_bytes=")
+            && trace.contains("logical_stable_bytes=")
             && trace.contains("stable_mcp_bytes=41 explicit_mcp_bytes=23 action_result_bytes=17"),
         "{trace}"
     );
