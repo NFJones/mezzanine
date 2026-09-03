@@ -250,6 +250,13 @@ impl RuntimeSessionService {
             created_at_unix_seconds,
             turn,
         )?;
+        self.append_exact_execution_block_transcript_events(
+            &mut entries,
+            &turn.conversation_id,
+            first_sequence,
+            created_at_unix_seconds,
+            turn,
+        )?;
         let interrupted_entry = TranscriptEntry {
             conversation_id: turn.conversation_id.clone(),
             sequence: first_sequence.saturating_add(entries.len() as u64),
@@ -443,6 +450,7 @@ impl RuntimeSessionService {
         self.append_exact_execution_block_transcript_events(
             &mut execution_entries,
             conversation_id,
+            sequence,
             created_at_unix_seconds,
             turn,
         )?;
@@ -566,6 +574,7 @@ impl RuntimeSessionService {
         &self,
         entries: &mut Vec<TranscriptEntry>,
         conversation_id: &str,
+        first_sequence: u64,
         created_at_unix_seconds: u64,
         turn: &AgentTurnRecord,
     ) -> Result<()> {
@@ -575,15 +584,15 @@ impl RuntimeSessionService {
         let imported_history_events = self.agent_turn_imported_history_events(&turn.turn_id);
         let mut sequence = entries
             .last()
-            .map_or(1, |entry| entry.sequence.saturating_add(1));
-        for block in context
+            .map_or(first_sequence, |entry| entry.sequence.saturating_add(1));
+        let mut group_ordinals = BTreeMap::<String, u64>::new();
+        for event in context
             .chronology()
             .iter()
             .skip(imported_history_events)
-            .map(|event| event.block())
-            .filter(|block| {
+            .filter(|event| {
                 matches!(
-                    block.source,
+                    event.block().source,
                     ContextSourceKind::CommittedEvidence
                         | ContextSourceKind::TranscriptAssistant
                         | ContextSourceKind::TranscriptTool
@@ -591,11 +600,27 @@ impl RuntimeSessionService {
                 )
             })
         {
-            let event = TranscriptContextEvent::execution_block(
-                block.source,
-                block.label.clone(),
-                block.content.clone(),
-            )
+            let block = event.block();
+            let transcript_event = if let Some(group) = event.execution_group_id() {
+                let ordinal = group_ordinals
+                    .entry(group.as_str().to_string())
+                    .or_default();
+                *ordinal = ordinal.saturating_add(1);
+                TranscriptContextEvent::execution_block_with_metadata(
+                    block.source,
+                    block.label.clone(),
+                    block.content.clone(),
+                    group.clone(),
+                    *ordinal,
+                    event.provider_owner(),
+                )
+            } else {
+                TranscriptContextEvent::execution_block(
+                    block.source,
+                    block.label.clone(),
+                    block.content.clone(),
+                )
+            }
             .ok_or_else(|| {
                 MezError::invalid_state("turn execution block is empty, oversized, or unsupported")
             })?;
@@ -607,7 +632,7 @@ impl RuntimeSessionService {
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 pane_id: turn.pane_id.clone(),
-                content: event.to_transcript_content(),
+                content: transcript_event.to_transcript_content(),
             };
             entry.validate()?;
             entries.push(entry);

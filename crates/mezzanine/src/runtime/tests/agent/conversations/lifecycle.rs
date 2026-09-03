@@ -738,7 +738,7 @@ fn runtime_interrupted_turn_prompt_is_persisted_for_continuation_context() {
     service.stop_agent_turn_for_pane("%1").unwrap();
 
     let entries = transcript_store.inspect(&conversation_id).unwrap();
-    assert_eq!(entries.len(), 2, "{entries:#?}");
+    assert_eq!(entries.len(), 4, "{entries:#?}");
     assert_eq!(entries[0].role, TranscriptRole::System);
     assert_eq!(entries[0].turn_id, interrupted.turn_id);
     assert!(
@@ -748,12 +748,33 @@ fn runtime_interrupted_turn_prompt_is_persisted_for_continuation_context() {
         ),
         "{entries:#?}"
     );
-    assert_eq!(entries[1].role, TranscriptRole::System);
+    for (entry, expected_source, expected_content) in [
+        (
+            &entries[1],
+            ContextSourceKind::TranscriptAssistant,
+            "inspection found the owning context assembly path",
+        ),
+        (
+            &entries[2],
+            ContextSourceKind::ActionResult,
+            "the focused inspection completed",
+        ),
+    ] {
+        let Some(mez_agent::TranscriptContextEvent::ExecutionBlock {
+            source, content, ..
+        }) = mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content)
+        else {
+            panic!("expected exact execution block: {entry:#?}");
+        };
+        assert_eq!(source, expected_source);
+        assert_eq!(content, expected_content);
+    }
+    assert_eq!(entries[3].role, TranscriptRole::System);
     assert!(
-        entries[1].content.contains("interrupted_turn"),
+        entries[3].content.contains("interrupted_turn"),
         "{entries:#?}"
     );
-    assert!(entries[1].content.contains("repair the interrupted defect"));
+    assert!(entries[3].content.contains("repair the interrupted defect"));
     assert_eq!(
         service
             .agent_turn_ledger()

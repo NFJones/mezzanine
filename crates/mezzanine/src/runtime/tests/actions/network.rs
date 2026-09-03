@@ -265,19 +265,19 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
             && block
                 .content
                 .contains("[action_result fetch-good fetch_url succeeded]")
-            && block.content.contains("historical_output: omitted")
-            && !block.content.contains("usable source body")
+            && !block.content.contains("historical_output: omitted")
+            && block.content.contains("usable source body")
     }));
     let context = runtime_prepared_context_for_turn(&service, "turn-1");
     assert!(context.blocks().iter().any(|block| {
-        block.source == ContextSourceKind::ActionDetail
+        block.source == ContextSourceKind::ActionResult
             && block
                 .content
                 .contains("[action_result fetch-good fetch_url succeeded]")
             && block.content.contains("usable source body")
     }));
     assert!(context.blocks().iter().any(|block| {
-        block.source == ContextSourceKind::ActionDetail
+        block.source == ContextSourceKind::ActionResult
             && block
                 .content
                 .contains("[action_result fetch-missing fetch_url failed]")

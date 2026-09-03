@@ -136,8 +136,8 @@ pub struct ProviderWireRequestObservation {
     pub message_bytes: usize,
     /// Request-local MCP manifest and availability bytes.
     pub mcp_live_state_bytes: usize,
-    /// Same-turn expanded action-result detail bytes.
-    pub action_detail_bytes: usize,
+    /// Exact durable action-result bytes included in this request.
+    pub action_result_bytes: usize,
     /// OpenAI Responses cache diagnostics, when applicable.
     pub openai_diagnostics: Option<mez_agent::OpenAiPromptCacheDiagnostics>,
     /// Whether OpenAI diagnostic construction failed independently of send.
@@ -269,12 +269,12 @@ impl<'a> ProviderWireObservationContext<'a> {
                 .fold(0usize, |total, message| {
                     total.saturating_add(message.content.len())
                 }),
-            action_detail_bytes: request
+            action_result_bytes: request
                 .messages
                 .iter()
                 .filter(|message| {
-                    message.placement == mez_agent::ContextPlacement::EphemeralTail
-                        && message.source == mez_agent::ContextSourceKind::ActionDetail
+                    message.placement == mez_agent::ContextPlacement::ConversationAppend
+                        && message.source == mez_agent::ContextSourceKind::ActionResult
                 })
                 .fold(0usize, |total, message| {
                     total.saturating_add(message.content.len())

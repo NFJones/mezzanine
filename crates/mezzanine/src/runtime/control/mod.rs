@@ -72,7 +72,7 @@ use crate::control::{
 };
 use crate::integrations::skills::{BUILTIN_MEZ_REFERENCE_SKILL_NAME, load_skill_document};
 pub(crate) use component::RuntimeControlComponent;
-use context::runtime_agent_transcript_context_blocks;
+use context::runtime_agent_transcript_context;
 pub(crate) use context::runtime_local_message_context_content;
 use mez_agent::{
     SkillDocument, insert_context_block_by_placement, is_valid_skill_name, memory_context_blocks,
@@ -147,7 +147,9 @@ impl RuntimeSessionService {
         }
         self.refresh_project_config_layers_for_pane(pane_id)?;
         self.settle_recoverable_pane_readiness_for_agent_prompt(pane_id)?;
-        let mut blocks = self.runtime_agent_history_epoch_context_blocks(pane_id)?;
+        let history = self.runtime_agent_history_epoch_context(pane_id)?;
+        let mut blocks = history.blocks;
+        let imported_execution_events = history.execution_events;
         let imported_history_events = blocks.len();
         let mut delivered_message_sequence = None;
         if include_unread_messages {
@@ -321,6 +323,9 @@ impl RuntimeSessionService {
             })
             .unwrap_or_default();
         let mut context = AgentContext::import_durable_blocks(blocks)?.with_metadata(metadata);
+        context
+            .restore_imported_execution_events(&imported_execution_events)
+            .map_err(|error| MezError::invalid_state(error.to_string()))?;
         if let Some(instruction_files) = instruction_files.as_deref() {
             context = set_project_guidance_context(context, instruction_files, 2)?;
         }
@@ -436,12 +441,13 @@ impl RuntimeSessionService {
     /// newer raw transcript. Task-local messages, prelude, prompt, steering, and
     /// same-turn execution events are appended by their owning producers after
     /// this epoch.
-    fn runtime_agent_history_epoch_context_blocks(
+    fn runtime_agent_history_epoch_context(
         &self,
         pane_id: &str,
-    ) -> Result<Vec<ContextBlock>> {
+    ) -> Result<context::RuntimeAgentTranscriptContext> {
         let context_memory_records = self.model_context_memory_records_for_pane(pane_id);
         let mut blocks = Vec::new();
+        let mut execution_events = Vec::new();
         blocks.extend(memory_context_blocks(
             &context_memory_records
                 .iter()
@@ -451,10 +457,16 @@ impl RuntimeSessionService {
         ));
 
         let Some(session) = self.agent_shell_store().get(pane_id) else {
-            return Ok(blocks);
+            return Ok(context::RuntimeAgentTranscriptContext {
+                blocks,
+                execution_events,
+            });
         };
         let Some(store) = self.persistence.transcript_store() else {
-            return Ok(blocks);
+            return Ok(context::RuntimeAgentTranscriptContext {
+                blocks,
+                execution_events,
+            });
         };
         let transcript_conversation_id = session
             .ephemeral_transcript_source_conversation_id
@@ -466,7 +478,10 @@ impl RuntimeSessionService {
             session.transcript_entries
         };
         if transcript_entries == 0 {
-            return Ok(blocks);
+            return Ok(context::RuntimeAgentTranscriptContext {
+                blocks,
+                execution_events,
+            });
         }
         let mut entries = match store.inspect(transcript_conversation_id) {
             Ok(entries) => entries,
@@ -487,9 +502,14 @@ impl RuntimeSessionService {
             entries.drain(..first_active);
         }
         if !entries.is_empty() {
-            blocks.extend(runtime_agent_transcript_context_blocks(pane_id, &entries));
+            let transcript = runtime_agent_transcript_context(pane_id, &entries);
+            blocks.extend(transcript.blocks);
+            execution_events = transcript.execution_events;
         }
-        Ok(blocks)
+        Ok(context::RuntimeAgentTranscriptContext {
+            blocks,
+            execution_events,
+        })
     }
 
     /// Refreshes transcript and compact-memory context for a running turn.
@@ -521,8 +541,9 @@ impl RuntimeSessionService {
             return Ok(false);
         }
 
-        let mut refreshed_blocks =
-            self.runtime_agent_history_epoch_context_blocks(&turn.pane_id)?;
+        let refreshed_history = self.runtime_agent_history_epoch_context(&turn.pane_id)?;
+        let mut refreshed_blocks = refreshed_history.blocks;
+        let refreshed_execution_events = refreshed_history.execution_events;
         let imported_history_events = self.agent_turn_imported_history_events(turn_id);
 
         if !self.agent_turn_has_new_environment_snapshot(turn_id)
@@ -561,6 +582,9 @@ impl RuntimeSessionService {
             },
             refreshed_blocks,
         )?;
+        refreshed_context
+            .restore_imported_execution_events(&refreshed_execution_events)
+            .map_err(|error| MezError::invalid_state(error.to_string()))?;
         let refreshed_block_count = refreshed_context.blocks().len();
         self.agent_turn_contexts_mut()
             .insert(turn_id.to_string(), refreshed_context);
@@ -1351,7 +1375,7 @@ fn runtime_mutating_response_is_cacheable(_method: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::runtime_agent_transcript_context_blocks;
+    use super::runtime_agent_transcript_context;
     use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
     use mez_agent::{AgentContext, ProviderTranscriptEvent, TranscriptContextEvent};
 
@@ -1450,7 +1474,7 @@ mod tests {
             },
         ];
 
-        let blocks = runtime_agent_transcript_context_blocks("%1", &entries);
+        let blocks = runtime_agent_transcript_context("%1", &entries).blocks;
 
         assert_eq!(blocks.len(), 4);
         assert_eq!(
@@ -1550,8 +1574,11 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let blocks = runtime_agent_transcript_context_blocks("%1", &entries);
-        let context = AgentContext::import_durable_blocks(blocks).unwrap();
+        let transcript = runtime_agent_transcript_context("%1", &entries);
+        let mut context = AgentContext::import_durable_blocks(transcript.blocks).unwrap();
+        context
+            .restore_imported_execution_events(&transcript.execution_events)
+            .unwrap();
         let group_ids = context
             .chronology()
             .iter()
@@ -1572,28 +1599,41 @@ mod tests {
     /// and restore the original cache-visible source, label, content, and order.
     #[test]
     fn runtime_transcript_restoration_replays_exact_execution_blocks() {
-        let request_state = TranscriptContextEvent::execution_block(
+        let group = mez_agent::ContextExecutionGroupId::new("execution-group-abc123").unwrap();
+        let request_state = TranscriptContextEvent::execution_block_with_metadata(
             mez_agent::ContextSourceKind::CommittedEvidence,
             "Mezzanine request state",
             "generation=1\ninteraction_kind=action_execution\nallowed_actions=say",
+            group.clone(),
+            1,
+            None,
         )
         .unwrap();
-        let decision = TranscriptContextEvent::execution_block(
+        let decision = TranscriptContextEvent::execution_block_with_metadata(
             mez_agent::ContextSourceKind::CommittedEvidence,
             "controller capability decision",
             "[capability continuation]\ncontinue with the granted surface",
+            group.clone(),
+            2,
+            None,
         )
         .unwrap();
-        let assistant = TranscriptContextEvent::execution_block(
+        let assistant = TranscriptContextEvent::execution_block_with_metadata(
             mez_agent::ContextSourceKind::TranscriptAssistant,
             "assistant response for turn-1 execution abc123",
             "rationale: inspect the repository",
+            group.clone(),
+            3,
+            None,
         )
         .unwrap();
-        let result = TranscriptContextEvent::execution_block(
+        let result = TranscriptContextEvent::execution_block_with_metadata(
             mez_agent::ContextSourceKind::ActionResult,
             "action result shell-1",
-            "[action_result shell-1 shell_command succeeded]\nhistorical_output: omitted",
+            "[action_result shell-1 shell_command succeeded]\noutput:\nexact output",
+            group.clone(),
+            4,
+            None,
         )
         .unwrap();
         let contents = [
@@ -1629,7 +1669,8 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let blocks = runtime_agent_transcript_context_blocks("%1", &entries);
+        let transcript = runtime_agent_transcript_context("%1", &entries);
+        let blocks = transcript.blocks.clone();
 
         assert_eq!(blocks.len(), 5, "{blocks:#?}");
         assert_eq!(
@@ -1659,21 +1700,22 @@ mod tests {
         assert_eq!(blocks[4].label, "action result shell-1");
         assert_eq!(
             blocks[4].content,
-            "[action_result shell-1 shell_command succeeded]\nhistorical_output: omitted"
+            "[action_result shell-1 shell_command succeeded]\noutput:\nexact output"
         );
         assert!(
             blocks
                 .iter()
                 .all(|block| { !block.content.contains("display-oriented assistant row") })
         );
-        let context = AgentContext::import_durable_blocks(blocks).unwrap();
+        let mut context = AgentContext::import_durable_blocks(blocks).unwrap();
+        context
+            .restore_imported_execution_events(&transcript.execution_events)
+            .unwrap();
         context.validate_durable().unwrap();
-        let group = context.chronology()[1].execution_group_id().cloned();
-        assert!(group.is_some());
         assert!(
             context.chronology()[1..]
                 .iter()
-                .all(|event| event.execution_group_id() == group.as_ref())
+                .all(|event| event.execution_group_id() == Some(&group))
         );
     }
 
@@ -1726,8 +1768,11 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let blocks = runtime_agent_transcript_context_blocks("%1", &entries);
-        let context = AgentContext::import_durable_blocks(blocks).unwrap();
+        let transcript = runtime_agent_transcript_context("%1", &entries);
+        let mut context = AgentContext::import_durable_blocks(transcript.blocks).unwrap();
+        context
+            .restore_imported_execution_events(&transcript.execution_events)
+            .unwrap();
         let first_group = context.chronology()[0].execution_group_id().cloned();
         let legacy_owner = &context.chronology()[2];
         let legacy_result = &context.chronology()[3];

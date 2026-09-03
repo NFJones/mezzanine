@@ -522,8 +522,8 @@ fn runtime_action_results_split_canonical_history_from_same_turn_detail() {
         .iter()
         .find(|block| block.label == "action result shell-private")
         .unwrap();
-    assert!(canonical.content.contains("historical_output: omitted"));
-    assert!(!canonical.content.contains("same-turn-secret-sentinel"));
+    assert!(canonical.content.contains("same-turn-secret-sentinel"));
+    assert!(!canonical.content.contains("historical_output: omitted"));
     let (prepared, _) = service
         .prepare_agent_turn_model_context(
             &turn,
@@ -532,17 +532,19 @@ fn runtime_action_results_split_canonical_history_from_same_turn_detail() {
             &runtime_model_profile("openai", "test"),
         )
         .unwrap();
-    let detail = prepared
-        .live_state()
-        .iter()
-        .find(|block| block.label == "current action detail shell-private")
-        .unwrap();
-    assert_eq!(detail.source, ContextSourceKind::ActionDetail);
-    assert_eq!(
-        detail.semantic_kind(),
-        mez_agent::ContextSemanticKind::LiveState
+    assert!(
+        prepared
+            .live_state()
+            .iter()
+            .all(|block| block.label != "current action detail shell-private")
     );
-    assert!(detail.content.contains("same-turn-secret-sentinel"));
+    let prepared_result = prepared
+        .durable()
+        .blocks()
+        .iter()
+        .find(|block| block.label == "action result shell-private")
+        .unwrap();
+    assert_eq!(prepared_result.content, canonical.content);
 }
 
 /// Verifies ordinary provider preparation emits only the working directory in
@@ -962,7 +964,7 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
                 .map(|message| message.content.len())
                 .sum(),
             mcp_live_state_bytes: 0,
-            action_detail_bytes: 0,
+            action_result_bytes: 0,
             openai_diagnostics: Some(diagnostics.clone()),
             diagnostics_failed: false,
             usage,
@@ -1019,7 +1021,7 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
         None,
     );
     omitted.mcp_live_state_bytes = 23;
-    omitted.action_detail_bytes = 17;
+    omitted.action_result_bytes = 17;
     assert!(
         service
             .apply_provider_wire_request_observation(omitted)
@@ -1038,14 +1040,15 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
         "{status}"
     );
     assert!(
-        status.contains("| Request-local input | request=wire-status-2 total_volatile_bytes=")
-            && status.contains("mcp_bytes=23 action_detail_bytes=17"),
+        status
+            .contains("| Request input composition | request=wire-status-2 total_volatile_bytes=")
+            && status.contains("mcp_bytes=23 action_result_bytes=17"),
         "{status}"
     );
     let trace = service.agent_pane_trace_log_text("%1").unwrap();
     assert!(
         trace.contains("id=wire-status-2 attempt=1 retry=none")
-            && trace.contains("mcp_bytes=23 action_detail_bytes=17"),
+            && trace.contains("mcp_bytes=23 action_result_bytes=17"),
         "{trace}"
     );
     assert!(!trace.contains("PRIVATE_PROVIDER_PROMPT_MARKER"), "{trace}");

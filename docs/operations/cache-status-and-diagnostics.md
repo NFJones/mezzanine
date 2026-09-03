@@ -44,6 +44,12 @@ Pane environment facts are frozen as typed prompt-boundary snapshots: an
 unchanged environment adds no message, while a changed or unavailable
 environment appends a new snapshot without rewriting the prior prefix.
 
+`action_result_bytes` reports exact durable action-result content in the
+observed request. Those bytes are cold when first appended, then remain in the
+same chronological position for later requests and turns until compaction.
+`mcp_bytes` reports request-local MCP manifest content; an explicitly selected
+integration can still move with the volatile suffix.
+
 ## Escalate a diagnostic safely
 
 Check whether a compaction, model choice, project-guidance change, or requested

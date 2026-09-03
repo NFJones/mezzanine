@@ -72,6 +72,6 @@ fn turn_execution_persistence_appends_to_durable_transcript_store() {
         .iter()
         .find(|entry| entry.role == DurableTranscriptRole::Tool)
         .unwrap();
-    assert!(tool.content.contains("historical_output: omitted"));
-    assert!(!tool.content.contains("/repo"));
+    assert!(!tool.content.contains("historical_output: omitted"));
+    assert!(tool.content.contains("/repo"));
 }

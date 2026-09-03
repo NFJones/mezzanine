@@ -1,10 +1,8 @@
 //! Action-result transcript and model-context rendering.
 //!
-//! This module owns compact, bounded projections of action results for
-//! durable transcript storage and follow-up model context. It keeps
-//! skill-result summarization, JSON audit pruning, and truncation notices
-//! separate from turn execution while preserving raw shell output bytes inside
-//! ordinary model context.
+//! This module owns the single bounded projection of an action result used for
+//! both active model context and durable transcript replay. Once exposed, the
+//! projection remains byte-identical until an explicit compaction epoch.
 
 use crate::{ActionResult, ActionStatus, ShellReadObservation};
 
@@ -78,60 +76,7 @@ impl<'a> ActionResultContextView<'a> {
 /// Callers receive a typed result or error with context from the underlying
 /// runtime operation.
 pub fn action_result_transcript_content(result: &ActionResult) -> String {
-    if matches!(result.action_type, "request_skills" | "call_skill") {
-        let mut content = format!(
-            "action_id={} action_type={} status={:?}",
-            result.action_id, result.action_type, result.status
-        );
-        if let Some(summary) = skill_action_result_transcript_summary(result) {
-            content.push_str("\nskill_action_summary:\n");
-            content.push_str(&summary);
-        }
-        if let Some(error) = &result.error {
-            content.push_str("\nerror:");
-            content.push_str(&error.code);
-            content.push(' ');
-            content.push_str(&error.message);
-        }
-        return content;
-    }
-    if matches!(
-        result.action_type,
-        "shell_command" | "apply_patch" | "mcp_call" | "web_search" | "fetch_url"
-    ) {
-        return durable_tool_result_summary(result);
-    }
     action_result_context_content(result)
-}
-
-/// Builds a secret-safe durable summary for an executed local or MCP tool.
-///
-/// Live action context retains exact output for the active task. Durable
-/// history stores only identity, status, safe shell outcome metadata, and an
-/// explicit omission marker so session replay cannot become a provider secret
-/// disclosure channel.
-fn durable_tool_result_summary(result: &ActionResult) -> String {
-    let facts = ActionResultContextView::new(result);
-    let mut lines = vec![facts.header_line()];
-    let structured_object = facts.structured_object();
-    let terminal_observation = structured_object
-        .and_then(|object| object.get("terminal_observation"))
-        .and_then(serde_json::Value::as_object);
-    if let Some(observation) = terminal_observation {
-        append_json_scalar_line(&mut lines, "exit_code", observation.get("exit_code"));
-        append_json_scalar_line(&mut lines, "signal", observation.get("signal"));
-        append_true_bool_line(&mut lines, "timed_out", observation.get("timed_out"));
-        append_true_bool_line(
-            &mut lines,
-            "output_truncated",
-            observation.get("output_truncated"),
-        );
-    }
-    if let Some(error) = &result.error {
-        lines.push(format!("error_code: {}", error.code));
-    }
-    lines.push("historical_output: omitted".to_string());
-    lines.join("\n")
 }
 
 /// Returns a provider-safe projection of one durable or legacy tool entry.
@@ -168,71 +113,6 @@ pub fn historical_tool_result_context_content(content: &str) -> Option<String> {
         retained.push("historical_output: omitted".to_string());
     }
     Some(retained.join("\n"))
-}
-
-/// Builds a compact durable summary for non-effecting skill actions.
-///
-/// Skill result bodies can contain complete `SKILL.md` documents or catalogs.
-/// Durable transcript storage keeps only metadata that helps audit what
-/// happened without allowing those workflow instructions to become future
-/// model prompt context.
-fn skill_action_result_transcript_summary(result: &ActionResult) -> Option<String> {
-    match result.action_type {
-        "request_skills" => skill_catalog_result_transcript_summary(result),
-        "call_skill" => called_skill_result_transcript_summary(result),
-        _ => None,
-    }
-}
-
-/// Summarizes a skill-catalog action result without copying descriptions.
-fn skill_catalog_result_transcript_summary(result: &ActionResult) -> Option<String> {
-    let data = result.structured_content_json.as_deref()?;
-    let value = serde_json::from_str::<serde_json::Value>(data).ok()?;
-    let skills = value
-        .get("skills")
-        .and_then(serde_json::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let diagnostics = value
-        .get("diagnostics")
-        .and_then(serde_json::Value::as_array)
-        .map_or(0, Vec::len);
-    let names = skills
-        .iter()
-        .filter_map(|skill| skill.get("name").and_then(serde_json::Value::as_str))
-        .collect::<Vec<_>>();
-    let mut lines = vec![format!(
-        "skills={} diagnostics={}",
-        names.len(),
-        diagnostics
-    )];
-    if !names.is_empty() {
-        lines.push(format!("names={}", names.join(",")));
-    }
-    Some(lines.join("\n"))
-}
-
-/// Summarizes a loaded skill result without copying the skill body.
-fn called_skill_result_transcript_summary(result: &ActionResult) -> Option<String> {
-    let data = result.structured_content_json.as_deref()?;
-    let value = serde_json::from_str::<serde_json::Value>(data).ok()?;
-    let object = value.as_object()?;
-    let mut fields = Vec::new();
-    for key in [
-        "name",
-        "source",
-        "path",
-        "skill_bytes",
-        "additional_context_bytes",
-    ] {
-        let Some(value) = object.get(key) else {
-            continue;
-        };
-        if let Some(text) = json_scalar_context_text(value) {
-            fields.push(format!("{key}={text}"));
-        }
-    }
-    (!fields.is_empty()).then(|| fields.join("\n"))
 }
 
 /// Executes the `action_result_context_content` operation for the owning subsystem.

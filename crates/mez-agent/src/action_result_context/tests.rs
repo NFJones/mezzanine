@@ -330,13 +330,14 @@ fn durable_tool_transcripts_omit_shell_and_mcp_bodies() {
     let durable_fetch = action_result_transcript_content(&fetch);
 
     assert!(live_shell.contains("shell-secret-sentinel"));
-    assert!(!durable_shell.contains("shell-secret-sentinel"));
-    assert!(!durable_shell.contains("printf secret"));
+    assert_eq!(durable_shell, live_shell);
+    assert!(durable_shell.contains("shell-secret-sentinel"));
+    assert!(durable_shell.contains("printf secret"));
     assert!(durable_shell.contains("exit_code: 0"));
-    assert!(durable_shell.contains("historical_output: omitted"));
-    assert!(!durable_mcp.contains("mcp-secret-sentinel"));
+    assert!(!durable_shell.contains("historical_output: omitted"));
+    assert!(durable_mcp.contains("mcp-secret-sentinel"));
     assert!(durable_mcp.contains("[action_result mcp-1 mcp_call succeeded]"));
-    assert!(!durable_fetch.contains("web-secret-sentinel"));
+    assert!(durable_fetch.contains("web-secret-sentinel"));
     assert!(durable_fetch.contains("[action_result fetch-1 fetch_url succeeded]"));
 }
 
@@ -360,13 +361,12 @@ fn historical_tool_replay_sanitizes_legacy_content() {
 }
 
 #[test]
-/// Verifies durable skill action results keep metadata, not skill text.
+/// Verifies skill action results use the same exact representation in active
+/// context and durable chronology.
 ///
-/// `request_skills` and `call_skill` action bodies can contain complete
-/// catalogs or full `SKILL.md` documents. Transcript storage should retain a
-/// compact audit summary without letting those workflow instructions become
-/// future context payload.
-fn skill_action_result_transcript_content_summarizes_skill_payloads() {
+/// Once a skill result has been shown to the model, later turns must replay
+/// the same bytes rather than replacing its catalog or document body.
+fn skill_action_result_transcript_content_preserves_exact_payloads() {
     let call_result = succeeded_result(
         "skill-1",
         "call_skill",
@@ -384,12 +384,13 @@ fn skill_action_result_transcript_content_summarizes_skill_payloads() {
     );
     let call_transcript = action_result_transcript_content(&call_result);
 
-    assert!(call_transcript.contains("action_type=call_skill"));
-    assert!(call_transcript.contains("name=review"));
-    assert!(call_transcript.contains("skill_bytes=1024"));
-    assert!(!call_transcript.contains("# Skill:"), "{call_transcript}");
+    assert_eq!(call_transcript, action_result_context_content(&call_result));
+    assert!(call_transcript.contains("[action_result skill-1 call_skill succeeded]"));
+    assert!(call_transcript.contains(r#""name":"review""#));
+    assert!(call_transcript.contains(r#""skill_bytes":1024"#));
+    assert!(call_transcript.contains("# Skill:"), "{call_transcript}");
     assert!(
-        !call_transcript.contains("Do a deep review"),
+        call_transcript.contains("Do a deep review"),
         "{call_transcript}"
     );
 
@@ -414,12 +415,14 @@ fn skill_action_result_transcript_content_summarizes_skill_payloads() {
     );
     let catalog_transcript = action_result_transcript_content(&catalog_result);
 
-    assert!(catalog_transcript.contains("action_type=request_skills"));
-    assert!(catalog_transcript.contains("skills=1"));
-    assert!(catalog_transcript.contains("names=review"));
+    assert_eq!(
+        catalog_transcript,
+        action_result_context_content(&catalog_result)
+    );
+    assert!(catalog_transcript.contains("[action_result catalog-1 request_skills succeeded]"));
     assert!(
-        !catalog_transcript.contains("long description"),
+        catalog_transcript.contains("long description"),
         "{catalog_transcript}"
     );
-    assert!(!catalog_transcript.contains("Available skills"));
+    assert!(catalog_transcript.contains("Available skills"));
 }

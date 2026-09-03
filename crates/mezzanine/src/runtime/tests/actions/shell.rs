@@ -1923,7 +1923,7 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
     }));
     let context = runtime_prepared_context_for_turn(&service, "turn-1");
     assert!(context.blocks().iter().any(|block| {
-        block.source == ContextSourceKind::ActionDetail
+        block.source == ContextSourceKind::ActionResult
             && block
                 .content
                 .contains("[action_result shell-fail shell_command succeeded]")
@@ -1963,7 +1963,7 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
                 .contains("[action_result shell-fail shell_command succeeded]")
     }));
     assert!(request.messages.iter().any(|message| {
-        message.source == ContextSourceKind::ActionDetail
+        message.source == ContextSourceKind::ActionResult
             && message
                 .content
                 .contains("[action_result shell-next shell_command succeeded]")
@@ -2071,7 +2071,7 @@ fn runtime_shell_action_timeout_queues_model_self_correction() {
     );
     let context = runtime_prepared_context_for_turn(&service, &turn.turn_id);
     assert!(context.blocks().iter().any(|block| {
-        block.source == ContextSourceKind::ActionDetail
+        block.source == ContextSourceKind::ActionResult
             && block
                 .content
                 .contains("[action_result patch-timeout apply_patch timed_out]")

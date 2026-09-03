@@ -167,12 +167,11 @@ impl ProviderTranscriptEvent {
         }
     }
 
-    /// Returns a secret-safe event suitable for replay from durable history.
+    /// Returns a reduced event suitable for replay from a legacy transcript.
     ///
-    /// Decoding remains lossless so current-turn provider continuations retain
-    /// complete action output. Durable transcript import calls this method to
-    /// reduce provider-native tool results to canonical status metadata before
-    /// they re-enter model context.
+    /// New typed execution records replay the exact event without calling this
+    /// method. Untyped legacy transcript import retains the reduction because
+    /// those records cannot prove which bytes were originally model-visible.
     pub fn sanitized_for_historical_replay(&self) -> Option<Self> {
         match self {
             Self::OpenAiFunctionCallOutput { call_id, output } => {

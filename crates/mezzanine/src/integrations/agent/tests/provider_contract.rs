@@ -306,7 +306,7 @@ async fn observed_async_provider_records_each_attempt_and_exact_usage_presence()
     request.provider = "batch".to_string();
     request.interaction_kind = mez_agent::ModelInteractionKind::CapabilityContinuation;
     let mcp_live_state = "[mcp integrations]\navailable_servers=1 available_tools=1";
-    let action_detail = "same-turn expanded action detail";
+    let action_result = "exact durable action result";
     request.messages.push(ModelMessage {
         role: ModelMessageRole::Context,
         source: ContextSourceKind::RuntimeHint,
@@ -315,9 +315,9 @@ async fn observed_async_provider_records_each_attempt_and_exact_usage_presence()
     });
     request.messages.push(ModelMessage {
         role: ModelMessageRole::Context,
-        source: ContextSourceKind::ActionDetail,
-        placement: mez_agent::ContextPlacement::EphemeralTail,
-        content: action_detail.to_string(),
+        source: ContextSourceKind::ActionResult,
+        placement: mez_agent::ContextPlacement::ConversationAppend,
+        content: action_result.to_string(),
     });
     provider.send_request_async(&request).await.unwrap();
     let omitted = receiver.recv().await.unwrap();
@@ -337,7 +337,7 @@ async fn observed_async_provider_records_each_attempt_and_exact_usage_presence()
     assert_eq!(omitted.interaction_kind, "capability_continuation");
     assert_eq!(omitted.usage, None);
     assert_eq!(omitted.mcp_live_state_bytes, mcp_live_state.len());
-    assert_eq!(omitted.action_detail_bytes, action_detail.len());
+    assert_eq!(omitted.action_result_bytes, action_result.len());
     assert_eq!(zero.interaction_kind, "maap_repair");
     assert_eq!(zero.usage, Some(explicit_zero));
     assert_eq!(failed.interaction_kind, "output_limit_retry");

@@ -17,7 +17,6 @@ use std::ops::Range;
 use sha2::{Digest, Sha256};
 
 use crate::action_result::ActionResult;
-use crate::action_result_context::action_result_transcript_content;
 use crate::mcp::McpPromptTool;
 use crate::surface::{AllowedActionSet, ModelInteractionKind};
 use crate::{AgentPromptError, AgentPromptErrorKind, ProviderTranscriptEvent};
@@ -72,8 +71,6 @@ pub enum ContextSourceKind {
     RoutedHandoff,
     /// A current-turn action result.
     ActionResult,
-    /// Expanded current-turn action output retained only in request-local state.
-    ActionDetail,
 }
 
 /// Trust domain assigned to one model-context block.
@@ -112,8 +109,7 @@ impl TrustDomain {
             | ContextSourceKind::TranscriptTool
             | ContextSourceKind::CommittedEvidence
             | ContextSourceKind::RoutedHandoff
-            | ContextSourceKind::ActionResult
-            | ContextSourceKind::ActionDetail => Self::ModelOutput,
+            | ContextSourceKind::ActionResult => Self::ModelOutput,
         }
     }
 
@@ -391,12 +387,100 @@ pub enum ProviderContinuityOwner {
 }
 
 impl ProviderContinuityOwner {
+    /// Returns the durable provider identifier for this continuity owner.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenAi => "openai",
+            Self::DeepSeek => "deepseek",
+        }
+    }
+
+    /// Decodes one durable provider identifier.
+    pub fn from_provider_id(provider: &str) -> Option<Self> {
+        match provider {
+            "openai" => Some(Self::OpenAi),
+            "deepseek" => Some(Self::DeepSeek),
+            _ => None,
+        }
+    }
+
     /// Returns whether this owner matches a configured provider id.
     pub fn matches_provider(self, provider: &str) -> bool {
-        match self {
-            Self::OpenAi => provider == "openai",
-            Self::DeepSeek => provider == "deepseek",
+        self.as_str() == provider
+    }
+}
+
+/// Exact execution metadata decoded from one typed transcript record.
+///
+/// The model-visible block remains the matching [`ContextBlock`]. This value
+/// restores causal ownership that is not rendered into provider input, so a
+/// resumed conversation selects the same native or provider-neutral execution
+/// projection and compacts the same atomic group.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedExecutionEvent {
+    block: ContextBlock,
+    execution_group_id: ContextExecutionGroupId,
+    ordinal: u64,
+    provider_owner: Option<ProviderContinuityOwner>,
+}
+
+impl ImportedExecutionEvent {
+    /// Creates one validated imported execution event.
+    pub fn new(
+        block: ContextBlock,
+        execution_group_id: ContextExecutionGroupId,
+        ordinal: u64,
+        provider_owner: Option<ProviderContinuityOwner>,
+    ) -> AgentContextResult<Self> {
+        if block.placement != ContextPlacement::ConversationAppend
+            || block.retention() != ContextRetention::ExecutionGroup
+            || ordinal == 0
+        {
+            return Err(AgentContextError::new(
+                "imported execution events require append-only execution-group blocks and a non-zero ordinal",
+            ));
         }
+        if provider_owner.is_some()
+            && ProviderTranscriptEvent::from_transcript_content(&block.content).is_none()
+        {
+            return Err(AgentContextError::new(
+                "imported provider ownership requires a typed provider continuity payload",
+            ));
+        }
+        if let Some(owner) = provider_owner
+            && ProviderTranscriptEvent::from_transcript_content(&block.content)
+                .is_none_or(|event| event.provider_id() != owner.as_str())
+        {
+            return Err(AgentContextError::new(
+                "imported provider ownership must match the typed continuity payload",
+            ));
+        }
+        Ok(Self {
+            block,
+            execution_group_id,
+            ordinal,
+            provider_owner,
+        })
+    }
+
+    /// Returns the exact model-visible block matched during import.
+    pub fn block(&self) -> &ContextBlock {
+        &self.block
+    }
+
+    /// Returns the original execution-group identity.
+    pub fn execution_group_id(&self) -> &ContextExecutionGroupId {
+        &self.execution_group_id
+    }
+
+    /// Returns the original ordinal within the execution group.
+    pub fn ordinal(&self) -> u64 {
+        self.ordinal
+    }
+
+    /// Returns the provider owner for opaque native continuity, when any.
+    pub fn provider_owner(&self) -> Option<ProviderContinuityOwner> {
+        self.provider_owner
     }
 }
 
@@ -715,7 +799,6 @@ impl ContextBlock {
             ContextSourceKind::TranscriptTool
             | ContextSourceKind::CommittedEvidence
             | ContextSourceKind::ActionResult => ContextSemanticKind::EvidenceEvent,
-            ContextSourceKind::ActionDetail => ContextSemanticKind::LiveState,
             ContextSourceKind::SkillInstruction => ContextSemanticKind::TaskPrelude,
             ContextSourceKind::LocalMessage
             | ContextSourceKind::Memory
@@ -762,7 +845,6 @@ impl ContextBlock {
             | ContextSourceKind::TranscriptTool
             | ContextSourceKind::CommittedEvidence
             | ContextSourceKind::ActionResult => ContextRetention::ExecutionGroup,
-            ContextSourceKind::ActionDetail => ContextRetention::RequestLocal,
             ContextSourceKind::Memory
             | ContextSourceKind::Transcript
             | ContextSourceKind::TranscriptUser => ContextRetention::Summarizable,
@@ -903,6 +985,54 @@ impl AgentContext {
         let context = Self::import_ordered_blocks(blocks)?;
         context.validate_durable()?;
         Ok(context)
+    }
+
+    /// Restores typed execution ownership decoded from durable transcript rows.
+    ///
+    /// Records are matched in transcript order against exact block identity.
+    /// The operation fails atomically on missing, reordered, duplicated, or
+    /// non-monotonic group metadata instead of falling back to inferred
+    /// ownership that could change provider projection or compaction behavior.
+    pub fn restore_imported_execution_events(
+        &mut self,
+        imported: &[ImportedExecutionEvent],
+    ) -> AgentContextResult<()> {
+        if imported.is_empty() {
+            return Ok(());
+        }
+        let mut candidate = self.clone();
+        let mut search_start = 0usize;
+        let mut group_ordinals = BTreeMap::<ContextExecutionGroupId, u64>::new();
+        for record in imported {
+            let previous = group_ordinals
+                .insert(record.execution_group_id.clone(), record.ordinal)
+                .unwrap_or(0);
+            if record.ordinal != previous.saturating_add(1) {
+                return Err(AgentContextError::new(
+                    "imported execution-group ordinals must be contiguous and start at one",
+                ));
+            }
+            let Some(relative_index) = candidate.chronology[search_start..]
+                .iter()
+                .position(|event| event.block == record.block)
+            else {
+                return Err(AgentContextError::new(
+                    "imported execution metadata has no matching chronological block",
+                ));
+            };
+            let index = search_start.saturating_add(relative_index);
+            let event = &mut candidate.chronology[index];
+            event.semantic_kind = record.block.semantic_kind();
+            event.retention = ContextRetention::ExecutionGroup;
+            event.execution_group_id = Some(record.execution_group_id.clone());
+            event.provider_owner = record.provider_owner;
+            event.recoverable_for_compaction = true;
+            search_start = index.saturating_add(1);
+        }
+        candidate.rebuild_projections();
+        candidate.validate_durable()?;
+        *self = candidate;
+        Ok(())
     }
 
     /// Creates durable compatibility context for lower-crate fixtures.
@@ -1965,7 +2095,7 @@ impl AgentContext {
         let mut committed = 0usize;
         for result in results {
             let label = format!("action result {}", result.action_id);
-            let content = action_result_transcript_content(result);
+            let content = crate::action_result_context_content(result);
             let exact_block = candidate
                 .blocks
                 .iter()

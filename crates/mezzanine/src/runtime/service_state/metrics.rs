@@ -33,7 +33,7 @@ pub(crate) struct RuntimeProviderWireRequestStatus {
     pub(crate) stable_input_bytes: Option<usize>,
     pub(crate) volatile_input_bytes: Option<usize>,
     pub(crate) mcp_live_state_bytes: usize,
-    pub(crate) action_detail_bytes: usize,
+    pub(crate) action_result_bytes: usize,
     pub(crate) continuity: Option<mez_agent::OpenAiRequestContinuity>,
 }
 
@@ -421,7 +421,7 @@ impl RuntimeMetricsSnapshot {
                 .as_ref()
                 .map(|diagnostics| diagnostics.volatile_input_bytes),
             mcp_live_state_bytes: observation.mcp_live_state_bytes,
-            action_detail_bytes: observation.action_detail_bytes,
+            action_result_bytes: observation.action_result_bytes,
             continuity,
         };
         if observation.purpose
@@ -727,7 +727,7 @@ mod provider_wire_tests {
                 .map(|message| message.content.len())
                 .sum(),
             mcp_live_state_bytes: 0,
-            action_detail_bytes: 0,
+            action_result_bytes: 0,
             openai_diagnostics: Some(
                 mez_agent::openai_prompt_cache_diagnostics_for_request(request).unwrap(),
             ),

@@ -116,7 +116,7 @@ fn runtime_show_metrics_reports_provider_tokens_by_model() {
                     .map(|message| message.content.len())
                     .sum(),
                 mcp_live_state_bytes: 0,
-                action_detail_bytes: 0,
+                action_result_bytes: 0,
                 openai_diagnostics: None,
                 diagnostics_failed: false,
                 usage: None,

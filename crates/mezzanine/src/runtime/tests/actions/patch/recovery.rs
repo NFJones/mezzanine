@@ -122,7 +122,7 @@ fn runtime_apply_patch_invalid_params_queues_model_self_correction() {
     let durable = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
     let context = runtime_prepared_context_for_turn(&service, &turn.turn_id);
     assert!(context.blocks().iter().any(|block| {
-        block.source == ContextSourceKind::ActionDetail
+        block.source == ContextSourceKind::ActionResult
             && block
                 .content
                 .contains("[action_result patch-invalid apply_patch failed]")
@@ -243,7 +243,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_preserves_failure_evidence() {
     assert_no_persisted_failure_feedback(durable);
     let context = runtime_prepared_context_for_turn(&service, &turn.turn_id);
     assert!(context.blocks().iter().any(|block| {
-        block.source == ContextSourceKind::ActionDetail
+        block.source == ContextSourceKind::ActionResult
             && block
                 .content
                 .contains("apply_patch: hunk did not match: src/driver/mod.rs")
@@ -953,7 +953,7 @@ fn runtime_apply_patch_unsafe_path_recovery_preserves_diagnostic() {
     assert_no_persisted_failure_feedback(durable);
     let context = runtime_prepared_context_for_turn(&service, &turn.turn_id);
     assert!(context.blocks().iter().any(|block| {
-        block.source == ContextSourceKind::ActionDetail
+        block.source == ContextSourceKind::ActionResult
             && block
                 .content
                 .contains("apply_patch: unsafe patch path: /home/neil/Documents/repos/chimera/src/conf/document.rs")

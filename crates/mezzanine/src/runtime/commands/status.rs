@@ -452,19 +452,19 @@ impl RuntimeSessionService {
                 ),
             ],
             vec![
-                "Request-local input".to_string(),
+                "Request input composition".to_string(),
                 provider_wire_status.map_or_else(
                     || "unknown".to_string(),
                     |status| {
                         format!(
-                            "request={} total_volatile_bytes={} mcp_bytes={} action_detail_bytes={}",
+                            "request={} total_volatile_bytes={} mcp_bytes={} action_result_bytes={}",
                             status.request_id,
                             status.volatile_input_bytes.map_or_else(
                                 || "unknown".to_string(),
                                 |value| value.to_string()
                             ),
                             status.mcp_live_state_bytes,
-                            status.action_detail_bytes,
+                            status.action_result_bytes,
                         )
                     },
                 ),

@@ -18,6 +18,14 @@ terminal sources retain distinct roles. Terminal text becomes context only when
 an explicit action result includes it; live controller state, passive terminal
 content, credentials, and unrelated pane data are not normal model context.
 
+An action result has one bounded model-visible representation. Mez appends that
+representation once, stores it in the conversation transcript, and replays the
+same bytes on later turns and after restart or resume. This includes captured
+shell, patch, MCP, web, fetch, and skill output, so transcripts and context
+exports can contain sensitive task data. Later results append after earlier
+ones; they do not move or replace prior output. Only explicit conversation
+compaction may summarize complete older execution groups.
+
 The pane conversation can survive hiding the agent shell, detaching and
 reattaching the client, and ordinary session persistence. A forked or routed
 conversation uses its captured source boundary and does not absorb later parent

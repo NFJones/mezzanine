@@ -208,7 +208,6 @@ impl RuntimeSessionService {
         self.agent
             .agent_turn_current_environment_snapshots
             .remove(turn_id);
-        self.agent.agent_turn_action_result_details.remove(turn_id);
         self.agent_turn_executions_mut().remove(turn_id);
         self.agent.sandbox_failure_assessments.remove(turn_id);
         self.clear_agent_failure_feedback_attempts_for_turn(turn_id);

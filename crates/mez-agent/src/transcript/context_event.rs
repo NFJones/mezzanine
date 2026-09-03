@@ -10,7 +10,9 @@
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::ContextSourceKind;
+use crate::{
+    ContextExecutionGroupId, ContextSourceKind, ProviderContinuityOwner, ProviderTranscriptEvent,
+};
 
 /// Marker prefix for provider-independent transcript context events.
 pub const TRANSCRIPT_CONTEXT_EVENT_MARKER: &str = "[mez-transcript-context-event/v1]\n";
@@ -68,6 +70,14 @@ pub enum TranscriptContextEvent {
     ExecutionBlock {
         /// Original provider-neutral context provenance.
         source: ContextSourceKind,
+        /// SHA-256 digest of source, label, and exact model-visible content.
+        projection_sha256: String,
+        /// Stable causal execution owner for new exact records.
+        execution_group_id: Option<ContextExecutionGroupId>,
+        /// Non-zero ordinal within the causal execution group.
+        ordinal: Option<u64>,
+        /// Exclusive provider owner for opaque native continuity records.
+        provider_owner: Option<ProviderContinuityOwner>,
         /// Exact model-visible block label.
         label: String,
         /// Exact canonical model-visible content.
@@ -140,6 +150,49 @@ impl TranscriptContextEvent {
         }
         Some(Self::ExecutionBlock {
             source,
+            projection_sha256: execution_block_sha256(source, &label, &content, None, None, None),
+            execution_group_id: None,
+            ordinal: None,
+            provider_owner: None,
+            label,
+            content,
+        })
+    }
+
+    /// Builds one validated exact execution block with durable causal metadata.
+    pub fn execution_block_with_metadata(
+        source: ContextSourceKind,
+        label: impl Into<String>,
+        content: impl Into<String>,
+        execution_group_id: ContextExecutionGroupId,
+        ordinal: u64,
+        provider_owner: Option<ProviderContinuityOwner>,
+    ) -> Option<Self> {
+        let label = label.into();
+        let content = content.into();
+        if !valid_execution_block(source, &label, &content) || ordinal == 0 {
+            return None;
+        }
+        if let Some(owner) = provider_owner
+            && ProviderTranscriptEvent::from_transcript_content(&content)
+                .is_none_or(|event| event.provider_id() != owner.as_str())
+        {
+            return None;
+        }
+        let projection_sha256 = execution_block_sha256(
+            source,
+            &label,
+            &content,
+            Some(execution_group_id.as_str()),
+            Some(ordinal),
+            provider_owner,
+        );
+        Some(Self::ExecutionBlock {
+            source,
+            projection_sha256,
+            execution_group_id: Some(execution_group_id),
+            ordinal: Some(ordinal),
+            provider_owner,
             label,
             content,
         })
@@ -177,12 +230,20 @@ impl TranscriptContextEvent {
             }),
             Self::ExecutionBlock {
                 source,
+                projection_sha256,
+                execution_group_id,
+                ordinal,
+                provider_owner,
                 label,
                 content,
             } => serde_json::json!({
                 "version": TRANSCRIPT_CONTEXT_EVENT_VERSION,
                 "kind": EXECUTION_BLOCK_KIND,
                 "source": execution_block_source_name(*source),
+                "projection_sha256": projection_sha256,
+                "execution_group_id": execution_group_id.as_ref().map(ContextExecutionGroupId::as_str),
+                "ordinal": ordinal,
+                "provider_owner": provider_owner.map(ProviderContinuityOwner::as_str),
                 "label": label,
                 "content": content,
             }),
@@ -262,8 +323,55 @@ impl TranscriptContextEvent {
                 if !valid_execution_block(source, label, content) {
                     return None;
                 }
+                let execution_group_id = value
+                    .get("execution_group_id")
+                    .and_then(Value::as_str)
+                    .map(ContextExecutionGroupId::new)
+                    .transpose()
+                    .ok()?;
+                let ordinal = value.get("ordinal").and_then(Value::as_u64);
+                if execution_group_id.is_some() != ordinal.is_some()
+                    || ordinal.is_some_and(|ordinal| ordinal == 0)
+                {
+                    return None;
+                }
+                let provider_owner = match value.get("provider_owner") {
+                    None | Some(Value::Null) => None,
+                    Some(value) => {
+                        Some(ProviderContinuityOwner::from_provider_id(value.as_str()?)?)
+                    }
+                };
+                if provider_owner.is_some() && execution_group_id.is_none() {
+                    return None;
+                }
+                if let Some(owner) = provider_owner
+                    && ProviderTranscriptEvent::from_transcript_content(content)
+                        .is_none_or(|event| event.provider_id() != owner.as_str())
+                {
+                    return None;
+                }
+                let projection_sha256 = value.get("projection_sha256").and_then(Value::as_str);
+                let expected = execution_block_sha256(
+                    source,
+                    label,
+                    content,
+                    execution_group_id
+                        .as_ref()
+                        .map(ContextExecutionGroupId::as_str),
+                    ordinal,
+                    provider_owner,
+                );
+                if (execution_group_id.is_some() && projection_sha256.is_none())
+                    || projection_sha256.is_some_and(|digest| digest != expected)
+                {
+                    return None;
+                }
                 Some(Self::ExecutionBlock {
                     source,
+                    projection_sha256: projection_sha256.unwrap_or(&expected).to_string(),
+                    execution_group_id,
+                    ordinal,
+                    provider_owner,
                     label: label.to_string(),
                     content: content.to_string(),
                 })
@@ -390,6 +498,40 @@ fn valid_execution_block(source: ContextSourceKind, label: &str, content: &str) 
         && !content.bytes().any(|byte| byte == 0)
 }
 
+/// Digests one exact execution block without ambiguous field concatenation.
+fn execution_block_sha256(
+    source: ContextSourceKind,
+    label: &str,
+    content: &str,
+    execution_group_id: Option<&str>,
+    ordinal: Option<u64>,
+    provider_owner: Option<ProviderContinuityOwner>,
+) -> String {
+    let material = if execution_group_id.is_none() && ordinal.is_none() && provider_owner.is_none()
+    {
+        format!(
+            "{}\0{}\0{}",
+            execution_block_source_name(source),
+            label,
+            content
+        )
+    } else {
+        format!(
+            "{}\0{}\0{}\0{}\0{}\0{}",
+            execution_block_source_name(source),
+            label,
+            content,
+            execution_group_id.unwrap_or_default(),
+            ordinal.map_or_else(String::new, |value| value.to_string()),
+            provider_owner.map_or("", ProviderContinuityOwner::as_str),
+        )
+    };
+    Sha256::digest(material.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -472,10 +614,14 @@ mod tests {
     /// model-visible bytes across durable transcript encoding and replay.
     #[test]
     fn execution_block_transcript_context_event_round_trips() {
-        let event = TranscriptContextEvent::execution_block(
+        let group = ContextExecutionGroupId::new("execution-group-1").unwrap();
+        let event = TranscriptContextEvent::execution_block_with_metadata(
             ContextSourceKind::ActionResult,
             "action result shell-1",
-            "[action_result shell-1 shell_command succeeded]\nhistorical_output: omitted",
+            "[action_result shell-1 shell_command succeeded]\noutput:\nexact output",
+            group,
+            2,
+            None,
         )
         .unwrap();
 
@@ -485,6 +631,10 @@ mod tests {
             TranscriptContextEvent::from_transcript_content(&encoded),
             Some(event)
         );
+        let tampered = encoded.replace("exact output", "rewritten output");
+        assert!(TranscriptContextEvent::from_transcript_content(&tampered).is_none());
+        let tampered = encoded.replace("\"ordinal\":2", "\"ordinal\":3");
+        assert!(TranscriptContextEvent::from_transcript_content(&tampered).is_none());
         assert!(
             TranscriptContextEvent::execution_block(
                 ContextSourceKind::UserInstruction,

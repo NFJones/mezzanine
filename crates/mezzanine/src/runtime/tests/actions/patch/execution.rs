@@ -152,7 +152,7 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
         .blocks()
         .iter()
         .find(|block| {
-            block.source == ContextSourceKind::ActionDetail
+            block.source == ContextSourceKind::ActionResult
                 && block.content.contains("diff -- apply patch")
         })
         .map(|block| block.content.clone())
@@ -1032,7 +1032,7 @@ fn runtime_apply_patch_pane_input_failure_queues_model_self_correction() {
     let durable = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
     let context = runtime_prepared_context_for_turn(&service, &turn.turn_id);
     assert!(context.blocks().iter().any(|block| {
-        block.source == ContextSourceKind::ActionDetail
+        block.source == ContextSourceKind::ActionResult
             && block
                 .content
                 .contains("[action_result patch-transport apply_patch failed]")

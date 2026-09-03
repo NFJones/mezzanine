@@ -222,11 +222,11 @@ async fn runtime_routed_presentation_retries_correctable_patch_failure() {
         .find(|block| block.source == ContextSourceKind::ActionResult)
         .unwrap();
     assert!(
-        canonical_failure
+        !canonical_failure
             .content
             .contains("historical_output: omitted")
     );
-    assert!(!canonical_failure.content.contains(diagnostic));
+    assert!(canonical_failure.content.contains(diagnostic));
     let (prepared, _) = service
         .prepare_agent_turn_model_context(
             &turn,
@@ -235,9 +235,14 @@ async fn runtime_routed_presentation_retries_correctable_patch_failure() {
             &runtime_model_profile("openai", "test"),
         )
         .unwrap();
-    assert!(prepared.live_state().iter().any(|block| {
-        block.label == "current action detail malformed-routed-patch"
-            && block.content.contains(diagnostic)
+    assert!(
+        prepared
+            .live_state()
+            .iter()
+            .all(|block| { block.label != "current action detail malformed-routed-patch" })
+    );
+    assert!(prepared.durable().blocks().iter().any(|block| {
+        block.source == ContextSourceKind::ActionResult && block.content.contains(diagnostic)
     }));
 
     service.remove_pending_agent_provider_task(&turn.turn_id);
@@ -1631,10 +1636,12 @@ fn runtime_blocked_execution_transcript_persists_later_group_delta() {
     let first_action = mez_agent::AgentAction {
         id: "first-action".to_string(),
         rationale: "complete the first action".to_string(),
-        payload: mez_agent::AgentActionPayload::Say {
-            status: mez_agent::SayStatus::Progress,
-            text: "first".to_string(),
-            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: "Produce exact output".to_string(),
+            command: "printf exact-cross-turn-output".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
         },
     };
     let mut first_execution = mez_agent::AgentTurnExecution {
@@ -1663,12 +1670,32 @@ fn runtime_blocked_execution_transcript_persists_later_group_delta() {
     let first_result = mez_agent::ActionResult::succeeded(
         &turn,
         &first_action,
-        vec!["first action settled".to_string()],
-        None,
+        vec!["shell command exited with status 0".to_string()],
+        Some(
+            serde_json::json!({
+                "command": "printf exact-cross-turn-output",
+                "execution_transport": "spawned_shell",
+                "terminal_observation": {
+                    "exit_code": 0,
+                    "combined_output_preview": "exact-cross-turn-output"
+                }
+            })
+            .to_string(),
+        ),
     );
     service
         .commit_settled_action_results_context(&turn.turn_id, std::slice::from_ref(&first_result))
         .unwrap();
+    let first_exact_result = service
+        .agent_turn_contexts()
+        .get(&turn.turn_id)
+        .unwrap()
+        .blocks()
+        .iter()
+        .find(|block| block.label == "action result first-action")
+        .unwrap()
+        .content
+        .clone();
     let second_group = mez_agent::ContextExecutionGroupId::new("terminal-second-group").unwrap();
     service
         .agent_turn_contexts_mut()
@@ -1719,19 +1746,25 @@ fn runtime_blocked_execution_transcript_persists_later_group_delta() {
     assert!(delta_count > 0);
     assert_eq!(replay_count, 0);
     assert_eq!(exact_blocks, 4);
-    let exact_labels = entries
+    let exact_records = entries
         .iter()
         .filter_map(|entry| {
             match mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content) {
-                Some(mez_agent::TranscriptContextEvent::ExecutionBlock { label, .. }) => {
-                    Some(label)
-                }
+                Some(mez_agent::TranscriptContextEvent::ExecutionBlock {
+                    label,
+                    execution_group_id,
+                    ordinal,
+                    ..
+                }) => Some((label, execution_group_id, ordinal)),
                 _ => None,
             }
         })
         .collect::<Vec<_>>();
     assert_eq!(
-        exact_labels,
+        exact_records
+            .iter()
+            .map(|record| record.0.as_str())
+            .collect::<Vec<_>>(),
         [
             "assistant first group",
             "action result first-action",
@@ -1739,6 +1772,28 @@ fn runtime_blocked_execution_transcript_persists_later_group_delta() {
             "action result second-action",
         ]
     );
+    assert!(exact_records.iter().all(|record| record.1.is_some()));
+    assert_eq!(exact_records[0].1, exact_records[1].1);
+    assert_eq!(exact_records[2].1, exact_records[3].1);
+    assert_ne!(exact_records[0].1, exact_records[2].1);
+    assert_eq!(
+        exact_records
+            .iter()
+            .map(|record| record.2)
+            .collect::<Vec<_>>(),
+        [Some(1), Some(2), Some(1), Some(2)]
+    );
+    let next_context = service
+        .agent_context_for_pane_prompt("%1", "inspect the exact prior output", 0)
+        .unwrap();
+    let replayed_result = next_context
+        .blocks()
+        .iter()
+        .find(|block| block.label == "action result first-action")
+        .unwrap();
+    assert_eq!(replayed_result.source, ContextSourceKind::ActionResult);
+    assert_eq!(replayed_result.content, first_exact_result);
+    assert!(replayed_result.content.contains("exact-cross-turn-output"));
     let _ = std::fs::remove_dir_all(transcript_root);
 }
 
@@ -2836,16 +2891,16 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
             && block
                 .content
                 .contains("[action_result fetch-ok fetch_url succeeded]")
-            && block.content.contains("historical_output: omitted")
-            && !block.content.contains("provider document body")
+            && !block.content.contains("historical_output: omitted")
+            && block.content.contains("provider document body")
     }));
     assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block
                 .content
                 .contains("[action_result fetch-404 fetch_url failed]")
-            && block.content.contains("historical_output: omitted")
-            && !block.content.contains("network request returned HTTP 404")
+            && !block.content.contains("historical_output: omitted")
+            && block.content.contains("network request returned HTTP 404")
     }));
     let (prepared, _) = service
         .prepare_agent_turn_model_context(
@@ -2855,12 +2910,16 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
             &runtime_model_profile("runtime-batch", "test"),
         )
         .unwrap();
-    assert!(prepared.live_state().iter().any(|block| {
-        block.label == "current action detail fetch-ok"
+    assert!(prepared.live_state().iter().all(|block| {
+        block.label != "current action detail fetch-ok"
+            && block.label != "current action detail fetch-404"
+    }));
+    assert!(prepared.durable().blocks().iter().any(|block| {
+        block.source == ContextSourceKind::ActionResult
             && block.content.contains("provider document body")
     }));
-    assert!(prepared.live_state().iter().any(|block| {
-        block.label == "current action detail fetch-404"
+    assert!(prepared.durable().blocks().iter().any(|block| {
+        block.source == ContextSourceKind::ActionResult
             && block.content.contains("network request returned HTTP 404")
     }));
     let history = service

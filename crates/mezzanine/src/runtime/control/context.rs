@@ -14,12 +14,21 @@ const AGENT_TRANSCRIPT_TOOL_CONTEXT_LIMIT_BYTES: usize = 256 * 1024;
 const LEGACY_MAAP_ASSISTANT_CONTEXT: &str =
     "[legacy MAAP assistant execution omitted from transcript replay]";
 
-/// Builds model-context blocks from durable transcript entries for one runtime pane.
-pub(super) fn runtime_agent_transcript_context_blocks(
+/// Exact transcript projection plus non-model-visible execution ownership.
+pub(super) struct RuntimeAgentTranscriptContext {
+    /// Provider-visible blocks in durable transcript order.
+    pub(super) blocks: Vec<ContextBlock>,
+    /// Typed causal metadata for exact execution blocks.
+    pub(super) execution_events: Vec<mez_agent::ImportedExecutionEvent>,
+}
+
+/// Builds exact model context and typed execution ownership from transcripts.
+pub(super) fn runtime_agent_transcript_context(
     pane_id: &str,
     entries: &[TranscriptEntry],
-) -> Vec<ContextBlock> {
+) -> RuntimeAgentTranscriptContext {
     let mut blocks = Vec::new();
+    let mut execution_events = Vec::new();
     let exact_execution_turns = entries
         .iter()
         .filter_map(|entry| {
@@ -35,16 +44,31 @@ pub(super) fn runtime_agent_transcript_context_blocks(
         if entry.role == TranscriptRole::System
             && let Some(TranscriptContextEvent::ExecutionBlock {
                 source,
+                execution_group_id,
+                ordinal,
+                provider_owner,
                 label,
                 content,
+                ..
             }) = TranscriptContextEvent::from_transcript_content(&entry.content)
         {
-            blocks.push(ContextBlock {
+            let block = ContextBlock {
                 source,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
                 label,
                 content,
-            });
+            };
+            if let (Some(execution_group_id), Some(ordinal)) = (execution_group_id, ordinal)
+                && let Ok(imported) = mez_agent::ImportedExecutionEvent::new(
+                    block.clone(),
+                    execution_group_id,
+                    ordinal,
+                    provider_owner,
+                )
+            {
+                execution_events.push(imported);
+            }
+            blocks.push(block);
             continue;
         }
         if entry.role == TranscriptRole::System
@@ -129,7 +153,10 @@ pub(super) fn runtime_agent_transcript_context_blocks(
             content,
         });
     }
-    blocks
+    RuntimeAgentTranscriptContext {
+        blocks,
+        execution_events,
+    }
 }
 
 /// Maps a stored transcript role to a model-context source that preserves the

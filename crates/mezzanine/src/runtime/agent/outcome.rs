@@ -212,17 +212,6 @@ impl RuntimeSessionService {
         turn_id: &str,
         results: &[ActionResult],
     ) -> Result<usize> {
-        let action_result_details = results
-            .iter()
-            .map(|result| {
-                let expanded = mez_agent::action_result_context_content(result);
-                let canonical = mez_agent::action_result_transcript_content(result);
-                (
-                    result.action_id.clone(),
-                    (expanded != canonical).then_some(expanded),
-                )
-            })
-            .collect::<Vec<_>>();
         let action_ownership = self
             .agent
             .agent_execution_groups_by_turn
@@ -324,18 +313,6 @@ impl RuntimeSessionService {
                         true,
                     )
                     .map_err(|error| MezError::invalid_state(error.to_string()))?;
-            }
-        }
-        let details = self
-            .agent
-            .agent_turn_action_result_details
-            .entry(turn_id.to_string())
-            .or_default();
-        for (action_id, content) in action_result_details {
-            if let Some(content) = content {
-                details.insert(action_id, content);
-            } else {
-                details.remove(&action_id);
             }
         }
         Ok(committed)

@@ -4711,10 +4711,9 @@ NOT be rewritten as an explicit zero. Retained continuity baselines and latest
 conversation samples MUST be bounded with deterministic eviction, and stale
 observations MUST be rejected unless background compaction or memory work still
 belongs to the pane's current conversation.
-Per-wire diagnostics MUST report request-local MCP-manifest bytes and expanded
-same-turn action-detail bytes separately from the durable provider prefix, while
-retaining complete callable MCP schemas whenever the active provider requires
-them.
+Per-wire diagnostics MUST report request-local MCP-manifest bytes and exact
+durable action-result bytes separately, while retaining complete callable MCP
+schemas whenever the active provider requires them.
 
 Capability continuation, MAAP repair, output-limit retry, failure summary,
 routed handoff and repair, routed presentation and failure explanation,
@@ -4739,15 +4738,21 @@ the default capability-decision surface merely because the previous action was
 executed outside the provider worker. Live MCP, memory, and issue availability
 MUST still remove retained actions that are no longer executable before the
 next provider request.
-Settled action evidence MUST use its bounded, secret-safe durable projection
-before it first enters cache-eligible chronology. Any expanded output required
-for same-turn reasoning MUST be isolated in request-local live state and MUST
-be discarded with the owning turn. Every closed execution-group block consumed
-by a provider request, including controller state, assistant response, native
-provider continuity, and canonical action evidence, MUST persist and replay
-with byte-identical source, label, content, and order. Display-oriented
-transcript rows MAY coexist for audit and resume UX, but MUST NOT create a
-second model-context projection when exact execution-block records are present.
+Settled action evidence MUST use one bounded canonical model-visible projection
+before it first enters cache-eligible chronology. That exact projection,
+including captured shell, patch, MCP, web, fetch, skill, and other action output,
+MUST be durable and MUST remain byte-identical within and across turns. It MUST
+NOT be reconstructed as request-local live state, replaced with an omitted-output
+summary at a turn boundary, or reordered when a later action settles. Every
+closed execution-group block consumed by a provider request, including
+controller state, assistant response, native provider continuity, and canonical
+action evidence, MUST persist and replay with byte-identical source, label,
+content, and order. Display-oriented transcript rows MAY coexist for audit and
+resume UX, but MUST NOT create a second model-context projection when exact
+execution-block records are present. Transcript storage and export therefore
+contain the exact bounded action output supplied to the model; compaction is the
+only ordinary boundary allowed to replace complete older execution groups with
+a summary.
 Once deterministic action evidence settles, it MUST be committed exactly once
 to append-only `ConversationAppend` chronology and any volatile copy MUST be
 removed atomically. A settlement batch containing a running action or blocked
@@ -5852,9 +5857,13 @@ files, web content, and model output as separate context sources.
 Conversation transcript replay MUST preserve the author role of each replayed
 entry. Prior user messages MUST be supplied as user context, prior visible
 assistant responses MUST be supplied as assistant context, and prior tool or
-action results MUST be supplied only through a bounded, sanitized tool-result
-projection. Compact action/audit summaries MUST NOT replace visible assistant
-text when that text is needed for later references.
+action results MUST replay the exact bounded projection first supplied to the
+model. Newly persisted typed execution records MUST NOT sanitize, omit, truncate,
+or rewrap those bytes at an ordinary turn, restart, resume, or provider-switch
+boundary. Defensive reduction MAY remain only for legacy transcript records
+whose original provider-visible projection or provenance is unavailable.
+Compact action/audit summaries MUST NOT replace visible assistant text when that
+text is needed for later references.
 Normal provider-context construction MUST replay the complete active transcript
 projection in sequence order without applying a recent-entry or byte-tail limit.
 For an ordinary conversation, the active projection is the exact retained raw

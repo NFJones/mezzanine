@@ -1354,7 +1354,7 @@ fn runtime_shell_pane_not_ready_queues_model_self_correction() {
     let durable = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
     let context = runtime_prepared_context_for_turn(&service, &turn.turn_id);
     assert!(context.blocks().iter().any(|block| {
-        block.source == ContextSourceKind::ActionDetail
+        block.source == ContextSourceKind::ActionResult
             && block
                 .content
                 .contains("[action_result shell-not-ready shell_command failed]")

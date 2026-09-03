@@ -81,26 +81,6 @@ impl RuntimeSessionService {
                 )
                 .map_err(|error| MezError::invalid_state(error.to_string()))?;
         }
-        if let Some(details) = self
-            .agent
-            .agent_turn_action_result_details
-            .get(&turn.turn_id)
-        {
-            for (action_id, content) in details {
-                request_context
-                    .insert_typed_block(
-                        ContextBlock::live_state(
-                            ContextSourceKind::ActionDetail,
-                            format!("current action detail {action_id}"),
-                            content.clone(),
-                        ),
-                        ContextSemanticKind::LiveState,
-                        ContextRetention::RequestLocal,
-                        false,
-                    )
-                    .map_err(|error| MezError::invalid_state(error.to_string()))?;
-            }
-        }
         if let Some(state) = self.agent.agent_turn_output_limit_states.get(&turn.turn_id) {
             request_context
                 .insert_typed_block(
