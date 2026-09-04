@@ -197,12 +197,27 @@ pub(crate) fn runtime_subagent_state_json(
     model_profile: Option<&str>,
 ) -> String {
     let model = model_profile.unwrap_or("default");
+    let initial_model_size = spawn
+        .initial_model_size
+        .as_deref()
+        .map(|value| format!(r#""{}""#, json_escape(value)))
+        .unwrap_or_else(|| "null".to_string());
+    let initial_reasoning_effort = spawn
+        .initial_reasoning_effort
+        .as_deref()
+        .map(|value| format!(r#""{}""#, json_escape(value)))
+        .unwrap_or_else(|| "null".to_string());
+    let initial_model_profile = if spawn.initial_model_size.is_some() {
+        format!(r#""{}""#, json_escape(model))
+    } else {
+        "null".to_string()
+    };
     let visible = matches!(
         spawn.placement.as_str(),
         "visible" | "focused" | "new-pane" | "new-window"
     );
     format!(
-        r#"{{"id":"{}","version":1,"display_name":"{}","session_id":"{}","pane_id":"{}","status":"{}","visible":{},"conversation_id":"{}","model_profile":"{}","cooperation_mode":"{}","read_scopes":{},"write_scopes":{},"session":"{}","last_turn_id":"{}","role":"{}","parent_agent_id":"{}"}}"#,
+        r#"{{"id":"{}","version":1,"display_name":"{}","session_id":"{}","pane_id":"{}","status":"{}","visible":{},"conversation_id":"{}","model_profile":"{}","initial_model_size":{},"initial_reasoning_effort":{},"initial_model_profile":{},"cooperation_mode":"{}","read_scopes":{},"write_scopes":{},"session":"{}","last_turn_id":"{}","role":"{}","parent_agent_id":"{}"}}"#,
         json_escape(agent_id),
         json_escape(display_name),
         json_escape(session.id.as_str()),
@@ -214,6 +229,9 @@ pub(crate) fn runtime_subagent_state_json(
         visible,
         json_escape(agent_id),
         json_escape(model),
+        initial_model_size,
+        initial_reasoning_effort,
+        initial_model_profile,
         runtime_cooperation_mode_name(spawn.cooperation_mode),
         runtime_string_array_json(&spawn.read_scopes),
         runtime_string_array_json(&spawn.write_scopes),

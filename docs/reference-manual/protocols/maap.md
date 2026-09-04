@@ -44,7 +44,7 @@ surface; an absent action family must be requested, not emulated.
 | `web_search` | `query` | Runtime-owned web search, only for user-requested current web information. |
 | `fetch_url` | `url` | Runtime-owned HTTP(S) retrieval, never a local-path reader. |
 | `send_message` | `recipient`, `content_type`, `payload` | Requests local MMP delivery. |
-| `spawn_agent` | `role`, `task_prompt` | Requests pane-backed delegation. Optional `session: fork | new` selects a bounded immutable parent-history snapshot or an isolated child session; scope and policy remain runtime-controlled. |
+| `spawn_agent` | `role`, `task_prompt` | Requests pane-backed delegation. Optional `session: fork | new` selects a bounded immutable parent-history snapshot or an isolated child session. Optional atomic `size` and `reasoning_effort` select the initial child turn only; scope and policy remain runtime-controlled. |
 | `config_change` | `setting_path`, `operation`, `value` | Proposes a supported live leaf configuration mutation. Set values accept strings, signed integers, booleans, or string arrays; objects, null set-values, floats, and mixed arrays are rejected. Provider schemas carry the value as a string containing a JSON scalar or string array, while plain non-JSON text is a string value. |
 | `mcp_server_search` | `query`, `limit` | Searches configured MCP directory records and persists safe results as durable action evidence. |
 | `mcp_server_get` | `server` | Retrieves one referencable server's complete safe tool contract; retrieval is required before calling it. |
@@ -76,7 +76,11 @@ provider schema may omit from a particular turn:
 - `memory_search`: optional `limit`; `memory_store`: optional `priority`,
   `scope`, and `expires_in_days`.
 - `spawn_agent`: optional `placement`, `cooperation_mode`, `read_scopes`,
-  `write_scopes`, and `session`. `session: fork` copies the bounded parent
+  `write_scopes`, `session`, and atomic `size`/`reasoning_effort`. `size` is
+  `small`, `medium`, or `large`; `reasoning_effort` is `low`, `medium`,
+  `high`, or `xhigh`; both fields are required together. A valid pair resolves
+  against the inherited auto-sizing configuration, applies only to the
+  initial child turn, and bypasses automatic routing for that turn. `session: fork` copies the bounded parent
   transcript into a distinct child conversation; `session: new`, or omission,
   creates an isolated child conversation. Include task-critical facts in
   `task_prompt` in either mode. Session selection never broadens authority;

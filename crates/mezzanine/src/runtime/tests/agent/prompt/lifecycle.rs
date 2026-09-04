@@ -57,6 +57,8 @@ fn runtime_native_subagent_startup_bypasses_pane_bootstrap() {
                 write_scopes: Vec::new(),
                 write_scopes_defaulted: false,
                 session_mode: mez_agent::SubagentSessionMode::New,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
                 task_prompt: "inspect native startup".to_string(),
                 explicit_user_approval: false,
                 skip_initial_turn: false,
@@ -130,6 +132,8 @@ fn runtime_terminal_profile_spawn_excludes_spawn_agent() {
                 write_scopes: Vec::new(),
                 write_scopes_defaulted: true,
                 session_mode: mez_agent::SubagentSessionMode::New,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
                 task_prompt: "finish without delegation".to_string(),
                 explicit_user_approval: false,
                 skip_initial_turn: false,
@@ -186,6 +190,8 @@ fn runtime_posix_subagent_startup_releases_queued_turn_after_bootstrap() {
                 write_scopes: Vec::new(),
                 write_scopes_defaulted: false,
                 session_mode: mez_agent::SubagentSessionMode::New,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
                 task_prompt: "inspect managed startup".to_string(),
                 explicit_user_approval: false,
                 skip_initial_turn: false,
@@ -321,6 +327,8 @@ fn runtime_subagent_startup_timeout_settles_queued_turn() {
                 write_scopes: Vec::new(),
                 write_scopes_defaulted: false,
                 session_mode: mez_agent::SubagentSessionMode::New,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
                 task_prompt: "inspect startup timeout".to_string(),
                 explicit_user_approval: false,
                 skip_initial_turn: false,
@@ -389,6 +397,8 @@ fn runtime_subagent_spawn_logs_parent_prompt_in_child_pane() {
         write_scopes: Vec::new(),
         write_scopes_defaulted: false,
         session_mode: SubagentSessionMode::New,
+        initial_model_size: None,
+        initial_reasoning_effort: None,
         task_prompt: "inspect the renderer issue".to_string(),
         explicit_user_approval: false,
         skip_initial_turn: false,
@@ -487,6 +497,8 @@ fn runtime_subagent_inherits_parent_plan_and_latency_preferences() {
                 write_scopes: Vec::new(),
                 write_scopes_defaulted: false,
                 session_mode: mez_agent::SubagentSessionMode::New,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
                 task_prompt: "inspect the inherited preferences".to_string(),
                 explicit_user_approval: false,
                 skip_initial_turn: true,
@@ -544,6 +556,8 @@ fn runtime_subagent_default_preferences_do_not_create_overrides() {
                 write_scopes: Vec::new(),
                 write_scopes_defaulted: false,
                 session_mode: mez_agent::SubagentSessionMode::New,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
                 task_prompt: "inspect the inherited defaults".to_string(),
                 explicit_user_approval: false,
                 skip_initial_turn: true,
@@ -603,6 +617,8 @@ fn runtime_subagent_sessions_are_durable_but_hidden_from_resume() {
         write_scopes: Vec::new(),
         write_scopes_defaulted: false,
         session_mode: SubagentSessionMode::New,
+        initial_model_size: None,
+        initial_reasoning_effort: None,
         task_prompt: "inspect the renderer issue".to_string(),
         explicit_user_approval: false,
         skip_initial_turn: false,
@@ -730,6 +746,8 @@ fn runtime_subagent_session_modes_fork_bounded_history_or_start_isolated() {
                 write_scopes: Vec::new(),
                 write_scopes_defaulted: false,
                 session_mode: SubagentSessionMode::Fork,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
                 task_prompt: "continue the parent task".to_string(),
                 explicit_user_approval: false,
                 skip_initial_turn: true,
@@ -810,6 +828,8 @@ fn runtime_subagent_session_modes_fork_bounded_history_or_start_isolated() {
                 write_scopes: Vec::new(),
                 write_scopes_defaulted: false,
                 session_mode: SubagentSessionMode::New,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
                 task_prompt: "inspect a self-contained task".to_string(),
                 explicit_user_approval: false,
                 skip_initial_turn: true,
@@ -934,6 +954,8 @@ fn runtime_subagent_omitted_scopes_inherit_parent_bubblewrap_authority() {
         write_scopes: Vec::new(),
         write_scopes_defaulted: true,
         session_mode: SubagentSessionMode::New,
+        initial_model_size: None,
+        initial_reasoning_effort: None,
         task_prompt: "implement the bounded change".to_string(),
         explicit_user_approval: false,
         skip_initial_turn: true,
@@ -968,6 +990,8 @@ fn runtime_explorer_omitted_scopes_clear_inherited_write_authority() {
         write_scopes: Vec::new(),
         write_scopes_defaulted: true,
         session_mode: SubagentSessionMode::New,
+        initial_model_size: None,
+        initial_reasoning_effort: None,
         task_prompt: "inspect the bounded change".to_string(),
         explicit_user_approval: false,
         skip_initial_turn: true,
@@ -1000,6 +1024,8 @@ fn runtime_host_access_subagent_retains_coordination_scope() {
         write_scopes: Vec::new(),
         write_scopes_defaulted: true,
         session_mode: SubagentSessionMode::New,
+        initial_model_size: None,
+        initial_reasoning_effort: None,
         task_prompt: "work with inherited host access".to_string(),
         explicit_user_approval: false,
         skip_initial_turn: true,
@@ -1051,6 +1077,8 @@ fn runtime_subagent_explicit_empty_scopes_do_not_inherit_parent_authority() {
         write_scopes: Vec::new(),
         write_scopes_defaulted: false,
         session_mode: SubagentSessionMode::New,
+        initial_model_size: None,
+        initial_reasoning_effort: None,
         task_prompt: "perform no filesystem work".to_string(),
         explicit_user_approval: false,
         skip_initial_turn: true,
@@ -1084,6 +1112,8 @@ fn runtime_subagent_inherits_explicit_parent_sandbox_override() {
         write_scopes: Vec::new(),
         write_scopes_defaulted: true,
         session_mode: SubagentSessionMode::New,
+        initial_model_size: None,
+        initial_reasoning_effort: None,
         task_prompt: "inherit sandbox state".to_string(),
         explicit_user_approval: false,
         skip_initial_turn: true,
@@ -1120,6 +1150,8 @@ fn runtime_subagent_requested_scopes_only_narrow_parent_authority() {
         write_scopes: vec!["generated".to_string(), "../../outside".to_string()],
         write_scopes_defaulted: false,
         session_mode: SubagentSessionMode::New,
+        initial_model_size: None,
+        initial_reasoning_effort: None,
         task_prompt: "update generated files".to_string(),
         explicit_user_approval: false,
         skip_initial_turn: true,
@@ -1157,6 +1189,8 @@ fn runtime_nested_subagent_cannot_rediscover_broader_trusted_authority() {
         write_scopes: vec!["generated".to_string()],
         write_scopes_defaulted: false,
         session_mode: SubagentSessionMode::New,
+        initial_model_size: None,
+        initial_reasoning_effort: None,
         task_prompt: "own generated files".to_string(),
         explicit_user_approval: false,
         skip_initial_turn: true,
@@ -1174,6 +1208,8 @@ fn runtime_nested_subagent_cannot_rediscover_broader_trusted_authority() {
         write_scopes: Vec::new(),
         write_scopes_defaulted: true,
         session_mode: SubagentSessionMode::New,
+        initial_model_size: None,
+        initial_reasoning_effort: None,
         task_prompt: "continue generated work".to_string(),
         explicit_user_approval: false,
         skip_initial_turn: true,
@@ -1527,4 +1563,149 @@ fn runtime_agent_user_prompt_renders_pasted_provider_error_without_terminal_fail
         "{pane_text}"
     );
     assert!(pane_text.contains("terminal step failed"), "{pane_text}");
+}
+
+/// Verifies an explicit spawn size and reasoning pair selects the child’s
+/// first profile before provider scheduling, then leaves later child turns on
+/// the inherited default routing path.
+#[test]
+fn runtime_subagent_explicit_selection_applies_only_to_initial_turn() {
+    let mut service = test_runtime_service();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"
+[agents]
+default_provider = "runtime-batch"
+default_model_profile = "default"
+routing = true
+
+[agents.auto_sizing]
+router_model_profile = "router"
+small_model_profile = "small"
+medium_model_profile = "medium"
+large_model_profile = "large"
+allowed_reasoning_efforts = ["low", "medium", "high", "xhigh"]
+
+[providers.runtime-batch]
+kind = "openai"
+models = ["gpt-default", "gpt-router", "gpt-small", "gpt-medium", "gpt-large"]
+default_model = "gpt-default"
+
+[model_profiles.default]
+provider = "runtime-batch"
+model = "gpt-default"
+reasoning_profile = "medium"
+
+[model_profiles.router]
+provider = "runtime-batch"
+model = "gpt-router"
+reasoning_profile = "low"
+
+[model_profiles.small]
+provider = "runtime-batch"
+model = "gpt-small"
+reasoning_profile = "medium"
+
+[model_profiles.medium]
+provider = "runtime-batch"
+model = "gpt-medium"
+reasoning_profile = "medium"
+
+[model_profiles.large]
+provider = "runtime-batch"
+model = "gpt-large"
+reasoning_profile = "high"
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let spawned = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: SubagentSessionMode::New,
+                initial_model_size: Some("large".to_string()),
+                initial_reasoning_effort: Some("high".to_string()),
+                task_prompt: "implement the bounded change".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: false,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap();
+    let spawned = serde_json::from_str::<serde_json::Value>(&spawned).unwrap();
+    let child_pane_id = spawned["pane"]["pane_id"].as_str().unwrap().to_string();
+    let first_turn_id = spawned["turn"]["id"].as_str().unwrap().to_string();
+    let first_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == first_turn_id)
+        .cloned()
+        .unwrap();
+    let first_profile = service.agent_turn_model_profile(&first_turn_id).unwrap();
+
+    assert_eq!(spawned["agent"]["initial_model_size"], "large");
+    assert_eq!(spawned["agent"]["initial_reasoning_effort"], "high");
+    assert_eq!(spawned["agent"]["initial_model_profile"], "large");
+    assert_eq!(first_profile.model, "gpt-large");
+    assert_eq!(first_profile.reasoning_profile.as_deref(), Some("high"));
+    assert!(service.agent_turn_routing_applied(&first_turn_id));
+    assert!(
+        service
+            .runtime_auto_sizing_dispatch_for_turn(&first_turn, first_profile)
+            .unwrap()
+            .is_none()
+    );
+
+    service.stop_agent_turn_for_pane(&child_pane_id).unwrap();
+    let second = service
+        .start_agent_prompt_turn(&child_pane_id, "follow up on the change")
+        .unwrap();
+    let second_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == second.turn_id)
+        .cloned()
+        .unwrap();
+    let second_profile = service.agent_turn_model_profile(&second.turn_id).unwrap();
+
+    assert_eq!(second_turn.model_profile, "default");
+    assert_eq!(second_profile.model, "gpt-default");
+    assert!(!service.agent_turn_routing_applied(&second.turn_id));
+    assert!(
+        service
+            .runtime_auto_sizing_dispatch_for_turn(&second_turn, second_profile)
+            .unwrap()
+            .is_some()
+    );
+    service.terminate_all_pane_processes().unwrap();
 }

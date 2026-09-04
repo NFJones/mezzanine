@@ -220,7 +220,7 @@ pub use auto_sizing::{
     DEFAULT_AUTO_SIZING_SMALL_PROFILE, apply_auto_sizing_execution_profile,
     auto_sizing_fallback_selection, auto_sizing_minimum_context_profile,
     auto_sizing_reasoning_levels_for_profile, auto_sizing_request,
-    auto_sizing_selection_from_response,
+    auto_sizing_selection_for_explicit_pair, auto_sizing_selection_from_response,
 };
 pub use config_change::{
     CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_SETTING_PATH_DESCRIPTION,

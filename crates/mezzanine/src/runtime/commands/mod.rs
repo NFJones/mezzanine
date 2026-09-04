@@ -875,7 +875,7 @@ impl RuntimeSessionService {
         pane_id: &str,
         prompt: &str,
     ) -> Result<RuntimeAgentPromptTurnStart> {
-        self.start_agent_prompt_turn_inner(pane_id, prompt, None, None)
+        self.start_agent_prompt_turn_inner(pane_id, prompt, None, None, None)
     }
 
     /// Returns whether a pane still has a running or queued turn owned by its loop controller.
@@ -1002,7 +1002,7 @@ impl RuntimeSessionService {
         let (session_id, transcript_entries) =
             self.prepare_agent_loop_work_conversation(pane_id, &state)?;
         let prompt = runtime_agent_loop_work_prompt(&state);
-        let started = self.start_agent_prompt_turn_inner(pane_id, &prompt, None, None)?;
+        let started = self.start_agent_prompt_turn_inner(pane_id, &prompt, None, None, None)?;
         self.insert_agent_loop_turn(
             started.turn_id.clone(),
             RuntimeAgentLoopTurn {
@@ -1216,8 +1216,15 @@ impl RuntimeSessionService {
         prompt: &str,
         cooperation_mode: Option<String>,
         initial_capability: Option<mez_agent::AgentCapability>,
+        initial_model_selection: Option<mez_agent::AutoSizingSelection>,
     ) -> Result<RuntimeAgentPromptTurnStart> {
-        self.start_agent_prompt_turn_inner(pane_id, prompt, cooperation_mode, initial_capability)
+        self.start_agent_prompt_turn_inner(
+            pane_id,
+            prompt,
+            cooperation_mode,
+            initial_capability,
+            initial_model_selection,
+        )
     }
 
     /// Runs the start agent prompt turn inner operation for this subsystem.
@@ -1231,6 +1238,7 @@ impl RuntimeSessionService {
         prompt: &str,
         cooperation_mode: Option<String>,
         initial_capability: Option<mez_agent::AgentCapability>,
+        initial_model_selection: Option<mez_agent::AutoSizingSelection>,
     ) -> Result<RuntimeAgentPromptTurnStart> {
         self.refresh_project_config_layers_for_pane(pane_id)?;
         if let Some(project_trust_request) = self
@@ -1307,6 +1315,13 @@ impl RuntimeSessionService {
             model_profile_name = redirected_profile_name;
             model_profile = redirected_profile;
         }
+        let initial_model_selection = initial_model_selection
+            .map(|selection| (selection.selected_profile_name, selection.selected_profile));
+        if let Some((selected_profile_name, selected_profile)) = initial_model_selection.as_ref() {
+            model_profile_name = selected_profile_name.clone();
+            model_profile = selected_profile.clone();
+            turn.model_profile = selected_profile_name.clone();
+        }
         self.agent_turn_ledger_mut().queue_turn(turn.clone())?;
         self.append_agent_trace_turn_event(
             pane_id,
@@ -1341,6 +1356,13 @@ impl RuntimeSessionService {
                 .advance_subscription(&recipient, sequence)?;
         }
         self.set_agent_turn_model_profile(turn_id.clone(), model_profile);
+        if let Some((selected_profile_name, _)) = initial_model_selection.as_ref() {
+            self.set_agent_turn_configured_model_profile(
+                turn_id.clone(),
+                selected_profile_name.clone(),
+            );
+            self.mark_agent_turn_routing_applied(turn_id.clone());
+        }
         self.enqueue_agent_work(ScheduledWork {
             turn_id: turn_id.clone(),
             conversation_id: conversation_id.clone(),

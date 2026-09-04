@@ -403,6 +403,14 @@ pub enum AgentActionPayload {
         ///
         /// Omission preserves the existing isolated child-session behavior.
         session_mode: Option<SubagentSessionMode>,
+        /// Optional explicit initial child model-size selection.
+        ///
+        /// The value is valid only when paired with `reasoning_effort`.
+        size: Option<String>,
+        /// Optional explicit initial child reasoning selection.
+        ///
+        /// The value is valid only when paired with `size`.
+        reasoning_effort: Option<String>,
         /// Stores the task prompt value for this data structure.
         ///
         /// The field is part of structured state exchanged across this module
@@ -857,13 +865,34 @@ impl AgentAction {
                 role,
                 placement,
                 cooperation_mode,
+                size,
+                reasoning_effort,
                 task_prompt,
                 ..
             } => {
                 validate_non_empty("subagent role", role)?;
                 validate_non_empty("subagent placement", placement)?;
                 validate_non_empty("subagent cooperation mode", cooperation_mode)?;
-                validate_non_empty("subagent task prompt", task_prompt)
+                validate_non_empty("subagent task prompt", task_prompt)?;
+                match (size.as_deref(), reasoning_effort.as_deref()) {
+                    (None, None) => Ok(()),
+                    (Some(size), Some(reasoning_effort)) => {
+                        if !matches!(size, "small" | "medium" | "large") {
+                            return Err(MaapContractError::invalid_args(
+                                "subagent size must be small, medium, or large",
+                            ));
+                        }
+                        if !matches!(reasoning_effort, "low" | "medium" | "high" | "xhigh") {
+                            return Err(MaapContractError::invalid_args(
+                                "subagent reasoning_effort must be low, medium, high, or xhigh",
+                            ));
+                        }
+                        Ok(())
+                    }
+                    _ => Err(MaapContractError::invalid_args(
+                        "subagent size and reasoning_effort must be provided together",
+                    )),
+                }
             }
             AgentActionPayload::ConfigChange {
                 setting_path,
@@ -1328,27 +1357,52 @@ fn parse_maap_action_value(
             content_type: required_string(object, "content_type")?.to_string(),
             payload: required_json_or_string(object, "payload")?,
         },
-        "spawn_agent" => AgentActionPayload::SpawnAgent {
-            role: required_string(object, "role")?.to_string(),
-            placement: optional_string(object, "placement")?
-                .unwrap_or("new-window")
-                .to_string(),
-            cooperation_mode: optional_string(object, "cooperation_mode")?
-                .map(str::to_string)
-                .unwrap_or_else(|| maap_default_cooperation_mode(object)),
-            read_scopes: optional_present_string_array(object, "read_scopes")?,
-            write_scopes: optional_present_string_array(object, "write_scopes")?,
-            session_mode: optional_string(object, "session")?
-                .map(|value| {
-                    SubagentSessionMode::parse(value).ok_or_else(|| {
-                        MaapContractError::invalid_args(
-                            "subagent session must be either fork or new",
-                        )
+        "spawn_agent" => {
+            let size = optional_string(object, "size")?.map(str::to_string);
+            let reasoning_effort = optional_string(object, "reasoning_effort")?.map(str::to_string);
+            if size.is_some() != reasoning_effort.is_some() {
+                return Err(MaapContractError::invalid_args(
+                    "subagent size and reasoning_effort must be provided together",
+                ));
+            }
+            if let Some(size) = size.as_deref()
+                && !matches!(size, "small" | "medium" | "large")
+            {
+                return Err(MaapContractError::invalid_args(
+                    "subagent size must be small, medium, or large",
+                ));
+            }
+            if let Some(reasoning_effort) = reasoning_effort.as_deref()
+                && !matches!(reasoning_effort, "low" | "medium" | "high" | "xhigh")
+            {
+                return Err(MaapContractError::invalid_args(
+                    "subagent reasoning_effort must be low, medium, high, or xhigh",
+                ));
+            }
+            AgentActionPayload::SpawnAgent {
+                role: required_string(object, "role")?.to_string(),
+                placement: optional_string(object, "placement")?
+                    .unwrap_or("new-window")
+                    .to_string(),
+                cooperation_mode: optional_string(object, "cooperation_mode")?
+                    .map(str::to_string)
+                    .unwrap_or_else(|| maap_default_cooperation_mode(object)),
+                read_scopes: optional_present_string_array(object, "read_scopes")?,
+                write_scopes: optional_present_string_array(object, "write_scopes")?,
+                session_mode: optional_string(object, "session")?
+                    .map(|value| {
+                        SubagentSessionMode::parse(value).ok_or_else(|| {
+                            MaapContractError::invalid_args(
+                                "subagent session must be either fork or new",
+                            )
+                        })
                     })
-                })
-                .transpose()?,
-            task_prompt: required_string(object, "task_prompt")?.to_string(),
-        },
+                    .transpose()?,
+                size,
+                reasoning_effort,
+                task_prompt: required_string(object, "task_prompt")?.to_string(),
+            }
+        }
         "config_change" => AgentActionPayload::ConfigChange {
             setting_path: required_string(object, "setting_path")?.to_string(),
             operation: required_string(object, "operation")?.to_string(),
@@ -1887,6 +1941,47 @@ mod tests {
         assert_eq!(
             invalid.message(),
             "subagent session must be either fork or new"
+        );
+    }
+
+    /// Verifies an explicit child model selection is atomic and remains within
+    /// the canonical size and reasoning vocabulary before runtime dispatch.
+    #[test]
+    fn spawn_agent_parser_requires_a_valid_complete_model_selection() {
+        let selected = parse_maap_action_batch_json_for_turn(
+            r#"{"rationale":"delegate complex work","actions":[{"type":"spawn_agent","role":"worker","size":"large","reasoning_effort":"high","task_prompt":"implement and validate the change"}]}"#,
+            "turn-1",
+            "agent-1",
+        )
+        .unwrap();
+        let partial = parse_maap_action_batch_json_for_turn(
+            r#"{"rationale":"delegate","actions":[{"type":"spawn_agent","role":"worker","size":"medium","task_prompt":"inspect"}]}"#,
+            "turn-1",
+            "agent-1",
+        )
+        .unwrap_err();
+        let unknown = parse_maap_action_batch_json_for_turn(
+            r#"{"rationale":"delegate","actions":[{"type":"spawn_agent","role":"worker","size":"huge","reasoning_effort":"high","task_prompt":"inspect"}]}"#,
+            "turn-1",
+            "agent-1",
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            selected.actions[0].payload,
+            AgentActionPayload::SpawnAgent {
+                size: Some(ref size),
+                reasoning_effort: Some(ref reasoning_effort),
+                ..
+            } if size == "large" && reasoning_effort == "high"
+        ));
+        assert_eq!(
+            partial.message(),
+            "subagent size and reasoning_effort must be provided together"
+        );
+        assert_eq!(
+            unknown.message(),
+            "subagent size must be small, medium, or large"
         );
     }
 

@@ -733,8 +733,24 @@ fn maap_spawn_agent_action_schema() -> serde_json::Value {
                     "description": "Optional child conversation mode. Use fork only when the delegated task needs a bounded snapshot of parent chronology; use new for an isolated self-contained task. Use null or omit it to preserve the current isolated new-session behavior. Include task-critical facts in task_prompt in either mode."
                 }),
             ),
+            (
+                "size",
+                serde_json::json!({
+                    "type": ["string", "null"],
+                    "enum": ["small", "medium", "large", null],
+                    "description": "Optional initial child model size. Provide it together with reasoning_effort to override automatic routing for the initial child turn only. Choose size for task scope, uncertainty, blast radius, and validation burden; a small final diff can still require large scope."
+                }),
+            ),
+            (
+                "reasoning_effort",
+                serde_json::json!({
+                    "type": ["string", "null"],
+                    "enum": ["low", "medium", "high", "xhigh", null],
+                    "description": "Optional initial child reasoning effort. Provide it together with size. Choose it for diagnostic depth, ambiguity, and consequence; implementation, debugging, refactoring, test-writing, and repository exploration must not use low. Choose the higher adjacent level when under-routing risks correctness or completion."
+                }),
+            ),
         ],
-        &["role", "task_prompt", "session"],
+        &["role", "task_prompt", "session", "size", "reasoning_effort"],
     )
 }
 

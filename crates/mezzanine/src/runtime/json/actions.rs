@@ -153,6 +153,19 @@ pub(crate) fn runtime_subagent_spawn_request(
                     MezError::invalid_args("agent/spawn session must be either fork or new")
                 })
             })?;
+    let initial_model_size = object
+        .get("size")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let initial_reasoning_effort = object
+        .get("reasoning_effort")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    if initial_model_size.is_some() != initial_reasoning_effort.is_some() {
+        return Err(MezError::invalid_args(
+            "agent/spawn size and reasoning_effort must be provided together",
+        ));
+    }
     Ok(SubagentSpawnRequest {
         parent_agent_id,
         requested_role,
@@ -164,6 +177,8 @@ pub(crate) fn runtime_subagent_spawn_request(
         write_scopes,
         write_scopes_defaulted,
         session_mode,
+        initial_model_size,
+        initial_reasoning_effort,
         task_prompt,
         explicit_user_approval: caller_is_primary,
         skip_initial_turn: object

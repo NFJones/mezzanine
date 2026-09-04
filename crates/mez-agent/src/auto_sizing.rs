@@ -740,34 +740,52 @@ fn auto_sizing_profile_from_response(
     response: &ModelResponse,
 ) -> AutoSizingResult<AutoSizingSelection> {
     let decision = auto_sizing_decision_from_text(&response.raw_text)?;
-    if !auto_sizing
-        .allowed_reasoning_efforts
+    let target = auto_sizing_target_for_size(auto_sizing, &decision.size)?;
+    let mut selection = auto_sizing_selection_for_explicit_pair(
+        &auto_sizing.allowed_reasoning_efforts,
+        target,
+        &decision.reasoning_effort,
+    )?;
+    selection.decision = Some(decision);
+    Ok(selection)
+}
+
+/// Selects one explicitly requested target and reasoning pair.
+///
+/// Callers use this deterministic path when a trusted runtime caller has
+/// already chosen a canonical size bucket. The same global and target-specific
+/// reasoning checks used for router responses still apply before the profile is
+/// returned, and no synthetic router decision is recorded.
+pub fn auto_sizing_selection_for_explicit_pair(
+    allowed_reasoning_efforts: &[String],
+    target: &AutoSizingTargetProfile,
+    reasoning_effort: &str,
+) -> AutoSizingResult<AutoSizingSelection> {
+    if !allowed_reasoning_efforts
         .iter()
-        .any(|effort| effort == &decision.reasoning_effort)
+        .any(|effort| effort == reasoning_effort)
     {
         return Err(AutoSizingError::invalid_state(format!(
-            "auto-sizing selected disallowed reasoning effort `{}`",
-            decision.reasoning_effort
+            "auto-sizing selected disallowed reasoning effort `{reasoning_effort}`"
         )));
     }
-    let target = auto_sizing_target_for_size(auto_sizing, &decision.size)?;
     if !target.supported_reasoning_efforts.is_empty()
         && !target
             .supported_reasoning_efforts
             .iter()
-            .any(|effort| effort == &decision.reasoning_effort)
+            .any(|effort| effort == reasoning_effort)
     {
         return Err(AutoSizingError::invalid_state(format!(
-            "auto-sizing selected reasoning effort `{}` unsupported by `{}`",
-            decision.reasoning_effort, target.profile_name
+            "auto-sizing selected reasoning effort `{reasoning_effort}` unsupported by `{}`",
+            target.profile_name
         )));
     }
     let mut profile = target.profile.clone();
-    profile.reasoning_profile = Some(decision.reasoning_effort.clone());
+    profile.reasoning_profile = Some(reasoning_effort.to_string());
     Ok(AutoSizingSelection {
         selected_profile: profile,
         selected_profile_name: target.profile_name.clone(),
-        decision: Some(decision),
+        decision: None,
         fallback: None,
     })
 }
@@ -1190,6 +1208,38 @@ mod tests {
                 .fallback
                 .as_deref()
                 .is_some_and(|fallback| fallback.contains("unsupported by `large`"))
+        );
+    }
+
+    /// Verifies an explicit caller-selected pair uses the same global and
+    /// target reasoning checks as router output without inventing a router
+    /// decision that could be mistaken for a dispatched classifier request.
+    #[test]
+    fn explicit_auto_sizing_selection_validates_and_preserves_no_router_decision() {
+        let dispatch = dispatch();
+        let selected = auto_sizing_selection_for_explicit_pair(
+            &dispatch.allowed_reasoning_efforts,
+            &dispatch.large,
+            "high",
+        )
+        .unwrap();
+        let disallowed = auto_sizing_selection_for_explicit_pair(
+            &dispatch.allowed_reasoning_efforts,
+            &dispatch.large,
+            "low",
+        )
+        .unwrap_err();
+
+        assert_eq!(selected.selected_profile_name, "large");
+        assert_eq!(
+            selected.selected_profile.reasoning_profile.as_deref(),
+            Some("high")
+        );
+        assert!(selected.decision.is_none());
+        assert!(
+            disallowed
+                .message()
+                .contains("disallowed reasoning effort `low`")
         );
     }
 

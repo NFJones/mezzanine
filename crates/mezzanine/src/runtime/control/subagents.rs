@@ -629,11 +629,33 @@ impl RuntimeSessionService {
         {
             self.set_agent_auto_sizing_override(&started.pane_id, Some(auto_sizing));
         }
+        let initial_selection = match (
+            spawn.initial_model_size.as_deref(),
+            spawn.initial_reasoning_effort.as_deref(),
+        ) {
+            (Some(size), Some(reasoning_effort)) => {
+                Some(self.runtime_explicit_auto_sizing_selection_for_pane(
+                    &started.pane_id,
+                    size,
+                    reasoning_effort,
+                )?)
+            }
+            (None, None) => None,
+            _ => {
+                return Err(MezError::invalid_args(
+                    "subagent initial size and reasoning effort must be provided together",
+                ));
+            }
+        };
+        let initial_model_profile = initial_selection
+            .as_ref()
+            .map(|selection| selection.selected_profile_name.clone());
         let turn = match self.start_agent_prompt_turn_with_cooperation(
             &started.pane_id,
             &spawn.task_prompt,
             Some(runtime_cooperation_mode_name(spawn.cooperation_mode).to_string()),
             None,
+            initial_selection,
         ) {
             Ok(turn) => turn,
             Err(error) => {
@@ -720,11 +742,13 @@ impl RuntimeSessionService {
                 &child_display_name,
                 &spawn,
                 Some(&turn),
-                self.integration
-                    .model_profile_overrides()
-                    .agent_profiles
-                    .get(child_agent_id.as_str())
-                    .map(String::as_str),
+                initial_model_profile.as_deref().or_else(|| {
+                    self.integration
+                        .model_profile_overrides()
+                        .agent_profiles
+                        .get(child_agent_id.as_str())
+                        .map(String::as_str)
+                }),
             ),
             self.runtime_control_pane_state_json(window, pane),
             runtime_agent_turn_state_json(&turn)

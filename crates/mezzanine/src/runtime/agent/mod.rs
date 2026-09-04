@@ -1983,6 +1983,17 @@ impl RuntimeSessionService {
             .insert(turn_id.into(), profile);
     }
 
+    /// Records the configured profile identity that produced one turn profile.
+    pub(crate) fn set_agent_turn_configured_model_profile(
+        &mut self,
+        turn_id: impl Into<String>,
+        profile_name: impl Into<String>,
+    ) {
+        self.agent
+            .agent_turn_configured_model_profiles
+            .insert(turn_id.into(), profile_name.into());
+    }
+
     /// Removes the effective model profile retained for one turn.
     pub(crate) fn remove_agent_turn_model_profile(
         &mut self,

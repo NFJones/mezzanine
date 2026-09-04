@@ -6609,6 +6609,17 @@ read scopes, and write scopes MAY appear in compatibility output or future
 expanded schemas, but provider-native compact schemas SHOULD let Mezzanine
 apply runtime placement, policy inheritance, and scope defaults.
 
+A compact `spawn_agent` action MAY include `size` and `reasoning_effort` only
+as an atomic pair. `size` MUST be one of `small`, `medium`, or `large`, and
+`reasoning_effort` MUST be one of `low`, `medium`, `high`, or `xhigh`. The
+runtime MUST resolve the pair against the child’s inherited auto-sizing policy,
+including globally allowed and target-supported reasoning levels, before the
+child provider request begins. A valid pair MUST select the child’s initial
+turn profile and suppress automatic routing for that turn only; it MUST NOT
+mutate the child’s role-profile or inherited default for later turns. Successful
+spawn state and action-result metadata MUST report the effective requested size,
+reasoning effort, and resolved model-profile identity.
+
 A `config_change` action MUST include setting path, operation, and value,
 unset marker, or reset marker. Provider-facing `config_change` schemas MUST
 include annotated configuration path guidance derived from the implementation

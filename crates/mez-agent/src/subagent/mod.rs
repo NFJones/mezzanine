@@ -268,6 +268,10 @@ pub struct SubagentSpawnRequest {
     /// `New` preserves the existing isolated child-session behavior, while
     /// `Fork` requests a bounded durable snapshot of parent chronology.
     pub session_mode: SubagentSessionMode,
+    /// Optional explicit model size for the child’s initial turn only.
+    pub initial_model_size: Option<String>,
+    /// Optional explicit reasoning effort for the child’s initial turn only.
+    pub initial_reasoning_effort: Option<String>,
     /// Initial task prompt for the child.
     pub task_prompt: String,
     /// Whether product composition should create an idle child session.
@@ -286,6 +290,34 @@ impl SubagentSpawnRequest {
             return Err(SubagentContractError::new(
                 SubagentContractErrorKind::InvalidArgs,
                 "subagent spawn request identity, placement, and task must not be empty",
+            ));
+        }
+        if self.initial_model_size.is_some() != self.initial_reasoning_effort.is_some() {
+            return Err(SubagentContractError::new(
+                SubagentContractErrorKind::InvalidArgs,
+                "subagent initial size and reasoning effort must be provided together",
+            ));
+        }
+        if self.skip_initial_turn && self.initial_model_size.is_some() {
+            return Err(SubagentContractError::new(
+                SubagentContractErrorKind::InvalidArgs,
+                "subagent initial model selection requires an initial turn",
+            ));
+        }
+        if let Some(size) = self.initial_model_size.as_deref()
+            && !matches!(size, "small" | "medium" | "large")
+        {
+            return Err(SubagentContractError::new(
+                SubagentContractErrorKind::InvalidArgs,
+                "subagent initial size must be small, medium, or large",
+            ));
+        }
+        if let Some(reasoning_effort) = self.initial_reasoning_effort.as_deref()
+            && !matches!(reasoning_effort, "low" | "medium" | "high" | "xhigh")
+        {
+            return Err(SubagentContractError::new(
+                SubagentContractErrorKind::InvalidArgs,
+                "subagent initial reasoning effort must be low, medium, high, or xhigh",
             ));
         }
         if self.cooperation_mode == CooperationMode::ExploreOnly && !self.write_scopes.is_empty() {
@@ -620,6 +652,8 @@ mod tests {
             write_scopes: vec!["src/parser".to_string()],
             write_scopes_defaulted: false,
             session_mode: SubagentSessionMode::New,
+            initial_model_size: None,
+            initial_reasoning_effort: None,
             task_prompt: "implement parser".to_string(),
             skip_initial_turn: false,
             explicit_user_approval: false,

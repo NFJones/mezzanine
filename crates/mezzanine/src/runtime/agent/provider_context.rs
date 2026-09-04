@@ -659,6 +659,30 @@ impl RuntimeSessionService {
         })
     }
 
+    /// Resolves one explicit child-turn selection through the pane's effective
+    /// auto-sizing policy without issuing a router request.
+    pub(crate) fn runtime_explicit_auto_sizing_selection_for_pane(
+        &self,
+        pane_id: &str,
+        size: &str,
+        reasoning_effort: &str,
+    ) -> Result<mez_agent::AutoSizingSelection> {
+        let config = self.runtime_auto_sizing_config_for_pane(pane_id).clone();
+        let profile_name = match size {
+            "small" => &config.small_model_profile,
+            "medium" => &config.medium_model_profile,
+            "large" => &config.large_model_profile,
+            _ => return Err(MezError::invalid_args("unsupported subagent model size")),
+        };
+        let target = self.runtime_auto_sizing_target_profile(size, profile_name)?;
+        mez_agent::auto_sizing_selection_for_explicit_pair(
+            &config.allowed_reasoning_efforts,
+            &target,
+            reasoning_effort,
+        )
+        .map_err(|error| MezError::invalid_args(error.message()))
+    }
+
     /// Logs a bounded auto-sizing decision without placing router
     /// correspondence into model context or transcript content.
     #[cfg(test)]

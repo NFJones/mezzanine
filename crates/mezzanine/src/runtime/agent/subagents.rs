@@ -703,6 +703,8 @@ impl RuntimeSessionService {
             read_scopes,
             write_scopes,
             session_mode,
+            size,
+            reasoning_effort,
             task_prompt,
         } = &action.payload
         else {
@@ -750,6 +752,15 @@ impl RuntimeSessionService {
         }
         if let Some(write_scopes) = write_scopes {
             params.insert("write_scopes".to_string(), serde_json::json!(write_scopes));
+        }
+        if let Some(size) = size {
+            params.insert("size".to_string(), serde_json::json!(size));
+        }
+        if let Some(reasoning_effort) = reasoning_effort {
+            params.insert(
+                "reasoning_effort".to_string(),
+                serde_json::json!(reasoning_effort),
+            );
         }
         let params = serde_json::Value::Object(params).to_string();
         let spawn = runtime_subagent_spawn_request(&params, false)?;

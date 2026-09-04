@@ -1657,6 +1657,8 @@ executable = "{bubblewrap_executable}"
                 write_scopes: Vec::new(),
                 write_scopes_defaulted: false,
                 session_mode: mez_agent::SubagentSessionMode::New,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
                 task_prompt: "finish this routed subagent task".to_string(),
                 explicit_user_approval: true,
                 skip_initial_turn: false,

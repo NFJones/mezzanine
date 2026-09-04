@@ -181,6 +181,7 @@ impl RuntimeSessionService {
             &orchestration_prompt,
             Some("macro-orchestration".to_string()),
             Some(mez_agent::AgentCapability::Subagent),
+            None,
         )?;
         self.register_macro_managed_subagent(
             &child_agent_id,

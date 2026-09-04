@@ -192,12 +192,13 @@ pub fn plan_action_result(
                 "protocol_error":serde_json::Value::Null
             }).to_string()),
         )),
-        AgentActionPayload::SpawnAgent { role, placement, cooperation_mode, read_scopes, write_scopes, session_mode, task_prompt } => Ok(ActionResult::running(
+        AgentActionPayload::SpawnAgent { role, placement, cooperation_mode, read_scopes, write_scopes, session_mode, size, reasoning_effort, task_prompt } => Ok(ActionResult::running(
             turn, action, vec!["subagent spawn accepted for control endpoint placement".to_string()],
             Some(serde_json::json!({
                 "role":role,"placement":placement,"cooperation_mode":cooperation_mode,
                 "read_scopes":read_scopes,"write_scopes":write_scopes,
-                "session":session_mode.map(|mode| mode.as_str()),"prompt_bytes":task_prompt.len()
+                "session":session_mode.map(|mode| mode.as_str()),
+                "size":size,"reasoning_effort":reasoning_effort,"prompt_bytes":task_prompt.len()
             }).to_string()),
         )),
         AgentActionPayload::MemorySearch { .. } | AgentActionPayload::MemoryStore { .. } => Ok(ActionResult::running(
