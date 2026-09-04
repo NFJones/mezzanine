@@ -1050,6 +1050,7 @@ fn runtime_pane_permission_overrides_inherit_and_shadow_by_field() {
             root_agent_id: "agent-%1".to_string(),
             depth: 1,
             display_name: "child".to_string(),
+            terminal: false,
         },
     );
     service.set_subagent_lineage(
@@ -1059,6 +1060,7 @@ fn runtime_pane_permission_overrides_inherit_and_shadow_by_field() {
             root_agent_id: "agent-%1".to_string(),
             depth: 2,
             display_name: "grandchild".to_string(),
+            terminal: false,
         },
     );
 
@@ -1192,6 +1194,7 @@ fn runtime_subagent_profile_preset_restricts_pane_override() {
             root_agent_id: "agent-%1".to_string(),
             depth: 1,
             display_name: "child".to_string(),
+            terminal: false,
         },
     );
     service.set_subagent_scope_declaration(
@@ -1242,6 +1245,7 @@ fn runtime_pane_permission_override_cycle_fails_closed() {
             root_agent_id: "agent-%1".to_string(),
             depth: 1,
             display_name: "first".to_string(),
+            terminal: false,
         },
     );
     service.set_subagent_lineage(
@@ -1251,6 +1255,7 @@ fn runtime_pane_permission_override_cycle_fails_closed() {
             root_agent_id: "agent-%1".to_string(),
             depth: 2,
             display_name: "second".to_string(),
+            terminal: false,
         },
     );
 

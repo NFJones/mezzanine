@@ -1250,6 +1250,7 @@ unsandboxed retry, and the grant is consumed exactly once.
 | --- | --- | --- | --- |
 | `subagents.<name>.name` | string | omitted | Display name. |
 | `subagents.<name>.description` | string | omitted | Role description. |
+| `subagents.<name>.terminal` | boolean | `false` | Remove `spawn_agent` from children using this profile. |
 | `subagents.<name>.developer_instructions` | string | omitted | Role-specific developer instructions. |
 | `subagents.<name>.developer_prompt` | string | omitted | Compatibility developer prompt field. |
 | `subagents.<name>.model_profile` | string | omitted | Model profile id. |

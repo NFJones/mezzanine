@@ -4103,6 +4103,7 @@ fn runtime_parent_agent_shell_exit_closes_child_subagent_panes() {
             root_agent_id: "agent-%1".to_string(),
             depth: 1,
             display_name: "helper".to_string(),
+            terminal: false,
         },
     );
 

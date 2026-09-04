@@ -427,6 +427,7 @@ fn runtime_agent_shell_routing_policy_scopes_changes_and_preserves_subagents() {
             root_agent_id: "agent-%1".to_string(),
             depth: 1,
             display_name: "child".to_string(),
+            terminal: false,
         },
     );
     let child_turn = mez_agent::AgentTurnRecord {

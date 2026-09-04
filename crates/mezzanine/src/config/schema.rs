@@ -786,6 +786,7 @@ pub(super) const MODEL_PRESET_KEYS: &[&str] = &[
 pub(super) const SUBAGENT_PROFILE_KEYS: &[&str] = &[
     "name",
     "description",
+    "terminal",
     "developer_instructions",
     "developer_prompt",
     "model_profile",

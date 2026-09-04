@@ -285,6 +285,8 @@ pub struct SubagentProfile {
     pub name: String,
     /// User-visible profile description.
     pub description: String,
+    /// Whether children using this profile are forbidden from spawning subagents.
+    pub terminal: bool,
     /// Optional developer instructions appended to the child prompt.
     pub developer_instructions: Option<String>,
     /// Optional child model-profile override.
@@ -367,6 +369,7 @@ pub fn builtin_subagent_profiles() -> BTreeMap<String, SubagentProfile> {
             id: id.to_string(),
             name: id.to_string(),
             description: description.to_string(),
+            terminal: false,
             developer_instructions: None,
             model_profile: None,
             permission_preset: None,

@@ -4089,7 +4089,7 @@ frame context usage, `/model list`, and explicit or provider-limit compaction
 use the same denominator.
 
 The `subagents` table MUST be a map keyed by subagent profile identity. Each
-profile MAY define `name`, `description`, `developer_instructions`,
+profile MAY define `name`, `description`, `terminal`, `developer_instructions`,
 `model_profile`, `permission_preset`, `mcp_servers`, `shell_env`,
 `default_cooperation_mode`, `default_read_scopes`, and
 `default_write_scopes`.
@@ -7355,6 +7355,13 @@ status naming the child and final state, but final subagent output MUST NOT be
 rendered directly into the parent pane as parent-agent output. The parent agent
 MUST decide whether and how to analyze, summarize, or act on child results.
 
+The static provider action set for a subagent at `agents.max_depth`, or for a
+subagent created from a profile with `terminal = true`, MUST exclude
+`spawn_agent`. Other spawned subagents MUST retain configured recursive
+delegation capability. A runtime-managed routed worker MUST begin a fresh
+delegation tree at depth 0; its initial managed spawn MUST NOT consume depth
+from the invoking agent's tree.
+
 The `agents.subagent_wait_policy` setting MUST default to `join`. In `join`
 mode, a parent `spawn_agent` action MUST remain a running action until the
 spawned child delivers its final task result, and the parent provider turn MUST
@@ -7441,7 +7448,7 @@ Mezzanine MUST define built-in subagent roles equivalent to:
 - `explorer`: Read-heavy codebase exploration agent.
 
 Custom subagent profiles MUST support name, description, developer
-instructions, model profile override, permission override, MCP server override,
+instructions, a terminal flag, model profile override, permission override, MCP server override,
 shell environment override, default cooperation mode, and default read and
 write scopes. Default read and write scopes MUST be treated as task metadata
 unless the profile is applied to an already-scoped parent and the inherited

@@ -232,6 +232,7 @@ impl RuntimeSessionService {
                 root_agent_id: agent_id.to_string(),
                 depth: 0,
                 display_name: String::new(),
+                terminal: false,
             })
     }
 
@@ -244,9 +245,10 @@ impl RuntimeSessionService {
     fn validate_subagent_spawn_capacity(
         &self,
         parent_agent_id: &str,
+        routed_root: bool,
     ) -> Result<RuntimeSubagentLineage> {
         let parent_lineage = self.subagent_lineage_for_agent(parent_agent_id);
-        if parent_lineage.depth >= self.max_subagent_depth() {
+        if !routed_root && parent_lineage.depth >= self.max_subagent_depth() {
             return Err(MezError::forbidden(format!(
                 "subagent depth limit reached for {parent_agent_id}: depth {} of {}",
                 parent_lineage.depth,
@@ -269,9 +271,18 @@ impl RuntimeSessionService {
         }
         Ok(RuntimeSubagentLineage {
             parent_agent_id: parent_agent_id.to_string(),
-            root_agent_id: parent_lineage.root_agent_id,
-            depth: parent_lineage.depth + 1,
+            root_agent_id: if routed_root {
+                String::new()
+            } else {
+                parent_lineage.root_agent_id
+            },
+            depth: if routed_root {
+                0
+            } else {
+                parent_lineage.depth + 1
+            },
             display_name: String::new(),
+            terminal: false,
         })
     }
 
@@ -319,7 +330,7 @@ impl RuntimeSessionService {
         spawn: SubagentSpawnRequest,
         placement: RuntimeSubagentPlacement,
     ) -> Result<String> {
-        self.spawn_runtime_subagent_internal(Some(controller), spawn, placement)
+        self.spawn_runtime_subagent_internal(Some(controller), spawn, placement, false)
     }
 
     /// Creates a child subagent for already-authorized session-owned orchestration.
@@ -328,7 +339,16 @@ impl RuntimeSessionService {
         spawn: SubagentSpawnRequest,
         placement: RuntimeSubagentPlacement,
     ) -> Result<String> {
-        self.spawn_runtime_subagent_internal(None, spawn, placement)
+        self.spawn_runtime_subagent_internal(None, spawn, placement, false)
+    }
+
+    /// Creates a runtime-routed worker as the root of a fresh delegation tree.
+    pub(crate) fn spawn_runtime_routed_subagent_session_owned(
+        &mut self,
+        spawn: SubagentSpawnRequest,
+        placement: RuntimeSubagentPlacement,
+    ) -> Result<String> {
+        self.spawn_runtime_subagent_internal(None, spawn, placement, true)
     }
 
     /// Implements client-authenticated and session-owned subagent creation.
@@ -337,6 +357,7 @@ impl RuntimeSessionService {
         controller: Option<&mez_core::ids::ClientId>,
         mut spawn: SubagentSpawnRequest,
         placement: RuntimeSubagentPlacement,
+        routed_root: bool,
     ) -> Result<String> {
         let profile = self
             .integration
@@ -413,9 +434,11 @@ impl RuntimeSessionService {
             spawn.write_scopes.clear();
         }
         spawn.validate()?;
-        let mut child_lineage = self.validate_subagent_spawn_capacity(&spawn.parent_agent_id)?;
+        let mut child_lineage =
+            self.validate_subagent_spawn_capacity(&spawn.parent_agent_id, routed_root)?;
         let child_display_name = self.allocate_subagent_display_name();
         child_lineage.display_name = child_display_name.clone();
+        child_lineage.terminal = profile.terminal;
 
         let requested_window_name = match &placement {
             RuntimeSubagentPlacement::NewWindow { name, .. } => Some(name.as_str()),
@@ -433,6 +456,9 @@ impl RuntimeSessionService {
             child_startup_mode,
         )?;
         let child_agent_id = format!("agent-{}", started.pane_id);
+        if routed_root {
+            child_lineage.root_agent_id = child_agent_id.clone();
+        }
         if let Err(error) = self.apply_subagent_display_titles(
             controller,
             &started.window_id,

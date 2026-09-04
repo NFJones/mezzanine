@@ -94,8 +94,9 @@ impl RuntimeSessionService {
     /// turn across actor-owned action execution boundaries.
     ///
     /// The configured action set is constant across ordinary turns and
-    /// continuations. Explicit exceptional interaction kinds remain
-    /// authoritative, but they do not mutate the action surface.
+    /// continuations. Terminal-profile children and agents at the configured
+    /// depth limit cannot spawn children. Explicit exceptional interaction
+    /// kinds remain authoritative.
     pub(crate) fn agent_provider_request_control_for_turn(
         &self,
         turn: &AgentTurnRecord,
@@ -104,7 +105,14 @@ impl RuntimeSessionService {
         Option<mez_agent::ModelInteractionKind>,
     ) {
         let previous_execution = self.agent_turn_executions().get(&turn.turn_id);
-        let allowed_actions = Some(self.agent_enabled_actions().clone());
+        let mut allowed_actions = self.agent_enabled_actions().clone();
+        let terminal_or_at_depth_limit = self
+            .subagent_lineage(&turn.agent_id)
+            .is_some_and(|lineage| lineage.terminal || lineage.depth >= self.max_subagent_depth());
+        if terminal_or_at_depth_limit {
+            allowed_actions.remove(mez_agent::AllowedAction::SpawnAgent);
+        }
+        let allowed_actions = Some(allowed_actions);
         let interaction_kind = self
             .agent
             .agent_turn_interaction_kinds

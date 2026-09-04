@@ -88,6 +88,72 @@ fn runtime_native_subagent_startup_bypasses_pane_bootstrap() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies a terminal profile is snapshotted when its child is spawned and
+/// removes `spawn_agent` from that child's first static provider action set.
+#[test]
+fn runtime_terminal_profile_spawn_excludes_spawn_agent() {
+    let mut service = test_runtime_service();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[subagents.terminal-worker]\nterminal = true\ndefault_cooperation_mode = \"explore-only\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let spawned = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "terminal-worker".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: true,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: true,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: true,
+                task_prompt: "finish without delegation".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: false,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap();
+    let spawned = serde_json::from_str::<serde_json::Value>(&spawned).unwrap();
+    let turn_id = spawned["turn"]["id"].as_str().unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .expect("spawned terminal child turn should exist");
+    let allowed_actions = service
+        .agent_provider_request_control_for_turn(turn)
+        .0
+        .expect("spawned child should have a static action set");
+
+    assert!(!allowed_actions.contains(mez_agent::AllowedAction::SpawnAgent));
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies a POSIX pane-mode subagent remains queued until authenticated
 /// prompt admission and environment bootstrap settle, without creating a
 /// foreign-shell boundary or claiming provider capacity early.

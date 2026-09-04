@@ -3,6 +3,100 @@
 use super::*;
 use crate::runtime::ActiveTurnSleepInhibition;
 
+/// Verifies a spawned child below the configured depth limit retains recursive
+/// delegation unless its selected profile marks it terminal.
+#[test]
+fn nonterminal_subagent_provider_surface_retains_spawn_agent_below_limit() {
+    let mut service = test_runtime_service();
+    let turn = mez_agent::AgentTurnRecord {
+        turn_id: "turn-child".to_string(),
+        conversation_id: "conversation-child".to_string(),
+        agent_id: "agent-child".to_string(),
+        pane_id: "%2".to_string(),
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 1,
+        deadline_at_unix_millis: 0,
+        policy_profile: "default".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        state: mez_agent::AgentTurnState::Running,
+        cooperation_mode: None,
+        initial_capability: None,
+    };
+    service.set_subagent_lineage(
+        turn.agent_id.clone(),
+        RuntimeSubagentLineage {
+            parent_agent_id: "agent-parent".to_string(),
+            root_agent_id: "agent-parent".to_string(),
+            depth: 1,
+            display_name: "child".to_string(),
+            terminal: false,
+        },
+    );
+
+    let allowed_actions = service
+        .agent_provider_request_control_for_turn(&turn)
+        .0
+        .expect("ordinary provider turns should have a static action set");
+
+    assert!(allowed_actions.contains(mez_agent::AllowedAction::SpawnAgent));
+    assert!(allowed_actions.contains(mez_agent::AllowedAction::SendMessage));
+}
+
+/// Verifies terminal-profile and maximum-depth agents have `spawn_agent`
+/// removed from their static provider action set.
+#[test]
+fn terminal_and_max_depth_subagent_surfaces_exclude_spawn_agent() {
+    let mut service = test_runtime_service();
+    let turn = mez_agent::AgentTurnRecord {
+        turn_id: "turn-child".to_string(),
+        conversation_id: "conversation-child".to_string(),
+        agent_id: "agent-child".to_string(),
+        pane_id: "%2".to_string(),
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 1,
+        deadline_at_unix_millis: 0,
+        policy_profile: "default".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        state: mez_agent::AgentTurnState::Running,
+        cooperation_mode: None,
+        initial_capability: None,
+    };
+    service.set_subagent_lineage(
+        turn.agent_id.clone(),
+        RuntimeSubagentLineage {
+            parent_agent_id: "agent-parent".to_string(),
+            root_agent_id: "agent-parent".to_string(),
+            depth: service.max_subagent_depth(),
+            display_name: "depth-limited child".to_string(),
+            terminal: false,
+        },
+    );
+
+    let depth_limited_actions = service
+        .agent_provider_request_control_for_turn(&turn)
+        .0
+        .expect("provider turns should have a static action set");
+    assert!(!depth_limited_actions.contains(mez_agent::AllowedAction::SpawnAgent));
+
+    service.set_subagent_lineage(
+        turn.agent_id.clone(),
+        RuntimeSubagentLineage {
+            parent_agent_id: "agent-parent".to_string(),
+            root_agent_id: "agent-parent".to_string(),
+            depth: 1,
+            display_name: "terminal child".to_string(),
+            terminal: true,
+        },
+    );
+    let terminal_actions = service
+        .agent_provider_request_control_for_turn(&turn)
+        .0
+        .expect("provider turns should have a static action set");
+    assert!(!terminal_actions.contains(mez_agent::AllowedAction::SpawnAgent));
+}
+
 /// Verifies that runtime hook diagnostics use the same canonical event label as
 /// hook audit records and hook configuration. This matters because blocked
 /// action payloads and hook failure events are user-visible protocol surfaces
@@ -1373,6 +1467,7 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
             root_agent_id: parent.agent_id.clone(),
             depth: 1,
             display_name: "child one".to_string(),
+            terminal: false,
         },
     );
     service.set_subagent_lineage(
@@ -1382,6 +1477,7 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
             root_agent_id: parent.agent_id.clone(),
             depth: 1,
             display_name: "child two".to_string(),
+            terminal: false,
         },
     );
     let parent_turn = service
@@ -2946,6 +3042,7 @@ fn runtime_interrupted_subagent_redirects_without_premature_parent_handoff() {
             root_agent_id: parent.agent_id.clone(),
             depth: 1,
             display_name: "redirectable child".to_string(),
+            terminal: false,
         },
     );
     block_turn_on_joined_child(
@@ -3187,6 +3284,7 @@ fn runtime_nested_joined_children_close_after_each_successful_handoff() {
             root_agent_id: root.agent_id.clone(),
             depth: 1,
             display_name: "child".to_string(),
+            terminal: false,
         },
     );
     service.set_subagent_lineage(
@@ -3196,6 +3294,7 @@ fn runtime_nested_joined_children_close_after_each_successful_handoff() {
             root_agent_id: root.agent_id.clone(),
             depth: 2,
             display_name: "grandchild".to_string(),
+            terminal: false,
         },
     );
     block_turn_on_joined_child(

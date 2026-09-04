@@ -480,6 +480,7 @@ pub(crate) fn runtime_subagent_profiles_from_config(
         let description = runtime_json_string(object.get("description"))
             .unwrap_or("")
             .to_string();
+        let terminal = runtime_json_bool(object.get("terminal")).unwrap_or(false);
         let developer_instructions = runtime_json_string(object.get("developer_instructions"))
             .or_else(|| runtime_json_string(object.get("developer_prompt")))
             .map(ToOwned::to_owned);
@@ -506,6 +507,7 @@ pub(crate) fn runtime_subagent_profiles_from_config(
                 id: profile_id.clone(),
                 name,
                 description,
+                terminal,
                 developer_instructions,
                 model_profile,
                 permission_preset,

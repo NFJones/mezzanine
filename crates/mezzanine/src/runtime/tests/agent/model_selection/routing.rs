@@ -99,6 +99,27 @@ fn selected_routed_loop(
     selected_routed_loop_with_mode(command, crate::runtime::config::ShellMode::Native)
 }
 
+/// Verifies a routed worker starts a fresh delegation tree at depth zero, so
+/// routing from a depth-limited parent does not consume the worker's depth.
+#[test]
+fn runtime_routed_worker_starts_at_root_depth() {
+    let (service, _parent_turn_id, worker_turn) =
+        selected_routed_loop("/loop --limit 1 inspect routing depth");
+    let lineage = service
+        .subagent_lineage(&worker_turn.agent_id)
+        .expect("routed worker should retain active lineage");
+
+    assert_eq!(lineage.depth, 0);
+    assert_eq!(lineage.root_agent_id, worker_turn.agent_id);
+    assert!(
+        service
+            .agent_provider_request_control_for_turn(&worker_turn)
+            .0
+            .unwrap()
+            .contains(mez_agent::AllowedAction::SpawnAgent)
+    );
+}
+
 /// Verifies concurrent routed workers spawned by independent parent panes can
 /// share one subagent bucket without sharing bootstrap or readiness ownership.
 ///
@@ -384,6 +405,7 @@ fn runtime_subagent_routing_applies_selected_profile_in_place_once() {
             root_agent_id: "agent-root".to_string(),
             depth: 1,
             display_name: "Child".to_string(),
+            terminal: false,
         },
     );
     service.remove_pending_agent_provider_task("turn-1");

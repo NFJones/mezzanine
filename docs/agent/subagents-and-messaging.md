@@ -34,6 +34,10 @@ Delegation is bounded by `agents.max_subagent_panes_per_window`,
 `agents.max_root_subagents`, `agents.max_subagents_per_subagent`, and
 `agents.max_depth`. Their defaults are four panes per subagent window, four
 direct children for a root agent, two children for a subagent, and depth two.
+Agents at the maximum depth, and profiles configured with `terminal = true`,
+do not receive `spawn_agent` in their static action set. Routed workers begin a
+fresh delegation tree at depth zero, so their initial managed spawn does not
+consume delegation depth.
 When a limit rejects a spawn, narrow or sequence the work instead of assuming
 the child was created.
 

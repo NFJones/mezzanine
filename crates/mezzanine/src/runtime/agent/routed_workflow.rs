@@ -348,7 +348,7 @@ impl RuntimeSessionService {
         .to_string();
         let spawn = runtime_subagent_spawn_request(&params, false)?;
         let placement = runtime_subagent_placement_mode(&params)?;
-        let spawn_json = self.spawn_runtime_subagent_session_owned(spawn, placement)?;
+        let spawn_json = self.spawn_runtime_routed_subagent_session_owned(spawn, placement)?;
         let (child_agent_id, _child_display_name, child_turn_id) =
             runtime_spawn_json_agent_and_turn(&spawn_json)?;
         let child_pane_id = child_agent_id

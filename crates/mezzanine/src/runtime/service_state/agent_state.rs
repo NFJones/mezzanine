@@ -46,6 +46,8 @@ pub(crate) struct RuntimeSubagentLineage {
     pub depth: usize,
     /// Human-readable display name assigned while the subagent is active.
     pub display_name: String,
+    /// Whether the selected child profile forbids further delegation.
+    pub terminal: bool,
 }
 
 /// Product-specialized mux overlay carrying record-browser and live sources.

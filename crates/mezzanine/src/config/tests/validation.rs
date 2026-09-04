@@ -9,7 +9,7 @@ use super::*;
 fn validates_custom_subagent_profile_schema() {
     let valid = validate_config_text(
         ConfigFormat::Toml,
-        "[subagents.reviewer]\nname = \"Reviewer\"\ndescription = \"Reviews changes\"\ndeveloper_instructions = \"Focus on correctness.\"\nmodel_profile = \"default\"\npermission_preset = \"read-only\"\nmcp_servers = [\"filesystem\"]\ndefault_cooperation_mode = \"explore-only\"\ndefault_read_scopes = [\"src\"]\ndefault_write_scopes = []\n[subagents.reviewer.shell_env]\nREVIEW_MODE = \"strict\"\n",
+        "[subagents.reviewer]\nname = \"Reviewer\"\ndescription = \"Reviews changes\"\nterminal = true\ndeveloper_instructions = \"Focus on correctness.\"\nmodel_profile = \"default\"\npermission_preset = \"read-only\"\nmcp_servers = [\"filesystem\"]\ndefault_cooperation_mode = \"explore-only\"\ndefault_read_scopes = [\"src\"]\ndefault_write_scopes = []\n[subagents.reviewer.shell_env]\nREVIEW_MODE = \"strict\"\n",
         ConfigScope::Primary,
     );
 
