@@ -791,6 +791,27 @@ fn runtime_unlimited_provider_retry_reports_policy_and_remains_cancellable() {
             && event.payload.contains(r#""unlimited":true"#)
             && event.payload.contains(r#""error_kind":"invalid_state""#)
     }));
+    assert!(
+        service
+            .agent_turn_contexts()
+            .get(&turn.turn_id)
+            .unwrap()
+            .chronology()
+            .iter()
+            .any(|event| {
+                event.block().source == ContextSourceKind::RuntimeHint
+                    && event.block().label == "provider retry scheduled"
+                    && event
+                        .block()
+                        .content
+                        .contains("retry_class=retryable_transport")
+                    && event.block().content.contains("error_kind=invalid_state")
+                    && !event
+                        .block()
+                        .content
+                        .contains("provider temporarily unavailable")
+            })
+    );
 
     service
         .finish_agent_turn("%1", &turn.turn_id, AgentTurnState::Interrupted)

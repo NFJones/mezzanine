@@ -13,6 +13,9 @@ const CAPABILITY_DECISION_LABEL: &str = "controller capability decision";
 const CAPABILITY_DECISION_PREFIX: &str = "[controller capability decision]\n";
 const REQUEST_STATE_LABEL: &str = "Mezzanine request state";
 const REQUEST_STATE_PREFIX: &str = "[Mezzanine request state]\n";
+const MAAP_REPAIR_EVIDENCE_LABEL: &str = "MAAP repair evidence";
+const FAILURE_SUMMARY_EVIDENCE_LABEL: &str = "failure summary evidence";
+const FAILURE_SUMMARY_EVIDENCE_PREFIX: &str = "[failure summary evidence]\n";
 const PROVIDER_ACTION_EXECUTION_SEPARATOR: &str = "~mez~";
 const PROVIDER_ACTION_EXECUTION_DIGEST_LEN: usize = 16;
 
@@ -99,7 +102,10 @@ impl RuntimeSessionService {
             block.source == ContextSourceKind::CommittedEvidence
                 && matches!(
                     block.label.as_str(),
-                    CAPABILITY_DECISION_LABEL | REQUEST_STATE_LABEL
+                    CAPABILITY_DECISION_LABEL
+                        | REQUEST_STATE_LABEL
+                        | MAAP_REPAIR_EVIDENCE_LABEL
+                        | FAILURE_SUMMARY_EVIDENCE_LABEL
                 )
         }) {
             *retained_decision_counts
@@ -124,6 +130,16 @@ impl RuntimeSessionService {
                     (CAPABILITY_DECISION_LABEL, content)
                 } else if let Some(content) = message.content.strip_prefix(REQUEST_STATE_PREFIX) {
                     (REQUEST_STATE_LABEL, content)
+                } else if let Some(content) = message
+                    .content
+                    .strip_prefix(mez_agent::MAAP_REPAIR_EVIDENCE_PREFIX)
+                {
+                    (MAAP_REPAIR_EVIDENCE_LABEL, content)
+                } else if let Some(content) = message
+                    .content
+                    .strip_prefix(FAILURE_SUMMARY_EVIDENCE_PREFIX)
+                {
+                    (FAILURE_SUMMARY_EVIDENCE_LABEL, content)
                 } else {
                     continue;
                 };

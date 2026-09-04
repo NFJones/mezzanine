@@ -345,14 +345,18 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
         execution.response.raw_text,
         "corrected file action response"
     );
+    assert!(execution.request.messages.iter().any(|message| {
+        message
+            .content
+            .contains(mez_agent::MAAP_REPAIR_EVIDENCE_PREFIX)
+            && message.content.contains("heredoc redirection is disabled")
+    }));
     assert!(
         execution
             .request
             .messages
             .iter()
-            .all(|message| !message.content.contains("heredoc redirection is disabled")),
-        "{:?}",
-        execution.request.messages
+            .all(|message| !message.content.contains("[MAAP repair state]"))
     );
     let requests = provider.requests();
     assert_eq!(requests.len(), 2);
@@ -373,10 +377,10 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
 }
 
 #[test]
-/// Verifies that an unavailable MCP action is repaired through an append-only
-/// provider retry. The corrected execution and persisted transcript retain the
-/// bounded validation evidence in chronological context.
-fn turn_runner_retries_maap_validation_error_without_persisting_repair_context() {
+/// Verifies that an unavailable MCP action retains a safe repair fact through
+/// the corrected durable request without retaining the malformed provider
+/// response excerpt.
+fn turn_runner_retries_maap_validation_error_with_safe_durable_repair_evidence() {
     let turn = turn();
     let invalid = ModelResponse {
         provider: "batch".to_string(),
@@ -471,16 +475,16 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
 
     assert_eq!(execution.terminal_state, AgentTurnState::Completed);
     assert_eq!(execution.response.raw_text, "corrected say response");
-    assert!(
-        execution
-            .request
-            .messages
-            .iter()
-            .all(|message| !message.content.contains("maap_validation_error")
-                && !message.content.contains("[MAAP repair state]")),
-        "{:?}",
-        execution.request.messages
-    );
+    assert!(execution.request.messages.iter().any(|message| {
+        message
+            .content
+            .contains(mez_agent::MAAP_REPAIR_EVIDENCE_PREFIX)
+            && message.content.contains("unavailable server")
+    }));
+    assert!(execution.request.messages.iter().all(|message| {
+        !message.content.contains("[MAAP repair state]")
+            && !message.content.contains("invalid unavailable mcp action")
+    }));
     let requests = provider.requests();
     assert_eq!(requests.len(), 2);
     assert!(
@@ -517,12 +521,11 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
         requests[1].messages
     );
     let entries = transcript_entries_for_execution("conv1", 1, 200, &turn, &execution).unwrap();
-    assert!(
-        entries.iter().all(|entry| {
-            !entry.content.contains("[MAAP repair state]")
-                && !entry.content.contains("maap_validation_error")
-                && !entry.content.contains("invalid unavailable mcp action")
-        }),
-        "{entries:?}"
-    );
+    assert!(entries.iter().all(|entry| {
+        !entry
+            .content
+            .contains(mez_agent::MAAP_REPAIR_EVIDENCE_PREFIX)
+            && !entry.content.contains("[MAAP repair state]")
+            && !entry.content.contains("invalid unavailable mcp action")
+    }));
 }

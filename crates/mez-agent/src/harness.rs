@@ -103,6 +103,15 @@ impl<Request> AgentTurnNegotiation<Request> {
         self.durable_request = request;
     }
 
+    /// Applies an append-only update to the request retained for durable context.
+    ///
+    /// Recovery requests may include request-only diagnostics that must not be
+    /// retained. Callers use this narrow hook to preserve only their separately
+    /// classified safe continuation evidence.
+    pub fn update_durable_request(&mut self, update: impl FnOnce(&mut Request)) {
+        update(&mut self.durable_request);
+    }
+
     /// Records one recoverable negotiation attempt when capacity remains.
     pub const fn record_recovery_attempt(&mut self) -> bool {
         self.recovery_budget.record_attempt()

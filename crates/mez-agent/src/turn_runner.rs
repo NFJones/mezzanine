@@ -16,9 +16,9 @@ use crate::{
     AgentTurnResponseDecision, AgentTurnState, AllowedActionSet, BatchContinuationError,
     BatchContinuationInput, BatchContinuationPlan, BatchValidationFailure, MaapBatch,
     McpPromptTool, ModelInteractionKind, ModelMessage, ModelRequest, ModelResponse,
-    ProviderErrorRetryClass, ProviderResponseAcceptance, apply_default_action_gates,
-    failed_turn_execution_without_batch, maap_repair_request, plan_batch_continuation,
-    plan_turn_execution_from_batch,
+    ProviderErrorRetryClass, ProviderResponseAcceptance, append_maap_repair_evidence,
+    apply_default_action_gates, failed_turn_execution_without_batch, maap_repair_request,
+    plan_batch_continuation, plan_turn_execution_from_batch,
 };
 
 /// Default number of ephemeral repairs accepted during one provider negotiation phase.
@@ -232,6 +232,9 @@ pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
                     failure.retry_class,
                 ) {
                     AgentTurnProviderFailureDecision::RecoverMalformedOutput { attempt } => {
+                        negotiation.update_durable_request(|durable_request| {
+                            append_maap_repair_evidence(durable_request, &failure.message, attempt);
+                        });
                         request = maap_repair_request(
                             &response_request,
                             &failure.message,
@@ -320,6 +323,13 @@ pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
             if let AgentTurnResponseDecision::RecoverMissingActionBatch { attempt } =
                 response_decision
             {
+                negotiation.update_durable_request(|durable_request| {
+                    append_maap_repair_evidence(
+                        durable_request,
+                        environment.error_message(&error),
+                        attempt,
+                    );
+                });
                 request = maap_repair_request(
                     &response_request,
                     environment.error_message(&error),

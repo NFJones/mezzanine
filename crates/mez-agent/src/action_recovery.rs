@@ -18,6 +18,9 @@ use crate::{
 /// Maximum previous-response bytes included in one ephemeral MAAP repair prompt.
 const MAAP_REPAIR_RAW_TEXT_LIMIT_BYTES: usize = 12 * 1024;
 
+/// Prefix for bounded MAAP repair facts retained in durable chronology.
+pub const MAAP_REPAIR_EVIDENCE_PREFIX: &str = "[MAAP repair evidence]\n";
+
 /// Result returned by provider-independent action recovery policy.
 pub type ActionRecoveryResult<T> = Result<T, ActionRecoveryError>;
 
@@ -358,6 +361,7 @@ pub fn maap_repair_request(
     let mut request = original_request.clone();
     complete_orphaned_deepseek_tool_calls(&mut request);
     select_model_interaction_kind(&mut request, ModelInteractionKind::MaapRepair);
+    append_maap_repair_evidence(&mut request, error_message, attempt);
     request.messages.push(ModelMessage {
         role: ModelMessageRole::Context,
         source: ContextSourceKind::RuntimeHint,
@@ -379,6 +383,36 @@ pub fn maap_repair_request(
         ),
     });
     request
+}
+
+/// Appends one bounded repair fact without retaining model-produced raw text.
+///
+/// The companion repair prompt may carry a bounded excerpt of malformed model
+/// output so the immediate retry can correct it. Durable chronology retains
+/// only this stable controller fact, which is sufficient to explain why the
+/// recovery request occurred without persisting the malformed response body.
+pub fn append_maap_repair_evidence(
+    request: &mut ModelRequest,
+    error_message: &str,
+    attempt: usize,
+) {
+    let content = format!(
+        "{MAAP_REPAIR_EVIDENCE_PREFIX}attempt={attempt}\nvalidation_error={}",
+        maap_repair_raw_text_excerpt(error_message)
+    );
+    if request.messages.iter().any(|message| {
+        message.source == ContextSourceKind::RuntimeHint
+            && message.placement == crate::ContextPlacement::ConversationAppend
+            && message.content == content
+    }) {
+        return;
+    }
+    request.messages.push(ModelMessage {
+        role: ModelMessageRole::Context,
+        source: ContextSourceKind::RuntimeHint,
+        placement: crate::ContextPlacement::ConversationAppend,
+        content,
+    });
 }
 
 /// Appends chronological DeepSeek tool results for native calls left unanswered
@@ -462,6 +496,10 @@ pub fn plan_batch_continuation<ProductError>(
             return Ok(BatchContinuationPlan::Continue(Box::new(next_request)));
         }
         if negotiation.record_recovery_attempt() {
+            let attempt = negotiation.recovery_attempts();
+            negotiation.update_durable_request(|durable_request| {
+                append_maap_repair_evidence(durable_request, error.message(), attempt);
+            });
             return Ok(BatchContinuationPlan::Continue(Box::new(
                 maap_repair_request(
                     input.response_request,
@@ -479,6 +517,10 @@ pub fn plan_batch_continuation<ProductError>(
 
     if let Err(failure) = validate_product_batch() {
         if negotiation.record_recovery_attempt() {
+            let attempt = negotiation.recovery_attempts();
+            negotiation.update_durable_request(|durable_request| {
+                append_maap_repair_evidence(durable_request, &failure.message, attempt);
+            });
             return Ok(BatchContinuationPlan::Continue(Box::new(
                 maap_repair_request(
                     input.response_request,
@@ -502,14 +544,20 @@ pub fn plan_batch_continuation<ProductError>(
             )))
         }
         Ok(None) => Ok(BatchContinuationPlan::Execute),
-        Err(error) if negotiation.record_recovery_attempt() => Ok(BatchContinuationPlan::Continue(
-            Box::new(maap_repair_request(
-                input.response_request,
-                error.message(),
-                input.response_raw_text,
-                negotiation.recovery_attempts(),
-            )),
-        )),
+        Err(error) if negotiation.record_recovery_attempt() => {
+            let attempt = negotiation.recovery_attempts();
+            negotiation.update_durable_request(|durable_request| {
+                append_maap_repair_evidence(durable_request, error.message(), attempt);
+            });
+            Ok(BatchContinuationPlan::Continue(Box::new(
+                maap_repair_request(
+                    input.response_request,
+                    error.message(),
+                    input.response_raw_text,
+                    attempt,
+                ),
+            )))
+        }
         Err(error) => Err(BatchContinuationRejection {
             error: BatchContinuationError::Recovery(error),
             stage: "capability_negotiation",

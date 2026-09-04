@@ -30,6 +30,16 @@ struct RuntimeProviderRetrySchedule {
     delay_ms: u64,
 }
 
+/// Returns the model-safe stable name for a scheduled provider retry class.
+fn runtime_provider_retry_class_name(retry_class: ProviderErrorRetryClass) -> &'static str {
+    match retry_class {
+        ProviderErrorRetryClass::ContextLimit => "context_limit",
+        ProviderErrorRetryClass::OutputLimit => "output_limit",
+        ProviderErrorRetryClass::RetryableTransport => "retryable_transport",
+        ProviderErrorRetryClass::NonRetryable => "non_retryable",
+    }
+}
+
 /// Returns the complete serialized OpenAI Responses body size for one dispatch.
 fn runtime_openai_dispatch_request_shape(
     dispatch: &RuntimeAgentProviderDispatch,
@@ -76,10 +86,11 @@ fn runtime_openai_dispatch_request_shape(
 #[cfg(test)]
 use super::AgentTurnExecution;
 use super::{
-    AgentId, AgentTurnRecord, AgentTurnState, DEFAULT_PROVIDER_TIMEOUT_MS, EventKind, HookEvent,
-    MezError, PaneReadinessState, ProviderApiCompatibility, ReqwestProviderHttpTransport, Result,
-    RuntimeAgentProviderClaim, RuntimeAgentProviderDispatch, RuntimeAgentProviderDispatchProvider,
-    RuntimeAgentProviderTask, RuntimeProviderConfig, RuntimeSessionService, assemble_model_request,
+    AgentId, AgentTurnRecord, AgentTurnState, ContextSourceKind, DEFAULT_PROVIDER_TIMEOUT_MS,
+    EventKind, HookEvent, MezError, PaneReadinessState, ProviderApiCompatibility,
+    ReqwestProviderHttpTransport, Result, RuntimeAgentProviderClaim, RuntimeAgentProviderDispatch,
+    RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeProviderConfig,
+    RuntimeSessionService, assemble_model_request,
     deepseek_chat_completions_provider_from_auth_store_with_provider_options, json_escape,
     openai_compatible_provider_from_auth_store_with_provider_options,
     openai_responses_provider_from_auth_store_with_provider_options, resolve_provider_api,
@@ -1150,6 +1161,21 @@ impl RuntimeSessionService {
                 "runtime agent turn has no model profile",
             ));
         };
+        let retry_class = runtime_provider_retry_class_name(
+            crate::integrations::agent::provider::provider_error_retry_class(error),
+        );
+        self.agent_turn_contexts_mut()
+            .get_mut(turn_id)
+            .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?
+            .append_reference_event(
+                ContextSourceKind::RuntimeHint,
+                "provider retry scheduled",
+                format!(
+                    "[provider retry scheduled]\nretry_class={retry_class}\nerror_kind={}\nattempt={attempt}\nmax_attempts={max_attempts}\nunlimited={unlimited}\ndelay_ms={delay_ms}",
+                    runtime_mezzanine_error_code(error.kind()),
+                ),
+            )
+            .map_err(|error| MezError::invalid_state(error.to_string()))?;
         self.agent.pending_agent_provider_tasks.remove(turn_id);
         self.append_provider_request_failure_audit(
             &turn,

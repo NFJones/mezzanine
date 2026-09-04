@@ -179,9 +179,10 @@ pub use action_planning::{
 pub use action_recovery::{
     ActionRecoveryError, ActionRecoveryResult, BatchContinuationError, BatchContinuationInput,
     BatchContinuationPlan, BatchContinuationRejection, BatchValidationFailure,
-    capability_continuation_request, capability_requests_from_batch,
-    disallowed_action_capability_continuation_request, maap_repair_request,
-    mixed_capability_continuation_request, plan_batch_continuation, validate_batch_allowed_actions,
+    MAAP_REPAIR_EVIDENCE_PREFIX, append_maap_repair_evidence, capability_continuation_request,
+    capability_requests_from_batch, disallowed_action_capability_continuation_request,
+    maap_repair_request, mixed_capability_continuation_request, plan_batch_continuation,
+    validate_batch_allowed_actions,
 };
 pub use action_result::{
     ActionContentBlock, ActionError, ActionResult, ActionResultContractError,

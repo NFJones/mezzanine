@@ -73,6 +73,8 @@ const FAILURE_SUMMARY_PROVIDER_RETRY_LIMIT: usize = 1;
 /// Maximum number of MAAP repair retries for one malformed failure-summary
 /// response.
 const FAILURE_SUMMARY_MAAP_REPAIR_LIMIT: usize = 1;
+/// Prefix for bounded failure-summary facts retained in durable chronology.
+const FAILURE_SUMMARY_EVIDENCE_PREFIX: &str = "[failure summary evidence]\n";
 
 /// Builds a response-only model request for final failure characterization.
 fn failure_summary_request(
@@ -84,6 +86,7 @@ fn failure_summary_request(
     let mut request = previous_request.clone();
     select_model_interaction_kind(&mut request, ModelInteractionKind::FailureSummary);
     request.allowed_actions = AllowedActionSet::say_only();
+    append_failure_summary_evidence(&mut request, stage, error);
     request.messages.push(ModelMessage {
         role: ModelMessageRole::Context,
         source: ContextSourceKind::RuntimeHint,
@@ -98,6 +101,27 @@ fn failure_summary_request(
         ),
     });
     request
+}
+
+/// Appends one bounded failure-summary fact without retaining raw diagnostics.
+fn append_failure_summary_evidence(request: &mut ModelRequest, stage: &str, error: &MezError) {
+    let content = format!(
+        "{FAILURE_SUMMARY_EVIDENCE_PREFIX}stage={stage}\nerror_kind={:?}",
+        error.kind()
+    );
+    if request.messages.iter().any(|message| {
+        message.source == ContextSourceKind::RuntimeHint
+            && message.placement == mez_agent::ContextPlacement::ConversationAppend
+            && message.content == content
+    }) {
+        return;
+    }
+    request.messages.push(ModelMessage {
+        role: ModelMessageRole::Context,
+        source: ContextSourceKind::RuntimeHint,
+        placement: mez_agent::ContextPlacement::ConversationAppend,
+        content,
+    });
 }
 
 /// Returns a bounded UTF-8-safe excerpt for terminal failure summary prompts.

@@ -395,6 +395,74 @@ fn runtime_provider_execution_identity_is_request_scoped_and_idempotent() {
     );
 }
 
+#[test]
+/// Verifies safe MAAP repair evidence is committed to actor-owned chronology
+/// while request-only malformed-response excerpts remain excluded.
+fn runtime_provider_execution_commits_safe_maap_repair_evidence() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "repair an unavailable MCP call")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let mut request = runtime_model_request_fixture(&turn.turn_id);
+    request.messages.push(mez_agent::ModelMessage {
+        role: mez_agent::ModelMessageRole::Context,
+        source: ContextSourceKind::RuntimeHint,
+        placement: mez_agent::ContextPlacement::ConversationAppend,
+        content: format!(
+            "{}attempt=1\nvalidation_error=mcp action references an unavailable server",
+            mez_agent::MAAP_REPAIR_EVIDENCE_PREFIX
+        ),
+    });
+    let execution = mez_agent::AgentTurnExecution {
+        request,
+        response: mez_agent::ModelResponse {
+            provider: "openai".to_string(),
+            model: "test".to_string(),
+            raw_text: "corrected response".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Vec::new(),
+            action_batch: None,
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: Vec::new(),
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+
+    service
+        .append_agent_execution_chronology(&turn, &execution)
+        .unwrap();
+
+    assert!(
+        service
+            .agent_turn_contexts()
+            .get(&turn.turn_id)
+            .unwrap()
+            .chronology()
+            .iter()
+            .any(|event| {
+                event.block().source == ContextSourceKind::CommittedEvidence
+                    && event.block().label == "MAAP repair evidence"
+                    && event.block().content.contains("unavailable server")
+                    && !event.block().content.contains("previous_response_excerpt")
+            })
+    );
+}
+
 /// Verifies response-local MAAP ordinals become distinct causal action ids
 /// across consecutive provider completions in one logical turn.
 ///

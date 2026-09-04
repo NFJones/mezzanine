@@ -594,6 +594,19 @@ fn turn_runner_summarizes_terminal_provider_failure_with_say_only_request() {
     let requests = provider.requests();
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[1].allowed_actions.action_type_names(), vec!["say"]);
+    let failure_evidence = requests[1]
+        .messages
+        .iter()
+        .find(|message| message.content.contains("[failure summary evidence]"))
+        .expect("bounded failure-summary evidence");
+    assert!(failure_evidence.content.contains("stage=provider_error"));
+    assert!(failure_evidence.content.contains("error_kind=InvalidState"));
+    assert!(
+        !failure_evidence
+            .content
+            .contains("provider schema rejected request"),
+        "{failure_evidence:?}"
+    );
     assert!(
         requests[1]
             .messages
