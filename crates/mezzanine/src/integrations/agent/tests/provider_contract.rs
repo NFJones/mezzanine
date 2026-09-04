@@ -343,8 +343,10 @@ async fn observed_async_provider_records_each_attempt_and_exact_usage_presence()
     assert!(sequence(&zero.request_id) < sequence(&failed.request_id));
     assert_eq!(omitted.interaction_kind, "capability_continuation");
     assert_eq!(omitted.usage, None);
-    assert_eq!(omitted.mcp_live_state_bytes, 0);
-    assert_eq!(omitted.mcp_catalog_bytes, mcp_catalog.len());
+    assert_eq!(omitted.mcp_directory_bytes, mcp_catalog.len());
+    assert_eq!(omitted.mcp_search_result_bytes, 0);
+    assert_eq!(omitted.mcp_retrieved_contract_bytes, 0);
+    assert_eq!(omitted.mcp_action_result_bytes, 0);
     assert_eq!(omitted.action_result_bytes, action_result.len());
     assert_eq!(zero.interaction_kind, "maap_repair");
     assert_eq!(zero.usage, Some(explicit_zero));

@@ -88,7 +88,10 @@ fn openai_current_action_results_remain_append_only_before_volatile_suffix() {
     }));
     let diagnostics = openai_prompt_cache_diagnostics_for_request(&request).unwrap();
     assert!(diagnostics.stable_input_bytes > 2);
-    assert_eq!(diagnostics.volatile_input_bytes, 2);
+    assert_eq!(
+        diagnostics.continuity_snapshot.input_items,
+        diagnostics.effective_input_items
+    );
 }
 
 #[test]
@@ -318,7 +321,10 @@ fn openai_settled_controller_state_is_chronological_developer_input() {
 
     let diagnostics = openai_prompt_cache_diagnostics_for_request(&request).unwrap();
     assert!(diagnostics.stable_input_bytes > 2);
-    assert_eq!(diagnostics.volatile_input_bytes, 2);
+    assert_eq!(
+        diagnostics.continuity_snapshot.input_items,
+        diagnostics.effective_input_items
+    );
 }
 
 #[test]
@@ -385,7 +391,10 @@ fn openai_committed_request_state_does_not_add_volatile_duplicate() {
             .contains("[Mezzanine request state]")
     );
     let diagnostics = openai_prompt_cache_diagnostics_for_request(&request).unwrap();
-    assert_eq!(diagnostics.volatile_input_bytes, 2);
+    assert_eq!(
+        diagnostics.continuity_snapshot.input_items,
+        diagnostics.effective_input_items
+    );
 }
 
 #[test]
@@ -505,10 +514,6 @@ fn openai_historical_tool_results_replay_in_shared_append_only_prefix() {
     assert_ne!(
         first_diagnostics.stable_input_sha256,
         second_diagnostics.stable_input_sha256
-    );
-    assert_eq!(
-        first_diagnostics.volatile_input_sha256,
-        second_diagnostics.volatile_input_sha256
     );
 }
 
@@ -632,7 +637,10 @@ fn openai_long_session_keeps_observed_action_results_raw_without_committed_evide
 
     let diagnostics = openai_prompt_cache_diagnostics_for_request(&request).unwrap();
     assert!(diagnostics.stable_input_bytes > 2);
-    assert_eq!(diagnostics.volatile_input_bytes, 2);
+    assert_eq!(
+        diagnostics.continuity_snapshot.input_items,
+        diagnostics.effective_input_items
+    );
 }
 
 #[test]
@@ -853,8 +861,6 @@ fn openai_prompt_cache_diagnostics_fingerprint_provider_prefix_parts() {
     assert_eq!(diagnostics.tools_sha256.len(), 64);
     assert!(diagnostics.stable_input_bytes > 2);
     assert_eq!(diagnostics.stable_input_sha256.len(), 64);
-    assert_eq!(diagnostics.volatile_input_bytes, 2);
-    assert_eq!(diagnostics.volatile_input_sha256.len(), 64);
     assert!(diagnostics.stable_projection_bytes > diagnostics.instructions_bytes);
     assert_eq!(diagnostics.stable_projection_sha256.len(), 64);
     assert!(diagnostics.provider_request_shape_bytes > diagnostics.tools_bytes);
@@ -1254,10 +1260,6 @@ fn openai_cache_hashes_attribute_stable_volatile_and_control_changes() {
         base.stable_projection_sha256,
         cwd_changed.stable_projection_sha256
     );
-    assert_eq!(
-        base.volatile_input_sha256,
-        cwd_changed.volatile_input_sha256
-    );
     assert_ne!(
         base.continuity_snapshot.request_sha256,
         cwd_changed.continuity_snapshot.request_sha256
@@ -1452,7 +1454,10 @@ fn openai_stable_prefix_excludes_injected_mcp_integration_context() {
     assert!(stable_input_text.contains("durable assistant context after mcp"));
     assert!(!stable_input.is_empty());
     assert!(diagnostics.stable_input_bytes > 2);
-    assert_eq!(diagnostics.volatile_input_bytes, 2);
+    assert_eq!(
+        diagnostics.continuity_snapshot.input_items,
+        diagnostics.effective_input_items
+    );
     assert!(body["input"].as_array().unwrap().iter().any(|message| {
         message["role"] == "developer"
             && message["content"][0]["text"]

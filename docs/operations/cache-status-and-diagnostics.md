@@ -31,8 +31,8 @@ the latest sample but does not erase a prior cold sample from cumulative
 accounting.
 
 Trace continuity comparison reports the longest matching immutable prefix,
-whether durable chronology grew append-only, estimates for immutable and live
-state, and a classification such as `new_turn`, `compaction`,
+whether durable chronology grew append-only, and a classification such as
+`new_turn`, `compaction`,
 `provider_switch`, `model_switch`, `append_only`, or `unexpected_rewrite`.
 The last classification indicates a settled-context consistency signal, not a
 provider cache decision.
@@ -40,8 +40,7 @@ provider cache decision.
 `Provider wire prefix` compares the complete ordered OpenAI input sent on the
 wire, together with cache-affecting request-envelope components. Ordinary
 requests in one conversation and cache epoch retain every previously sent input
-item byte-for-byte and append newly settled chronology or superseding live state
-after it. The reported `input_bytes` is the canonical serialized size of the
+item byte-for-byte and append newly settled chronology after it. The reported `input_bytes` is the canonical serialized size of the
 effective input array actually sent. `common_bytes` is the corresponding size
 of the identical leading item array, while `envelope_unchanged` confirms that
 instructions, response format, tools, tool choice, cache key, and request
@@ -49,22 +48,21 @@ controls did not change. `append_only=true` requires both conditions.
 Pane environment facts are frozen as typed prompt-boundary snapshots: an
 unchanged environment adds no message, while a changed or unavailable
 environment appends a new snapshot without rewriting the prior prefix.
-Ordinary requests therefore do not repeat the frozen working directory in the
-volatile suffix. `logical_stable_bytes` and `logical_volatile_bytes` describe
-the latest source-level partition only; they are not provider wire-prefix sizes
-and need not grow monotonically. A non-empty logical volatile byte count should
-come from an explicitly request-local producer such as selected MCP metadata or
-recovery guidance.
+Ordinary requests therefore do not repeat the frozen working directory outside
+durable chronology. Provider-wire diagnostics are the evidence for continuity:
+they report canonical input size and items, the common leading items and bytes,
+and whether the cache-affecting envelope remained unchanged.
 
 `action_result_bytes` reports exact durable action-result content in the
 observed request. Those bytes are cold when first appended, then remain in the
 same chronological position for later requests and turns until compaction.
-`stable_mcp_bytes` reports configured always-exposed MCP catalog snapshots in
-append-only chronology. `explicit_mcp_bytes` reports request-local manifests
-for integrations selected only with `@server`; once sent, those exact wire
-items remain in the turn's request chain and changed state appends a superseding
-item. An unchanged always-exposed catalog should not increase the snapshot
-count or create an MCP-caused provider-prefix divergence.
+`mcp_directory_bytes` reports compact always-exposed MCP directory records in
+append-only chronology. Search results, explicit references, retrieved server
+contracts, and MCP action results are likewise durable action evidence. A
+retrieved contract permits a later `mcp_call` only while it remains in the
+current compaction epoch; live registry validation remains required. An
+unchanged directory must not increase the snapshot count or create an
+MCP-caused provider-prefix divergence.
 
 Changes to the model, provider routing namespace, prompt-cache lineage, stream
 shape, compaction epoch, or an explicitly exceptional interaction start a new

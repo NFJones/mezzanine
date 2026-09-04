@@ -26,8 +26,6 @@ pub struct OpenAiRenderedMessages {
     pub input: Vec<serde_json::Value>,
     /// Input messages included in the stable reusable prefix.
     pub stable_input: Vec<serde_json::Value>,
-    /// Input messages that belong to the volatile suffix.
-    pub volatile_input: Vec<serde_json::Value>,
 }
 
 /// Renders provider-independent messages into OpenAI Responses input shape.
@@ -37,21 +35,11 @@ pub fn openai_render_messages(
 ) -> ProviderRequestAssemblyResult<OpenAiRenderedMessages> {
     let mut instructions = Vec::new();
     let mut input = Vec::new();
-    let mut stable_input = Vec::new();
-    let mut volatile_input = Vec::new();
-    let mut stable_input_open = true;
     for message in messages {
         if let Some(event) = ProviderTranscriptEvent::from_transcript_content(&message.content) {
             if let Some(items) = event.openai_input_items() {
                 for item in items {
-                    openai_push_input_value(
-                        item,
-                        message,
-                        &mut input,
-                        &mut stable_input,
-                        &mut volatile_input,
-                        &mut stable_input_open,
-                    );
+                    openai_push_input_value(item, &mut input);
                 }
             }
             continue;
@@ -60,13 +48,7 @@ pub fn openai_render_messages(
             instructions.push(message.content.clone());
             continue;
         }
-        openai_push_input_message(
-            message,
-            &mut input,
-            &mut stable_input,
-            &mut volatile_input,
-            &mut stable_input_open,
-        );
+        openai_push_input_message(message, &mut input);
     }
     if input.is_empty() {
         return Err(ProviderRequestAssemblyError::invalid_args(
@@ -75,46 +57,19 @@ pub fn openai_render_messages(
     }
     Ok(OpenAiRenderedMessages {
         instructions: instructions.join("\n\n"),
+        stable_input: input.clone(),
         input,
-        stable_input,
-        volatile_input,
     })
 }
 
 /// Adds one rendered input message to provider input and cache diagnostics.
-fn openai_push_input_message(
-    message: &ModelMessage,
-    input: &mut Vec<serde_json::Value>,
-    stable_input: &mut Vec<serde_json::Value>,
-    volatile_input: &mut Vec<serde_json::Value>,
-    stable_input_open: &mut bool,
-) {
+fn openai_push_input_message(message: &ModelMessage, input: &mut Vec<serde_json::Value>) {
     let value = openai_input_message_value(message);
-    openai_push_input_value(
-        value,
-        message,
-        input,
-        stable_input,
-        volatile_input,
-        stable_input_open,
-    );
+    openai_push_input_value(value, input);
 }
 
 /// Adds one already native Responses item to input and cache diagnostics.
-fn openai_push_input_value(
-    value: serde_json::Value,
-    message: &ModelMessage,
-    input: &mut Vec<serde_json::Value>,
-    stable_input: &mut Vec<serde_json::Value>,
-    volatile_input: &mut Vec<serde_json::Value>,
-    stable_input_open: &mut bool,
-) {
-    if *stable_input_open && openai_message_stable_prefix_eligible(message) {
-        stable_input.push(value.clone());
-    } else {
-        *stable_input_open = false;
-        volatile_input.push(value.clone());
-    }
+fn openai_push_input_value(value: serde_json::Value, input: &mut Vec<serde_json::Value>) {
     input.push(value);
 }
 
@@ -191,15 +146,6 @@ fn openai_context_entry_body(content: &str) -> &str {
     } else {
         content
     }
-}
-
-/// Returns whether a rendered input message belongs in the reusable prefix.
-fn openai_message_stable_prefix_eligible(message: &ModelMessage) -> bool {
-    matches!(
-        message.placement,
-        crate::context::ContextPlacement::StablePrefix
-            | crate::context::ContextPlacement::ConversationAppend
-    )
 }
 
 /// Stable categories for provider request-assembly failures.
@@ -283,10 +229,6 @@ pub struct OpenAiPromptCacheDiagnostics {
     pub stable_input_bytes: usize,
     /// SHA-256 of the source-level logical stable input partition.
     pub stable_input_sha256: String,
-    /// Bytes in the source-level logical volatile input partition.
-    pub volatile_input_bytes: usize,
-    /// SHA-256 of the source-level logical volatile input partition.
-    pub volatile_input_sha256: String,
     /// Bytes in Mezzanine's instructions-and-stable-input projection.
     pub stable_projection_bytes: usize,
     /// SHA-256 of Mezzanine's instructions-and-stable-input projection.
@@ -324,10 +266,6 @@ pub fn openai_prompt_cache_diagnostics(
         &rendered.stable_input,
         "OpenAI stable-input diagnostics failed",
     )?;
-    let volatile_input_text = openai_diagnostic_json(
-        &rendered.volatile_input,
-        "OpenAI volatile-input diagnostics failed",
-    )?;
     let stable_projection = openai_stable_projection_material(rendered)?;
     let provider_request_shape = openai_diagnostic_json(
         provider_request_shape,
@@ -359,8 +297,6 @@ pub fn openai_prompt_cache_diagnostics(
         tool_choice_sha256: sha256_hex(tool_choice_text.as_bytes()),
         stable_input_bytes: stable_input_text.len(),
         stable_input_sha256: sha256_hex(stable_input_text.as_bytes()),
-        volatile_input_bytes: volatile_input_text.len(),
-        volatile_input_sha256: sha256_hex(volatile_input_text.as_bytes()),
         stable_projection_bytes: stable_projection.len(),
         stable_projection_sha256,
         provider_request_shape_bytes: provider_request_shape.len(),

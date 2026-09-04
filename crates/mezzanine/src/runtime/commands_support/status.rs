@@ -608,14 +608,6 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
             &runtime_metrics.provider_prompt_effective_input_items,
         ),
         (
-            "provider_prompt_logical_stable_input_bytes",
-            &runtime_metrics.provider_prompt_stable_input_bytes,
-        ),
-        (
-            "provider_prompt_logical_volatile_input_bytes",
-            &runtime_metrics.provider_prompt_volatile_input_bytes,
-        ),
-        (
             "provider_prompt_stable_projection_bytes",
             &runtime_metrics.provider_prompt_stable_projection_bytes,
         ),

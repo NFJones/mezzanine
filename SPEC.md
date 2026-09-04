@@ -4589,17 +4589,18 @@ for the concrete execution model. Auxiliary routing and model-sizing requests
 MUST contribute to cumulative provider/model accounting without replacing the
 execution model's latest-request sample.
 OpenAI request diagnostics SHOULD record non-model-visible fingerprints for the
-front-loaded instructions, response-format schema, tool schema, stable input
-prefix, volatile input suffix, and complete observable cacheable prefix so cache
-misses can be diagnosed without inserting diagnostic text into model context.
-For ordinary requests in one conversation and cache epoch, the complete rendered input
-sent by each prior request MUST be a byte-identical prefix of the next request.
-Request-local model-visible state that was already sent MUST remain in that
-wire sequence; changed live state MUST append a superseding item rather than
-replace or relocate the prior item. Diagnostics MUST report complete-wire
-append continuity as the provider-prefix result. A logical stable-only
-projection MAY be retained as a secondary diagnostic but MUST NOT be presented
-as proof of provider cache continuity.
+front-loaded instructions, response-format schema, tool schema, complete
+canonical input, cache-affecting request envelope, and complete observable
+provider request so cache misses can be diagnosed without inserting diagnostic
+text into model context. For ordinary requests in one conversation and cache
+epoch, the complete rendered input sent by each prior request MUST be a
+byte-identical prefix of the next request. Every model-visible item in that
+sequence MUST be reconstructible from immutable epoch material or durable
+chronology; an unchanged epoch MUST reject any omitted, reordered, or rewritten
+item before provider dispatch. Diagnostics MUST report complete-wire append
+continuity as the provider-prefix result. A local projection MAY be retained as
+a secondary diagnostic but MUST NOT be presented as proof of provider cache
+continuity.
 Static invariant agent behavior SHOULD remain in the front-loaded OpenAI
 `instructions` field. The selected model name MUST be the only variable agent
 profile value included in that durable instruction prefix; provider, pane,
@@ -4614,21 +4615,18 @@ placement, semantic kind, retention, provenance, and canonical role. These are
 independent properties. `StablePrefix` is reserved for invariant ambient
 instructions and stable configuration. `ConversationAppend` contains immutable
 chronological task preludes, direct user events, assistant events, evidence,
-neutral references, and compaction-summary epochs. `EphemeralTail` contains only
-factual request-local live state that can change the correctness of the next
-provider response and is not already represented by a typed provider field or
-durable event.
-Ordinary provider preparation MUST NOT duplicate a frozen prompt-boundary
-working directory in `EphemeralTail`. OpenAI request assembly MUST recognize a
-chronological request-state transition after runtime promotion from
-`RuntimeHint` to `CommittedEvidence` and MUST NOT append a duplicate generated
-request-state tail. The first ordinary OpenAI request in a turn MUST establish
-a request chain containing its exact rendered input and cache-affecting
-envelope. Later ordinary requests in the same provider, model, routing
-namespace, stream shape, and prompt-cache lineage MUST preserve that complete
-input as an exact prefix. Model, namespace, stream, lineage, compaction, and
-explicitly exceptional interaction transitions establish a new cache epoch;
-unclassified envelope rewrites MUST fail before provider dispatch.
+neutral references, and compaction-summary epochs. No request-local placement
+may become model-visible. Dynamic controller facts, recovery diagnostics, and
+output-limit continuation instructions MUST either be typed non-model-visible
+request metadata or append durable chronological evidence before the follow-up
+request is assembled.
+The first ordinary request in an epoch MUST establish a request chain containing
+its exact rendered input and cache-affecting envelope. Later ordinary requests
+in the same provider, model, routing namespace, stream shape, and prompt-cache
+lineage MUST preserve that complete input as an exact prefix. Model, namespace,
+stream, lineage, compaction, and explicitly classified interaction transitions
+establish a new cache epoch; unclassified envelope rewrites MUST fail before
+provider dispatch.
 
 Direct user prompts and mid-turn steering MUST be exact `UserEvent` chronology.
 The initial prompt MUST be appended once before the assistant actions and
@@ -4658,37 +4656,30 @@ restoration, and provider switching until their complete execution group is
 atomically compacted.
 
 Durable `AgentContext` MUST contain only `StablePrefix` and
-`ConversationAppend`; provider preparation MUST construct and discard a
-separate live-state suffix without mutating durable context. Assembly MUST
-reject placement regression or semantic/lifetime mismatches and MUST NOT sort a
-malformed context. Tail blocks MUST use live-state semantics and request-local
-retention. Conversation events, action results, user prompts, steering, skill
-instructions, memories, and transcript records MUST NOT enter the tail.
+`ConversationAppend`. Provider preparation MUST render that exact material
+without adding a model-visible suffix. Assembly MUST reject placement regression
+or semantic/lifetime mismatches and MUST NOT sort malformed context.
 
-Stable slots, sequenced conversation events, and live-state blocks MUST be
-structurally distinct stored types. Typed storage is the source of truth;
-adapter-facing block and metadata vectors, if retained, MUST be read-only exact
-projections. Every checked mutation MUST validate an isolated candidate before
-commit so failure cannot expose a partial chronology or advance its event
-sequence. Compatibility transcript import MUST preserve source order. If an old
-transcript has evidence separated from any unambiguous assistant owner by an
-exact barrier, Mezzanine MUST retain that evidence as an exact neutral reference
-rather than invent an execution group or move the evidence across the barrier.
-Event identities MUST leave sufficient monotonic space for a running-turn
-history refresh to replace only the imported historical prefix without
-renumbering the active prompt or later events. If a replacement cannot fit
-before the first retained event, it MUST fail atomically.
+Stable slots and sequenced conversation events MUST be structurally distinct
+stored types. Typed storage is the source of truth; adapter-facing block and
+metadata vectors, if retained, MUST be read-only exact projections. Every
+checked mutation MUST validate an isolated candidate before commit so failure
+cannot expose a partial chronology or advance its event sequence. Compatibility
+transcript import MUST preserve source order. If an old transcript has evidence
+separated from any unambiguous assistant owner by an exact barrier, Mezzanine
+MUST retain that evidence as an exact neutral reference rather than invent an
+execution group or move the evidence across the barrier. Event identities MUST
+leave sufficient monotonic space for a running-turn history refresh to replace
+only the imported historical prefix without renumbering the active prompt or
+later events. If a replacement cannot fit before the first retained event, it
+MUST fail atomically.
 
-Allowlisted tail state consists only of the authoritative current working
-directory, OpenAI action-superset narrowing, the explicitly invoked OpenAI MCP
-manifest that its stable generic schema cannot express, and concise unavailable
-MCP diagnostics when the requested integration affects the next response.
 Pane readiness, write conflicts/scopes, scheduler state, retry bounds, recovery
 mode names, session/pane/cache identity, environment hashes, host diagnostics,
 progress or rationale ledgers, action pressure, generic failure coaching,
 resolved-skill hints, permission policy, and duplicate MCP schemas MUST stay out
-of model context. Session and cache lineage travel as typed non-model-visible
-request metadata.
+of model context unless a bounded causal event is explicitly committed. Session
+and cache lineage travel as typed non-model-visible request metadata.
 
 Prompt-boundary plan policy, explicit skill instructions, invocation-time
 configuration snapshots, and unread local messages that precede a user event
@@ -4730,19 +4721,19 @@ NOT be rewritten as an explicit zero. Retained continuity baselines and latest
 conversation samples MUST be bounded with deterministic eviction, and stale
 observations MUST be rejected unless background compaction or memory work still
 belongs to the pane's current conversation.
-Per-wire diagnostics MUST report request-local MCP-manifest bytes and exact
-durable action-result bytes separately, while retaining complete callable MCP
-schemas whenever the active provider requires them.
+Per-wire diagnostics MUST report durable MCP-directory bytes and exact durable
+action-result bytes separately. Durable search results, server references, and
+retrieved server contracts MUST remain distinguishable in trace data without
+exposing credentials, transport configuration, headers, or provider output.
 
 Capability continuation, MAAP repair, output-limit retry, failure summary,
 routed handoff and repair, routed presentation and failure explanation,
 auto-sizing, and macro judging MUST be represented by typed interaction modes.
 Mode-static behavioral rules for exceptional repair, retry, routing, and
 summary requests belong in the mode's system instruction profile; dynamic
-errors and prior output belong in chronological evidence or one bounded factual
-live-state block. The runtime MUST replace older state for the same exceptional
-mode rather than accumulate retry prompts. Context diagnostics MUST label only
-intentional instruction-profile changes as expected cache breaks. The
+errors and prior output MUST append as chronological evidence. Context
+diagnostics MUST label only intentional instruction-profile changes as expected
+cache breaks. The
 configured allowed-action set MUST remain actor-owned state and MUST survive
 every provider-worker, action-execution, approval, and provider-continuation
 boundary without capability negotiation. Live MCP, memory, and issue
@@ -7059,9 +7050,9 @@ range's original position. It MUST NOT be moved to the start or end of the
 conversation or across a user/task barrier. Existing epochs MUST remain
 byte-stable during later provider context-limit recovery. Direct user and task
 instructions MUST remain byte-for-byte exact. Mezzanine MUST NOT synthesize
-semantic summary prose locally or partially truncate blocks. `EphemeralTail`
-state MUST remain outside summary input and MUST be recomputed only after
-compaction completes.
+semantic summary prose locally or partially truncate blocks. Non-model-visible
+request metadata remains outside summary input; all model-visible recovery facts
+are already durable chronology before compaction begins.
 
 Provider-limit recovery MUST plan compaction only for events at or below the
 event-sequence high-water mark consumed by the rejected provider request.
@@ -9667,22 +9658,15 @@ MUST explain that a successful same-turn semantic duplicate is suppressed and
 terminates further provider continuation after other actions in that response
 settle. It MUST treat settled `config_change` results as authoritative over any
 turn-start or skill-invocation configuration snapshot. It MUST explain that
-`mcp_call` is only for MCP tools listed as available in the current turn-local
-runtime context. The stable system prompt MUST NOT enumerate
-configured MCP servers, unavailable MCP servers, MCP tools, or MCP availability
-counts. A submitted user prompt or loaded skill MAY request MCP metadata for the
-current turn with `@<mcp-server-name>`. When runtime MCP context is injected for
-such an explicit invocation, all turn-local MCP availability surfaces MUST agree
-on whether invoked MCP servers and tools are available. A provider adapter MAY
-keep its function-tool description and schema request-independent for prompt
-caching; in that mode, a generic `mcp_call` variant does not assert that any
-particular tool is active, and the late action-surface message plus injected MCP
-context MUST identify callable tools while controller and runtime validation
-reject unavailable identities or invalid arguments. Provider adapters that emit
-request-specific concrete `mcp_call` variants MUST NOT report zero available MCP
-tools while those variants are exposed, and their action descriptions MUST
-include a bounded, secret-safe manifest of callable `server/tool` identities and
-tool descriptions.
+`mcp_server_search` discovers configured servers and `mcp_server_get` retrieves
+one referencable server's complete safe contract. `mcp_call` is only for a tool
+in a durable retrieval record that the live registry still validates. The stable
+system prompt MUST NOT enumerate configured MCP servers, unavailable MCP
+servers, MCP tools, or MCP availability counts. A submitted user prompt or
+loaded skill MAY add a durable `@<mcp-server-name>` reference. Provider action
+schemas remain request-independent; durable directory, reference, search, and
+retrieval chronology supplies model-visible discovery state, while controller
+and runtime validation reject unavailable identities or invalid arguments.
 The default selected-model action surface MAY expose `mcp_call`,
 `memory_search`, and `memory_store` together when those capabilities are
 enabled. The presence of configured MCP integrations MUST NOT by itself suppress
@@ -9801,20 +9785,17 @@ The prompt MUST include the active agent's cooperation mode, read scopes, and
 write scopes when the agent is a subagent.
 
 The stable prompt MUST keep MCP awareness abstract and MUST NOT include a
-session-wide MCP integration manifest. When a user prompt or loaded skill names
-`@<mcp-server-name>`, the runtime MUST add a bounded, turn-volatile,
-secret-safe MCP context block for that invoked server only. Available invoked
-MCP servers MUST be presented with configured server id, status, model-visible
-external-capability purpose, the `mcp_call` route, and available-tool count.
-Available invoked MCP tools MUST identify `mcp_call` as the callable route, MUST
-be bounded, and MUST NOT expose approval requirements, secret-bearing transport,
-environment, header, credential, or raw schema data. MCP servers that are not
-named by `@<mcp-server-name>` MUST NOT be exposed to the model for that turn.
-Injected MCP context MUST be ephemeral: it MUST NOT be persisted to durable
-transcript summaries, memory, provider cache-prefix material, or later turns
-unless a later prompt or loaded skill invokes the server again. MCP servers that
-are disabled, blacklisted for the session, or unavailable because of
-environmental failure MUST NOT be presented as available tools.
+session-wide MCP integration manifest. Always-exposed servers contribute only
+compact durable directory records containing server identity, display name,
+purpose, and usage guidance. A user prompt or loaded skill naming
+`@<mcp-server-name>` adds a bounded durable reference; `mcp_server_search` adds
+safe durable search results. `mcp_server_get` is the only action that may append
+a complete safe tool and schema contract, and it MUST omit approval internals,
+secret-bearing transport, environment, headers, and credentials. A later
+`mcp_call` requires that durable retrieval record and fresh live registry
+validation. Compaction clears retrieved contracts, requiring a fresh retrieval.
+Disabled, blacklisted, or unavailable servers remain discoverable only through
+safe diagnostics and MUST NOT be represented as callable tools.
 
 The prompt MUST instruct the agent to report blockers and uncertainty rather
 than inventing unavailable state.
@@ -9881,12 +9862,10 @@ On repeated followups about the same likely bug or missing behavior, the prompt
 SHOULD tell the agent not to keep restating uncertainty in user-facing prose
 once the next concrete inspection, test, or implementation step is available,
 and instead to use the next turn to act.
-The runtime MUST add a bounded, turn-volatile context block that lists recent
-progress `say` messages already emitted during the active turn before subsequent
-provider continuations. The block MUST be framed as already-shown progress, not
-as a new user request. It MUST be excluded from stable prompt-cache prefix
-material, MUST be cleared when the active turn completes, and SHOULD retain only
-the most recent entries needed to prevent redundant progress narration.
+Already-emitted progress is presentation state, not model context. The runtime
+MUST NOT synthesize a request-local progress block for provider continuations;
+any model-visible causal fact required for continuation MUST be committed as
+bounded durable chronology before the next request is assembled.
 For implementation summaries, the prompt MUST require changed files, successful
 mutation evidence, verification evidence, and skipped validation when relevant.
 The prompt MUST prohibit leading with approval phrases such as "Great

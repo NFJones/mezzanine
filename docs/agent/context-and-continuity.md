@@ -11,14 +11,14 @@ Use the [agent shell](../using-mezzanine/agent-shell.md) in an active pane.
 
 ## What a turn receives
 
-Each request combines a durable reusable prefix with a short-lived suffix of
-facts needed only for the next request. The durable prefix contains stable
-runtime and project guidance plus ordered conversation history, including every
-explicit action result appended since the latest compaction boundary. User,
-assistant, action-result, project-file, and terminal sources retain distinct
-roles. Terminal text becomes context only when an explicit action result
-includes it; live controller state, passive terminal content, credentials, and
-unrelated pane data are not normal model context.
+Each request combines an immutable epoch prefix with ordered durable
+conversation chronology. The epoch prefix contains invariant runtime and
+project guidance; chronology contains every task prelude, user or assistant
+event, and explicit action result appended since the latest compaction boundary.
+User, assistant, action-result, project-file, and terminal sources retain
+distinct roles. Terminal text becomes context only when an explicit action
+result includes it; live controller state, passive terminal content,
+credentials, and unrelated pane data are not normal model context.
 
 An action result has one bounded model-visible representation. Mez appends that
 representation once to the durable chronological prefix, stores it in the
@@ -30,11 +30,16 @@ ones; they do not move or replace prior output. Only explicit conversation
 compaction may summarize complete older execution groups.
 
 Servers listed in `agents.always_exposed_mcp_servers` use the same append-only
-model. Mez stores their complete model-safe catalog as typed conversation
-snapshots. An unchanged catalog is reused in place; configuration, discovery,
-schema, guidance, availability, or removal changes append an authoritative
-transition. Explicit-only `@server` metadata remains request-local, and the
-live MCP registry—not historical snapshots—controls whether a call may run.
+model. Mez stores compact typed directory snapshots containing only server
+identity, display name, purpose, and usage guidance. An unchanged directory is
+reused in place; a configured-directory change or removal appends an
+authoritative transition. Explicit `@server` references and successful
+`mcp_server_search` results become durable references, while a successful
+`mcp_server_get` records the complete retrieved server contract needed for a
+later `mcp_call`. The live MCP registry—not historical records—still controls
+whether a call may run and revalidates its arguments immediately before
+execution. Compaction clears retrieved contracts, so a later call requires a
+fresh `mcp_server_get`.
 
 The pane conversation can survive hiding the agent shell, detaching and
 reattaching the client, and ordinary session persistence. A forked or routed

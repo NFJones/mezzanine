@@ -193,8 +193,8 @@ fn openai_maap_schema_is_stable_across_non_mcp_action_surfaces() {
         execution_diagnostics.provider_request_shape_sha256
     );
     assert_eq!(
-        capability_diagnostics.volatile_input_sha256,
-        execution_diagnostics.volatile_input_sha256
+        capability_diagnostics.continuity_snapshot.input_bytes,
+        execution_diagnostics.continuity_snapshot.input_bytes
     );
 }
 

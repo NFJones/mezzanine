@@ -812,8 +812,6 @@ fn runtime_openai_request_chain_survives_completed_turn_boundary() {
     assert!(continuity.request_prefix_append_only, "{continuity:#?}");
     assert_eq!(continuity.common_message_prefix, first_input.len());
     assert!(second_diagnostics.effective_input_bytes > first_diagnostics.effective_input_bytes);
-    assert_eq!(first_diagnostics.volatile_input_bytes, 2);
-    assert_eq!(second_diagnostics.volatile_input_bytes, 2);
 }
 
 /// Prepares one synthetic provider request from prompt chronology without
@@ -1381,8 +1379,10 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
                 .iter()
                 .map(|message| message.content.len())
                 .sum(),
-            mcp_live_state_bytes: 0,
-            mcp_catalog_bytes: 0,
+            mcp_directory_bytes: 0,
+            mcp_search_result_bytes: 0,
+            mcp_retrieved_contract_bytes: 0,
+            mcp_action_result_bytes: 0,
             action_result_bytes: 0,
             openai_diagnostics: Some(diagnostics.clone()),
             diagnostics_failed: false,
@@ -1412,8 +1412,7 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
     );
     assert!(
         status.contains("| Provider wire prefix | request=wire-status-1 initial input_bytes=")
-            && status.contains("logical_stable_bytes=")
-            && status.contains("logical_volatile_bytes="),
+            && status.contains("input_items="),
         "{status}"
     );
 
@@ -1441,8 +1440,10 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
         crate::integrations::agent::provider::ProviderRequestPurpose::Execution,
         None,
     );
-    omitted.mcp_live_state_bytes = 23;
-    omitted.mcp_catalog_bytes = 41;
+    omitted.mcp_directory_bytes = 41;
+    omitted.mcp_search_result_bytes = 23;
+    omitted.mcp_retrieved_contract_bytes = 31;
+    omitted.mcp_action_result_bytes = 19;
     omitted.action_result_bytes = 17;
     assert!(
         service
@@ -1467,16 +1468,19 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
     );
     assert!(
         status.contains(
-            "| Request input composition | request=wire-status-2 logical_volatile_input_bytes="
-        ) && status.contains("stable_mcp_bytes=41 explicit_mcp_bytes=23 action_result_bytes=17"),
+            "| Request input composition | request=wire-status-2 mcp_directory_bytes=41"
+        ) && status.contains(
+            "mcp_search_result_bytes=23 mcp_retrieved_contract_bytes=31 mcp_action_result_bytes=19 action_result_bytes=17"
+        ),
         "{status}"
     );
     let trace = service.agent_pane_trace_log_text("%1").unwrap();
     assert!(
         trace.contains("id=wire-status-2 attempt=1 retry=none")
             && trace.contains("input_bytes=")
-            && trace.contains("logical_stable_bytes=")
-            && trace.contains("stable_mcp_bytes=41 explicit_mcp_bytes=23 action_result_bytes=17"),
+            && trace.contains(
+                "mcp_directory_bytes=41 mcp_search_result_bytes=23 mcp_retrieved_contract_bytes=31 mcp_action_result_bytes=19 action_result_bytes=17"
+            ),
         "{trace}"
     );
     assert!(!trace.contains("PRIVATE_PROVIDER_PROMPT_MARKER"), "{trace}");

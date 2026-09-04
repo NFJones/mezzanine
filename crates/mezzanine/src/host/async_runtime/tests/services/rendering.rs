@@ -538,10 +538,6 @@ async fn async_terminal_show_metrics_command_renders_actor_metrics() {
             "{output}"
         );
         assert!(
-            output.contains("provider_prompt_logical_stable_input_bytes"),
-            "{output}"
-        );
-        assert!(
             output.contains("provider_prompt_stable_projection_bytes"),
             "{output}"
         );

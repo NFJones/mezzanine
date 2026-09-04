@@ -25,18 +25,23 @@ so ordinary agent work continues with a reduced tool catalog. `/list-mcp`
 shows the failure reason and whether retry is available; an explicit retry or
 re-enable can attempt discovery again.
 
-## Expose tools for one task
+## Discover and use tools for one task
 
-Start a prompt with `@<server-id>` to resolve and expose that server's callable
-tools and argument contracts for the current turn. Unknown, disabled,
-ambiguous, or unavailable identifiers expose no substitute tools. Configured
-always-exposed servers use the same validation rules, but their complete
-model-safe catalogs are stored as append-only conversation snapshots rather
-than regenerated request-local context. Catalog and availability changes append
-an authoritative transition; older snapshots remain causal history, while the
-live MCP registry remains authoritative for whether a call can run. If an
-explicit mention names an always-exposed server, Mez emits only the stable
-catalog entry instead of a duplicate request-local manifest.
+Use `mcp_server_search` when the relevant configured server is not already
+known, or mention `@<server-id>` to create a durable reference to a known
+server. Use `mcp_server_get` for a referencable server before `mcp_call`; it
+returns the complete safe tool and argument contract and records that retrieval
+in conversation chronology. Unknown, disabled, ambiguous, or unavailable
+identifiers expose no substitute tools.
+
+Configured always-exposed servers contribute only compact directory records to
+the conversation. Directory changes append an authoritative transition; older
+records remain causal history. Search results and explicit references remain
+referencable after restart or resume. Retrieved tool contracts are cleared by
+compaction, so retrieve the selected server again before calling one of its
+tools. The live MCP registry remains authoritative for execution: it
+revalidates the selected server, tool, availability, and arguments immediately
+before a call runs.
 
 MCP calls are external actions. A tool that reads or changes local files,
 reaches the network, accesses credentials, or executes processes requires

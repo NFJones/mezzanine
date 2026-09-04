@@ -32,10 +32,10 @@ pub(crate) struct RuntimeProviderWireRequestStatus {
     pub(crate) usage: Option<ModelTokenUsage>,
     pub(crate) effective_input_bytes: Option<usize>,
     pub(crate) effective_input_items: Option<usize>,
-    pub(crate) stable_input_bytes: Option<usize>,
-    pub(crate) volatile_input_bytes: Option<usize>,
-    pub(crate) mcp_live_state_bytes: usize,
-    pub(crate) mcp_catalog_bytes: usize,
+    pub(crate) mcp_directory_bytes: usize,
+    pub(crate) mcp_search_result_bytes: usize,
+    pub(crate) mcp_retrieved_contract_bytes: usize,
+    pub(crate) mcp_action_result_bytes: usize,
     pub(crate) action_result_bytes: usize,
     pub(crate) continuity: Option<mez_agent::OpenAiRequestContinuity>,
 }
@@ -177,10 +177,6 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub(crate) provider_prompt_effective_input_bytes: crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of effective provider-visible OpenAI input items.
     pub(crate) provider_prompt_effective_input_items: crate::host::async_runtime::RuntimeHistogram,
-    /// Histogram of logical stable input bytes in cache diagnostics.
-    pub(crate) provider_prompt_stable_input_bytes: crate::host::async_runtime::RuntimeHistogram,
-    /// Histogram of logical volatile input bytes in cache diagnostics.
-    pub(crate) provider_prompt_volatile_input_bytes: crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of local instructions-and-stable-input projection bytes.
     pub(crate) provider_prompt_stable_projection_bytes:
         crate::host::async_runtime::RuntimeHistogram,
@@ -355,10 +351,6 @@ impl RuntimeMetricsSnapshot {
                     .record(diagnostics.effective_input_bytes as u64);
                 self.provider_prompt_effective_input_items
                     .record(diagnostics.effective_input_items as u64);
-                self.provider_prompt_stable_input_bytes
-                    .record(diagnostics.stable_input_bytes as u64);
-                self.provider_prompt_volatile_input_bytes
-                    .record(diagnostics.volatile_input_bytes as u64);
                 self.provider_prompt_stable_projection_bytes
                     .record(diagnostics.stable_projection_bytes as u64);
                 self.provider_request_shape_bytes
@@ -454,16 +446,10 @@ impl RuntimeMetricsSnapshot {
                 .openai_diagnostics
                 .as_ref()
                 .map(|diagnostics| diagnostics.effective_input_items),
-            stable_input_bytes: observation
-                .openai_diagnostics
-                .as_ref()
-                .map(|diagnostics| diagnostics.stable_input_bytes),
-            volatile_input_bytes: observation
-                .openai_diagnostics
-                .as_ref()
-                .map(|diagnostics| diagnostics.volatile_input_bytes),
-            mcp_live_state_bytes: observation.mcp_live_state_bytes,
-            mcp_catalog_bytes: observation.mcp_catalog_bytes,
+            mcp_directory_bytes: observation.mcp_directory_bytes,
+            mcp_search_result_bytes: observation.mcp_search_result_bytes,
+            mcp_retrieved_contract_bytes: observation.mcp_retrieved_contract_bytes,
+            mcp_action_result_bytes: observation.mcp_action_result_bytes,
             action_result_bytes: observation.action_result_bytes,
             continuity,
         };
@@ -768,8 +754,10 @@ mod provider_wire_tests {
                 .iter()
                 .map(|message| message.content.len())
                 .sum(),
-            mcp_live_state_bytes: 0,
-            mcp_catalog_bytes: 0,
+            mcp_directory_bytes: 0,
+            mcp_search_result_bytes: 0,
+            mcp_retrieved_contract_bytes: 0,
+            mcp_action_result_bytes: 0,
             action_result_bytes: 0,
             openai_diagnostics: Some(
                 mez_agent::openai_prompt_cache_diagnostics_for_request(request).unwrap(),

@@ -46,7 +46,9 @@ surface; an absent action family must be requested, not emulated.
 | `send_message` | `recipient`, `content_type`, `payload` | Requests local MMP delivery. |
 | `spawn_agent` | `role`, `task_prompt` | Requests pane-backed delegation. Optional `session: fork | new` selects a bounded immutable parent-history snapshot or an isolated child session; scope and policy remain runtime-controlled. |
 | `config_change` | `setting_path`, `operation`, `value` | Proposes a supported live leaf configuration mutation. Set values accept strings, signed integers, booleans, or string arrays; objects, null set-values, floats, and mixed arrays are rejected. Provider schemas carry the value as a string containing a JSON scalar or string array, while plain non-JSON text is a string value. |
-| `mcp_call` | `server`, `tool`, `arguments` | Invokes one currently exposed MCP tool with JSON-object arguments. |
+| `mcp_server_search` | `query`, `limit` | Searches configured MCP directory records and persists safe results as durable action evidence. |
+| `mcp_server_get` | `server` | Retrieves one referencable server's complete safe tool contract; retrieval is required before calling it. |
+| `mcp_call` | `server`, `tool`, `arguments` | Invokes one durably retrieved MCP tool with JSON-object arguments after live registry revalidation. |
 | `memory_search` | `query` | Searches enabled runtime-owned durable memory; a memory UUID retrieves that record exactly. |
 | `memory_store` | `kind`, `keywords`, `content` | Stores safe, durable, non-secret memory; optional priority, scope, and retention apply. |
 | `issue_add` | `kind`, `title`, `depends_on` | Creates a local project issue; state, body, and notes are optional. |

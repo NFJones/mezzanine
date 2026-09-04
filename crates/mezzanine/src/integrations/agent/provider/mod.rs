@@ -134,10 +134,14 @@ pub struct ProviderWireRequestObservation {
     pub message_count: usize,
     /// Total provider-neutral message content bytes.
     pub message_bytes: usize,
-    /// Request-local MCP manifest and availability bytes.
-    pub mcp_live_state_bytes: usize,
-    /// Stable configured always-exposed MCP catalog bytes.
-    pub mcp_catalog_bytes: usize,
+    /// Durable always-exposed MCP directory bytes.
+    pub mcp_directory_bytes: usize,
+    /// Durable MCP server-search action-result bytes.
+    pub mcp_search_result_bytes: usize,
+    /// Durable MCP server-retrieval action-result bytes.
+    pub mcp_retrieved_contract_bytes: usize,
+    /// Durable MCP tool-call action-result bytes.
+    pub mcp_action_result_bytes: usize,
     /// Exact durable action-result bytes included in this request.
     pub action_result_bytes: usize,
     /// OpenAI Responses cache diagnostics, when applicable.
@@ -260,8 +264,7 @@ impl<'a> ProviderWireObservationContext<'a> {
             message_bytes: request.messages.iter().fold(0usize, |total, message| {
                 total.saturating_add(message.content.len())
             }),
-            mcp_live_state_bytes: 0,
-            mcp_catalog_bytes: request
+            mcp_directory_bytes: request
                 .messages
                 .iter()
                 .filter(|message| {
@@ -271,6 +274,9 @@ impl<'a> ProviderWireObservationContext<'a> {
                 .fold(0usize, |total, message| {
                     total.saturating_add(message.content.len())
                 }),
+            mcp_search_result_bytes: provider_action_result_bytes(request, "mcp_server_search"),
+            mcp_retrieved_contract_bytes: provider_action_result_bytes(request, "mcp_server_get"),
+            mcp_action_result_bytes: provider_action_result_bytes(request, "mcp_call"),
             action_result_bytes: request
                 .messages
                 .iter()
@@ -289,6 +295,22 @@ impl<'a> ProviderWireObservationContext<'a> {
         };
         let _ = self.observer.sender.send(observation).await;
     }
+}
+
+/// Returns exact durable action-result bytes for one MAAP action type.
+fn provider_action_result_bytes(request: &ModelRequest, action_type: &str) -> usize {
+    let marker = format!(" {action_type} ");
+    request
+        .messages
+        .iter()
+        .filter(|message| {
+            message.placement == mez_agent::ContextPlacement::ConversationAppend
+                && message.source == mez_agent::ContextSourceKind::ActionResult
+                && message.content.contains(&marker)
+        })
+        .fold(0usize, |total, message| {
+            total.saturating_add(message.content.len())
+        })
 }
 
 /// Returns a stable content-free provider failure classification.

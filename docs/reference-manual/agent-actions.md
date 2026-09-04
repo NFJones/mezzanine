@@ -34,7 +34,8 @@ terminal state remain outside ordinary model context.
 | `web_search`, `fetch_url` | User-requested current web search or HTTP(S) retrieval. | They are runtime network actions, not local-path readers. |
 | `send_message`, `spawn_agent` | Local coordination and pane-backed delegation. | `spawn_agent` may use `session: fork` for a bounded immutable parent-history snapshot or `session: new` for isolation; scope and policy inherit independently and cannot be broadened by that choice. |
 | `config_change` | Supported live leaf configuration mutation. | Set values accept strings, signed integers, booleans, or string arrays; execution-boundary settings remain direct-user-only. |
-| `mcp_call` | Call a currently available configured MCP tool. | External capability and approval policy still apply. |
+| `mcp_server_search`, `mcp_server_get` | Discover configured MCP servers and retrieve one durable complete tool contract. | Search results and retrieval records are safe durable chronology; retrieval is required before a later call. |
+| `mcp_call` | Call a durably retrieved, currently available configured MCP tool. | The live registry revalidates server, tool, arguments, external capability, and approval policy. |
 | `memory_search`, `memory_store` | Retrieve or retain runtime-owned durable memory when enabled. | Records must be safe, durable, and non-secret. |
 | `issue_add`, `issue_update`, `issue_query`, `issue_delete` | Manage runtime-owned local issues for the active project. | Issue records remain subject to the configured action set and project-store rules. |
 

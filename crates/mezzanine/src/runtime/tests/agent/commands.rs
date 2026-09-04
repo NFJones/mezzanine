@@ -115,8 +115,10 @@ fn runtime_show_metrics_reports_provider_tokens_by_model() {
                     .iter()
                     .map(|message| message.content.len())
                     .sum(),
-                mcp_live_state_bytes: 0,
-                mcp_catalog_bytes: 0,
+                mcp_directory_bytes: 0,
+                mcp_search_result_bytes: 0,
+                mcp_retrieved_contract_bytes: 0,
+                mcp_action_result_bytes: 0,
                 action_result_bytes: 0,
                 openai_diagnostics: None,
                 diagnostics_failed: false,

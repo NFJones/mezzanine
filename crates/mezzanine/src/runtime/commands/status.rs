@@ -430,7 +430,7 @@ impl RuntimeSessionService {
                         status.continuity.as_ref().map_or_else(
                             || {
                                 format!(
-                                    "request={} initial input_bytes={} input_items={} logical_stable_bytes={} logical_volatile_bytes={}",
+                                    "request={} initial input_bytes={} input_items={}",
                                     status.request_id,
                                     status.effective_input_bytes.map_or_else(
                                         || "unknown".to_string(),
@@ -440,19 +440,11 @@ impl RuntimeSessionService {
                                         || "unknown".to_string(),
                                         |value| value.to_string()
                                     ),
-                                    status.stable_input_bytes.map_or_else(
-                                        || "unknown".to_string(),
-                                        |value| value.to_string()
-                                    ),
-                                    status.volatile_input_bytes.map_or_else(
-                                        || "unknown".to_string(),
-                                        |value| value.to_string()
-                                    ),
                                 )
                             },
                             |continuity| {
                             format!(
-                                    "request={} previous_input_bytes={} current_input_bytes={} input_items={} common_messages={} common_bytes={} envelope_unchanged={} append_only={} logical_stable_bytes={} logical_volatile_bytes={}",
+                                    "request={} previous_input_bytes={} current_input_bytes={} input_items={} common_messages={} common_bytes={} envelope_unchanged={} append_only={}",
                                     status.request_id,
                                     continuity.previous_input_bytes,
                                     continuity.current_input_bytes,
@@ -464,14 +456,6 @@ impl RuntimeSessionService {
                                     continuity.common_message_prefix_bytes,
                                     continuity.cache_envelope_unchanged,
                                     continuity.request_prefix_append_only,
-                                    status.stable_input_bytes.map_or_else(
-                                        || "unknown".to_string(),
-                                        |value| value.to_string()
-                                    ),
-                                    status.volatile_input_bytes.map_or_else(
-                                        || "unknown".to_string(),
-                                        |value| value.to_string()
-                                    ),
                             )
                             },
                         )
@@ -484,14 +468,12 @@ impl RuntimeSessionService {
                     || "unknown".to_string(),
                     |status| {
                         format!(
-                            "request={} logical_volatile_input_bytes={} stable_mcp_bytes={} explicit_mcp_bytes={} action_result_bytes={}",
+                            "request={} mcp_directory_bytes={} mcp_search_result_bytes={} mcp_retrieved_contract_bytes={} mcp_action_result_bytes={} action_result_bytes={}",
                             status.request_id,
-                            status.volatile_input_bytes.map_or_else(
-                                || "unknown".to_string(),
-                                |value| value.to_string()
-                            ),
-                            status.mcp_catalog_bytes,
-                            status.mcp_live_state_bytes,
+                            status.mcp_directory_bytes,
+                            status.mcp_search_result_bytes,
+                            status.mcp_retrieved_contract_bytes,
+                            status.mcp_action_result_bytes,
                             status.action_result_bytes,
                         )
                     },
