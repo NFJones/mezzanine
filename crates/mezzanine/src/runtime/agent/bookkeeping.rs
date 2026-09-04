@@ -130,6 +130,104 @@ impl RuntimeSessionService {
         Ok(entries.len())
     }
 
+    /// Persists an MCP authorization-reset boundary and fresh safe catalog after compaction.
+    pub(crate) fn persist_mcp_compaction_epoch_transcript(
+        &mut self,
+        pane_id: &str,
+        conversation_id: &str,
+        catalog_snapshot: Option<String>,
+    ) -> Result<usize> {
+        let Some(session) = self.agent_shell_store().get(pane_id) else {
+            return Ok(0);
+        };
+        if session.session_id != conversation_id || session.ephemeral {
+            return Ok(0);
+        }
+        let Some(store) = self.persistence.cloned_transcript_store() else {
+            return Ok(0);
+        };
+        let sequence = if self.persistence.transcript_uses_adapter() {
+            self.persistence
+                .deferred_transcript_next_sequence(conversation_id)
+                .map(Ok)
+                .unwrap_or_else(|| next_transcript_sequence(&store, conversation_id))?
+        } else {
+            next_transcript_sequence(&store, conversation_id)?
+        };
+        let entry = TranscriptEntry {
+            conversation_id: conversation_id.to_string(),
+            sequence,
+            created_at_unix_seconds: current_unix_seconds().max(1),
+            role: TranscriptRole::System,
+            turn_id: format!("compact-{conversation_id}-{sequence}"),
+            agent_id: format!("agent-{pane_id}"),
+            pane_id: pane_id.to_string(),
+            content: TranscriptContextEvent::McpCompactionEpoch.to_transcript_content(),
+        };
+        entry.validate()?;
+        let mut entries = vec![entry];
+        if let Some(catalog_snapshot) = catalog_snapshot {
+            let catalog_event = TranscriptContextEvent::mcp_catalog_snapshot(
+                catalog_snapshot,
+                sequence.saturating_add(1),
+            )
+            .ok_or_else(|| {
+                MezError::invalid_state("compaction MCP catalog snapshot is empty or oversized")
+            })?;
+            let catalog_entry = TranscriptEntry {
+                conversation_id: conversation_id.to_string(),
+                sequence: sequence.saturating_add(1),
+                created_at_unix_seconds: current_unix_seconds().max(1),
+                role: TranscriptRole::System,
+                turn_id: format!("compact-{conversation_id}-{sequence}"),
+                agent_id: format!("agent-{pane_id}"),
+                pane_id: pane_id.to_string(),
+                content: catalog_event.to_transcript_content(),
+            };
+            catalog_entry.validate()?;
+            entries.push(catalog_entry);
+        }
+        let guidance_event = TranscriptContextEvent::prompt_boundary(
+            ContextSourceKind::Configuration,
+            "MCP compaction re-retrieval guidance",
+            "Conversation compaction cleared previously retrieved MCP tool contracts. Before using mcp_call, retrieve the needed server again with mcp_server_get; existing directory, reference, and search evidence may still make a server referencable.",
+        )
+        .ok_or_else(|| {
+            MezError::invalid_state("compaction MCP re-retrieval guidance is invalid")
+        })?;
+        let guidance_entry = TranscriptEntry {
+            conversation_id: conversation_id.to_string(),
+            sequence: sequence.saturating_add(entries.len() as u64),
+            created_at_unix_seconds: current_unix_seconds().max(1),
+            role: TranscriptRole::System,
+            turn_id: format!("compact-{conversation_id}-{sequence}"),
+            agent_id: format!("agent-{pane_id}"),
+            pane_id: pane_id.to_string(),
+            content: guidance_event.to_transcript_content(),
+        };
+        guidance_entry.validate()?;
+        entries.push(guidance_entry);
+        if self.persistence.transcript_uses_adapter() {
+            self.persistence.set_deferred_transcript_next_sequence(
+                conversation_id.to_string(),
+                sequence.saturating_add(entries.len() as u64),
+            );
+            self.persistence
+                .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
+                    path: store.transcript_path(conversation_id)?,
+                    store,
+                    entries: entries.clone(),
+                });
+        } else {
+            store.append_many(&entries)?;
+        }
+        self.record_pane_transcript_ref(
+            pane_id,
+            format!("transcript:{pane_id}:{conversation_id}"),
+        )?;
+        Ok(entries.len())
+    }
+
     /// Keeps only transcript records that have not already been stored or
     /// queued for the same turn, then assigns one contiguous fresh sequence.
     ///
@@ -633,6 +731,9 @@ impl RuntimeSessionService {
                     | ContextSourceKind::TranscriptAssistant
                     | ContextSourceKind::TranscriptTool
                     | ContextSourceKind::ActionResult
+                    | ContextSourceKind::McpServerReference
+                    | ContextSourceKind::McpServerSearchResult
+                    | ContextSourceKind::McpRetrievedManifest
             ) {
                 continue;
             } else if let Some(group) = event.execution_group_id() {

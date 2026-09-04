@@ -167,21 +167,33 @@ impl RuntimeSessionService {
             timeout_ms,
             permission_evaluation,
         } = dispatch;
-        let effective_timeout_ms = mez_agent::agent_shell_timeout_ms(
-            turn.started_at_unix_seconds,
-            turn.deadline_at_unix_millis,
-            current_unix_millis(),
-            timeout_ms,
-        )
-        .ok_or_else(|| {
-            MezError::invalid_state("agent turn deadline expired before shell dispatch")
-        })?;
         let permission_policy = self.permission_policy_for_turn(turn);
         let policy_command = local_action_plan(action)?
             .ok_or_else(|| MezError::invalid_state("shell dispatch requires a local action plan"))?
             .policy_command;
         let native_mode =
             self.effective_agent_shell_mode_for_pane(&turn.pane_id) == ShellMode::Native;
+        let native_shell_command =
+            native_mode && matches!(action.payload, AgentActionPayload::ShellCommand { .. });
+        let effective_timeout_ms = if native_shell_command {
+            mez_agent::agent_native_shell_timeout_ms(
+                turn.started_at_unix_seconds,
+                turn.deadline_at_unix_millis,
+                current_unix_millis(),
+                self.agent_native_shell_timeout_ms_for_turn(&turn.turn_id),
+                timeout_ms,
+            )
+        } else {
+            mez_agent::agent_shell_timeout_ms(
+                turn.started_at_unix_seconds,
+                turn.deadline_at_unix_millis,
+                current_unix_millis(),
+                timeout_ms,
+            )
+        }
+        .ok_or_else(|| {
+            MezError::invalid_state("agent turn deadline expired before shell dispatch")
+        })?;
         let native_context = native_mode
             .then(|| self.native_shell_context_for_pane(&turn.pane_id))
             .transpose()?;

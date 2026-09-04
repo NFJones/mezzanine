@@ -2060,7 +2060,7 @@ context_window_tokens = 5000
             })
             .unwrap();
     }
-    service.set_agent_transcript_store(transcript_store);
+    service.set_agent_transcript_store(transcript_store.clone());
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
@@ -2085,13 +2085,29 @@ context_window_tokens = 5000
     assert!(compact.contains("state=queued"), "{compact}");
     assert!(compact.contains("summarized_entries=5"), "{compact}");
     complete_runtime_test_compaction(&mut service, "%1", "old raw marker should be summary only");
+    let persisted = transcript_store.inspect("as-tail").unwrap();
+    assert!(
+        persisted.iter().any(|entry| matches!(
+            mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
+            Some(mez_agent::TranscriptContextEvent::McpCompactionEpoch)
+        )),
+        "{persisted:#?}"
+    );
+    assert!(
+        persisted.iter().any(|entry| matches!(
+            mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
+            Some(mez_agent::TranscriptContextEvent::PromptBoundary { label, .. })
+                if label == "MCP compaction re-retrieval guidance"
+        )),
+        "{persisted:#?}"
+    );
     assert_eq!(
         service
             .agent_shell_store()
             .get("%1")
             .unwrap()
             .transcript_entries,
-        7
+        9
     );
 
     let prompt = service.dispatch_runtime_control_body(
@@ -2138,6 +2154,14 @@ context_window_tokens = 5000
     assert!(
         !transcript_context.contains("old raw marker should be summary only"),
         "{transcript_context}"
+    );
+    assert!(
+        context.blocks().iter().any(|block| {
+            block.label == "MCP compaction re-retrieval guidance"
+                && block.content.contains("mcp_server_get")
+        }),
+        "{:#?}",
+        context.blocks()
     );
 }
 

@@ -32,17 +32,6 @@ fn mcp_summary_for_server_ids(server_ids: &[&str]) -> McpPromptSummary {
     }
 }
 
-/// Returns the generated request-local MCP block without relying on its index
-/// relative to durable prompt chronology.
-fn mcp_context_content(context: &AgentContext) -> &str {
-    &context
-        .blocks()
-        .iter()
-        .find(|block| block.label == MCP_INTEGRATIONS_CONTEXT_LABEL)
-        .expect("MCP live-state block should be present")
-        .content
-}
-
 /// Returns the immutable configured MCP catalog snapshot.
 fn mcp_catalog_snapshot_content(context: &AgentContext) -> &str {
     &context
@@ -53,9 +42,74 @@ fn mcp_catalog_snapshot_content(context: &AgentContext) -> &str {
         .content
 }
 
+/// Builds durable retrieval authority for one available MCP server. The
+/// resulting manifest is deliberately distinct from configuration and prompt
+/// mentions, which can make a server referencable but never callable.
+fn context_with_retrieved_mcp_manifest(server_id: &str) -> AgentContext {
+    let result = ActionResult {
+        protocol: "maap/1".to_string(),
+        turn_id: "turn-1".to_string(),
+        agent_id: "agent-1".to_string(),
+        action_id: "get-1".to_string(),
+        action_type: "mcp_server_get",
+        status: ActionStatus::Succeeded,
+        content: Vec::new(),
+        structured_content_json: Some(
+            serde_json::json!({
+                "server": {
+                    "server_id": server_id,
+                    "display_name": "Filesystem",
+                    "purpose": "Read project files",
+                    "usage_instructions": "Use read_file for one path.",
+                    "state": "available",
+                    "tools": [{
+                        "name": "read_file",
+                        "state": "available",
+                        "description": "Read one project file",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}},
+                            "required": ["path"]
+                        }
+                    }]
+                }
+            })
+            .to_string(),
+        ),
+        permission_evaluation: None,
+        is_error: false,
+        error: None,
+    };
+    let (server_id, content) = mcp_retrieved_manifest_for_action_result(&result).unwrap();
+    let group = crate::ContextExecutionGroupId::new("mcp-retrieval-1").unwrap();
+    let mut context = AgentContext::new(vec![ContextBlock::user_event(
+        "user prompt",
+        "retrieve an MCP server",
+    )])
+    .unwrap();
+    context
+        .append_assistant_event(
+            "assistant retrieval",
+            "retrieve MCP metadata",
+            group.clone(),
+        )
+        .unwrap();
+    context
+        .append_evidence_event(
+            ContextSourceKind::McpRetrievedManifest,
+            format!("{MCP_RETRIEVED_MANIFEST_CONTEXT_LABEL_PREFIX}{server_id}"),
+            content,
+            group,
+            None,
+            true,
+        )
+        .unwrap();
+    context
+}
+
 #[test]
-/// Verifies configured MCP exposure selects callable metadata without requiring
-/// an explicit user mention or adding duplicate tools for repeated names.
+/// Verifies configured MCP exposure produces a compact directory but never
+/// confers callable-tool authority before a successful retrieval.
 fn mcp_context_exposes_configured_servers_without_explicit_mentions() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
@@ -70,11 +124,11 @@ fn mcp_context_exposes_configured_servers_without_explicit_mentions() {
     let tools = invoked_mcp_tools_for_context_with_configured(&context, &summary, &configured);
     let context = append_mcp_context_with_configured(context, &summary, &configured).unwrap();
 
-    assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0].server_id, "GitHub_2");
+    assert!(tools.is_empty());
     let content = mcp_catalog_snapshot_content(&context);
-    assert_eq!(content.matches("available_tool=GitHub_2/lookup").count(), 1);
-    assert!(content.contains("configured_exposure=\"GitHub_2\""));
+    assert_eq!(content.matches("server=GitHub_2").count(), 1);
+    assert!(!content.contains("available_tool="), "{content}");
+    assert!(!content.contains("input_schema="), "{content}");
     assert!(
         context
             .blocks()
@@ -82,6 +136,23 @@ fn mcp_context_exposes_configured_servers_without_explicit_mentions() {
             .all(|block| block.label != MCP_INTEGRATIONS_CONTEXT_LABEL)
     );
     assert!(!content.contains("Use GitHub_2"), "{content}");
+}
+
+#[test]
+/// Verifies only a validated durable `mcp_server_get` result exposes a tool
+/// and preserves its complete object argument schema for MAAP validation.
+fn mcp_retrieved_manifest_grants_callable_tools() {
+    let context = context_with_retrieved_mcp_manifest("fs");
+    let tools = invoked_mcp_tools_for_context(&context, &mcp_summary_for_server_ids(&["fs"]));
+
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].server_id, "fs");
+    assert_eq!(tools[0].tool_name, "read_file");
+    assert!(tools[0].input_schema_json.contains("\"path\""));
+    assert!(context.blocks().iter().any(|block| {
+        block.source == ContextSourceKind::McpRetrievedManifest
+            && block.label == "retrieved MCP manifest fs"
+    }));
 }
 
 #[test]
@@ -108,7 +179,7 @@ fn mcp_configured_catalog_snapshots_append_only_on_transition() {
     assert_eq!(unchanged_snapshots[0].content, first_content);
 
     let mut changed_summary = first_summary;
-    changed_summary.available_tools[0].description = "Changed lookup contract".to_string();
+    changed_summary.available_servers[0].display_name = "Changed state service".to_string();
     let changed =
         append_mcp_context_with_configured(unchanged, &changed_summary, &configured).unwrap();
     let changed_snapshots = changed
@@ -121,7 +192,7 @@ fn mcp_configured_catalog_snapshots_append_only_on_transition() {
     assert!(
         changed_snapshots[1]
             .content
-            .contains("Changed lookup contract")
+            .contains("Changed state service")
     );
 
     let removed = append_mcp_context_with_configured(changed, &changed_summary, &[]).unwrap();
@@ -153,7 +224,8 @@ fn mcp_configured_catalog_deduplicates_explicit_overlap_by_canonical_id() {
     let context = append_mcp_context_with_configured(context, &summary, &configured).unwrap();
     let stable = mcp_catalog_snapshot_content(&context);
 
-    assert_eq!(stable.matches("available_tool=GitHub_2/lookup").count(), 1);
+    assert_eq!(stable.matches("server=GitHub_2").count(), 1);
+    assert!(!stable.contains("available_tool="), "{stable}");
     assert!(
         context
             .blocks()
@@ -179,36 +251,14 @@ fn mcp_context_merges_configured_and_explicit_servers_deterministically() {
     let tools = invoked_mcp_tools_for_context_with_configured(&context, &summary, &configured);
     let context = append_mcp_context_with_configured(context, &summary, &configured).unwrap();
 
-    assert_eq!(
-        tools
-            .iter()
-            .map(|tool| tool.server_id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["GitHub_2", "state"]
-    );
-    let explicit = mcp_context_content(&context);
+    assert!(tools.is_empty());
     let configured = mcp_catalog_snapshot_content(&context);
-    assert_eq!(
-        explicit.matches("available_tool=GitHub_2/lookup").count(),
-        1
-    );
-    assert!(
-        !explicit.contains("available_tool=state/lookup"),
-        "{explicit}"
-    );
-    assert_eq!(configured.matches("available_tool=state/lookup").count(), 1);
+    assert_eq!(configured.matches("server=state").count(), 1);
     assert!(
         !configured.contains("available_tool=GitHub_2/lookup"),
         "{configured}"
     );
-    assert!(
-        configured.contains("unavailable_server=missing"),
-        "{configured}"
-    );
-    assert!(
-        configured.contains("configured MCP server name did not match a configured server"),
-        "{configured}"
-    );
+    assert!(!configured.contains("unavailable_server="), "{configured}");
 }
 
 #[test]
@@ -234,17 +284,12 @@ fn mcp_context_is_provider_aware_and_keeps_unavailability_diagnostics() {
             .iter()
             .all(|block| block.label != MCP_INTEGRATIONS_CONTEXT_LABEL)
     );
-    let openai_manifest = openai
-        .blocks()
-        .iter()
-        .find(|block| block.label == MCP_INTEGRATIONS_CONTEXT_LABEL)
-        .unwrap();
     assert!(
-        openai_manifest
-            .content
-            .contains("available_tool=GitHub_2/lookup")
+        openai
+            .blocks()
+            .iter()
+            .all(|block| block.label != MCP_INTEGRATIONS_CONTEXT_LABEL)
     );
-    assert!(openai_manifest.content.contains("input_schema="));
 }
 
 #[test]
@@ -266,9 +311,12 @@ fn mcp_context_uses_resolved_openai_responses_api_for_aliased_providers() {
     )
     .expect("aliased OpenAI Responses providers should receive the late manifest");
 
-    let manifest = mcp_context_content(&context);
-    assert!(manifest.contains("available_tool=GitHub_2/lookup"));
-    assert!(manifest.contains("input_schema="));
+    assert!(
+        context
+            .blocks()
+            .iter()
+            .all(|block| block.label != MCP_INTEGRATIONS_CONTEXT_LABEL)
+    );
 }
 
 #[test]
@@ -287,12 +335,12 @@ fn mcp_context_resolves_exact_mixed_case_configured_server_id() {
     let tools = invoked_mcp_tools_for_context(&context, &summary);
     let context = append_mcp_context(context, &summary).unwrap();
 
-    assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0].server_id, "GitHub_2");
-    let content = mcp_context_content(&context);
+    assert!(tools.is_empty());
     assert!(
-        content.contains("server=GitHub_2 status=available route=mcp_call"),
-        "{content}"
+        context
+            .blocks()
+            .iter()
+            .all(|block| block.label != MCP_INTEGRATIONS_CONTEXT_LABEL)
     );
 }
 
@@ -312,12 +360,12 @@ fn mcp_context_resolves_server_from_routed_controller_task() {
     let tools = invoked_mcp_tools_for_context(&context, &summary);
     let context = append_mcp_context(context, &summary).unwrap();
 
-    assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0].server_id, "GitHub_2");
-    let content = mcp_context_content(&context);
+    assert!(tools.is_empty());
     assert!(
-        content.contains("available_tool=GitHub_2/lookup"),
-        "{content}"
+        context
+            .blocks()
+            .iter()
+            .all(|block| block.label != MCP_INTEGRATIONS_CONTEXT_LABEL)
     );
 }
 
@@ -361,8 +409,7 @@ fn mcp_context_resolves_unambiguous_case_insensitive_server_id() {
 
     let tools = invoked_mcp_tools_for_context(&context, &summary);
 
-    assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0].server_id, "GitHub_2");
+    assert!(tools.is_empty());
 }
 
 #[test]
@@ -380,17 +427,14 @@ fn mcp_context_reports_unresolved_and_ambiguous_server_mentions() {
 
     let tools = invoked_mcp_tools_for_context(&context, &summary);
     let context = append_mcp_context(context, &summary).unwrap();
-    let content = mcp_context_content(&context);
 
     assert!(tools.is_empty());
-    assert!(content.contains("unavailable_server=missing"), "{content}");
     assert!(
-        content.contains("did not match a configured server"),
-        "{content}"
+        context
+            .blocks()
+            .iter()
+            .all(|block| block.label != MCP_INTEGRATIONS_CONTEXT_LABEL)
     );
-    assert!(content.contains("unavailable_server=GITHUB"), "{content}");
-    assert!(content.contains("mention is ambiguous"), "{content}");
-    assert!(!content.contains("available_tool="), "{content}");
 }
 
 #[test]
@@ -408,8 +452,7 @@ fn mcp_context_prefers_exact_server_id_over_case_ambiguous_matches() {
 
     let tools = invoked_mcp_tools_for_context(&context, &summary);
 
-    assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0].server_id, "GitHub");
+    assert!(tools.is_empty());
 }
 
 #[test]
@@ -450,12 +493,12 @@ fn mcp_context_does_not_emit_routing_match_for_verbatim_server_purpose() {
     )
     .unwrap();
 
-    let content = mcp_context_content(&context);
     assert!(
-        content.contains("server=gitlab status=available route=mcp_call"),
-        "{content}"
+        context
+            .blocks()
+            .iter()
+            .all(|block| block.label != MCP_INTEGRATIONS_CONTEXT_LABEL)
     );
-    assert!(!content.contains("routing_match="), "{content}");
 }
 
 #[test]
@@ -498,15 +541,13 @@ fn mcp_context_includes_all_tools_for_explicit_server_invocation() {
         },
     )
     .unwrap();
-    let content = mcp_context_content(&context);
 
-    for index in 0..10 {
-        assert!(
-            content.contains(&format!("available_tool=fs/tool_{index:02}")),
-            "{content}"
-        );
-    }
-    assert!(!content.contains("available_tool_inventory="), "{content}");
+    assert!(
+        context
+            .blocks()
+            .iter()
+            .all(|block| block.label != MCP_INTEGRATIONS_CONTEXT_LABEL)
+    );
 }
 
 #[test]
@@ -545,21 +586,13 @@ fn mcp_context_preserves_complete_selected_tool_schema_and_descriptions() {
         },
     )
     .unwrap();
-    let content = mcp_context_content(&context);
 
     assert!(
-        content.contains("available_tool=catalog/lookup_item"),
-        "{content}"
+        context
+            .blocks()
+            .iter()
+            .all(|block| block.label != MCP_INTEGRATIONS_CONTEXT_LABEL)
     );
-    let canonical_schema = serde_json::from_str::<serde_json::Value>(schema)
-        .and_then(|schema| serde_json::to_string(&schema))
-        .unwrap();
-    assert!(content.contains(&canonical_schema), "{content}");
-    let normalized_long_description = long_description
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    assert!(content.contains(&normalized_long_description), "{content}");
 }
 
 #[test]
@@ -649,9 +682,12 @@ fn mcp_context_quotes_and_normalizes_tool_descriptions() {
     )
     .unwrap();
 
-    let content = mcp_context_content(&context);
-    assert!(content.contains("available_tool=fs/read_file"));
-    assert!(content.contains("description=\"Read files from MCP\""));
+    assert!(
+        context
+            .blocks()
+            .iter()
+            .all(|block| block.label != MCP_INTEGRATIONS_CONTEXT_LABEL)
+    );
 }
 
 #[test]
@@ -712,22 +748,7 @@ fn mcp_context_refresh_replaces_previous_integration_block() {
         .filter(|block| block.label == "mcp integrations")
         .collect::<Vec<_>>();
 
-    assert_eq!(mcp_blocks.len(), 1);
-    assert!(
-        mcp_blocks[0]
-            .content
-            .contains("server=git status=available route=mcp_call")
-    );
-    assert!(
-        !mcp_blocks[0]
-            .content
-            .contains("available_tool=fs/read_file")
-    );
-    assert!(
-        mcp_blocks[0].content.contains("available_tool=git/status"),
-        "{}",
-        mcp_blocks[0].content
-    );
+    assert!(mcp_blocks.is_empty());
 }
 
 #[test]

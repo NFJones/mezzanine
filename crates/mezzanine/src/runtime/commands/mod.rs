@@ -1323,6 +1323,7 @@ impl RuntimeSessionService {
             turn.model_profile = selected_profile_name.clone();
         }
         self.agent_turn_ledger_mut().queue_turn(turn.clone())?;
+        self.snapshot_agent_native_shell_timeout_for_turn(&turn_id);
         self.append_agent_trace_turn_event(
             pane_id,
             &turn_id,
@@ -1742,6 +1743,71 @@ mod tests {
 
         assert_eq!(summarized, &entries[..1]);
         assert_eq!(forced, 1);
+    }
+
+    /// Verifies the durable MCP epoch and its replacement catalog are compacted
+    /// as one control group so a later compaction cannot be blocked by its own
+    /// authorization-reset boundary.
+    #[test]
+    fn runtime_compact_transcript_summary_accepts_mcp_epoch_control_group() {
+        let entries = [
+            TranscriptEntry {
+                conversation_id: "compact-epoch".to_string(),
+                sequence: 1,
+                created_at_unix_seconds: 1,
+                role: TranscriptRole::System,
+                turn_id: "compact-epoch-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: mez_agent::TranscriptContextEvent::McpCompactionEpoch
+                    .to_transcript_content(),
+            },
+            TranscriptEntry {
+                conversation_id: "compact-epoch".to_string(),
+                sequence: 2,
+                created_at_unix_seconds: 1,
+                role: TranscriptRole::System,
+                turn_id: "compact-epoch-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: mez_agent::TranscriptContextEvent::mcp_catalog_snapshot(
+                    "available_servers=0 available_tools=0 unavailable_servers=0",
+                    2,
+                )
+                .unwrap()
+                .to_transcript_content(),
+            },
+            TranscriptEntry {
+                conversation_id: "compact-epoch".to_string(),
+                sequence: 3,
+                created_at_unix_seconds: 1,
+                role: TranscriptRole::System,
+                turn_id: "compact-epoch-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: mez_agent::TranscriptContextEvent::prompt_boundary(
+                    ContextSourceKind::Configuration,
+                    "MCP compaction re-retrieval guidance",
+                    "Retrieve the server again with mcp_server_get.",
+                )
+                .unwrap()
+                .to_transcript_content(),
+            },
+            TranscriptEntry {
+                conversation_id: "compact-epoch".to_string(),
+                sequence: 4,
+                created_at_unix_seconds: 1,
+                role: TranscriptRole::Assistant,
+                turn_id: "turn-2".to_string(),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: "assistant response after compaction".to_string(),
+            },
+        ];
+
+        let summarized = runtime_compact_transcript_entries_for_summary(4, &entries, 0);
+
+        assert_eq!(summarized, entries);
     }
 
     /// Builds deterministic transcript entries for compaction helper tests.

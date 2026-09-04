@@ -342,6 +342,12 @@ impl RuntimeSessionService {
             &mut blocks,
             ContextBlock::user_event("user prompt", prompt),
         );
+        for block in mez_agent::mcp_server_reference_blocks_for_prompt(
+            prompt,
+            &self.mcp_registry().prompt_summary(),
+        ) {
+            insert_context_block_by_placement(&mut blocks, block);
+        }
         let metadata = self
             .agent_shell_store()
             .get(pane_id)
@@ -1744,6 +1750,188 @@ mod tests {
                 .iter()
                 .all(|event| event.execution_group_id() == Some(&group))
         );
+    }
+
+    /// Verifies exact MCP directory grants restore as typed retrieval
+    /// eligibility evidence without reconstructing a callable manifest.
+    #[test]
+    fn runtime_transcript_restoration_replays_mcp_reference_and_search_grants() {
+        let reference = TranscriptContextEvent::execution_block(
+            mez_agent::ContextSourceKind::McpServerReference,
+            "MCP server reference fs",
+            r#"{"version":"mez-mcp-server-reference/v1","server":{"server_id":"fs","display_name":"Filesystem","purpose":"Read project files","usage_instructions":"Use read_file."}}"#,
+        )
+        .unwrap();
+        let search = TranscriptContextEvent::execution_block(
+            mez_agent::ContextSourceKind::McpServerSearchResult,
+            "MCP server search result search-1",
+            r#"{"version":"mez-mcp-server-search-result/v1","query":"filesystem","servers":[{"server_id":"fs","display_name":"Filesystem","purpose":"Read project files","usage_instructions":"Use read_file."}]}"#,
+        )
+        .unwrap();
+        let entries = [reference, search]
+            .into_iter()
+            .enumerate()
+            .map(|(index, event)| TranscriptEntry {
+                conversation_id: "conv1".to_string(),
+                sequence: u64::try_from(index).unwrap().saturating_add(1),
+                created_at_unix_seconds: 100,
+                role: TranscriptRole::System,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-1".to_string(),
+                pane_id: "%1".to_string(),
+                content: event.to_transcript_content(),
+            })
+            .collect::<Vec<_>>();
+
+        let transcript = runtime_agent_transcript_context("%1", &entries);
+        assert_eq!(
+            transcript
+                .blocks
+                .iter()
+                .map(|block| block.source)
+                .collect::<Vec<_>>(),
+            vec![
+                mez_agent::ContextSourceKind::McpServerReference,
+                mez_agent::ContextSourceKind::McpServerSearchResult,
+            ]
+        );
+        let context = AgentContext::import_durable_blocks(transcript.blocks).unwrap();
+        assert!(mez_agent::mcp_server_is_referencable(&context, "fs"));
+        assert!(
+            mez_agent::invoked_mcp_tools_for_context(
+                &context,
+                &mez_agent::McpPromptSummary {
+                    available_servers: Vec::new(),
+                    available_tools: Vec::new(),
+                    unavailable_servers: Vec::new(),
+                },
+            )
+            .is_empty()
+        );
+    }
+
+    /// Verifies a compaction epoch retains safe MCP reference evidence while
+    /// requiring a fresh retrieval before a previously described server can
+    /// expose callable tools during transcript replay.
+    #[test]
+    fn runtime_transcript_compaction_epoch_clears_prior_mcp_manifests() {
+        let reference = TranscriptContextEvent::execution_block(
+            mez_agent::ContextSourceKind::McpServerReference,
+            "MCP server reference fs",
+            r#"{"version":"mez-mcp-server-reference/v1","server":{"server_id":"fs","display_name":"Filesystem","purpose":"Read project files","usage_instructions":"Use read_file."}}"#,
+        )
+        .unwrap();
+        let stale_manifest = TranscriptContextEvent::execution_block(
+            mez_agent::ContextSourceKind::McpRetrievedManifest,
+            "MCP retrieved manifest fs",
+            r#"{"version":"mez-mcp-retrieved-manifest/v1","server_id":"fs","display_name":"Filesystem","purpose":"Read project files","usage_instructions":"Use read_file.","tools":[{"name":"read_file","description":"Read a project file","input_schema":{"type":"object","properties":{"path":{"type":"string"}}}}]}"#,
+        )
+        .unwrap();
+        let fresh_manifest = TranscriptContextEvent::execution_block(
+            mez_agent::ContextSourceKind::McpRetrievedManifest,
+            "MCP retrieved manifest git",
+            r#"{"version":"mez-mcp-retrieved-manifest/v1","server_id":"git","display_name":"Git","purpose":"Inspect repository history","usage_instructions":"Use log.","tools":[{"name":"log","description":"Read history","input_schema":{"type":"object","properties":{}}}]}"#,
+        )
+        .unwrap();
+        let entries = [
+            reference,
+            stale_manifest,
+            TranscriptContextEvent::McpCompactionEpoch,
+            fresh_manifest,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, event)| TranscriptEntry {
+            conversation_id: "conv1".to_string(),
+            sequence: u64::try_from(index).unwrap().saturating_add(1),
+            created_at_unix_seconds: 100,
+            role: TranscriptRole::System,
+            turn_id: format!("turn-{}", index.saturating_add(1)),
+            agent_id: "agent-1".to_string(),
+            pane_id: "%1".to_string(),
+            content: event.to_transcript_content(),
+        })
+        .collect::<Vec<_>>();
+
+        let transcript = runtime_agent_transcript_context("%1", &entries);
+        assert_eq!(
+            transcript
+                .blocks
+                .iter()
+                .map(|block| (block.source, block.label.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    mez_agent::ContextSourceKind::McpServerReference,
+                    "MCP server reference fs",
+                ),
+                (
+                    mez_agent::ContextSourceKind::McpRetrievedManifest,
+                    "MCP retrieved manifest git",
+                ),
+            ]
+        );
+        let context = AgentContext::import_durable_blocks(transcript.blocks).unwrap();
+        assert!(mez_agent::mcp_server_is_referencable(&context, "fs"));
+        let tools = mez_agent::invoked_mcp_tools_for_context(
+            &context,
+            &mez_agent::McpPromptSummary {
+                available_servers: Vec::new(),
+                available_tools: Vec::new(),
+                unavailable_servers: Vec::new(),
+            },
+        );
+        assert_eq!(
+            tools
+                .iter()
+                .map(|tool| (tool.server_id.as_str(), tool.tool_name.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("git", "log")]
+        );
+    }
+
+    /// Verifies a compaction epoch removes a legacy catalog that exposed tool
+    /// contracts and replays only the replacement compact directory record.
+    #[test]
+    fn runtime_transcript_compaction_epoch_replaces_legacy_mcp_catalog() {
+        let legacy_catalog = TranscriptContextEvent::mcp_catalog_snapshot(
+            "available_servers=1 available_tools=1 unavailable_servers=0\nconfigured_exposure=\"fs\" action=mcp_call\navailable_tool=fs/read_file input_schema={\"type\":\"object\"}",
+            1,
+        )
+        .unwrap();
+        let compact_catalog = TranscriptContextEvent::mcp_catalog_snapshot(
+            "available_servers=1 available_tools=0 unavailable_servers=0\nserver=fs display_name=Filesystem purpose=Read_project_files usage=Use_read_file",
+            3,
+        )
+        .unwrap();
+        let entries = [
+            legacy_catalog,
+            TranscriptContextEvent::McpCompactionEpoch,
+            compact_catalog,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, event)| TranscriptEntry {
+            conversation_id: "conv1".to_string(),
+            sequence: u64::try_from(index).unwrap().saturating_add(1),
+            created_at_unix_seconds: 100,
+            role: TranscriptRole::System,
+            turn_id: "compact-conv1".to_string(),
+            agent_id: "agent-1".to_string(),
+            pane_id: "%1".to_string(),
+            content: event.to_transcript_content(),
+        })
+        .collect::<Vec<_>>();
+
+        let transcript = runtime_agent_transcript_context("%1", &entries);
+
+        assert_eq!(transcript.blocks.len(), 1);
+        assert_eq!(
+            transcript.blocks[0].source,
+            mez_agent::ContextSourceKind::McpCatalogSnapshot
+        );
+        assert!(transcript.blocks[0].content.contains("server=fs"));
+        assert!(!transcript.blocks[0].content.contains("available_tool="));
     }
 
     /// Verifies a legacy raw-MAAP owner cannot collapse its result into the

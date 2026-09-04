@@ -594,6 +594,7 @@ impl McpRegistry {
                                     effects.join(",")
                                 },
                                 description: tool.description.clone(),
+                                input_schema_json: tool.input_schema_json.clone(),
                             }
                         })
                         .collect();

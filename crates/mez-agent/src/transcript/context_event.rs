@@ -27,6 +27,8 @@ const INTERRUPTED_TURN_KIND: &str = "interrupted_turn";
 const ENVIRONMENT_SNAPSHOT_KIND: &str = "environment_snapshot";
 /// Event kind for one immutable configured MCP catalog projection.
 const MCP_CATALOG_SNAPSHOT_KIND: &str = "mcp_catalog_snapshot";
+/// Event kind for one durable MCP authorization-reset compaction boundary.
+const MCP_COMPACTION_EPOCH_KIND: &str = "mcp_compaction_epoch";
 /// Event kind for one exact context block immediately preceding a user event.
 const PROMPT_BOUNDARY_KIND: &str = "prompt_boundary";
 /// Event kind for one exact cache-visible execution block.
@@ -66,6 +68,8 @@ pub enum TranscriptContextEvent {
         /// Exact model-visible configured MCP catalog projection.
         content: String,
     },
+    /// Durable compaction boundary that invalidates prior retrieved MCP manifests.
+    McpCompactionEpoch,
     /// One exact pre-user context event retained in chronological order.
     PromptBoundary {
         /// Original provider-neutral context provenance.
@@ -254,6 +258,10 @@ impl TranscriptContextEvent {
                 "event_sequence": event_sequence,
                 "content": content,
             }),
+            Self::McpCompactionEpoch => serde_json::json!({
+                "version": TRANSCRIPT_CONTEXT_EVENT_VERSION,
+                "kind": MCP_COMPACTION_EPOCH_KIND,
+            }),
             Self::PromptBoundary {
                 source,
                 projection_sha256,
@@ -351,6 +359,7 @@ impl TranscriptContextEvent {
                     content: content.to_string(),
                 })
             }
+            MCP_COMPACTION_EPOCH_KIND => Some(Self::McpCompactionEpoch),
             PROMPT_BOUNDARY_KIND => {
                 let source = prompt_boundary_source(value.get("source")?.as_str()?)?;
                 let projection_sha256 = value.get("projection_sha256")?.as_str()?;
@@ -548,6 +557,9 @@ fn execution_block_source_name(source: ContextSourceKind) -> &'static str {
         ContextSourceKind::TranscriptAssistant => "transcript_assistant",
         ContextSourceKind::TranscriptTool => "transcript_tool",
         ContextSourceKind::ActionResult => "action_result",
+        ContextSourceKind::McpServerReference => "mcp_server_reference",
+        ContextSourceKind::McpServerSearchResult => "mcp_server_search_result",
+        ContextSourceKind::McpRetrievedManifest => "mcp_retrieved_manifest",
         _ => "unsupported",
     }
 }
@@ -559,6 +571,9 @@ fn execution_block_source(source: &str) -> Option<ContextSourceKind> {
         "transcript_assistant" => Some(ContextSourceKind::TranscriptAssistant),
         "transcript_tool" => Some(ContextSourceKind::TranscriptTool),
         "action_result" => Some(ContextSourceKind::ActionResult),
+        "mcp_server_reference" => Some(ContextSourceKind::McpServerReference),
+        "mcp_server_search_result" => Some(ContextSourceKind::McpServerSearchResult),
+        "mcp_retrieved_manifest" => Some(ContextSourceKind::McpRetrievedManifest),
         _ => None,
     }
 }
@@ -672,6 +687,21 @@ mod tests {
         assert!(TranscriptContextEvent::from_transcript_content(&tampered).is_none());
     }
 
+    /// Verifies MCP compaction boundaries round-trip as durable control events.
+    #[test]
+    fn mcp_compaction_epoch_transcript_context_event_round_trips() {
+        let event = TranscriptContextEvent::McpCompactionEpoch;
+
+        let encoded = event.to_transcript_content();
+
+        assert_eq!(
+            TranscriptContextEvent::from_transcript_content(&encoded),
+            Some(event)
+        );
+        let malformed = encoded.replace("mcp_compaction_epoch", "unknown_epoch");
+        assert!(TranscriptContextEvent::from_transcript_content(&malformed).is_none());
+    }
+
     /// Verifies every allowlisted pre-user source round-trips exactly and a
     /// tampered digest or unsupported source cannot become model context.
     #[test]
@@ -740,6 +770,33 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    /// Verifies durable MCP reference and search evidence retain their typed
+    /// provenance across transcript encoding without becoming manifests.
+    #[test]
+    fn mcp_reference_and_search_execution_blocks_round_trip() {
+        for (source, label, content) in [
+            (
+                ContextSourceKind::McpServerReference,
+                "MCP server reference fs",
+                "mcp_server_reference={\"server_id\":\"fs\"}",
+            ),
+            (
+                ContextSourceKind::McpServerSearchResult,
+                "MCP server search result search-1",
+                "mcp_server_search={\"servers\":[{\"server_id\":\"fs\"}]}",
+            ),
+        ] {
+            let event = TranscriptContextEvent::execution_block(source, label, content)
+                .expect("typed MCP evidence should be serializable");
+            let encoded = event.to_transcript_content();
+
+            assert_eq!(
+                TranscriptContextEvent::from_transcript_content(&encoded),
+                Some(event)
+            );
+        }
     }
 
     /// Verifies an interrupted turn retains its original intent and only the

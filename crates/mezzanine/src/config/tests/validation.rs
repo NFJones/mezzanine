@@ -732,6 +732,28 @@ fn rejects_invalid_agent_turn_timeout_values() {
     }
 }
 
+/// Verifies native shell defaults reject nonpositive, nonnumeric, and unsafe
+/// long durations before runtime dispatch can create an unbounded command.
+#[test]
+fn rejects_invalid_native_shell_timeout_values() {
+    for value in ["0", "-1", "1.5", "\"600000\"", "86400001"] {
+        let validation = validate_config_text(
+            ConfigFormat::Toml,
+            &format!("[agents]\nnative_shell_timeout_ms = {value}\n"),
+            ConfigScope::Primary,
+        );
+
+        assert!(
+            !validation.valid,
+            "accepted native shell timeout value {value}"
+        );
+        assert!(validation.diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == "agents.native_shell_timeout_ms"
+                && diagnostic.message.contains("integer from 1 to 86400000")
+        }));
+    }
+}
+
 /// Verifies agent shell mode rejects unsupported enum values.
 ///
 /// Only the pane and native transports have defined runtime behavior; any

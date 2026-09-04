@@ -2197,7 +2197,7 @@ fn migrates_schema_66_with_disabled_iroh_transport() {
 /// single bidirectional control stream enforced by the v1 Iroh protocol.
 #[test]
 fn migrates_schema_67_to_fixed_iroh_stream_limit() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 83);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 84);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2262,7 +2262,7 @@ fn migrates_schema_68_with_separate_outbound_iroh_permission() {
 /// changing the existing ephemeral behavior unless the owner configures it.
 #[test]
 fn migrates_schema_69_with_iroh_bind_port() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 83);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 84);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2293,7 +2293,7 @@ fn migrates_schema_69_with_iroh_bind_port() {
 /// supported primary configuration format without enabling the Iroh listener.
 #[test]
 fn migrates_schema_70_with_iroh_compression_defaults() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 83);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 84);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2458,7 +2458,10 @@ fn migrates_schema_73_without_enabling_seatbelt_or_changing_policy() {
 
         assert_eq!(plan.from_version, 73);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"83".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert_eq!(
             values.get("permissions.sandbox").map(String::as_str),
             expected_sandbox
@@ -2506,7 +2509,7 @@ fn migrates_schema_74_without_enabling_streaming_compression() {
 
         assert_eq!(plan.from_version, 74);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 83);
+        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 84);
         assert_eq!(
             root.pointer("/transport/iroh/compression_codecs"),
             Some(&expected_codecs)
@@ -2550,7 +2553,10 @@ fn migrates_schema_75_pane_title_template_to_renderer_owned_padding() {
             parse_config_json_value(format, &migrate_config_text(format, missing).unwrap().text)
                 .unwrap();
 
-        assert_eq!(exact.pointer("/version"), Some(&serde_json::json!(83)));
+        assert_eq!(
+            exact.pointer("/version"),
+            Some(&serde_json::json!(CURRENT_CONFIG_SCHEMA_VERSION))
+        );
         assert_eq!(
             exact.pointer("/frames/pane/template"),
             Some(&serde_json::json!("#{pane.index} #{pane.title}"))
@@ -2641,7 +2647,7 @@ fn migrates_schema_76_provider_models_to_structured_records() {
 
         assert_eq!(plan.from_version, 76);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 83);
+        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 84);
         assert_eq!(
             root.pointer("/providers/custom/models/alpha-model/id"),
             Some(&serde_json::json!("alpha/model"))
@@ -2705,7 +2711,7 @@ fn migrates_schema_77_saved_session_retention_defaults() {
 
         assert_eq!(
             migrated_missing.pointer("/version"),
-            Some(&serde_json::json!(83))
+            Some(&serde_json::json!(CURRENT_CONFIG_SCHEMA_VERSION))
         );
         assert_eq!(
             migrated_missing.pointer("/history/saved_sessions_limit"),
@@ -2717,7 +2723,7 @@ fn migrates_schema_77_saved_session_retention_defaults() {
         );
         assert_eq!(
             migrated_default.pointer("/version"),
-            Some(&serde_json::json!(83))
+            Some(&serde_json::json!(CURRENT_CONFIG_SCHEMA_VERSION))
         );
         assert_eq!(
             migrated_default.pointer("/history/saved_sessions_limit"),
@@ -2751,8 +2757,8 @@ fn migrates_schema_78_external_editor_defaults() {
         let root = parse_config_json_value(format, &plan.text).unwrap();
 
         assert_eq!(plan.from_version, 78);
-        assert_eq!(plan.to_version, 83);
-        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 83);
+        assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 84);
         assert_eq!(
             root.pointer("/external_editor/command"),
             Some(&serde_json::json!(["editor", "{file}"]))
@@ -2791,7 +2797,10 @@ fn migrates_schema_79_disabled_x11_policy() {
 
         assert_eq!(plan.from_version, 79);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(root.pointer("/version"), Some(&serde_json::json!(83)));
+        assert_eq!(
+            root.pointer("/version"),
+            Some(&serde_json::json!(CURRENT_CONFIG_SCHEMA_VERSION))
+        );
         assert_eq!(
             root.pointer("/transport/iroh/enabled"),
             Some(&serde_json::json!(true))
@@ -2845,7 +2854,10 @@ fn migrates_schema_80_provider_retry_policy_defaults() {
         )
         .unwrap();
 
-        assert_eq!(missing.pointer("/version"), Some(&serde_json::json!(83)));
+        assert_eq!(
+            missing.pointer("/version"),
+            Some(&serde_json::json!(CURRENT_CONFIG_SCHEMA_VERSION))
+        );
         assert_eq!(
             missing.pointer("/agents/provider_error_retry_limit"),
             Some(&serde_json::json!(5))
@@ -2895,7 +2907,10 @@ fn migrates_schema_81_static_enabled_actions() {
         )
         .unwrap();
 
-        assert_eq!(missing.pointer("/version"), Some(&serde_json::json!(83)));
+        assert_eq!(
+            missing.pointer("/version"),
+            Some(&serde_json::json!(CURRENT_CONFIG_SCHEMA_VERSION))
+        );
         assert_eq!(
             missing.pointer("/agents/enabled_actions"),
             Some(&serde_json::json!([
@@ -2947,11 +2962,55 @@ fn migrates_schema_82_terminal_subagent_profiles() {
         let root = parse_config_json_value(format, &plan.text).unwrap();
 
         assert_eq!(plan.from_version, 82);
-        assert_eq!(plan.to_version, 83);
-        assert_eq!(root.pointer("/version"), Some(&serde_json::json!(83)));
+        assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(
+            root.pointer("/version"),
+            Some(&serde_json::json!(CURRENT_CONFIG_SCHEMA_VERSION))
+        );
         assert_eq!(
             root.pointer("/subagents/worker/terminal"),
             Some(&serde_json::json!(true))
+        );
+    }
+}
+
+/// Schema v84 materializes the bounded native shell timeout without replacing
+/// a duration explicitly chosen by the primary configuration owner.
+#[test]
+fn migrates_schema_83_native_shell_timeout() {
+    for (format, missing, configured) in [
+        (
+            ConfigFormat::Toml,
+            "version = 83\n",
+            "version = 83\n[agents]\nnative_shell_timeout_ms = 12345\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":83}"#,
+            r#"{"version":83,"agents":{"native_shell_timeout_ms":12345}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 83\n",
+            "version: 83\nagents:\n  native_shell_timeout_ms: 12345\n",
+        ),
+    ] {
+        let missing =
+            parse_config_json_value(format, &migrate_config_text(format, missing).unwrap().text)
+                .unwrap();
+        let configured = parse_config_json_value(
+            format,
+            &migrate_config_text(format, configured).unwrap().text,
+        )
+        .unwrap();
+
+        assert_eq!(
+            missing.pointer("/agents/native_shell_timeout_ms"),
+            Some(&serde_json::json!(600_000))
+        );
+        assert_eq!(
+            configured.pointer("/agents/native_shell_timeout_ms"),
+            Some(&serde_json::json!(12_345))
         );
     }
 }

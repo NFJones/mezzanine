@@ -173,7 +173,7 @@ fn runtime_mcp_context_uses_resolved_api_for_aliased_openai_provider() {
             .all(|block| block.label != "mcp integrations")
     );
 
-    assert_eq!(tools.len(), 1);
+    assert!(tools.is_empty());
 }
 
 /// Verifies a stale running `spawn_agent` result without a live joined child is

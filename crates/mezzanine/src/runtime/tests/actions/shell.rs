@@ -1077,6 +1077,83 @@ fn runtime_native_agent_shell_command_output_is_visible_in_shell_view() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies native shell actions use the configured deadline snapshotted when
+/// their owning turn starts, rather than a later live configuration value.
+#[test]
+fn runtime_native_shell_command_uses_snapshotted_configured_timeout() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_agent_shell_mode_override("%1", Some(crate::runtime::config::ShellMode::Native));
+    service.permission_policy_mut().set_approval_bypass(true);
+    service.set_agent_native_shell_timeout_ms(1_234);
+
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-native-snapshotted-timeout","input":"run a bounded native command"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.set_agent_native_shell_timeout_ms(5);
+    service.remove_pending_agent_provider_task("turn-1");
+    let provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "native timeout snapshot".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test native timeout snapshot".to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![mez_agent::AgentAction {
+                    id: "shell-1".to_string(),
+                    rationale: "run a bounded native command".to_string(),
+                    payload: mez_agent::AgentActionPayload::ShellCommand {
+                        summary: "Run a bounded native command".to_string(),
+                        command: "true".to_string(),
+                        interactive: false,
+                        stateful: false,
+                        timeout_ms: None,
+                    },
+                }],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+
+    let execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    let dispatch = service
+        .claim_native_shell_action("turn-1", "shell-1")
+        .unwrap()
+        .expect("native shell action should be queued for a worker");
+    assert_eq!(dispatch.request.timeout_ms, Some(1_234));
+    assert!(
+        service
+            .complete_native_shell_action(crate::runtime::execute_native_shell_dispatch(dispatch))
+            .unwrap()
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies native `apply_patch` hunk failures leave recovery shadow text as
 /// their sole pane-visible failure presentation.
 ///

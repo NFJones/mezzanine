@@ -271,6 +271,7 @@ impl RuntimeSessionService {
             initial_capability: None,
         };
         self.agent_turn_ledger_mut().queue_turn(turn.clone())?;
+        self.snapshot_agent_native_shell_timeout_for_turn(&turn_id);
         self.agent_turn_contexts_mut()
             .insert(turn_id.clone(), context);
         self.agent

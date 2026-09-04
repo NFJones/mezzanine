@@ -282,6 +282,10 @@ pub(crate) struct RuntimeAgentComponent {
     agent_action_failure_retry_limit: usize,
     /// Total wall-clock budget snapshotted when each new agent turn is created.
     agent_turn_timeout_ms: u64,
+    /// Default native shell action deadline applied before dispatch.
+    agent_native_shell_timeout_ms: u64,
+    /// Native shell deadline snapshots keyed by the turns they govern.
+    agent_turn_native_shell_timeout_ms: BTreeMap<String, u64>,
     /// Per-failure-signature correction attempts keyed by turn/signature.
     agent_turn_failure_feedback_attempts: BTreeMap<String, usize>,
     /// Output-limit recovery attempt currently shaping each active request.
@@ -586,6 +590,7 @@ impl RuntimeAgentComponent {
             agent_loop_limit,
             agent_action_failure_retry_limit,
             agent_turn_timeout_ms,
+            agent_native_shell_timeout_ms: mez_agent::DEFAULT_NATIVE_SHELL_TIMEOUT_MS,
             max_subagent_panes_per_window: DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW,
             max_root_subagents: DEFAULT_MAX_ROOT_SUBAGENTS,
             max_subagents_per_subagent: DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT,
@@ -2314,6 +2319,32 @@ impl RuntimeSessionService {
     /// Replaces the budget used when subsequently creating agent turns.
     pub(crate) fn set_agent_turn_timeout_ms(&mut self, timeout_ms: u64) {
         self.agent.agent_turn_timeout_ms = timeout_ms;
+    }
+
+    /// Returns the configured default timeout used only by native shell actions.
+    pub(crate) fn agent_native_shell_timeout_ms(&self) -> u64 {
+        self.agent.agent_native_shell_timeout_ms.max(1)
+    }
+
+    /// Replaces the default timeout used by subsequently dispatched native actions.
+    pub(crate) fn set_agent_native_shell_timeout_ms(&mut self, timeout_ms: u64) {
+        self.agent.agent_native_shell_timeout_ms = timeout_ms;
+    }
+
+    /// Snapshots the current native shell timeout for one newly created turn.
+    pub(crate) fn snapshot_agent_native_shell_timeout_for_turn(&mut self, turn_id: &str) {
+        self.agent
+            .agent_turn_native_shell_timeout_ms
+            .insert(turn_id.to_string(), self.agent_native_shell_timeout_ms());
+    }
+
+    /// Returns the native shell timeout snapshotted for one turn.
+    pub(crate) fn agent_native_shell_timeout_ms_for_turn(&self, turn_id: &str) -> u64 {
+        self.agent
+            .agent_turn_native_shell_timeout_ms
+            .get(turn_id)
+            .copied()
+            .unwrap_or_else(|| self.agent_native_shell_timeout_ms())
     }
 
     /// Returns the configured loop iteration limit.

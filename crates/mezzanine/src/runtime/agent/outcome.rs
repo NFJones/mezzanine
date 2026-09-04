@@ -240,15 +240,61 @@ impl RuntimeSessionService {
                 touched_groups.push(group.clone());
             }
             committed = committed.saturating_add(
-                match execution_group {
+                match execution_group.as_ref() {
                     Some(group) => context.commit_settled_action_results_in_group(
                         std::slice::from_ref(result),
-                        group,
+                        group.clone(),
                     ),
                     None => context.commit_settled_action_results(std::slice::from_ref(result)),
                 }
                 .map_err(|error| MezError::invalid_state(error.to_string()))?,
             );
+            if let Some(content) = mez_agent::mcp_server_search_result_for_action_result(result) {
+                let label = format!(
+                    "{}{}",
+                    mez_agent::MCP_SERVER_SEARCH_RESULT_CONTEXT_LABEL_PREFIX,
+                    result.action_id
+                );
+                if !context.chronology().iter().any(|event| {
+                    event.block().source == ContextSourceKind::McpServerSearchResult
+                        && event.block().label == label
+                        && event.block().content == content
+                }) {
+                    context
+                        .append_reference_event(
+                            ContextSourceKind::McpServerSearchResult,
+                            label,
+                            content,
+                        )
+                        .map_err(|error| MezError::invalid_state(error.to_string()))?;
+                }
+            }
+            if let (Some(group), Some((server_id, content))) = (
+                execution_group.as_ref(),
+                mez_agent::mcp_retrieved_manifest_for_action_result(result),
+            ) {
+                let label = format!(
+                    "{}{}",
+                    mez_agent::MCP_RETRIEVED_MANIFEST_CONTEXT_LABEL_PREFIX,
+                    server_id
+                );
+                if !context.chronology().iter().any(|event| {
+                    event.block().source == ContextSourceKind::McpRetrievedManifest
+                        && event.block().label == label
+                        && event.block().content == content
+                }) {
+                    context
+                        .append_evidence_event(
+                            ContextSourceKind::McpRetrievedManifest,
+                            label,
+                            content,
+                            group.clone(),
+                            None,
+                            true,
+                        )
+                        .map_err(|error| MezError::invalid_state(error.to_string()))?;
+                }
+            }
         }
         for group in touched_groups {
             let Some(tool_calls) = provider_tool_calls.get(&group) else {

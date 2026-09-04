@@ -54,6 +54,12 @@ pub enum ContextSourceKind {
     RuntimeHint,
     /// An immutable snapshot of configured always-exposed MCP metadata.
     McpCatalogSnapshot,
+    /// An exact explicit reference to one MCP server.
+    McpServerReference,
+    /// Exact safe directory records returned by an MCP server search.
+    McpServerSearchResult,
+    /// A complete MCP tool manifest retrieved from the live registry.
+    McpRetrievedManifest,
     /// Repository or project guidance.
     ProjectGuidance,
     /// Retrieved durable memory context.
@@ -99,7 +105,9 @@ impl TrustDomain {
             | ContextSourceKind::DeveloperInstruction
             | ContextSourceKind::Policy
             | ContextSourceKind::Configuration
-            | ContextSourceKind::McpCatalogSnapshot => Self::Configuration,
+            | ContextSourceKind::McpCatalogSnapshot
+            | ContextSourceKind::McpServerReference
+            | ContextSourceKind::McpServerSearchResult => Self::Configuration,
             ContextSourceKind::UserInstruction | ContextSourceKind::LocalMessage => Self::UserInput,
             ContextSourceKind::SkillInstruction | ContextSourceKind::ProjectGuidance => {
                 Self::ProjectFile
@@ -113,7 +121,8 @@ impl TrustDomain {
             | ContextSourceKind::TranscriptTool
             | ContextSourceKind::CommittedEvidence
             | ContextSourceKind::RoutedHandoff
-            | ContextSourceKind::ActionResult => Self::ModelOutput,
+            | ContextSourceKind::ActionResult
+            | ContextSourceKind::McpRetrievedManifest => Self::ModelOutput,
         }
     }
 
@@ -740,13 +749,16 @@ impl ContextBlock {
             ContextSourceKind::TranscriptAssistant => ContextSemanticKind::AssistantEvent,
             ContextSourceKind::TranscriptTool
             | ContextSourceKind::CommittedEvidence
-            | ContextSourceKind::ActionResult => ContextSemanticKind::EvidenceEvent,
+            | ContextSourceKind::ActionResult
+            | ContextSourceKind::McpRetrievedManifest => ContextSemanticKind::EvidenceEvent,
             ContextSourceKind::SkillInstruction => ContextSemanticKind::TaskPrelude,
             ContextSourceKind::LocalMessage
             | ContextSourceKind::Memory
             | ContextSourceKind::Transcript
             | ContextSourceKind::RoutedHandoff
-            | ContextSourceKind::McpCatalogSnapshot => ContextSemanticKind::ReferenceEvent,
+            | ContextSourceKind::McpCatalogSnapshot
+            | ContextSourceKind::McpServerReference
+            | ContextSourceKind::McpServerSearchResult => ContextSemanticKind::ReferenceEvent,
             ContextSourceKind::System
             | ContextSourceKind::DeveloperInstruction
             | ContextSourceKind::ProjectGuidance
@@ -780,11 +792,14 @@ impl ContextBlock {
             | ContextSourceKind::PersistedContextDocument
             | ContextSourceKind::RuntimeHint
             | ContextSourceKind::RoutedHandoff
-            | ContextSourceKind::McpCatalogSnapshot => ContextRetention::Exact,
+            | ContextSourceKind::McpCatalogSnapshot
+            | ContextSourceKind::McpServerReference
+            | ContextSourceKind::McpServerSearchResult => ContextRetention::Exact,
             ContextSourceKind::TranscriptAssistant
             | ContextSourceKind::TranscriptTool
             | ContextSourceKind::CommittedEvidence
-            | ContextSourceKind::ActionResult => ContextRetention::ExecutionGroup,
+            | ContextSourceKind::ActionResult
+            | ContextSourceKind::McpRetrievedManifest => ContextRetention::ExecutionGroup,
             ContextSourceKind::Memory
             | ContextSourceKind::Transcript
             | ContextSourceKind::TranscriptUser => ContextRetention::Summarizable,
@@ -804,8 +819,11 @@ impl ContextBlock {
                 | ContextSourceKind::RoutedHandoff
                 | ContextSourceKind::RuntimeHint
                 | ContextSourceKind::ActionResult
+                | ContextSourceKind::McpRetrievedManifest
                 | ContextSourceKind::LocalMessage
                 | ContextSourceKind::McpCatalogSnapshot
+                | ContextSourceKind::McpServerReference
+                | ContextSourceKind::McpServerSearchResult
         )
     }
 }
@@ -2202,6 +2220,7 @@ fn compatibility_event_contract(
         ContextSourceKind::TranscriptTool
             | ContextSourceKind::CommittedEvidence
             | ContextSourceKind::ActionResult
+            | ContextSourceKind::McpRetrievedManifest
     ) && execution_group_id.is_none()
     {
         return (
@@ -2236,7 +2255,9 @@ fn compatibility_execution_group_ranges(blocks: &[&ContextBlock]) -> Vec<Range<u
                 .iter()
                 .all(|candidate| candidate.source == ContextSourceKind::CommittedEvidence),
             ContextSourceKind::TranscriptTool => has_assistant,
-            ContextSourceKind::ActionResult => has_assistant || has_native_tool,
+            ContextSourceKind::ActionResult | ContextSourceKind::McpRetrievedManifest => {
+                has_assistant || has_native_tool
+            }
             _ => false,
         };
         let current_group_protected = blocks[start..index]

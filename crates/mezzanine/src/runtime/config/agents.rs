@@ -273,6 +273,24 @@ pub(crate) fn runtime_agent_turn_timeout_ms_from_config(root: &Value) -> Result<
     }
 }
 
+/// Parses the configured bounded default for native shell command actions.
+pub(crate) fn runtime_agent_native_shell_timeout_ms_from_config(root: &Value) -> Result<u64> {
+    let Some(agents) = runtime_json_object(root, "agents") else {
+        return Ok(mez_agent::DEFAULT_NATIVE_SHELL_TIMEOUT_MS);
+    };
+    let Some(value) = agents.get("native_shell_timeout_ms") else {
+        return Ok(mez_agent::DEFAULT_NATIVE_SHELL_TIMEOUT_MS);
+    };
+    match value.as_u64() {
+        Some(timeout_ms) if (1..=mez_agent::MAX_NATIVE_SHELL_TIMEOUT_MS).contains(&timeout_ms) => {
+            Ok(timeout_ms)
+        }
+        _ => Err(MezError::config(
+            "agents.native_shell_timeout_ms must be an integer from 1 to 86400000",
+        )),
+    }
+}
+
 /// Parses the `/loop` work-iteration budget from `[agents]`.
 pub(crate) fn runtime_agent_loop_limit_from_config(root: &Value) -> Result<usize> {
     runtime_positive_agents_usize_from_config(root, "loop_limit", DEFAULT_AGENT_LOOP_LIMIT)

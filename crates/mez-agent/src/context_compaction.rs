@@ -499,6 +499,65 @@ mod tests {
         );
     }
 
+    /// Verifies compacting a retrieval execution group clears its callable MCP
+    /// manifest while exact directory-reference evidence remains durable.
+    #[test]
+    fn model_context_compaction_clears_retrieved_mcp_manifest_grants() {
+        let mut context = AgentContext::new_durable(vec![ContextBlock::reference_event(
+            ContextSourceKind::McpServerReference,
+            "MCP server reference fs",
+            r#"{"version":"mez-mcp-server-reference/v1","server":{"server_id":"fs","display_name":"Filesystem","purpose":"Read project files","usage_instructions":"Use read_file."}}"#,
+        )])
+        .unwrap();
+        let group = crate::ContextExecutionGroupId::new("mcp-retrieval-1").unwrap();
+        context
+            .append_assistant_event("retrieve MCP manifest", "retrieve fs", group.clone())
+            .unwrap();
+        context
+            .append_evidence_event(
+                ContextSourceKind::McpRetrievedManifest,
+                "retrieved MCP manifest fs",
+                r#"{"version":"mez-mcp-retrieved-manifest/v1","server_id":"fs","display_name":"Filesystem","purpose":"Read project files","usage_instructions":"Use read_file.","tools":[{"name":"read_file","description":"Read one project file","input_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}]}"#,
+                group,
+                None,
+                true,
+            )
+            .unwrap();
+
+        let plan = plan_model_context_compaction_at_consumed_sequence(
+            &context,
+            1_000,
+            0,
+            context.event_sequence_high_water_mark(),
+        )
+        .unwrap();
+        assert!(plan.changes_context());
+        assert!(
+            plan.replacement_blocks()
+                .iter()
+                .any(|block| { block.source == ContextSourceKind::McpRetrievedManifest })
+        );
+
+        let (compacted, _) = apply_model_context_compaction_plan(
+            context,
+            &plan,
+            "The MCP server was retrieved earlier and must be retrieved again before calling tools.",
+        )
+        .unwrap();
+        assert!(
+            compacted
+                .blocks()
+                .iter()
+                .any(|block| { block.source == ContextSourceKind::McpServerReference })
+        );
+        assert!(
+            compacted
+                .blocks()
+                .iter()
+                .all(|block| { block.source != ContextSourceKind::McpRetrievedManifest })
+        );
+    }
+
     /// Verifies application resolves selected history by stable event identity
     /// and preserves a post-boundary event byte-for-byte.
     #[test]

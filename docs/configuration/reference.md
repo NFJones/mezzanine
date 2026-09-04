@@ -695,6 +695,7 @@ description.
 | `agents.provider_error_retry_limit` | integer | `5` | Retries after eligible transient provider failures; accepts `0` to disable finite retries and values through `4294967295`. Delays begin at one second and use exponential backoff capped at 15 minutes. |
 | `agents.provider_error_retry_unlimited` | boolean | `false` | Continue eligible transport failures, rate limits, retry hints, 5xx responses, and transient provider outages beyond the finite retry count. Context/output-limit recovery and non-retryable failures remain bounded. Stop, cancellation, and runtime shutdown still terminate retry work. |
 | `agents.turn_timeout_ms` | integer | `1800000` | Total wall-clock deadline, in milliseconds, snapshotted for each new agent turn; must be positive. |
+| `agents.native_shell_timeout_ms` | integer | `600000` | Default maximum, in milliseconds, for native-mode `shell_command` actions; 1 to 86400000. Each turn snapshots the value at creation. The effective native timeout is the earliest of this value, any explicit per-action timeout, and the remaining turn budget. Pane-shell actions do not use this setting. |
 | `agents.loop_limit` | integer | `8` | Maximum iterations for a `/loop`; must be positive. |
 | `agents.custom_system_prompt` | string | `""` | User-owned system prompt appended after built-in prompt content. |
 | `agents.default_personality` | string | `""` | Default personality profile id; empty means none. |

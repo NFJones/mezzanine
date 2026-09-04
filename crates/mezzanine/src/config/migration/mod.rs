@@ -78,6 +78,7 @@ mod v79_v80;
 mod v80_v81;
 mod v81_v82;
 mod v82_v83;
+mod v83_v84;
 
 #[cfg(test)]
 pub use driver::migrate_config_text;

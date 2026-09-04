@@ -3843,7 +3843,7 @@ The `issues` table MUST support `enabled` and `database_path`.
 The `agents` table MUST support `default_provider`, `default_model_profile`,
 `active_turn_sleep_inhibition`, `shell_only`, `compaction_raw_retention_percent`, `routing`,
 `shell_mode`, `action_failure_retry_limit`, `provider_error_retry_limit`,
-`provider_error_retry_unlimited`, `turn_timeout_ms`, `loop_limit`, `custom_system_prompt`,
+`provider_error_retry_unlimited`, `turn_timeout_ms`, `native_shell_timeout_ms`, `loop_limit`, `custom_system_prompt`,
 `default_personality`, `subagent_placement`,
 `max_concurrent_agents`, `max_queued_turns`, `max_queued_bytes`,
 `max_root_subagents`, `max_subagents_per_subagent`,
@@ -3894,6 +3894,13 @@ retry generation or changing its selected delay.
 `1800000`. The runtime MUST snapshot this duration as an absolute
 millisecond-resolution deadline when each turn is created. Reloading the
 setting MUST affect only subsequently created turns.
+`agents.native_shell_timeout_ms` MUST be an integer from `1` to `86400000` and
+MUST default to `600000`. The runtime MUST snapshot this duration when each
+turn is created. For a native-mode `shell_command`, its effective timeout MUST
+be the earliest of this snapshotted default, any positive model-supplied
+per-action timeout, and the remaining turn-wide budget. Pane-shell actions and
+non-`shell_command` native work MUST NOT use this configured default. Reloading
+the setting MUST affect only subsequently created turns.
 `agents.shell_mode` MUST default to `native` and MUST accept only `pane` or
 `native`. `native` executes agent shell actions in a freshly spawned shell
 process whose path and working directory are inferred from the pane's root
@@ -5599,9 +5606,11 @@ positive integer `agents.turn_timeout_ms`, which MUST default to 1,800,000 ms
 (30 minutes). Mezzanine MUST snapshot the resulting absolute deadline when a
 turn is created, so configuration reloads affect only subsequently created
 turns. Shell actions MAY request a positive per-action timeout, and omitted
-values MUST inherit the remaining turn-wide timeout budget. The effective
-shell-action timeout MUST be bounded by that remaining turn-wide timeout budget,
-so no shell action can outlive its enclosing turn. Expired turns MUST be
+values MUST inherit the remaining turn-wide timeout budget in pane mode; native
+`shell_command` actions instead use the snapshotted
+`agents.native_shell_timeout_ms` default. The effective shell-action timeout
+MUST be bounded by the remaining turn-wide timeout budget, so no shell action
+can outlive its enclosing turn. Expired turns MUST be
 rejected before provider or shell dispatch rather than represented as a
 minimum-duration shell transaction. Non-stateful shell
 transactions that wait for a deferred command payload receiver MUST also use a

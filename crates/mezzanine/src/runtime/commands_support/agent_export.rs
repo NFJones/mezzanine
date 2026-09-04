@@ -617,6 +617,9 @@ fn runtime_context_source_name(source: ContextSourceKind) -> &'static str {
         ContextSourceKind::RoutedHandoff => "routed-handoff",
         ContextSourceKind::ActionResult => "action-result",
         ContextSourceKind::McpCatalogSnapshot => "mcp-catalog-snapshot",
+        ContextSourceKind::McpServerReference => "mcp-server-reference",
+        ContextSourceKind::McpServerSearchResult => "mcp-server-search-result",
+        ContextSourceKind::McpRetrievedManifest => "mcp-retrieved-manifest",
     }
 }
 

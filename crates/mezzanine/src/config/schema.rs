@@ -685,6 +685,7 @@ pub(super) const AGENT_KEYS: &[&str] = &[
     "provider_error_retry_limit",
     "provider_error_retry_unlimited",
     "turn_timeout_ms",
+    "native_shell_timeout_ms",
     "loop_limit",
     "custom_system_prompt",
     "default_personality",

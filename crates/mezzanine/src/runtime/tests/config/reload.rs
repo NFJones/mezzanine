@@ -349,6 +349,30 @@ fn runtime_config_reload_applies_agent_turn_timeout() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies native shell timeout reloads apply to future turns while an
+/// existing turn preserves the deadline captured at its creation boundary.
+#[test]
+fn runtime_config_reload_snapshots_native_shell_timeout_per_turn() {
+    let mut service = test_runtime_service();
+    assert_eq!(
+        service.agent_native_shell_timeout_ms(),
+        mez_agent::DEFAULT_NATIVE_SHELL_TIMEOUT_MS
+    );
+    service.set_agent_native_shell_timeout_ms(4_321);
+    service.snapshot_agent_native_shell_timeout_for_turn("turn-existing");
+    service.set_agent_native_shell_timeout_ms(1_234);
+
+    assert_eq!(
+        service.agent_native_shell_timeout_ms_for_turn("turn-existing"),
+        4_321
+    );
+    assert_eq!(service.agent_native_shell_timeout_ms(), 1_234);
+    assert_eq!(
+        service.agent_native_shell_timeout_ms_for_turn("turn-created-after-reload"),
+        1_234
+    );
+}
+
 /// Verifies always-exposed MCP server selection is replaced on config reload.
 ///
 /// The setting is live request policy, so removing a server from configuration

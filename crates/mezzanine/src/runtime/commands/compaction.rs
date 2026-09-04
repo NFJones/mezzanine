@@ -783,9 +783,22 @@ impl RuntimeSessionService {
                 224,
                 content,
             ))?;
+            let mcp_catalog_snapshot = mez_agent::configured_mcp_catalog_snapshot_content(
+                &self.mcp_registry().prompt_summary(),
+                self.integration.always_exposed_mcp_servers(),
+            );
+            let mcp_epoch_entries = self.persist_mcp_compaction_epoch_transcript(
+                pane_id,
+                &task.conversation_id,
+                mcp_catalog_snapshot,
+            )?;
             let remaining_transcript_entries = self
                 .agent_shell_store_mut()
-                .retain_recent_transcript_entries(pane_id, task.retained_transcript_entries)?
+                .retain_recent_transcript_entries(
+                    pane_id,
+                    task.retained_transcript_entries
+                        .saturating_add(mcp_epoch_entries as u64),
+                )?
                 .transcript_entries;
             self.append_agent_status_text_to_terminal_buffer(
                 pane_id,
@@ -1231,6 +1244,9 @@ pub(super) fn runtime_context_source_kind_name(source: ContextSourceKind) -> &'s
         ContextSourceKind::RoutedHandoff => "routed-handoff",
         ContextSourceKind::ActionResult => "action-result",
         ContextSourceKind::McpCatalogSnapshot => "mcp-catalog-snapshot",
+        ContextSourceKind::McpServerReference => "mcp-server-reference",
+        ContextSourceKind::McpServerSearchResult => "mcp-server-search-result",
+        ContextSourceKind::McpRetrievedManifest => "mcp-retrieved-manifest",
     }
 }
 
@@ -1480,14 +1496,39 @@ pub(super) fn runtime_compact_transcript_entries_for_summary(
         .into_iter()
         .take_while(|group| group.end <= requested_compactable_count)
         .take_while(|group| {
-            active_entries[group.clone()]
-                .iter()
-                .any(|entry| entry.role == TranscriptRole::Assistant)
+            runtime_compaction_group_is_summarizable(&active_entries[group.clone()])
         })
         .map(|group| group.end)
         .last()
         .unwrap_or(0);
     &active_entries[..compactable_count]
+}
+
+/// Returns whether one complete transcript group can enter a compacted prefix.
+///
+/// Ordinary groups require an assistant response. The dedicated MCP epoch and
+/// compact directory snapshot are durable control metadata that replace older
+/// MCP authority at each compaction boundary, so they may be summarized as one
+/// intact group during a subsequent compaction.
+fn runtime_compaction_group_is_summarizable(entries: &[TranscriptEntry]) -> bool {
+    entries
+        .iter()
+        .any(|entry| entry.role == TranscriptRole::Assistant)
+        || entries.iter().all(|entry| {
+            if entry.role != TranscriptRole::System {
+                return false;
+            }
+            match mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content) {
+                Some(mez_agent::TranscriptContextEvent::McpCompactionEpoch)
+                | Some(mez_agent::TranscriptContextEvent::McpCatalogSnapshot { .. }) => true,
+                Some(mez_agent::TranscriptContextEvent::PromptBoundary {
+                    source: ContextSourceKind::Configuration,
+                    label,
+                    ..
+                }) => label == "MCP compaction re-retrieval guidance",
+                _ => false,
+            }
+        })
 }
 
 /// Returns contiguous durable execution groups keyed by stable turn id.

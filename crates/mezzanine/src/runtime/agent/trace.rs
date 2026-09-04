@@ -418,6 +418,9 @@ pub(super) fn runtime_context_source_kind_name(source: ContextSourceKind) -> &'s
         ContextSourceKind::RoutedHandoff => "routed_handoff",
         ContextSourceKind::ActionResult => "action_result",
         ContextSourceKind::McpCatalogSnapshot => "mcp_catalog_snapshot",
+        ContextSourceKind::McpServerReference => "mcp_server_reference",
+        ContextSourceKind::McpServerSearchResult => "mcp_server_search_result",
+        ContextSourceKind::McpRetrievedManifest => "mcp_retrieved_manifest",
     }
 }
 

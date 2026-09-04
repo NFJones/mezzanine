@@ -456,7 +456,7 @@ context_window_tokens = 4500
             .get("%1")
             .unwrap()
             .transcript_entries,
-        5
+        7
     );
     let compacted = service
         .memory_records()

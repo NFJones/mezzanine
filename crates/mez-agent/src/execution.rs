@@ -20,6 +20,10 @@ use crate::{
 
 /// Default turn-wide budget for shell-backed agent work.
 pub const DEFAULT_AGENT_TURN_TIMEOUT_MS: u64 = 30 * 60 * 1000;
+/// Default bounded timeout for native shell command actions.
+pub const DEFAULT_NATIVE_SHELL_TIMEOUT_MS: u64 = 10 * 60 * 1000;
+/// Largest supported configured native shell action timeout in milliseconds.
+pub const MAX_NATIVE_SHELL_TIMEOUT_MS: u64 = 24 * 60 * 60 * 1000;
 
 /// Error returned while projecting local execution output into a MAAP result.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,6 +152,32 @@ pub fn agent_shell_timeout_ms(
         requested_timeout_ms
             .map(|timeout_ms| timeout_ms.min(remaining))
             .unwrap_or(remaining)
+            .max(1),
+    )
+}
+
+/// Bounds a native shell action by its configured default, any explicit
+/// model-requested timeout, and the remaining turn-wide budget.
+///
+/// Pane-shell callers must use [`agent_shell_timeout_ms`] instead so their
+/// model-selected timeout remains unconstrained by native execution policy.
+pub fn agent_native_shell_timeout_ms(
+    started_at_unix_seconds: u64,
+    deadline_at_unix_millis: u64,
+    now_unix_millis: u64,
+    configured_timeout_ms: u64,
+    requested_timeout_ms: Option<u64>,
+) -> Option<u64> {
+    let remaining = agent_turn_remaining_timeout_ms(
+        started_at_unix_seconds,
+        deadline_at_unix_millis,
+        now_unix_millis,
+    )?;
+    Some(
+        requested_timeout_ms
+            .unwrap_or(configured_timeout_ms)
+            .min(configured_timeout_ms)
+            .min(remaining)
             .max(1),
     )
 }
@@ -725,6 +755,31 @@ mod tests {
         assert_eq!(
             agent_shell_timeout_ms(2_000_000_000, 2_000_000_010_000, 2_000_000_010_000, None,),
             None
+        );
+    }
+
+    /// Verifies native shell timeouts use the earliest configured, requested,
+    /// or remaining-turn deadline while pane-mode callers retain the existing
+    /// action-or-turn calculation.
+    #[test]
+    fn native_shell_timeout_policy_applies_configured_default_as_a_cap() {
+        assert_eq!(
+            agent_native_shell_timeout_ms(1, 0, 2_000_000_000_000, 600_000, None),
+            Some(600_000)
+        );
+        assert_eq!(
+            agent_native_shell_timeout_ms(1, 0, 2_000_000_000_000, 600_000, Some(2_000)),
+            Some(2_000)
+        );
+        assert_eq!(
+            agent_native_shell_timeout_ms(
+                2_000_000_000,
+                2_000_000_010_000,
+                2_000_000_008_000,
+                600_000,
+                Some(30_000),
+            ),
+            Some(2_000)
         );
     }
 

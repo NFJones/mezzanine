@@ -29,18 +29,29 @@ pub(super) fn runtime_agent_transcript_context(
 ) -> RuntimeAgentTranscriptContext {
     let mut blocks = Vec::new();
     let mut execution_events = Vec::new();
+    let latest_mcp_compaction_epoch = entries.iter().rposition(|entry| {
+        entry.role == TranscriptRole::System
+            && matches!(
+                TranscriptContextEvent::from_transcript_content(&entry.content),
+                Some(TranscriptContextEvent::McpCompactionEpoch)
+            )
+    });
     let exact_execution_turns = entries
         .iter()
+        .enumerate()
         .filter_map(|entry| {
+            let (index, entry) = entry;
             (entry.role == TranscriptRole::System
                 && matches!(
                     TranscriptContextEvent::from_transcript_content(&entry.content),
-                    Some(TranscriptContextEvent::ExecutionBlock { .. })
+                    Some(TranscriptContextEvent::ExecutionBlock { source, .. })
+                        if source != ContextSourceKind::McpRetrievedManifest
+                            || latest_mcp_compaction_epoch.is_none_or(|epoch| index > epoch)
                 ))
             .then_some(entry.turn_id.as_str())
         })
         .collect::<BTreeSet<_>>();
-    for entry in entries {
+    for (index, entry) in entries.iter().enumerate() {
         if entry.role == TranscriptRole::System
             && let Some(TranscriptContextEvent::ExecutionBlock {
                 source,
@@ -52,6 +63,11 @@ pub(super) fn runtime_agent_transcript_context(
                 ..
             }) = TranscriptContextEvent::from_transcript_content(&entry.content)
         {
+            if source == ContextSourceKind::McpRetrievedManifest
+                && latest_mcp_compaction_epoch.is_some_and(|epoch| index <= epoch)
+            {
+                continue;
+            }
             let block = ContextBlock {
                 source,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
@@ -72,6 +88,14 @@ pub(super) fn runtime_agent_transcript_context(
             continue;
         }
         if entry.role == TranscriptRole::System
+            && matches!(
+                TranscriptContextEvent::from_transcript_content(&entry.content),
+                Some(TranscriptContextEvent::McpCompactionEpoch)
+            )
+        {
+            continue;
+        }
+        if entry.role == TranscriptRole::System
             && let Some(TranscriptContextEvent::EnvironmentSnapshot { content, .. }) =
                 TranscriptContextEvent::from_transcript_content(&entry.content)
         {
@@ -87,6 +111,9 @@ pub(super) fn runtime_agent_transcript_context(
             && let Some(TranscriptContextEvent::McpCatalogSnapshot { content, .. }) =
                 TranscriptContextEvent::from_transcript_content(&entry.content)
         {
+            if latest_mcp_compaction_epoch.is_some_and(|epoch| index <= epoch) {
+                continue;
+            }
             blocks.push(ContextBlock {
                 source: ContextSourceKind::McpCatalogSnapshot,
                 placement: mez_agent::ContextPlacement::ConversationAppend,

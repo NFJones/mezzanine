@@ -143,6 +143,8 @@ pub struct AgentShellMcpToolSummary {
     pub effects: String,
     /// Model-safe tool description.
     pub description: String,
+    /// Validated JSON Schema accepted by the tool's object arguments.
+    pub input_schema_json: String,
 }
 
 #[cfg(test)]
@@ -202,6 +204,8 @@ mod tests {
                     permission_required: true,
                     effects: "read-fs".to_string(),
                     description: "Read a file".to_string(),
+                    input_schema_json:
+                        r#"{"type":"object","properties":{"path":{"type":"string"}}}"#.to_string(),
                 }],
             }],
         };

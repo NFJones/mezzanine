@@ -54,7 +54,21 @@ impl RuntimeSessionService {
                     ),
                 )?;
             }
-            execution.action_results[index] = self.execute_mcp_discovery_action(turn, &action)?;
+            let referencable = match &action.payload {
+                AgentActionPayload::McpServerGet { server } => {
+                    self.agent_turn_contexts()
+                        .get(&turn.turn_id)
+                        .is_some_and(|context| {
+                            mez_agent::mcp_server_is_referencable(context, server)
+                        })
+                        || execution.action_results[..index].iter().any(|result| {
+                            mez_agent::mcp_server_is_referencable_from_action_result(result, server)
+                        })
+                }
+                _ => true,
+            };
+            execution.action_results[index] =
+                self.execute_mcp_discovery_action(turn, &action, referencable)?;
             executed = executed.saturating_add(1);
         }
         execution.terminal_state = runtime_agent_turn_state_from_action_results(
@@ -69,6 +83,7 @@ impl RuntimeSessionService {
         &self,
         turn: &AgentTurnRecord,
         action: &AgentAction,
+        referencable: bool,
     ) -> Result<ActionResult> {
         match &action.payload {
             AgentActionPayload::McpServerSearch { query, limit } => {
@@ -90,6 +105,18 @@ impl RuntimeSessionService {
                 ))
             }
             AgentActionPayload::McpServerGet { server } => {
+                if !referencable {
+                    let error = MezError::forbidden(
+                        "MCP server must be returned by mcp_server_search or durable MCP directory context before retrieval",
+                    );
+                    return Ok(ActionResult::failed(
+                        turn,
+                        action,
+                        ActionStatus::Rejected,
+                        runtime_mezzanine_error_code(error.kind()),
+                        error.message().to_string(),
+                    )?);
+                }
                 let summary = match self.mcp_registry().agent_shell_server_summary(server) {
                     Ok(summary) => summary,
                     Err(error) => {
@@ -151,6 +178,8 @@ fn mcp_server_record(server: &mez_agent::AgentShellMcpServerSummary) -> serde_js
             "name": tool.name,
             "state": tool.state,
             "description": tool.description,
+            "input_schema": serde_json::from_str::<serde_json::Value>(&tool.input_schema_json)
+                .unwrap_or(serde_json::Value::Null),
         })).collect::<Vec<_>>(),
     })
 }

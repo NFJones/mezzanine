@@ -68,12 +68,8 @@ fn openai_available_mcp_keeps_memory_on_default_surface() {
     assert!(action_types.contains(&"mcp_call".to_string()));
     assert!(action_types.contains(&"memory_search".to_string()));
     assert!(action_types.contains(&"memory_store".to_string()));
-    assert!(
-        body.contains("explicit_invocation=\\\"githubcopilot\\\""),
-        "{body}"
-    );
-    assert!(body.contains("action=mcp_call"), "{body}");
-    assert!(body.contains("required_arguments=\\\"repo\\\""), "{body}");
+    assert!(!body.contains("explicit_invocation="), "{body}");
+    assert!(!body.contains("required_arguments="), "{body}");
     assert!(
         !body.contains("memory search and unrelated discovery are not substitutes"),
         "{body}"

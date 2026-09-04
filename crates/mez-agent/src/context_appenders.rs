@@ -7,8 +7,8 @@
 
 use crate::instructions::DiscoveredInstructionFile;
 use crate::{
-    AgentContext, AgentContextResult, ContextBlock, ContextRetention, ContextSemanticKind,
-    ContextSourceKind, McpPromptServer, McpPromptSummary, McpPromptTool,
+    ActionResult, ActionStatus, AgentContext, AgentContextResult, ContextBlock, ContextRetention,
+    ContextSemanticKind, ContextSourceKind, McpPromptServer, McpPromptSummary, McpPromptTool,
     McpPromptUnavailableServer, MemoryContextRecord, ProviderApiCompatibility,
     validate_context_required,
 };
@@ -73,10 +73,14 @@ pub fn memory_context_blocks(
 pub const MCP_INTEGRATIONS_CONTEXT_LABEL: &str = "mcp integrations";
 /// Label for immutable configured always-exposed MCP catalog snapshots.
 pub const MCP_CATALOG_SNAPSHOT_CONTEXT_LABEL: &str = "always-exposed MCP catalog snapshot";
+/// Prefix for compactable complete manifests returned by `mcp_server_get`.
+pub const MCP_RETRIEVED_MANIFEST_CONTEXT_LABEL_PREFIX: &str = "retrieved MCP manifest ";
+/// Prefix for exact durable explicit MCP server references.
+pub const MCP_SERVER_REFERENCE_CONTEXT_LABEL_PREFIX: &str = "MCP server reference ";
+/// Prefix for exact durable MCP server search-result directories.
+pub const MCP_SERVER_SEARCH_RESULT_CONTEXT_LABEL_PREFIX: &str = "MCP server search result ";
 /// Authoritative transition used when no servers remain always exposed.
 pub const MCP_CATALOG_REMOVED_CONTEXT: &str = "available_servers=0 available_tools=0 unavailable_servers=0\nconfigured_exposure=\"\" action=mcp_call\nstate=removed";
-/// Runtime-owned label for the original task copied into a routed worker.
-const ROUTED_CONTROLLER_TASK_LABEL: &str = "routed controller task";
 
 pub fn append_mcp_context(
     context: AgentContext,
@@ -107,8 +111,7 @@ pub fn append_mcp_context_with_configured(
             content,
         )?;
     }
-    let invocation = explicit_mcp_invocation_summary(&context, summary, configured_server_names);
-    append_filtered_mcp_context(context, &invocation, true, McpExposureKind::Explicit)
+    context.revalidate()
 }
 
 /// Replaces MCP live state using only information absent from the provider's
@@ -134,13 +137,8 @@ pub fn append_mcp_context_for_provider_with_configured(
     configured_server_names: &[String],
 ) -> AgentContextResult<AgentContext> {
     context.retain_blocks(|block| !is_mcp_context_block(block))?;
-    let invocation = explicit_mcp_invocation_summary(&context, summary, configured_server_names);
-    append_filtered_mcp_context(
-        context,
-        &invocation,
-        provider == "openai",
-        McpExposureKind::Explicit,
-    )
+    let _ = (summary, provider, configured_server_names);
+    context.revalidate()
 }
 
 /// Replaces MCP live state according to the resolved provider wire API.
@@ -155,16 +153,11 @@ pub fn append_mcp_context_for_api_with_configured(
     configured_server_names: &[String],
 ) -> AgentContextResult<AgentContext> {
     context.retain_blocks(|block| !is_mcp_context_block(block))?;
-    let invocation = explicit_mcp_invocation_summary(&context, summary, configured_server_names);
-    append_filtered_mcp_context(
-        context,
-        &invocation,
-        api == ProviderApiCompatibility::OpenAiResponses,
-        McpExposureKind::Explicit,
-    )
+    let _ = (summary, api, configured_server_names);
+    context.revalidate()
 }
 
-/// Renders the complete deterministic catalog selected by configuration.
+/// Renders the compact deterministic directory selected by configuration.
 ///
 /// The returned bytes are provider-neutral and suitable for immutable
 /// prompt-boundary chronology. Runtime authorization must still use the live
@@ -181,7 +174,7 @@ pub fn configured_mcp_catalog_snapshot_content(
         summary,
         "configured MCP server name",
     );
-    render_filtered_mcp_context(&selected, true, McpExposureKind::Configured)
+    render_mcp_directory(&selected)
 }
 
 /// Returns the MCP tools that should be callable for this turn.
@@ -195,170 +188,413 @@ pub fn invoked_mcp_tools_for_context(
 /// Returns callable MCP tools selected by configuration or explicit invocation.
 pub fn invoked_mcp_tools_for_context_with_configured(
     context: &AgentContext,
-    summary: &McpPromptSummary,
-    configured_server_names: &[String],
+    _summary: &McpPromptSummary,
+    _configured_server_names: &[String],
 ) -> Vec<McpPromptTool> {
-    mcp_invocation_summary(context, summary, configured_server_names).available_tools
+    mcp_retrieved_manifest_tools_for_context(context)
 }
 
-/// Builds one prompt-context block from a pre-filtered MCP summary.
-fn append_filtered_mcp_context(
-    mut context: AgentContext,
+/// Builds exact compact directory references for resolvable `@server` mentions.
+///
+/// References make a server eligible for `mcp_server_get`, but never expose a
+/// tool contract or make `mcp_call` callable. Unknown, ambiguous, disabled,
+/// and unavailable names deliberately produce no grant.
+pub fn mcp_server_reference_blocks_for_prompt(
+    prompt: &str,
     summary: &McpPromptSummary,
-    include_available_manifest: bool,
-    exposure: McpExposureKind,
-) -> AgentContextResult<AgentContext> {
-    let Some(content) = render_filtered_mcp_context(summary, include_available_manifest, exposure)
-    else {
-        return context.revalidate();
-    };
-    context.insert_typed_block(
-        ContextBlock {
-            source: ContextSourceKind::RuntimeHint,
-            placement: crate::ContextPlacement::ConversationAppend,
-            label: MCP_INTEGRATIONS_CONTEXT_LABEL.to_string(),
-            content,
-        },
-        ContextSemanticKind::TaskPrelude,
-        ContextRetention::Exact,
-        true,
-    )?;
-    context.revalidate()
+) -> Vec<ContextBlock> {
+    let mut server_ids = Vec::new();
+    for requested in explicit_mcp_server_mentions(prompt) {
+        let exact = summary
+            .available_servers
+            .iter()
+            .find(|server| server.server_id == requested);
+        let case_matches = summary
+            .available_servers
+            .iter()
+            .filter(|server| server.server_id.eq_ignore_ascii_case(&requested))
+            .collect::<Vec<_>>();
+        let Some(server) = exact.or_else(|| (case_matches.len() == 1).then(|| case_matches[0]))
+        else {
+            continue;
+        };
+        if !server_ids
+            .iter()
+            .any(|server_id| server_id == &server.server_id)
+        {
+            server_ids.push(server.server_id.clone());
+        }
+    }
+    server_ids
+        .into_iter()
+        .filter_map(|server_id| {
+            let server = summary
+                .available_servers
+                .iter()
+                .find(|server| server.server_id == server_id)?;
+            let content = serde_json::to_string(&serde_json::json!({
+                "version": "mez-mcp-server-reference/v1",
+                "server": mcp_directory_record_value(server),
+            }))
+            .ok()?;
+            Some(ContextBlock::reference_event(
+                ContextSourceKind::McpServerReference,
+                format!("{MCP_SERVER_REFERENCE_CONTEXT_LABEL_PREFIX}{server_id}"),
+                content,
+            ))
+        })
+        .collect()
 }
 
-/// MCP catalog ownership used only to label otherwise identical manifest data.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum McpExposureKind {
-    Configured,
-    Explicit,
-}
-
-/// Renders one complete deterministic MCP manifest without choosing placement.
-fn render_filtered_mcp_context(
-    summary: &McpPromptSummary,
-    include_available_manifest: bool,
-    exposure: McpExposureKind,
-) -> Option<String> {
-    if summary.unavailable_servers.is_empty()
-        && (!include_available_manifest
-            || summary.available_servers.is_empty() && summary.available_tools.is_empty())
-    {
+/// Builds a canonical durable directory grant from one successful MCP search.
+///
+/// The result is retrieval-only metadata: it makes returned available servers
+/// referencable but cannot expose a callable MCP tool.
+pub fn mcp_server_search_result_for_action_result(result: &ActionResult) -> Option<String> {
+    if result.action_type != "mcp_server_search" || result.status != ActionStatus::Succeeded {
         return None;
     }
-    let mut lines = if include_available_manifest {
-        vec![format!(
-            "available_servers={} available_tools={} unavailable_servers={}",
-            summary.available_servers.len(),
-            summary.available_tools.len(),
-            summary.unavailable_servers.len()
-        )]
-    } else {
-        vec![format!(
-            "unavailable_servers={}",
-            summary.unavailable_servers.len()
-        )]
-    };
-    let mut available_servers = summary.available_servers.clone();
-    available_servers.sort_by(|left, right| left.server_id.cmp(&right.server_id));
-    let mut available_tools = summary.available_tools.clone();
-    available_tools.sort_by(|left, right| {
-        left.server_id
-            .cmp(&right.server_id)
-            .then_with(|| left.tool_name.cmp(&right.tool_name))
-    });
-    let mut unavailable_servers = summary.unavailable_servers.clone();
-    unavailable_servers.sort_by(|left, right| left.server_id.cmp(&right.server_id));
-    if include_available_manifest && !available_servers.is_empty() {
-        let invoked_servers = available_servers
-            .iter()
-            .map(|server| server.server_id.as_str())
-            .collect::<Vec<_>>()
-            .join(",");
-        let selection = match exposure {
-            McpExposureKind::Configured => "configured_exposure",
-            McpExposureKind::Explicit => "explicit_invocation",
+    let value =
+        serde_json::from_str::<serde_json::Value>(result.structured_content_json.as_deref()?)
+            .ok()?;
+    let query = value.get("query")?.as_str()?.trim();
+    if query.is_empty() {
+        return None;
+    }
+    let mut servers = value
+        .get("servers")?
+        .as_array()?
+        .iter()
+        .filter_map(|server| mcp_directory_record_from_value(server, true))
+        .collect::<Vec<_>>();
+    servers.sort_by(|left, right| left["server_id"].as_str().cmp(&right["server_id"].as_str()));
+    servers.dedup_by(|left, right| left["server_id"] == right["server_id"]);
+    (!servers.is_empty()).then(|| {
+        serde_json::to_string(&serde_json::json!({
+            "version": "mez-mcp-server-search-result/v1",
+            "query": query,
+            "servers": servers,
+        }))
+        .ok()
+    })?
+}
+
+/// Returns whether a canonical server identifier has durable retrieval access.
+pub fn mcp_server_is_referencable(context: &AgentContext, server_id: &str) -> bool {
+    valid_mcp_server_id(server_id)
+        && context.blocks().iter().any(|block| match block.source {
+            ContextSourceKind::McpCatalogSnapshot => mcp_catalog_server_ids(&block.content)
+                .iter()
+                .any(|candidate| candidate == server_id),
+            ContextSourceKind::McpServerReference => {
+                mcp_reference_server_id(&block.content).as_deref() == Some(server_id)
+            }
+            ContextSourceKind::McpServerSearchResult => {
+                mcp_search_result_server_ids(&block.content)
+                    .iter()
+                    .any(|candidate| candidate == server_id)
+            }
+            _ => false,
+        })
+}
+
+/// Returns whether a prior successfully settled search result makes one
+/// canonical server identifier referencable within the same action batch.
+pub fn mcp_server_is_referencable_from_action_result(
+    result: &ActionResult,
+    server_id: &str,
+) -> bool {
+    valid_mcp_server_id(server_id)
+        && mcp_server_search_result_for_action_result(result).is_some_and(|content| {
+            mcp_search_result_server_ids(&content)
+                .iter()
+                .any(|candidate| candidate == server_id)
+        })
+}
+
+/// Builds the canonical durable manifest grant for one successful live MCP retrieval.
+///
+/// Only a server currently reported as available and its currently available tools
+/// can create a grant. The returned content contains complete validated object
+/// schemas but no transport, approval, credential, or live-authority internals.
+pub fn mcp_retrieved_manifest_for_action_result(result: &ActionResult) -> Option<(String, String)> {
+    if result.action_type != "mcp_server_get" || result.status != ActionStatus::Succeeded {
+        return None;
+    }
+    let server =
+        serde_json::from_str::<serde_json::Value>(result.structured_content_json.as_deref()?)
+            .ok()?
+            .get("server")?
+            .as_object()?
+            .clone();
+    if server.get("state")?.as_str()? != "available" {
+        return None;
+    }
+    let server_id = server.get("server_id")?.as_str()?.trim();
+    if server_id.is_empty() {
+        return None;
+    }
+    let display_name = server.get("display_name")?.as_str()?;
+    let purpose = server.get("purpose")?.as_str()?;
+    let usage_instructions = server.get("usage_instructions")?.as_str()?;
+    let mut tools = server
+        .get("tools")?
+        .as_array()?
+        .iter()
+        .filter_map(|tool| {
+            let tool = tool.as_object()?;
+            if tool.get("state")?.as_str()? != "available" {
+                return None;
+            }
+            let name = tool.get("name")?.as_str()?.trim();
+            let description = tool.get("description")?.as_str()?;
+            let input_schema = tool.get("input_schema")?.as_object()?.clone();
+            if name.is_empty()
+                || input_schema
+                    .get("type")
+                    .is_some_and(|schema_type| schema_type != "object")
+            {
+                return None;
+            }
+            Some(serde_json::json!({
+                "name": name,
+                "description": description,
+                "input_schema": input_schema,
+            }))
+        })
+        .collect::<Vec<_>>();
+    tools.sort_by(|left, right| left["name"].as_str().cmp(&right["name"].as_str()));
+    let content = serde_json::to_string(&serde_json::json!({
+        "version": "mez-mcp-retrieved-manifest/v1",
+        "server_id": server_id,
+        "display_name": display_name,
+        "purpose": purpose,
+        "usage_instructions": usage_instructions,
+        "tools": tools,
+    }))
+    .ok()?;
+    Some((server_id.to_string(), content))
+}
+
+/// Reconstructs callable MCP tools from the newest durable retrieved manifest
+/// for each server in the current chronology.
+pub fn mcp_retrieved_manifest_tools_for_context(context: &AgentContext) -> Vec<McpPromptTool> {
+    let mut manifests = std::collections::BTreeMap::new();
+    for block in context.blocks() {
+        if block.source != ContextSourceKind::McpRetrievedManifest {
+            continue;
+        }
+        let Some((server_id, tools)) = parse_mcp_retrieved_manifest(&block.content) else {
+            continue;
         };
-        lines.push(format!(
-            "{selection}={} action=mcp_call",
-            mcp_context_quoted_value(&invoked_servers)
-        ));
+        manifests.insert(server_id, tools);
     }
-    if include_available_manifest {
-        let detailed_tools = mcp_context_selected_tool_details(
-            &AgentContext::empty(),
-            &available_servers,
-            &available_tools,
-            usize::MAX,
-        );
-        for server in &available_servers {
-            lines.push(mcp_available_server_line(server));
+    manifests.into_values().flatten().collect()
+}
+
+/// Parses one canonical durable retrieval manifest without accepting legacy
+/// generic action results as executable authority.
+fn parse_mcp_retrieved_manifest(content: &str) -> Option<(String, Vec<McpPromptTool>)> {
+    let value = serde_json::from_str::<serde_json::Value>(content).ok()?;
+    if value.get("version")?.as_str()? != "mez-mcp-retrieved-manifest/v1" {
+        return None;
+    }
+    let server_id = value.get("server_id")?.as_str()?.trim();
+    if server_id.is_empty() {
+        return None;
+    }
+    let mut tools = value
+        .get("tools")?
+        .as_array()?
+        .iter()
+        .filter_map(|tool| {
+            let tool = tool.as_object()?;
+            let tool_name = tool.get("name")?.as_str()?.trim();
+            let description = tool.get("description")?.as_str()?;
+            let input_schema = tool.get("input_schema")?.as_object()?;
+            if tool_name.is_empty()
+                || input_schema
+                    .get("type")
+                    .is_some_and(|schema_type| schema_type != "object")
+            {
+                return None;
+            }
+            Some(McpPromptTool {
+                server_id: server_id.to_string(),
+                tool_name: tool_name.to_string(),
+                description: description.to_string(),
+                approval_required: false,
+                input_schema_json: serde_json::to_string(input_schema).ok()?,
+            })
+        })
+        .collect::<Vec<_>>();
+    tools.sort_by(|left, right| left.tool_name.cmp(&right.tool_name));
+    tools.dedup_by(|left, right| left.tool_name == right.tool_name);
+    Some((server_id.to_string(), tools))
+}
+
+/// Builds the canonical safe directory projection for one available server.
+fn mcp_directory_record_value(server: &McpPromptServer) -> serde_json::Value {
+    serde_json::json!({
+        "server_id": server.server_id,
+        "display_name": server.display_name,
+        "purpose": server.purpose,
+        "usage_instructions": server.usage_instructions,
+    })
+}
+
+/// Validates and canonicalizes one safe server directory record.
+fn mcp_directory_record_from_value(
+    value: &serde_json::Value,
+    require_available_state: bool,
+) -> Option<serde_json::Value> {
+    let value = value.as_object()?;
+    if require_available_state && value.get("state")?.as_str()? != "available" {
+        return None;
+    }
+    let server_id = value.get("server_id")?.as_str()?.trim();
+    let display_name = value.get("display_name")?.as_str()?.trim();
+    let purpose = value.get("purpose")?.as_str()?.trim();
+    let usage_instructions = value.get("usage_instructions")?.as_str()?.trim();
+    (valid_mcp_server_id(server_id)
+        && !display_name.is_empty()
+        && !purpose.is_empty()
+        && !usage_instructions.is_empty())
+    .then(|| {
+        serde_json::json!({
+            "server_id": server_id,
+            "display_name": display_name,
+            "purpose": purpose,
+            "usage_instructions": usage_instructions,
+        })
+    })
+}
+
+/// Returns canonical server ids from a versioned explicit reference record.
+fn mcp_reference_server_id(content: &str) -> Option<String> {
+    let value = serde_json::from_str::<serde_json::Value>(content).ok()?;
+    if value.get("version")?.as_str()? != "mez-mcp-server-reference/v1" {
+        return None;
+    }
+    mcp_directory_record_from_value(value.get("server")?, false)?["server_id"]
+        .as_str()
+        .map(str::to_string)
+}
+
+/// Returns canonical server ids from a versioned search-result directory.
+fn mcp_search_result_server_ids(content: &str) -> Vec<String> {
+    let Some(value) = serde_json::from_str::<serde_json::Value>(content).ok() else {
+        return Vec::new();
+    };
+    if value.get("version").and_then(serde_json::Value::as_str)
+        != Some("mez-mcp-server-search-result/v1")
+        || value
+            .get("query")
+            .and_then(serde_json::Value::as_str)
+            .is_none_or(|query| query.trim().is_empty())
+    {
+        return Vec::new();
+    }
+    let Some(servers) = value.get("servers").and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+    let mut server_ids = servers
+        .iter()
+        .filter_map(|server| mcp_directory_record_from_value(server, false))
+        .filter_map(|server| server["server_id"].as_str().map(str::to_string))
+        .collect::<Vec<_>>();
+    server_ids.sort();
+    server_ids.dedup();
+    server_ids
+}
+
+/// Extracts canonical identifiers from the compact configured directory.
+fn mcp_catalog_server_ids(content: &str) -> Vec<String> {
+    let mut server_ids = content
+        .lines()
+        .filter_map(|line| line.strip_prefix("server="))
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|server_id| valid_mcp_server_id(server_id))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    server_ids.sort();
+    server_ids.dedup();
+    server_ids
+}
+
+/// Extracts ordered unique standalone `@server` references from one prompt.
+fn explicit_mcp_server_mentions(prompt: &str) -> Vec<String> {
+    let mut references = Vec::new();
+    let mut start = None;
+    for (index, character) in prompt.char_indices() {
+        if let Some(reference_start) = start {
+            if mcp_server_id_character(character) {
+                continue;
+            }
+            push_mcp_server_reference(prompt, reference_start, index, &mut references);
+            start = None;
         }
-        for tool in &detailed_tools {
-            lines.push(format!(
-                "available_tool={}/{} route=mcp_call callable=true required_arguments={} input_schema={} description={}",
-                tool.server_id,
-                tool.tool_name,
-                mcp_context_quoted_value(&mcp_required_argument_summary(tool)),
-                mcp_context_complete_input_schema(&tool.input_schema_json),
-                mcp_context_quoted_value(&tool.description)
-            ));
+        if character == '@'
+            && prompt[..index]
+                .chars()
+                .next_back()
+                .is_none_or(|previous| !previous.is_ascii_alphanumeric() && previous != '_')
+        {
+            start = Some(index + character.len_utf8());
         }
     }
-    for server in &unavailable_servers {
-        lines.push(format!(
-            "unavailable_server={} purpose={} usage_instructions={} retryable={} reason={}",
-            server.server_id,
-            mcp_context_quoted_value(&server.purpose),
-            mcp_context_quoted_value(&server.usage_instructions),
-            server.retryable,
-            mcp_context_quoted_value(&server.reason)
-        ));
+    if let Some(reference_start) = start {
+        push_mcp_server_reference(prompt, reference_start, prompt.len(), &mut references);
     }
-    Some(lines.join("\n"))
+    references
+}
+
+/// Adds one syntactically valid MCP server reference without duplicate text.
+fn push_mcp_server_reference(prompt: &str, start: usize, end: usize, references: &mut Vec<String>) {
+    let Some(reference) = prompt.get(start..end) else {
+        return;
+    };
+    if valid_mcp_server_id(reference) && !references.iter().any(|known| known == reference) {
+        references.push(reference.to_string());
+    }
+}
+
+/// Returns whether one identifier is a non-empty canonical MCP server id.
+fn valid_mcp_server_id(value: &str) -> bool {
+    !value.is_empty() && value.chars().all(mcp_server_id_character)
+}
+
+/// Returns whether one character is permitted in an MCP server identifier.
+fn mcp_server_id_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+}
+
+/// Renders one compact deterministic MCP directory without tool contracts or
+/// sampled live availability. A directory entry makes a server referencable,
+/// never callable.
+fn render_mcp_directory(summary: &McpPromptSummary) -> Option<String> {
+    let mut servers = summary.available_servers.clone();
+    servers.sort_by(|left, right| left.server_id.cmp(&right.server_id));
+    (!servers.is_empty()).then(|| {
+        servers
+            .iter()
+            .map(|server| {
+                format!(
+                    "server={} name={} purpose={} usage_instructions={}",
+                    server.server_id,
+                    mcp_context_quoted_value(&server.display_name),
+                    mcp_context_quoted_value(&server.purpose),
+                    mcp_context_quoted_value(&server.usage_instructions)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    })
 }
 
 /// Returns true when a context block is runtime-injected MCP prompt context.
 fn is_mcp_context_block(block: &ContextBlock) -> bool {
     block.source == ContextSourceKind::RuntimeHint && block.label == MCP_INTEGRATIONS_CONTEXT_LABEL
-}
-
-/// Filters MCP state to explicit names not already owned by configuration.
-fn explicit_mcp_invocation_summary(
-    context: &AgentContext,
-    summary: &McpPromptSummary,
-    configured_server_names: &[String],
-) -> McpPromptSummary {
-    let explicit = explicit_mcp_invocations_from_context(context);
-    let configured = mcp_summary_for_requested_names(
-        configured_server_names,
-        summary,
-        "configured MCP server name",
-    );
-    let configured_ids = configured
-        .available_servers
-        .iter()
-        .map(|server| server.server_id.as_str())
-        .chain(
-            configured
-                .unavailable_servers
-                .iter()
-                .map(|server| server.server_id.as_str()),
-        )
-        .collect::<Vec<_>>();
-    let mut selected =
-        mcp_summary_for_requested_names(&explicit, summary, "explicit MCP server mention");
-    selected
-        .available_servers
-        .retain(|server| !configured_ids.iter().any(|id| id == &server.server_id));
-    selected
-        .available_tools
-        .retain(|tool| !configured_ids.iter().any(|id| id == &tool.server_id));
-    selected.unavailable_servers.retain(|server| {
-        !configured_ids
-            .iter()
-            .any(|configured| configured == &server.server_id)
-    });
-    selected
 }
 
 /// Filters MCP state to one requested-name set with deterministic diagnostics.
@@ -395,68 +631,6 @@ fn mcp_summary_for_requested_names(
             .filter(|server| resolved.iter().any(|name| name == &server.server_id))
             .cloned(),
     );
-    available_servers.sort_by(|left, right| left.server_id.cmp(&right.server_id));
-    available_tools.sort_by(|left, right| {
-        left.server_id
-            .cmp(&right.server_id)
-            .then_with(|| left.tool_name.cmp(&right.tool_name))
-    });
-    unavailable_servers.sort_by(|left, right| left.server_id.cmp(&right.server_id));
-    McpPromptSummary {
-        available_servers,
-        available_tools,
-        unavailable_servers,
-    }
-}
-
-/// Filters live MCP state to configured servers and turn-local explicit names.
-fn mcp_invocation_summary(
-    context: &AgentContext,
-    summary: &McpPromptSummary,
-    configured_server_names: &[String],
-) -> McpPromptSummary {
-    let explicit = explicit_mcp_invocations_from_context(context);
-    if explicit.is_empty() && configured_server_names.is_empty() {
-        return McpPromptSummary {
-            available_servers: Vec::new(),
-            available_tools: Vec::new(),
-            unavailable_servers: Vec::new(),
-        };
-    }
-
-    let (mut resolved, mut resolution_failures) = resolve_mcp_server_names(
-        configured_server_names,
-        summary,
-        "configured MCP server name",
-    );
-    let (explicit_resolved, mut explicit_failures) =
-        resolve_mcp_server_names(&explicit, summary, "explicit MCP server mention");
-    for server_id in explicit_resolved {
-        if !resolved.iter().any(|existing| existing == &server_id) {
-            resolved.push(server_id);
-        }
-    }
-    resolution_failures.append(&mut explicit_failures);
-
-    let mut available_servers = summary
-        .available_servers
-        .iter()
-        .filter(|server| resolved.iter().any(|name| name == &server.server_id))
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut available_tools = summary
-        .available_tools
-        .iter()
-        .filter(|tool| resolved.iter().any(|name| name == &tool.server_id))
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut unavailable_servers = summary
-        .unavailable_servers
-        .iter()
-        .filter(|server| resolved.iter().any(|name| name == &server.server_id))
-        .cloned()
-        .collect::<Vec<_>>();
-    unavailable_servers.append(&mut resolution_failures);
     available_servers.sort_by(|left, right| left.server_id.cmp(&right.server_id));
     available_tools.sort_by(|left, right| {
         left.server_id
@@ -531,240 +705,6 @@ fn resolve_mcp_server_names(
         });
     }
     (resolved, failures)
-}
-
-/// Extracts ordered unique `@<server-id>` MCP invocations from turn-local text.
-fn explicit_mcp_invocations_from_context(context: &AgentContext) -> Vec<String> {
-    let mut names = Vec::new();
-    for block in context.blocks() {
-        let eligible_instruction = matches!(
-            block.source,
-            ContextSourceKind::UserInstruction | ContextSourceKind::SkillInstruction
-        );
-        let routed_controller_task = block.source == ContextSourceKind::LocalMessage
-            && block.label == ROUTED_CONTROLLER_TASK_LABEL;
-        if !eligible_instruction && !routed_controller_task {
-            continue;
-        }
-        for name in explicit_mcp_invocations_from_text(&block.content) {
-            if !names.iter().any(|existing| existing == &name) {
-                names.push(name);
-            }
-        }
-    }
-    names
-}
-
-/// Extracts conservative `@<server-id>` tokens from one model-visible text.
-fn explicit_mcp_invocations_from_text(text: &str) -> Vec<String> {
-    let mut names = Vec::new();
-    let mut start = None;
-    for (index, character) in text.char_indices() {
-        if let Some(name_start) = start {
-            if is_mcp_invocation_character(character) {
-                continue;
-            }
-            push_mcp_invocation_candidate(text, name_start, index, &mut names);
-            start = None;
-        }
-        if character == '@' && invocation_prefix_allows_at(text, index) {
-            start = Some(index + character.len_utf8());
-        }
-    }
-    if let Some(name_start) = start {
-        push_mcp_invocation_candidate(text, name_start, text.len(), &mut names);
-    }
-    names
-}
-
-/// Adds one candidate MCP invocation when it matches the server-id shape.
-fn push_mcp_invocation_candidate(text: &str, start: usize, end: usize, names: &mut Vec<String>) {
-    let Some(candidate) = text.get(start..end) else {
-        return;
-    };
-    if candidate.is_empty() || !candidate.chars().all(is_mcp_invocation_character) {
-        return;
-    }
-    if !names.iter().any(|existing| existing == candidate) {
-        names.push(candidate.to_string());
-    }
-}
-
-/// Returns whether one character can appear in an MCP invocation token.
-fn is_mcp_invocation_character(character: char) -> bool {
-    character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
-}
-
-/// Returns whether an `@` starts a standalone invocation instead of an email or handle.
-fn invocation_prefix_allows_at(text: &str, at_index: usize) -> bool {
-    text[..at_index]
-        .chars()
-        .next_back()
-        .is_none_or(|character| !character.is_ascii_alphanumeric() && character != '_')
-}
-
-/// Returns the bounded subset of MCP tool details that should be rendered.
-///
-/// The general MCP context is intentionally compact: the action schema remains
-/// authoritative for callable tools, while this manifest only expands tool
-/// descriptions when the current user text explicitly asks about MCP, names a
-/// server, or names a tool. This avoids broad tool catalogs becoming implicit
-/// routing pressure for unrelated tasks.
-fn mcp_context_selected_tool_details(
-    context: &AgentContext,
-    available_servers: &[McpPromptServer],
-    available_tools: &[McpPromptTool],
-    limit: usize,
-) -> Vec<McpPromptTool> {
-    if limit == 0 || available_tools.is_empty() {
-        return Vec::new();
-    }
-    if !available_servers.is_empty() {
-        let mut selected = available_tools
-            .iter()
-            .filter(|tool| {
-                available_servers
-                    .iter()
-                    .any(|server| server.server_id == tool.server_id)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        selected.sort_by(|left, right| {
-            left.server_id
-                .cmp(&right.server_id)
-                .then_with(|| left.tool_name.cmp(&right.tool_name))
-        });
-        selected.dedup_by(|left, right| {
-            left.server_id == right.server_id && left.tool_name == right.tool_name
-        });
-        return selected;
-    }
-    let task_text = mcp_context_normalized_user_text(context);
-    if task_text.is_empty() {
-        return Vec::new();
-    }
-    let explicit_mcp_request = mcp_context_contains_token(&task_text, "mcp");
-    let named_servers = available_servers
-        .iter()
-        .filter(|server| {
-            mcp_context_contains_identifier(&task_text, &server.server_id)
-                || mcp_context_contains_identifier(&task_text, &server.display_name)
-        })
-        .map(|server| server.server_id.as_str())
-        .collect::<Vec<_>>();
-    let mut selected = available_tools
-        .iter()
-        .filter(|tool| {
-            named_servers
-                .iter()
-                .any(|server_id| *server_id == tool.server_id)
-                || mcp_context_contains_identifier(&task_text, &tool.tool_name)
-                || mcp_context_contains_identifier(
-                    &task_text,
-                    &format!("{}/{}", tool.server_id, tool.tool_name),
-                )
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    if selected.is_empty() && explicit_mcp_request {
-        selected = available_tools.to_vec();
-    }
-    selected.sort_by(|left, right| {
-        left.server_id
-            .cmp(&right.server_id)
-            .then_with(|| left.tool_name.cmp(&right.tool_name))
-    });
-    selected.dedup_by(|left, right| {
-        left.server_id == right.server_id && left.tool_name == right.tool_name
-    });
-    selected.into_iter().take(limit).collect()
-}
-
-/// Returns normalized user-authored text for explicit MCP detail selection.
-fn mcp_context_normalized_user_text(context: &AgentContext) -> String {
-    context
-        .blocks()
-        .iter()
-        .filter(|block| block.source == ContextSourceKind::UserInstruction)
-        .map(|block| mcp_context_normalize_identifier(&block.content))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Reports whether normalized task text contains an exact normalized token.
-fn mcp_context_contains_token(normalized_task: &str, token: &str) -> bool {
-    normalized_task
-        .split_whitespace()
-        .any(|task_token| task_token == token)
-}
-
-/// Reports whether normalized task text names one server or tool identifier.
-fn mcp_context_contains_identifier(normalized_task: &str, value: &str) -> bool {
-    let normalized = mcp_context_normalize_identifier(value);
-    if normalized.is_empty() {
-        return false;
-    }
-    let compacted = normalized.replace(' ', "");
-    mcp_context_contains_token(normalized_task, &normalized)
-        || (!compacted.is_empty() && mcp_context_contains_token(normalized_task, &compacted))
-}
-
-/// Normalizes server and tool identifiers for explicit MCP detail selection.
-fn mcp_context_normalize_identifier(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
-    let mut previous_space = true;
-    for character in value.chars().flat_map(char::to_lowercase) {
-        let normalized = if character.is_ascii_alphanumeric() || matches!(character, '/' | '_') {
-            Some(character)
-        } else {
-            None
-        };
-        if let Some(character) = normalized {
-            output.push(character);
-            previous_space = false;
-        } else if !previous_space {
-            output.push(' ');
-            previous_space = true;
-        }
-    }
-    output.trim().to_string()
-}
-
-/// Formats one available MCP server manifest line for prompt context.
-fn mcp_available_server_line(server: &McpPromptServer) -> String {
-    format!(
-        "server={} status=available route=mcp_call name={} purpose={} usage_instructions={} tools={}",
-        server.server_id,
-        mcp_context_quoted_value(&server.display_name),
-        mcp_context_quoted_value(&server.purpose),
-        mcp_context_quoted_value(&server.usage_instructions),
-        server.tool_count
-    )
-}
-
-/// Returns a concise required-argument list while the action schema remains authoritative.
-fn mcp_required_argument_summary(tool: &McpPromptTool) -> String {
-    serde_json::from_str::<serde_json::Value>(&tool.input_schema_json)
-        .ok()
-        .and_then(|schema| schema.get("required").cloned())
-        .and_then(|required| required.as_array().cloned())
-        .map(|required| {
-            required
-                .iter()
-                .filter_map(serde_json::Value::as_str)
-                .collect::<Vec<_>>()
-                .join(",")
-        })
-        .filter(|required| !required.is_empty())
-        .unwrap_or_else(|| "none".to_string())
-}
-
-/// Canonicalizes a callable tool schema without dropping nested call metadata.
-fn mcp_context_complete_input_schema(input_schema_json: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(input_schema_json)
-        .ok()
-        .and_then(|schema| serde_json::to_string(&schema).ok())
-        .unwrap_or_else(|| input_schema_json.to_string())
 }
 
 /// Quotes one MCP prompt-context value without exposing raw newlines.

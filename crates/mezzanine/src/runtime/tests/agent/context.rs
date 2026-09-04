@@ -247,11 +247,13 @@ fn runtime_configured_mcp_catalog_snapshots_persist_replay_and_remove() {
         .position(|block| block.source == ContextSourceKind::UserInstruction)
         .unwrap();
     assert!(first_snapshot_index < first_user_index);
-    assert!(first_snapshot.contains("available_tool=state/list"));
-    assert!(first_snapshot.contains("input_schema="), "{first_snapshot}");
-    assert!(first_snapshot.contains(r#""limit""#), "{first_snapshot}");
+    assert!(first_snapshot.contains("server=state"), "{first_snapshot}");
     assert!(
-        first_snapshot.contains(r#""type":"integer""#),
+        !first_snapshot.contains("available_tool="),
+        "{first_snapshot}"
+    );
+    assert!(
+        !first_snapshot.contains("input_schema="),
         "{first_snapshot}"
     );
     service.stop_agent_turn_for_pane("%1").unwrap();
@@ -292,7 +294,7 @@ fn runtime_configured_mcp_catalog_snapshots_persist_replay_and_remove() {
             &runtime_model_profile("openai", "test"),
         )
         .unwrap();
-    assert_eq!(available_tools.len(), 1);
+    assert!(available_tools.is_empty());
     assert!(
         prepared
             .durable()

@@ -338,8 +338,7 @@ impl RuntimeSessionService {
                 block.hook_id, block.message
             )));
         }
-        let available_mcp_servers = mcp_summary
-            .available_tools
+        let available_mcp_servers = available_mcp_tools
             .iter()
             .map(|tool| tool.server_id.clone())
             .collect::<std::collections::BTreeSet<_>>()

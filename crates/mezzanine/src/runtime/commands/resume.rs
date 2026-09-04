@@ -71,6 +71,7 @@ fn runtime_resume_system_display_content(content: &str) -> String {
         Some(
             mez_agent::TranscriptContextEvent::ExecutionBlock { .. }
                 | mez_agent::TranscriptContextEvent::McpCatalogSnapshot { .. }
+                | mez_agent::TranscriptContextEvent::McpCompactionEpoch
         )
     ) {
         return String::new();

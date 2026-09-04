@@ -36,6 +36,7 @@ impl RuntimeSessionService {
         }
 
         self.agent_turn_ledger_mut().start_turn(turn.clone())?;
+        self.snapshot_agent_native_shell_timeout_for_turn(&turn.turn_id);
         self.reconcile_active_turn_sleep_inhibition();
         self.integration
             .runtime_metrics_mut()
@@ -201,6 +202,9 @@ impl RuntimeSessionService {
     /// and retained execution context cannot outlive any terminal ledger path.
     fn clear_terminal_agent_turn_runtime_state(&mut self, turn_id: &str) {
         self.agent_turn_contexts_mut().remove(turn_id);
+        self.agent
+            .agent_turn_native_shell_timeout_ms
+            .remove(turn_id);
         self.agent
             .agent_turn_imported_history_events
             .remove(turn_id);

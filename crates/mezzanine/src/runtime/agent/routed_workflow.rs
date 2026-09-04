@@ -1559,6 +1559,7 @@ impl RuntimeSessionService {
         };
         self.append_agent_parent_prompt_to_terminal_buffer(child_pane_id, prompt)?;
         self.agent_turn_ledger_mut().queue_turn(turn.clone())?;
+        self.snapshot_agent_native_shell_timeout_for_turn(&turn_id);
         self.agent_turn_contexts_mut()
             .insert(turn_id.clone(), context);
         if let Some(interaction_kind) = match reason {

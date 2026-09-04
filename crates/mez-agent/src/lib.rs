@@ -243,12 +243,17 @@ pub use context::{
 };
 pub use context_appenders::{
     MCP_CATALOG_REMOVED_CONTEXT, MCP_CATALOG_SNAPSHOT_CONTEXT_LABEL,
-    MCP_INTEGRATIONS_CONTEXT_LABEL, append_mcp_context, append_mcp_context_for_api_with_configured,
+    MCP_INTEGRATIONS_CONTEXT_LABEL, MCP_RETRIEVED_MANIFEST_CONTEXT_LABEL_PREFIX,
+    MCP_SERVER_REFERENCE_CONTEXT_LABEL_PREFIX, MCP_SERVER_SEARCH_RESULT_CONTEXT_LABEL_PREFIX,
+    append_mcp_context, append_mcp_context_for_api_with_configured,
     append_mcp_context_for_provider, append_mcp_context_for_provider_with_configured,
     append_mcp_context_with_configured, append_memory_context, append_permission_policy_context,
     append_project_guidance_context, configured_mcp_catalog_snapshot_content,
     invoked_mcp_tools_for_context, invoked_mcp_tools_for_context_with_configured,
-    memory_context_blocks, project_guidance_context_block, set_project_guidance_context,
+    mcp_retrieved_manifest_for_action_result, mcp_server_is_referencable,
+    mcp_server_is_referencable_from_action_result, mcp_server_reference_blocks_for_prompt,
+    mcp_server_search_result_for_action_result, memory_context_blocks,
+    project_guidance_context_block, set_project_guidance_context,
 };
 pub use context_assembly::{
     ModelRequestIdentity, assemble_model_request_from_context, role_for_context_block,
@@ -284,15 +289,15 @@ pub use deepseek_response::{
     parse_deepseek_chat_completions_provider_body,
 };
 pub use execution::{
-    AsyncMcpActionExecutor, DEFAULT_AGENT_TURN_TIMEOUT_MS, LocalActionExecutor,
-    LocalExecutionOutput, LocalExecutionProjectionError, LocalExecutionRequest,
-    LocalExecutionTransport, McpActionExecutor, McpExecutionValidationError, PaneShellExecutor,
-    ShellExecutionOutput, ShellExecutionRequest, SpawnedShellExecutor,
-    action_content_blocks_from_json_or_text, agent_shell_timeout_ms,
-    agent_turn_remaining_timeout_ms, local_execution_output_to_action_result,
-    mcp_response_to_action_result, postprocess_local_shell_output,
-    postprocess_shell_action_success_output, shell_command_result_content,
-    validate_mcp_execution_request,
+    AsyncMcpActionExecutor, DEFAULT_AGENT_TURN_TIMEOUT_MS, DEFAULT_NATIVE_SHELL_TIMEOUT_MS,
+    LocalActionExecutor, LocalExecutionOutput, LocalExecutionProjectionError,
+    LocalExecutionRequest, LocalExecutionTransport, MAX_NATIVE_SHELL_TIMEOUT_MS, McpActionExecutor,
+    McpExecutionValidationError, PaneShellExecutor, ShellExecutionOutput, ShellExecutionRequest,
+    SpawnedShellExecutor, action_content_blocks_from_json_or_text, agent_native_shell_timeout_ms,
+    agent_shell_timeout_ms, agent_turn_remaining_timeout_ms,
+    local_execution_output_to_action_result, mcp_response_to_action_result,
+    postprocess_local_shell_output, postprocess_shell_action_success_output,
+    shell_command_result_content, validate_mcp_execution_request,
 };
 pub use execution_transcript::{
     AgentTurnExecution, assistant_context_content_for_execution, transcript_entries_for_execution,

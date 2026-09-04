@@ -2,6 +2,74 @@
 
 use super::*;
 
+/// Appends the same compactable retrieval authority that a prior successful
+/// `mcp_server_get` action would contribute before a fixture calls `fixture/echo`.
+fn grant_fixture_mcp_tool_for_turn(service: &mut RuntimeSessionService, turn_id: &str) {
+    let result = mez_agent::ActionResult {
+        protocol: "maap/1".to_string(),
+        turn_id: turn_id.to_string(),
+        agent_id: "agent-%1".to_string(),
+        action_id: "fixture-get".to_string(),
+        action_type: "mcp_server_get",
+        status: ActionStatus::Succeeded,
+        content: Vec::new(),
+        structured_content_json: Some(
+            serde_json::json!({
+                "server": {
+                    "server_id": "fixture",
+                    "display_name": "Fixture",
+                    "purpose": "Exercise MCP test behavior",
+                    "usage_instructions": "Use echo for fixture requests.",
+                    "state": "available",
+                    "tools": [{
+                        "name": "echo",
+                        "state": "available",
+                        "description": "Echo one message",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {"message": {"type": "string"}},
+                            "required": ["message"]
+                        }
+                    }]
+                }
+            })
+            .to_string(),
+        ),
+        permission_evaluation: None,
+        is_error: false,
+        error: None,
+    };
+    let (server_id, content) = mez_agent::mcp_retrieved_manifest_for_action_result(&result)
+        .expect("fixture retrieval result should produce durable MCP authority");
+    let group = mez_agent::ContextExecutionGroupId::new(format!("fixture-retrieval-{turn_id}"))
+        .expect("fixture retrieval group should be valid");
+    let context = service
+        .agent_turn_contexts_mut()
+        .get_mut(turn_id)
+        .expect("fixture turn context should be available");
+    context
+        .append_assistant_event(
+            "fixture MCP retrieval",
+            "retrieve fixture MCP metadata",
+            group.clone(),
+        )
+        .expect("fixture retrieval assistant event should append");
+    context
+        .append_evidence_event(
+            ContextSourceKind::McpRetrievedManifest,
+            format!(
+                "{}{}",
+                mez_agent::MCP_RETRIEVED_MANIFEST_CONTEXT_LABEL_PREFIX,
+                server_id
+            ),
+            content,
+            group,
+            None,
+            true,
+        )
+        .expect("fixture retrieval manifest should append");
+}
+
 /// Verifies MCP tool calls log a compact normal-mode action line with the
 /// invoked server, tool, and compact JSON arguments.
 ///
@@ -163,6 +231,24 @@ fn runtime_mcp_server_discovery_actions_return_safe_registry_metadata() {
     config.external_capability.usage_instructions = "Use read_file for one path.".to_string();
     config.env_vars.push("MCP_TOKEN".to_string());
     service.mcp_registry_mut().add_server(config).unwrap();
+    service
+        .mcp_registry_mut()
+        .mark_available(
+            "fs",
+            vec![mez_agent::mcp::McpToolState {
+                server_id: String::new(),
+                name: "read_file".to_string(),
+                available: true,
+                blacklisted: false,
+                permission_required: true,
+                effects: mez_agent::mcp::McpToolEffects::none(),
+                approval: mez_agent::mcp::McpApprovalSetting::Inherit,
+                description: "Read one project file".to_string(),
+                input_schema_json: r#"{"type":"object"}"#.to_string(),
+            }],
+            1,
+        )
+        .unwrap();
     let started = service
         .start_agent_prompt_turn("%1", "find the filesystem integration")
         .unwrap();
@@ -173,6 +259,13 @@ fn runtime_mcp_server_discovery_actions_return_safe_registry_metadata() {
         .cloned()
         .unwrap();
     let actions = vec![
+        mez_agent::AgentAction {
+            id: "get-before-search-1".to_string(),
+            rationale: "verify retrieval requires discovery evidence".to_string(),
+            payload: mez_agent::AgentActionPayload::McpServerGet {
+                server: "fs".to_string(),
+            },
+        },
         mez_agent::AgentAction {
             id: "search-1".to_string(),
             rationale: "find filesystem MCP server".to_string(),
@@ -223,17 +316,22 @@ fn runtime_mcp_server_discovery_actions_return_safe_registry_metadata() {
         service
             .execute_running_mcp_discovery_actions_for_turn(&turn, &mut execution)
             .unwrap(),
-        2
+        3
     );
-    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Rejected);
     assert!(
         execution
             .action_results
             .iter()
+            .skip(1)
             .all(|result| result.status == ActionStatus::Succeeded)
     );
     let rendered = format!("{:?}", execution.action_results);
     assert!(rendered.contains("Read project files"), "{rendered}");
+    assert!(
+        rendered.contains(r#"\"input_schema\":{\"type\":\"object\"}"#),
+        "{rendered}"
+    );
     assert!(!rendered.contains("mcp-fs-secret-command"), "{rendered}");
     assert!(!rendered.contains("MCP_TOKEN"), "{rendered}");
 }
@@ -678,6 +776,7 @@ async fn runtime_executes_accepted_stdio_mcp_action_and_audits_call() {
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
+    grant_fixture_mcp_tool_for_turn(&mut service, "turn-1");
     let provider = RuntimeBatchProvider {
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
@@ -787,6 +886,7 @@ async fn runtime_mcp_tool_error_queues_continuation_without_disabling_server() {
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
+    grant_fixture_mcp_tool_for_turn(&mut service, "turn-1");
     let provider = RuntimeBatchProvider {
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
@@ -1045,6 +1145,7 @@ async fn runtime_full_access_executes_prompt_stdio_mcp_action() {
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
+    grant_fixture_mcp_tool_for_turn(&mut service, "turn-1");
     let provider = RuntimeBatchProvider {
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
@@ -1139,6 +1240,7 @@ async fn runtime_nonfinal_mcp_action_queues_provider_continuation() {
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
+    grant_fixture_mcp_tool_for_turn(&mut service, "turn-1");
     let first_provider = RuntimeBatchProvider {
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),

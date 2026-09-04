@@ -308,7 +308,7 @@ pub fn validate_config_text(
         ConfigFormat::Json => extract_json_paths(text),
     };
     let values = extract_config_values(format, text);
-    diagnostics.extend(validate_agent_turn_timeout_config(format, text));
+    diagnostics.extend(validate_agent_timeout_config(format, text));
     diagnostics.extend(validate_provider_retry_config(format, text));
     diagnostics.extend(validate_host_config(format, text));
     diagnostics.extend(validate_iroh_transport_config(format, text));
@@ -443,6 +443,16 @@ pub fn validate_config_text(
         {
             if let Some(message) = validate_positive_usize_value(&value, &path) {
                 diagnostics.push(ConfigDiagnostic { path, message });
+            }
+        } else if path == "agents.native_shell_timeout_ms" {
+            match value.parse::<u64>() {
+                Ok(timeout_ms)
+                    if (1..=mez_agent::MAX_NATIVE_SHELL_TIMEOUT_MS).contains(&timeout_ms) => {}
+                _ => diagnostics.push(ConfigDiagnostic {
+                    path,
+                    message: "agents.native_shell_timeout_ms must be an integer from 1 to 86400000"
+                        .to_string(),
+                }),
             }
         } else if path == "agents.compaction_raw_retention_percent" {
             match value.parse::<usize>() {
@@ -1291,26 +1301,35 @@ fn validate_iroh_transport_config(format: ConfigFormat, text: &str) -> Vec<Confi
     diagnostics
 }
 
-/// Validates the agent-turn timeout with its structured scalar type intact.
-fn validate_agent_turn_timeout_config(format: ConfigFormat, text: &str) -> Vec<ConfigDiagnostic> {
+/// Validates agent timeout settings with their structured scalar types intact.
+fn validate_agent_timeout_config(format: ConfigFormat, text: &str) -> Vec<ConfigDiagnostic> {
     let Ok(root) = parse_config_json_value(format, text) else {
         return Vec::new();
     };
-    let Some(value) = root
-        .get("agents")
-        .and_then(serde_json::Value::as_object)
-        .and_then(|agents| agents.get("turn_timeout_ms"))
-    else {
+    let Some(agents) = root.get("agents").and_then(serde_json::Value::as_object) else {
         return Vec::new();
     };
-    if value.as_u64().is_some_and(|timeout_ms| timeout_ms > 0) {
-        Vec::new()
-    } else {
-        vec![ConfigDiagnostic {
+    let mut diagnostics = Vec::new();
+    if let Some(value) = agents.get("turn_timeout_ms")
+        && !value.as_u64().is_some_and(|timeout_ms| timeout_ms > 0)
+    {
+        diagnostics.push(ConfigDiagnostic {
             path: "agents.turn_timeout_ms".to_string(),
             message: "agents.turn_timeout_ms must be a positive integer".to_string(),
-        }]
+        });
     }
+    if let Some(value) = agents.get("native_shell_timeout_ms")
+        && !value.as_u64().is_some_and(|timeout_ms| {
+            (1..=mez_agent::MAX_NATIVE_SHELL_TIMEOUT_MS).contains(&timeout_ms)
+        })
+    {
+        diagnostics.push(ConfigDiagnostic {
+            path: "agents.native_shell_timeout_ms".to_string(),
+            message: "agents.native_shell_timeout_ms must be an integer from 1 to 86400000"
+                .to_string(),
+        });
+    }
+    diagnostics
 }
 
 /// Validates provider retry count and unlimited mode with scalar types intact.

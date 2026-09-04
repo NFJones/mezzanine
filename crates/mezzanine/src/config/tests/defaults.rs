@@ -145,6 +145,12 @@ fn initial_config_uses_native_shell_and_platform_sandbox_defaults() {
         agents.get("shell_mode").and_then(toml::Value::as_str),
         Some("native")
     );
+    assert_eq!(
+        agents
+            .get("native_shell_timeout_ms")
+            .and_then(toml::Value::as_integer),
+        Some(600_000)
+    );
     let enabled_actions = agents
         .get("enabled_actions")
         .and_then(toml::Value::as_array)

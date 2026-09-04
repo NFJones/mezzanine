@@ -8,7 +8,7 @@
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 83
+version = 84
 
 # Persistent multi-session host policy. The host and inbound Iroh listener are
 # disabled until explicitly started or enabled by the primary user.
@@ -396,6 +396,10 @@ provider_error_retry_limit = 5
 provider_error_retry_unlimited = false
 # Total wall-clock budget snapshotted for each new agent turn.
 turn_timeout_ms = 1800000
+# Default maximum duration for one native shell `shell_command` action.
+# The effective timeout is the earliest of this value, an explicit action
+# timeout, and the remaining turn budget. Pane-shell actions do not use it.
+native_shell_timeout_ms = 600000
 # Agent shell command execution mode. `native` spawns a fresh shell process
 # inferred from the pane root process without touching the pane PTY; `pane`
 # executes commands through the pane shell.
