@@ -240,12 +240,15 @@ failure.
 Interactive Iroh attach retains that initialized stream instead of opening a
 stream per request. The client serializes each resize, `terminal/step`, and
 `terminal/view` operation behind exactly one response before sending the next
-operation. Legacy v1 and v2 event streams carry authorized `event/*`
-notifications that wake the client to request a fresh rendered view. Version 3
-additionally carries authoritative `render/snapshot` and `render/delta`
-notifications, which the client renders without steady-state view fetches. No
-event-stream version carries terminal input or control responses. Terminal
-input is non-replayable:
+operation. Unix and legacy Iroh v1 and v2 event streams carry authorized
+`event/*` notifications that wake the client to request a fresh rendered view.
+The bound Unix stream can also carry a non-durable owner-scoped
+`render/wakeup` notification. Its `invalidate_output` flag tells the client
+whether to discard its physical-output diff base before that view pull; live
+pane-divider drags set it to `false`. Version 3 additionally carries
+authoritative `render/snapshot` and `render/delta` notifications, which the
+client renders without steady-state view fetches. No event-stream version
+carries terminal input or control responses. Terminal input is non-replayable:
 after a write, read, timeout, reset, or connection failure that leaves its
 outcome ambiguous, the client must fail visibly, close the channel, and require
 reattach without retrying buffered input.

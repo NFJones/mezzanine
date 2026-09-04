@@ -684,3 +684,99 @@ async fn bound_unix_event_listener_delivers_refreshes_to_concurrent_primaries() 
     let ((), (), _exit) = tokio::join!(clients, server, actor.run());
     let _ = std::fs::remove_file(&path);
 }
+
+/// Verifies a bound Unix event stream drains render effects only for its exact
+/// attached client and delivers divider-drag work as a differential wakeup.
+/// The wakeup must not become a durable `event/*` record or force the client
+/// to discard the physical-output base needed for smooth divider movement.
+#[tokio::test(flavor = "current_thread")]
+async fn bound_unix_event_stream_delivers_differential_owner_render_wakeup() {
+    use crate::control::{decode_control_frame, encode_control_body};
+    use crate::runtime::{RenderInvalidationReason, RuntimeSideEffect};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::UnixStream;
+    use tokio::sync::oneshot;
+    use tokio::time::{Duration, timeout};
+
+    let mut service = test_service_with_event_log();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let after_event_id = service.event_log().unwrap().latest_event_id();
+    let peer_uid = current_effective_uid();
+    let (token, _) = service.mint_unix_event_binding(primary.clone(), peer_uid);
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let producer_handle = handle.clone();
+    let (mut client_stream, mut server_stream) = UnixStream::pair().unwrap();
+    let (initialized_tx, initialized_rx) = oneshot::channel();
+    let (wakeup_received_tx, wakeup_received_rx) = oneshot::channel();
+
+    let client = async {
+        let initialize = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "event-init",
+            "method": "event/initialize",
+            "params": {"binding_token": token, "after_event_id": after_event_id}
+        })
+        .to_string();
+        client_stream
+            .write_all(&encode_control_body(&initialize))
+            .await
+            .unwrap();
+        client_stream.flush().await.unwrap();
+        initialized_tx.send(()).unwrap();
+
+        let mut output = vec![0; 4096];
+        let read = timeout(Duration::from_secs(1), client_stream.read(&mut output))
+            .await
+            .unwrap()
+            .unwrap();
+        let (body, _) = decode_control_frame(&output[..read], 4096).unwrap();
+        let wakeup: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(wakeup["method"], "render/wakeup");
+        assert_eq!(wakeup["params"]["invalidate_output"], false);
+        wakeup_received_tx.send(()).unwrap();
+    };
+    let producer = async move {
+        initialized_rx.await.unwrap();
+        producer_handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::RenderClient {
+                client_id: primary.clone(),
+                reason: RenderInvalidationReason::ResizeDrag,
+            }])
+            .await
+            .unwrap();
+        wakeup_received_rx.await.unwrap();
+        assert!(
+            producer_handle
+                .drain_render_side_effects_for_client(primary, 10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        producer_handle.shutdown().await.unwrap();
+    };
+    let server = async {
+        let delivered = serve_bound_async_runtime_event_connection(
+            &mut server_stream,
+            &handle,
+            AsyncRuntimeEventConnectionConfig::new(10, peer_uid).unwrap(),
+            "unix-render-wakeup".to_string(),
+            |_delivered, state| {
+                matches!(
+                    state,
+                    RuntimeLifecycleState::Stopping
+                        | RuntimeLifecycleState::Killed
+                        | RuntimeLifecycleState::Failed
+                )
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(delivered, 0);
+    };
+
+    let ((), (), (), _exit) = tokio::join!(client, producer, server, actor.run());
+}

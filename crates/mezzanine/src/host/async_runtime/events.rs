@@ -13,6 +13,7 @@ use super::{
 use super::{EventAudience, authorize_unix_peer_raw_fd};
 #[cfg(test)]
 use crate::runtime::RuntimeEventConnectionTable;
+use crate::runtime::{RenderInvalidationReason, RuntimeSideEffect};
 use std::io::ErrorKind;
 use std::sync::Arc;
 
@@ -178,6 +179,39 @@ fn event_stream_disconnect(kind: ErrorKind) -> bool {
     )
 }
 
+/// Returns the output-base invalidation required by exact-client render effects.
+///
+/// Unix attached clients fetch an authoritative view after this wakeup, so the
+/// classification must match the legacy Iroh notification path. A divider drag
+/// is intentionally differential: it replaces only the retained body and
+/// divider cells without forcing a terminal-wide erase.
+fn unix_render_wakeup_invalidation(effects: &[RuntimeSideEffect]) -> Option<bool> {
+    let mut render_required = false;
+    let mut invalidate_output = false;
+    for effect in effects {
+        let RuntimeSideEffect::RenderClient { reason, .. } = effect else {
+            continue;
+        };
+        render_required = true;
+        invalidate_output |= matches!(reason, RenderInvalidationReason::Resize);
+    }
+    render_required.then_some(invalidate_output)
+}
+
+/// Encodes one non-durable exact-client render wakeup for a Unix attach.
+///
+/// Render wakeups deliberately do not use `event/*`: they carry no replayable
+/// runtime event and only tell the bound foreground client to pull its current
+/// authoritative terminal view.
+fn unix_render_wakeup_notification(invalidate_output: bool) -> String {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "render/wakeup",
+        "params": {"invalidate_output": invalidate_output},
+    })
+    .to_string()
+}
+
 /// Serves one Unix event stream after a client-bound initialization frame.
 ///
 /// The binding token is consumed exactly once through the actor. Every event
@@ -238,12 +272,14 @@ where
     let mut last_delivered_event_id = after_event_id;
     let mut lifecycle = handle.lifecycle_state_watcher();
     let mut event_delivery = handle.event_delivery_watcher();
+    let mut side_effect_delivery = handle.side_effect_delivery_watcher();
     loop {
         let state = *lifecycle.borrow();
         if should_stop(delivered, state) {
             return Ok(delivered);
         }
         let _ = event_delivery.borrow_and_update();
+        let _ = side_effect_delivery.borrow_and_update();
         let wakeups = match handle
             .event_wakeups_for_client(
                 caller_client_id.clone(),
@@ -254,6 +290,16 @@ where
             .await
         {
             Ok(wakeups) => wakeups,
+            Err(_) => return Ok(delivered),
+        };
+        let render_wakeup = match handle
+            .drain_render_side_effects_for_client(
+                caller_client_id.clone(),
+                config.limit_per_connection,
+            )
+            .await
+        {
+            Ok(effects) => unix_render_wakeup_invalidation(&effects),
             Err(_) => return Ok(delivered),
         };
         let mut batch_last = None;
@@ -270,18 +316,34 @@ where
                 delivered = delivered.saturating_add(1);
             }
         }
-        if let Some(batch_last) = batch_last {
+        if let Some(invalidate_output) = render_wakeup {
+            let frame = encode_control_body(&unix_render_wakeup_notification(invalidate_output));
+            if let Err(error) = framed.get_mut().write_all(&frame).await {
+                if event_stream_disconnect(error.kind()) {
+                    return Ok(delivered);
+                }
+                return Err(error.into());
+            }
+        }
+        if batch_last.is_some() || render_wakeup.is_some() {
             if let Err(error) = framed.get_mut().flush().await {
                 if event_stream_disconnect(error.kind()) {
                     return Ok(delivered);
                 }
                 return Err(error.into());
             }
-            last_delivered_event_id = batch_last;
+            if let Some(batch_last) = batch_last {
+                last_delivered_event_id = batch_last;
+            }
             continue;
         }
         tokio::select! {
             changed = event_delivery.changed() => {
+                if changed.is_err() {
+                    return Ok(delivered);
+                }
+            }
+            changed = side_effect_delivery.changed() => {
                 if changed.is_err() {
                     return Ok(delivered);
                 }

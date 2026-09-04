@@ -1318,6 +1318,16 @@ pub(super) fn attach_render_action_for_event_body(body: &str) -> AttachRenderAct
     let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
         return AttachRenderAction::None;
     };
+    if value.get("method").and_then(serde_json::Value::as_str) == Some("render/wakeup") {
+        return match value
+            .get("params")
+            .and_then(|params| params.get("invalidate_output"))
+            .and_then(serde_json::Value::as_bool)
+        {
+            Some(true) => AttachRenderAction::InvalidateAndView,
+            Some(false) | None => AttachRenderAction::View,
+        };
+    }
     let Some(event_type) = event_type_from_notification(&value) else {
         return AttachRenderAction::None;
     };

@@ -532,6 +532,74 @@ async fn control_socket_primary_attach_loop_runtime_event_requests_view() {
     assert_eq!(io.written_frames[1].lines, vec!["event redraw"]);
 }
 
+/// Verifies a differential Unix render wakeup pulls a fresh client view without
+/// invalidating the retained terminal frame. Live pane-divider drags use this
+/// path so their blank-body and moving-divider projection remains a smooth
+/// terminal diff rather than a terminal-wide erase.
+#[tokio::test(start_paused = true, flavor = "current_thread")]
+async fn control_socket_primary_attach_loop_differential_render_wakeup_requests_view() {
+    let (client_stream, mut server_stream) = UnixStream::pair().unwrap();
+    client_stream.set_nonblocking(true).unwrap();
+    let mut client_stream = tokio::net::UnixStream::from_std(client_stream).unwrap();
+    let (event_client_stream, mut event_server_stream) = UnixStream::pair().unwrap();
+    event_client_stream.set_nonblocking(true).unwrap();
+    let event_client_stream = tokio::net::UnixStream::from_std(event_client_stream).unwrap();
+    let server = thread::spawn(move || {
+        for (expected_id, response_lines) in [
+            ("cli-terminal-view-0", "initial"),
+            ("cli-terminal-view-1", "live divider"),
+        ] {
+            let request = read_control_response_frames(&mut server_stream, 1024 * 1024, 1).unwrap();
+            let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+            let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(
+                parsed.get("method").and_then(serde_json::Value::as_str),
+                Some("terminal/view")
+            );
+            assert_eq!(
+                parsed.get("id").and_then(serde_json::Value::as_str),
+                Some(expected_id)
+            );
+            if expected_id == "cli-terminal-view-0" {
+                event_server_stream
+                    .write_all(&encode_control_body(
+                        r#"{"jsonrpc":"2.0","method":"render/wakeup","params":{"invalidate_output":false}}"#,
+                    ))
+                    .unwrap();
+                event_server_stream.flush().unwrap();
+            }
+            server_stream
+                .write_all(&encode_control_body(&format!(
+                    r#"{{"jsonrpc":"2.0","id":"{expected_id}","result":{{"view":{{"lines":["{response_lines}"],"line_style_spans":[[]],"cursor":{{"row":0,"column":12,"visible":true,"style":"bar","blink":false}},"output_modes":{{"application_keypad":false}}}}}}}}"#
+                )))
+                .unwrap();
+            server_stream.flush().unwrap();
+        }
+    });
+    let mut io = AsyncFakeAttachedTerminalIo::default();
+    io.push_pending_input_read();
+    io.push_pending_input_read();
+    let primary_client_id = mez_core::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    {
+        let run = run_control_socket_attached_primary_client_loop_async_with_runtime_events(
+            &mut client_stream,
+            &mut io,
+            primary_client_id,
+            Size::new(80, 24).unwrap(),
+            Some(event_client_stream),
+        );
+        tokio::pin!(run);
+        tokio::time::advance(Duration::from_millis(100)).await;
+        run.await.unwrap();
+    }
+    server.join().unwrap();
+    assert_eq!(io.presentation_entries, 1);
+    assert_eq!(io.invalidated_output_frames, 0);
+    assert_eq!(io.written_frames.len(), 2);
+    assert_eq!(io.written_frames[0].lines, vec!["initial"]);
+    assert_eq!(io.written_frames[1].lines, vec!["live divider"]);
+}
+
 /// Verifies active animation metadata refreshes a socket-attached primary view
 /// even when no runtime event arrives.
 ///
@@ -1094,6 +1162,29 @@ async fn attached_runtime_event_stream_coalesces_event_burst() {
     assert_eq!(
         event_stream.read_render_action().await.unwrap(),
         AttachRenderAction::InvalidateAndView
+    );
+}
+
+/// Verifies a differential render wakeup requests a fresh view without
+/// discarding the retained terminal-output frame. Pane-divider drags use this
+/// notification so their blank-body and moving-divider projection can remain
+/// a compact terminal diff.
+#[tokio::test(flavor = "current_thread")]
+async fn attached_runtime_event_stream_preserves_differential_render_wakeup() {
+    let (event_client_stream, mut event_server_stream) = UnixStream::pair().unwrap();
+    event_client_stream.set_nonblocking(true).unwrap();
+    let event_client_stream = tokio::net::UnixStream::from_std(event_client_stream).unwrap();
+    let mut event_stream = AttachedRuntimeEventStream::new(event_client_stream);
+    let frame = encode_control_body(
+        r#"{"jsonrpc":"2.0","method":"render/wakeup","params":{"invalidate_output":false}}"#,
+    );
+
+    event_server_stream.write_all(&frame).unwrap();
+    event_server_stream.flush().unwrap();
+
+    assert_eq!(
+        event_stream.read_render_action().await.unwrap(),
+        AttachRenderAction::View
     );
 }
 
