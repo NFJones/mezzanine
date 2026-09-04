@@ -1178,8 +1178,8 @@ async fn async_attached_terminal_service_coalesces_resize_storm_timers() {
     assert!(exit.commands_processed >= 13);
 }
 
-/// Verifies releasing a divider cancels the movement timer and starts a fresh
-/// debounce generation even when release arrives in a later input batch.
+/// Verifies an active divider drag immediately flushes its provisional frame
+/// and releasing it starts a fresh debounce generation when it arrives later.
 #[tokio::test(flavor = "current_thread")]
 async fn async_attached_terminal_service_rearms_resize_debounce_on_drag_release() {
     let mut service = test_service();
@@ -1279,15 +1279,35 @@ async fn async_attached_terminal_service_rearms_resize_debounce_on_drag_release(
                     max_input_bytes: 128,
                 },
             },
-            AsyncAttachedTerminalClientServiceConfig { max_batches: 3 },
+            AsyncAttachedTerminalClientServiceConfig { max_batches: 4 },
             |_| Ok(None),
         )
         .await
         .unwrap();
 
         assert_eq!(report.action_counts.handle_mouse, 3);
-        assert_eq!(report.loop_report.output_frames, 1);
-        assert_eq!(io.written_batches.len(), 1);
+        assert_eq!(report.loop_report.output_frames, 2);
+        assert_eq!(io.written_batches.len(), 2);
+        let provisional = io
+            .written_batches
+            .last()
+            .expect("active drag should flush a provisional divider frame");
+        assert_eq!(
+            mez_mux::render::line_slice(
+                &provisional[usize::from(border.row)],
+                usize::from(border.column),
+                usize::from(border.column).saturating_add(1),
+            ),
+            " "
+        );
+        assert_eq!(
+            mez_mux::render::line_slice(
+                &provisional[usize::from(border.row)],
+                usize::from(moved_column),
+                usize::from(moved_column).saturating_add(1),
+            ),
+            "│"
+        );
         let timer_effects = handle.drain_timer_side_effects(8).await.unwrap();
         let resize_timer_effects = timer_effects
             .into_iter()

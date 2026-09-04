@@ -752,7 +752,8 @@ fn client_render_invalidation_priority(reason: RenderInvalidationReason) -> u8 {
 fn render_invalidation_reason_bypasses_rate_limit(reason: RenderInvalidationReason) -> bool {
     matches!(
         reason,
-        RenderInvalidationReason::Resize
+        RenderInvalidationReason::ResizeDrag
+            | RenderInvalidationReason::Resize
             | RenderInvalidationReason::Layout
             | RenderInvalidationReason::FullRedraw
     )
