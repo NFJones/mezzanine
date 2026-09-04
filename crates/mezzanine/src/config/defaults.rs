@@ -610,6 +610,12 @@ default_model = "gpt-5.6-terra"
 # Resolution is profile, configured model, then authenticated discovery;
 # configured lists replace lower lists and option maps merge per key. Token
 # limits are user-editable configuration and are never inferred at runtime.
+[providers.openai.models.gpt-6-astra]
+id = "gpt-6-astra"
+context_window_tokens = 1000000
+max_input_tokens = 800000
+max_output_tokens = 60000
+
 [providers.openai.models.gpt-5-6-sol]
 id = "gpt-5.6-sol"
 context_window_tokens = 1000000

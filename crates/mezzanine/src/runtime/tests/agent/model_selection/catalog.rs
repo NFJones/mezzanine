@@ -145,6 +145,7 @@ async fn runtime_agent_shell_model_list_uses_code_defaults_when_config_models_em
 
     for model in [
         "★ gpt-5.6-sol",
+        "gpt-6-astra",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
         "gpt-5.5",

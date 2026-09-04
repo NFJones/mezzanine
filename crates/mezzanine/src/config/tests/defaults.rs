@@ -819,6 +819,7 @@ fn default_config_uses_configured_openai_model_token_limits() {
         .unwrap();
 
     for (entry, expected) in [
+        ("gpt-6-astra", (1_000_000, 800_000, 60_000)),
         ("gpt-5-6-sol", (1_000_000, 800_000, 60_000)),
         ("gpt-5-6-terra", (500_000, 400_000, 30_000)),
         ("gpt-5-6-luna", (250_000, 200_000, 15_000)),
@@ -890,6 +891,7 @@ fn authenticated_provider_defaults_preserve_openai_model_overrides() {
     );
     assert!(models.contains_key("gpt-5-6-sol"));
     assert!(models.contains_key("gpt-5-6-luna"));
+    assert!(models.contains_key("gpt-6-astra"));
 
     let _ = fs::remove_dir_all(root);
 }

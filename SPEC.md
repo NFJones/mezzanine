@@ -4858,8 +4858,11 @@ MUST use its effective merged options and limits.
 The built-in OpenAI provider default model MUST be `gpt-5.6-terra` unless the user
 overrides it through provider or model-profile configuration. The built-in
 OpenAI provider model table SHOULD include only coding-agent harness models:
-`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, and
-`gpt-5.4-mini`. When a provider configuration leaves `models` empty, Mezzanine
+`gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`,
+`gpt-5.4`, and `gpt-5.4-mini`. The built-in `gpt-6-astra` entry MUST use the
+same token limits as `gpt-5.6-sol`: a `1000000` token context window,
+`800000` maximum input tokens, and `60000` maximum output tokens.
+When a provider configuration leaves `models` empty, Mezzanine
 MUST load the provider's built-in code-defined model list instead of treating
 the provider as having no selectable models.
 The built-in Anthropic provider default model MUST be `claude-sonnet-5` unless

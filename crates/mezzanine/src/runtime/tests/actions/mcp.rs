@@ -434,7 +434,7 @@ fn runtime_applies_permission_and_mcp_state_from_config_layers() {
         "fs"
     );
     assert_eq!(report.providers_configured, 1);
-    assert_eq!(report.model_profiles_configured, 7);
+    assert_eq!(report.model_profiles_configured, 8);
     assert_eq!(report.default_model_profile.as_deref(), Some("default"));
     let profile = service
         .provider_registry()
