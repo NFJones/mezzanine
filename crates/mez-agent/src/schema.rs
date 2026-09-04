@@ -95,7 +95,7 @@ pub fn maap_current_action_batch_description(
 /// Returns the request-independent OpenAI Responses MAAP tool description.
 pub fn maap_cache_stable_action_batch_description() -> String {
     maap_action_batch_description_with_mcp_manifest(
-        "The schema includes a generic mcp_call action. The OpenAI request-state suffix identifies the currently allowed actions, and injected MCP context identifies callable server/tool pairs when MCP is active; runtime validation rejects unavailable tools and invalid arguments.",
+        "The schema includes fixed mcp_server_search and mcp_server_get actions plus a generic mcp_call action. Search configured MCP metadata, retrieve a selected server's safe metadata, then use mcp_call only when the current action surface and MCP context identify a callable server/tool pair; runtime validation rejects unavailable tools and invalid arguments.",
     )
 }
 
@@ -108,106 +108,6 @@ fn maap_action_batch_description_with_mcp_manifest(mcp_manifest: &str) -> String
         mcp_manifest,
         OpenAiMaapToolSurface::ANTI_EXAMPLES
     )
-}
-
-/// Returns a compact model-facing manifest for MCP tools in one provider schema.
-pub fn mcp_tool_manifest_for_description(tools: &[McpPromptTool]) -> String {
-    const MAX_TOOL_DESCRIPTION_COUNT: usize = 20;
-    const MAX_SERVER_DESCRIPTION_COUNT: usize = 20;
-    if tools.is_empty() {
-        return "No MCP tools are currently callable in this schema.".to_string();
-    }
-    let sorted_tools = sorted_mcp_prompt_tools(tools);
-    if sorted_tools.is_empty() {
-        return "No MCP tools are currently callable in this schema.".to_string();
-    }
-    let total_servers = mcp_server_manifest_entries(&sorted_tools).len();
-    let mut server_entries = mcp_server_manifest_entries(&sorted_tools)
-        .into_iter()
-        .take(MAX_SERVER_DESCRIPTION_COUNT)
-        .collect::<Vec<_>>();
-    if total_servers > MAX_SERVER_DESCRIPTION_COUNT {
-        server_entries.push(format!(
-            "... plus {} more MCP servers listed in the schema",
-            total_servers - MAX_SERVER_DESCRIPTION_COUNT
-        ));
-    }
-    let total = sorted_tools.len();
-    let mut entries = sorted_tools
-        .into_iter()
-        .take(MAX_TOOL_DESCRIPTION_COUNT)
-        .map(|tool| {
-            format!(
-                "{}/{}: {}",
-                tool.server_id,
-                tool.tool_name,
-                mcp_schema_description(&tool.description)
-            )
-        })
-        .collect::<Vec<_>>();
-    if total > MAX_TOOL_DESCRIPTION_COUNT {
-        entries.push(format!(
-            "... plus {} more MCP tools listed in the schema",
-            total - MAX_TOOL_DESCRIPTION_COUNT
-        ));
-    }
-    format!(
-        "Available MCP servers callable with mcp_call: {}. Available MCP tools callable with mcp_call: {}.",
-        server_entries.join("; "),
-        entries.join("; ")
-    )
-}
-
-/// Returns compact server-level routing entries synthesized from MCP tools.
-fn mcp_server_manifest_entries(tools: &[&McpPromptTool]) -> Vec<String> {
-    let mut servers = Vec::<(String, Option<String>, Vec<String>)>::new();
-    for tool in tools {
-        let purpose = mcp_server_purpose_from_description(&tool.description);
-        match servers.last_mut() {
-            Some((server_id, server_purpose, tool_names)) if *server_id == tool.server_id => {
-                if server_purpose.is_none() {
-                    *server_purpose = purpose;
-                }
-                tool_names.push(tool.tool_name.clone());
-            }
-            _ => servers.push((
-                tool.server_id.clone(),
-                purpose,
-                vec![tool.tool_name.clone()],
-            )),
-        }
-    }
-    servers
-        .into_iter()
-        .map(|(server_id, purpose, tool_names)| {
-            let preview = tool_names.iter().take(3).cloned().collect::<Vec<_>>();
-            let remaining = tool_names.len().saturating_sub(preview.len());
-            let tool_summary = if remaining == 0 {
-                format!("tools: {}", preview.join(", "))
-            } else {
-                format!("tools: {} (+{} more)", preview.join(", "), remaining)
-            };
-            match purpose {
-                Some(purpose) if !purpose.is_empty() => {
-                    format!("{} ({}; {})", server_id, purpose, tool_summary)
-                }
-                _ => format!("{} ({})", server_id, tool_summary),
-            }
-        })
-        .collect()
-}
-
-/// Extracts user-configured server purpose text embedded in tool descriptions.
-fn mcp_server_purpose_from_description(description: &str) -> Option<String> {
-    const PURPOSE_PREFIX: &str = "User-configured non-authoritative server purpose: ";
-    const USAGE_PREFIX: &str = ". User-configured non-authoritative usage guidance:";
-
-    let normalized = mcp_schema_description(description);
-    let start = normalized.find(PURPOSE_PREFIX)? + PURPOSE_PREFIX.len();
-    let tail = normalized.get(start..)?.trim();
-    let end = tail.find(USAGE_PREFIX).or_else(|| tail.find('.'));
-    let purpose = end.map_or(tail, |index| &tail[..index]).trim();
-    (!purpose.is_empty()).then(|| purpose.to_string())
 }
 
 /// Runs the maap action batch schema operation for this subsystem.
@@ -274,6 +174,10 @@ fn maap_action_schema() -> serde_json::Value {
             AllowedAction::IssueUpdate => action_schemas.push(maap_issue_update_action_schema()),
             AllowedAction::IssueQuery => action_schemas.push(maap_issue_query_action_schema()),
             AllowedAction::IssueDelete => action_schemas.push(maap_issue_delete_action_schema()),
+            AllowedAction::McpServerSearch => {
+                action_schemas.push(maap_mcp_server_search_action_schema())
+            }
+            AllowedAction::McpServerGet => action_schemas.push(maap_mcp_server_get_action_schema()),
             AllowedAction::McpCall => action_schemas.push(maap_generic_mcp_call_action_schema()),
         }
     }
@@ -283,20 +187,6 @@ fn maap_action_schema() -> serde_json::Value {
     serde_json::json!({
         "anyOf": action_schemas
     })
-}
-
-/// Returns MCP prompt tools in deterministic provider-visible order.
-fn sorted_mcp_prompt_tools(tools: &[McpPromptTool]) -> Vec<&McpPromptTool> {
-    let mut tools = tools
-        .iter()
-        .filter(|tool| !tool.server_id.is_empty() && !tool.tool_name.is_empty())
-        .collect::<Vec<_>>();
-    tools.sort_by(|left, right| {
-        left.server_id
-            .cmp(&right.server_id)
-            .then_with(|| left.tool_name.cmp(&right.tool_name))
-    });
-    tools
 }
 
 /// Runs the maap common action properties operation for this subsystem.
@@ -877,50 +767,62 @@ fn maap_config_change_action_schema(setting_path_description: &str) -> serde_jso
     )
 }
 
-/// Runs the maap mcp call action schema for tool operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub fn maap_mcp_call_action_schema_for_tool(tool: &McpPromptTool) -> Option<serde_json::Value> {
+/// Returns the request-independent MCP server discovery action schema.
+pub fn maap_mcp_server_search_action_schema() -> serde_json::Value {
     let mut schema = maap_action_object_schema(
-        "mcp_call",
+        "mcp_server_search",
         [
             (
-                "server",
+                "query",
                 serde_json::json!({
                     "type": "string",
-                    "enum": [tool.server_id],
-                    "description": format!("MCP server id exposed for this tool: {}", tool.server_id)
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "description": "Search query matched against configured MCP server identity and purpose."
                 }),
             ),
             (
-                "tool",
+                "limit",
                 serde_json::json!({
-                    "type": "string",
-                    "enum": [tool.tool_name],
-                    "description": format!("MCP tool exposed by server {}: {}. Tool description: {}", tool.server_id, tool.tool_name, mcp_schema_description(&tool.description))
+                    "type": ["integer", "null"],
+                    "minimum": 1,
+                    "maximum": 20,
+                    "description": "Maximum matching servers to return in deterministic rank order."
                 }),
-            ),
-            (
-                "arguments",
-                mcp_tool_arguments_schema_with_description(tool)?,
             ),
         ],
-        &["server", "tool", "arguments"],
+        &["query", "limit"],
     );
     if let Some(object) = schema.as_object_mut() {
         object.insert(
             "description".to_string(),
-            serde_json::json!(format!(
-                "Call MCP tool {}/{}. Description: {}. If the user named this MCP server or the task matches this tool description, use this as a direct action when it is the smallest action that makes concrete progress; do not use shell, capability requests, memory_search, or memory_store merely as setup before it. If required arguments such as identifiers, URLs, paths, repo owner/name, branch, commit, issue/PR number, or CI target are already present in current prompt or action results, use them directly; if they must be safely derived from local, web, or integration context and the needed capability is absent, request that capability instead of asking the user.",
-                tool.server_id,
-                tool.tool_name,
-                mcp_schema_description(&tool.description)
-            )),
+            serde_json::json!("Search configured MCP server metadata without invoking an external tool. Retrieve a matching server with mcp_server_get before calling it."),
         );
     }
-    Some(schema)
+    schema
+}
+
+/// Returns the request-independent MCP server metadata retrieval action schema.
+pub fn maap_mcp_server_get_action_schema() -> serde_json::Value {
+    let mut schema = maap_action_object_schema(
+        "mcp_server_get",
+        [(
+            "server",
+            serde_json::json!({
+                "type": "string",
+                "minLength": 1,
+                "description": "Configured MCP server id returned by mcp_server_search or durable MCP directory context."
+            }),
+        )],
+        &["server"],
+    );
+    if let Some(object) = schema.as_object_mut() {
+        object.insert(
+            "description".to_string(),
+            serde_json::json!("Retrieve safe metadata for one configured MCP server before deciding whether an external mcp_call is useful."),
+        );
+    }
+    schema
 }
 
 /// Returns the request-independent MCP action variant used by OpenAI Responses.
@@ -967,44 +869,6 @@ pub fn maap_generic_mcp_call_action_schema() -> serde_json::Value {
         );
     }
     schema
-}
-
-/// Returns a compact provider-facing description for MCP schema metadata.
-fn mcp_schema_description(description: &str) -> String {
-    let normalized = description.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalized.is_empty() {
-        "No tool description was provided by the MCP server.".to_string()
-    } else {
-        normalized
-    }
-}
-
-/// Returns the MCP tool arguments schema with tool-specific guidance attached.
-fn mcp_tool_arguments_schema_with_description(tool: &McpPromptTool) -> Option<serde_json::Value> {
-    let mut schema = mcp_tool_arguments_schema(tool)?;
-    if let Some(object) = schema.as_object_mut() {
-        object.insert(
-            "description".to_string(),
-            serde_json::json!(format!(
-                "Arguments for MCP tool {}/{}. Use this action when the task matches this tool description or the user named this MCP server/tool. Fill task-local arguments from current prompt, action results, or safely gatherable context when available instead of searching memory or asking the user: {}",
-                tool.server_id,
-                tool.tool_name,
-                mcp_schema_description(&tool.description)
-            )),
-        );
-    }
-    Some(schema)
-}
-
-/// Runs the mcp tool arguments schema operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn mcp_tool_arguments_schema(tool: &McpPromptTool) -> Option<serde_json::Value> {
-    crate::mcp::validate_mcp_tool_input_schema(&tool.input_schema_json)
-        .ok()
-        .map(normalize_openai_strict_schema)
 }
 
 /// Runs the normalize openai strict schema operation for this subsystem.
@@ -1099,6 +963,8 @@ mod tests {
                 "send_message",
                 "spawn_agent",
                 "config_change",
+                "mcp_server_search",
+                "mcp_server_get",
                 "mcp_call",
                 "memory_search",
                 "memory_store",
@@ -1108,48 +974,6 @@ mod tests {
                 "issue_delete",
             ]
         );
-    }
-
-    /// Verifies MCP argument schemas are normalized to the strict provider
-    /// object shape while unsupported format annotations are removed.
-    #[test]
-    fn mcp_argument_schema_is_normalized_for_strict_providers() {
-        let tool = McpPromptTool {
-            server_id: "example".to_string(),
-            tool_name: "lookup".to_string(),
-            description: "Look up one resource".to_string(),
-            approval_required: false,
-            input_schema_json: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string", "format": "uri"}
-                }
-            })
-            .to_string(),
-        };
-
-        let schema = maap_mcp_call_action_schema_for_tool(&tool).unwrap();
-        let arguments = &schema["properties"]["arguments"];
-        assert_eq!(arguments["required"], serde_json::json!(["url"]));
-        assert_eq!(arguments["additionalProperties"], false);
-        assert!(arguments["properties"]["url"].get("format").is_none());
-    }
-
-    /// Verifies malformed and non-object MCP schemas never produce callable
-    /// action variants with synthesized empty arguments.
-    #[test]
-    fn invalid_mcp_argument_schemas_are_omitted_from_action_construction() {
-        for input_schema_json in ["{", "[]", r#"{"type":"string"}"#] {
-            let tool = McpPromptTool {
-                server_id: "example".to_string(),
-                tool_name: "broken".to_string(),
-                description: "Broken schema fixture".to_string(),
-                approval_required: false,
-                input_schema_json: input_schema_json.to_string(),
-            };
-
-            assert!(maap_mcp_call_action_schema_for_tool(&tool).is_none());
-        }
     }
 
     /// Verifies third-party MCP input schemas are normalized into the OpenAI
@@ -1203,47 +1027,6 @@ mod tests {
         assert_eq!(
             normalized.pointer("/properties/data/additionalProperties"),
             Some(&serde_json::json!(false))
-        );
-    }
-
-    /// Verifies an MCP tool schema containing `format: uri` can be embedded in
-    /// the OpenAI MCP action schema without leaking the rejected annotation.
-    ///
-    /// This protects the provider request path where a configured MCP server
-    /// advertises a nested `arguments.data.uri` field.
-    #[test]
-    fn openai_mcp_action_tool_schema_omits_rejected_uri_format() {
-        let tool = McpPromptTool {
-            server_id: "everything".to_string(),
-            tool_name: "echo".to_string(),
-            description: "Echo test input".to_string(),
-            approval_required: false,
-            input_schema_json: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "data": {
-                        "type": "object",
-                        "properties": {
-                            "uri": {"type": "string", "format": "uri"}
-                        }
-                    }
-                }
-            })
-            .to_string(),
-        };
-        let schema = maap_mcp_call_action_schema_for_tool(&tool).unwrap();
-
-        assert_eq!(
-            schema.pointer("/properties/arguments/properties/data/properties/uri/format"),
-            None
-        );
-        assert_eq!(
-            schema.pointer("/properties/arguments/properties/data/required"),
-            Some(&serde_json::json!(["uri"]))
-        );
-        assert_eq!(
-            schema.pointer("/properties/arguments/required"),
-            Some(&serde_json::json!(["data"]))
         );
     }
 }

@@ -85,7 +85,9 @@ fn openai_available_mcp_keeps_memory_on_default_surface() {
     assert_eq!(mcp_actions.len(), 1);
     assert_eq!(mcp_actions[0]["properties"]["arguments"]["type"], "string");
     assert!(
-        description.contains("The schema includes a generic mcp_call action"),
+        description.contains(
+            "The schema includes fixed mcp_server_search and mcp_server_get actions plus a generic mcp_call action"
+        ),
         "{description}"
     );
     assert!(
@@ -877,7 +879,9 @@ fn openai_responses_request_body_uses_mcp_tool_argument_schemas() {
     assert_openai_strict_schema_shape(&mcp_tool["parameters"]);
     assert_eq!(value["tool_choice"]["name"], "submit_maap_action_batch");
     assert!(
-        description.contains("The schema includes a generic mcp_call action"),
+        description.contains(
+            "The schema includes fixed mcp_server_search and mcp_server_get actions plus a generic mcp_call action"
+        ),
         "{description}"
     );
     assert!(
@@ -890,10 +894,12 @@ fn openai_responses_request_body_uses_mcp_tool_argument_schemas() {
         .filter(|schema| schema["properties"]["type"]["enum"][0] == "mcp_call")
         .collect::<Vec<_>>();
 
-    assert_eq!(action_schemas.len(), 15);
+    assert_eq!(action_schemas.len(), 17);
     let action_types = openai_tool_action_types(mcp_tool);
     assert!(!action_types.contains(&"request_skills".to_string()));
     assert!(!action_types.contains(&"call_skill".to_string()));
+    assert!(action_types.contains(&"mcp_server_search".to_string()));
+    assert!(action_types.contains(&"mcp_server_get".to_string()));
     assert_eq!(mcp_schemas.len(), 1);
     assert_eq!(mcp_schemas[0]["properties"]["server"]["type"], "string");
     assert_eq!(mcp_schemas[0]["properties"]["tool"]["type"], "string");

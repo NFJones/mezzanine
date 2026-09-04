@@ -919,6 +919,19 @@ pub(super) fn runtime_maap_action_payload_trace_json(
                     .unwrap_or(serde_json::Value::Null),
             );
         }
+        AgentActionPayload::McpServerSearch { query, limit } => {
+            data.insert(
+                "query".to_string(),
+                runtime_bounded_trace_string_value(query),
+            );
+            data.insert("limit".to_string(), serde_json::json!(limit));
+        }
+        AgentActionPayload::McpServerGet { server } => {
+            data.insert(
+                "server".to_string(),
+                runtime_bounded_trace_string_value(server),
+            );
+        }
         AgentActionPayload::McpCall {
             server,
             tool,

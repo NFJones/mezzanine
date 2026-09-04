@@ -208,6 +208,10 @@ pub fn plan_action_result(
             turn, action, vec!["issue action accepted for runtime execution".to_string()],
             Some(r#"{"state":"pending_runtime_issue"}"#.to_string()),
         )),
+        AgentActionPayload::McpServerSearch { .. } | AgentActionPayload::McpServerGet { .. } => Ok(ActionResult::running(
+            turn, action, vec!["MCP server discovery accepted for runtime execution".to_string()],
+            Some(r#"{"state":"pending_runtime_mcp_discovery"}"#.to_string()),
+        )),
         AgentActionPayload::ConfigChange { setting_path, operation, .. } => {
             plan_config_change(turn, action, setting_path, operation, input)
         }

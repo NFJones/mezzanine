@@ -495,6 +495,16 @@ fn assistant_transcript_action_summary(action: &AgentAction) -> String {
             bounded_transcript_field(setting_path),
             value.as_deref().map(str::len).unwrap_or(0)
         ),
+        AgentActionPayload::McpServerSearch { query, limit } => format!(
+            "mcp_server_search query={} limit={}",
+            bounded_transcript_field(query),
+            limit
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "default".to_string())
+        ),
+        AgentActionPayload::McpServerGet { server } => {
+            format!("mcp_server_get server={}", bounded_transcript_field(server))
+        }
         AgentActionPayload::McpCall {
             server,
             tool,

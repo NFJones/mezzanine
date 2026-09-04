@@ -104,6 +104,10 @@ pub struct AgentShellMcpServerSummary {
     pub server_id: String,
     /// Human-readable configured server name.
     pub display_name: String,
+    /// Model-safe configured server purpose.
+    pub purpose: String,
+    /// Model-safe configured server usage guidance.
+    pub usage_instructions: String,
     /// Effective state after applying configuration and runtime status.
     pub state: String,
     /// Raw normalized runtime status.
@@ -181,6 +185,8 @@ mod tests {
             servers: vec![AgentShellMcpServerSummary {
                 server_id: "filesystem".to_string(),
                 display_name: "Filesystem".to_string(),
+                purpose: "Read project files".to_string(),
+                usage_instructions: "Use read_file for one path.".to_string(),
                 state: "available".to_string(),
                 status: "available".to_string(),
                 enabled: true,

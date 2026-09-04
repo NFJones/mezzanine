@@ -692,7 +692,11 @@ fn runtime_capability_for_response(
             mez_agent::AgentActionPayload::FetchUrl { .. } => {
                 Some(mez_agent::AgentCapability::NetworkFetch)
             }
-            mez_agent::AgentActionPayload::McpCall { .. } => Some(mez_agent::AgentCapability::Mcp),
+            mez_agent::AgentActionPayload::McpServerSearch { .. }
+            | mez_agent::AgentActionPayload::McpServerGet { .. }
+            | mez_agent::AgentActionPayload::McpCall { .. } => {
+                Some(mez_agent::AgentCapability::Mcp)
+            }
             mez_agent::AgentActionPayload::SendMessage { .. }
             | mez_agent::AgentActionPayload::SpawnAgent { .. } => {
                 Some(mez_agent::AgentCapability::Subagent)

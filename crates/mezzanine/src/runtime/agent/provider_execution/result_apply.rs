@@ -99,6 +99,9 @@ impl RuntimeSessionService {
             self.execute_running_message_actions_for_turn(turn, &mut execution)?;
         terminal_observations.observe(&execution);
         let network_actions_executed = 0usize;
+        let _mcp_discovery_actions_executed =
+            self.execute_running_mcp_discovery_actions_for_turn(turn, &mut execution)?;
+        terminal_observations.observe(&execution);
         let mcp_actions_executed =
             self.execute_running_mcp_actions_for_turn(turn, &mut execution)?;
         terminal_observations.observe(&execution);

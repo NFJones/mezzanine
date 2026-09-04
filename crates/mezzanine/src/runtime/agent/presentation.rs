@@ -249,7 +249,9 @@ impl RuntimeSessionService {
                 | AgentActionPayload::FetchUrl { .. } => {
                     pending_runtime_visible_action = true;
                 }
-                AgentActionPayload::McpCall { .. }
+                AgentActionPayload::McpServerSearch { .. }
+                | AgentActionPayload::McpServerGet { .. }
+                | AgentActionPayload::McpCall { .. }
                 | AgentActionPayload::SendMessage { .. }
                 | AgentActionPayload::SpawnAgent { .. }
                 | AgentActionPayload::ConfigChange { .. }

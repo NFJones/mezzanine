@@ -104,6 +104,9 @@ impl RuntimeSessionService {
                 .await?
         };
         terminal_observations.observe(&execution);
+        let mcp_discovery_actions_executed =
+            self.execute_running_mcp_discovery_actions_for_turn(turn, &mut execution)?;
+        terminal_observations.observe(&execution);
         let mcp_actions_executed = if defer_external_actions {
             self.queue_running_mcp_actions_for_turn(turn, &mut execution)?
         } else {
@@ -120,6 +123,7 @@ impl RuntimeSessionService {
         let actions_executed_before_persistence = skill_actions_executed
             .saturating_add(message_actions_executed)
             .saturating_add(network_actions_executed)
+            .saturating_add(mcp_discovery_actions_executed)
             .saturating_add(mcp_actions_executed)
             .saturating_add(spawn_actions_executed)
             .saturating_add(config_actions_executed);

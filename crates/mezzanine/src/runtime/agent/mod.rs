@@ -158,6 +158,7 @@ mod issues;
 mod lifecycle;
 mod macros;
 mod mcp_network;
+mod mcp_registry;
 mod memory;
 mod messages;
 mod outcome;

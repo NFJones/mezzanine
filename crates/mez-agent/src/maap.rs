@@ -426,6 +426,18 @@ pub enum AgentActionPayload {
         /// boundary and should remain aligned with the owning type invariant.
         value: Option<String>,
     },
+    /// Represents a read-only MCP server directory search.
+    McpServerSearch {
+        /// Query matched against safe configured server metadata.
+        query: String,
+        /// Optional maximum number of deterministic search results.
+        limit: Option<u64>,
+    },
+    /// Represents a read-only MCP server metadata lookup.
+    McpServerGet {
+        /// Configured MCP server identifier to retrieve.
+        server: String,
+    },
     /// Represents the Mcp Call case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -666,6 +678,8 @@ impl AgentAction {
             AgentActionPayload::SendMessage { .. } => "send_message",
             AgentActionPayload::SpawnAgent { .. } => "spawn_agent",
             AgentActionPayload::ConfigChange { .. } => "config_change",
+            AgentActionPayload::McpServerSearch { .. } => "mcp_server_search",
+            AgentActionPayload::McpServerGet { .. } => "mcp_server_get",
             AgentActionPayload::McpCall { .. } => "mcp_call",
             AgentActionPayload::Complete => "complete",
             AgentActionPayload::Abort { .. } => "abort",
@@ -855,6 +869,23 @@ impl AgentAction {
                 validate_non_empty("config setting path", setting_path)?;
                 validate_non_empty("config operation", operation)
             }
+            AgentActionPayload::McpServerSearch { query, limit } => {
+                validate_non_empty("mcp server search query", query)?;
+                if query.chars().count() > 512 {
+                    return Err(MaapContractError::invalid_args(
+                        "mcp server search query must not exceed 512 characters",
+                    ));
+                }
+                if let Some(limit) = limit
+                    && !(1..=20).contains(limit)
+                {
+                    return Err(MaapContractError::invalid_args(
+                        "mcp server search limit must be between 1 and 20",
+                    ));
+                }
+                Ok(())
+            }
+            AgentActionPayload::McpServerGet { server } => validate_non_empty("mcp server", server),
             AgentActionPayload::McpCall {
                 server,
                 tool,
@@ -1309,6 +1340,13 @@ fn parse_maap_action_value(
             setting_path: required_string(object, "setting_path")?.to_string(),
             operation: required_string(object, "operation")?.to_string(),
             value: optional_json_or_string(object, "value")?,
+        },
+        "mcp_server_search" => AgentActionPayload::McpServerSearch {
+            query: required_string(object, "query")?.to_string(),
+            limit: optional_nullable_u64(object, "limit")?,
+        },
+        "mcp_server_get" => AgentActionPayload::McpServerGet {
+            server: required_string(object, "server")?.to_string(),
         },
         "mcp_call" => AgentActionPayload::McpCall {
             server: required_string(object, "server")?.to_string(),

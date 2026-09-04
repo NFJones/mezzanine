@@ -142,7 +142,7 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     );
     assert_eq!(
         openai_tool_action_schemas(capability_tool).len(),
-        15,
+        17,
         "the canonical OpenAI tool exposes a stable action superset with generic MCP"
     );
     assert_eq!(

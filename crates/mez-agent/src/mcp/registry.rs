@@ -600,6 +600,11 @@ impl McpRegistry {
                     AgentShellMcpServerSummary {
                         server_id: server.configured.id.clone(),
                         display_name: server.configured.name.clone(),
+                        purpose: mcp_prompt_server_purpose(
+                            server,
+                            &server.tools.iter().collect::<Vec<_>>(),
+                        ),
+                        usage_instructions: mcp_prompt_server_usage_instructions(server),
                         state: state.to_string(),
                         status: status.to_string(),
                         enabled: server.configured.enabled,
@@ -615,6 +620,72 @@ impl McpRegistry {
                 })
                 .collect();
         AgentShellMcpSummary { servers }
+    }
+
+    /// Returns one safe MCP server metadata record by configured identifier.
+    ///
+    /// The projection intentionally excludes transport configuration,
+    /// credentials, headers, environment, and live execution authority.
+    pub fn agent_shell_server_summary(
+        &self,
+        server_id: &str,
+    ) -> Result<AgentShellMcpServerSummary> {
+        self.agent_shell_summary()
+            .servers
+            .into_iter()
+            .find(|server| server.server_id == server_id)
+            .ok_or_else(|| MezError::not_found("MCP server not found"))
+    }
+
+    /// Searches safe MCP server metadata in deterministic relevance order.
+    ///
+    /// Exact identifiers rank first, followed by identifier prefixes,
+    /// display-name matches, and purpose or usage-guidance matches. Ties use
+    /// the canonical configured identifier so registry insertion order cannot
+    /// affect model-visible discovery results.
+    pub fn search_agent_shell_servers(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Vec<AgentShellMcpServerSummary> {
+        let query = query.trim().to_ascii_lowercase();
+        if query.is_empty() || limit == 0 {
+            return Vec::new();
+        }
+        let mut matches = self
+            .agent_shell_summary()
+            .servers
+            .into_iter()
+            .filter_map(|server| {
+                let rank = if server.server_id.eq_ignore_ascii_case(&query) {
+                    Some(0u8)
+                } else if server.server_id.to_ascii_lowercase().starts_with(&query) {
+                    Some(1)
+                } else if server.display_name.to_ascii_lowercase().contains(&query) {
+                    Some(2)
+                } else if server.purpose.to_ascii_lowercase().contains(&query)
+                    || server
+                        .usage_instructions
+                        .to_ascii_lowercase()
+                        .contains(&query)
+                {
+                    Some(3)
+                } else {
+                    None
+                };
+                rank.map(|rank| (rank, server))
+            })
+            .collect::<Vec<_>>();
+        matches.sort_by(|(left_rank, left), (right_rank, right)| {
+            left_rank
+                .cmp(right_rank)
+                .then_with(|| left.server_id.cmp(&right.server_id))
+        });
+        matches
+            .into_iter()
+            .take(limit)
+            .map(|(_, server)| server)
+            .collect()
     }
 
     /// Runs the server operation for this subsystem.

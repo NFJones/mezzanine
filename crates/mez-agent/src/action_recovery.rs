@@ -523,7 +523,9 @@ fn capability_for_allowed_action(action: AllowedAction) -> Option<AgentCapabilit
         AllowedAction::ShellCommand | AllowedAction::ApplyPatch => Some(AgentCapability::Shell),
         AllowedAction::WebSearch => Some(AgentCapability::NetworkSearch),
         AllowedAction::FetchUrl => Some(AgentCapability::NetworkFetch),
-        AllowedAction::McpCall => Some(AgentCapability::Mcp),
+        AllowedAction::McpServerSearch | AllowedAction::McpServerGet | AllowedAction::McpCall => {
+            Some(AgentCapability::Mcp)
+        }
         AllowedAction::SendMessage | AllowedAction::SpawnAgent => Some(AgentCapability::Subagent),
         AllowedAction::ConfigChange => Some(AgentCapability::ConfigChange),
         AllowedAction::MemorySearch | AllowedAction::MemoryStore => Some(AgentCapability::Memory),

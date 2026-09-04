@@ -650,6 +650,47 @@ fn maap_parser_rejects_non_object_mcp_argument_text() {
 }
 
 #[test]
+/// Verifies fixed MCP discovery actions parse and validate without requiring a
+/// request-local callable tool manifest.
+fn maap_parser_accepts_fixed_mcp_server_discovery_actions() {
+    let batch = parse_maap_action_batch_json_for_turn(
+        r#"{"rationale":"find a server","actions":[{"type":"mcp_server_search","query":"filesystem","limit":3},{"type":"mcp_server_get","server":"fs"}]}"#,
+        "turn-1",
+        "agent-1",
+    )
+    .unwrap();
+
+    assert!(matches!(
+        &batch.actions[0].payload,
+        AgentActionPayload::McpServerSearch { query, limit }
+            if query == "filesystem" && *limit == Some(3)
+    ));
+    assert!(matches!(
+        &batch.actions[1].payload,
+        AgentActionPayload::McpServerGet { server } if server == "fs"
+    ));
+    batch.validate(&turn(), &[], &[]).unwrap();
+}
+
+#[test]
+/// Verifies fixed MCP discovery rejects out-of-range result limits before the
+/// runtime can inspect the registry.
+fn maap_discovery_validation_rejects_out_of_range_search_limit() {
+    let batch = parse_maap_action_batch_json_for_turn(
+        r#"{"rationale":"find a server","actions":[{"type":"mcp_server_search","query":"filesystem","limit":21}]}"#,
+        "turn-1",
+        "agent-1",
+    )
+    .unwrap();
+
+    let error = batch.validate(&turn(), &[], &[]).unwrap_err();
+    assert_eq!(
+        error.message(),
+        "mcp server search limit must be between 1 and 20"
+    );
+}
+
+#[test]
 /// Verifies `say` content types are normalized at the MAAP boundary.
 ///
 /// New provider prompts require models to declare the presentation media type,

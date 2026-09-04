@@ -158,6 +158,48 @@ fn configured_server_is_prompt_visible_as_pending_discovery() {
     assert!(server.retryable);
 }
 
+#[test]
+/// Verifies fixed discovery returns deterministic safe metadata for configured
+/// servers without exposing transport commands or environment names.
+fn agent_shell_server_search_and_get_are_safe_and_deterministic() {
+    let mut registry = McpRegistry::default();
+    let mut filesystem = config();
+    filesystem.external_capability.purpose = "Filesystem project reads".to_string();
+    filesystem.external_capability.usage_instructions = "Use for project files.".to_string();
+    filesystem.env_vars.push("MCP_TOKEN".to_string());
+    registry.add_server(filesystem).unwrap();
+    registry
+        .add_server(McpServerConfig::stdio(
+            "fs-cache",
+            "Filesystem cache",
+            "mcp-cache",
+            Vec::new(),
+        ))
+        .unwrap();
+
+    let search = registry.search_agent_shell_servers("fs", 20);
+    assert_eq!(
+        search
+            .iter()
+            .map(|server| server.server_id.as_str())
+            .collect::<Vec<_>>(),
+        ["fs", "fs-cache"]
+    );
+    let server = registry.agent_shell_server_summary("fs").unwrap();
+    assert_eq!(server.purpose, "Filesystem project reads");
+    assert_eq!(server.usage_instructions, "Use for project files.");
+    let rendered = format!("{server:?}");
+    assert!(!rendered.contains("mcp-fs"), "{rendered}");
+    assert!(!rendered.contains("MCP_TOKEN"), "{rendered}");
+    assert_eq!(
+        registry
+            .agent_shell_server_summary("missing")
+            .unwrap_err()
+            .kind(),
+        McpErrorKind::NotFound
+    );
+}
+
 /// Verifies session blacklisting removes tools from callable registry state.
 #[test]
 fn session_blacklist_hides_tools() {

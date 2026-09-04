@@ -140,6 +140,104 @@ fn runtime_control_mcp_list_uses_runtime_owned_registry() {
     );
 }
 
+#[test]
+/// Verifies fixed MCP discovery actions settle against the live registry with
+/// safe metadata only, without starting an MCP transport or requiring a
+/// callable request-local tool manifest.
+fn runtime_mcp_server_discovery_actions_return_safe_registry_metadata() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let mut config = mez_agent::mcp::McpServerConfig::stdio(
+        "fs",
+        "Filesystem",
+        "mcp-fs-secret-command",
+        Vec::new(),
+    );
+    config.external_capability.purpose = "Read project files".to_string();
+    config.external_capability.usage_instructions = "Use read_file for one path.".to_string();
+    config.env_vars.push("MCP_TOKEN".to_string());
+    service.mcp_registry_mut().add_server(config).unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "find the filesystem integration")
+        .unwrap();
+    service.remove_pending_agent_provider_task(&started.turn_id);
+    let turn = service
+        .agent_turn_ledger()
+        .turn(&started.turn_id)
+        .cloned()
+        .unwrap();
+    let actions = vec![
+        mez_agent::AgentAction {
+            id: "search-1".to_string(),
+            rationale: "find filesystem MCP server".to_string(),
+            payload: mez_agent::AgentActionPayload::McpServerSearch {
+                query: "filesystem".to_string(),
+                limit: Some(5),
+            },
+        },
+        mez_agent::AgentAction {
+            id: "get-1".to_string(),
+            rationale: "inspect filesystem MCP server".to_string(),
+            payload: mez_agent::AgentActionPayload::McpServerGet {
+                server: "fs".to_string(),
+            },
+        },
+    ];
+    let mut execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "discover MCP metadata".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "discover the configured MCP server".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: actions.clone(),
+                final_turn: true,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: actions
+            .iter()
+            .map(|action| mez_agent::ActionResult::running(&turn, action, Vec::new(), None))
+            .collect(),
+        final_turn: true,
+        terminal_state: AgentTurnState::Running,
+    };
+
+    assert_eq!(
+        service
+            .execute_running_mcp_discovery_actions_for_turn(&turn, &mut execution)
+            .unwrap(),
+        2
+    );
+    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    assert!(
+        execution
+            .action_results
+            .iter()
+            .all(|result| result.status == ActionStatus::Succeeded)
+    );
+    let rendered = format!("{:?}", execution.action_results);
+    assert!(rendered.contains("Read project files"), "{rendered}");
+    assert!(!rendered.contains("mcp-fs-secret-command"), "{rendered}");
+    assert!(!rendered.contains("MCP_TOKEN"), "{rendered}");
+}
+
 /// Verifies that the synchronous MCP retry helper keeps async-only transports
 /// blacklisted instead of exposing stale tools. Blacklisted servers stay hidden
 /// from the model until an integration workflow with async runtime support can

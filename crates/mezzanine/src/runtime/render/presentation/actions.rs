@@ -185,6 +185,20 @@ pub(crate) fn agent_action_execution_display_header(action: &AgentAction) -> Opt
         AgentActionPayload::IssueDelete { id } => {
             format!("issue delete: id={}", agent_action_display_preview(id))
         }
+        AgentActionPayload::McpServerSearch { query, limit } => {
+            let mut header = format!("mcp server search: {}", agent_action_display_preview(query));
+            if let Some(limit) = limit {
+                header.push_str(" limit=");
+                header.push_str(&limit.to_string());
+            }
+            header
+        }
+        AgentActionPayload::McpServerGet { server } => {
+            format!(
+                "mcp server metadata: {}",
+                agent_action_display_preview(server)
+            )
+        }
         AgentActionPayload::McpCall {
             server,
             tool,

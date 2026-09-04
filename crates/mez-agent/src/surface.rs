@@ -278,6 +278,10 @@ pub enum AllowedAction {
     SpawnAgent,
     /// Configuration change.
     ConfigChange,
+    /// Search configured MCP server metadata.
+    McpServerSearch,
+    /// Retrieve configured MCP server metadata.
+    McpServerGet,
     /// MCP tool call.
     McpCall,
     /// Search persistent memory records.
@@ -309,6 +313,8 @@ impl AllowedAction {
             AllowedAction::SendMessage => "send_message",
             AllowedAction::SpawnAgent => "spawn_agent",
             AllowedAction::ConfigChange => "config_change",
+            AllowedAction::McpServerSearch => "mcp_server_search",
+            AllowedAction::McpServerGet => "mcp_server_get",
             AllowedAction::McpCall => "mcp_call",
             AllowedAction::MemorySearch => "memory_search",
             AllowedAction::MemoryStore => "memory_store",
@@ -333,6 +339,8 @@ impl AllowedAction {
             "send_message" => Some(AllowedAction::SendMessage),
             "spawn_agent" => Some(AllowedAction::SpawnAgent),
             "config_change" => Some(AllowedAction::ConfigChange),
+            "mcp_server_search" => Some(AllowedAction::McpServerSearch),
+            "mcp_server_get" => Some(AllowedAction::McpServerGet),
             "mcp_call" => Some(AllowedAction::McpCall),
             "memory_search" => Some(AllowedAction::MemorySearch),
             "memory_store" => Some(AllowedAction::MemoryStore),
@@ -370,6 +378,8 @@ impl AllowedActionSet {
             AllowedAction::SendMessage,
             AllowedAction::SpawnAgent,
             AllowedAction::ConfigChange,
+            AllowedAction::McpServerSearch,
+            AllowedAction::McpServerGet,
             AllowedAction::McpCall,
             AllowedAction::MemorySearch,
             AllowedAction::MemoryStore,
@@ -417,7 +427,11 @@ impl AllowedActionSet {
             }
             AgentCapability::NetworkSearch => output.extend([AllowedAction::WebSearch]),
             AgentCapability::NetworkFetch => output.extend([AllowedAction::FetchUrl]),
-            AgentCapability::Mcp => output.extend([AllowedAction::McpCall]),
+            AgentCapability::Mcp => output.extend([
+                AllowedAction::McpServerSearch,
+                AllowedAction::McpServerGet,
+                AllowedAction::McpCall,
+            ]),
             AgentCapability::Subagent => {
                 output.extend([AllowedAction::SendMessage, AllowedAction::SpawnAgent])
             }

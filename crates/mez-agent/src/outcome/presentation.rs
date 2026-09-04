@@ -128,7 +128,9 @@ pub fn action_rationale_repeats_visible_summary(
             rationale == normalize_user_visible_text(text)
         }
         AgentActionPayload::Abort { reason } => rationale == normalize_user_visible_text(reason),
-        AgentActionPayload::McpCall { .. }
+        AgentActionPayload::McpServerSearch { .. }
+        | AgentActionPayload::McpServerGet { .. }
+        | AgentActionPayload::McpCall { .. }
         | AgentActionPayload::SendMessage { .. }
         | AgentActionPayload::SpawnAgent { .. }
         | AgentActionPayload::ConfigChange { .. }
@@ -186,6 +188,8 @@ pub fn action_has_runtime_visible_effect(action: &AgentAction) -> bool {
             | AgentActionPayload::ApplyPatch { .. }
             | AgentActionPayload::WebSearch { .. }
             | AgentActionPayload::FetchUrl { .. }
+            | AgentActionPayload::McpServerSearch { .. }
+            | AgentActionPayload::McpServerGet { .. }
             | AgentActionPayload::McpCall { .. }
             | AgentActionPayload::RequestSkills
             | AgentActionPayload::CallSkill { .. }
@@ -241,6 +245,12 @@ pub fn action_user_phrase(
         });
     }
     let (kind, target) = match &action.payload {
+        AgentActionPayload::McpServerSearch { query, .. } => {
+            ("MCP server search", action_terminal_preview(query))
+        }
+        AgentActionPayload::McpServerGet { server } => {
+            ("MCP server metadata", action_terminal_preview(server))
+        }
         AgentActionPayload::McpCall { server, tool, .. } => (
             "MCP call",
             format!(

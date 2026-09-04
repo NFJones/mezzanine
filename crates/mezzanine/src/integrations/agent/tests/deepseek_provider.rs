@@ -140,6 +140,8 @@ fn deepseek_chat_completions_request_body_dispatches_static_actions_on_initial_s
         DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME
     );
     assert!(action_types.contains(&"mcp_call".to_string()));
+    assert!(action_types.contains(&"mcp_server_search".to_string()));
+    assert!(action_types.contains(&"mcp_server_get".to_string()));
     assert!(action_types.contains(&"memory_search".to_string()));
     assert!(action_types.contains(&"memory_store".to_string()));
     assert!(!action_types.contains(&"request_capability".to_string()));
@@ -148,7 +150,9 @@ fn deepseek_chat_completions_request_body_dispatches_static_actions_on_initial_s
         "{description}"
     );
     assert!(
-        description.contains("The schema includes a generic mcp_call action"),
+        description.contains(
+            "The schema includes fixed mcp_server_search and mcp_server_get actions plus a generic mcp_call action"
+        ),
         "{description}"
     );
     assert!(
