@@ -1129,6 +1129,12 @@ impl RuntimeSessionService {
             };
             record_browser.browser.set_active_index(active_index);
             record_browser.browser.set_active_record_markdown(markdown);
+            if !record_browser.browser.is_detail_view() {
+                record_browser
+                    .browser
+                    .set_scroll_offset(overlay.scroll_offset);
+                overlay.scroll_offset = 0;
+            }
             record_browser
                 .browser
                 .apply_action(mez_mux::record_browser::RecordBrowserAction::OpenActive)?;
@@ -1211,12 +1217,23 @@ impl RuntimeSessionService {
                     outcome,
                     mez_mux::record_browser::RecordBrowserOutcome::Updated
                 ) {
-                    return Ok(Some(render_record_browser_overlay(
+                    let list_scroll_offset = record_browser.browser.scroll_offset();
+                    let changed = render_record_browser_overlay(
                         overlay,
                         &self.presentation.settings.ui_theme,
                         terminal_width,
                         prose_width,
-                    )));
+                    );
+                    overlay.scroll_offset = list_scroll_offset;
+                    clamp_overlay_scroll(overlay, self.session.authoritative_size);
+                    if let Some(line_index) = mez_mux::overlay::overlay_active_line_index(overlay) {
+                        mez_mux::overlay::scroll_overlay_to_line(
+                            overlay,
+                            line_index,
+                            self.session.authoritative_size,
+                        );
+                    }
+                    return Ok(Some(changed));
                 }
                 return Ok(None);
             }
@@ -1225,6 +1242,18 @@ impl RuntimeSessionService {
         let Some(action) = action else {
             return Ok(None);
         };
+        // The browser retains list-relative scrolling while the overlay owns
+        // the detail's document-relative viewport. Never save detail offsets
+        // over the list position when Enter is pressed again inside a detail.
+        let opening_detail = matches!(
+            action,
+            mez_mux::record_browser::RecordBrowserAction::OpenActive
+        ) && !record_browser.browser.is_detail_view();
+        if opening_detail {
+            record_browser
+                .browser
+                .set_scroll_offset(overlay.scroll_offset);
+        }
         let outcome = record_browser.browser.apply_action(action)?;
         match outcome {
             mez_mux::record_browser::RecordBrowserOutcome::Ignored => return Ok(None),
@@ -1234,6 +1263,9 @@ impl RuntimeSessionService {
                 ));
             }
             _ => {}
+        }
+        if opening_detail {
+            overlay.scroll_offset = 0;
         }
         Ok(Some(render_record_browser_overlay(
             overlay,

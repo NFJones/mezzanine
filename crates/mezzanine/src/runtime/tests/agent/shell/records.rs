@@ -444,6 +444,105 @@ fn runtime_record_browser_kind_selector_keeps_end_selection_visible() {
     ));
 }
 
+/// Verifies returning from a deeply scrolled detail restores visible list rows
+/// immediately, without a follow-up arrow or wheel event repairing the viewport.
+///
+/// Both a single-row table and a scrolled multi-row table retain their focused
+/// record and list offset. Resizing while detail is open additionally requires
+/// the restored viewport to be clamped to the new layout rather than blindly
+/// reusing coordinates from the old terminal size.
+#[test]
+fn runtime_record_browser_detail_return_restores_visible_list_viewport() {
+    for (record_count, resize) in [(1, false), (20, false), (20, true)] {
+        let mut service = test_runtime_service();
+        let mut size = Size::new(120, 12).unwrap();
+        let primary = service.attach_primary("primary", true, size, 120).unwrap();
+        let pane_id = service.active_pane_id().unwrap().to_string();
+        let records = (0..record_count)
+            .map(|index| mez_mux::record_browser::RecordBrowserRecord {
+                id: format!("issue-{index}"),
+                open_command: Some(format!("/show-issues issue-{index}")),
+                title: format!("Issue {index}"),
+                metadata: vec![("summary".to_string(), format!("Issue {index}"))],
+                markdown: "Detail paragraph.\n\n".repeat(200),
+            })
+            .collect();
+        let mut browser =
+            mez_mux::record_browser::RecordBrowser::new("Issues", records, Vec::new()).unwrap();
+        browser.set_table_id_column("Issue");
+        browser.set_table_columns_with_labels(vec![("Summary".to_string(), "summary".to_string())]);
+        let page = browser.render_page();
+        service.register_pending_record_browser_overlay(&pane_id, "show-issues", browser, None);
+        let response = crate::runtime::runtime_agent_shell_command_response_json(
+            &pane_id,
+            "/show-issues",
+            Some(&crate::runtime::AgentShellCommandOutcome::Display {
+                command: "show-issues".to_string(),
+                body: page.raw_markdown,
+            }),
+        );
+        service
+            .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+            .unwrap();
+        for _ in 1..record_count {
+            apply_record_browser_input(&mut service, &primary, b"\x1b[B");
+        }
+        let list = service.primary_display_overlay().unwrap();
+        let list_offset = list.scroll_offset;
+        let list_lines = list.lines.len();
+        let active_id = list
+            .record_browser
+            .as_ref()
+            .unwrap()
+            .browser
+            .active_record_id()
+            .unwrap()
+            .to_string();
+        apply_record_browser_input(&mut service, &primary, b"\r");
+        for _ in 0..10 {
+            apply_record_browser_input(&mut service, &primary, b"\x1b[6~");
+        }
+        assert!(service.primary_display_overlay().unwrap().scroll_offset > list_lines);
+        if resize {
+            size = Size::new(80, 30).unwrap();
+            service
+                .resize_attached_primary_terminal(&primary, size)
+                .unwrap();
+        }
+        apply_record_browser_input(&mut service, &primary, b"\x1b");
+        let list = service.primary_display_overlay().unwrap();
+        assert!(
+            !list
+                .record_browser
+                .as_ref()
+                .unwrap()
+                .browser
+                .is_detail_view()
+        );
+        assert_eq!(
+            list.record_browser
+                .as_ref()
+                .unwrap()
+                .browser
+                .active_record_id(),
+            Some(active_id.as_str())
+        );
+        assert!(
+            mez_mux::overlay::overlay_selection_index_is_visible(
+                list,
+                list.active_selection_index.unwrap(),
+                size
+            ),
+            "returned list must immediately show its focused record: {list:?}"
+        );
+        if !resize {
+            assert_eq!(list.scroll_offset, list_offset);
+        }
+        apply_record_browser_input(&mut service, &primary, b"\r");
+        assert_eq!(service.primary_display_overlay().unwrap().scroll_offset, 0);
+    }
+}
+
 /// Verifies retained record browsers reflow from raw Markdown when the primary
 /// terminal becomes narrower and paginate the resulting physical rows.
 ///
