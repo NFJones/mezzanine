@@ -1374,6 +1374,7 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
             allowed_actions: request.allowed_actions.action_type_names().join(","),
             max_output_tokens: None,
             output_limit_retry_override_tokens: None,
+            continuity_warning: None,
             purpose,
             message_count: request.messages.len(),
             message_bytes: request
@@ -1399,6 +1400,8 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
         crate::integrations::agent::provider::ProviderRequestPurpose::Execution,
         Some(usage),
     );
+    let mut execution = execution;
+    execution.continuity_warning = Some("provider_cache_continuity_reset".to_string());
     assert!(
         service
             .apply_provider_wire_request_observation(execution)
@@ -1416,6 +1419,22 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
         status.contains("| Provider wire prefix | request=wire-status-1 initial input_bytes=")
             && status.contains("input_items="),
         "{status}"
+    );
+    let pane_text = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        normalized_pane_log_text(&pane_text).contains(
+            "agent warning: provider request continues; cache baseline reset (provider_cache_continuity_reset)"
+        ),
+        "{pane_text}"
+    );
+    let trace = service.agent_pane_trace_log_text("%1").unwrap();
+    assert!(
+        trace.contains("continuity_warning=provider_cache_continuity_reset"),
+        "{trace}"
     );
 
     let auxiliary = observation(

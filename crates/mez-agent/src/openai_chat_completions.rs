@@ -375,7 +375,7 @@ pub fn openai_chat_completions_request_body_with_stream(
     })
 }
 
-/// Enforces exact native-message continuity for one compatible Chat request.
+/// Checks native-message continuity without blocking valid compatible Chat requests.
 ///
 /// Both projections are rebuilt from durable chronology with the fixed
 /// compatibility options selected by the adapter.
@@ -387,9 +387,9 @@ pub fn prepare_openai_chat_completions_request_prefix_extension(
 ) -> ProviderRequestAssemblyResult<()> {
     let stream = options.streaming_enabled();
     let current_body = openai_chat_completions_request_body_with_stream(request, options, stream)?;
-    let previous_body = previous
-        .map(|previous| openai_chat_completions_request_body_with_stream(previous, options, stream))
-        .transpose()?;
+    let previous_body = previous.and_then(|previous| {
+        openai_chat_completions_request_body_with_stream(previous, options, stream).ok()
+    });
     prepare_provider_native_request_prefix_extension(
         request,
         previous,
@@ -1086,7 +1086,7 @@ mod tests {
     }
 
     /// Verifies compatible Chat Completions accepts durable message growth and
-    /// rejects a same-epoch rewrite of an already-sent native message.
+    /// warns on a same-epoch rewrite without blocking the request or later comparisons.
     #[test]
     fn openai_chat_request_chain_requires_exact_native_message_prefix() {
         let mut first = test_request();
@@ -1139,14 +1139,26 @@ mod tests {
             placement: crate::ContextPlacement::ConversationAppend,
             content: "rewrite the repository request".to_string(),
         });
-        let error = prepare_openai_chat_completions_request_prefix_extension(
+        prepare_openai_chat_completions_request_prefix_extension(
             &mut rewritten,
             Some(&first),
             "compatible:test",
             options,
         )
-        .unwrap_err();
-        assert!(error.message().contains("rewrote canonical provider input"));
+        .unwrap();
+        assert_eq!(
+            rewritten.messages.provider_continuity_warning(),
+            Some("canonical_input_rewritten")
+        );
+        let mut next = rewritten.clone();
+        prepare_openai_chat_completions_request_prefix_extension(
+            &mut next,
+            Some(&rewritten),
+            "compatible:test",
+            options,
+        )
+        .unwrap();
+        assert_eq!(next.messages.provider_continuity_warning(), None);
     }
 
     /// Verifies OpenAI-compatible Chat Completions can preserve the canonical

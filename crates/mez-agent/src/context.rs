@@ -2713,6 +2713,8 @@ pub enum ContextEpochTransition {
     Initial,
     /// One typed cache-affecting component started a new epoch.
     Changed(ContextEpochComponent),
+    /// A cache comparison failed; the valid current request starts a new baseline.
+    Warning(&'static str),
 }
 
 /// Typed epoch metadata retained across one append-only provider request chain.
@@ -2768,6 +2770,14 @@ impl ModelMessages {
     /// Returns the typed provider epoch selected for this prepared request.
     pub(crate) fn provider_request_epoch(&self) -> Option<&ProviderRequestEpoch> {
         self.provider_request_epoch.as_ref()
+    }
+
+    /// Returns a content-free advisory cache warning for this request only.
+    pub fn provider_continuity_warning(&self) -> Option<&'static str> {
+        match self.provider_request_epoch.as_ref()?.epoch_transition {
+            ContextEpochTransition::Warning(code) => Some(code),
+            _ => None,
+        }
     }
 
     /// Installs provider epoch metadata without retaining provider-visible input.

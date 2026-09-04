@@ -1,10 +1,11 @@
-//! Canonical provider-native request continuity enforcement.
+//! Advisory canonical provider-native request continuity diagnostics.
 //!
 //! Provider adapters render their own request bodies, but all adapters share
 //! one invariant: within an unchanged epoch, the complete model-visible input
 //! must extend the prior input by exact canonical items. This module compares
 //! transient canonical renderings and retains only typed epoch metadata on the
-//! request, never prior prompt or provider-input bytes.
+//! request, never prior prompt or provider-input bytes. Comparison failures
+//! establish a fresh baseline and warn without rejecting valid current input.
 
 use crate::{
     ContextEpochIdentity, ContextEpochTransition, ContextPlacement, ModelRequest,
@@ -35,12 +36,13 @@ pub(crate) struct ProviderNativeRequestContinuity<'a> {
     pub(crate) previous_body: Option<&'a str>,
 }
 
-/// Enforces append-only native input for one comparable provider request.
+/// Checks append-only native input for one comparable provider request.
 ///
 /// The supplied bodies must be deterministic provider-native request bodies
 /// using the same input field. The function derives all compared bytes from
 /// the supplied durable requests and stores only typed epoch metadata on
-/// `request`.
+/// `request`. Invalid current bodies are errors; unusable prior bodies and
+/// continuity mismatches are advisory warnings only.
 pub(crate) fn prepare_provider_native_request_prefix_extension(
     request: &mut ModelRequest,
     previous: Option<&ModelRequest>,
@@ -66,17 +68,19 @@ pub(crate) fn prepare_provider_native_request_prefix_extension(
             });
         return Ok(());
     };
-    let previous_body = continuity.previous_body.ok_or_else(|| {
-        ProviderRequestAssemblyError::invalid_state(format!(
-            "{} request continuity is missing the prior canonical request body",
-            continuity.provider_label,
-        ))
-    })?;
-    let previous_projection = provider_native_request_projection(
-        previous_body,
-        continuity.input_field,
-        continuity.provider_label,
-    )?;
+    let previous_projection = continuity.previous_body.and_then(|body| {
+        provider_native_request_projection(body, continuity.input_field, continuity.provider_label)
+            .ok()
+    });
+    let Some(previous_projection) = previous_projection else {
+        request
+            .messages
+            .set_provider_request_epoch(crate::context::ProviderRequestEpoch {
+                context_epoch: current_epoch,
+                epoch_transition: ContextEpochTransition::Warning("prior_baseline_unavailable"),
+            });
+        return Ok(());
+    };
     let previous_epoch = previous
         .messages
         .provider_request_epoch()
@@ -102,27 +106,34 @@ pub(crate) fn prepare_provider_native_request_prefix_extension(
         return Ok(());
     }
     if previous_projection.envelope != current.envelope {
-        return Err(ProviderRequestAssemblyError::invalid_state(format!(
-            "{} request chain changed an unclassified canonical envelope inside one epoch",
-            continuity.provider_label,
-        )));
+        request
+            .messages
+            .set_provider_request_epoch(crate::context::ProviderRequestEpoch {
+                context_epoch: current_epoch,
+                epoch_transition: ContextEpochTransition::Warning("canonical_envelope_changed"),
+            });
+        return Ok(());
     }
     if !current.input.starts_with(&previous_projection.input) {
-        return Err(ProviderRequestAssemblyError::invalid_state(format!(
-            "{} request chain rewrote canonical provider input inside one epoch",
-            continuity.provider_label,
-        )));
+        request
+            .messages
+            .set_provider_request_epoch(crate::context::ProviderRequestEpoch {
+                context_epoch: current_epoch,
+                epoch_transition: ContextEpochTransition::Warning("canonical_input_rewritten"),
+            });
+        return Ok(());
     }
     request
         .messages
         .set_provider_request_epoch(crate::context::ProviderRequestEpoch {
             context_epoch: current_epoch,
-            epoch_transition: previous
-                .messages
-                .provider_request_epoch()
-                .map_or(ContextEpochTransition::Initial, |epoch| {
-                    epoch.epoch_transition
-                }),
+            epoch_transition: previous.messages.provider_request_epoch().map_or(
+                ContextEpochTransition::Initial,
+                |epoch| match epoch.epoch_transition {
+                    ContextEpochTransition::Warning(_) => ContextEpochTransition::Initial,
+                    transition => transition,
+                },
+            ),
         });
     Ok(())
 }

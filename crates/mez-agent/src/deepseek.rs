@@ -232,7 +232,7 @@ pub fn deepseek_chat_completions_request_body_with_strategy(
     })
 }
 
-/// Enforces exact native-message continuity for one DeepSeek request.
+/// Checks native-message continuity without blocking valid DeepSeek requests.
 ///
 /// Each body is reconstructed from durable chronology using the request's own
 /// strategy and effective stream mode before the common prefix check runs.
@@ -254,7 +254,7 @@ pub fn prepare_deepseek_request_prefix_extension(
                 deepseek_chat_completions_request_body_with_strategy(previous, stream, strategy)?;
             Ok::<_, ProviderRequestAssemblyError>((body, strategy, stream))
         })
-        .transpose()?;
+        .and_then(Result::ok);
     let previous_body = previous_preparation
         .as_ref()
         .map(|(body, _, _)| body.as_str());
@@ -569,8 +569,8 @@ mod tests {
         }
     }
 
-    /// Verifies DeepSeek accepts append-only native messages and rejects a
-    /// changed prior native item before provider dispatch.
+    /// Verifies DeepSeek accepts append-only native messages and warns on a
+    /// changed prior native item without blocking provider dispatch.
     #[test]
     fn deepseek_request_chain_requires_exact_native_message_prefix() {
         let messages = vec![
@@ -634,14 +634,26 @@ mod tests {
                 content: "rewrite the repository request".to_string(),
             },
         ]);
-        let error = prepare_deepseek_request_prefix_extension(
+        prepare_deepseek_request_prefix_extension(
             &mut rewritten,
             Some(&first),
             "deepseek:test",
             false,
         )
-        .unwrap_err();
-        assert!(error.message().contains("rewrote canonical provider input"));
+        .unwrap();
+        assert_eq!(
+            rewritten.messages.provider_continuity_warning(),
+            Some("canonical_input_rewritten")
+        );
+        let mut next = rewritten.clone();
+        prepare_deepseek_request_prefix_extension(
+            &mut next,
+            Some(&rewritten),
+            "deepseek:test",
+            false,
+        )
+        .unwrap();
+        assert_eq!(next.messages.provider_continuity_warning(), None);
     }
 
     /// Verifies DeepSeek repair retries inherit the original request's thinking

@@ -41,7 +41,8 @@ fn openai_render_request_messages_without_chain(
 /// all cache-affecting envelope bytes and retain the prior complete canonical
 /// input as an exact leading prefix. The current canonical input is rendered
 /// solely from durable context; exceptional modes and explicit scope changes
-/// start a new chain epoch.
+/// start a new chain epoch. Comparison failures warn and start a fresh baseline
+/// without blocking a valid current request or changing its canonical content.
 pub fn prepare_openai_request_prefix_extension(
     request: &mut ModelRequest,
     previous: Option<&ModelRequest>,
@@ -70,17 +71,26 @@ pub fn prepare_openai_request_prefix_extension_with_context(
         return Ok(());
     };
 
-    let previous_canonical = openai_render_request_messages_without_chain(previous)?;
-    let previous_epoch = previous
-        .messages
-        .provider_request_epoch()
-        .map(|chain| chain.context_epoch.clone())
-        .unwrap_or(openai_context_epoch_identity(
-            previous,
-            &previous_canonical,
-            cache_namespace,
-            stream,
-        )?);
+    let prior = (|| {
+        let canonical = openai_render_request_messages_without_chain(previous)?;
+        let epoch = match previous.messages.provider_request_epoch() {
+            Some(chain) => chain.context_epoch.clone(),
+            None => openai_context_epoch_identity(previous, &canonical, cache_namespace, stream)?,
+        };
+        Ok::<_, ProviderRequestAssemblyError>((canonical, epoch))
+    })();
+    let (previous_canonical, previous_epoch) = match prior {
+        Ok(prior) => prior,
+        Err(_) => {
+            request
+                .messages
+                .set_provider_request_epoch(provider_request_epoch(
+                    current_epoch,
+                    ContextEpochTransition::Warning("prior_baseline_unavailable"),
+                ));
+            return Ok(());
+        }
+    };
     if previous_epoch != current_epoch {
         let transition = ContextEpochTransition::Changed(
             previous_epoch
@@ -93,20 +103,25 @@ pub fn prepare_openai_request_prefix_extension_with_context(
         return Ok(());
     }
     if !canonical.input.starts_with(&previous_canonical.input) {
-        return Err(ProviderRequestAssemblyError::invalid_state(
-            "OpenAI request chain rewrote canonical provider input inside one cache epoch",
-        ));
+        request
+            .messages
+            .set_provider_request_epoch(provider_request_epoch(
+                current_epoch,
+                ContextEpochTransition::Warning("canonical_input_rewritten"),
+            ));
+        return Ok(());
     }
     request
         .messages
         .set_provider_request_epoch(provider_request_epoch(
             current_epoch,
-            previous
-                .messages
-                .provider_request_epoch()
-                .map_or(ContextEpochTransition::Initial, |chain| {
-                    chain.epoch_transition
-                }),
+            previous.messages.provider_request_epoch().map_or(
+                ContextEpochTransition::Initial,
+                |chain| match chain.epoch_transition {
+                    ContextEpochTransition::Warning(_) => ContextEpochTransition::Initial,
+                    transition => transition,
+                },
+            ),
         ));
     Ok(())
 }
@@ -376,9 +391,10 @@ mod tests {
     }
 
     /// Verifies an ordinary request chain appends new chronology while
-    /// rejecting a rewrite of an already-sent chronological item.
+    /// warning on a rewrite of an already-sent chronological item without
+    /// blocking the request or poisoning subsequent comparisons.
     #[test]
-    fn openai_request_chain_appends_chronology_and_rejects_rewrites() {
+    fn openai_request_chain_appends_chronology_and_warns_on_rewrites() {
         let messages = vec![
             ModelMessage {
                 role: ModelMessageRole::System,
@@ -443,9 +459,95 @@ mod tests {
             },
         ]
         .into();
-        let error =
-            prepare_openai_request_prefix_extension(&mut rewritten, Some(&first)).unwrap_err();
-        assert!(error.message().contains("rewrote canonical provider input"));
+        prepare_openai_request_prefix_extension(&mut rewritten, Some(&first)).unwrap();
+        assert_eq!(
+            rewritten.messages.provider_continuity_warning(),
+            Some("canonical_input_rewritten")
+        );
+        let mut next = rewritten.clone();
+        prepare_openai_request_prefix_extension(&mut next, Some(&rewritten)).unwrap();
+        assert_eq!(next.messages.provider_continuity_warning(), None);
+    }
+
+    /// Verifies missing or malformed native comparison baselines cannot reject
+    /// a valid current body, while malformed current bodies remain errors.
+    /// Warning metadata must not change model-visible request content.
+    #[test]
+    fn native_cache_baseline_failures_are_advisory() {
+        use crate::provider_continuity::{
+            ProviderNativeRequestContinuity, prepare_provider_native_request_prefix_extension,
+        };
+        let previous = request_chain_fixture(Vec::new());
+        for baseline in [
+            None,
+            Some("not json"),
+            Some("[]"),
+            Some("{}"),
+            Some(r#"{"messages":false}"#),
+        ] {
+            let mut current = previous.clone();
+            prepare_provider_native_request_prefix_extension(
+                &mut current,
+                Some(&previous),
+                ProviderNativeRequestContinuity {
+                    cache_namespace: "test",
+                    provider_label: "test",
+                    current_api_shape: "test",
+                    previous_api_shape: "test",
+                    input_field: "messages",
+                    current_body: r#"{"messages":[]}"#,
+                    previous_body: baseline,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                current.messages.provider_continuity_warning(),
+                Some("prior_baseline_unavailable")
+            );
+            assert_eq!(current.messages.iter().count(), 0);
+        }
+        let mut current = previous.clone();
+        assert!(
+            prepare_provider_native_request_prefix_extension(
+                &mut current,
+                Some(&previous),
+                ProviderNativeRequestContinuity {
+                    cache_namespace: "test",
+                    provider_label: "test",
+                    current_api_shape: "test",
+                    previous_api_shape: "test",
+                    input_field: "messages",
+                    current_body: "not json",
+                    previous_body: None,
+                },
+            )
+            .is_err()
+        );
+    }
+
+    /// Verifies invalid controls on a prior Responses baseline are advisory,
+    /// without weakening current request validation or changing wire content.
+    #[test]
+    fn openai_unrenderable_baseline_does_not_block_valid_request() {
+        let mut current = request_chain_fixture(vec![ModelMessage {
+            role: ModelMessageRole::User,
+            source: ContextSourceKind::UserInstruction,
+            placement: crate::ContextPlacement::ConversationAppend,
+            content: "continue normally".to_string(),
+        }]);
+        let wire = crate::openai_responses_request_body(&current).unwrap();
+        let mut previous = current.clone();
+        previous.model.clear();
+        prepare_openai_request_prefix_extension(&mut current, Some(&previous)).unwrap();
+        assert_eq!(
+            current.messages.provider_continuity_warning(),
+            Some("prior_baseline_unavailable")
+        );
+        assert_eq!(
+            crate::openai_responses_request_body(&current).unwrap(),
+            wire
+        );
+        assert!(prepare_openai_request_prefix_extension(&mut previous, Some(&current)).is_err());
     }
 
     /// Verifies a cache-affecting instruction change establishes a classified

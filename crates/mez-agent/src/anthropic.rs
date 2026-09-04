@@ -282,7 +282,7 @@ pub fn anthropic_messages_request_body(
     })
 }
 
-/// Enforces exact native-message continuity for one Anthropic request.
+/// Checks native-message continuity without blocking valid Anthropic requests.
 ///
 /// The renderer is invoked for both requests from their durable chronology;
 /// no prior provider input is retained on the request chain.
@@ -295,8 +295,7 @@ pub fn prepare_anthropic_request_prefix_extension(
 ) -> ProviderRequestAssemblyResult<()> {
     let current_body = anthropic_messages_request_body(request, stream, options)?;
     let previous_body = previous
-        .map(|previous| anthropic_messages_request_body(previous, stream, options))
-        .transpose()?;
+        .and_then(|previous| anthropic_messages_request_body(previous, stream, options).ok());
     prepare_provider_native_request_prefix_extension(
         request,
         previous,
@@ -1383,8 +1382,8 @@ mod tests {
         );
     }
 
-    /// Verifies Anthropic accepts durable native-message growth and rejects a
-    /// same-epoch rewrite before the request reaches provider transport.
+    /// Verifies Anthropic accepts durable native-message growth and warns on a
+    /// same-epoch rewrite without blocking transport or later comparisons.
     #[test]
     fn anthropic_request_chain_requires_exact_native_message_prefix() {
         let messages = vec![
@@ -1455,15 +1454,28 @@ mod tests {
                 content: "rewrite the repository request".to_string(),
             },
         ]);
-        let error = prepare_anthropic_request_prefix_extension(
+        prepare_anthropic_request_prefix_extension(
             &mut rewritten,
             Some(&first),
             "anthropic:test",
             false,
             &AnthropicMessagesOptions::default(),
         )
-        .unwrap_err();
-        assert!(error.message().contains("rewrote canonical provider input"));
+        .unwrap();
+        assert_eq!(
+            rewritten.messages.provider_continuity_warning(),
+            Some("canonical_input_rewritten")
+        );
+        let mut next = rewritten.clone();
+        prepare_anthropic_request_prefix_extension(
+            &mut next,
+            Some(&rewritten),
+            "anthropic:test",
+            false,
+            &AnthropicMessagesOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(next.messages.provider_continuity_warning(), None);
     }
 
     /// Verifies options from incompatible provider APIs fail at the lower

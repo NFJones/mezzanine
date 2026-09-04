@@ -128,6 +128,8 @@ pub struct ProviderWireRequestObservation {
     pub max_output_tokens: Option<usize>,
     /// Temporary output-limit retry override carried by this exact request.
     pub output_limit_retry_override_tokens: Option<usize>,
+    /// Content-free provider cache-continuity warning for this request.
+    pub continuity_warning: Option<String>,
     /// Execution, routing, or other auxiliary request class.
     pub purpose: ProviderRequestPurpose,
     /// Number of provider-neutral request messages.
@@ -259,6 +261,10 @@ impl<'a> ProviderWireObservationContext<'a> {
             output_limit_retry_override_tokens: request.max_output_tokens.filter(|_| {
                 request.interaction_kind == mez_agent::ModelInteractionKind::OutputLimitRetry
             }),
+            continuity_warning: request
+                .messages
+                .provider_continuity_warning()
+                .map(str::to_string),
             purpose: self.purpose,
             message_count: request.messages.len(),
             message_bytes: request.messages.iter().fold(0usize, |total, message| {

@@ -3,9 +3,8 @@
 use super::super::*;
 
 /// Verifies that a rewritten OpenAI input detected while registering a worker
-/// lease fails only the affected turn. The claim must return no dispatch, show
-/// a copyable diagnostic, and leave the actor alive rather than forwarding the
-/// assembly error to the provider service supervisor.
+/// lease is advisory. The claim must still dispatch and retain a fresh baseline
+/// without failing the turn or forwarding an error to the service supervisor.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_contains_provider_claim_cache_chain_failure() {
     let mut service = test_service();
@@ -98,7 +97,7 @@ model = "invalid-model"
             .claim_configured_agent_provider_task(agent_id, task.turn_id.clone())
             .await
             .expect("request assembly failures must not escape to the provider supervisor");
-        assert!(claimed.is_none());
+        assert!(claimed.is_some());
         assert!(
             handle
                 .pending_agent_provider_tasks()
@@ -112,8 +111,8 @@ model = "invalid-model"
                 .await
                 .unwrap()
                 .iter()
-                .all(|effect| {
-                    !matches!(effect, RuntimeSideEffect::ScheduleTimer { key, .. }
+                .any(|effect| {
+                    matches!(effect, RuntimeSideEffect::ScheduleTimer { key, .. }
                 if key.kind == RuntimeTimerKind::ProviderClaim)
                 })
         );
@@ -122,8 +121,8 @@ model = "invalid-model"
             RuntimeLifecycleState::Running
         );
     };
-    let ((), exit) = tokio::join!(client, actor.run());
-    assert_eq!(exit.service.agent_scheduler().snapshot().running, 0);
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.service.agent_scheduler().snapshot().running, 1);
     assert_eq!(
         exit.service
             .agent_turn_ledger()
@@ -132,7 +131,7 @@ model = "invalid-model"
             .find(|turn| turn.turn_id == task.turn_id)
             .unwrap()
             .state,
-        mez_agent::AgentTurnState::Failed
+        mez_agent::AgentTurnState::Running
     );
     let pane_text = exit
         .service
@@ -140,10 +139,35 @@ model = "invalid-model"
         .unwrap()
         .normal_content_lines()
         .join("\n");
-    assert!(
-        pane_text.contains("rewrote canonical provider input"),
-        "{pane_text}"
+    assert!(!pane_text.contains("provider_error"), "{pane_text}");
+    exit.service
+        .complete_running_agent_turn_and_start_ready(
+            &dispatch.turn,
+            mez_agent::AgentTurnState::Completed,
+            "test_cache_warning_completed",
+        )
+        .unwrap();
+    let next = exit
+        .service
+        .execute_agent_shell_command(&primary, "continue in the same conversation")
+        .unwrap();
+    assert!(next.contains(r#""state":"running""#), "{next}");
+    let next_task = exit.service.pending_agent_provider_tasks().remove(0);
+    let next_dispatch = exit
+        .service
+        .claim_configured_agent_provider_task(
+            &AgentId::opaque(next_task.agent_id).unwrap(),
+            &next_task.turn_id,
+        )
+        .unwrap()
+        .expect("next prompt must remain dispatchable");
+    assert_eq!(
+        next_dispatch.turn.conversation_id,
+        dispatch.turn.conversation_id
     );
+    exit.service
+        .record_claimed_agent_provider_task(&next_dispatch, 2, 30_000)
+        .unwrap();
 }
 
 /// Verifies that render workers can drain only render invalidations while

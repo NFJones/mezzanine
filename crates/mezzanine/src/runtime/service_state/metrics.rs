@@ -747,6 +747,7 @@ mod provider_wire_tests {
             allowed_actions: request.allowed_actions.action_type_names().join(","),
             max_output_tokens: request.max_output_tokens,
             output_limit_retry_override_tokens: None,
+            continuity_warning: None,
             purpose,
             message_count: request.messages.len(),
             message_bytes: request

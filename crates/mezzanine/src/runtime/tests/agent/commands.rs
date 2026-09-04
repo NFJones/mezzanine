@@ -108,6 +108,7 @@ fn runtime_show_metrics_reports_provider_tokens_by_model() {
                 allowed_actions: request.allowed_actions.action_type_names().join(","),
                 max_output_tokens: request.max_output_tokens,
                 output_limit_retry_override_tokens: request.max_output_tokens,
+                continuity_warning: None,
                 purpose: crate::integrations::agent::provider::ProviderRequestPurpose::Execution,
                 message_count: request.messages.len(),
                 message_bytes: request

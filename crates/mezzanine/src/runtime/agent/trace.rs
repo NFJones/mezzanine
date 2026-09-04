@@ -79,10 +79,11 @@ impl RuntimeSessionService {
                 )
             },
         );
+        let continuity_warning = observation.continuity_warning.as_deref().unwrap_or("none");
         self.record_agent_pane_trace_log_text(
             &observation.pane_id,
             &format!(
-                "agent trace: turn {}: provider wire request id={} attempt={} retry={} purpose={} provider={} model={} interaction={} succeeded={} failure={} input_bytes={} input_items={} mcp_directory_bytes={} mcp_search_result_bytes={} mcp_retrieved_contract_bytes={} mcp_action_result_bytes={} action_result_bytes={} cache={} continuity={}",
+                "agent trace: turn {}: provider wire request id={} attempt={} retry={} purpose={} provider={} model={} interaction={} succeeded={} failure={} input_bytes={} input_items={} mcp_directory_bytes={} mcp_search_result_bytes={} mcp_retrieved_contract_bytes={} mcp_action_result_bytes={} action_result_bytes={} cache={} continuity={} continuity_warning={}",
                 observation.turn_id,
                 status.request_id,
                 observation.attempt_index,
@@ -102,8 +103,17 @@ impl RuntimeSessionService {
                 status.action_result_bytes,
                 usage,
                 continuity,
+                continuity_warning,
             ),
         );
+        if let Some(warning) = observation.continuity_warning.as_deref() {
+            let _ = self.append_agent_status_text_to_terminal_buffer(
+                &observation.pane_id,
+                &format!(
+                    "agent warning: provider request continues; cache baseline reset ({warning})"
+                ),
+            );
+        }
         Ok(self.runtime_transition_with_render(true, None))
     }
 

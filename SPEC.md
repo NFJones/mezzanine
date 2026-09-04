@@ -2502,9 +2502,9 @@ continuation. If runtime cleanup discovers a running turn with none of those
 paths, Mezzanine MUST fail that turn with a copyable pane-local diagnostic
 rather than leaving it in a permanent running state.
 
-Provider selection, credential, request assembly (including cache-continuity
-validation during worker claim registration), transport, and provider response
-errors during agent prompt execution MUST fail the affected turn and render pane-local,
+Provider selection, credential, invalid current request assembly, transport, and
+provider response errors during agent prompt execution MUST fail the affected
+turn and render pane-local,
 copyable failure details in the pane terminal buffer. Such errors MUST NOT
 terminate the session daemon, detach the primary client, or prevent other panes
 and agents from continuing.
@@ -4604,8 +4604,15 @@ text into model context. For ordinary requests in one conversation and cache
 epoch, the complete rendered input sent by each prior request MUST be a
 byte-identical prefix of the next request. Every model-visible item in that
 sequence MUST be reconstructible from immutable epoch material or durable
-chronology; an unchanged epoch MUST reject any omitted, reordered, or rewritten
-item before provider dispatch. Diagnostics MUST report complete-wire append
+chronology. Cache comparison failures, including omitted, reordered, or rewritten
+input, unclassified envelope changes, and missing or unrenderable prior baselines,
+MUST be advisory warnings, never reasons to reject an otherwise valid current
+request, fail a turn, or interrupt a session. The current canonical request MUST
+establish a fresh comparison baseline without changing durable history or adding
+warning text to model context. Content-free warnings MUST be observable in pane
+output and diagnostics; warning presentation failure MUST NOT block execution.
+Validation of the current request and durable context remains mandatory.
+Diagnostics MUST report complete-wire append
 continuity as the provider-prefix result. A local projection MAY be retained as
 a secondary diagnostic but MUST NOT be presented as proof of provider cache
 continuity.
@@ -4633,8 +4640,9 @@ its exact rendered input and cache-affecting envelope. Later ordinary requests
 in the same provider, model, routing namespace, stream shape, and prompt-cache
 lineage MUST preserve that complete input as an exact prefix. Model, namespace,
 stream, lineage, compaction, and explicitly classified interaction transitions
-establish a new cache epoch; unclassified envelope rewrites MUST fail before
-provider dispatch.
+establish a new cache epoch; unclassified envelope rewrites MUST warn and reset
+the comparison baseline without blocking provider dispatch. Subsequent valid
+requests and user prompts MUST remain usable without clearing the conversation.
 
 Direct user prompts and mid-turn steering MUST be exact `UserEvent` chronology.
 The initial prompt MUST be appended once before the assistant actions and
