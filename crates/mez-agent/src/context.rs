@@ -1,12 +1,13 @@
 //! Provider-independent agent context validation contracts.
 //!
-//! This module owns typed stable slots, monotonic conversation events,
-//! request-local live state, and deterministic validation failures for context
-//! and model-profile selection. Typed collections are authoritative; ordered
+//! This module owns typed stable slots, monotonic conversation events, and
+//! deterministic validation failures for context and model-profile selection.
+//! Typed collections are authoritative; ordered
 //! blocks and metadata are read-only projections rebuilt after a checked
 //! mutation. Mutations validate an isolated candidate before commit, direct
-//! user events are exact, evidence requires a preceding causal owner, and no
-//! request-local state may survive in durable context. Product prompt assets,
+//! user events are exact, evidence requires a preceding causal owner, and all
+//! model-visible state belongs to the stable prefix or durable chronology.
+//! Product prompt assets,
 //! transcript persistence, and provider execution remain outside this crate
 //! and adapt these contracts at their composition boundaries.
 
@@ -164,8 +165,6 @@ pub enum ContextPlacement {
     StablePrefix,
     /// Immutable chronological conversation material appended after the prefix.
     ConversationAppend,
-    /// Regenerated controller and current-turn state kept outside the prefix.
-    EphemeralTail,
 }
 
 /// Model-facing meaning of one context block, independent of provider role.
@@ -187,8 +186,6 @@ pub enum ContextSemanticKind {
     EvidenceEvent,
     /// Neutral historical, memory, or agent-to-agent reference material.
     ReferenceEvent,
-    /// Mutable factual state needed only for the next provider request.
-    LiveState,
 }
 
 /// Retention and compaction treatment for one context block.
@@ -201,8 +198,6 @@ pub enum ContextRetention {
     ExecutionGroup,
     /// The block may participate in chronological historical summarization.
     Summarizable,
-    /// The block exists only in one prepared request and is never persisted.
-    RequestLocal,
 }
 
 /// Monotonic identity assigned when one chronological event commits.
@@ -613,46 +608,6 @@ impl ConversationEvent {
     }
 }
 
-/// One factual request-local block stored only by a prepared model request.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LiveStateBlock {
-    block: ContextBlock,
-}
-
-impl LiveStateBlock {
-    /// Creates one validated request-local live-state block.
-    pub fn new(block: ContextBlock) -> AgentContextResult<Self> {
-        if block.placement != ContextPlacement::EphemeralTail
-            || block.semantic_kind() != ContextSemanticKind::LiveState
-            || block.retention() != ContextRetention::RequestLocal
-        {
-            return Err(AgentContextError::new(
-                "live-state blocks require ephemeral-tail request-local semantics",
-            ));
-        }
-        Ok(Self { block })
-    }
-
-    /// Returns the exact model-visible live-state block.
-    pub fn block(&self) -> &ContextBlock {
-        &self.block
-    }
-
-    /// Builds the adapter-facing metadata projection for this live state.
-    fn metadata(&self) -> ContextBlockMetadata {
-        ContextBlockMetadata {
-            semantic_kind: ContextSemanticKind::LiveState,
-            retention: ContextRetention::RequestLocal,
-            event_sequence: None,
-            execution_group_id: None,
-            provider_owner: None,
-            recoverable_for_compaction: false,
-            stable_slot_id: None,
-            stable_source_fingerprint: None,
-        }
-    }
-}
-
 /// One ordered unit of model-visible context.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextBlock {
@@ -743,20 +698,6 @@ impl ContextBlock {
         }
     }
 
-    /// Builds one factual request-local live-state block.
-    pub fn live_state(
-        source: ContextSourceKind,
-        label: impl Into<String>,
-        content: impl Into<String>,
-    ) -> Self {
-        Self {
-            source,
-            placement: ContextPlacement::EphemeralTail,
-            label: label.into(),
-            content: content.into(),
-        }
-    }
-
     /// Returns the block's derived trust domain.
     pub fn trust_domain(&self) -> TrustDomain {
         TrustDomain::for_source(self.source)
@@ -767,7 +708,6 @@ impl ContextBlock {
         match self.placement {
             ContextPlacement::StablePrefix => ContextStability::Static,
             ContextPlacement::ConversationAppend => ContextStability::SessionStable,
-            ContextPlacement::EphemeralTail => ContextStability::TurnVolatile,
         }
     }
 
@@ -777,7 +717,6 @@ impl ContextBlock {
             ContextPlacement::StablePrefix | ContextPlacement::ConversationAppend => {
                 ContextCachePolicy::Eligible
             }
-            ContextPlacement::EphemeralTail => ContextCachePolicy::Ineligible,
         }
     }
 
@@ -822,17 +761,13 @@ impl ContextBlock {
             | ContextSourceKind::Configuration
             | ContextSourceKind::RuntimeHint => match self.placement {
                 ContextPlacement::StablePrefix => ContextSemanticKind::AmbientInstruction,
-                ContextPlacement::ConversationAppend => ContextSemanticKind::TaskPrelude,
-                ContextPlacement::EphemeralTail => ContextSemanticKind::LiveState,
+                ContextPlacement::ConversationAppend => ContextSemanticKind::ReferenceEvent,
             },
         }
     }
 
     /// Returns the canonical retention treatment of this block.
     pub fn retention(&self) -> ContextRetention {
-        if self.placement == ContextPlacement::EphemeralTail {
-            return ContextRetention::RequestLocal;
-        }
         match self.source {
             ContextSourceKind::UserInstruction
             | ContextSourceKind::SkillInstruction
@@ -858,9 +793,6 @@ impl ContextBlock {
 
     /// Returns whether exact content can be recovered outside model context.
     pub fn recoverable_for_compaction(&self) -> bool {
-        if self.placement == ContextPlacement::EphemeralTail {
-            return false;
-        }
         matches!(
             self.source,
             ContextSourceKind::Memory
@@ -918,8 +850,6 @@ pub struct AgentContext {
     stable_slots: Vec<StableContextBlock>,
     /// Immutable chronological events in actor commit order.
     chronology: Vec<ConversationEvent>,
-    /// Request-local state present only on compatibility provider views.
-    live_state: Vec<LiveStateBlock>,
     /// Read-only ordered projection consumed by existing provider adapters.
     blocks: Vec<ContextBlock>,
     /// Read-only metadata projection aligned one-to-one with `blocks`.
@@ -940,7 +870,6 @@ impl AgentContext {
         Self {
             stable_slots: Vec::new(),
             chronology: Vec::new(),
-            live_state: Vec::new(),
             blocks: Vec::new(),
             block_metadata: Vec::new(),
             next_event_sequence: CONTEXT_EVENT_SEQUENCE_STRIDE,
@@ -1186,6 +1115,111 @@ impl AgentContext {
         )
     }
 
+    /// Inserts task-scoped chronological preludes immediately before the one
+    /// active direct-user prompt during initial request construction.
+    ///
+    /// The supplied blocks remain durable conversation events. Existing
+    /// historical events retain their sequence and order; sparse sequence
+    /// values are assigned only in the interval before the not-yet-sent active
+    /// prompt. Callers must use this construction boundary before provider
+    /// dispatch, never to rewrite a sent request chain.
+    pub fn insert_task_preludes_before_active_user(
+        &mut self,
+        preludes: Vec<ContextBlock>,
+    ) -> AgentContextResult<()> {
+        if preludes.is_empty() {
+            return Ok(());
+        }
+        if preludes.iter().any(|block| {
+            block.placement != ContextPlacement::ConversationAppend
+                || block.semantic_kind() != ContextSemanticKind::TaskPrelude
+                || block.retention() != ContextRetention::Exact
+        }) {
+            return Err(AgentContextError::new(
+                "prompt-boundary insertion requires exact chronological task preludes",
+            ));
+        }
+        let mut candidate = self.clone();
+        let active_users = candidate
+            .chronology
+            .iter()
+            .enumerate()
+            .filter(|(_, event)| {
+                event.block.source == ContextSourceKind::UserInstruction
+                    && event.semantic_kind == ContextSemanticKind::UserEvent
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if active_users.len() > 1 {
+            return Err(AgentContextError::new(
+                "prompt-boundary insertion accepts at most one active user prompt",
+            ));
+        }
+        let Some(active_user_index) = active_users.first().copied() else {
+            for block in preludes {
+                candidate.append_conversation_event(
+                    block,
+                    ContextSemanticKind::TaskPrelude,
+                    ContextRetention::Exact,
+                    None,
+                    None,
+                    true,
+                )?;
+            }
+            *self = candidate;
+            return Ok(());
+        };
+        let previous_sequence = active_user_index
+            .checked_sub(1)
+            .and_then(|index| candidate.chronology.get(index))
+            .map_or(0, |event| event.sequence.get());
+        let active_user_sequence = candidate.chronology[active_user_index].sequence.get();
+        let required_gaps = u64::try_from(preludes.len())
+            .ok()
+            .and_then(|count| count.checked_add(1))
+            .ok_or_else(|| AgentContextError::new("prompt-boundary prelude count is too large"))?;
+        let available_gap = active_user_sequence.saturating_sub(previous_sequence);
+        if available_gap <= required_gaps {
+            return Err(AgentContextError::new(
+                "prompt-boundary prelude insertion exhausted the sequence interval before the active user prompt",
+            ));
+        }
+        let step = available_gap / required_gaps;
+        let events = preludes
+            .into_iter()
+            .enumerate()
+            .map(|(index, block)| {
+                let offset = u64::try_from(index)
+                    .ok()
+                    .and_then(|index| index.checked_add(1))
+                    .and_then(|index| index.checked_mul(step))
+                    .ok_or_else(|| {
+                        AgentContextError::new("prompt-boundary prelude sequence overflow")
+                    })?;
+                Ok(ConversationEvent {
+                    block,
+                    semantic_kind: ContextSemanticKind::TaskPrelude,
+                    retention: ContextRetention::Exact,
+                    sequence: ContextEventSequence::new(
+                        previous_sequence.checked_add(offset).ok_or_else(|| {
+                            AgentContextError::new("prompt-boundary prelude sequence overflow")
+                        })?,
+                    )?,
+                    execution_group_id: None,
+                    provider_owner: None,
+                    recoverable_for_compaction: true,
+                })
+            })
+            .collect::<AgentContextResult<Vec<_>>>()?;
+        candidate
+            .chronology
+            .splice(active_user_index..active_user_index, events);
+        candidate.rebuild_projections();
+        candidate.validate_stored_metadata()?;
+        *self = candidate;
+        Ok(())
+    }
+
     /// Reclassifies one exact direct-user event as an exact neutral reference
     /// without moving it in chronology.
     ///
@@ -1309,7 +1343,6 @@ impl AgentContext {
         let mut candidate = self.clone();
         candidate.stable_slots.retain(|slot| keep(&slot.block));
         candidate.chronology.retain(|event| keep(&event.block));
-        candidate.live_state.retain(|state| keep(&state.block));
         candidate.rebuild_projections();
         candidate.validate_stored_metadata()?;
         validate_context_placement_order(&candidate.blocks)?;
@@ -1361,10 +1394,6 @@ impl AgentContext {
             .chronology
             .iter()
             .any(|event| event.block.source == source)
-            || self
-                .live_state
-                .iter()
-                .any(|state| state.block.source == source)
         {
             return Err(AgentContextError::new(
                 "stable source replacement found the source outside the stable prefix",
@@ -1424,7 +1453,7 @@ impl AgentContext {
 
     /// Inserts a new block at its lifecycle boundary and records its semantics.
     ///
-    /// This compatibility operation is intended for stable/task-prelude/live
+    /// This compatibility operation is intended for stable and task-prelude
     /// assembly helpers. Runtime conversation events must use the narrower
     /// append methods so execution ownership is explicit.
     pub fn insert_typed_block(
@@ -1501,34 +1530,10 @@ impl AgentContext {
                 self.chronology.push(event);
                 Some(sequence)
             }
-            ContextPlacement::EphemeralTail => {
-                if semantic_kind != ContextSemanticKind::LiveState
-                    || retention != ContextRetention::RequestLocal
-                    || recoverable_for_compaction
-                {
-                    return Err(AgentContextError::new(
-                        "live-state insertion requires request-local non-recoverable semantics",
-                    ));
-                }
-                self.live_state.push(LiveStateBlock::new(block)?);
-                None
-            }
         };
         self.rebuild_projections();
         self.validate_stored_metadata()?;
         Ok(sequence)
-    }
-
-    /// Removes the request-local suffix and returns it for prepared-request
-    /// construction without changing durable event identity.
-    pub fn split_off_live_state(&mut self) -> Vec<ContextBlock> {
-        let live_state = self
-            .live_state
-            .drain(..)
-            .map(|state| state.block)
-            .collect::<Vec<_>>();
-        self.rebuild_projections();
-        live_state
     }
 
     /// Replaces chronology for compatibility fixtures and imported snapshots.
@@ -1595,7 +1600,7 @@ impl AgentContext {
         if !blocks.is_empty() {
             imported.initialize_typed_storage_from_blocks(blocks)?;
         }
-        if !imported.stable_slots.is_empty() || !imported.live_state.is_empty() {
+        if !imported.stable_slots.is_empty() {
             return Err(AgentContextError::new(
                 "imported history replacement produced a non-chronological block",
             ));
@@ -1850,7 +1855,6 @@ impl AgentContext {
         let mut conversation_index = 0usize;
         self.stable_slots.clear();
         self.chronology.clear();
-        self.live_state.clear();
         self.block_metadata.clear();
         self.blocks.clear();
         self.next_event_sequence = CONTEXT_EVENT_SEQUENCE_STRIDE;
@@ -1876,9 +1880,6 @@ impl AgentContext {
                     });
                     conversation_index = conversation_index.saturating_add(1);
                 }
-                ContextPlacement::EphemeralTail => {
-                    self.live_state.push(LiveStateBlock::new(block)?);
-                }
             }
         }
         self.rebuild_projections();
@@ -1890,7 +1891,7 @@ impl AgentContext {
         self.blocks.clear();
         self.block_metadata.clear();
         self.blocks
-            .reserve(self.stable_slots.len() + self.chronology.len() + self.live_state.len());
+            .reserve(self.stable_slots.len() + self.chronology.len());
         self.block_metadata.reserve(self.blocks.capacity());
         for slot in &self.stable_slots {
             self.blocks.push(slot.block.clone());
@@ -1900,10 +1901,6 @@ impl AgentContext {
             self.blocks.push(event.block.clone());
             self.block_metadata.push(event.metadata());
         }
-        for live_state in &self.live_state {
-            self.blocks.push(live_state.block.clone());
-            self.block_metadata.push(live_state.metadata());
-        }
     }
 
     /// Validates stored metadata alignment and strictly increasing chronology.
@@ -1911,14 +1908,12 @@ impl AgentContext {
         let typed_len = self
             .stable_slots
             .len()
-            .saturating_add(self.chronology.len())
-            .saturating_add(self.live_state.len());
+            .saturating_add(self.chronology.len());
         if self.blocks.len() != self.block_metadata.len() || self.blocks.len() != typed_len {
             return Err(AgentContextError::new(format!(
-                "context projection length mismatch: stable={} chronology={} live_state={} blocks={} metadata={}; mutate context through checked APIs",
+                "context projection length mismatch: stable={} chronology={} blocks={} metadata={}; mutate context through checked APIs",
                 self.stable_slots.len(),
                 self.chronology.len(),
-                self.live_state.len(),
                 self.blocks.len(),
                 self.block_metadata.len()
             )));
@@ -1931,11 +1926,6 @@ impl AgentContext {
                 self.chronology
                     .iter()
                     .map(|event| (&event.block, event.metadata())),
-            )
-            .chain(
-                self.live_state
-                    .iter()
-                    .map(|live_state| (&live_state.block, live_state.metadata())),
             );
         for (index, ((expected_block, expected_metadata), (block, metadata))) in typed_projection
             .zip(self.blocks.iter().zip(&self.block_metadata))
@@ -2021,18 +2011,6 @@ impl AgentContext {
         self.validate_stored_metadata()?;
         validate_context_placement_order(&self.blocks)?;
         validate_context_semantics(&self.blocks)?;
-        if let Some((index, block)) = self
-            .blocks
-            .iter()
-            .enumerate()
-            .find(|(_, block)| block.placement == ContextPlacement::EphemeralTail)
-        {
-            return Err(context_semantic_error(
-                index,
-                block,
-                "durable agent context cannot contain ephemeral-tail blocks",
-            ));
-        }
         Ok(())
     }
 
@@ -2279,36 +2257,27 @@ fn compatibility_execution_group_ranges(blocks: &[&ContextBlock]) -> Vec<Range<u
     groups
 }
 
-/// One provider-bound view composed from durable chronology and request-local
-/// live state.
-///
-/// The live state is validated separately and is discarded after the request;
-/// it never mutates or becomes part of the stored [`AgentContext`].
+/// One provider-bound view composed from durable stable and chronological
+/// context plus non-model-visible previous-request metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedModelContext {
     durable: AgentContext,
-    live_state: Vec<ContextBlock>,
     previous_request: Option<ModelRequest>,
 }
 
 impl PreparedModelContext {
     /// Builds and validates one prepared provider context.
-    pub fn new(durable: AgentContext, live_state: Vec<ContextBlock>) -> AgentContextResult<Self> {
+    pub fn new(durable: AgentContext) -> AgentContextResult<Self> {
         durable.validate_durable()?;
-        let prepared = Self {
+        Ok(Self {
             durable,
-            live_state,
             previous_request: None,
-        };
-        let ordered = prepared.ordered_blocks();
-        validate_context_placement_order(&ordered)?;
-        validate_context_semantics(&ordered)?;
-        Ok(prepared)
+        })
     }
 
     /// Builds a prepared context with no request-local live state.
     pub fn from_durable(durable: AgentContext) -> AgentContextResult<Self> {
-        Self::new(durable, Vec::new())
+        Self::new(durable)
     }
 
     /// Carries the last concrete request emitted for this turn into the next
@@ -2323,11 +2292,6 @@ impl PreparedModelContext {
         &self.durable
     }
 
-    /// Returns the request-local live-state suffix.
-    pub fn live_state(&self) -> &[ContextBlock] {
-        &self.live_state
-    }
-
     /// Returns the last concrete request emitted for this turn, when present.
     pub fn previous_request(&self) -> Option<&ModelRequest> {
         self.previous_request.as_ref()
@@ -2335,7 +2299,7 @@ impl PreparedModelContext {
 
     /// Returns the number of blocks visible to the provider.
     pub fn len(&self) -> usize {
-        self.durable.blocks.len() + self.live_state.len()
+        self.durable.blocks.len()
     }
 
     /// Reports whether the prepared request has no model-visible blocks.
@@ -2345,41 +2309,12 @@ impl PreparedModelContext {
 
     /// Clones the canonical provider-visible sequence without changing order.
     pub fn to_agent_context(&self) -> AgentContext {
-        let mut context = self.durable.clone();
-        for block in &self.live_state {
-            context
-                .insert_typed_block(
-                    block.clone(),
-                    ContextSemanticKind::LiveState,
-                    ContextRetention::RequestLocal,
-                    false,
-                )
-                .expect("prepared live state was validated at construction");
-        }
-        context
+        self.durable.clone()
     }
 
-    /// Consumes the prepared view and joins its two already validated phases.
-    pub fn into_agent_context(mut self) -> AgentContext {
-        for block in self.live_state.drain(..) {
-            self.durable
-                .insert_typed_block(
-                    block,
-                    ContextSemanticKind::LiveState,
-                    ContextRetention::RequestLocal,
-                    false,
-                )
-                .expect("prepared live state was validated at construction");
-        }
+    /// Consumes the prepared view and returns its durable context.
+    pub fn into_agent_context(self) -> AgentContext {
         self.durable
-    }
-
-    /// Clones stable/append chronology followed by the live-state suffix.
-    fn ordered_blocks(&self) -> Vec<ContextBlock> {
-        let mut blocks = Vec::with_capacity(self.len());
-        blocks.extend(self.durable.blocks.iter().cloned());
-        blocks.extend(self.live_state.iter().cloned());
-        blocks
     }
 }
 
@@ -2443,16 +2378,9 @@ pub fn validate_context_semantics(blocks: &[ContextBlock]) -> AgentContextResult
                 Some("stable-prefix blocks must be ambient instructions")
             }
             ContextPlacement::ConversationAppend
-                if semantic == ContextSemanticKind::LiveState
-                    || retention == ContextRetention::RequestLocal =>
+                if semantic == ContextSemanticKind::AmbientInstruction =>
             {
-                Some("append-only blocks cannot contain request-local live state")
-            }
-            ContextPlacement::EphemeralTail
-                if semantic != ContextSemanticKind::LiveState
-                    || retention != ContextRetention::RequestLocal =>
-            {
-                Some("ephemeral-tail blocks must be request-local live state")
+                Some("append-only blocks cannot contain ambient instructions")
             }
             _ => None,
         };
@@ -2516,7 +2444,6 @@ fn validate_context_block_metadata(
         ContextPlacement::StablePrefix
             if metadata.semantic_kind != ContextSemanticKind::AmbientInstruction
                 || metadata.event_sequence.is_some()
-                || metadata.retention == ContextRetention::RequestLocal
                 || stable_slot_metadata_is_partial =>
         {
             Some(
@@ -2524,25 +2451,12 @@ fn validate_context_block_metadata(
             )
         }
         ContextPlacement::ConversationAppend
-            if metadata.semantic_kind == ContextSemanticKind::LiveState
-                || metadata.retention == ContextRetention::RequestLocal
+            if metadata.semantic_kind == ContextSemanticKind::AmbientInstruction
                 || metadata.event_sequence.is_none()
                 || metadata.stable_slot_id.is_some()
                 || metadata.stable_source_fingerprint.is_some() =>
         {
             Some("conversation events require a sequence and cannot own stable-slot metadata")
-        }
-        ContextPlacement::EphemeralTail
-            if metadata.semantic_kind != ContextSemanticKind::LiveState
-                || metadata.retention != ContextRetention::RequestLocal
-                || metadata.event_sequence.is_some()
-                || metadata.execution_group_id.is_some()
-                || metadata.stable_slot_id.is_some()
-                || metadata.stable_source_fingerprint.is_some() =>
-        {
-            Some(
-                "live state must be unsequenced request-local context without stable-slot metadata",
-            )
         }
         _ => None,
     };
@@ -2659,16 +2573,139 @@ pub struct ModelMessages {
     openai_input_chain: Option<OpenAiInputChain>,
 }
 
+/// One typed cache-affecting component that begins a new model-context epoch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextEpochComponent {
+    /// Provider routing namespace changed.
+    ProviderNamespace,
+    /// Provider implementation changed.
+    Provider,
+    /// Selected provider model changed.
+    Model,
+    /// Static prompt-profile or instruction bytes changed.
+    StaticInstructions,
+    /// The static MAAP schema version changed.
+    MaapSchema,
+    /// Provider response-format contract changed.
+    ResponseFormat,
+    /// Interaction family changed.
+    InteractionFamily,
+    /// Provider tool schema changed.
+    ToolSchema,
+    /// Provider tool-choice control changed.
+    ToolChoice,
+    /// Provider request controls changed.
+    RequestControls,
+    /// API or streaming shape changed.
+    ApiShape,
+    /// Prompt-cache lineage changed.
+    CacheLineage,
+    /// Compaction rewrote chronology.
+    CompactionGeneration,
+}
+
+/// Typed identity for one immutable provider context epoch.
+///
+/// This non-model-visible value records every cache-affecting dimension that
+/// must remain fixed while provider input grows by durable chronology alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextEpochIdentity {
+    pub provider_namespace: String,
+    pub provider: String,
+    pub model: String,
+    pub static_instructions_sha256: String,
+    pub maap_schema_version: String,
+    pub response_format_sha256: String,
+    pub interaction_family: String,
+    pub tool_schema_sha256: String,
+    pub tool_choice_sha256: String,
+    pub request_controls_sha256: String,
+    pub api_shape: String,
+    pub cache_lineage: Option<String>,
+    pub compaction_generation_sha256: String,
+}
+
+impl ContextEpochIdentity {
+    /// Returns the first deterministically ordered component changed by a new
+    /// epoch identity, if any.
+    pub fn changed_component(&self, current: &Self) -> Option<ContextEpochComponent> {
+        [
+            (
+                ContextEpochComponent::ProviderNamespace,
+                self.provider_namespace != current.provider_namespace,
+            ),
+            (
+                ContextEpochComponent::Provider,
+                self.provider != current.provider,
+            ),
+            (ContextEpochComponent::Model, self.model != current.model),
+            (
+                ContextEpochComponent::StaticInstructions,
+                self.static_instructions_sha256 != current.static_instructions_sha256,
+            ),
+            (
+                ContextEpochComponent::MaapSchema,
+                self.maap_schema_version != current.maap_schema_version,
+            ),
+            (
+                ContextEpochComponent::ResponseFormat,
+                self.response_format_sha256 != current.response_format_sha256,
+            ),
+            (
+                ContextEpochComponent::InteractionFamily,
+                self.interaction_family != current.interaction_family,
+            ),
+            (
+                ContextEpochComponent::ToolSchema,
+                self.tool_schema_sha256 != current.tool_schema_sha256,
+            ),
+            (
+                ContextEpochComponent::ToolChoice,
+                self.tool_choice_sha256 != current.tool_choice_sha256,
+            ),
+            (
+                ContextEpochComponent::RequestControls,
+                self.request_controls_sha256 != current.request_controls_sha256,
+            ),
+            (
+                ContextEpochComponent::ApiShape,
+                self.api_shape != current.api_shape,
+            ),
+            (
+                ContextEpochComponent::CacheLineage,
+                self.cache_lineage != current.cache_lineage,
+            ),
+            (
+                ContextEpochComponent::CompactionGeneration,
+                self.compaction_generation_sha256 != current.compaction_generation_sha256,
+            ),
+        ]
+        .into_iter()
+        .find_map(|(component, changed)| changed.then_some(component))
+    }
+}
+
+/// Origin of the epoch that owns one exact provider input chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextEpochTransition {
+    /// The request established the first chain for this context.
+    Initial,
+    /// One typed cache-affecting component started a new epoch.
+    Changed(ContextEpochComponent),
+}
+
 /// Exact OpenAI input retained across one append-only request chain.
 ///
-/// The effective input is the sequence sent on the wire. Canonical stable and
-/// volatile partitions describe the latest source-level request so the next
-/// continuation can append new chronology without relocating its prior tail.
+/// The effective input is the exact sequence sent on the wire and is derived
+/// entirely from durable context. Its epoch identity freezes every
+/// cache-affecting envelope dimension for subsequent prefix extensions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OpenAiInputChain {
     pub(crate) effective_input: std::sync::Arc<Vec<serde_json::Value>>,
     pub(crate) cache_namespace: String,
     pub(crate) stream: bool,
+    pub(crate) context_epoch: ContextEpochIdentity,
+    pub(crate) epoch_transition: ContextEpochTransition,
 }
 
 impl ModelMessages {
@@ -2826,11 +2863,6 @@ pub struct ModelRequest {
     pub allowed_actions: AllowedActionSet,
     /// Provider stop sequences, when configured.
     pub stop: Option<Vec<String>>,
-    /// Request-local recovery input appended after assembled context.
-    ///
-    /// This is never committed to durable chronology and may contain only
-    /// validated safe continuation state.
-    pub recovery_input: Option<String>,
     /// Ordered provider-independent messages.
     pub messages: ModelMessages,
 }
@@ -2991,10 +3023,10 @@ mod tests {
         assert_eq!(continuation[1].content, "workspace inspected");
     }
 
-    /// Verifies context blocks expose cache-stability metadata without changing
-    /// the stored source, label, and content shape.
+    /// Verifies context blocks expose only stable-prefix or append-only cache
+    /// metadata without changing their source, label, or content shape.
     #[test]
-    fn context_block_cache_metadata_classifies_stable_and_volatile_sources() {
+    fn context_block_cache_metadata_classifies_two_phase_sources() {
         let project = ContextBlock {
             source: ContextSourceKind::ProjectGuidance,
             placement: crate::ContextPlacement::StablePrefix,
@@ -3002,8 +3034,8 @@ mod tests {
             content: "follow repo guidance".to_string(),
         };
         let scheduler = ContextBlock {
-            source: ContextSourceKind::Policy,
-            placement: crate::ContextPlacement::EphemeralTail,
+            source: ContextSourceKind::RuntimeHint,
+            placement: crate::ContextPlacement::ConversationAppend,
             label: "scheduler state".to_string(),
             content: "state=idle".to_string(),
         };
@@ -3027,7 +3059,7 @@ mod tests {
         };
         let pane_identity = ContextBlock {
             source: ContextSourceKind::Configuration,
-            placement: crate::ContextPlacement::EphemeralTail,
+            placement: crate::ContextPlacement::ConversationAppend,
             label: "pane identity".to_string(),
             content: "pane_id=%1 window_name=0".to_string(),
         };
@@ -3036,10 +3068,13 @@ mod tests {
         assert_eq!(project.stability(), ContextStability::Static);
         assert_eq!(project.cache_policy(), ContextCachePolicy::Eligible);
         assert!(project.stable_prefix_eligible());
-        assert_eq!(scheduler.placement, crate::ContextPlacement::EphemeralTail);
-        assert_eq!(scheduler.stability(), ContextStability::TurnVolatile);
-        assert_eq!(scheduler.cache_policy(), ContextCachePolicy::Ineligible);
-        assert!(!scheduler.stable_prefix_eligible());
+        assert_eq!(
+            scheduler.placement,
+            crate::ContextPlacement::ConversationAppend
+        );
+        assert_eq!(scheduler.stability(), ContextStability::SessionStable);
+        assert_eq!(scheduler.cache_policy(), ContextCachePolicy::Eligible);
+        assert!(scheduler.stable_prefix_eligible());
         assert_eq!(transcript_tool.stability(), ContextStability::SessionStable);
         assert_eq!(transcript_tool.cache_policy(), ContextCachePolicy::Eligible);
         assert!(transcript_tool.stable_prefix_eligible());
@@ -3053,9 +3088,9 @@ mod tests {
         );
         assert!(committed_evidence.stable_prefix_eligible());
         assert!(committed_evidence.recoverable_for_compaction());
-        assert_eq!(pane_identity.stability(), ContextStability::TurnVolatile);
-        assert_eq!(pane_identity.cache_policy(), ContextCachePolicy::Ineligible);
-        assert!(!pane_identity.stable_prefix_eligible());
+        assert_eq!(pane_identity.stability(), ContextStability::SessionStable);
+        assert_eq!(pane_identity.cache_policy(), ContextCachePolicy::Eligible);
+        assert!(pane_identity.stable_prefix_eligible());
         assert!(action.recoverable_for_compaction());
     }
 
@@ -3086,7 +3121,7 @@ mod tests {
             "local message",
             "agent-%2: avoid file.rs",
         );
-        let live = ContextBlock::live_state(
+        let runtime = ContextBlock::reference_event(
             ContextSourceKind::RuntimeHint,
             "runtime state",
             "cwd=/workspace",
@@ -3113,13 +3148,13 @@ mod tests {
             ContextSemanticKind::ReferenceEvent
         );
         assert_eq!(reference.retention(), ContextRetention::Exact);
-        assert_eq!(live.semantic_kind(), ContextSemanticKind::LiveState);
-        assert_eq!(live.retention(), ContextRetention::RequestLocal);
+        assert_eq!(runtime.semantic_kind(), ContextSemanticKind::ReferenceEvent);
+        assert_eq!(runtime.retention(), ContextRetention::Exact);
     }
 
     /// Verifies semantic validation accepts one complete canonical request
     /// chronology with an exact task prelude, direct user prompt, execution
-    /// group, later reference event, and final factual live state.
+    /// group, and later factual reference event.
     #[test]
     fn context_semantics_accept_canonical_chronology() {
         let blocks = vec![
@@ -3141,7 +3176,11 @@ mod tests {
                 "local message",
                 "avoid overlap",
             ),
-            ContextBlock::live_state(ContextSourceKind::RuntimeHint, "live state", "cwd=/repo"),
+            ContextBlock::reference_event(
+                ContextSourceKind::RuntimeHint,
+                "runtime state",
+                "cwd=/repo",
+            ),
         ];
 
         validate_context_semantics(&blocks).unwrap();
@@ -3196,18 +3235,12 @@ mod tests {
         assert_eq!(context.blocks[5].retention(), ContextRetention::Exact);
     }
 
-    /// Verifies semantic validation rejects events in the request-local tail,
-    /// non-instructions in the stable prefix, and task preludes inserted after
-    /// the active prompt, with enough diagnostics to identify the producer.
+    /// Verifies semantic validation rejects non-instructions in the stable
+    /// prefix and task preludes inserted after the active prompt, with enough
+    /// diagnostics to identify the producer.
     #[test]
     fn context_semantics_reject_ambiguous_lifetime_and_authorship() {
         let invalid_cases = [
-            vec![ContextBlock {
-                source: ContextSourceKind::UserInstruction,
-                placement: crate::ContextPlacement::EphemeralTail,
-                label: "late user restatement".to_string(),
-                content: "do the work".to_string(),
-            }],
             vec![ContextBlock {
                 source: ContextSourceKind::Memory,
                 placement: crate::ContextPlacement::StablePrefix,
@@ -3232,73 +3265,40 @@ mod tests {
         }
     }
 
-    /// Verifies prepared request construction joins live state after immutable
-    /// chronology without mutating the durable context retained by the runtime.
+    /// Verifies prepared request construction projects durable context exactly
+    /// without creating a request-local model-visible suffix.
     #[test]
-    fn prepared_model_context_keeps_live_state_out_of_durable_context() {
+    fn prepared_model_context_projects_only_durable_context() {
         let durable = AgentContext::new_durable(vec![
             ContextBlock::stable_instruction(ContextSourceKind::Policy, "policy", "stable"),
             ContextBlock::user_event("user prompt", "do the work"),
         ])
         .unwrap();
         let original = durable.clone();
-        let prepared = PreparedModelContext::new(
-            durable,
-            vec![ContextBlock::live_state(
-                ContextSourceKind::RuntimeHint,
-                "runtime state",
-                "cwd=/repo",
-            )],
-        )
-        .unwrap();
+        let prepared = PreparedModelContext::new(durable).unwrap();
 
         assert_eq!(prepared.durable(), &original);
-        assert_eq!(prepared.live_state().len(), 1);
-        assert_eq!(prepared.len(), 3);
+        assert_eq!(prepared.len(), 2);
         let ordered = prepared.to_agent_context();
         assert_eq!(ordered.blocks[1].source, ContextSourceKind::UserInstruction);
-        assert_eq!(
-            ordered.blocks[2].semantic_kind(),
-            ContextSemanticKind::LiveState
-        );
-        assert!(
-            prepared
-                .durable()
-                .blocks
-                .iter()
-                .all(|block| { block.placement != crate::ContextPlacement::EphemeralTail })
-        );
+        assert_eq!(ordered, original);
     }
 
-    /// Verifies prepared request construction rejects event-like tail blocks
-    /// and rejects durable storage that already contains request-local state.
+    /// Verifies a prepared request can only be created from valid two-phase
+    /// durable context and retains its exact projection.
     #[test]
-    fn prepared_model_context_rejects_invalid_phase_ownership() {
+    fn prepared_model_context_requires_valid_durable_context() {
         let durable =
             AgentContext::new_durable(vec![ContextBlock::user_event("user prompt", "do the work")])
                 .unwrap();
-        let event_tail = ContextBlock {
-            source: ContextSourceKind::ActionResult,
-            placement: crate::ContextPlacement::EphemeralTail,
-            label: "action result action-1".to_string(),
-            content: "succeeded".to_string(),
-        };
-        let error = PreparedModelContext::new(durable, vec![event_tail]).unwrap_err();
-        assert!(error.message().contains("ephemeral-tail blocks"));
-
-        let error = AgentContext::new_durable(vec![ContextBlock::live_state(
-            ContextSourceKind::RuntimeHint,
-            "runtime state",
-            "cwd=/repo",
-        )])
-        .unwrap_err();
-        assert!(error.message().contains("durable agent context"));
+        let prepared = PreparedModelContext::new(durable.clone()).unwrap();
+        assert_eq!(prepared.to_agent_context(), durable);
     }
 
     /// Verifies the typed collections are the source of truth for their
     /// read-only provider projection and retain stable replacement identity.
     #[test]
-    fn agent_context_projects_typed_stable_event_and_live_state_storage_in_order() {
+    fn agent_context_projects_typed_stable_and_event_storage_in_order() {
         let mut durable = AgentContext::new_durable(vec![ContextBlock::user_event(
             "user prompt",
             "inspect chronology",
@@ -3335,20 +3335,11 @@ mod tests {
                 true,
             )
             .unwrap();
-        let prepared = PreparedModelContext::new(
-            durable.clone(),
-            vec![ContextBlock::live_state(
-                ContextSourceKind::RuntimeHint,
-                "runtime state",
-                "cwd=/repo",
-            )],
-        )
-        .unwrap();
+        let prepared = PreparedModelContext::new(durable.clone()).unwrap();
         let projected = prepared.to_agent_context();
 
         assert_eq!(projected.stable_slots().len(), 1);
         assert_eq!(projected.chronology().len(), 3);
-        assert_eq!(projected.live_state.len(), 1);
         assert_eq!(
             projected
                 .blocks()
@@ -3360,7 +3351,6 @@ mod tests {
                 "user prompt",
                 "assistant action",
                 "action result inspect",
-                "runtime state",
             ]
         );
         assert_eq!(prepared.durable(), &durable);
@@ -3654,7 +3644,7 @@ mod tests {
             },
             ContextBlock {
                 source: ContextSourceKind::RuntimeHint,
-                placement: crate::ContextPlacement::EphemeralTail,
+                placement: crate::ContextPlacement::ConversationAppend,
                 label: "scheduler".to_string(),
                 content: "waiting".to_string(),
             },

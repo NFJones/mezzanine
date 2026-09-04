@@ -97,7 +97,7 @@ fn runtime_shell_history_remains_outside_model_context() {
 }
 
 /// Verifies an arbitrarily named provider using the OpenAI Responses wire API
-/// receives the selected MCP manifest required by its generic action schema.
+/// does not receive a request-local MCP manifest during context preparation.
 #[test]
 fn runtime_mcp_context_uses_resolved_api_for_aliased_openai_provider() {
     let mut service = test_runtime_service();
@@ -166,15 +166,14 @@ fn runtime_mcp_context_uses_resolved_api_for_aliased_openai_provider() {
         )
         .unwrap();
     let context = prepared.to_agent_context();
-    let manifest = context
-        .blocks()
-        .iter()
-        .find(|block| block.label == "mcp integrations")
-        .expect("OpenAI Responses alias should receive MCP live context");
+    assert!(
+        context
+            .blocks()
+            .iter()
+            .all(|block| block.label != "mcp integrations")
+    );
 
     assert_eq!(tools.len(), 1);
-    assert!(manifest.content.contains("available_tool=fs/read_file"));
-    assert!(manifest.content.contains("input_schema="));
 }
 
 /// Verifies a stale running `spawn_agent` result without a live joined child is

@@ -173,7 +173,6 @@ async fn async_zsh_large_semantic_patch_completes_and_releases_input() {
                 allowed_actions: mez_agent::AllowedActionSet::for_capability(
                     mez_agent::AgentCapability::Shell,
                 ),
-                recovery_input: None,
                 messages: vec![mez_agent::ModelMessage {
                     role: mez_agent::ModelMessageRole::User,
                     source: mez_agent::ContextSourceKind::UserInstruction,

@@ -98,7 +98,7 @@ mod tests {
     };
 
     /// Builds a request whose canonical bodies include system/user messages,
-    /// action schemas, request-state wrappers, and recovery input.
+    /// action schemas, and request-state wrappers.
     fn complete_test_request(provider: &str) -> ModelRequest {
         ModelRequest {
             provider: provider.to_string(),
@@ -119,7 +119,6 @@ mod tests {
             interaction_kind: ModelInteractionKind::ActionExecution,
             allowed_actions: AllowedActionSet::say_only(),
             stop: None,
-            recovery_input: Some("recover from the exact validated boundary".to_string()),
             messages: vec![
                 ModelMessage {
                     role: ModelMessageRole::System,
@@ -157,8 +156,7 @@ mod tests {
     }
 
     #[test]
-    /// Verifies every supported provider API estimates its canonical JSON body
-    /// and that request-local recovery material increases its complete cost.
+    /// Verifies every supported provider API estimates its canonical JSON body.
     fn complete_wire_estimation_covers_every_provider_api() {
         let cases = [
             ("openai", ProviderApiCompatibility::OpenAiResponses),
@@ -175,15 +173,11 @@ mod tests {
 
         for (provider, api) in cases {
             let complete = complete_test_request(provider);
-            let mut minimal = complete.clone();
-            minimal.recovery_input = None;
             let complete_estimate =
                 provider_request_input_estimate(&complete, api, &BTreeMap::new(), true).unwrap();
-            let minimal_estimate =
-                provider_request_input_estimate(&minimal, api, &BTreeMap::new(), true).unwrap();
 
-            assert!(complete_estimate.wire_bytes > minimal_estimate.wire_bytes);
-            assert!(complete_estimate.input_tokens >= minimal_estimate.input_tokens);
+            assert!(complete_estimate.wire_bytes > 0);
+            assert!(complete_estimate.input_tokens > 0);
         }
     }
 

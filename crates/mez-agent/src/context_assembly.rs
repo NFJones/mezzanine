@@ -41,17 +41,7 @@ pub fn assemble_model_request_from_context(
     validate_context_semantics(context.blocks())?;
 
     let blocks = context.blocks();
-    let repository_instruction_blocks = blocks
-        .iter()
-        .filter(|block| block.source == ContextSourceKind::ProjectGuidance)
-        .map(|block| block.content.clone())
-        .collect::<Vec<_>>();
     let is_deepseek = profile.provider == "deepseek";
-    let repo_instructions_for_prompt = if is_deepseek && !repository_instruction_blocks.is_empty() {
-        vec![deepseek_repository_instructions_system_prompt_pointer()]
-    } else {
-        repository_instruction_blocks.clone()
-    };
     let provider_native_execution_groups = blocks
         .iter()
         .enumerate()
@@ -69,17 +59,8 @@ pub fn assemble_model_request_from_context(
         role: ModelMessageRole::System,
         source: ContextSourceKind::System,
         placement: ContextPlacement::StablePrefix,
-        content: assemble_agent_system_prompt(
-            &prompt_profile,
-            &repo_instructions_for_prompt,
-            prompt_assets,
-        )?,
+        content: assemble_agent_system_prompt(&prompt_profile, &[], prompt_assets)?,
     });
-    if is_deepseek && !repository_instruction_blocks.is_empty() {
-        messages.push(deepseek_repository_instructions_message(
-            &repository_instruction_blocks,
-        ));
-    }
     for (index, block) in blocks.iter().enumerate() {
         let metadata = context.metadata_for_block(index).ok_or_else(|| {
             crate::AgentRequestAssemblyError::from(crate::AgentContextError::new(
@@ -106,9 +87,6 @@ pub fn assemble_model_request_from_context(
                 ContextSourceKind::TranscriptAssistant | ContextSourceKind::ActionResult
             )
         {
-            continue;
-        }
-        if block.source == ContextSourceKind::ProjectGuidance {
             continue;
         }
         messages.push(ModelMessage {
@@ -158,7 +136,6 @@ pub fn assemble_model_request_from_context(
         interaction_kind: ModelInteractionKind::ActionExecution,
         allowed_actions: AllowedActionSet::all_enabled(),
         stop: is_deepseek.then(|| vec!["\n}".to_string()]),
-        recovery_input: None,
         messages: messages.into(),
     };
     constrain_skill_actions_for_loaded_context(&mut request);
@@ -197,30 +174,7 @@ fn role_for_context_semantic(
         }
         crate::ContextSemanticKind::TaskPrelude
         | crate::ContextSemanticKind::EvidenceEvent
-        | crate::ContextSemanticKind::ReferenceEvent
-        | crate::ContextSemanticKind::LiveState => ModelMessageRole::Context,
-    }
-}
-
-/// Returns the system-prompt pointer used for DeepSeek repository guidance.
-fn deepseek_repository_instructions_system_prompt_pointer() -> String {
-    "DeepSeek provider note: active repository instructions are provided in a dedicated neutral-context message immediately after this system prompt. The provider may transport that block through a user-compatible envelope, but it is not user-authored. Treat it as the authoritative repository instruction contents for this turn; do not reread repository instruction files merely because the full text is reinforced outside section 3.".to_string()
-}
-
-/// Builds the fixed-position repository-guidance message used by DeepSeek.
-fn deepseek_repository_instructions_message(
-    repository_instruction_blocks: &[String],
-) -> ModelMessage {
-    let mut content = String::from("Active repository instructions:\n\n");
-    for block in repository_instruction_blocks {
-        content.push_str(block);
-        content.push_str("\n\n");
-    }
-    ModelMessage {
-        role: ModelMessageRole::Context,
-        source: ContextSourceKind::ProjectGuidance,
-        placement: ContextPlacement::StablePrefix,
-        content,
+        | crate::ContextSemanticKind::ReferenceEvent => ModelMessageRole::Context,
     }
 }
 

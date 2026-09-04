@@ -87,7 +87,6 @@ use mez_agent::{
     DEFAULT_PROVIDER_TIMEOUT_MS, EnvironmentSignature, MaapBatch, MacroManagedSubagent,
     MacroRunState, ModelInteractionKind, ModelTokenUsage, ModelTokenUsageKey, PreparedModelContext,
     ProviderApiCompatibility, ProviderQuotaUsage, SayStatus, ToolDiscoveryCache, ToolInventory,
-    append_mcp_context_for_api_with_configured, append_mcp_context_for_provider_with_configured,
     assistant_context_content_for_execution, invoked_mcp_tools_for_context_with_configured,
     set_project_guidance_context,
 };
@@ -286,15 +285,9 @@ pub(crate) struct RuntimeAgentComponent {
     agent_turn_failure_feedback_attempts: BTreeMap<String, usize>,
     /// Output-limit recovery attempt currently shaping each active request.
     ///
-    /// This controller state is intentionally not stored in model-visible
-    /// chronology. Provider preparation projects it into a concise live-state
-    /// flag only while the corresponding retry remains active.
+    /// The counter remains controller state. The corresponding safe
+    /// continuation material commits to chronology when recovery begins.
     agent_turn_output_limit_recovery_attempts: BTreeMap<String, u32>,
-    /// Bounded safe partial provider state retained only for output-limit continuation.
-    ///
-    /// This request-local state is removed with the owning turn and never enters
-    /// durable chronology or action execution.
-    agent_turn_output_limit_states: BTreeMap<String, mez_agent::ProviderOutputLimitState>,
     /// Exceptional provider interaction selected for each active turn.
     agent_turn_interaction_kinds: BTreeMap<String, ModelInteractionKind>,
     /// Causal execution group keyed by turn and execution-scoped action id.

@@ -3453,6 +3453,7 @@ fn runtime_persisted_context_documents_affect_only_future_turns() {
         .unwrap()
         .blocks()
         .iter()
+        .rev()
         .find(|block| block.source == ContextSourceKind::PersistedContextDocument)
         .expect("updated document should be present in the later turn");
     assert_eq!(second_document.content, "document after");

@@ -247,31 +247,11 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
 #[test]
 /// Verifies unsupported shell heredocs are repairable validation failures.
 ///
-/// Shell commands are exposed only after a capability request, so this test
-/// first grants the shell surface and then returns an unsupported heredoc. The
-/// runner should send a bounded ephemeral repair request, accept the corrected
-/// response, and avoid retaining the repair diagnostic in durable execution
-/// context.
+/// The direct action surface includes shell commands, so an unsupported heredoc
+/// must trigger an append-only repair request. The corrected response retains
+/// the validation facts as durable chronology.
 fn turn_runner_repairs_shell_command_heredoc_validation_error() {
     let turn = turn();
-    let capability = ModelResponse {
-        provider: "batch".to_string(),
-        model: "test".to_string(),
-        raw_text: "request shell capability".to_string(),
-        usage: Default::default(),
-        latest_request_usage: None,
-        quota_usage: Default::default(),
-        action_batch: Some(MaapBatch {
-            protocol: "maap/1".to_string(),
-            rationale: "test action batch rationale".to_string(),
-            thought: None,
-            turn_id: turn.turn_id.clone(),
-            agent_id: turn.agent_id.clone(),
-            actions: vec![capability_action("capability-1", AgentCapability::Shell)],
-            final_turn: false,
-        }),
-        provider_transcript_events: Vec::new(),
-    };
     let mut heredoc = shell_action("shell-heredoc");
     if let AgentActionPayload::ShellCommand {
         command, summary, ..
@@ -319,7 +299,7 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
         }),
         provider_transcript_events: Vec::new(),
     };
-    let provider = SequencedProvider::new(vec![Ok(capability), Ok(invalid), Ok(corrected)]);
+    let provider = SequencedProvider::new(vec![Ok(invalid), Ok(corrected)]);
     let policy =
         PermissionPolicy::default().with_approval_policy(mez_agent::ApprovalPolicy::FullAccess);
     let approvals = SessionApprovalStore::default();
@@ -375,8 +355,8 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
         execution.request.messages
     );
     let requests = provider.requests();
-    assert_eq!(requests.len(), 3);
-    let repair_message = &requests[2]
+    assert_eq!(requests.len(), 2);
+    let repair_message = &requests[1]
         .messages
         .iter()
         .find(|message| message.content.contains("[MAAP repair state]"))
@@ -393,31 +373,11 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
 }
 
 #[test]
-/// Verifies that MAAP validation failures are repaired through a bounded ephemeral
-/// provider retry before the runtime records a failed turn. The correction
-/// instruction must be present only in the retry request; the returned
-/// execution keeps the original request so transcripts and later context do not
-/// inherit the validation error when repair succeeds.
+/// Verifies that an unavailable MCP action is repaired through an append-only
+/// provider retry. The corrected execution and persisted transcript retain the
+/// bounded validation evidence in chronological context.
 fn turn_runner_retries_maap_validation_error_without_persisting_repair_context() {
     let turn = turn();
-    let capability = ModelResponse {
-        provider: "batch".to_string(),
-        model: "test".to_string(),
-        raw_text: "request mcp capability".to_string(),
-        usage: Default::default(),
-        latest_request_usage: None,
-        quota_usage: Default::default(),
-        action_batch: Some(MaapBatch {
-            protocol: "maap/1".to_string(),
-            rationale: "test action batch rationale".to_string(),
-            thought: None,
-            turn_id: turn.turn_id.clone(),
-            agent_id: turn.agent_id.clone(),
-            actions: vec![capability_action("capability-1", AgentCapability::Mcp)],
-            final_turn: false,
-        }),
-        provider_transcript_events: Vec::new(),
-    };
     let invalid = ModelResponse {
         provider: "batch".to_string(),
         model: "test".to_string(),
@@ -462,7 +422,7 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
         }),
         provider_transcript_events: Vec::new(),
     };
-    let provider = SequencedProvider::new(vec![Ok(capability), Ok(invalid), Ok(corrected)]);
+    let provider = SequencedProvider::new(vec![Ok(invalid), Ok(corrected)]);
     let policy = PermissionPolicy::default();
     let approvals = SessionApprovalStore::default();
     let tools = vec![McpPromptTool {
@@ -522,9 +482,9 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
         execution.request.messages
     );
     let requests = provider.requests();
-    assert_eq!(requests.len(), 3);
+    assert_eq!(requests.len(), 2);
     assert!(
-        requests[2]
+        requests[1]
             .messages
             .iter()
             .find(|message| message.content.contains("[MAAP repair state]"))
@@ -532,10 +492,10 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
             .content
             .contains("[MAAP repair state]"),
         "{:?}",
-        requests[2].messages
+        requests[1].messages
     );
     assert!(
-        requests[2]
+        requests[1]
             .messages
             .iter()
             .find(|message| message.content.contains("[MAAP repair state]"))
@@ -543,10 +503,10 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
             .content
             .contains("unavailable server"),
         "{:?}",
-        requests[2].messages
+        requests[1].messages
     );
     assert!(
-        requests[2]
+        requests[1]
             .messages
             .iter()
             .find(|message| message.content.contains("[MAAP repair state]"))
@@ -554,7 +514,7 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
             .content
             .contains("request_capability_available="),
         "{:?}",
-        requests[2].messages
+        requests[1].messages
     );
     let entries = transcript_entries_for_execution("conv1", 1, 200, &turn, &execution).unwrap();
     assert!(

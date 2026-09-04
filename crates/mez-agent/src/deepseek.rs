@@ -165,18 +165,6 @@ pub fn deepseek_chat_completions_request_body_with_strategy(
         }));
     }
     complete_pending_deepseek_tool_calls(&mut messages, &mut pending_tool_call_ids);
-    if let Some(recovery_input) = request
-        .recovery_input
-        .as_deref()
-        .filter(|input| !input.is_empty())
-    {
-        messages.push(serde_json::json!({
-            "role": "user",
-            "content": format!(
-                "[Mezzanine context; not user-authored]\n{recovery_input}"
-            )
-        }));
-    }
     let mut body = serde_json::json!({
         "model": request.model,
         "messages": messages,
@@ -525,7 +513,6 @@ mod tests {
             interaction_kind: ModelInteractionKind::ActionExecution,
             allowed_actions: AllowedActionSet::action_execution_base(),
             stop: None,
-            recovery_input: None,
             messages: messages.into(),
         }
     }

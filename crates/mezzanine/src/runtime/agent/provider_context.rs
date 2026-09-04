@@ -8,15 +8,13 @@
 //! grouped by their context-shaping responsibility.
 
 use super::{
-    AgentId, AgentTurnRecord, AgentTurnState, ContextBlock, ContextSourceKind, MezError,
-    ModelProfile, Result, RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile,
-    RuntimeSessionService, append_mcp_context_for_api_with_configured,
-    append_mcp_context_for_provider_with_configured, invoked_mcp_tools_for_context_with_configured,
-    runtime_cooperation_mode_name, runtime_mezzanine_error_code, set_project_guidance_context,
+    AgentId, AgentTurnRecord, AgentTurnState, ContextSourceKind, MezError, ModelProfile, Result,
+    RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile, RuntimeSessionService,
+    invoked_mcp_tools_for_context_with_configured, runtime_cooperation_mode_name,
+    runtime_mezzanine_error_code, set_project_guidance_context,
 };
 #[cfg(test)]
 use crate::runtime::RuntimeAutoSizingDecision;
-use mez_agent::{ContextRetention, ContextSemanticKind};
 use sha2::{Digest, Sha256};
 
 /// Renders the bounded safe state that follows an output-token cutoff.
@@ -93,67 +91,23 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Prepares the next provider request from durable chronology and a fresh
-    /// allowlisted live-state suffix without mutating stored turn context.
+    /// Prepares the next provider request from durable stable and chronological
+    /// context without adding a request-local model-visible suffix.
     pub(crate) fn prepare_agent_turn_model_context(
         &self,
         turn: &AgentTurnRecord,
         durable: super::AgentContext,
         mcp_summary: &mez_agent::McpPromptSummary,
-        model_profile: &ModelProfile,
+        _model_profile: &ModelProfile,
     ) -> Result<(super::PreparedModelContext, Vec<mez_agent::McpPromptTool>)> {
         durable.validate_durable()?;
-        let mut request_context = durable.clone();
-
-        if let Some(state) = self.agent.agent_turn_output_limit_states.get(&turn.turn_id) {
-            request_context
-                .insert_typed_block(
-                    ContextBlock::live_state(
-                        ContextSourceKind::RuntimeHint,
-                        "output-limit continuation",
-                        output_limit_continuation_input(state),
-                    ),
-                    ContextSemanticKind::LiveState,
-                    ContextRetention::RequestLocal,
-                    false,
-                )
-                .map_err(|error| MezError::invalid_state(error.to_string()))?;
-        }
-        request_context = if let Some(provider_config) =
-            self.provider_registry().provider(&model_profile.provider)
-        {
-            let provider_api = mez_agent::resolve_provider_api(
-                &provider_config.kind,
-                provider_config.api.as_deref(),
-            )?;
-            append_mcp_context_for_api_with_configured(
-                request_context,
-                mcp_summary,
-                provider_api,
-                self.integration.always_exposed_mcp_servers(),
-            )?
-        } else {
-            append_mcp_context_for_provider_with_configured(
-                request_context,
-                mcp_summary,
-                &model_profile.provider,
-                self.integration.always_exposed_mcp_servers(),
-            )?
-        };
         let available_mcp_tools = invoked_mcp_tools_for_context_with_configured(
             &durable,
             mcp_summary,
             self.integration.always_exposed_mcp_servers(),
         );
-
-        let live_state = request_context.split_off_live_state();
-        if request_context != durable {
-            return Err(MezError::invalid_state(
-                "provider preparation modified durable context while building live state",
-            ));
-        }
         Ok((
-            super::PreparedModelContext::new(durable, live_state)?.with_previous_request(
+            super::PreparedModelContext::new(durable)?.with_previous_request(
                 self.agent
                     .agent_turn_provider_request_chains
                     .get(&turn.turn_id)
@@ -564,11 +518,19 @@ impl RuntimeSessionService {
             .agent_turn_output_limit_recovery_attempts
             .insert(turn_id.to_string(), attempt.max(1));
         if attempt <= 1 {
-            self.agent
-                .agent_turn_output_limit_states
-                .insert(turn_id.to_string(), output_limit_state);
-        } else {
-            self.agent.agent_turn_output_limit_states.remove(turn_id);
+            let context = self
+                .agent_turn_contexts_mut()
+                .get_mut(turn_id)
+                .ok_or_else(|| {
+                    MezError::invalid_state("runtime agent turn context is unavailable")
+                })?;
+            context
+                .append_reference_event(
+                    ContextSourceKind::RuntimeHint,
+                    "output-limit continuation",
+                    output_limit_continuation_input(&output_limit_state),
+                )
+                .map_err(|error| MezError::invalid_state(error.to_string()))?;
         }
         self.agent.agent_turn_interaction_kinds.insert(
             turn_id.to_string(),

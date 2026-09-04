@@ -237,7 +237,8 @@ async fn runtime_routed_presentation_retries_correctable_patch_failure() {
         .unwrap();
     assert!(
         prepared
-            .live_state()
+            .durable()
+            .blocks()
             .iter()
             .all(|block| { block.label != "current action detail malformed-routed-patch" })
     );
@@ -1850,7 +1851,7 @@ fn runtime_routed_handoff_summary_persists_once_and_rehydrates_with_parent_answe
         },
         ContextBlock {
             source: ContextSourceKind::RuntimeHint,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "routed result presentation".to_string(),
             content: "PRESENTATION INSTRUCTION MUST NOT PERSIST".to_string(),
         },
@@ -2910,7 +2911,7 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
             &runtime_model_profile("runtime-batch", "test"),
         )
         .unwrap();
-    assert!(prepared.live_state().iter().all(|block| {
+    assert!(prepared.durable().blocks().iter().all(|block| {
         block.label != "current action detail fetch-ok"
             && block.label != "current action detail fetch-404"
     }));

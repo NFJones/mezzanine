@@ -75,10 +75,12 @@ fn mcp_context_exposes_configured_servers_without_explicit_mentions() {
     let content = mcp_catalog_snapshot_content(&context);
     assert_eq!(content.matches("available_tool=GitHub_2/lookup").count(), 1);
     assert!(content.contains("configured_exposure=\"GitHub_2\""));
-    assert!(context.blocks().iter().all(|block| {
-        block.placement != crate::ContextPlacement::EphemeralTail
-            && block.label != MCP_INTEGRATIONS_CONTEXT_LABEL
-    }));
+    assert!(
+        context
+            .blocks()
+            .iter()
+            .all(|block| block.label != MCP_INTEGRATIONS_CONTEXT_LABEL)
+    );
     assert!(!content.contains("Use GitHub_2"), "{content}");
 }
 
@@ -152,10 +154,12 @@ fn mcp_configured_catalog_deduplicates_explicit_overlap_by_canonical_id() {
     let stable = mcp_catalog_snapshot_content(&context);
 
     assert_eq!(stable.matches("available_tool=GitHub_2/lookup").count(), 1);
-    assert!(context.blocks().iter().all(|block| {
-        block.placement != crate::ContextPlacement::EphemeralTail
-            && block.label != MCP_INTEGRATIONS_CONTEXT_LABEL
-    }));
+    assert!(
+        context
+            .blocks()
+            .iter()
+            .all(|block| block.label != MCP_INTEGRATIONS_CONTEXT_LABEL)
+    );
 }
 
 #[test]

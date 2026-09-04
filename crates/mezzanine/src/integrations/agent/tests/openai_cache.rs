@@ -88,7 +88,7 @@ fn openai_current_action_results_remain_append_only_before_volatile_suffix() {
     }));
     let diagnostics = openai_prompt_cache_diagnostics_for_request(&request).unwrap();
     assert!(diagnostics.stable_input_bytes > 2);
-    assert!(diagnostics.volatile_input_bytes > 2);
+    assert_eq!(diagnostics.volatile_input_bytes, 2);
 }
 
 #[test]
@@ -246,17 +246,12 @@ fn openai_promoted_conversation_entries_keep_complete_input_bytes() {
     let second_input = second_body["input"].as_array().unwrap();
 
     assert_eq!(first_input, &second_input[..first_input.len()]);
+    assert_eq!(first_input.len(), 1);
     assert!(
-        first_input.last().unwrap()["content"][0]["text"]
+        first_input[0]["content"][0]["text"]
             .as_str()
-            .unwrap()
-            .contains("[OpenAI request state]")
+            .is_some_and(|text| text.contains("inspect cache continuity"))
     );
-    assert!(second_input[..first_input.len()].iter().any(|message| {
-        message["content"][0]["text"]
-            .as_str()
-            .is_some_and(|text| text.contains("[OpenAI request state]"))
-    }));
 
     let first_diagnostics = openai_prompt_cache_diagnostics_for_request(&first).unwrap();
     let second_diagnostics = openai_prompt_cache_diagnostics_for_request(&second).unwrap();
@@ -322,8 +317,8 @@ fn openai_settled_controller_state_is_chronological_developer_input() {
     }));
 
     let diagnostics = openai_prompt_cache_diagnostics_for_request(&request).unwrap();
-    assert!(diagnostics.volatile_input_bytes > 2);
     assert!(diagnostics.stable_input_bytes > 2);
+    assert_eq!(diagnostics.volatile_input_bytes, 2);
 }
 
 #[test]
@@ -637,7 +632,7 @@ fn openai_long_session_keeps_observed_action_results_raw_without_committed_evide
 
     let diagnostics = openai_prompt_cache_diagnostics_for_request(&request).unwrap();
     assert!(diagnostics.stable_input_bytes > 2);
-    assert!(diagnostics.volatile_input_bytes > 2);
+    assert_eq!(diagnostics.volatile_input_bytes, 2);
 }
 
 #[test]
@@ -809,12 +804,11 @@ fn openai_prompt_cache_diagnostics_fingerprint_provider_prefix_parts() {
         &profile,
         &turn(),
         &AgentContext::new(vec![
-            ContextBlock {
-                source: ContextSourceKind::ProjectGuidance,
-                placement: mez_agent::ContextPlacement::StablePrefix,
-                label: "active repository instructions".to_string(),
-                content: "run just test".to_string(),
-            },
+            ContextBlock::task_prelude(
+                ContextSourceKind::ProjectGuidance,
+                "active repository instructions",
+                "run just test",
+            ),
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
@@ -831,12 +825,12 @@ fn openai_prompt_cache_diagnostics_fingerprint_provider_prefix_parts() {
     let diagnostics = openai_prompt_cache_diagnostics_for_request(&request).unwrap();
 
     assert!(
-        body["instructions"]
+        !body["instructions"]
             .as_str()
             .unwrap()
             .contains("run just test")
     );
-    assert!(!body["input"].as_array().unwrap().iter().any(|message| {
+    assert!(body["input"].as_array().unwrap().iter().any(|message| {
         message["content"][0]["text"]
             .as_str()
             .is_some_and(|text| text.contains("run just test"))
@@ -859,7 +853,7 @@ fn openai_prompt_cache_diagnostics_fingerprint_provider_prefix_parts() {
     assert_eq!(diagnostics.tools_sha256.len(), 64);
     assert!(diagnostics.stable_input_bytes > 2);
     assert_eq!(diagnostics.stable_input_sha256.len(), 64);
-    assert!(diagnostics.volatile_input_bytes > 2);
+    assert_eq!(diagnostics.volatile_input_bytes, 2);
     assert_eq!(diagnostics.volatile_input_sha256.len(), 64);
     assert!(diagnostics.stable_projection_bytes > diagnostics.instructions_bytes);
     assert_eq!(diagnostics.stable_projection_sha256.len(), 64);
@@ -1039,12 +1033,11 @@ fn openai_prompt_cache_key_uses_stable_namespace_not_rendered_prefix_hash() {
         &profile,
         &turn(),
         &AgentContext::new(vec![
-            ContextBlock {
-                source: ContextSourceKind::ProjectGuidance,
-                placement: mez_agent::ContextPlacement::StablePrefix,
-                label: "project guidance".to_string(),
-                content: "use style a".to_string(),
-            },
+            ContextBlock::task_prelude(
+                ContextSourceKind::ProjectGuidance,
+                "project guidance",
+                "use style a",
+            ),
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
@@ -1059,12 +1052,11 @@ fn openai_prompt_cache_key_uses_stable_namespace_not_rendered_prefix_hash() {
         &profile,
         &turn(),
         &AgentContext::new(vec![
-            ContextBlock {
-                source: ContextSourceKind::ProjectGuidance,
-                placement: mez_agent::ContextPlacement::StablePrefix,
-                label: "project guidance".to_string(),
-                content: "use style a".to_string(),
-            },
+            ContextBlock::task_prelude(
+                ContextSourceKind::ProjectGuidance,
+                "project guidance",
+                "use style a",
+            ),
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
@@ -1079,12 +1071,11 @@ fn openai_prompt_cache_key_uses_stable_namespace_not_rendered_prefix_hash() {
         &profile,
         &turn(),
         &AgentContext::new(vec![
-            ContextBlock {
-                source: ContextSourceKind::ProjectGuidance,
-                placement: mez_agent::ContextPlacement::StablePrefix,
-                label: "project guidance".to_string(),
-                content: "use style b".to_string(),
-            },
+            ContextBlock::task_prelude(
+                ContextSourceKind::ProjectGuidance,
+                "project guidance",
+                "use style b",
+            ),
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
@@ -1105,23 +1096,15 @@ fn openai_prompt_cache_key_uses_stable_namespace_not_rendered_prefix_hash() {
         serde_json::from_str(&openai_responses_request_body(&stable_b).unwrap()).unwrap();
     let stable_a_diagnostics = openai_prompt_cache_diagnostics_for_request(&stable_a).unwrap();
     let stable_b_diagnostics = openai_prompt_cache_diagnostics_for_request(&stable_b).unwrap();
-    let stable_a_instructions = stable_a_value["instructions"].as_str().unwrap();
-    let stable_b_instructions = stable_b_value["instructions"].as_str().unwrap();
-    let repository_suffix_marker = "\n\nActive Repository Instructions\n";
-    let stable_a_invariant = stable_a_instructions
-        .split_once(repository_suffix_marker)
-        .unwrap()
-        .0;
-    let stable_b_invariant = stable_b_instructions
-        .split_once(repository_suffix_marker)
-        .unwrap()
-        .0;
 
     assert_ne!(
         openai_stable_projection_material_for_request(&stable_a).unwrap(),
         openai_stable_projection_material_for_request(&stable_a_different_user).unwrap()
     );
-    assert_eq!(stable_a_invariant, stable_b_invariant);
+    assert_eq!(
+        stable_a_value["instructions"],
+        stable_b_value["instructions"]
+    );
     assert_ne!(
         openai_stable_projection_material_for_request(&stable_a).unwrap(),
         openai_stable_projection_material_for_request(&stable_b).unwrap()
@@ -1206,12 +1189,11 @@ fn openai_prompt_cache_key_uses_unknown_lineage_without_session_identity() {
 }
 
 #[test]
-/// Verifies cache diagnostics distinguish no-op preparation, volatile CWD
-/// changes, real stable-guidance rewrites, and exceptional request controls.
+/// Verifies cache diagnostics distinguish no-op preparation, durable CWD and
+/// guidance chronology changes, and exceptional request controls.
 ///
-/// CWD must alter only the volatile suffix/full request, while stable guidance
-/// intentionally rewrites the reusable projection. A typed exceptional mode
-/// changes provider control shape and is therefore an expected cache break.
+/// CWD and guidance both append as durable chronology, while a typed
+/// exceptional mode changes provider control shape and starts a new epoch.
 fn openai_cache_hashes_attribute_stable_volatile_and_control_changes() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
@@ -1224,13 +1206,13 @@ fn openai_cache_hashes_attribute_stable_volatile_and_control_changes() {
     };
     let context = |guidance: &str, cwd: &str| {
         AgentContext::new(vec![
-            ContextBlock::stable_instruction(
+            ContextBlock::task_prelude(
                 ContextSourceKind::ProjectGuidance,
                 "active repository instructions",
                 guidance,
             ),
             ContextBlock::user_event("user prompt", "inspect cache chronology"),
-            ContextBlock::live_state(
+            ContextBlock::reference_event(
                 ContextSourceKind::RuntimeHint,
                 "runtime state",
                 format!("cwd={cwd}"),
@@ -1268,11 +1250,11 @@ fn openai_cache_hashes_attribute_stable_volatile_and_control_changes() {
         no_op.provider_request_shape_sha256
     );
 
-    assert_eq!(
+    assert_ne!(
         base.stable_projection_sha256,
         cwd_changed.stable_projection_sha256
     );
-    assert_ne!(
+    assert_eq!(
         base.volatile_input_sha256,
         cwd_changed.volatile_input_sha256
     );
@@ -1426,7 +1408,7 @@ fn openai_stable_prefix_excludes_injected_mcp_integration_context() {
         },
         ContextBlock {
             source: ContextSourceKind::RuntimeHint,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "mcp integrations".to_string(),
             content: "available_servers=1 available_tools=1 unavailable_servers=0".to_string(),
         },
@@ -1461,16 +1443,16 @@ fn openai_stable_prefix_excludes_injected_mcp_integration_context() {
 
     assert_eq!(ordinary_instructions, instructions);
     assert_eq!(instructions, post_mcp_instructions);
-    assert_eq!(ordinary_stable_input, stable_input);
-    assert_eq!(stable_input, post_mcp_stable_input);
+    assert!(stable_input.starts_with(&ordinary_stable_input));
+    assert_eq!(ordinary_stable_input, post_mcp_stable_input);
     assert!(
-        !stable_input_text.contains("[mcp integrations]"),
+        stable_input_text.contains("[mcp integrations]"),
         "{stable_input_text}"
     );
     assert!(stable_input_text.contains("durable assistant context after mcp"));
     assert!(!stable_input.is_empty());
     assert!(diagnostics.stable_input_bytes > 2);
-    assert!(diagnostics.volatile_input_bytes > 2);
+    assert_eq!(diagnostics.volatile_input_bytes, 2);
     assert!(body["input"].as_array().unwrap().iter().any(|message| {
         message["role"] == "developer"
             && message["content"][0]["text"]

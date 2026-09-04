@@ -277,7 +277,7 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
             .unwrap()
             .contains("Mezzanine pane agent")
     );
-    assert_eq!(value["input"].as_array().unwrap().len(), 3);
+    assert_eq!(value["input"].as_array().unwrap().len(), 2);
     assert_eq!(value["input"][0]["role"], "developer");
     assert!(
         value["input"][0]["content"][0]["text"]
@@ -292,12 +292,7 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
             .unwrap()
             .contains("[user prompt transcript entry]")
     );
-    assert_eq!(value["input"][2]["role"], "developer");
-    let request_state = value["input"][2]["content"][0]["text"].as_str().unwrap();
-    assert!(request_state.contains("[OpenAI request state]"));
-    assert!(request_state.contains("interaction_kind=action_execution"));
-    assert!(request_state.contains("allowed_actions=say,shell_command,apply_patch"));
-    assert!(!request_state.contains("Emit only"));
+    assert_eq!(value["input"].as_array().unwrap().len(), 2);
 }
 
 #[test]
@@ -420,7 +415,7 @@ fn openai_responses_request_body_marks_prior_user_history_inactive() {
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
     let input = value["input"].as_array().unwrap();
 
-    assert_eq!(input.len(), 3);
+    assert_eq!(input.len(), 2);
     assert_eq!(input[0]["role"], "user");
     let historical_text = input[0]["content"][0]["text"].as_str().unwrap();
     assert!(historical_text.contains("[user prompt transcript entry]"));
@@ -432,14 +427,7 @@ fn openai_responses_request_body_marks_prior_user_history_inactive() {
     assert!(current_text.contains("[user prompt transcript entry]"));
     assert!(current_text.contains("ordered conversation transcript"));
     assert!(current_text.contains("Patch the prompt context manager"));
-
-    assert_eq!(input[2]["role"], "developer");
-    assert!(
-        input[2]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("[OpenAI request state]")
-    );
+    assert_eq!(input.len(), 2);
 }
 
 #[test]
@@ -482,7 +470,7 @@ fn openai_responses_request_body_preserves_assistant_history_role() {
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
     let input = value["input"].as_array().unwrap();
 
-    assert_eq!(input.len(), 3);
+    assert_eq!(input.len(), 2);
     assert_eq!(input[0]["role"], "assistant");
     assert_eq!(input[0]["content"][0]["type"], "output_text");
     assert!(
@@ -499,11 +487,5 @@ fn openai_responses_request_body_preserves_assistant_history_role() {
             .unwrap()
             .contains("Do item 2")
     );
-    assert_eq!(input[2]["role"], "developer");
-    assert!(
-        input[2]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("[OpenAI request state]")
-    );
+    assert_eq!(input.len(), 2);
 }

@@ -333,14 +333,9 @@ pub fn capability_continuation_request(
     request
 }
 
-/// Inserts settled controller evidence at the chronological boundary before
-/// any request-local live-state suffix.
+/// Appends settled controller evidence after all prior chronology.
 fn append_chronological_controller_evidence(request: &mut ModelRequest, content: String) {
-    let insert_at = request
-        .messages
-        .iter()
-        .position(|message| message.placement == crate::ContextPlacement::EphemeralTail)
-        .unwrap_or(request.messages.len());
+    let insert_at = request.messages.len();
     request.messages.insert(
         insert_at,
         ModelMessage {
@@ -352,8 +347,8 @@ fn append_chronological_controller_evidence(request: &mut ModelRequest, content:
     );
 }
 
-/// Builds an ephemeral provider retry request that asks the model to repair its
-/// previous MAAP response without changing durable transcript context.
+/// Builds an append-only provider retry request that asks the model to repair
+/// its previous MAAP response.
 pub fn maap_repair_request(
     original_request: &ModelRequest,
     error_message: &str,
@@ -363,14 +358,10 @@ pub fn maap_repair_request(
     let mut request = original_request.clone();
     complete_orphaned_deepseek_tool_calls(&mut request);
     select_model_interaction_kind(&mut request, ModelInteractionKind::MaapRepair);
-    request.messages.retain(|message| {
-        !(message.source == ContextSourceKind::RuntimeHint
-            && message.content.starts_with("[MAAP repair state]"))
-    });
     request.messages.push(ModelMessage {
         role: ModelMessageRole::Context,
         source: ContextSourceKind::RuntimeHint,
-        placement: crate::ContextPlacement::EphemeralTail,
+        placement: crate::ContextPlacement::ConversationAppend,
         content: format!(
             "[MAAP repair state]\n\
              attempt={attempt}\nvalidation_error={}\n\
@@ -390,8 +381,8 @@ pub fn maap_repair_request(
     request
 }
 
-/// Appends ephemeral DeepSeek tool results for native calls left unanswered in
-/// a failed request.
+/// Appends chronological DeepSeek tool results for native calls left unanswered
+/// in a failed request.
 ///
 /// A provider may reject a request before Mezzanine receives a response when
 /// restored native continuity contains an assistant tool-call message without
@@ -425,7 +416,7 @@ fn complete_orphaned_deepseek_tool_calls(request: &mut ModelRequest) {
             messages.push(ModelMessage {
                 role: ModelMessageRole::System,
                 source: ContextSourceKind::RuntimeHint,
-                placement: crate::ContextPlacement::EphemeralTail,
+                placement: crate::ContextPlacement::ConversationAppend,
                 content: ProviderTranscriptEvent::DeepSeekToolResult {
                     tool_call_id: tool_call_id.to_string(),
                     content: "The prior tool call was rejected before Mezzanine could run its actions. Emit a new MAAP action batch if further work is needed.".to_string(),
@@ -630,7 +621,6 @@ mod tests {
             interaction_kind: ModelInteractionKind::CapabilityDecision,
             allowed_actions: AllowedActionSet::capability_decision(),
             stop: None,
-            recovery_input: None,
             messages: Vec::new().into(),
         }
     }
@@ -814,7 +804,7 @@ mod tests {
         );
         assert_eq!(
             repair.messages.last().unwrap().placement,
-            crate::ContextPlacement::EphemeralTail
+            crate::ContextPlacement::ConversationAppend
         );
     }
 

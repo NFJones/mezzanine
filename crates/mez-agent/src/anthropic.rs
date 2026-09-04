@@ -205,17 +205,6 @@ pub fn anthropic_messages_request_body(
             placement: cache_disposition,
         });
     }
-    if let Some(recovery_input) = request
-        .recovery_input
-        .as_deref()
-        .filter(|input| !input.is_empty())
-    {
-        rendered_messages.push(AnthropicRenderedMessage {
-            role: "user",
-            content: format!("[Mezzanine context; not user-authored]\n{recovery_input}"),
-            placement: ContextPlacement::EphemeralTail,
-        });
-    }
     if rendered_messages.is_empty() {
         return Err(ProviderRequestAssemblyError::invalid_args(
             "Anthropic Messages request requires at least one user or assistant message",
@@ -1265,7 +1254,6 @@ mod tests {
             interaction_kind: crate::ModelInteractionKind::ActionExecution,
             allowed_actions: crate::AllowedActionSet::say_only(),
             stop: None,
-            recovery_input: None,
             messages: messages.into(),
         }
     }
@@ -1277,7 +1265,7 @@ mod tests {
     /// model-visible after the durable user event without changing the cached
     /// stable system block or immutable conversation prefix.
     #[test]
-    fn anthropic_cache_breakpoint_precedes_volatile_neutral_state() {
+    fn anthropic_cache_breakpoint_includes_chronological_neutral_state() {
         let request = |state: &str| {
             anthropic_cache_test_request(vec![
                 crate::ModelMessage {
@@ -1295,7 +1283,7 @@ mod tests {
                 crate::ModelMessage {
                     role: ModelMessageRole::Context,
                     source: crate::ContextSourceKind::RuntimeHint,
-                    placement: crate::ContextPlacement::EphemeralTail,
+                    placement: crate::ContextPlacement::ConversationAppend,
                     content: format!("[runtime state]\n{state}"),
                 },
             ])
@@ -1325,26 +1313,24 @@ mod tests {
             first["system"][0]["cache_control"],
             serde_json::json!({ "type": "ephemeral" })
         );
-        assert_eq!(first["messages"][0]["content"][0]["text"], "continue");
+        assert_eq!(
+            first["messages"][0]["content"][0]["text"],
+            "continue\n\n[Mezzanine context; not user-authored]\n[runtime state]\nfirst update"
+        );
         assert_eq!(
             first["messages"][0]["content"][0]["cache_control"],
             serde_json::json!({ "type": "ephemeral" })
         );
         assert_eq!(
-            first["messages"][1]["content"],
-            "[Mezzanine context; not user-authored]\n[runtime state]\nfirst update"
-        );
-        assert_eq!(
-            second["messages"][1]["content"],
-            "[Mezzanine context; not user-authored]\n[runtime state]\nsecond update"
+            second["messages"][0]["content"][0]["text"],
+            "continue\n\n[Mezzanine context; not user-authored]\n[runtime state]\nsecond update"
         );
     }
 
     /// Verifies Anthropic marks the latest immutable transcript turn as a second cache boundary.
     ///
     /// Historical user and assistant content should remain reusable while the
-    /// current user request remains immutable and request-local state stays
-    /// after the breakpoint as a volatile suffix.
+    /// current user request and later neutral context remain chronological.
     #[test]
     fn anthropic_cache_breakpoint_marks_latest_immutable_transcript_message() {
         let request = anthropic_cache_test_request(vec![
@@ -1375,7 +1361,7 @@ mod tests {
             crate::ModelMessage {
                 role: ModelMessageRole::Context,
                 source: crate::ContextSourceKind::RuntimeHint,
-                placement: crate::ContextPlacement::EphemeralTail,
+                placement: crate::ContextPlacement::ConversationAppend,
                 content: "cwd=/repo".to_string(),
             },
         ]);
@@ -1390,15 +1376,11 @@ mod tests {
         assert_eq!(value["messages"][1]["content"], "historical answer");
         assert_eq!(
             value["messages"][2]["content"][0]["text"],
-            "current request"
+            "current request\n\n[Mezzanine context; not user-authored]\ncwd=/repo"
         );
         assert_eq!(
             value["messages"][2]["content"][0]["cache_control"],
             serde_json::json!({ "type": "ephemeral" })
-        );
-        assert_eq!(
-            value["messages"][3]["content"],
-            "[Mezzanine context; not user-authored]\ncwd=/repo"
         );
     }
 

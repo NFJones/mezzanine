@@ -76,7 +76,7 @@ use context::runtime_agent_transcript_context;
 pub(crate) use context::runtime_local_message_context_content;
 use mez_agent::{
     SkillDocument, insert_context_block_by_placement, is_valid_skill_name, memory_context_blocks,
-    parse_skill_prompt_invocation, set_project_guidance_context, skill_context_text,
+    parse_skill_prompt_invocation, project_guidance_context_block, skill_context_text,
 };
 use protocol::{
     pane_id_from_runtime_agent_id, paths_equivalent, runtime_project_trust_read_method,
@@ -261,6 +261,11 @@ impl RuntimeSessionService {
                 ),
             );
         }
+        if let Some(instruction_files) = instruction_files.as_deref()
+            && let Some(block) = project_guidance_context_block(instruction_files, 2)?
+        {
+            insert_context_block_by_placement(&mut blocks, block);
+        }
         if let Some(invocation) = parse_skill_prompt_invocation(prompt) {
             if !is_valid_skill_name(&invocation.name) {
                 return Err(MezError::invalid_args(
@@ -351,9 +356,6 @@ impl RuntimeSessionService {
         context
             .restore_imported_execution_events(&imported_execution_events)
             .map_err(|error| MezError::invalid_state(error.to_string()))?;
-        if let Some(instruction_files) = instruction_files.as_deref() {
-            context = set_project_guidance_context(context, instruction_files, 2)?;
-        }
         Ok(RuntimeAgentPromptContext {
             context,
             delivered_message_sequence,

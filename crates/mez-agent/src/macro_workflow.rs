@@ -599,7 +599,6 @@ pub fn macro_step_model_request(parent_turn: &AgentTurnRecord) -> ModelRequest {
         interaction_kind: ModelInteractionKind::ActionExecution,
         allowed_actions: AllowedActionSet::for_capability(AgentCapability::Subagent),
         stop: None,
-        recovery_input: None,
         messages: vec![ModelMessage {
             role: ModelMessageRole::User,
             source: ContextSourceKind::TranscriptUser,
@@ -708,7 +707,6 @@ pub fn macro_judge_model_request(
         interaction_kind: ModelInteractionKind::MacroJudge,
         allowed_actions: AllowedActionSet::for_capability(AgentCapability::RespondOnly),
         stop: None,
-        recovery_input: None,
         messages: vec![
             ModelMessage {
                 role: ModelMessageRole::System,

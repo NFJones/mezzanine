@@ -68,7 +68,6 @@ fn provider_projection_matrix_preserves_chronology_and_neutral_authorship() {
         interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
         allowed_actions: mez_agent::AllowedActionSet::say_only(),
         stop: None,
-        recovery_input: None,
         messages: vec![
             ModelMessage {
                 role: ModelMessageRole::System,
@@ -103,8 +102,8 @@ fn provider_projection_matrix_preserves_chronology_and_neutral_authorship() {
             ModelMessage {
                 role: ModelMessageRole::Context,
                 source: ContextSourceKind::RuntimeHint,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
-                content: "LIVE_STATE_MARKER".to_string(),
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                content: "CHRONOLOGICAL_RUNTIME_MARKER".to_string(),
             },
         ]
         .into(),
@@ -149,7 +148,7 @@ fn provider_projection_matrix_preserves_chronology_and_neutral_authorship() {
             "ASSISTANT_ACTION_MARKER",
             "ACTION_RESULT_MARKER",
             "NEUTRAL_REFERENCE_MARKER",
-            "LIVE_STATE_MARKER",
+            "CHRONOLOGICAL_RUNTIME_MARKER",
         ];
         let positions = markers
             .iter()
@@ -305,7 +304,7 @@ async fn observed_async_provider_records_each_attempt_and_exact_usage_presence()
     let mut request = openai_prompt_cache_retention_test_request("test-model");
     request.provider = "batch".to_string();
     request.interaction_kind = mez_agent::ModelInteractionKind::CapabilityContinuation;
-    let mcp_live_state = "[mcp integrations]\navailable_servers=1 available_tools=1";
+    let mcp_runtime_hint = "[mcp integrations]\navailable_servers=1 available_tools=1";
     let mcp_catalog =
         "[always-exposed MCP catalog snapshot]\navailable_servers=1 available_tools=1";
     let action_result = "exact durable action result";
@@ -318,8 +317,8 @@ async fn observed_async_provider_records_each_attempt_and_exact_usage_presence()
     request.messages.push(ModelMessage {
         role: ModelMessageRole::Context,
         source: ContextSourceKind::RuntimeHint,
-        placement: mez_agent::ContextPlacement::EphemeralTail,
-        content: mcp_live_state.to_string(),
+        placement: mez_agent::ContextPlacement::ConversationAppend,
+        content: mcp_runtime_hint.to_string(),
     });
     request.messages.push(ModelMessage {
         role: ModelMessageRole::Context,
@@ -344,7 +343,7 @@ async fn observed_async_provider_records_each_attempt_and_exact_usage_presence()
     assert!(sequence(&zero.request_id) < sequence(&failed.request_id));
     assert_eq!(omitted.interaction_kind, "capability_continuation");
     assert_eq!(omitted.usage, None);
-    assert_eq!(omitted.mcp_live_state_bytes, mcp_live_state.len());
+    assert_eq!(omitted.mcp_live_state_bytes, 0);
     assert_eq!(omitted.mcp_catalog_bytes, mcp_catalog.len());
     assert_eq!(omitted.action_result_bytes, action_result.len());
     assert_eq!(zero.interaction_kind, "maap_repair");

@@ -378,9 +378,6 @@ pub fn routed_worker_seed_context(
         .blocks()
         .iter()
         .filter(|block| {
-            if block.placement == ContextPlacement::EphemeralTail {
-                return false;
-            }
             if block.source == ContextSourceKind::UserInstruction
                 && block.label == "user prompt"
                 && block.content == original_user_prompt
@@ -1224,7 +1221,6 @@ mod tests {
                 interaction_kind: ModelInteractionKind::ActionExecution,
                 allowed_actions: AllowedActionSet::say_only(),
                 stop: None,
-                recovery_input: None,
                 messages: Vec::new().into(),
             },
             response: ModelResponse {

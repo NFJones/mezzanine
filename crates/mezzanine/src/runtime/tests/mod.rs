@@ -913,7 +913,6 @@ fn runtime_model_request_fixture_for_agent(
         issue_actions_enabled: true,
         interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
         allowed_actions: mez_agent::AllowedActionSet::capability_decision(),
-        recovery_input: None,
         messages: vec![mez_agent::ModelMessage {
             role: mez_agent::ModelMessageRole::User,
             source: ContextSourceKind::UserInstruction,

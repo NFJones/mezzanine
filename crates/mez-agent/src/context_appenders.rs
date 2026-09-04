@@ -9,10 +9,9 @@ use crate::instructions::DiscoveredInstructionFile;
 use crate::{
     AgentContext, AgentContextResult, ContextBlock, ContextRetention, ContextSemanticKind,
     ContextSourceKind, McpPromptServer, McpPromptSummary, McpPromptTool,
-    McpPromptUnavailableServer, MemoryContextRecord, ProviderApiCompatibility, StableContextBlock,
-    StableContextSlotId, StableContextSourceFingerprint, validate_context_required,
+    McpPromptUnavailableServer, MemoryContextRecord, ProviderApiCompatibility,
+    validate_context_required,
 };
-use sha2::{Digest, Sha256};
 
 /// Appends selected memory records to provider-bound context.
 ///
@@ -216,13 +215,13 @@ fn append_filtered_mcp_context(
     context.insert_typed_block(
         ContextBlock {
             source: ContextSourceKind::RuntimeHint,
-            placement: crate::ContextPlacement::EphemeralTail,
+            placement: crate::ContextPlacement::ConversationAppend,
             label: MCP_INTEGRATIONS_CONTEXT_LABEL.to_string(),
             content,
         },
-        ContextSemanticKind::LiveState,
-        ContextRetention::RequestLocal,
-        false,
+        ContextSemanticKind::TaskPrelude,
+        ContextRetention::Exact,
+        true,
     )?;
     context.revalidate()
 }
@@ -774,29 +773,27 @@ fn mcp_context_quoted_value(value: &str) -> String {
     format!("{:?}", collapsed)
 }
 
-/// Inserts project guidance context before the first non-guidance block.
+/// Appends the deterministic project-guidance snapshot as task prelude chronology.
 ///
 /// Each discovered instruction file is wrapped in an explicit repository
 /// instruction contract so provider-bound context preserves scope, precedence,
-/// and security boundaries after compaction or continuation.
+/// and security boundaries without mutating the context epoch prefix.
 pub fn append_project_guidance_context(
     mut context: AgentContext,
     files: &[DiscoveredInstructionFile],
     max_files: usize,
 ) -> AgentContextResult<AgentContext> {
-    if max_files == 0 || files.is_empty() {
-        return Ok(context);
+    if let Some(block) = project_guidance_context_block(files, max_files)? {
+        context.insert_task_preludes_before_active_user(vec![block])?;
     }
-    let slots = project_guidance_stable_slots(files, max_files)?;
-    context.replace_stable_source_slots(ContextSourceKind::ProjectGuidance, slots)?;
     context.revalidate()
 }
 
-/// Builds the single named stable slot that owns active project guidance.
-fn project_guidance_stable_slots(
+/// Builds one deterministic prompt-boundary project-guidance snapshot.
+pub fn project_guidance_context_block(
     files: &[DiscoveredInstructionFile],
     max_files: usize,
-) -> AgentContextResult<Vec<StableContextBlock>> {
+) -> AgentContextResult<Option<ContextBlock>> {
     let mut selected_files = files.to_vec();
     selected_files.sort_by(|left, right| {
         left.scope_root
@@ -806,7 +803,7 @@ fn project_guidance_stable_slots(
     selected_files.truncate(max_files);
     selected_files.retain(|file| !file.content.is_empty());
     if selected_files.is_empty() {
-        return Ok(Vec::new());
+        return Ok(None);
     }
     for file in &selected_files {
         validate_context_required("project instruction path", &file.path)?;
@@ -818,32 +815,11 @@ fn project_guidance_stable_slots(
         .map(project_guidance_context_content)
         .collect::<Vec<_>>()
         .join("\n\n");
-    let mut source_material = Vec::new();
-    for file in &selected_files {
-        for field in [
-            file.path.as_bytes(),
-            file.scope_root.as_bytes(),
-            file.content.as_bytes(),
-        ] {
-            source_material.extend_from_slice(&(field.len() as u64).to_be_bytes());
-            source_material.extend_from_slice(field);
-        }
-        source_material.extend_from_slice(&(file.bytes as u64).to_be_bytes());
-        source_material.push(u8::from(file.truncated));
-    }
-    let fingerprint = Sha256::digest(&source_material)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    Ok(vec![StableContextBlock::new(
-        StableContextSlotId::new("project-guidance")?,
-        StableContextSourceFingerprint::new(fingerprint)?,
-        ContextBlock::stable_instruction(
-            ContextSourceKind::ProjectGuidance,
-            "active repository instructions",
-            content,
-        ),
-    )?])
+    Ok(Some(ContextBlock::task_prelude(
+        ContextSourceKind::ProjectGuidance,
+        "active repository instructions",
+        content,
+    )))
 }
 
 /// Builds the model-facing body for one project instruction file.
@@ -871,15 +847,26 @@ fn xml_attribute_escape(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
-/// Replaces project guidance context with the current discovered instruction
-/// files for a pane.
+/// Appends the current project-guidance snapshot as prompt-boundary chronology.
 pub fn set_project_guidance_context(
     mut context: AgentContext,
     files: &[DiscoveredInstructionFile],
     max_files: usize,
 ) -> AgentContextResult<AgentContext> {
-    let slots = project_guidance_stable_slots(files, max_files)?;
-    context.replace_stable_source_slots(ContextSourceKind::ProjectGuidance, slots)?;
+    let Some(block) = project_guidance_context_block(files, max_files)? else {
+        return Ok(context);
+    };
+    let unchanged = context
+        .chronology()
+        .iter()
+        .rev()
+        .find(|event| event.block().source == ContextSourceKind::ProjectGuidance)
+        .is_some_and(|event| {
+            event.block().label == block.label && event.block().content == block.content
+        });
+    if !unchanged {
+        context.insert_task_preludes_before_active_user(vec![block])?;
+    }
     context.revalidate()
 }
 

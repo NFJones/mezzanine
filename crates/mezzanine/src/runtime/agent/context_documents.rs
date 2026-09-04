@@ -1,9 +1,7 @@
 //! Future-turn injection for explicitly enabled persisted context documents.
 
 use super::{ContextBlock, ContextSourceKind, Result, RuntimeSessionService};
-use mez_agent::{
-    AgentContext, StableContextBlock, StableContextSlotId, StableContextSourceFingerprint,
-};
+use mez_agent::AgentContext;
 
 impl RuntimeSessionService {
     /// Adds a deterministic snapshot of enabled documents to one newly built turn context.
@@ -24,28 +22,22 @@ impl RuntimeSessionService {
         let store =
             crate::storage::context_documents::ContextDocumentStore::under_config_root(config_root);
         let selection = store.select_enabled_for_project(&project)?;
-        let slots = selection
+        let snapshots = selection
             .documents
             .into_iter()
             .map(|document| {
-                let revision = store.revision(&document)?;
-                StableContextBlock::new(
-                    StableContextSlotId::new(format!("context-document-{}", document.id))?,
-                    StableContextSourceFingerprint::new(revision)?,
-                    ContextBlock::stable_instruction(
-                        ContextSourceKind::PersistedContextDocument,
-                        format!(
-                            "persisted context document {} ({})",
-                            document.title, document.id
-                        ),
-                        document.content,
+                Ok(ContextBlock::task_prelude(
+                    ContextSourceKind::PersistedContextDocument,
+                    format!(
+                        "persisted context document {} ({})",
+                        document.title, document.id
                     ),
-                )
-                .map_err(Into::into)
+                    document.content,
+                ))
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<ContextBlock>>>()?;
         context
-            .replace_stable_source_slots(ContextSourceKind::PersistedContextDocument, slots)
+            .insert_task_preludes_before_active_user(snapshots)
             .map_err(crate::error::MezError::from)?;
         context.validate_durable()?;
         Ok(context)

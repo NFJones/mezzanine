@@ -4,19 +4,22 @@
 //! messages into Responses API `instructions` and `input` material. It also
 //! computes non-model-visible prompt-cache fingerprints used for diagnostics.
 
-use crate::context::OpenAiInputChain;
+use crate::context::{ContextEpochIdentity, ContextEpochTransition, OpenAiInputChain};
 use crate::openai_request::openai_responses_request_control_shape_with_stream;
 use crate::openai_schema::openai_maap_action_batch_tools;
 use crate::provider::MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME;
 use crate::{
-    ContextSourceKind, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest,
-    OpenAiPromptCacheDiagnostics, OpenAiRenderedMessages, ProviderRequestAssemblyError,
-    ProviderRequestAssemblyResult, openai_auto_sizing_response_format,
-    openai_macro_judge_response_format, openai_prompt_cache_diagnostics,
-    openai_prompt_cache_key as provider_prompt_cache_key, openai_render_messages,
-    openai_routed_handoff_response_format, openai_sandbox_failure_assessment_response_format,
-    openai_stable_projection_material, validate_provider_request_required,
+    ContextSourceKind, ModelInteractionKind, ModelRequest, OpenAiPromptCacheDiagnostics,
+    OpenAiRenderedMessages, ProviderRequestAssemblyError, ProviderRequestAssemblyResult,
+    openai_auto_sizing_response_format, openai_macro_judge_response_format,
+    openai_prompt_cache_diagnostics, openai_prompt_cache_key as provider_prompt_cache_key,
+    openai_render_messages, openai_routed_handoff_response_format,
+    openai_sandbox_failure_assessment_response_format, openai_stable_projection_material,
+    validate_provider_request_required,
 };
+#[cfg(test)]
+use crate::{ModelMessage, ModelMessageRole};
+use sha2::{Digest, Sha256};
 
 /// Renders request messages and captures canonical stable-prefix material.
 pub(super) fn openai_render_request_messages(
@@ -30,51 +33,20 @@ pub(super) fn openai_render_request_messages(
     Ok(rendered)
 }
 
-/// Renders the canonical request before any retained OpenAI wire-chain override.
+/// Renders the canonical durable request before any retained OpenAI wire-chain override.
 fn openai_render_request_messages_without_chain(
     request: &ModelRequest,
 ) -> ProviderRequestAssemblyResult<OpenAiRenderedMessages> {
-    let mut messages = request.messages.clone();
-    let has_chronological_request_state = messages.iter().any(|message| {
-        matches!(
-            message.source,
-            ContextSourceKind::RuntimeHint | ContextSourceKind::CommittedEvidence
-        ) && message.placement == crate::ContextPlacement::ConversationAppend
-            && message.content.starts_with("[Mezzanine request state]")
-    });
-    if request.interaction_kind.expects_maap_batch() && !has_chronological_request_state {
-        messages.push(ModelMessage {
-            role: ModelMessageRole::Context,
-            source: ContextSourceKind::RuntimeHint,
-            placement: crate::ContextPlacement::EphemeralTail,
-            content: format!(
-                "[OpenAI request state]\ninteraction_kind={}\nallowed_actions={}",
-                request.interaction_kind.as_str(),
-                request.allowed_actions.action_type_names().join(",")
-            ),
-        });
-    }
-    if let Some(recovery_input) = request
-        .recovery_input
-        .as_deref()
-        .filter(|input| !input.is_empty())
-    {
-        messages.push(ModelMessage {
-            role: ModelMessageRole::Context,
-            source: ContextSourceKind::RuntimeHint,
-            placement: crate::ContextPlacement::EphemeralTail,
-            content: recovery_input.to_string(),
-        });
-    }
-    openai_render_messages(&messages)
+    openai_render_messages(&request.messages)
 }
 
 /// Prepares one exact append-only OpenAI input chain before a concrete send.
 ///
 /// Ordinary requests in the same provider/model/lineage epoch must preserve
-/// all cache-affecting envelope bytes, retain the prior complete input, and
-/// append only new canonical chronology or superseding live state. Exceptional
-/// modes and explicit scope changes start a new chain epoch.
+/// all cache-affecting envelope bytes and retain the prior complete canonical
+/// input as an exact leading prefix. The current canonical input is rendered
+/// solely from durable context; exceptional modes and explicit scope changes
+/// start a new chain epoch.
 pub fn prepare_openai_request_prefix_extension(
     request: &mut ModelRequest,
     previous: Option<&ModelRequest>,
@@ -91,102 +63,127 @@ pub fn prepare_openai_request_prefix_extension_with_context(
     stream: bool,
 ) -> ProviderRequestAssemblyResult<()> {
     let canonical = openai_render_request_messages_without_chain(request)?;
-    let Some(previous) = previous
-        .filter(|previous| openai_same_cache_epoch(previous, request, cache_namespace, stream))
-    else {
+    let current_epoch =
+        openai_context_epoch_identity(request, &canonical, cache_namespace, stream)?;
+    let Some(previous) = previous else {
         request.messages.set_openai_input_chain(openai_input_chain(
             canonical.input.clone(),
             cache_namespace,
             stream,
+            current_epoch,
+            ContextEpochTransition::Initial,
         ));
         return Ok(());
     };
 
     let previous_canonical = openai_render_request_messages_without_chain(previous)?;
-    validate_openai_request_envelope(previous, request, stream)?;
-    if !canonical
-        .stable_input
-        .starts_with(&previous_canonical.stable_input)
-    {
-        return Err(ProviderRequestAssemblyError::invalid_state(
-            "OpenAI request chain rewrote canonical stable input inside one cache epoch",
-        ));
-    }
-    let previous_effective = previous
+    let previous_epoch = previous
         .messages
         .openai_input_chain()
-        .map(|chain| chain.effective_input.as_ref().clone())
-        .unwrap_or_else(|| previous_canonical.input.clone());
-    let mut effective = previous_effective;
-    effective.extend_from_slice(&canonical.stable_input[previous_canonical.stable_input.len()..]);
-    if canonical.volatile_input != previous_canonical.volatile_input {
-        if canonical.volatile_input.len() < previous_canonical.volatile_input.len() {
-            effective.push(openai_removed_live_state_transition(
-                previous_canonical.volatile_input.len(),
-                canonical.volatile_input.len(),
-            ));
-        }
-        effective.extend(
-            canonical
-                .volatile_input
-                .iter()
-                .enumerate()
-                .filter(|(index, value)| {
-                    previous_canonical.volatile_input.get(*index) != Some(value)
-                })
-                .map(|(_, value)| value.clone()),
+        .map(|chain| chain.context_epoch.clone())
+        .unwrap_or(openai_context_epoch_identity(
+            previous,
+            &previous_canonical,
+            cache_namespace,
+            stream,
+        )?);
+    if previous_epoch != current_epoch {
+        let transition = ContextEpochTransition::Changed(
+            previous_epoch
+                .changed_component(&current_epoch)
+                .expect("different context epochs must identify a changed component"),
         );
+        request.messages.set_openai_input_chain(openai_input_chain(
+            canonical.input,
+            cache_namespace,
+            stream,
+            current_epoch,
+            transition,
+        ));
+        return Ok(());
     }
-    request
-        .messages
-        .set_openai_input_chain(openai_input_chain(effective, cache_namespace, stream));
+    if !canonical.input.starts_with(&previous_canonical.input) {
+        return Err(ProviderRequestAssemblyError::invalid_state(
+            "OpenAI request chain rewrote canonical provider input inside one cache epoch",
+        ));
+    }
+    request.messages.set_openai_input_chain(openai_input_chain(
+        canonical.input,
+        cache_namespace,
+        stream,
+        current_epoch,
+        previous
+            .messages
+            .openai_input_chain()
+            .map_or(ContextEpochTransition::Initial, |chain| {
+                chain.epoch_transition
+            }),
+    ));
     Ok(())
 }
 
-/// Builds an append-only transition when the latest live-state snapshot omits
-/// provider-visible items that appeared in the prior request.
-fn openai_removed_live_state_transition(
-    previous_items: usize,
-    current_items: usize,
-) -> serde_json::Value {
-    serde_json::json!({
-        "role": "developer",
-        "content": [{
-            "type": "input_text",
-            "text": format!(
-                "[Mezzanine live state transition]\nPrior request-local live state is historical. Items omitted from the current snapshot are no longer active.\nprevious_items={previous_items}\ncurrent_items={current_items}"
-            )
-        }]
+/// Freezes canonical and effective OpenAI input for a request-chain generation.
+fn openai_input_chain(
+    effective_input: Vec<serde_json::Value>,
+    cache_namespace: &str,
+    stream: bool,
+    context_epoch: ContextEpochIdentity,
+    epoch_transition: ContextEpochTransition,
+) -> OpenAiInputChain {
+    OpenAiInputChain {
+        effective_input: std::sync::Arc::new(effective_input),
+        cache_namespace: cache_namespace.to_string(),
+        stream,
+        context_epoch,
+        epoch_transition,
+    }
+}
+
+/// Builds the exact non-model-visible identity for one OpenAI Responses epoch.
+///
+/// Every field is derived from canonical provider-bound state. A difference
+/// starts a fresh epoch before dispatch rather than permitting a same-epoch
+/// rewrite of provider input.
+fn openai_context_epoch_identity(
+    request: &ModelRequest,
+    rendered: &OpenAiRenderedMessages,
+    cache_namespace: &str,
+    stream: bool,
+) -> ProviderRequestAssemblyResult<ContextEpochIdentity> {
+    let response_format = openai_response_format(request).unwrap_or(serde_json::Value::Null);
+    let (tools, tool_choice) = if request.interaction_kind.expects_structured_json() {
+        (serde_json::json!([]), serde_json::json!("none"))
+    } else {
+        (
+            serde_json::json!(openai_maap_action_batch_tools(request)),
+            serde_json::json!({
+                "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                "type": "function"
+            }),
+        )
+    };
+    let request_controls = openai_responses_request_control_shape_with_stream(request, stream)?;
+    Ok(ContextEpochIdentity {
+        provider_namespace: cache_namespace.to_string(),
+        provider: request.provider.clone(),
+        model: request.model.clone(),
+        static_instructions_sha256: sha256_hex(rendered.instructions.as_bytes()),
+        maap_schema_version: "maap/1".to_string(),
+        response_format_sha256: canonical_json_sha256(&response_format)?,
+        interaction_family: request.interaction_kind.as_str().to_string(),
+        tool_schema_sha256: canonical_json_sha256(&tools)?,
+        tool_choice_sha256: canonical_json_sha256(&tool_choice)?,
+        request_controls_sha256: canonical_json_sha256(&request_controls)?,
+        api_shape: format!("openai-responses;stream={stream}"),
+        cache_lineage: request.prompt_cache_lineage_id.clone(),
+        compaction_generation_sha256: sha256_hex(
+            openai_compaction_generation_material(request).as_bytes(),
+        ),
     })
 }
 
-/// Returns whether two requests belong to one ordinary OpenAI cache epoch.
-fn openai_same_cache_epoch(
-    previous: &ModelRequest,
-    current: &ModelRequest,
-    cache_namespace: &str,
-    stream: bool,
-) -> bool {
-    previous.provider == current.provider
-        && previous.model == current.model
-        && previous.prompt_cache_lineage_id == current.prompt_cache_lineage_id
-        && openai_compaction_epoch(previous) == openai_compaction_epoch(current)
-        && previous
-            .messages
-            .openai_input_chain()
-            .is_none_or(|chain| chain.cache_namespace == cache_namespace && chain.stream == stream)
-        && previous
-            .interaction_kind
-            .expected_cache_break_reason()
-            .is_none()
-        && current
-            .interaction_kind
-            .expected_cache_break_reason()
-            .is_none()
-}
-
-/// Returns exact compaction markers that identify one rewritten context epoch.
-fn openai_compaction_epoch(request: &ModelRequest) -> Vec<&str> {
+/// Returns the exact durable compaction markers that identify one chronology epoch.
+fn openai_compaction_generation_material(request: &ModelRequest) -> String {
     request
         .messages
         .iter()
@@ -200,66 +197,34 @@ fn openai_compaction_epoch(request: &ModelRequest) -> Vec<&str> {
                         .starts_with("[conversation compaction notice]\n")
                     || message.content.starts_with("[memory compact-"))
         })
-        .map(|message| message.content.as_str())
+        .map(|message| {
+            format!(
+                "{}:{}:{}",
+                message.content.len(),
+                message.source as u8,
+                message.content
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Returns a deterministic SHA-256 digest for canonical JSON material.
+fn canonical_json_sha256(value: &serde_json::Value) -> ProviderRequestAssemblyResult<String> {
+    let bytes = serde_json::to_vec(value).map_err(|error| {
+        ProviderRequestAssemblyError::invalid_state(format!(
+            "OpenAI context epoch JSON encoding failed: {error}"
+        ))
+    })?;
+    Ok(sha256_hex(&bytes))
+}
+
+/// Returns lowercase SHA-256 text without retaining the hashed material.
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
         .collect()
-}
-
-/// Freezes canonical and effective OpenAI input for a request-chain generation.
-fn openai_input_chain(
-    effective_input: Vec<serde_json::Value>,
-    cache_namespace: &str,
-    stream: bool,
-) -> OpenAiInputChain {
-    OpenAiInputChain {
-        effective_input: std::sync::Arc::new(effective_input),
-        cache_namespace: cache_namespace.to_string(),
-        stream,
-    }
-}
-
-/// Rejects cache-affecting envelope changes inside one ordinary request epoch.
-fn validate_openai_request_envelope(
-    previous: &ModelRequest,
-    current: &ModelRequest,
-    stream: bool,
-) -> ProviderRequestAssemblyResult<()> {
-    let previous = openai_prompt_cache_diagnostics_for_request_with_stream(previous, stream)?;
-    let current = openai_prompt_cache_diagnostics_for_request_with_stream(current, stream)?;
-    for (name, previous, current) in [
-        (
-            "instructions",
-            previous.instructions_sha256,
-            current.instructions_sha256,
-        ),
-        (
-            "response_format",
-            previous.response_format_sha256,
-            current.response_format_sha256,
-        ),
-        ("tools", previous.tools_sha256, current.tools_sha256),
-        (
-            "tool_choice",
-            previous.tool_choice_sha256,
-            current.tool_choice_sha256,
-        ),
-        (
-            "prompt_cache_key",
-            previous.prompt_cache_key,
-            current.prompt_cache_key,
-        ),
-        (
-            "request_control",
-            previous.provider_request_shape_sha256,
-            current.provider_request_shape_sha256,
-        ),
-    ] {
-        if previous != current {
-            return Err(ProviderRequestAssemblyError::invalid_state(format!(
-                "OpenAI request chain changed {name} inside one cache epoch"
-            )));
-        }
-    }
-    Ok(())
 }
 
 /// Returns the OpenAI response-format field for special request modes.
@@ -365,13 +330,12 @@ mod tests {
             interaction_kind: ModelInteractionKind::ActionExecution,
             allowed_actions: AllowedActionSet::action_execution_base(),
             stop: None,
-            recovery_input: None,
             messages: messages.into(),
         }
     }
 
     /// Verifies a rebuilt request retains every prior OpenAI input item before
-    /// appending newly settled chronology, including a prior volatile tail.
+    /// appending newly settled chronology.
     ///
     /// The provider caches the complete rendered input rather than Mezzanine's
     /// logical placement classes. This regression therefore compares actual
@@ -393,10 +357,11 @@ mod tests {
         let tail = ModelMessage {
             role: ModelMessageRole::Context,
             source: ContextSourceKind::RuntimeHint,
-            placement: crate::ContextPlacement::EphemeralTail,
+            placement: crate::ContextPlacement::ConversationAppend,
             content: "[mcp integrations]\navailable_tool=files/read".to_string(),
         };
         let mut first = request_chain_fixture(vec![system.clone(), user.clone(), tail.clone()]);
+        crate::append_request_state_transition(&mut first);
         prepare_openai_request_prefix_extension(&mut first, None).unwrap();
         let first_body: serde_json::Value =
             serde_json::from_str(&crate::openai_responses_request_body(&first).unwrap()).unwrap();
@@ -407,7 +372,8 @@ mod tests {
             placement: crate::ContextPlacement::ConversationAppend,
             content: "read the file".to_string(),
         };
-        let mut second = request_chain_fixture(vec![system, user, assistant, tail]);
+        let mut second = first.clone();
+        second.messages.push(assistant);
         prepare_openai_request_prefix_extension(&mut second, Some(&first)).unwrap();
         let second_body: serde_json::Value =
             serde_json::from_str(&crate::openai_responses_request_body(&second).unwrap()).unwrap();
@@ -426,10 +392,10 @@ mod tests {
         assert_eq!(continuity.common_message_prefix, first_input.len());
     }
 
-    /// Verifies an ordinary request chain appends superseding live state while
-    /// rejecting envelope rewrites inside the same cache epoch.
+    /// Verifies an ordinary request chain appends new chronology while
+    /// rejecting a rewrite of an already-sent chronological item.
     #[test]
-    fn openai_request_chain_appends_live_state_and_rejects_envelope_rewrites() {
+    fn openai_request_chain_appends_chronology_and_rejects_rewrites() {
         let messages = vec![
             ModelMessage {
                 role: ModelMessageRole::System,
@@ -446,47 +412,39 @@ mod tests {
             ModelMessage {
                 role: ModelMessageRole::Context,
                 source: ContextSourceKind::RuntimeHint,
-                placement: crate::ContextPlacement::EphemeralTail,
+                placement: crate::ContextPlacement::ConversationAppend,
                 content: "state=first".to_string(),
             },
         ];
         let mut first = request_chain_fixture(messages.clone());
+        crate::append_request_state_transition(&mut first);
         prepare_openai_request_prefix_extension(&mut first, None).unwrap();
 
-        let mut changed_tail_messages = messages.clone();
-        changed_tail_messages.last_mut().unwrap().content = "state=second".to_string();
-        let mut changed_tail = request_chain_fixture(changed_tail_messages);
-        prepare_openai_request_prefix_extension(&mut changed_tail, Some(&first)).unwrap();
+        let mut appended = first.clone();
+        appended.messages.push(ModelMessage {
+            role: ModelMessageRole::Context,
+            source: ContextSourceKind::RuntimeHint,
+            placement: crate::ContextPlacement::ConversationAppend,
+            content: "state=second".to_string(),
+        });
+        prepare_openai_request_prefix_extension(&mut appended, Some(&first)).unwrap();
         let first_body: serde_json::Value =
             serde_json::from_str(&crate::openai_responses_request_body(&first).unwrap()).unwrap();
-        let changed_tail_body: serde_json::Value =
-            serde_json::from_str(&crate::openai_responses_request_body(&changed_tail).unwrap())
+        let appended_body: serde_json::Value =
+            serde_json::from_str(&crate::openai_responses_request_body(&appended).unwrap())
                 .unwrap();
         let first_input = first_body["input"].as_array().unwrap();
-        let changed_tail_input = changed_tail_body["input"].as_array().unwrap();
-        assert_eq!(first_input, &changed_tail_input[..first_input.len()]);
-        assert_eq!(changed_tail_input.len(), first_input.len() + 1);
+        let appended_input = appended_body["input"].as_array().unwrap();
+        assert_eq!(first_input, &appended_input[..first_input.len()]);
+        assert_eq!(appended_input.len(), first_input.len() + 1);
 
-        let mut removed_tail = request_chain_fixture(messages[..2].to_vec());
-        prepare_openai_request_prefix_extension(&mut removed_tail, Some(&first)).unwrap();
-        let removed_tail_body: serde_json::Value =
-            serde_json::from_str(&crate::openai_responses_request_body(&removed_tail).unwrap())
-                .unwrap();
-        let removed_tail_input = removed_tail_body["input"].as_array().unwrap();
-        assert_eq!(first_input, &removed_tail_input[..first_input.len()]);
-        assert!(removed_tail_input.iter().any(|message| {
-            message["content"][0]["text"]
-                .as_str()
-                .is_some_and(|text| text.contains("[Mezzanine live state transition]"))
-        }));
-
-        let mut changed_instructions = request_chain_fixture(messages);
-        changed_instructions.messages = vec![
+        let mut rewritten = first.clone();
+        rewritten.messages = vec![
             ModelMessage {
                 role: ModelMessageRole::System,
                 source: ContextSourceKind::System,
                 placement: crate::ContextPlacement::StablePrefix,
-                content: "rewritten instructions".to_string(),
+                content: "stable instructions".to_string(),
             },
             ModelMessage {
                 role: ModelMessageRole::User,
@@ -497,15 +455,61 @@ mod tests {
             ModelMessage {
                 role: ModelMessageRole::Context,
                 source: ContextSourceKind::RuntimeHint,
-                placement: crate::ContextPlacement::EphemeralTail,
-                content: "state=first".to_string(),
+                placement: crate::ContextPlacement::ConversationAppend,
+                content: "state=rewritten".to_string(),
             },
         ]
         .into();
         let error =
-            prepare_openai_request_prefix_extension(&mut changed_instructions, Some(&first))
-                .unwrap_err();
-        assert!(error.message().contains("changed instructions"));
+            prepare_openai_request_prefix_extension(&mut rewritten, Some(&first)).unwrap_err();
+        assert!(error.message().contains("rewrote canonical provider input"));
+    }
+
+    /// Verifies a cache-affecting instruction change establishes a classified
+    /// epoch instead of bypassing same-epoch canonical-input prefix checks.
+    #[test]
+    fn openai_instruction_change_starts_a_classified_context_epoch() {
+        let user = ModelMessage {
+            role: ModelMessageRole::User,
+            source: ContextSourceKind::UserInstruction,
+            placement: crate::ContextPlacement::ConversationAppend,
+            content: "inspect the cache".to_string(),
+        };
+        let mut first = request_chain_fixture(vec![
+            ModelMessage {
+                role: ModelMessageRole::System,
+                source: ContextSourceKind::System,
+                placement: crate::ContextPlacement::StablePrefix,
+                content: "first epoch instructions".to_string(),
+            },
+            user.clone(),
+        ]);
+        crate::append_request_state_transition(&mut first);
+        prepare_openai_request_prefix_extension(&mut first, None).unwrap();
+
+        let mut changed = request_chain_fixture(vec![
+            ModelMessage {
+                role: ModelMessageRole::System,
+                source: ContextSourceKind::System,
+                placement: crate::ContextPlacement::StablePrefix,
+                content: "second epoch instructions".to_string(),
+            },
+            user,
+        ]);
+        crate::append_request_state_transition(&mut changed);
+        prepare_openai_request_prefix_extension(&mut changed, Some(&first)).unwrap();
+
+        assert!(matches!(
+            changed
+                .messages
+                .openai_input_chain()
+                .unwrap()
+                .epoch_transition,
+            ContextEpochTransition::Changed(crate::ContextEpochComponent::StaticInstructions)
+        ));
+        let body: serde_json::Value =
+            serde_json::from_str(&crate::openai_responses_request_body(&changed).unwrap()).unwrap();
+        assert_eq!(body["instructions"], "second epoch instructions");
     }
 
     /// Verifies OpenAI request rendering ignores hidden provider-native
@@ -561,7 +565,6 @@ mod tests {
             max_output_tokens: None,
             temperature: None,
             stop: None,
-            recovery_input: None,
             prompt_cache_session_id: None,
             prompt_cache_lineage_id: None,
             turn_id: "turn-1".to_string(),
@@ -609,10 +612,10 @@ mod tests {
         let rendered = openai_render_request_messages(&request).unwrap();
         let rendered_json = serde_json::to_string(&rendered.input).unwrap();
 
-        assert_eq!(rendered.input.len(), 5);
+        assert_eq!(rendered.input.len(), 4);
         assert!(rendered.instructions.contains("system prompt"));
         assert!(rendered_json.contains("continue"));
-        assert!(rendered_json.contains("[OpenAI request state]"));
+        assert!(!rendered_json.contains("[OpenAI request state]"));
         assert!(rendered_json.contains("opaque-openai-ciphertext"));
         assert!(rendered_json.contains("\"call_id\":\"call_openai\""));
         assert!(rendered_json.contains("function_call_output"));

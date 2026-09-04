@@ -55,10 +55,8 @@ pub struct ContextBlockDiagnostics {
     pub bytes: usize,
     /// Best-effort token estimate.
     pub token_estimate: usize,
-    /// Whether the block can participate in the reusable request prefix.
-    pub reusable_prefix: bool,
-    /// Whether the block is discarded after this provider request.
-    pub request_local: bool,
+    /// Whether the block belongs to the fixed context-epoch prefix.
+    pub epoch_prefix: bool,
     /// SHA-256 of the complete canonical block encoding.
     pub sha256: String,
 }
@@ -89,26 +87,18 @@ pub struct ContextContinuitySnapshot {
     pub immutable_blocks: Vec<ImmutableContextBlockDigest>,
     /// Ordered diagnostics for both durable and request-local blocks.
     pub blocks: Vec<ContextBlockDiagnostics>,
-    /// Best-effort token estimate for stable and conversation material.
-    pub immutable_token_estimate: usize,
-    /// Best-effort token estimate for regenerated ephemeral material.
-    pub volatile_token_estimate: usize,
+    /// Best-effort token estimate for all model-visible durable context.
+    pub durable_token_estimate: usize,
     /// Canonical bytes in invariant stable-prefix blocks.
     pub stable_prefix_bytes: usize,
     /// Canonical bytes in immutable append-only chronology.
     pub append_only_bytes: usize,
-    /// Canonical bytes in request-local live state.
-    pub live_state_bytes: usize,
     /// Best-effort tokens in invariant stable-prefix blocks.
     pub stable_prefix_token_estimate: usize,
     /// Best-effort tokens in immutable append-only chronology.
     pub append_only_token_estimate: usize,
-    /// Best-effort tokens in request-local live state.
-    pub live_state_token_estimate: usize,
     /// Counts and sizes grouped by model-facing semantic category.
     pub semantic_aggregates: Vec<ContextSemanticAggregate>,
-    /// First canonical block index outside the reusable prefix.
-    pub first_volatile_block: Option<usize>,
     /// Number of blocks duplicating an earlier exact canonical digest.
     pub exact_duplicate_blocks: usize,
     /// Number of blocks duplicating normalized source/content with only
@@ -264,16 +254,12 @@ pub fn context_continuity_snapshot(
     let mut block_diagnostics = Vec::new();
     let mut immutable_projection = Vec::new();
     let mut provider_projection = Vec::new();
-    let mut immutable_token_estimate = 0usize;
-    let mut volatile_token_estimate = 0usize;
+    let mut durable_token_estimate = 0usize;
     let mut stable_prefix_bytes = 0usize;
     let mut append_only_bytes = 0usize;
-    let mut live_state_bytes = 0usize;
     let mut stable_prefix_token_estimate = 0usize;
     let mut append_only_token_estimate = 0usize;
-    let mut live_state_token_estimate = 0usize;
     let mut semantic_totals = BTreeMap::<String, (ContextSemanticKind, usize, usize, usize)>::new();
-    let mut first_volatile_block = None;
     let mut exact_digests = BTreeSet::new();
     let mut near_digests = BTreeSet::new();
     let mut exact_duplicate_blocks = 0usize;
@@ -304,40 +290,31 @@ pub fn context_continuity_snapshot(
         provider_projection.extend_from_slice(&canonical);
         provider_projection.extend_from_slice(&(provider_role.len() as u64).to_be_bytes());
         provider_projection.extend_from_slice(provider_role.as_bytes());
-        let request_local = block.placement == ContextPlacement::EphemeralTail;
-        if request_local {
-            first_volatile_block.get_or_insert(index);
-            volatile_token_estimate = volatile_token_estimate.saturating_add(token_estimate);
-            live_state_bytes = live_state_bytes.saturating_add(canonical.len());
-            live_state_token_estimate = live_state_token_estimate.saturating_add(token_estimate);
-        } else {
-            immutable_projection.extend_from_slice(&(canonical.len() as u64).to_be_bytes());
-            immutable_projection.extend_from_slice(&canonical);
-            immutable_token_estimate = immutable_token_estimate.saturating_add(token_estimate);
-            contains_compaction_epoch |= context_block_is_compaction_epoch(block);
-            match block.placement {
-                ContextPlacement::StablePrefix => {
-                    stable_prefix_bytes = stable_prefix_bytes.saturating_add(canonical.len());
-                    stable_prefix_token_estimate =
-                        stable_prefix_token_estimate.saturating_add(token_estimate);
-                }
-                ContextPlacement::ConversationAppend => {
-                    append_only_bytes = append_only_bytes.saturating_add(canonical.len());
-                    append_only_token_estimate =
-                        append_only_token_estimate.saturating_add(token_estimate);
-                }
-                ContextPlacement::EphemeralTail => unreachable!(),
+        immutable_projection.extend_from_slice(&(canonical.len() as u64).to_be_bytes());
+        immutable_projection.extend_from_slice(&canonical);
+        durable_token_estimate = durable_token_estimate.saturating_add(token_estimate);
+        contains_compaction_epoch |= context_block_is_compaction_epoch(block);
+        match block.placement {
+            ContextPlacement::StablePrefix => {
+                stable_prefix_bytes = stable_prefix_bytes.saturating_add(canonical.len());
+                stable_prefix_token_estimate =
+                    stable_prefix_token_estimate.saturating_add(token_estimate);
             }
-            immutable_blocks.push(ImmutableContextBlockDigest {
-                placement: block.placement,
-                source: block.source,
-                semantic_kind: semantic,
-                retention: block.retention(),
-                bytes: canonical.len(),
-                token_estimate,
-                sha256: digest.clone(),
-            });
+            ContextPlacement::ConversationAppend => {
+                append_only_bytes = append_only_bytes.saturating_add(canonical.len());
+                append_only_token_estimate =
+                    append_only_token_estimate.saturating_add(token_estimate);
+            }
         }
+        immutable_blocks.push(ImmutableContextBlockDigest {
+            placement: block.placement,
+            source: block.source,
+            semantic_kind: semantic,
+            retention: block.retention(),
+            bytes: canonical.len(),
+            token_estimate,
+            sha256: digest.clone(),
+        });
         block_diagnostics.push(ContextBlockDiagnostics {
             index,
             placement: block.placement,
@@ -349,8 +326,7 @@ pub fn context_continuity_snapshot(
             block_identity_sha256: context_block_identity_sha256(block),
             bytes: canonical.len(),
             token_estimate,
-            reusable_prefix: block.stable_prefix_eligible(),
-            request_local,
+            epoch_prefix: block.stable_prefix_eligible(),
             sha256: digest,
         });
     }
@@ -371,16 +347,12 @@ pub fn context_continuity_snapshot(
         turn_id: turn_id.to_string(),
         immutable_blocks,
         blocks: block_diagnostics,
-        immutable_token_estimate,
-        volatile_token_estimate,
+        durable_token_estimate,
         stable_prefix_bytes,
         append_only_bytes,
-        live_state_bytes,
         stable_prefix_token_estimate,
         append_only_token_estimate,
-        live_state_token_estimate,
         semantic_aggregates,
-        first_volatile_block,
         exact_duplicate_blocks,
         near_duplicate_blocks,
         stable_projection_bytes: immutable_projection.len(),
@@ -540,7 +512,7 @@ mod tests {
                 "run tests",
             ),
             block(
-                ContextPlacement::EphemeralTail,
+                ContextPlacement::ConversationAppend,
                 ContextSourceKind::RuntimeHint,
                 "runtime",
                 "running",
@@ -557,12 +529,9 @@ mod tests {
         );
         assert!(diagnostics.immutable_append_only);
         assert_eq!(diagnostics.common_immutable_prefix_blocks, 1);
-        assert!(diagnostics.snapshot.immutable_token_estimate > 0);
-        assert!(diagnostics.snapshot.volatile_token_estimate > 0);
-        assert_eq!(diagnostics.snapshot.first_volatile_block, Some(2));
+        assert!(diagnostics.snapshot.durable_token_estimate > 0);
         assert!(diagnostics.snapshot.stable_prefix_bytes > 0);
         assert!(diagnostics.snapshot.append_only_bytes > 0);
-        assert!(diagnostics.snapshot.live_state_bytes > 0);
         assert_eq!(diagnostics.snapshot.blocks[1].canonical_role, "user");
         assert_eq!(diagnostics.snapshot.blocks[2].canonical_role, "context");
         assert_eq!(
@@ -644,8 +613,12 @@ mod tests {
     fn context_continuity_fingerprints_semantics_and_labels_exceptional_modes() {
         let context = AgentContext::new(vec![
             ContextBlock::user_event("user prompt", "run tests"),
-            ContextBlock::live_state(ContextSourceKind::RuntimeHint, "runtime", "cwd=/repo"),
-            ContextBlock::live_state(ContextSourceKind::RuntimeHint, "runtime copy", "CWD=/repo"),
+            ContextBlock::reference_event(ContextSourceKind::RuntimeHint, "runtime", "cwd=/repo"),
+            ContextBlock::reference_event(
+                ContextSourceKind::RuntimeHint,
+                "runtime copy",
+                "CWD=/repo",
+            ),
         ])
         .unwrap();
 
@@ -669,7 +642,7 @@ mod tests {
         );
         assert_eq!(
             diagnostics.snapshot.blocks[1].retention,
-            ContextRetention::RequestLocal
+            ContextRetention::Exact
         );
         assert_eq!(
             diagnostics.snapshot.blocks[1].provider_role,

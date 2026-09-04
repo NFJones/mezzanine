@@ -78,12 +78,11 @@ fn assemble_model_request_points_deepseek_system_prompt_to_neutral_repository_in
         },
         &turn(),
         &AgentContext::new(vec![
-            ContextBlock {
-                source: ContextSourceKind::ProjectGuidance,
-                placement: crate::ContextPlacement::StablePrefix,
-                label: "active repository instructions".to_string(),
-                content: "Run just test before handoff.".to_string(),
-            },
+            ContextBlock::task_prelude(
+                ContextSourceKind::ProjectGuidance,
+                "active repository instructions",
+                "Run just test before handoff.",
+            ),
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
                 placement: crate::ContextPlacement::ConversationAppend,
@@ -100,17 +99,15 @@ fn assemble_model_request_points_deepseek_system_prompt_to_neutral_repository_in
     let user_prompt = &request.messages[2];
 
     assert!(system.contains("3. Repository Instructions"));
-    assert!(system.contains("DeepSeek provider note"));
-    assert!(system.contains("dedicated neutral-context message"));
     assert!(!system.contains("Run just test before handoff."));
-    assert!(
-        repository_guidance
-            .content
-            .starts_with("Active repository instructions:")
-    );
     assert_eq!(
         repository_guidance.source,
         ContextSourceKind::ProjectGuidance
+    );
+    assert_eq!(repository_guidance.role, ModelMessageRole::Context);
+    assert_eq!(
+        repository_guidance.placement,
+        crate::ContextPlacement::ConversationAppend
     );
     assert!(
         repository_guidance
@@ -138,12 +135,11 @@ fn assemble_model_request_keeps_deepseek_repository_guidance_without_user_prompt
             safety_tier: None,
         },
         &turn(),
-        &AgentContext::new(vec![ContextBlock {
-            source: ContextSourceKind::ProjectGuidance,
-            placement: crate::ContextPlacement::StablePrefix,
-            label: "active repository instructions".to_string(),
-            content: "Run just test before handoff.".to_string(),
-        }])
+        &AgentContext::new(vec![ContextBlock::task_prelude(
+            ContextSourceKind::ProjectGuidance,
+            "active repository instructions",
+            "Run just test before handoff.",
+        )])
         .unwrap(),
     )
     .unwrap();
@@ -445,7 +441,7 @@ fn model_request_keeps_context_sources_distinct() {
             },
             ContextBlock {
                 source: ContextSourceKind::RuntimeHint,
-                placement: crate::ContextPlacement::EphemeralTail,
+                placement: crate::ContextPlacement::ConversationAppend,
                 label: "runtime hint".to_string(),
                 content: "cwd=/repo".to_string(),
             },
@@ -598,20 +594,10 @@ fn model_request_preserves_action_results_before_provider_feedback() {
 /// Reordering malformed context would change transcript and tool-event
 /// semantics, so the canonical provider boundary must fail before projection.
 fn model_request_rejects_context_lifecycle_regressions() {
-    let regressions = [
-        (
-            crate::ContextPlacement::EphemeralTail,
-            crate::ContextPlacement::ConversationAppend,
-        ),
-        (
-            crate::ContextPlacement::ConversationAppend,
-            crate::ContextPlacement::StablePrefix,
-        ),
-        (
-            crate::ContextPlacement::EphemeralTail,
-            crate::ContextPlacement::StablePrefix,
-        ),
-    ];
+    let regressions = [(
+        crate::ContextPlacement::ConversationAppend,
+        crate::ContextPlacement::StablePrefix,
+    )];
 
     for (first, second) in regressions {
         let context_error = AgentContext::new(vec![
@@ -664,12 +650,11 @@ fn model_request_preserves_context_observation_order() {
         },
         &turn(),
         &AgentContext::new(vec![
-            ContextBlock {
-                source: ContextSourceKind::ProjectGuidance,
-                placement: crate::ContextPlacement::StablePrefix,
-                label: "project guidance".to_string(),
-                content: "stable guidance".to_string(),
-            },
+            ContextBlock::task_prelude(
+                ContextSourceKind::ProjectGuidance,
+                "project guidance",
+                "stable guidance",
+            ),
             ContextBlock::assistant_event("assistant response", "produce the observed result"),
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
@@ -697,12 +682,14 @@ fn model_request_preserves_context_observation_order() {
         sources,
         vec![
             ContextSourceKind::System,
+            ContextSourceKind::ProjectGuidance,
             ContextSourceKind::TranscriptAssistant,
             ContextSourceKind::ActionResult,
             ContextSourceKind::UserInstruction,
         ]
     );
-    assert!(request.messages[0].content.contains("stable guidance"));
+    assert!(!request.messages[0].content.contains("stable guidance"));
+    assert!(request.messages[1].content.contains("stable guidance"));
     assert!(
         request
             .messages
@@ -722,12 +709,11 @@ fn model_request_preserves_context_observation_order() {
         },
         &turn(),
         &AgentContext::new(vec![
-            ContextBlock {
-                source: ContextSourceKind::ProjectGuidance,
-                placement: crate::ContextPlacement::StablePrefix,
-                label: "project guidance".to_string(),
-                content: "stable guidance".to_string(),
-            },
+            ContextBlock::task_prelude(
+                ContextSourceKind::ProjectGuidance,
+                "project guidance",
+                "stable guidance",
+            ),
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
                 placement: crate::ContextPlacement::ConversationAppend,
@@ -758,12 +744,14 @@ fn model_request_preserves_context_observation_order() {
         sources,
         vec![
             ContextSourceKind::System,
+            ContextSourceKind::ProjectGuidance,
             ContextSourceKind::UserInstruction,
             ContextSourceKind::TranscriptAssistant,
             ContextSourceKind::ActionResult,
         ]
     );
-    assert!(request.messages[0].content.contains("stable guidance"));
+    assert!(!request.messages[0].content.contains("stable guidance"));
+    assert!(request.messages[1].content.contains("stable guidance"));
     assert!(
         request
             .messages

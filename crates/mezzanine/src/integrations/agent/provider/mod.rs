@@ -260,17 +260,7 @@ impl<'a> ProviderWireObservationContext<'a> {
             message_bytes: request.messages.iter().fold(0usize, |total, message| {
                 total.saturating_add(message.content.len())
             }),
-            mcp_live_state_bytes: request
-                .messages
-                .iter()
-                .filter(|message| {
-                    message.placement == mez_agent::ContextPlacement::EphemeralTail
-                        && message.source == mez_agent::ContextSourceKind::RuntimeHint
-                        && message.content.starts_with("[mcp integrations]\n")
-                })
-                .fold(0usize, |total, message| {
-                    total.saturating_add(message.content.len())
-                }),
+            mcp_live_state_bytes: 0,
             mcp_catalog_bytes: request
                 .messages
                 .iter()

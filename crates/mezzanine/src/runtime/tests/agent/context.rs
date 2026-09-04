@@ -295,7 +295,8 @@ fn runtime_configured_mcp_catalog_snapshots_persist_replay_and_remove() {
     assert_eq!(available_tools.len(), 1);
     assert!(
         prepared
-            .live_state()
+            .durable()
+            .blocks()
             .iter()
             .all(|block| { block.label != mez_agent::MCP_INTEGRATIONS_CONTEXT_LABEL })
     );
@@ -539,8 +540,8 @@ fn runtime_plan_mode_tags_only_the_active_pane_newest_prompt() {
 }
 
 /// Verifies project-guidance discovery is an exact no-op until source content
-/// changes before the first provider response, then rewrites only the reserved
-/// stable slot and records a new cache lineage with an attributable diagnostic.
+/// changes before the first provider response, then appends a successor
+/// task-prelude snapshot and records a new cache lineage diagnostic.
 #[test]
 fn runtime_project_guidance_refresh_preserves_or_rewrites_cache_lineage_by_fingerprint() {
     let mut service = test_runtime_service();
@@ -584,19 +585,18 @@ fn runtime_project_guidance_refresh_preserves_or_rewrites_cache_lineage_by_finge
         .refresh_agent_turn_project_guidance_context(&turn)
         .unwrap();
     let changed = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
-    assert_ne!(
-        changed
-            .stable_slot_source_fingerprint("project-guidance")
-            .unwrap(),
-        original
-            .stable_slot_source_fingerprint("project-guidance")
-            .unwrap()
-    );
+    assert_ne!(changed, &original);
+    assert!(changed.blocks().iter().any(|block| {
+        block.source == ContextSourceKind::ProjectGuidance
+            && block
+                .content
+                .contains("Preserve chronology and causal ownership.")
+    }));
     assert_ne!(
         changed.metadata().prompt_cache_lineage_id,
         original.metadata().prompt_cache_lineage_id
     );
-    assert_eq!(changed.chronology(), original.chronology());
+    assert_ne!(changed.chronology(), original.chronology());
     let trace = service.agent_pane_trace_log_text("%1").unwrap();
     assert!(
         trace.contains("context lineage changed") && trace.contains("project guidance"),
@@ -691,9 +691,8 @@ fn runtime_project_guidance_refresh_defers_changes_during_active_cache_epoch() {
 /// Verifies terminal turn cleanup preserves the exact OpenAI wire chain for
 /// the next ordinary request in the same conversation and cache epoch.
 ///
-/// The first request includes request-local live state that is absent from the
-/// second request. Its complete rendered input must remain a byte-identical
-/// prefix, followed by new chronology and an explicit live-state transition.
+/// Both requests are rendered entirely from durable chronology. The second
+/// input retains the first byte-for-byte and adds only new chronology.
 #[test]
 fn runtime_openai_request_chain_survives_completed_turn_boundary() {
     let mut service = test_runtime_service();
@@ -726,7 +725,7 @@ fn runtime_openai_request_chain_survives_completed_turn_boundary() {
     first_request.messages.push(mez_agent::ModelMessage {
         role: mez_agent::ModelMessageRole::Context,
         source: ContextSourceKind::RuntimeHint,
-        placement: mez_agent::ContextPlacement::EphemeralTail,
+        placement: mez_agent::ContextPlacement::ConversationAppend,
         content: "state=first-turn-live".to_string(),
     });
     mez_agent::append_request_state_transition(&mut first_request);
@@ -774,9 +773,6 @@ fn runtime_openai_request_chain_survives_completed_turn_boundary() {
 
     let mut second_request = first_request.clone();
     second_request.turn_id = second_turn.turn_id;
-    second_request
-        .messages
-        .retain(|message| message.placement != mez_agent::ContextPlacement::EphemeralTail);
     second_request.messages.push(mez_agent::ModelMessage {
         role: mez_agent::ModelMessageRole::Assistant,
         source: ContextSourceKind::TranscriptAssistant,
@@ -799,10 +795,10 @@ fn runtime_openai_request_chain_survives_completed_turn_boundary() {
 
     assert_eq!(first_input, &second_input[..first_input.len()]);
     assert!(second_input.len() > first_input.len());
-    assert!(second_input.iter().any(|message| {
+    assert!(second_input.iter().all(|message| {
         message["content"][0]["text"]
             .as_str()
-            .is_some_and(|text| text.contains("[Mezzanine live state transition]"))
+            .is_none_or(|text| !text.contains("[Mezzanine live state transition]"))
     }));
     let first_diagnostics =
         mez_agent::openai_prompt_cache_diagnostics_for_request(&first_request).unwrap();
@@ -816,7 +812,8 @@ fn runtime_openai_request_chain_survives_completed_turn_boundary() {
     assert!(continuity.request_prefix_append_only, "{continuity:#?}");
     assert_eq!(continuity.common_message_prefix, first_input.len());
     assert!(second_diagnostics.effective_input_bytes > first_diagnostics.effective_input_bytes);
-    assert!(second_diagnostics.volatile_input_bytes < first_diagnostics.volatile_input_bytes);
+    assert_eq!(first_diagnostics.volatile_input_bytes, 2);
+    assert_eq!(second_diagnostics.volatile_input_bytes, 2);
 }
 
 /// Prepares one synthetic provider request from prompt chronology without
@@ -869,13 +866,7 @@ fn runtime_provider_preparation_does_not_mutate_or_grow_durable_context() {
     assert_eq!(durable, original);
     assert_eq!(first.durable(), &original);
     assert_eq!(second.durable(), &original);
-    assert_eq!(first.live_state(), second.live_state());
-    assert!(
-        original
-            .blocks()
-            .iter()
-            .all(|block| block.placement != mez_agent::ContextPlacement::EphemeralTail)
-    );
+    assert_eq!(first.to_agent_context(), second.to_agent_context());
 }
 
 /// Verifies settled action evidence is canonical before it becomes reusable,
@@ -956,7 +947,8 @@ fn runtime_action_results_split_canonical_history_from_same_turn_detail() {
         .unwrap();
     assert!(
         prepared
-            .live_state()
+            .durable()
+            .blocks()
             .iter()
             .all(|block| block.label != "current action detail shell-private")
     );
@@ -994,7 +986,6 @@ fn runtime_provider_preparation_reuses_durable_environment_snapshot() {
 
     let prepared = prepared_context_for_prompt(&service, durable);
 
-    assert!(prepared.live_state().is_empty());
     assert!(prepared.durable().blocks().iter().any(|block| {
         block.label == "task environment snapshot" && block.content.contains("cwd=/repo/work")
     }));
@@ -1317,7 +1308,7 @@ fn runtime_status_reports_provider_context_continuity_diagnostics() {
         trace.contains("\"break_reason\": \"append_only\""),
         "{trace}"
     );
-    assert!(trace.contains("\"immutable_token_estimate\""), "{trace}");
+    assert!(trace.contains("\"durable_token_estimate\""), "{trace}");
     assert!(
         status.contains("| Provider wire prefix | unknown |"),
         "{status}"
@@ -1861,7 +1852,8 @@ fn runtime_agent_context_omits_nonready_pane_readiness() {
     );
     assert!(
         prepared
-            .live_state()
+            .durable()
+            .blocks()
             .iter()
             .all(|block| block.label != "pane readiness")
     );
@@ -1899,7 +1891,8 @@ fn runtime_agent_context_settles_recoverable_prompt_candidate_readiness() {
     );
     assert!(
         !prepared
-            .live_state()
+            .durable()
+            .blocks()
             .iter()
             .any(|block| block.label == "pane readiness")
     );
@@ -1932,7 +1925,8 @@ fn runtime_agent_context_omits_unconfirmed_busy_readiness() {
     );
     assert!(
         prepared
-            .live_state()
+            .durable()
+            .blocks()
             .iter()
             .all(|block| block.label != "pane readiness")
     );

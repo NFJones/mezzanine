@@ -84,14 +84,10 @@ fn failure_summary_request(
     let mut request = previous_request.clone();
     select_model_interaction_kind(&mut request, ModelInteractionKind::FailureSummary);
     request.allowed_actions = AllowedActionSet::say_only();
-    request.messages.retain(|message| {
-        !(message.source == ContextSourceKind::RuntimeHint
-            && message.content.starts_with("[failure summary state]"))
-    });
     request.messages.push(ModelMessage {
         role: ModelMessageRole::Context,
         source: ContextSourceKind::RuntimeHint,
-        placement: mez_agent::ContextPlacement::EphemeralTail,
+        placement: mez_agent::ContextPlacement::ConversationAppend,
         content: format!(
             "[failure summary state]\n\
              stage={stage}\nerror_kind={:?}\nerror_message={}\n\

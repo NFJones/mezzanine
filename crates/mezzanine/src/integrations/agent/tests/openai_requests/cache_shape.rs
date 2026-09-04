@@ -28,12 +28,11 @@ fn openai_responses_request_body_has_canonical_cache_shape_fixture() {
         &profile,
         &turn(),
         &AgentContext::new(vec![
-            ContextBlock {
-                source: ContextSourceKind::ProjectGuidance,
-                placement: mez_agent::ContextPlacement::StablePrefix,
-                label: "active repository instructions".to_string(),
-                content: "Prefer deterministic request shapes.".to_string(),
-            },
+            ContextBlock::task_prelude(
+                ContextSourceKind::ProjectGuidance,
+                "active repository instructions",
+                "Prefer deterministic request shapes.",
+            ),
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
@@ -63,11 +62,17 @@ fn openai_responses_request_body_has_canonical_cache_shape_fixture() {
     assert_eq!(body["tool_choice"]["name"], "submit_maap_action_batch");
     assert!(body["text"]["format"].is_null());
     assert!(
-        body["instructions"]
+        !body["instructions"]
             .as_str()
             .unwrap()
             .contains("Prefer deterministic request shapes.")
     );
+    assert!(body["input"].as_array().unwrap().iter().any(|message| {
+        message["role"] == "developer"
+            && message["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("Prefer deterministic request shapes."))
+    }));
     assert!(body["input"].as_array().unwrap().iter().any(|message| {
         message["role"] == "user"
             && message["content"][0]["text"]

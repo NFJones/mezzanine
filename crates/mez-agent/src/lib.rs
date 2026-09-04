@@ -231,15 +231,15 @@ pub use config_change::{
 pub use context::{
     AgentContext, AgentContextError, AgentContextResult, AgentRequestAssemblyError,
     AgentRequestAssemblyErrorKind, AgentRequestAssemblyResult, ContextBlock, ContextBlockMetadata,
-    ContextCachePolicy, ContextEventSequence, ContextExecutionGroupId, ContextPlacement,
-    ContextRetention, ContextSemanticKind, ContextSourceKind, ContextStability, ConversationEvent,
-    ImportedExecutionEvent, LiveStateBlock, ModelContextCompactionReport, ModelContextMetadata,
-    ModelMessage, ModelMessageRole, ModelMessages, ModelRequest, PreparedModelContext,
-    ProviderContinuityOwner, StableContextBlock, StableContextSlotId,
-    StableContextSourceFingerprint, TrustDomain, context_block_is_compaction_summary,
-    context_placement_insertion_index, insert_context_block_by_placement,
-    model_context_block_header, validate_context_placement_order, validate_context_required,
-    validate_context_semantics,
+    ContextCachePolicy, ContextEpochComponent, ContextEpochIdentity, ContextEpochTransition,
+    ContextEventSequence, ContextExecutionGroupId, ContextPlacement, ContextRetention,
+    ContextSemanticKind, ContextSourceKind, ContextStability, ConversationEvent,
+    ImportedExecutionEvent, ModelContextCompactionReport, ModelContextMetadata, ModelMessage,
+    ModelMessageRole, ModelMessages, ModelRequest, PreparedModelContext, ProviderContinuityOwner,
+    StableContextBlock, StableContextSlotId, StableContextSourceFingerprint, TrustDomain,
+    context_block_is_compaction_summary, context_placement_insertion_index,
+    insert_context_block_by_placement, model_context_block_header,
+    validate_context_placement_order, validate_context_required, validate_context_semantics,
 };
 pub use context_appenders::{
     MCP_CATALOG_REMOVED_CONTEXT, MCP_CATALOG_SNAPSHOT_CONTEXT_LABEL,
@@ -248,7 +248,7 @@ pub use context_appenders::{
     append_mcp_context_with_configured, append_memory_context, append_permission_policy_context,
     append_project_guidance_context, configured_mcp_catalog_snapshot_content,
     invoked_mcp_tools_for_context, invoked_mcp_tools_for_context_with_configured,
-    memory_context_blocks, set_project_guidance_context,
+    memory_context_blocks, project_guidance_context_block, set_project_guidance_context,
 };
 pub use context_assembly::{
     ModelRequestIdentity, assemble_model_request_from_context, role_for_context_block,

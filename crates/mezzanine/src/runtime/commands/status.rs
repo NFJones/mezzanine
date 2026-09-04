@@ -362,10 +362,9 @@ impl RuntimeSessionService {
                     || "unknown".to_string(),
                     |diagnostics| {
                         format!(
-                            "reason={} immutable_tokens~{} volatile_tokens~{} append_only={}",
+                            "reason={} durable_tokens~{} append_only={}",
                             diagnostics.break_reason.as_str(),
-                            diagnostics.snapshot.immutable_token_estimate,
-                            diagnostics.snapshot.volatile_token_estimate,
+                            diagnostics.snapshot.durable_token_estimate,
                             diagnostics.immutable_append_only,
                         )
                     },

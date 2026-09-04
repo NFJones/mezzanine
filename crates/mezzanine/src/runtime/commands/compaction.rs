@@ -1047,7 +1047,6 @@ pub(super) fn runtime_model_compaction_request(
                 issue_actions_enabled: true,
         interaction_kind: ModelInteractionKind::ActionExecution,
         allowed_actions: AllowedActionSet::say_only(),
-        recovery_input: None,
         messages: vec![
             ModelMessage {
                 role: ModelMessageRole::System,

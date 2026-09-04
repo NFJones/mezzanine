@@ -70,12 +70,13 @@ fn project_guidance_context_is_inserted_before_user_prompt() {
 }
 
 #[test]
-/// Verifies stable project guidance is inserted before task environment state.
+/// Verifies project guidance follows earlier durable environment evidence while
+/// remaining a prelude before the active user prompt.
 ///
 /// Runtime prompt construction discovers repository instructions after pane and
-/// environment state. The shared appender must use the stable-phase boundary
-/// without moving the task environment after the active user event.
-fn project_guidance_context_precedes_task_environment_configuration() {
+/// environment state. The snapshot must keep that causal ordering without
+/// appearing after the active user event.
+fn project_guidance_context_follows_task_environment_before_user_prompt() {
     let context = AgentContext::new(vec![
         ContextBlock {
             source: ContextSourceKind::Configuration,
@@ -101,11 +102,11 @@ fn project_guidance_context_precedes_task_environment_configuration() {
 
     let context = append_project_guidance_context(context, &files, 1).unwrap();
 
+    assert_eq!(context.blocks()[0].label, "environment signature");
     assert_eq!(
-        context.blocks()[0].source,
+        context.blocks()[1].source,
         ContextSourceKind::ProjectGuidance
     );
-    assert_eq!(context.blocks()[1].label, "environment signature");
     assert_eq!(
         context.blocks()[2].source,
         ContextSourceKind::UserInstruction
@@ -114,24 +115,19 @@ fn project_guidance_context_precedes_task_environment_configuration() {
 }
 
 #[test]
-/// Verifies project guidance replacement removes stale instruction blocks.
+/// Verifies an updated project-guidance snapshot is appended before the active
+/// user prompt without rewriting the prior durable snapshot.
 ///
-/// Provider continuations refresh stored turn context before each request, so
-/// the replacement helper must keep one current project-guidance block instead of
-/// accumulating old guidance after file edits or repeated model round trips.
-fn project_guidance_context_replaces_existing_guidance_blocks() {
+/// Each discovery is durable evidence of the instructions governing a prompt.
+/// A changed snapshot must therefore retain the prior bytes and append its
+/// successor at the deterministic prompt boundary.
+fn project_guidance_context_change_retains_prior_snapshot() {
     let context = AgentContext::new(vec![
         ContextBlock {
             source: ContextSourceKind::Policy,
             placement: crate::ContextPlacement::StablePrefix,
             label: "permission policy".to_string(),
             content: "approval_policy=Ask".to_string(),
-        },
-        ContextBlock {
-            source: ContextSourceKind::ProjectGuidance,
-            placement: crate::ContextPlacement::StablePrefix,
-            label: "project guidance".to_string(),
-            content: "stale guidance".to_string(),
         },
         ContextBlock {
             source: ContextSourceKind::UserInstruction,
@@ -146,20 +142,29 @@ fn project_guidance_context_replaces_existing_guidance_blocks() {
         scope_root: ".".to_string(),
         bytes: 15,
         truncated: false,
-        content: "fresh guidance".to_string(),
+        content: "first guidance".to_string(),
     }];
 
-    let context = set_project_guidance_context(context, &files, 2).unwrap();
+    let first = set_project_guidance_context(context, &files, 2).unwrap();
+    let updated_files = vec![DiscoveredInstructionFile {
+        path: "./AGENTS.md".to_string(),
+        scope_root: ".".to_string(),
+        bytes: 14,
+        truncated: false,
+        content: "fresh guidance".to_string(),
+    }];
+    let context = set_project_guidance_context(first, &updated_files, 2).unwrap();
 
     let guidance = context
         .blocks()
         .iter()
         .filter(|block| block.source == ContextSourceKind::ProjectGuidance)
         .collect::<Vec<_>>();
-    assert_eq!(guidance.len(), 1);
-    assert!(guidance[0].content.contains("fresh guidance"));
+    assert_eq!(guidance.len(), 2);
+    assert!(guidance[0].content.contains("first guidance"));
+    assert!(guidance[1].content.contains("fresh guidance"));
     assert!(
-        guidance[0]
+        guidance[1]
             .content
             .contains("If a higher-priority instruction prevents following this file")
     );
@@ -170,18 +175,22 @@ fn project_guidance_context_replaces_existing_guidance_blocks() {
     );
     assert_eq!(
         context.blocks()[2].source,
+        ContextSourceKind::ProjectGuidance
+    );
+    assert_eq!(
+        context.blocks()[3].source,
         ContextSourceKind::UserInstruction
     );
 }
 
 #[test]
 /// Verifies repeated discovery of byte-identical repository instructions is an
-/// exact stable-slot no-op.
+/// exact chronological no-op.
 ///
-/// Provider continuations refresh guidance before every request. Reconstructing
-/// or relocating an unchanged block would make cache lineage appear unstable
-/// even though the governing source did not change.
-fn project_guidance_context_noop_refresh_preserves_slot_and_fingerprint() {
+/// Provider continuations may rediscover guidance before every request. An
+/// unchanged snapshot must not duplicate a durable prelude or alter its
+/// sequence.
+fn project_guidance_context_noop_refresh_preserves_snapshot() {
     let files = vec![DiscoveredInstructionFile {
         path: "./AGENTS.md".to_string(),
         scope_root: ".".to_string(),
@@ -195,26 +204,23 @@ fn project_guidance_context_noop_refresh_preserves_slot_and_fingerprint() {
         2,
     )
     .unwrap();
-    let fingerprint = original
-        .stable_slot_source_fingerprint("project-guidance")
-        .unwrap()
-        .clone();
-
     let refreshed = set_project_guidance_context(original.clone(), &files, 2).unwrap();
 
     assert_eq!(refreshed, original);
     assert_eq!(
         refreshed
-            .stable_slot_source_fingerprint("project-guidance")
-            .unwrap(),
-        &fingerprint
+            .chronology()
+            .iter()
+            .filter(|event| event.block().source == ContextSourceKind::ProjectGuidance)
+            .count(),
+        1
     );
 }
 
 #[test]
-/// Verifies a real guidance change replaces the named slot at its original
-/// prefix anchor and records a new source fingerprint.
-fn project_guidance_context_change_rewrites_only_reserved_slot() {
+/// Verifies a real guidance change appends a successor snapshot before the
+/// active user prompt while retaining the original snapshot bytes.
+fn project_guidance_context_change_appends_successor_snapshot() {
     let before_files = vec![DiscoveredInstructionFile {
         path: "./AGENTS.md".to_string(),
         scope_root: ".".to_string(),
@@ -235,23 +241,15 @@ fn project_guidance_context_change_rewrites_only_reserved_slot() {
     ])
     .unwrap();
     let before = set_project_guidance_context(base, &before_files, 2).unwrap();
-    let old_fingerprint = before
-        .stable_slot_source_fingerprint("project-guidance")
-        .unwrap()
-        .clone();
 
     let after = set_project_guidance_context(before, &after_files, 2).unwrap();
 
     assert_eq!(after.blocks()[0].label, "policy");
     assert_eq!(after.blocks()[1].label, "active repository instructions");
-    assert!(after.blocks()[1].content.contains("new guidance"));
-    assert_eq!(after.blocks()[2].label, "user");
-    assert_ne!(
-        after
-            .stable_slot_source_fingerprint("project-guidance")
-            .unwrap(),
-        &old_fingerprint
-    );
+    assert!(after.blocks()[1].content.contains("old guidance"));
+    assert_eq!(after.blocks()[2].label, "active repository instructions");
+    assert!(after.blocks()[2].content.contains("new guidance"));
+    assert_eq!(after.blocks()[3].label, "user");
 }
 
 #[test]
@@ -314,12 +312,12 @@ fn project_guidance_context_respects_file_limit_and_skips_empty_content() {
 }
 
 #[test]
-/// Verifies active repository instruction text is embedded into the system
-/// prompt instead of replayed as a separate user-context block.
+/// Verifies active repository instruction text is a durable neutral prelude
+/// rather than mutable system-prefix content.
 ///
-/// This protects the prompt shape that prevents the model from spending an
-/// early action rediscovering repository guidance that was already loaded.
-fn project_guidance_is_templated_into_system_prompt() {
+/// This protects the two-phase prompt shape: the fixed system contract stays
+/// immutable while the discovered repository snapshot remains chronological.
+fn project_guidance_is_rendered_as_durable_context_prelude() {
     let files = vec![DiscoveredInstructionFile {
         path: "./AGENTS.md".to_string(),
         scope_root: ".".to_string(),
@@ -343,21 +341,15 @@ fn project_guidance_is_templated_into_system_prompt() {
 
     assert_eq!(request.messages[0].role, ModelMessageRole::System);
     assert!(
-        request.messages[0]
-            .content
-            .contains("Embedded active repository instruction contents")
-    );
-    assert!(
-        request.messages[0]
+        !request.messages[0]
             .content
             .contains("run just test before handoff")
     );
     assert!(!request.messages[0].content.contains("AGENTS.md"));
-    assert!(
-        request
-            .messages
-            .iter()
-            .skip(1)
-            .all(|message| message.source != ContextSourceKind::ProjectGuidance)
-    );
+    assert!(request.messages.iter().skip(1).any(|message| {
+        message.source == ContextSourceKind::ProjectGuidance
+            && message.role == ModelMessageRole::Context
+            && message.placement == crate::ContextPlacement::ConversationAppend
+            && message.content.contains("run just test before handoff")
+    }));
 }

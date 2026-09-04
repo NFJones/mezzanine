@@ -718,7 +718,6 @@ mod provider_wire_tests {
             issue_actions_enabled: false,
             interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
             allowed_actions: mez_agent::AllowedActionSet::say_only(),
-            recovery_input: None,
             messages: vec![
                 mez_agent::ModelMessage {
                     role: mez_agent::ModelMessageRole::System,

@@ -1151,15 +1151,11 @@ fn runtime_context_continuity_trace_json(
     diagnostics: &mez_agent::ContextContinuityDiagnostics,
 ) -> serde_json::Value {
     serde_json::json!({
-        "immutable_token_estimate": diagnostics.snapshot.immutable_token_estimate,
-        "volatile_token_estimate": diagnostics.snapshot.volatile_token_estimate,
+        "durable_token_estimate": diagnostics.snapshot.durable_token_estimate,
         "stable_prefix_bytes": diagnostics.snapshot.stable_prefix_bytes,
         "append_only_bytes": diagnostics.snapshot.append_only_bytes,
-        "live_state_bytes": diagnostics.snapshot.live_state_bytes,
         "stable_prefix_token_estimate": diagnostics.snapshot.stable_prefix_token_estimate,
         "append_only_token_estimate": diagnostics.snapshot.append_only_token_estimate,
-        "live_state_token_estimate": diagnostics.snapshot.live_state_token_estimate,
-        "first_volatile_block": diagnostics.snapshot.first_volatile_block,
         "exact_duplicate_blocks": diagnostics.snapshot.exact_duplicate_blocks,
         "near_duplicate_blocks": diagnostics.snapshot.near_duplicate_blocks,
         "stable_projection_bytes": diagnostics.snapshot.stable_projection_bytes,
@@ -1185,8 +1181,7 @@ fn runtime_context_continuity_trace_json(
                 "block_identity_sha256": block.block_identity_sha256,
                 "bytes": block.bytes,
                 "token_estimate": block.token_estimate,
-                "reusable_prefix": block.reusable_prefix,
-                "request_local": block.request_local,
+                "epoch_prefix": block.epoch_prefix,
                 "sha256": block.sha256,
             })
         }).collect::<Vec<_>>(),

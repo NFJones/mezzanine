@@ -195,7 +195,11 @@ fn openai_context_entry_body(content: &str) -> &str {
 
 /// Returns whether a rendered input message belongs in the reusable prefix.
 fn openai_message_stable_prefix_eligible(message: &ModelMessage) -> bool {
-    message.placement != crate::context::ContextPlacement::EphemeralTail
+    matches!(
+        message.placement,
+        crate::context::ContextPlacement::StablePrefix
+            | crate::context::ContextPlacement::ConversationAppend
+    )
 }
 
 /// Stable categories for provider request-assembly failures.

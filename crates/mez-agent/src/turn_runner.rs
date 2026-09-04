@@ -522,11 +522,7 @@ pub fn append_request_state_transition(request: &mut ModelRequest) {
         })
         .count()
         .saturating_add(1);
-    let insert_at = request
-        .messages
-        .iter()
-        .position(|message| message.placement == crate::ContextPlacement::EphemeralTail)
-        .unwrap_or(request.messages.len());
+    let insert_at = request.messages.len();
     request.messages.insert(
         insert_at,
         ModelMessage {
@@ -671,7 +667,6 @@ mod tests {
                 interaction_kind: ModelInteractionKind::ActionExecution,
                 allowed_actions: AllowedActionSet::say_only(),
                 stop: None,
-                recovery_input: None,
                 messages: vec![ModelMessage {
                     role: ModelMessageRole::User,
                     source: ContextSourceKind::UserInstruction,

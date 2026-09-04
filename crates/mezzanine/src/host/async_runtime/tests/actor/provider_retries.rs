@@ -1286,7 +1286,6 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
             allowed_actions: mez_agent::AllowedActionSet::for_capability(
                 mez_agent::AgentCapability::Shell,
             ),
-            recovery_input: None,
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: mez_agent::ContextSourceKind::UserInstruction,

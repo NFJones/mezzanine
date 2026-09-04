@@ -190,7 +190,7 @@ fn openai_maap_schema_is_stable_across_non_mcp_action_surfaces() {
         capability_diagnostics.provider_request_shape_sha256,
         execution_diagnostics.provider_request_shape_sha256
     );
-    assert_ne!(
+    assert_eq!(
         capability_diagnostics.volatile_input_sha256,
         execution_diagnostics.volatile_input_sha256
     );
@@ -671,15 +671,7 @@ fn openai_responses_request_body_exposes_static_execution_action_catalog() {
     assert!(!action_types.contains(&"abort".to_string()));
     assert!(action_types.contains(&"fetch_url".to_string()));
     assert!(action_types.contains(&"web_search".to_string()));
-    let request_state = value["input"].as_array().unwrap().last().unwrap()["content"][0]["text"]
-        .as_str()
-        .unwrap();
-    assert!(request_state.contains("[OpenAI request state]"));
-    assert!(request_state.contains("interaction_kind=action_execution"));
-    assert!(
-        request_state.contains("allowed_actions=say,request_capability,shell_command,apply_patch")
-    );
-    assert!(!request_state.contains("Emit only"));
+    assert_eq!(value["input"].as_array().unwrap().len(), 1);
 
     let shell_schema = action_schemas
         .iter()
