@@ -10,7 +10,7 @@ use rand::RngExt;
 
 use super::{
     ClientRole, Envelope, EventKind, MezError, PaneProcessStart, Path, PathBuf, Recipient, Result,
-    RuntimeAutoSizingConfig, RuntimeSessionService, RuntimeSubagentLineage,
+    RuntimeAutoSizingConfig, RuntimeSessionService, RuntimeSideEffect, RuntimeSubagentLineage,
     RuntimeSubagentPlacement, SUBAGENT_FRIENDLY_NAMES, SplitDirection, SubagentScopeDeclaration,
     SubagentSpawnRequest, TaskState, TaskStatusPayload, compare_permission_preset_authority,
     current_unix_seconds, json_escape, pane_id_from_runtime_agent_id,
@@ -32,6 +32,18 @@ const SUBAGENT_BUCKET_MIN_COLUMNS: u16 = 24;
 /// compact terminals to use top/bottom or grid layouts before opening another
 /// subagent bucket window.
 const SUBAGENT_BUCKET_MIN_ROWS: u16 = 4;
+
+/// Captures the bounded durable parent history copied into one forked child.
+///
+/// The copied records preserve their original role and authorship while the
+/// target conversation receives independent sequence ownership.
+#[derive(Debug, Clone)]
+struct RuntimeSubagentForkSnapshot {
+    /// Parent cache lineage retained by the child’s inherited prompt prefix.
+    prompt_cache_lineage_id: String,
+    /// Ordered parent records visible to the child at spawn time.
+    entries: Vec<mez_agent::TranscriptEntry>,
+}
 
 /// Layout choice for adding one pane to a dedicated subagent bucket window.
 #[derive(Debug, Clone, Copy)]
@@ -436,6 +448,11 @@ impl RuntimeSessionService {
         spawn.validate()?;
         let mut child_lineage =
             self.validate_subagent_spawn_capacity(&spawn.parent_agent_id, routed_root)?;
+        let fork_snapshot = if spawn.session_mode == mez_agent::SubagentSessionMode::Fork {
+            Some(self.capture_subagent_fork_snapshot(&spawn.parent_agent_id)?)
+        } else {
+            None
+        };
         let child_display_name = self.allocate_subagent_display_name();
         child_lineage.display_name = child_display_name.clone();
         child_lineage.terminal = profile.terminal;
@@ -514,18 +531,39 @@ impl RuntimeSessionService {
             .enter_or_resume(&started.pane_id)?
             .session_id
             .clone();
-        self.agent_shell_store_mut()
+        let child_transcript_entries = fork_snapshot
+            .as_ref()
+            .map_or(0, |snapshot| snapshot.entries.len() as u64);
+        let child_prompt_cache_lineage_id = fork_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.prompt_cache_lineage_id.clone());
+        if let Err(error) = self
+            .agent_shell_store_mut()
             .bind_subagent_conversation_with_lineage(
                 &started.pane_id,
                 child_conversation_id.clone(),
-                0,
-                None,
-            )?;
-        if let Some(store) = self.persistence.cloned_transcript_store() {
-            store.save_conversation_kind(
+                child_transcript_entries,
+                child_prompt_cache_lineage_id,
+            )
+        {
+            self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
+            return Err(error.into());
+        }
+        if let Some(snapshot) = fork_snapshot.as_ref()
+            && let Err(error) =
+                self.persist_subagent_fork_snapshot(&child_conversation_id, snapshot)
+        {
+            self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
+            return Err(error);
+        }
+        if let Some(store) = self.persistence.cloned_transcript_store()
+            && let Err(error) = store.save_conversation_kind(
                 &child_conversation_id,
                 mez_agent::AgentConversationKind::Subagent,
-            )?;
+            )
+        {
+            self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
+            return Err(error);
         }
         if let Err(error) = self.enter_runtime_owned_agent_mode_for_pane(&started.pane_id) {
             self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
@@ -631,13 +669,14 @@ impl RuntimeSessionService {
         if let Err(error) = self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(
-                r#"{{"parent_agent_id":"{}","child_agent_id":"{}","child_display_name":"{}","pane_id":"{}","role":"{}","cooperation_mode":"{}","turn_id":"{}"}}"#,
+                r#"{{"parent_agent_id":"{}","child_agent_id":"{}","child_display_name":"{}","pane_id":"{}","role":"{}","cooperation_mode":"{}","session":"{}","turn_id":"{}"}}"#,
                 json_escape(&spawn.parent_agent_id),
                 json_escape(&child_agent_id),
                 json_escape(&child_display_name),
                 json_escape(&started.pane_id),
                 json_escape(&spawn.requested_role),
                 runtime_cooperation_mode_name(spawn.cooperation_mode),
+                spawn.session_mode.as_str(),
                 json_escape(&turn.turn_id)
             ),
         ) {
@@ -1053,12 +1092,22 @@ impl RuntimeSessionService {
             self.remove_subagent_task_parent(turn_id);
             self.clear_joined_subagent_dependencies_for_turn(turn_id);
         }
+        let child_conversation_id = self
+            .agent_shell_store()
+            .get(pane_id)
+            .map(|session| session.session_id.clone());
         self.remove_subagent_authority_state(child_agent_id);
         self.deregister_macro_managed_subagent(child_agent_id);
         self.integration
             .model_profile_overrides_mut()
             .agent_profiles
             .remove(child_agent_id);
+        if let (Some(store), Some(conversation_id)) = (
+            self.persistence.cloned_transcript_store(),
+            child_conversation_id,
+        ) {
+            let _ = store.delete(&conversation_id);
+        }
         if let Some(controller) = controller {
             let _ = self.dispatch_runtime_pane_close(
                 controller,
@@ -1074,6 +1123,123 @@ impl RuntimeSessionService {
             let _ = self.cleanup_removed_pane_runtime_state(&removed_pane_id);
             let _ = self.sync_pane_resize_effects(&transition.effects);
         }
+    }
+
+    /// Captures the exact bounded parent history visible to a forked child.
+    ///
+    /// The snapshot follows the same retained-tail semantics used for ordinary
+    /// durable context assembly. A later parent append cannot enter the child
+    /// because records are copied into the child conversation at spawn time.
+    fn capture_subagent_fork_snapshot(
+        &self,
+        parent_agent_id: &str,
+    ) -> Result<RuntimeSubagentForkSnapshot> {
+        let parent_pane_id = pane_id_from_runtime_agent_id(parent_agent_id)
+            .ok_or_else(|| MezError::invalid_args("subagent parent agent id is invalid"))?;
+        let parent_session = self
+            .agent_shell_store()
+            .get(parent_pane_id.as_str())
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("subagent parent session is unavailable"))?;
+        let source_conversation_id = parent_session
+            .ephemeral_transcript_source_conversation_id
+            .clone()
+            .unwrap_or_else(|| parent_session.session_id.clone());
+        let source_entries = if parent_session.ephemeral
+            && parent_session
+                .ephemeral_transcript_source_conversation_id
+                .is_some()
+        {
+            parent_session.ephemeral_transcript_source_entries
+        } else {
+            parent_session.transcript_entries
+        };
+        if source_entries == 0 {
+            return Ok(RuntimeSubagentForkSnapshot {
+                prompt_cache_lineage_id: parent_session.prompt_cache_lineage_id,
+                entries: Vec::new(),
+            });
+        }
+        let store = self.persistence.cloned_transcript_store().ok_or_else(|| {
+            MezError::invalid_state(
+                "forked subagent sessions require the parent durable transcript store",
+            )
+        })?;
+        let mut entries = match store.inspect(&source_conversation_id) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error),
+        };
+        entries.extend(
+            self.persistence
+                .pending_transcript_entries(&source_conversation_id),
+        );
+        entries.sort_by_key(|entry| entry.sequence);
+        entries.dedup_by_key(|entry| entry.sequence);
+        if parent_session.ephemeral
+            && parent_session
+                .ephemeral_transcript_source_conversation_id
+                .is_some()
+        {
+            entries.retain(|entry| entry.sequence <= source_entries);
+        } else {
+            let retained_entries = usize::try_from(source_entries).unwrap_or(usize::MAX);
+            let first_retained = entries.len().saturating_sub(retained_entries);
+            entries.drain(..first_retained);
+        }
+        Ok(RuntimeSubagentForkSnapshot {
+            prompt_cache_lineage_id: parent_session.prompt_cache_lineage_id,
+            entries,
+        })
+    }
+
+    /// Persists a fork snapshot as an independent child conversation prefix.
+    fn persist_subagent_fork_snapshot(
+        &mut self,
+        child_conversation_id: &str,
+        snapshot: &RuntimeSubagentForkSnapshot,
+    ) -> Result<()> {
+        if snapshot.entries.is_empty() {
+            return Ok(());
+        }
+        let store = self.persistence.cloned_transcript_store().ok_or_else(|| {
+            MezError::invalid_state(
+                "forked subagent sessions require the child durable transcript store",
+            )
+        })?;
+        let created_at_unix_seconds = current_unix_seconds().max(1);
+        let entries = snapshot
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| mez_agent::TranscriptEntry {
+                conversation_id: child_conversation_id.to_string(),
+                sequence: u64::try_from(index).unwrap_or(u64::MAX).saturating_add(1),
+                created_at_unix_seconds,
+                role: entry.role,
+                turn_id: entry.turn_id.clone(),
+                agent_id: entry.agent_id.clone(),
+                pane_id: entry.pane_id.clone(),
+                content: entry.content.clone(),
+            })
+            .collect::<Vec<_>>();
+        if self.persistence.transcript_uses_adapter() {
+            self.persistence.set_deferred_transcript_next_sequence(
+                child_conversation_id.to_string(),
+                u64::try_from(entries.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_add(1),
+            );
+            self.persistence
+                .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
+                    path: store.transcript_path(child_conversation_id)?,
+                    store,
+                    entries,
+                });
+        } else {
+            store.append_many(&entries)?;
+        }
+        Ok(())
     }
 
     /// Queues the first MMP task-status update for a newly spawned subagent.

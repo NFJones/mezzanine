@@ -6608,10 +6608,15 @@ Mezzanine MUST normalize it to the canonical MMP text content type
 `text/plain; charset=utf-8` before validating and delivering the message.
 
 A compact `spawn_agent` action MUST include requested role and task prompt.
-Placement, cooperation mode, read scopes, and write scopes MAY appear in
-compatibility output or future expanded schemas, but provider-native compact
-schemas SHOULD let Mezzanine apply runtime placement, policy inheritance, and
-scope defaults.
+It MAY include `session: "fork" | "new"`. `fork` creates a distinct durable
+subagent conversation seeded from the parent conversation's bounded current
+transcript snapshot; `new` creates a distinct durable subagent conversation
+without parent transcript history. Omission MUST preserve the existing `new`
+behavior. Session selection MUST NOT expand child scope, permissions, sandbox,
+shell, profile, routing, or approval authority. Placement, cooperation mode,
+read scopes, and write scopes MAY appear in compatibility output or future
+expanded schemas, but provider-native compact schemas SHOULD let Mezzanine
+apply runtime placement, policy inheritance, and scope defaults.
 
 A `config_change` action MUST include setting path, operation, and value,
 unset marker, or reset marker. Provider-facing `config_change` schemas MUST
@@ -6767,9 +6772,10 @@ by Mezzanine, `structured_content` MUST include:
   prompt repaint text, and Mezzanine-owned wrapper echo.
 
 For `spawn_agent` actions, `structured_content` MUST include the created pane
-identity, spawned agent identity, cooperation mode, read scopes, write scopes,
-and initial delivery state when spawning succeeds. If spawning is blocked or
-fails, it MUST include the requested placement and reason.
+identity, spawned agent identity, effective session mode, cooperation mode,
+read scopes, write scopes, and initial delivery state when spawning succeeds.
+If spawning is blocked or fails, it MUST include the requested placement and
+reason.
 
 For `send_message` actions, `structured_content` MUST include recipient
 identity, message identity when assigned, delivery status, and any protocol
@@ -7354,6 +7360,12 @@ spawned agent finishes, the controlling pane SHOULD log a concise completion
 status naming the child and final state, but final subagent output MUST NOT be
 rendered directly into the parent pane as parent-agent output. The parent agent
 MUST decide whether and how to analyze, summarize, or act on child results.
+
+Forked child history is an immutable copy captured at spawn time: later parent
+records MUST NOT appear in the child, and child records MUST NOT mutate the
+parent conversation. New child sessions MUST not replay parent user,
+assistant, action-result, or controller chronology. Both modes remain durable
+subagent conversations and use the same independently derived authority.
 
 The static provider action set for a subagent at `agents.max_depth`, or for a
 subagent created from a profile with `terminal = true`, MUST exclude

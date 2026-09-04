@@ -702,6 +702,7 @@ impl RuntimeSessionService {
             cooperation_mode,
             read_scopes,
             write_scopes,
+            session_mode,
             task_prompt,
         } = &action.payload
         else {
@@ -726,6 +727,7 @@ impl RuntimeSessionService {
         };
         let normalized_cooperation_mode_name =
             runtime_cooperation_mode_name(normalized_cooperation_mode);
+        let effective_session_mode = session_mode.map_or("new", |mode| mode.as_str());
         let mut params = serde_json::Map::from_iter([
             (
                 "parent_agent".to_string(),
@@ -736,6 +738,10 @@ impl RuntimeSessionService {
             (
                 "cooperation_mode".to_string(),
                 serde_json::json!(normalized_cooperation_mode_name),
+            ),
+            (
+                "session".to_string(),
+                serde_json::json!(effective_session_mode),
             ),
             ("prompt".to_string(), serde_json::json!(prompt)),
         ]);
@@ -775,9 +781,10 @@ impl RuntimeSessionService {
                     "subagent {child_label} spawn accepted for {placement} placement; waiting for task result: {task_summary}"
                 )],
                 Some(format!(
-                    r#"{{"spawn":{},"placement":"{}","delivery_status":"accepted","join_policy":"join","join_state":"waiting","child_agent_id":"{}","child_display_name":{},"child_turn_id":"{}","error":null}}"#,
+                    r#"{{"spawn":{},"placement":"{}","session":"{}","delivery_status":"accepted","join_policy":"join","join_state":"waiting","child_agent_id":"{}","child_display_name":{},"child_turn_id":"{}","error":null}}"#,
                     spawn_json,
                     json_escape(placement),
+                    json_escape(effective_session_mode),
                     json_escape(&child_agent_id),
                     child_display_name
                         .as_deref()
@@ -796,9 +803,10 @@ impl RuntimeSessionService {
                 runtime_agent_terminal_preview(task_prompt)
             )],
             Some(format!(
-                r#"{{"spawn":{},"placement":"{}","delivery_status":"accepted","join_policy":"detach","error":null}}"#,
+                r#"{{"spawn":{},"placement":"{}","session":"{}","delivery_status":"accepted","join_policy":"detach","error":null}}"#,
                 spawn_json,
-                json_escape(placement)
+                json_escape(placement),
+                json_escape(effective_session_mode)
             )),
         ))
     }

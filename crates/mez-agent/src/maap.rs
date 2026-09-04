@@ -17,7 +17,7 @@ use crate::semantic_patch::{
     try_convert_unified_diff_to_mez_patch,
     validate_apply_patch_payload as validate_agent_apply_patch_payload,
 };
-use crate::{AgentActionResultIdentity, AgentCapability, McpPromptTool};
+use crate::{AgentActionResultIdentity, AgentCapability, McpPromptTool, SubagentSessionMode};
 use serde_json::Value;
 
 /// Result returned by MAAP parsing and validation contracts.
@@ -399,6 +399,10 @@ pub enum AgentActionPayload {
         /// `None` preserves an omitted declaration so the runtime can inherit
         /// the parent authority; `Some(Vec::new())` explicitly denies it.
         write_scopes: Option<Vec<String>>,
+        /// Optional child conversation initialization mode.
+        ///
+        /// Omission preserves the existing isolated child-session behavior.
+        session_mode: Option<SubagentSessionMode>,
         /// Stores the task prompt value for this data structure.
         ///
         /// The field is part of structured state exchanged across this module
@@ -1334,6 +1338,15 @@ fn parse_maap_action_value(
                 .unwrap_or_else(|| maap_default_cooperation_mode(object)),
             read_scopes: optional_present_string_array(object, "read_scopes")?,
             write_scopes: optional_present_string_array(object, "write_scopes")?,
+            session_mode: optional_string(object, "session")?
+                .map(|value| {
+                    SubagentSessionMode::parse(value).ok_or_else(|| {
+                        MaapContractError::invalid_args(
+                            "subagent session must be either fork or new",
+                        )
+                    })
+                })
+                .transpose()?,
             task_prompt: required_string(object, "task_prompt")?.to_string(),
         },
         "config_change" => AgentActionPayload::ConfigChange {
@@ -1832,6 +1845,49 @@ mod tests {
                 ..
             } if read_scopes.is_empty() && write_scopes.is_empty()
         ));
+    }
+
+    /// Verifies subagent session selection accepts the two bounded modes while
+    /// rejecting arbitrary strings before runtime child creation begins.
+    #[test]
+    fn spawn_agent_parser_validates_explicit_session_modes() {
+        let forked = parse_maap_action_batch_json_for_turn(
+            r#"{"rationale":"delegate with context","actions":[{"type":"spawn_agent","role":"worker","session":"fork","task_prompt":"continue the inspected task"}]}"#,
+            "turn-1",
+            "agent-1",
+        )
+        .unwrap();
+        let fresh = parse_maap_action_batch_json_for_turn(
+            r#"{"rationale":"delegate independently","actions":[{"type":"spawn_agent","role":"explorer","session":"new","task_prompt":"inspect a self-contained task"}]}"#,
+            "turn-1",
+            "agent-1",
+        )
+        .unwrap();
+        let invalid = parse_maap_action_batch_json_for_turn(
+            r#"{"rationale":"delegate","actions":[{"type":"spawn_agent","role":"worker","session":"shared","task_prompt":"inspect"}]}"#,
+            "turn-1",
+            "agent-1",
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            forked.actions[0].payload,
+            AgentActionPayload::SpawnAgent {
+                session_mode: Some(SubagentSessionMode::Fork),
+                ..
+            }
+        ));
+        assert!(matches!(
+            fresh.actions[0].payload,
+            AgentActionPayload::SpawnAgent {
+                session_mode: Some(SubagentSessionMode::New),
+                ..
+            }
+        ));
+        assert_eq!(
+            invalid.message(),
+            "subagent session must be either fork or new"
+        );
     }
 
     #[test]

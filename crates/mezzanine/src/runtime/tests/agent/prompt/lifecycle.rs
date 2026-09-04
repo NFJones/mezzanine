@@ -1,6 +1,7 @@
 //! Runtime tests for agent prompt lifecycle behavior.
 
 use super::*;
+use mez_agent::SubagentSessionMode;
 
 /// Verifies shorthand prompt words still resolve to the read-only subagent mode.
 ///
@@ -55,6 +56,7 @@ fn runtime_native_subagent_startup_bypasses_pane_bootstrap() {
                 read_scopes_defaulted: false,
                 write_scopes: Vec::new(),
                 write_scopes_defaulted: false,
+                session_mode: mez_agent::SubagentSessionMode::New,
                 task_prompt: "inspect native startup".to_string(),
                 explicit_user_approval: false,
                 skip_initial_turn: false,
@@ -127,6 +129,7 @@ fn runtime_terminal_profile_spawn_excludes_spawn_agent() {
                 read_scopes_defaulted: true,
                 write_scopes: Vec::new(),
                 write_scopes_defaulted: true,
+                session_mode: mez_agent::SubagentSessionMode::New,
                 task_prompt: "finish without delegation".to_string(),
                 explicit_user_approval: false,
                 skip_initial_turn: false,
@@ -182,6 +185,7 @@ fn runtime_posix_subagent_startup_releases_queued_turn_after_bootstrap() {
                 read_scopes_defaulted: false,
                 write_scopes: Vec::new(),
                 write_scopes_defaulted: false,
+                session_mode: mez_agent::SubagentSessionMode::New,
                 task_prompt: "inspect managed startup".to_string(),
                 explicit_user_approval: false,
                 skip_initial_turn: false,
@@ -316,6 +320,7 @@ fn runtime_subagent_startup_timeout_settles_queued_turn() {
                 read_scopes_defaulted: false,
                 write_scopes: Vec::new(),
                 write_scopes_defaulted: false,
+                session_mode: mez_agent::SubagentSessionMode::New,
                 task_prompt: "inspect startup timeout".to_string(),
                 explicit_user_approval: false,
                 skip_initial_turn: false,
@@ -383,6 +388,7 @@ fn runtime_subagent_spawn_logs_parent_prompt_in_child_pane() {
         read_scopes_defaulted: false,
         write_scopes: Vec::new(),
         write_scopes_defaulted: false,
+        session_mode: SubagentSessionMode::New,
         task_prompt: "inspect the renderer issue".to_string(),
         explicit_user_approval: false,
         skip_initial_turn: false,
@@ -480,6 +486,7 @@ fn runtime_subagent_inherits_parent_plan_and_latency_preferences() {
                 read_scopes_defaulted: false,
                 write_scopes: Vec::new(),
                 write_scopes_defaulted: false,
+                session_mode: mez_agent::SubagentSessionMode::New,
                 task_prompt: "inspect the inherited preferences".to_string(),
                 explicit_user_approval: false,
                 skip_initial_turn: true,
@@ -536,6 +543,7 @@ fn runtime_subagent_default_preferences_do_not_create_overrides() {
                 read_scopes_defaulted: false,
                 write_scopes: Vec::new(),
                 write_scopes_defaulted: false,
+                session_mode: mez_agent::SubagentSessionMode::New,
                 task_prompt: "inspect the inherited defaults".to_string(),
                 explicit_user_approval: false,
                 skip_initial_turn: true,
@@ -594,6 +602,7 @@ fn runtime_subagent_sessions_are_durable_but_hidden_from_resume() {
         read_scopes_defaulted: false,
         write_scopes: Vec::new(),
         write_scopes_defaulted: false,
+        session_mode: SubagentSessionMode::New,
         task_prompt: "inspect the renderer issue".to_string(),
         explicit_user_approval: false,
         skip_initial_turn: false,
@@ -656,6 +665,183 @@ fn runtime_subagent_sessions_are_durable_but_hidden_from_resume() {
             .iter()
             .all(|metadata| metadata.conversation_id != child_conversation_id)
     );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies forked children copy the parent’s bounded durable transcript into
+/// their own subagent conversation while new children remain isolated.
+///
+/// The copied snapshot must not observe a later parent append, and neither
+/// mode may reuse the parent conversation identity or authority state.
+#[test]
+fn runtime_subagent_session_modes_fork_bounded_history_or_start_isolated() {
+    let transcript_store = AgentTranscriptStore::new(temp_root("subagent-session-modes"));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let parent = service.agent_shell_store().get("%1").unwrap().clone();
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: parent.session_id.clone(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "parent-turn".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "captured parent decision".to_string(),
+        })
+        .unwrap();
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: parent.session_id.clone(),
+            sequence: 2,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::Assistant,
+            turn_id: "parent-turn".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "captured parent result".to_string(),
+        })
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 2)
+        .unwrap();
+
+    let forked = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: SubagentSessionMode::Fork,
+                task_prompt: "continue the parent task".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: true,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap();
+    let forked_pane =
+        serde_json::from_str::<serde_json::Value>(&forked).unwrap()["pane"]["pane_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+    let forked_session = service
+        .agent_shell_store()
+        .get(&forked_pane)
+        .unwrap()
+        .clone();
+
+    assert_ne!(forked_session.session_id, parent.session_id);
+    assert_eq!(
+        forked_session.prompt_cache_lineage_id,
+        parent.prompt_cache_lineage_id
+    );
+    assert_eq!(forked_session.transcript_entries, 2);
+    assert_eq!(
+        transcript_store
+            .inspect(&forked_session.session_id)
+            .unwrap()
+            .iter()
+            .map(|entry| entry.content.as_str())
+            .collect::<Vec<_>>(),
+        ["captured parent decision", "captured parent result"]
+    );
+
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: parent.session_id.clone(),
+            sequence: 3,
+            created_at_unix_seconds: 2,
+            role: TranscriptRole::User,
+            turn_id: "later-parent-turn".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "later parent mutation".to_string(),
+        })
+        .unwrap();
+
+    let forked_context = service
+        .agent_context_for_pane_prompt(&forked_pane, "continue", 0)
+        .unwrap();
+    assert!(
+        forked_context
+            .blocks()
+            .iter()
+            .any(|block| block.content == "captured parent decision")
+    );
+    assert!(
+        !forked_context
+            .blocks()
+            .iter()
+            .any(|block| block.content == "later parent mutation")
+    );
+
+    let fresh = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: SubagentSessionMode::New,
+                task_prompt: "inspect a self-contained task".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: true,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap();
+    let fresh_pane = serde_json::from_str::<serde_json::Value>(&fresh).unwrap()["pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let fresh_session = service
+        .agent_shell_store()
+        .get(&fresh_pane)
+        .unwrap()
+        .clone();
+    let fresh_context = service
+        .agent_context_for_pane_prompt(&fresh_pane, "inspect", 0)
+        .unwrap();
+
+    assert_ne!(fresh_session.session_id, parent.session_id);
+    assert_ne!(
+        fresh_session.prompt_cache_lineage_id,
+        parent.prompt_cache_lineage_id
+    );
+    assert_eq!(fresh_session.transcript_entries, 0);
+    assert!(fresh_context.blocks().iter().all(|block| {
+        block.content != "captured parent decision" && block.content != "later parent mutation"
+    }));
     service.terminate_all_pane_processes().unwrap();
 }
 
@@ -747,6 +933,7 @@ fn runtime_subagent_omitted_scopes_inherit_parent_bubblewrap_authority() {
         read_scopes_defaulted: true,
         write_scopes: Vec::new(),
         write_scopes_defaulted: true,
+        session_mode: SubagentSessionMode::New,
         task_prompt: "implement the bounded change".to_string(),
         explicit_user_approval: false,
         skip_initial_turn: true,
@@ -780,6 +967,7 @@ fn runtime_explorer_omitted_scopes_clear_inherited_write_authority() {
         read_scopes_defaulted: true,
         write_scopes: Vec::new(),
         write_scopes_defaulted: true,
+        session_mode: SubagentSessionMode::New,
         task_prompt: "inspect the bounded change".to_string(),
         explicit_user_approval: false,
         skip_initial_turn: true,
@@ -811,6 +999,7 @@ fn runtime_host_access_subagent_retains_coordination_scope() {
         read_scopes_defaulted: true,
         write_scopes: Vec::new(),
         write_scopes_defaulted: true,
+        session_mode: SubagentSessionMode::New,
         task_prompt: "work with inherited host access".to_string(),
         explicit_user_approval: false,
         skip_initial_turn: true,
@@ -861,6 +1050,7 @@ fn runtime_subagent_explicit_empty_scopes_do_not_inherit_parent_authority() {
         read_scopes_defaulted: false,
         write_scopes: Vec::new(),
         write_scopes_defaulted: false,
+        session_mode: SubagentSessionMode::New,
         task_prompt: "perform no filesystem work".to_string(),
         explicit_user_approval: false,
         skip_initial_turn: true,
@@ -893,6 +1083,7 @@ fn runtime_subagent_inherits_explicit_parent_sandbox_override() {
         read_scopes_defaulted: true,
         write_scopes: Vec::new(),
         write_scopes_defaulted: true,
+        session_mode: SubagentSessionMode::New,
         task_prompt: "inherit sandbox state".to_string(),
         explicit_user_approval: false,
         skip_initial_turn: true,
@@ -928,6 +1119,7 @@ fn runtime_subagent_requested_scopes_only_narrow_parent_authority() {
         read_scopes_defaulted: false,
         write_scopes: vec!["generated".to_string(), "../../outside".to_string()],
         write_scopes_defaulted: false,
+        session_mode: SubagentSessionMode::New,
         task_prompt: "update generated files".to_string(),
         explicit_user_approval: false,
         skip_initial_turn: true,
@@ -964,6 +1156,7 @@ fn runtime_nested_subagent_cannot_rediscover_broader_trusted_authority() {
         read_scopes_defaulted: false,
         write_scopes: vec!["generated".to_string()],
         write_scopes_defaulted: false,
+        session_mode: SubagentSessionMode::New,
         task_prompt: "own generated files".to_string(),
         explicit_user_approval: false,
         skip_initial_turn: true,
@@ -980,6 +1173,7 @@ fn runtime_nested_subagent_cannot_rediscover_broader_trusted_authority() {
         read_scopes_defaulted: true,
         write_scopes: Vec::new(),
         write_scopes_defaulted: true,
+        session_mode: SubagentSessionMode::New,
         task_prompt: "continue generated work".to_string(),
         explicit_user_approval: false,
         skip_initial_turn: true,

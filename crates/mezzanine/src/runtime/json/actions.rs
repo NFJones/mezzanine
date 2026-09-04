@@ -142,6 +142,17 @@ pub(crate) fn runtime_subagent_spawn_request(
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .ok_or_else(|| MezError::invalid_args("agent/spawn requires prompt"))?;
+    let session_mode =
+        object
+            .get("session")
+            .map_or(Ok(mez_agent::SubagentSessionMode::New), |value| {
+                let value = value.as_str().ok_or_else(|| {
+                    MezError::invalid_args("agent/spawn session must be either fork or new")
+                })?;
+                mez_agent::SubagentSessionMode::parse(value).ok_or_else(|| {
+                    MezError::invalid_args("agent/spawn session must be either fork or new")
+                })
+            })?;
     Ok(SubagentSpawnRequest {
         parent_agent_id,
         requested_role,
@@ -152,6 +163,7 @@ pub(crate) fn runtime_subagent_spawn_request(
         read_scopes_defaulted,
         write_scopes,
         write_scopes_defaulted,
+        session_mode,
         task_prompt,
         explicit_user_approval: caller_is_primary,
         skip_initial_turn: object

@@ -889,6 +889,7 @@ pub(super) fn runtime_maap_action_payload_trace_json(
             cooperation_mode,
             read_scopes,
             write_scopes,
+            session_mode,
             task_prompt,
         } => {
             data.insert("role".to_string(), serde_json::json!(role));
@@ -899,6 +900,10 @@ pub(super) fn runtime_maap_action_payload_trace_json(
             );
             data.insert("read_scopes".to_string(), serde_json::json!(read_scopes));
             data.insert("write_scopes".to_string(), serde_json::json!(write_scopes));
+            data.insert(
+                "session".to_string(),
+                serde_json::json!(session_mode.map_or("new", |mode| mode.as_str())),
+            );
             data.insert(
                 "task_prompt".to_string(),
                 runtime_bounded_trace_string_value(task_prompt),

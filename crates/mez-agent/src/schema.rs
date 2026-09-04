@@ -725,8 +725,16 @@ fn maap_spawn_agent_action_schema() -> serde_json::Value {
                     "type": "string"
                 }),
             ),
+            (
+                "session",
+                serde_json::json!({
+                    "type": ["string", "null"],
+                    "enum": ["fork", "new", null],
+                    "description": "Optional child conversation mode. Use fork only when the delegated task needs a bounded snapshot of parent chronology; use new for an isolated self-contained task. Use null or omit it to preserve the current isolated new-session behavior. Include task-critical facts in task_prompt in either mode."
+                }),
+            ),
         ],
-        &["role", "task_prompt"],
+        &["role", "task_prompt", "session"],
     )
 }
 
@@ -973,6 +981,35 @@ mod tests {
                 "issue_query",
                 "issue_delete",
             ]
+        );
+    }
+
+    /// Verifies the static spawn schema requires a nullable session field so
+    /// strict providers can represent omission while preserving `new` mode.
+    #[test]
+    fn spawn_agent_schema_exposes_nullable_session_mode() {
+        let schema = maap_action_batch_schema(&AllowedActionSet::all_enabled(), &[]);
+        let spawn = schema["properties"]["actions"]["items"]["anyOf"]
+            .as_array()
+            .and_then(|variants| {
+                variants.iter().find(|variant| {
+                    variant["properties"]["type"]["enum"] == serde_json::json!(["spawn_agent"])
+                })
+            })
+            .expect("spawn_agent schema variant");
+
+        assert_eq!(
+            spawn["properties"]["session"]["type"],
+            serde_json::json!(["string", "null"])
+        );
+        assert_eq!(
+            spawn["properties"]["session"]["enum"],
+            serde_json::json!(["fork", "new", null])
+        );
+        assert!(
+            spawn["required"]
+                .as_array()
+                .is_some_and(|required| required.contains(&serde_json::json!("session")))
         );
     }
 

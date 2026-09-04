@@ -214,6 +214,34 @@ pub enum BuiltinSubagentRole {
     Explorer,
 }
 
+/// Selects how a spawned child initializes its conversation context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubagentSessionMode {
+    /// Copy the bounded current parent transcript into a distinct child session.
+    Fork,
+    /// Start the child with no parent transcript snapshot.
+    New,
+}
+
+impl SubagentSessionMode {
+    /// Parses one canonical model-authored child session mode.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "fork" => Some(Self::Fork),
+            "new" => Some(Self::New),
+            _ => None,
+        }
+    }
+
+    /// Returns the canonical name used in action and runtime records.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Fork => "fork",
+            Self::New => "new",
+        }
+    }
+}
+
 /// Request to create a child agent with requested task-scope metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubagentSpawnRequest {
@@ -235,6 +263,11 @@ pub struct SubagentSpawnRequest {
     pub write_scopes: Vec<String>,
     /// Whether profile defaults supplied the write scopes.
     pub write_scopes_defaulted: bool,
+    /// Effective child conversation initialization mode.
+    ///
+    /// `New` preserves the existing isolated child-session behavior, while
+    /// `Fork` requests a bounded durable snapshot of parent chronology.
+    pub session_mode: SubagentSessionMode,
     /// Initial task prompt for the child.
     pub task_prompt: String,
     /// Whether product composition should create an idle child session.
@@ -511,7 +544,8 @@ fn scopes_overlap(left: &str, right: &str) -> bool {
 mod tests {
     use super::{
         CooperationMode, ScopeRegistry, SubagentContractErrorKind, SubagentScopeDeclaration,
-        SubagentSpawnRequest, builtin_subagent_profiles, normalize_subagent_spawn_role,
+        SubagentSessionMode, SubagentSpawnRequest, builtin_subagent_profiles,
+        normalize_subagent_spawn_role,
     };
     use crate::PermissionPreset;
 
@@ -585,6 +619,7 @@ mod tests {
             read_scopes_defaulted: false,
             write_scopes: vec!["src/parser".to_string()],
             write_scopes_defaulted: false,
+            session_mode: SubagentSessionMode::New,
             task_prompt: "implement parser".to_string(),
             skip_initial_turn: false,
             explicit_user_approval: false,

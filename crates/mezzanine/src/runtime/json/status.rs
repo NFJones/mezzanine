@@ -202,7 +202,7 @@ pub(crate) fn runtime_subagent_state_json(
         "visible" | "focused" | "new-pane" | "new-window"
     );
     format!(
-        r#"{{"id":"{}","version":1,"display_name":"{}","session_id":"{}","pane_id":"{}","status":"{}","visible":{},"conversation_id":"{}","model_profile":"{}","cooperation_mode":"{}","read_scopes":{},"write_scopes":{},"last_turn_id":"{}","role":"{}","parent_agent_id":"{}"}}"#,
+        r#"{{"id":"{}","version":1,"display_name":"{}","session_id":"{}","pane_id":"{}","status":"{}","visible":{},"conversation_id":"{}","model_profile":"{}","cooperation_mode":"{}","read_scopes":{},"write_scopes":{},"session":"{}","last_turn_id":"{}","role":"{}","parent_agent_id":"{}"}}"#,
         json_escape(agent_id),
         json_escape(display_name),
         json_escape(session.id.as_str()),
@@ -217,6 +217,7 @@ pub(crate) fn runtime_subagent_state_json(
         runtime_cooperation_mode_name(spawn.cooperation_mode),
         runtime_string_array_json(&spawn.read_scopes),
         runtime_string_array_json(&spawn.write_scopes),
+        spawn.session_mode.as_str(),
         json_escape(turn.map_or("", |t| t.turn_id.as_str())),
         json_escape(&spawn.requested_role),
         json_escape(&spawn.parent_agent_id)

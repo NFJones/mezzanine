@@ -882,6 +882,7 @@ fn runtime_spawn_agent_action(id: &str, task_prompt: &str) -> mez_agent::AgentAc
             cooperation_mode: "explore-only".to_string(),
             read_scopes: None,
             write_scopes: None,
+            session_mode: None,
             task_prompt: task_prompt.to_string(),
         },
     }

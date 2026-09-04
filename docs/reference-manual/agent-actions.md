@@ -32,7 +32,7 @@ terminal state remain outside ordinary model context.
 | `shell_command` | Local shell inspection, commands, validation, and filesystem operations. | Uses the effective native or pane shell mode and can require approval. |
 | `apply_patch` | Semantic file-content add, update, move, or delete using `*** Begin Patch` format. | It is a MAAP action, never a shell executable. |
 | `web_search`, `fetch_url` | User-requested current web search or HTTP(S) retrieval. | They are runtime network actions, not local-path readers. |
-| `send_message`, `spawn_agent` | Local coordination and pane-backed delegation. | Scope and policy inherit from the parent. |
+| `send_message`, `spawn_agent` | Local coordination and pane-backed delegation. | `spawn_agent` may use `session: fork` for a bounded immutable parent-history snapshot or `session: new` for isolation; scope and policy inherit independently and cannot be broadened by that choice. |
 | `config_change` | Supported live leaf configuration mutation. | Set values accept strings, signed integers, booleans, or string arrays; execution-boundary settings remain direct-user-only. |
 | `mcp_call` | Call a currently available configured MCP tool. | External capability and approval policy still apply. |
 | `memory_search`, `memory_store` | Retrieve or retain runtime-owned durable memory when enabled. | Records must be safe, durable, and non-secret. |
