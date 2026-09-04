@@ -2502,8 +2502,9 @@ continuation. If runtime cleanup discovers a running turn with none of those
 paths, Mezzanine MUST fail that turn with a copyable pane-local diagnostic
 rather than leaving it in a permanent running state.
 
-Provider selection, credential, transport, and provider response errors during
-agent prompt execution MUST fail the affected turn and render pane-local,
+Provider selection, credential, request assembly (including cache-continuity
+validation during worker claim registration), transport, and provider response
+errors during agent prompt execution MUST fail the affected turn and render pane-local,
 copyable failure details in the pane terminal buffer. Such errors MUST NOT
 terminate the session daemon, detach the primary client, or prevent other panes
 and agents from continuing.

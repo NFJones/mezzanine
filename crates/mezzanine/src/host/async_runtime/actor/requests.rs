@@ -1248,11 +1248,20 @@ impl AsyncRuntimeSessionActor {
                         self.timers.next_provider_claim_generation =
                             self.timers.next_provider_claim_generation.saturating_add(1);
                         let generation = self.timers.next_provider_claim_generation;
-                        let transition = self.service.record_claimed_agent_provider_task(
+                        let transition = match self.service.record_claimed_agent_provider_task(
                             &dispatch,
                             generation,
                             DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS,
-                        )?;
+                        ) {
+                            Ok(transition) => transition,
+                            Err(error) => {
+                                self.service
+                                    .fail_configured_agent_provider_task(&turn_id, &error)?;
+                                self.queue_deferred_pane_io_side_effects_from_service()?;
+                                self.queue_shell_transaction_timer_side_effects()?;
+                                return Ok(None);
+                            }
+                        };
                         self.queue_runtime_side_effects(transition.side_effects)?;
                         self.queue_deferred_pane_io_side_effects_from_service()?;
                         Ok(Some(dispatch))

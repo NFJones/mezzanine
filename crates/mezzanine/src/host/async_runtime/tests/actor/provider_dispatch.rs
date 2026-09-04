@@ -2,6 +2,150 @@
 
 use super::super::*;
 
+/// Verifies that a rewritten OpenAI input detected while registering a worker
+/// lease fails only the affected turn. The claim must return no dispatch, show
+/// a copyable diagnostic, and leave the actor alive rather than forwarding the
+/// assembly error to the provider service supervisor.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_contains_provider_claim_cache_chain_failure() {
+    let mut service = test_service();
+    let auth_root = std::env::temp_dir().join(format!(
+        "mez-claim-cache-chain-auth-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    service.set_auth_store(crate::security::auth::AuthStore::new(
+        crate::security::auth::AuthPaths::under_config_root(&auth_root),
+    ));
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "claim-cache-chain-failure".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[agents]
+default_provider = "runtime-batch"
+default_model_profile = "default"
+shell_mode = "pane"
+[permissions]
+sandbox = "policy-only"
+[providers.runtime-batch]
+kind = "openai"
+models = ["invalid-model"]
+default_model = "invalid-model"
+[model_profiles.default]
+provider = "runtime-batch"
+model = "invalid-model"
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(160, 40).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service
+        .execute_agent_shell_command(&primary, "exercise claim failure")
+        .unwrap();
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let task = service.pending_agent_provider_tasks().remove(0);
+    let agent_id = AgentId::opaque(task.agent_id.clone()).unwrap();
+    let dispatch = service
+        .claim_configured_agent_provider_task(&agent_id, &task.turn_id)
+        .unwrap()
+        .unwrap_or_else(|| {
+            panic!(
+                "initial claim unavailable: {:?}",
+                service
+                    .pane_screen("%1")
+                    .map(|screen| screen.normal_content_lines())
+            )
+        });
+    service
+        .record_claimed_agent_provider_task(&dispatch, 1, 30_000)
+        .unwrap();
+    let (context, _) = service
+        .prepare_agent_turn_model_context(
+            &dispatch.turn,
+            service
+                .agent_turn_contexts()
+                .get(&task.turn_id)
+                .unwrap()
+                .clone(),
+            &service.mcp_registry().prompt_summary(),
+            &dispatch.model_profile,
+        )
+        .unwrap();
+    let mut previous = context.previous_request().unwrap().clone();
+    previous.messages.push(mez_agent::ModelMessage {
+        role: mez_agent::ModelMessageRole::User,
+        source: mez_agent::ContextSourceKind::UserInstruction,
+        placement: mez_agent::ContextPlacement::ConversationAppend,
+        content: "input no longer present in canonical chronology".to_string(),
+    });
+    service.retain_agent_provider_request_chain(&dispatch.turn, previous);
+    service.clear_claimed_agent_provider_task(&task.turn_id);
+    assert!(service.queue_agent_provider_task(task.turn_id.clone()));
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        let claimed = handle
+            .claim_configured_agent_provider_task(agent_id, task.turn_id.clone())
+            .await
+            .expect("request assembly failures must not escape to the provider supervisor");
+        assert!(claimed.is_none());
+        assert!(
+            handle
+                .pending_agent_provider_tasks()
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            handle
+                .drain_timer_side_effects(16)
+                .await
+                .unwrap()
+                .iter()
+                .all(|effect| {
+                    !matches!(effect, RuntimeSideEffect::ScheduleTimer { key, .. }
+                if key.kind == RuntimeTimerKind::ProviderClaim)
+                })
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.service.agent_scheduler().snapshot().running, 0);
+    assert_eq!(
+        exit.service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == task.turn_id)
+            .unwrap()
+            .state,
+        mez_agent::AgentTurnState::Failed
+    );
+    let pane_text = exit
+        .service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        pane_text.contains("rewrote canonical provider input"),
+        "{pane_text}"
+    );
+}
+
 /// Verifies that render workers can drain only render invalidations while
 /// leaving provider dispatches queued for provider workers. This protects the
 /// side-effect queue from family-specific workers stealing unrelated work as
