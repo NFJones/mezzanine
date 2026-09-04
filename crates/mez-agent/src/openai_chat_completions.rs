@@ -5,6 +5,9 @@
 //! endpoints, HTTP headers, timeouts, transport, and product error projection
 //! remain in the root provider adapter.
 
+use crate::provider_continuity::{
+    ProviderNativeRequestContinuity, prepare_provider_native_request_prefix_extension,
+};
 use crate::{
     MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME, MaapBatch, ModelMessageRole,
     ModelRequest, ModelTokenUsage, ProviderErrorKind, ProviderMalformedOutputError,
@@ -370,6 +373,36 @@ pub fn openai_chat_completions_request_body_with_stream(
             "OpenAI-compatible Chat Completions request encoding failed: {error}"
         ))
     })
+}
+
+/// Enforces exact native-message continuity for one compatible Chat request.
+///
+/// Both projections are rebuilt from durable chronology with the fixed
+/// compatibility options selected by the adapter.
+pub fn prepare_openai_chat_completions_request_prefix_extension(
+    request: &mut ModelRequest,
+    previous: Option<&ModelRequest>,
+    cache_namespace: &str,
+    options: OpenAiChatCompletionsOptions,
+) -> ProviderRequestAssemblyResult<()> {
+    let stream = options.streaming_enabled();
+    let current_body = openai_chat_completions_request_body_with_stream(request, options, stream)?;
+    let previous_body = previous
+        .map(|previous| openai_chat_completions_request_body_with_stream(previous, options, stream))
+        .transpose()?;
+    prepare_provider_native_request_prefix_extension(
+        request,
+        previous,
+        ProviderNativeRequestContinuity {
+            cache_namespace,
+            provider_label: "OpenAI-compatible Chat Completions",
+            current_api_shape: &format!("openai-chat-completions;stream={stream}"),
+            previous_api_shape: &format!("openai-chat-completions;stream={stream}"),
+            input_field: "messages",
+            current_body: &current_body,
+            previous_body: previous_body.as_deref(),
+        },
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1050,6 +1083,70 @@ mod tests {
             }]
             .into(),
         }
+    }
+
+    /// Verifies compatible Chat Completions accepts durable message growth and
+    /// rejects a same-epoch rewrite of an already-sent native message.
+    #[test]
+    fn openai_chat_request_chain_requires_exact_native_message_prefix() {
+        let mut first = test_request();
+        first.messages.push(ModelMessage {
+            role: ModelMessageRole::User,
+            source: ContextSourceKind::UserInstruction,
+            placement: crate::ContextPlacement::ConversationAppend,
+            content: "inspect the repository".to_string(),
+        });
+        let options = OpenAiChatCompletionsOptions::default();
+        prepare_openai_chat_completions_request_prefix_extension(
+            &mut first,
+            None,
+            "compatible:test",
+            options,
+        )
+        .unwrap();
+
+        let mut appended = first.clone();
+        appended.messages.push(ModelMessage {
+            role: ModelMessageRole::Context,
+            source: ContextSourceKind::RuntimeHint,
+            placement: crate::ContextPlacement::ConversationAppend,
+            content: "cwd=/repo".to_string(),
+        });
+        prepare_openai_chat_completions_request_prefix_extension(
+            &mut appended,
+            Some(&first),
+            "compatible:test",
+            options,
+        )
+        .unwrap();
+        let first_body: serde_json::Value = serde_json::from_str(
+            &openai_chat_completions_request_body_with_stream(&first, options, false).unwrap(),
+        )
+        .unwrap();
+        let appended_body: serde_json::Value = serde_json::from_str(
+            &openai_chat_completions_request_body_with_stream(&appended, options, false).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            first_body["messages"].as_array().unwrap().as_slice(),
+            &appended_body["messages"].as_array().unwrap()[..2]
+        );
+
+        let mut rewritten = test_request();
+        rewritten.messages.push(ModelMessage {
+            role: ModelMessageRole::User,
+            source: ContextSourceKind::UserInstruction,
+            placement: crate::ContextPlacement::ConversationAppend,
+            content: "rewrite the repository request".to_string(),
+        });
+        let error = prepare_openai_chat_completions_request_prefix_extension(
+            &mut rewritten,
+            Some(&first),
+            "compatible:test",
+            options,
+        )
+        .unwrap_err();
+        assert!(error.message().contains("rewrote canonical provider input"));
     }
 
     /// Verifies OpenAI-compatible Chat Completions can preserve the canonical

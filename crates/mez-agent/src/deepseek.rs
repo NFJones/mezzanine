@@ -6,6 +6,9 @@
 //! metadata, transport, quota attachment, and error projection; deterministic
 //! response parsing lives in the sibling `deepseek_response` module.
 
+use crate::provider_continuity::{
+    ProviderNativeRequestContinuity, prepare_provider_native_request_prefix_extension,
+};
 use crate::{
     AllowedActionSet, MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME, McpPromptTool,
     ModelInteractionKind, ModelMessageRole, ModelRequest, ProviderApiCompatibility,
@@ -227,6 +230,55 @@ pub fn deepseek_chat_completions_request_body_with_strategy(
             "DeepSeek Chat Completions request encoding failed: {error}"
         ))
     })
+}
+
+/// Enforces exact native-message continuity for one DeepSeek request.
+///
+/// Each body is reconstructed from durable chronology using the request's own
+/// strategy and effective stream mode before the common prefix check runs.
+pub fn prepare_deepseek_request_prefix_extension(
+    request: &mut ModelRequest,
+    previous: Option<&ModelRequest>,
+    cache_namespace: &str,
+    stream: bool,
+) -> ProviderRequestAssemblyResult<()> {
+    let strategy = deepseek_maap_request_strategy(request);
+    let effective_stream = deepseek_effective_stream(stream, strategy);
+    let current_body =
+        deepseek_chat_completions_request_body_with_strategy(request, effective_stream, strategy)?;
+    let previous_preparation = previous
+        .map(|previous| {
+            let strategy = deepseek_maap_request_strategy(previous);
+            let stream = deepseek_effective_stream(stream, strategy);
+            let body =
+                deepseek_chat_completions_request_body_with_strategy(previous, stream, strategy)?;
+            Ok::<_, ProviderRequestAssemblyError>((body, strategy, stream))
+        })
+        .transpose()?;
+    let previous_body = previous_preparation
+        .as_ref()
+        .map(|(body, _, _)| body.as_str());
+    let previous_api_shape = previous_preparation.as_ref().map_or_else(
+        || format!("deepseek-chat-completions;stream={effective_stream};strategy={strategy:?}"),
+        |(_, strategy, stream)| {
+            format!("deepseek-chat-completions;stream={stream};strategy={strategy:?}")
+        },
+    );
+    prepare_provider_native_request_prefix_extension(
+        request,
+        previous,
+        ProviderNativeRequestContinuity {
+            cache_namespace,
+            provider_label: "DeepSeek Chat Completions",
+            current_api_shape: &format!(
+                "deepseek-chat-completions;stream={effective_stream};strategy={strategy:?}"
+            ),
+            previous_api_shape: &previous_api_shape,
+            input_field: "messages",
+            current_body: &current_body,
+            previous_body,
+        },
+    )
 }
 
 /// Completes a DeepSeek assistant tool-call message before any later message.
@@ -515,6 +567,81 @@ mod tests {
             stop: None,
             messages: messages.into(),
         }
+    }
+
+    /// Verifies DeepSeek accepts append-only native messages and rejects a
+    /// changed prior native item before provider dispatch.
+    #[test]
+    fn deepseek_request_chain_requires_exact_native_message_prefix() {
+        let messages = vec![
+            ModelMessage {
+                role: ModelMessageRole::System,
+                source: ContextSourceKind::System,
+                placement: crate::ContextPlacement::StablePrefix,
+                content: "system prompt".to_string(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::User,
+                source: ContextSourceKind::UserInstruction,
+                placement: crate::ContextPlacement::ConversationAppend,
+                content: "inspect the repository".to_string(),
+            },
+        ];
+        let mut first = deepseek_test_request(messages.clone());
+        prepare_deepseek_request_prefix_extension(&mut first, None, "deepseek:test", false)
+            .unwrap();
+
+        let mut appended = first.clone();
+        appended.messages.push(ModelMessage {
+            role: ModelMessageRole::Context,
+            source: ContextSourceKind::RuntimeHint,
+            placement: crate::ContextPlacement::ConversationAppend,
+            content: "cwd=/repo".to_string(),
+        });
+        prepare_deepseek_request_prefix_extension(
+            &mut appended,
+            Some(&first),
+            "deepseek:test",
+            false,
+        )
+        .unwrap();
+        let strategy = deepseek_maap_request_strategy(&first);
+        let first_body: serde_json::Value = serde_json::from_str(
+            &deepseek_chat_completions_request_body_with_strategy(&first, false, strategy).unwrap(),
+        )
+        .unwrap();
+        let appended_strategy = deepseek_maap_request_strategy(&appended);
+        let appended_body: serde_json::Value = serde_json::from_str(
+            &deepseek_chat_completions_request_body_with_strategy(
+                &appended,
+                false,
+                appended_strategy,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            first_body["messages"].as_array().unwrap().as_slice(),
+            &appended_body["messages"].as_array().unwrap()[..2]
+        );
+
+        let mut rewritten = deepseek_test_request(vec![
+            messages[0].clone(),
+            ModelMessage {
+                role: ModelMessageRole::User,
+                source: ContextSourceKind::UserInstruction,
+                placement: crate::ContextPlacement::ConversationAppend,
+                content: "rewrite the repository request".to_string(),
+            },
+        ]);
+        let error = prepare_deepseek_request_prefix_extension(
+            &mut rewritten,
+            Some(&first),
+            "deepseek:test",
+            false,
+        )
+        .unwrap_err();
+        assert!(error.message().contains("rewrote canonical provider input"));
     }
 
     /// Verifies DeepSeek repair retries inherit the original request's thinking

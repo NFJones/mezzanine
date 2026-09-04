@@ -77,6 +77,17 @@ pub trait ChatCompletionsDialect: Clone + Send + Sync + Default + 'static {
         timeout_ms: u64,
     ) -> Result<ProviderHttpRequest>;
 
+    /// Enforces this dialect's canonical native request continuity before send.
+    fn prepare_request_prefix_extension(
+        &self,
+        _request: &mut ModelRequest,
+        _previous: Option<&ModelRequest>,
+        _cache_namespace: &str,
+        _stream: bool,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Parses one successful provider-specific chat-completions HTTP response.
     fn parse_chat_response(
         &self,
@@ -389,6 +400,19 @@ where
 
     fn cache_namespace(&self) -> String {
         super::provider_cache_namespace(self.provider_id(), &self.endpoint)
+    }
+
+    fn prepare_request_prefix_extension(
+        &self,
+        request: &mut ModelRequest,
+        previous: Option<&ModelRequest>,
+    ) -> Result<()> {
+        self.dialect.prepare_request_prefix_extension(
+            request,
+            previous,
+            &self.cache_namespace(),
+            self.stream,
+        )
     }
 
     fn list_models_async<'a>(

@@ -16,6 +16,7 @@ use mez_agent::{
     AnthropicMessagesStreamDecoder, SseEvent, anthropic_messages_endpoint_for_base_url,
     anthropic_messages_request_body, anthropic_provider_failure_json,
     anthropic_request_requires_maap, parse_anthropic_messages_provider_body,
+    prepare_anthropic_request_prefix_extension,
 };
 use std::collections::BTreeMap;
 
@@ -85,6 +86,22 @@ impl ChatCompletionsDialect for AnthropicMessagesDialect {
             timeout_ms,
             &self.options,
         )
+    }
+
+    fn prepare_request_prefix_extension(
+        &self,
+        request: &mut ModelRequest,
+        previous: Option<&ModelRequest>,
+        cache_namespace: &str,
+        stream: bool,
+    ) -> Result<()> {
+        Ok(prepare_anthropic_request_prefix_extension(
+            request,
+            previous,
+            cache_namespace,
+            stream,
+            &self.options,
+        )?)
     }
 
     /// Parses one successful provider-specific Messages API response.
@@ -475,12 +492,8 @@ mod tests {
             serde_json::json!({ "type": "ephemeral" })
         );
         assert_eq!(
-            value["messages"][0]["content"][0]["text"],
+            value["messages"][0]["content"],
             "summarize this conversation"
-        );
-        assert_eq!(
-            value["messages"][0]["content"][0]["cache_control"],
-            serde_json::json!({ "type": "ephemeral" })
         );
     }
 
@@ -588,12 +601,8 @@ mod tests {
 
         assert!(value.get("system").is_none(), "{value}");
         assert_eq!(
-            value["messages"][0]["content"][0]["text"],
+            value["messages"][0]["content"],
             "summarize this conversation"
-        );
-        assert_eq!(
-            value["messages"][0]["content"][0]["cache_control"],
-            serde_json::json!({ "type": "ephemeral" })
         );
     }
 

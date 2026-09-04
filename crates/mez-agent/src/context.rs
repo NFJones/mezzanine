@@ -2591,7 +2591,7 @@ pub struct ModelMessage {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ModelMessages {
     items: std::sync::Arc<Vec<std::sync::Arc<ModelMessage>>>,
-    openai_input_chain: Option<OpenAiInputChain>,
+    provider_request_epoch: Option<ProviderRequestEpoch>,
 }
 
 /// One typed cache-affecting component that begins a new model-context epoch.
@@ -2715,16 +2715,13 @@ pub enum ContextEpochTransition {
     Changed(ContextEpochComponent),
 }
 
-/// Exact OpenAI input retained across one append-only request chain.
+/// Typed epoch metadata retained across one append-only provider request chain.
 ///
-/// The effective input is the exact sequence sent on the wire and is derived
-/// entirely from durable context. Its epoch identity freezes every
-/// cache-affecting envelope dimension for subsequent prefix extensions.
+/// This state deliberately contains no model-visible provider input. Adapters
+/// re-render canonical input from durable chronology before every send and use
+/// the epoch only to classify an intentional envelope transition.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct OpenAiInputChain {
-    pub(crate) effective_input: std::sync::Arc<Vec<serde_json::Value>>,
-    pub(crate) cache_namespace: String,
-    pub(crate) stream: bool,
+pub(crate) struct ProviderRequestEpoch {
     pub(crate) context_epoch: ContextEpochIdentity,
     pub(crate) epoch_transition: ContextEpochTransition,
 }
@@ -2752,30 +2749,30 @@ impl ModelMessages {
 
     /// Appends one request-local message using copy-on-write pointer storage.
     pub fn push(&mut self, message: ModelMessage) {
-        self.openai_input_chain = None;
+        self.provider_request_epoch = None;
         std::sync::Arc::make_mut(&mut self.items).push(std::sync::Arc::new(message));
     }
 
     /// Inserts one request-local message at the requested chronological index.
     pub fn insert(&mut self, index: usize, message: ModelMessage) {
-        self.openai_input_chain = None;
+        self.provider_request_epoch = None;
         std::sync::Arc::make_mut(&mut self.items).insert(index, std::sync::Arc::new(message));
     }
 
     /// Retains only messages accepted by `predicate`.
     pub fn retain(&mut self, mut predicate: impl FnMut(&ModelMessage) -> bool) {
-        self.openai_input_chain = None;
+        self.provider_request_epoch = None;
         std::sync::Arc::make_mut(&mut self.items).retain(|message| predicate(message.as_ref()));
     }
 
-    /// Returns the exact OpenAI request-chain state, when one has been prepared.
-    pub(crate) fn openai_input_chain(&self) -> Option<&OpenAiInputChain> {
-        self.openai_input_chain.as_ref()
+    /// Returns the typed provider epoch selected for this prepared request.
+    pub(crate) fn provider_request_epoch(&self) -> Option<&ProviderRequestEpoch> {
+        self.provider_request_epoch.as_ref()
     }
 
-    /// Installs the exact OpenAI input sequence prepared for the next send.
-    pub(crate) fn set_openai_input_chain(&mut self, chain: OpenAiInputChain) {
-        self.openai_input_chain = Some(chain);
+    /// Installs provider epoch metadata without retaining provider-visible input.
+    pub(crate) fn set_provider_request_epoch(&mut self, epoch: ProviderRequestEpoch) {
+        self.provider_request_epoch = Some(epoch);
     }
 
     /// Reports whether two collections share the same immutable backing store.
@@ -2789,7 +2786,7 @@ impl From<Vec<ModelMessage>> for ModelMessages {
     fn from(messages: Vec<ModelMessage>) -> Self {
         Self {
             items: std::sync::Arc::new(messages.into_iter().map(std::sync::Arc::new).collect()),
-            openai_input_chain: None,
+            provider_request_epoch: None,
         }
     }
 }

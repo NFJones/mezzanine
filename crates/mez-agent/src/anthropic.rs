@@ -7,6 +7,9 @@
 //! projection.
 
 use crate::context::ContextPlacement;
+use crate::provider_continuity::{
+    ProviderNativeRequestContinuity, prepare_provider_native_request_prefix_extension,
+};
 use crate::{
     MAAP_ACTION_BATCH_TOOL_NAME, MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME,
     MaapBatch, ModelMessageRole, ModelRequest, ModelTokenUsage, ProviderEndpointError,
@@ -152,11 +155,10 @@ fn parse_bool_option(label: &str, value: &str) -> ProviderRequestAssemblyResult<
     }
 }
 
-/// One Anthropic message retained with its cache lifecycle during serialization.
+/// One immutable Anthropic message rendered from durable chronology.
 struct AnthropicRenderedMessage {
     role: &'static str,
     content: String,
-    placement: ContextPlacement,
 }
 
 /// Builds one Anthropic-compliant Messages API JSON body.
@@ -182,7 +184,6 @@ pub fn anthropic_messages_request_body(
         if message.content.is_empty() {
             continue;
         }
-        let cache_disposition = message.cache_disposition();
         let content = if message.role == ModelMessageRole::Context {
             format!(
                 "[Mezzanine context; not user-authored]\n{}",
@@ -191,47 +192,19 @@ pub fn anthropic_messages_request_body(
         } else {
             message.content.clone()
         };
-        if let Some(last) = rendered_messages.last_mut()
-            && last.role == role
-            && last.placement == cache_disposition
-        {
-            last.content.push_str("\n\n");
-            last.content.push_str(&content);
-            continue;
-        }
-        rendered_messages.push(AnthropicRenderedMessage {
-            role,
-            content,
-            placement: cache_disposition,
-        });
+        rendered_messages.push(AnthropicRenderedMessage { role, content });
     }
     if rendered_messages.is_empty() {
         return Err(ProviderRequestAssemblyError::invalid_args(
             "Anthropic Messages request requires at least one user or assistant message",
         ));
     }
-    let latest_immutable_message = options.prompt_caching.then(|| {
-        rendered_messages
-            .iter()
-            .rposition(|message| message.placement == ContextPlacement::ConversationAppend)
-    });
-    let latest_immutable_message = latest_immutable_message.flatten();
     let messages = rendered_messages
         .into_iter()
-        .enumerate()
-        .map(|(index, message)| {
-            let content = if Some(index) == latest_immutable_message {
-                serde_json::json!([{
-                    "type": "text",
-                    "text": message.content,
-                    "cache_control": { "type": "ephemeral" },
-                }])
-            } else {
-                serde_json::json!(message.content)
-            };
+        .map(|message| {
             serde_json::json!({
                 "role": message.role,
-                "content": content,
+                "content": message.content,
             })
         })
         .collect::<Vec<_>>();
@@ -307,6 +280,36 @@ pub fn anthropic_messages_request_body(
             "Anthropic Messages request encoding failed: {error}"
         ))
     })
+}
+
+/// Enforces exact native-message continuity for one Anthropic request.
+///
+/// The renderer is invoked for both requests from their durable chronology;
+/// no prior provider input is retained on the request chain.
+pub fn prepare_anthropic_request_prefix_extension(
+    request: &mut ModelRequest,
+    previous: Option<&ModelRequest>,
+    cache_namespace: &str,
+    stream: bool,
+    options: &AnthropicMessagesOptions,
+) -> ProviderRequestAssemblyResult<()> {
+    let current_body = anthropic_messages_request_body(request, stream, options)?;
+    let previous_body = previous
+        .map(|previous| anthropic_messages_request_body(previous, stream, options))
+        .transpose()?;
+    prepare_provider_native_request_prefix_extension(
+        request,
+        previous,
+        ProviderNativeRequestContinuity {
+            cache_namespace,
+            provider_label: "Anthropic Messages",
+            current_api_shape: &format!("anthropic-messages;stream={stream}"),
+            previous_api_shape: &format!("anthropic-messages;stream={stream}"),
+            input_field: "messages",
+            current_body: &current_body,
+            previous_body: previous_body.as_deref(),
+        },
+    )
 }
 
 fn anthropic_maap_tool(request: &ModelRequest) -> serde_json::Value {
@@ -1258,12 +1261,12 @@ mod tests {
         }
     }
 
-    /// Verifies volatile neutral state remains after Anthropic's reusable
-    /// immutable-message cache breakpoint.
+    /// Verifies neutral chronological state remains separate from prior
+    /// Anthropic native messages.
     ///
-    /// Request-local facts can change between provider calls. They must remain
-    /// model-visible after the durable user event without changing the cached
-    /// stable system block or immutable conversation prefix.
+    /// Each durable chronology record must become its own native item. Moving
+    /// a cache-control wrapper between messages would rewrite an item already
+    /// sent in the same epoch, so only the stable system block is cached.
     #[test]
     fn anthropic_cache_breakpoint_includes_chronological_neutral_state() {
         let request = |state: &str| {
@@ -1313,24 +1316,23 @@ mod tests {
             first["system"][0]["cache_control"],
             serde_json::json!({ "type": "ephemeral" })
         );
+        assert_eq!(first["messages"][0]["content"], "continue");
         assert_eq!(
-            first["messages"][0]["content"][0]["text"],
-            "continue\n\n[Mezzanine context; not user-authored]\n[runtime state]\nfirst update"
+            first["messages"][1]["content"],
+            "[Mezzanine context; not user-authored]\n[runtime state]\nfirst update"
         );
+        assert_eq!(second["messages"][0], first["messages"][0]);
         assert_eq!(
-            first["messages"][0]["content"][0]["cache_control"],
-            serde_json::json!({ "type": "ephemeral" })
-        );
-        assert_eq!(
-            second["messages"][0]["content"][0]["text"],
-            "continue\n\n[Mezzanine context; not user-authored]\n[runtime state]\nsecond update"
+            second["messages"][1]["content"],
+            "[Mezzanine context; not user-authored]\n[runtime state]\nsecond update"
         );
     }
 
-    /// Verifies Anthropic marks the latest immutable transcript turn as a second cache boundary.
+    /// Verifies Anthropic preserves each chronological record as its own native message.
     ///
-    /// Historical user and assistant content should remain reusable while the
-    /// current user request and later neutral context remain chronological.
+    /// Historical user and assistant content must remain byte-identical while
+    /// later durable chronology appends new native messages without a moving
+    /// cache wrapper rewriting an earlier item.
     #[test]
     fn anthropic_cache_breakpoint_marks_latest_immutable_transcript_message() {
         let request = anthropic_cache_test_request(vec![
@@ -1374,14 +1376,94 @@ mod tests {
 
         assert_eq!(value["messages"][0]["content"], "historical request");
         assert_eq!(value["messages"][1]["content"], "historical answer");
+        assert_eq!(value["messages"][2]["content"], "current request");
         assert_eq!(
-            value["messages"][2]["content"][0]["text"],
-            "current request\n\n[Mezzanine context; not user-authored]\ncwd=/repo"
+            value["messages"][3]["content"],
+            "[Mezzanine context; not user-authored]\ncwd=/repo"
         );
+    }
+
+    /// Verifies Anthropic accepts durable native-message growth and rejects a
+    /// same-epoch rewrite before the request reaches provider transport.
+    #[test]
+    fn anthropic_request_chain_requires_exact_native_message_prefix() {
+        let messages = vec![
+            crate::ModelMessage {
+                role: ModelMessageRole::System,
+                source: crate::ContextSourceKind::System,
+                placement: crate::ContextPlacement::StablePrefix,
+                content: "stable system prompt".to_string(),
+            },
+            crate::ModelMessage {
+                role: ModelMessageRole::User,
+                source: crate::ContextSourceKind::UserInstruction,
+                placement: crate::ContextPlacement::ConversationAppend,
+                content: "inspect the repository".to_string(),
+            },
+        ];
+        let mut first = anthropic_cache_test_request(messages.clone());
+        prepare_anthropic_request_prefix_extension(
+            &mut first,
+            None,
+            "anthropic:test",
+            false,
+            &AnthropicMessagesOptions::default(),
+        )
+        .unwrap();
+
+        let mut appended = first.clone();
+        appended.messages.push(crate::ModelMessage {
+            role: ModelMessageRole::Context,
+            source: crate::ContextSourceKind::RuntimeHint,
+            placement: crate::ContextPlacement::ConversationAppend,
+            content: "cwd=/repo".to_string(),
+        });
+        prepare_anthropic_request_prefix_extension(
+            &mut appended,
+            Some(&first),
+            "anthropic:test",
+            false,
+            &AnthropicMessagesOptions::default(),
+        )
+        .unwrap();
+        let first_body: serde_json::Value = serde_json::from_str(
+            &anthropic_messages_request_body(&first, false, &AnthropicMessagesOptions::default())
+                .unwrap(),
+        )
+        .unwrap();
+        let appended_body: serde_json::Value = serde_json::from_str(
+            &anthropic_messages_request_body(
+                &appended,
+                false,
+                &AnthropicMessagesOptions::default(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert_eq!(
-            value["messages"][2]["content"][0]["cache_control"],
-            serde_json::json!({ "type": "ephemeral" })
+            first_body["messages"].as_array().unwrap().as_slice(),
+            &appended_body["messages"].as_array().unwrap()
+                [..first_body["messages"].as_array().unwrap().len()]
         );
+
+        let mut rewritten = anthropic_cache_test_request(vec![
+            messages[0].clone(),
+            crate::ModelMessage {
+                role: ModelMessageRole::User,
+                source: crate::ContextSourceKind::UserInstruction,
+                placement: crate::ContextPlacement::ConversationAppend,
+                content: "rewrite the repository request".to_string(),
+            },
+        ]);
+        let error = prepare_anthropic_request_prefix_extension(
+            &mut rewritten,
+            Some(&first),
+            "anthropic:test",
+            false,
+            &AnthropicMessagesOptions::default(),
+        )
+        .unwrap_err();
+        assert!(error.message().contains("rewrote canonical provider input"));
     }
 
     /// Verifies options from incompatible provider APIs fail at the lower

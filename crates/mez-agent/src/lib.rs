@@ -108,6 +108,8 @@ pub mod progress;
 pub mod prompt;
 /// Provider-neutral API compatibility contracts.
 pub mod provider;
+/// Canonical native provider request continuity enforcement.
+mod provider_continuity;
 /// Secret-safe provider failure diagnostic shaping.
 pub mod provider_diagnostics;
 /// Provider failure retry and recovery classification.
@@ -209,7 +211,7 @@ pub use anthropic::{
     DEFAULT_ANTHROPIC_PROMPT_CACHING, DEFAULT_ANTHROPIC_VERSION,
     anthropic_messages_endpoint_for_base_url, anthropic_messages_request_body,
     anthropic_provider_failure_json, anthropic_request_requires_maap,
-    parse_anthropic_messages_provider_body,
+    parse_anthropic_messages_provider_body, prepare_anthropic_request_prefix_extension,
 };
 pub use auth::{ProviderAuthMetadata, ProviderCredentialKind, ProviderCredentialSource};
 pub use auto_sizing::{
@@ -282,7 +284,7 @@ pub use deepseek::{
     deepseek_chat_completions_endpoint_for_base_url,
     deepseek_chat_completions_request_body_with_strategy, deepseek_effective_stream,
     deepseek_maap_request_strategy, deepseek_models_endpoint_for_base_url,
-    deepseek_should_retry_with_forced_maap,
+    deepseek_should_retry_with_forced_maap, prepare_deepseek_request_prefix_extension,
 };
 pub use deepseek_response::{
     DeepSeekChatCompletionsStreamDecoder, DeepSeekResponse, DeepSeekResponseError,
@@ -377,6 +379,7 @@ pub use openai_chat_completions::{
     OpenAiChatCompletionsResponseError, OpenAiChatCompletionsStreamDecoder,
     openai_chat_completions_request_body, openai_chat_completions_request_body_with_stream,
     parse_chat_completions_response_envelope, parse_openai_chat_completions_response_body,
+    prepare_openai_chat_completions_request_prefix_extension,
 };
 pub use openai_continuity::{
     OpenAiRequestContinuity, OpenAiRequestContinuitySnapshot, OpenAiRequestMessageDigest,

@@ -15,6 +15,7 @@ use mez_agent::{
     OpenAiChatCompletionsOptions, OpenAiChatCompletionsResponse,
     OpenAiChatCompletionsStreamDecoder, SseEvent, openai_chat_completions_request_body_with_stream,
     parse_openai_chat_completions_response_body, parse_sse_events_with,
+    prepare_openai_chat_completions_request_prefix_extension,
 };
 use std::collections::BTreeMap;
 
@@ -72,6 +73,21 @@ impl ChatCompletionsDialect for OpenAiChatCompletionsDialect {
             timeout_ms,
             self.options,
         )
+    }
+
+    fn prepare_request_prefix_extension(
+        &self,
+        request: &mut ModelRequest,
+        previous: Option<&ModelRequest>,
+        cache_namespace: &str,
+        _stream: bool,
+    ) -> Result<()> {
+        Ok(prepare_openai_chat_completions_request_prefix_extension(
+            request,
+            previous,
+            cache_namespace,
+            self.options,
+        )?)
     }
 
     fn parse_chat_response(

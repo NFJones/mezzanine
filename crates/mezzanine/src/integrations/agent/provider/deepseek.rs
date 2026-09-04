@@ -20,7 +20,7 @@ use mez_agent::{
     deepseek_chat_completions_request_body_with_strategy, deepseek_effective_stream,
     deepseek_maap_request_strategy, deepseek_models_endpoint_for_base_url,
     deepseek_request_requires_maap, deepseek_should_retry_with_forced_maap,
-    parse_deepseek_chat_completions_provider_body,
+    parse_deepseek_chat_completions_provider_body, prepare_deepseek_request_prefix_extension,
 };
 use std::collections::BTreeMap;
 
@@ -65,6 +65,21 @@ impl ChatCompletionsDialect for DeepSeekChatCompletionsDialect {
             timeout_ms,
             deepseek_maap_request_strategy(request),
         )
+    }
+
+    fn prepare_request_prefix_extension(
+        &self,
+        request: &mut ModelRequest,
+        previous: Option<&ModelRequest>,
+        cache_namespace: &str,
+        stream: bool,
+    ) -> Result<()> {
+        Ok(prepare_deepseek_request_prefix_extension(
+            request,
+            previous,
+            cache_namespace,
+            stream,
+        )?)
     }
 
     fn parse_chat_response(

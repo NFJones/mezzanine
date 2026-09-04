@@ -4,7 +4,7 @@
 //! messages into Responses API `instructions` and `input` material. It also
 //! computes non-model-visible prompt-cache fingerprints used for diagnostics.
 
-use crate::context::{ContextEpochIdentity, ContextEpochTransition, OpenAiInputChain};
+use crate::context::{ContextEpochIdentity, ContextEpochTransition, ProviderRequestEpoch};
 use crate::openai_request::openai_responses_request_control_shape_with_stream;
 use crate::openai_schema::openai_maap_action_batch_tools;
 use crate::provider::MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME;
@@ -21,16 +21,11 @@ use crate::{
 use crate::{ModelMessage, ModelMessageRole};
 use sha2::{Digest, Sha256};
 
-/// Renders request messages and captures canonical stable-prefix material.
+/// Renders request messages from canonical durable chronology.
 pub(super) fn openai_render_request_messages(
     request: &ModelRequest,
 ) -> ProviderRequestAssemblyResult<OpenAiRenderedMessages> {
-    let chain = request.messages.openai_input_chain().cloned();
-    let mut rendered = openai_render_request_messages_without_chain(request)?;
-    if let Some(chain) = chain {
-        rendered.input = chain.effective_input.as_ref().clone();
-    }
-    Ok(rendered)
+    openai_render_request_messages_without_chain(request)
 }
 
 /// Renders the canonical durable request before any retained OpenAI wire-chain override.
@@ -66,20 +61,19 @@ pub fn prepare_openai_request_prefix_extension_with_context(
     let current_epoch =
         openai_context_epoch_identity(request, &canonical, cache_namespace, stream)?;
     let Some(previous) = previous else {
-        request.messages.set_openai_input_chain(openai_input_chain(
-            canonical.input.clone(),
-            cache_namespace,
-            stream,
-            current_epoch,
-            ContextEpochTransition::Initial,
-        ));
+        request
+            .messages
+            .set_provider_request_epoch(provider_request_epoch(
+                current_epoch,
+                ContextEpochTransition::Initial,
+            ));
         return Ok(());
     };
 
     let previous_canonical = openai_render_request_messages_without_chain(previous)?;
     let previous_epoch = previous
         .messages
-        .openai_input_chain()
+        .provider_request_epoch()
         .map(|chain| chain.context_epoch.clone())
         .unwrap_or(openai_context_epoch_identity(
             previous,
@@ -93,13 +87,9 @@ pub fn prepare_openai_request_prefix_extension_with_context(
                 .changed_component(&current_epoch)
                 .expect("different context epochs must identify a changed component"),
         );
-        request.messages.set_openai_input_chain(openai_input_chain(
-            canonical.input,
-            cache_namespace,
-            stream,
-            current_epoch,
-            transition,
-        ));
+        request
+            .messages
+            .set_provider_request_epoch(provider_request_epoch(current_epoch, transition));
         return Ok(());
     }
     if !canonical.input.starts_with(&previous_canonical.input) {
@@ -107,33 +97,26 @@ pub fn prepare_openai_request_prefix_extension_with_context(
             "OpenAI request chain rewrote canonical provider input inside one cache epoch",
         ));
     }
-    request.messages.set_openai_input_chain(openai_input_chain(
-        canonical.input,
-        cache_namespace,
-        stream,
-        current_epoch,
-        previous
-            .messages
-            .openai_input_chain()
-            .map_or(ContextEpochTransition::Initial, |chain| {
-                chain.epoch_transition
-            }),
-    ));
+    request
+        .messages
+        .set_provider_request_epoch(provider_request_epoch(
+            current_epoch,
+            previous
+                .messages
+                .provider_request_epoch()
+                .map_or(ContextEpochTransition::Initial, |chain| {
+                    chain.epoch_transition
+                }),
+        ));
     Ok(())
 }
 
-/// Freezes canonical and effective OpenAI input for a request-chain generation.
-fn openai_input_chain(
-    effective_input: Vec<serde_json::Value>,
-    cache_namespace: &str,
-    stream: bool,
+/// Retains only the epoch classification for a prepared OpenAI request.
+fn provider_request_epoch(
     context_epoch: ContextEpochIdentity,
     epoch_transition: ContextEpochTransition,
-) -> OpenAiInputChain {
-    OpenAiInputChain {
-        effective_input: std::sync::Arc::new(effective_input),
-        cache_namespace: cache_namespace.to_string(),
-        stream,
+) -> ProviderRequestEpoch {
+    ProviderRequestEpoch {
         context_epoch,
         epoch_transition,
     }
@@ -502,7 +485,7 @@ mod tests {
         assert!(matches!(
             changed
                 .messages
-                .openai_input_chain()
+                .provider_request_epoch()
                 .unwrap()
                 .epoch_transition,
             ContextEpochTransition::Changed(crate::ContextEpochComponent::StaticInstructions)
