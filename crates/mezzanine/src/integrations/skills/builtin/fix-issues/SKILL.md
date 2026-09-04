@@ -13,7 +13,7 @@ Store the plan in the issue notes field with a progress-tracker section. Keep th
 
 Use issue_update to refresh the notes whenever the plan changes, a step completes, validation fails, or the next action changes. Keep the issue notes current instead of creating separate scratch tracking when the issue record can hold the progress state.
 
-Implement the fix completely. Add or update focused regression coverage first when feasible, then broaden validation proportionally.
+Implement the fix completely. Add or update focused regression coverage first when feasible, then broaden validation proportionally. If defects unrelated to the currently worked issue are detected, then file a new issue to cover the identified defect and include human validation as an acceptance gate if a clear decision needs to be made which has no obvious answer.
 
 After the fix is verified, update the issue notes with the completed validation outcome, then mark the issue `resolved` with `issue_update` so history remains queryable. Do not delete an issue merely because it has been fixed.
 
