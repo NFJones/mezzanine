@@ -162,7 +162,7 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 81
+version = 82
 
 # Persistent multi-session host policy. The host and inbound Iroh listener are
 # disabled until explicitly started or enabled by the primary user.
@@ -536,6 +536,8 @@ default_model_profile = "default"
 active_turn_sleep_inhibition = "disabled"
 # Restrict agent terminal work to the shell-mediated action surface.
 shell_only = true
+# Static MAAP actions permitted on every ordinary provider request.
+enabled_actions = ["say", "shell_command", "apply_patch", "web_search", "fetch_url", "send_message", "spawn_agent", "config_change", "mcp_call", "memory_search", "memory_store", "issue_add", "issue_update", "issue_query", "issue_delete"]
 # Percentage of the raw conversation tail retained after compaction.
 compaction_raw_retention_percent = 10
 # Disable automatic model sizing until explicitly enabled.

@@ -72,21 +72,16 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     );
     let capability_description = capability_tool["description"].as_str().unwrap();
     assert!(capability_description.contains("Return a function call, not prose"));
-    assert!(capability_description.contains("currently allowed actions"));
+    assert!(capability_description.contains("static catalog of every valid action"));
     assert!(capability_description.contains("transport envelope"));
     assert!(capability_description.contains("not a prerequisite task step"));
     assert!(capability_description.contains("required-function-call"));
     assert!(capability_description.contains("Choose the smallest action"));
-    assert!(capability_description.contains("missing information, parameters, or identifiers"));
-    assert!(
-        capability_description
-            .contains("request or use the relevant capability instead of asking the user")
-    );
-    assert!(capability_description.contains("identifiers, URLs, versions"));
+    assert!(capability_description.contains("Safely gather task-local facts"));
+    assert!(capability_description.contains("Do not ask for identifiers, URLs, versions"));
     assert!(capability_description.contains("facts already present in current action results"));
-    assert!(capability_description.contains("Capability map: shell=local files"));
-    assert!(capability_description.contains("Wrong: say(blocked"));
-    assert!(capability_description.contains("Right: request_capability(capability=\"shell\""));
+    assert!(capability_description.contains("without capability negotiation"));
+    assert!(!capability_description.contains("request_capability(capability=\"shell\""));
     assert!(schema_properties.contains_key("rationale"));
     assert!(schema_properties.contains_key("thought"));
     assert!(!schema_properties.contains_key("protocol"));
@@ -147,7 +142,7 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     );
     assert_eq!(
         openai_tool_action_schemas(capability_tool).len(),
-        16,
+        15,
         "the canonical OpenAI tool exposes a stable action superset with generic MCP"
     );
     assert_eq!(
@@ -155,17 +150,16 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         1
     );
     assert!(
-        capability_tool["description"]
-            .as_str()
-            .unwrap()
-            .contains("Model-selected skill lookup/loading is disabled"),
+        capability_tool["description"].as_str().unwrap().contains(
+            "Model-selected skill lookup/loading and capability negotiation are not valid actions"
+        ),
         "{}",
         capability_tool["description"]
     );
     let action_schemas = openai_tool_action_schemas(capability_tool);
     let action_types = openai_tool_action_types(capability_tool);
     assert!(action_types.contains(&"say".to_string()));
-    assert!(action_types.contains(&"request_capability".to_string()));
+    assert!(!action_types.contains(&"request_capability".to_string()));
     assert!(action_types.contains(&"shell_command".to_string()));
     assert!(action_types.contains(&"apply_patch".to_string()));
     assert!(action_types.contains(&"web_search".to_string()));
@@ -277,59 +271,6 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
             .unwrap()
             .contains("rationale")
     );
-    let capability_schema = action_schemas
-        .iter()
-        .find(|schema| schema["properties"]["type"]["enum"][0] == "request_capability")
-        .unwrap();
-    assert_eq!(
-        capability_schema["properties"]["capability"]["enum"],
-        serde_json::json!(mez_agent::AgentCapability::all_names())
-    );
-    let capability_description = capability_schema["properties"]["capability"]["description"]
-        .as_str()
-        .unwrap();
-    assert!(
-        capability_description
-            .contains("Capability map: shell exposes shell_command and apply_patch"),
-        "{capability_description}"
-    );
-    assert!(
-        capability_description.contains("network_search exposes web_search"),
-        "{capability_description}"
-    );
-    assert!(
-        capability_description.contains("network_fetch exposes fetch_url"),
-        "{capability_description}"
-    );
-    assert!(
-        capability_description.contains("subagent exposes send_message and spawn_agent"),
-        "{capability_description}"
-    );
-    assert!(
-        capability_description.contains("config_change exposes config_change"),
-        "{capability_description}"
-    );
-    assert!(
-        capability_description.contains("memory exposes memory_search and memory_store"),
-        "{capability_description}"
-    );
-    assert!(
-        capability_description
-            .contains("issues exposes issue_add, issue_update, issue_query, and issue_delete"),
-        "{capability_description}"
-    );
-    let capability_reason_description = capability_schema["properties"]["reason"]["description"]
-        .as_str()
-        .unwrap();
-    assert_eq!(capability_schema["properties"]["reason"]["minLength"], 1);
-    assert!(
-        capability_reason_description.contains("next concrete action or evidence needed"),
-        "{capability_reason_description}"
-    );
-    assert!(
-        capability_reason_description.contains("Do not ask the user to grant access here"),
-        "{capability_reason_description}"
-    );
     assert!(
         value["instructions"]
             .as_str()
@@ -354,8 +295,8 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert_eq!(value["input"][2]["role"], "developer");
     let request_state = value["input"][2]["content"][0]["text"].as_str().unwrap();
     assert!(request_state.contains("[OpenAI request state]"));
-    assert!(request_state.contains("interaction_kind=capability_decision"));
-    assert!(request_state.contains("allowed_actions=say,request_capability"));
+    assert!(request_state.contains("interaction_kind=action_execution"));
+    assert!(request_state.contains("allowed_actions=say,shell_command,apply_patch"));
     assert!(!request_state.contains("Emit only"));
 }
 

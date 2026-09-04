@@ -485,7 +485,7 @@ fn runtime_explicit_skill_prompt_rejects_redundant_call_skill_loop() {
         execution.response.raw_text
     );
     assert!(
-        execution
+        !execution
             .request
             .allowed_actions
             .action_type_names()

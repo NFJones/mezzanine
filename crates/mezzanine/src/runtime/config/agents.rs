@@ -18,9 +18,39 @@ use super::{
     runtime_json_object, runtime_json_string, runtime_json_string_array, runtime_json_string_map,
 };
 use mez_agent::{
-    AutoSizingRoutingPolicy, DEFAULT_AGENT_TURN_TIMEOUT_MS, DEFAULT_PROVIDER_RETRY_POLICY,
-    ProviderRetryPolicy,
+    AllowedAction, AllowedActionSet, AutoSizingRoutingPolicy, DEFAULT_AGENT_TURN_TIMEOUT_MS,
+    DEFAULT_PROVIDER_RETRY_POLICY, ProviderRetryPolicy,
 };
+
+/// Parses the static MAAP action set enabled for every ordinary provider request.
+pub(crate) fn runtime_agent_enabled_actions_from_config(root: &Value) -> Result<AllowedActionSet> {
+    let Some(agents) = runtime_json_object(root, "agents") else {
+        return Ok(AllowedActionSet::all_enabled());
+    };
+    let Some(values) = runtime_json_string_array(agents.get("enabled_actions"))? else {
+        return Ok(AllowedActionSet::all_enabled());
+    };
+    if values.is_empty() {
+        return Err(MezError::config(
+            "agents.enabled_actions must contain at least one action",
+        ));
+    }
+    let mut actions = Vec::with_capacity(values.len());
+    for value in values {
+        let action = AllowedAction::from_action_type(&value).ok_or_else(|| {
+            MezError::config(format!(
+                "agents.enabled_actions contains unknown action `{value}`"
+            ))
+        })?;
+        if !AllowedActionSet::all_enabled().contains(action) {
+            return Err(MezError::config(format!(
+                "agents.enabled_actions cannot enable controller-only action `{value}`"
+            )));
+        }
+        actions.push(action);
+    }
+    Ok(AllowedActionSet::from_actions(actions))
+}
 
 /// User-selected policy for idle sleep inhibition during active agent turns.
 ///

@@ -37,13 +37,14 @@ pub(super) use agents::{
     ActiveTurnSleepInhibition, ShellMode, runtime_active_turn_sleep_inhibition_from_config,
     runtime_agent_action_failure_retry_limit_from_config, runtime_agent_auto_sizing_from_config,
     runtime_agent_compaction_raw_retention_percent_from_config,
-    runtime_agent_custom_system_prompt_from_config, runtime_agent_loop_limit_from_config,
-    runtime_agent_personality_profiles_from_config, runtime_agent_root_routing_policy_from_config,
-    runtime_agent_routing_from_config, runtime_agent_turn_timeout_ms_from_config,
-    runtime_always_exposed_mcp_servers_from_config, runtime_default_agent_personality_from_config,
-    runtime_max_concurrent_agents_from_config, runtime_max_queued_agent_bytes_from_config,
-    runtime_max_queued_agent_turns_from_config, runtime_max_root_subagents_from_config,
-    runtime_max_subagent_depth_from_config, runtime_max_subagent_panes_per_window_from_config,
+    runtime_agent_custom_system_prompt_from_config, runtime_agent_enabled_actions_from_config,
+    runtime_agent_loop_limit_from_config, runtime_agent_personality_profiles_from_config,
+    runtime_agent_root_routing_policy_from_config, runtime_agent_routing_from_config,
+    runtime_agent_turn_timeout_ms_from_config, runtime_always_exposed_mcp_servers_from_config,
+    runtime_default_agent_personality_from_config, runtime_max_concurrent_agents_from_config,
+    runtime_max_queued_agent_bytes_from_config, runtime_max_queued_agent_turns_from_config,
+    runtime_max_root_subagents_from_config, runtime_max_subagent_depth_from_config,
+    runtime_max_subagent_panes_per_window_from_config,
     runtime_max_subagents_per_subagent_from_config,
     runtime_provider_error_retry_policy_from_config, runtime_shell_mode_from_config,
     runtime_subagent_profiles_from_config, runtime_subagent_wait_policy_from_config,
@@ -374,10 +375,27 @@ mod tests {
 
     use super::{
         ActiveTurnSleepInhibition, runtime_active_turn_sleep_inhibition_from_config,
-        runtime_fit_status_line, runtime_provider_error_retry_policy_from_config,
+        runtime_agent_enabled_actions_from_config, runtime_fit_status_line,
+        runtime_provider_error_retry_policy_from_config,
         runtime_terminal_agent_wrap_column_cap_from_config,
         runtime_terminal_emoji_width_from_config, runtime_terminal_streaming_output_from_config,
     };
+
+    /// Verifies the runtime defaults to all executable actions and preserves a
+    /// configured static subset without introducing capability actions.
+    #[test]
+    fn parses_static_enabled_actions_from_config() {
+        assert_eq!(
+            runtime_agent_enabled_actions_from_config(&serde_json::json!({})).unwrap(),
+            mez_agent::AllowedActionSet::all_enabled()
+        );
+        let configured = runtime_agent_enabled_actions_from_config(&serde_json::json!({
+            "agents": { "enabled_actions": ["say", "shell_command"] }
+        }))
+        .unwrap();
+        assert_eq!(configured.action_type_names(), ["say", "shell_command"]);
+        assert!(!configured.contains(mez_agent::AllowedAction::RequestCapability));
+    }
 
     /// Verifies the active-turn sleep-inhibition reader defaults to disabled,
     /// accepts both explicit opt-in modes, and rejects unsupported strings.

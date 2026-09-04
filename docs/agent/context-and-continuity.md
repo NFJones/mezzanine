@@ -11,16 +11,19 @@ Use the [agent shell](../using-mezzanine/agent-shell.md) in an active pane.
 
 ## What a turn receives
 
-Each request combines stable runtime and project guidance, ordered conversation
-history, applicable explicit action results, and a short-lived suffix of facts
-needed for the next request. User, assistant, action-result, project-file, and
-terminal sources retain distinct roles. Terminal text becomes context only when
-an explicit action result includes it; live controller state, passive terminal
-content, credentials, and unrelated pane data are not normal model context.
+Each request combines a durable reusable prefix with a short-lived suffix of
+facts needed only for the next request. The durable prefix contains stable
+runtime and project guidance plus ordered conversation history, including every
+explicit action result appended since the latest compaction boundary. User,
+assistant, action-result, project-file, and terminal sources retain distinct
+roles. Terminal text becomes context only when an explicit action result
+includes it; live controller state, passive terminal content, credentials, and
+unrelated pane data are not normal model context.
 
 An action result has one bounded model-visible representation. Mez appends that
-representation once, stores it in the conversation transcript, and replays the
-same bytes on later turns and after restart or resume. This includes captured
+representation once to the durable chronological prefix, stores it in the
+conversation transcript, and replays the same bytes on later turns and after
+restart or resume. This includes captured
 shell, patch, MCP, web, fetch, and skill output, so transcripts and context
 exports can contain sensitive task data. Later results append after earlier
 ones; they do not move or replace prior output. Only explicit conversation

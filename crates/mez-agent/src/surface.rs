@@ -355,6 +355,38 @@ pub struct AllowedActionSet {
 }
 
 impl AllowedActionSet {
+    /// Builds the complete provider-visible action surface used by ordinary
+    /// agent turns.
+    ///
+    /// Capability negotiation and model-selected skill loading are legacy
+    /// controller protocols, not executable actions in the static schema.
+    pub fn all_enabled() -> Self {
+        Self::from_actions([
+            AllowedAction::Say,
+            AllowedAction::ShellCommand,
+            AllowedAction::ApplyPatch,
+            AllowedAction::WebSearch,
+            AllowedAction::FetchUrl,
+            AllowedAction::SendMessage,
+            AllowedAction::SpawnAgent,
+            AllowedAction::ConfigChange,
+            AllowedAction::McpCall,
+            AllowedAction::MemorySearch,
+            AllowedAction::MemoryStore,
+            AllowedAction::IssueAdd,
+            AllowedAction::IssueUpdate,
+            AllowedAction::IssueQuery,
+            AllowedAction::IssueDelete,
+        ])
+    }
+
+    /// Returns whether this set contains only configurable executable actions.
+    pub fn is_configurable(&self) -> bool {
+        self.actions
+            .iter()
+            .all(|action| Self::all_enabled().contains(*action))
+    }
+
     /// Builds the initial non-executing capability-decision surface.
     pub fn capability_decision() -> Self {
         Self::from_actions([AllowedAction::Say, AllowedAction::RequestCapability])
@@ -455,5 +487,12 @@ impl AllowedActionSet {
             .iter()
             .map(|action| action.action_type())
             .collect()
+    }
+}
+
+impl Default for AllowedActionSet {
+    /// Enables every configurable MAAP action by default.
+    fn default() -> Self {
+        Self::all_enabled()
     }
 }

@@ -93,10 +93,9 @@ impl RuntimeSessionService {
     /// Resolves the provider control state that remains active for one logical
     /// turn across actor-owned action execution boundaries.
     ///
-    /// Routed presentation is always response-only. Otherwise the most recent
-    /// accepted execution owns the cumulative capability surface and
-    /// interaction mode; the turn's initial capability is used only before an
-    /// execution exists. Explicit exceptional interactions remain authoritative.
+    /// The configured action set is constant across ordinary turns and
+    /// continuations. Explicit exceptional interaction kinds remain
+    /// authoritative, but they do not mutate the action surface.
     pub(crate) fn agent_provider_request_control_for_turn(
         &self,
         turn: &AgentTurnRecord,
@@ -105,18 +104,7 @@ impl RuntimeSessionService {
         Option<mez_agent::ModelInteractionKind>,
     ) {
         let previous_execution = self.agent_turn_executions().get(&turn.turn_id);
-        let allowed_actions = if self.routed_presentation_turn(&turn.turn_id) {
-            Some(mez_agent::AllowedActionSet::for_capability(
-                mez_agent::AgentCapability::RespondOnly,
-            ))
-        } else {
-            previous_execution
-                .map(|execution| execution.request.allowed_actions.clone())
-                .or_else(|| {
-                    turn.initial_capability
-                        .map(mez_agent::AllowedActionSet::for_capability)
-                })
-        };
+        let allowed_actions = Some(self.agent_enabled_actions().clone());
         let interaction_kind = self
             .agent
             .agent_turn_interaction_kinds

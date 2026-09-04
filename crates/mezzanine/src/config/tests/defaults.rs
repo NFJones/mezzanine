@@ -145,6 +145,17 @@ fn initial_config_uses_native_shell_and_platform_sandbox_defaults() {
         agents.get("shell_mode").and_then(toml::Value::as_str),
         Some("native")
     );
+    let enabled_actions = agents
+        .get("enabled_actions")
+        .and_then(toml::Value::as_array)
+        .expect("generated config should contain the static action allowlist")
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        enabled_actions,
+        mez_agent::AllowedActionSet::all_enabled().action_type_names()
+    );
     assert_eq!(
         permissions.get("sandbox").and_then(toml::Value::as_str),
         Some(

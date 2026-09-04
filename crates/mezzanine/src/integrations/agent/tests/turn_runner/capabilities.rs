@@ -97,29 +97,21 @@ fn turn_runner_denies_issues_capability_when_issue_tracking_disabled() {
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[1].interaction_kind,
-        mez_agent::ModelInteractionKind::CapabilityContinuation
+        mez_agent::ModelInteractionKind::MaapRepair
     );
     assert_eq!(
         requests[1].allowed_actions.action_type_names(),
-        vec!["say", "request_capability"]
+        mez_agent::AllowedActionSet::all_enabled().action_type_names()
     );
     let capability_context = requests[1]
         .messages
         .iter()
-        .find(|message| message.content.contains("[capability denied]"))
-        .expect("missing denied capability context");
+        .find(|message| message.content.contains("[MAAP repair state]"))
+        .expect("missing MAAP repair context");
     assert!(
-        capability_context
-            .content
-            .contains("issues capability requires local issue tracking to be enabled"),
+        capability_context.content.contains("request_capability"),
         "{}",
         capability_context.content
-    );
-    assert!(
-        !requests[1]
-            .allowed_actions
-            .action_type_names()
-            .contains(&"issue_query")
     );
 }
 
@@ -203,12 +195,12 @@ fn turn_runner_exposes_mcp_actions_on_initial_surface_when_available() {
     assert_eq!(requests.len(), 1);
     assert_eq!(
         requests[0].interaction_kind,
-        mez_agent::ModelInteractionKind::CapabilityDecision
+        mez_agent::ModelInteractionKind::ActionExecution
     );
     let allowed_actions = requests[0].allowed_actions.action_type_names();
     assert!(allowed_actions.contains(&"mcp_call"));
-    assert!(allowed_actions.contains(&"request_capability"));
-    assert!(!allowed_actions.contains(&"shell_command"));
+    assert!(!allowed_actions.contains(&"request_capability"));
+    assert!(allowed_actions.contains(&"shell_command"));
 }
 
 #[test]
@@ -284,13 +276,13 @@ fn turn_runner_exposes_memory_actions_on_initial_surface_when_enabled() {
     assert_eq!(requests.len(), 1);
     assert_eq!(
         requests[0].interaction_kind,
-        mez_agent::ModelInteractionKind::CapabilityDecision
+        mez_agent::ModelInteractionKind::ActionExecution
     );
     let allowed_actions = requests[0].allowed_actions.action_type_names();
     assert!(allowed_actions.contains(&"memory_search"));
     assert!(allowed_actions.contains(&"memory_store"));
-    assert!(allowed_actions.contains(&"request_capability"));
-    assert!(!allowed_actions.contains(&"shell_command"));
+    assert!(!allowed_actions.contains(&"request_capability"));
+    assert!(allowed_actions.contains(&"shell_command"));
 }
 
 #[test]
@@ -402,28 +394,28 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[0].interaction_kind,
-        mez_agent::ModelInteractionKind::CapabilityDecision
+        mez_agent::ModelInteractionKind::ActionExecution
     );
     let initial_actions = requests[0].allowed_actions.action_type_names();
-    assert!(initial_actions.contains(&"request_capability"));
-    assert!(!initial_actions.contains(&"shell_command"));
-    assert!(!initial_actions.contains(&"fetch_url"));
+    assert!(!initial_actions.contains(&"request_capability"));
+    assert!(initial_actions.contains(&"shell_command"));
+    assert!(initial_actions.contains(&"fetch_url"));
     assert_eq!(
         requests[1].interaction_kind,
-        mez_agent::ModelInteractionKind::CapabilityContinuation
+        mez_agent::ModelInteractionKind::MaapRepair
     );
     let execution_actions = requests[1].allowed_actions.action_type_names();
     assert!(execution_actions.contains(&"shell_command"));
-    assert!(execution_actions.contains(&"request_capability"));
-    assert!(!execution_actions.contains(&"fetch_url"));
+    assert!(!execution_actions.contains(&"request_capability"));
+    assert!(execution_actions.contains(&"fetch_url"));
     assert!(
         requests[1]
             .messages
             .iter()
-            .find(|message| message.content.contains("[capability granted]"))
+            .find(|message| message.content.contains("[MAAP repair state]"))
             .unwrap()
             .content
-            .contains("[capability granted]"),
+            .contains("[MAAP repair state]"),
         "{:?}",
         requests[1].messages
     );
@@ -523,17 +515,17 @@ fn turn_runner_grants_fetch_capability_without_context_url() {
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[1].interaction_kind,
-        mez_agent::ModelInteractionKind::CapabilityContinuation
+        mez_agent::ModelInteractionKind::MaapRepair
     );
     let allowed_actions = requests[1].allowed_actions.action_type_names();
     assert!(allowed_actions.contains(&"fetch_url"));
-    assert!(allowed_actions.contains(&"request_capability"));
+    assert!(!allowed_actions.contains(&"request_capability"));
     let decision_message = &requests[1]
         .messages
         .iter()
-        .find(|message| message.content.contains("[capability granted]"))
+        .find(|message| message.content.contains("[MAAP repair state]"))
         .unwrap()
         .content;
-    assert!(decision_message.contains("[capability granted]"));
-    assert!(decision_message.contains("capability is permitted"));
+    assert!(decision_message.contains("[MAAP repair state]"));
+    assert!(decision_message.contains("request_capability"));
 }

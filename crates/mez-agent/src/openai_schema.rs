@@ -6,8 +6,8 @@
 //! for the actions and MCP tools eligible on an individual request.
 
 use crate::{
-    AllowedAction, AllowedActionSet, MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME,
-    ModelRequest, maap_action_batch_schema,
+    AllowedActionSet, MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME, ModelRequest,
+    maap_action_batch_schema,
 };
 
 /// Builds the OpenAI MAAP function-tool list for the current request.
@@ -36,27 +36,6 @@ fn openai_maap_current_action_batch_tool() -> serde_json::Value {
 /// OpenAI prompt caching is sensitive to request-body tool bytes, so normal
 /// action turns use one stable superset and rely on compact request state plus
 /// runtime validation for actual eligibility.
-fn openai_stable_schema_action_surface() -> AllowedActionSet {
-    AllowedActionSet::from_actions([
-        AllowedAction::Say,
-        AllowedAction::RequestCapability,
-        AllowedAction::ShellCommand,
-        AllowedAction::ApplyPatch,
-        AllowedAction::WebSearch,
-        AllowedAction::FetchUrl,
-        AllowedAction::SendMessage,
-        AllowedAction::SpawnAgent,
-        AllowedAction::ConfigChange,
-        AllowedAction::MemorySearch,
-        AllowedAction::MemoryStore,
-        AllowedAction::IssueAdd,
-        AllowedAction::IssueUpdate,
-        AllowedAction::IssueQuery,
-        AllowedAction::IssueDelete,
-        AllowedAction::McpCall,
-    ])
-}
-
 /// Builds the byte-stable OpenAI schema with one generic MCP action variant.
 ///
 /// The canonical schema shape below is produced in this crate and therefore
@@ -64,13 +43,7 @@ fn openai_stable_schema_action_surface() -> AllowedActionSet {
 /// text so third-party tool schemas cannot change provider-visible tool bytes;
 /// canonical parsing normalizes that text before active-tool validation.
 fn openai_cache_stable_action_batch_schema() -> serde_json::Value {
-    let mut schema = maap_action_batch_schema(&openai_stable_schema_action_surface(), &[]);
-    let action_variants = schema
-        .pointer_mut("/properties/actions/items/anyOf")
-        .and_then(serde_json::Value::as_array_mut)
-        .expect("canonical MAAP action-batch schema always contains an action union");
-    action_variants.push(crate::schema::maap_generic_mcp_call_action_schema());
-    schema
+    maap_action_batch_schema(&AllowedActionSet::all_enabled(), &[])
 }
 
 /// Returns the provider-facing description for the current MAAP action-batch tool.

@@ -13,8 +13,8 @@ Read [Agent overview](../agent/overview.md) and [Approvals and review](../safety
 
 An agent response is a validated `maap/1` batch with a concise rationale and
 one or more actions. Mezzanine assigns turn and action identities, validates
-the active action surface, independently classifies effects, and records a
-result for every accepted action: it may be blocked, denied, run, succeed,
+the configured static action set, independently classifies effects, and records
+a result for every accepted action: it may be blocked, denied, run, succeed,
 fail, time out, be cancelled, or be interrupted. Rejected batches and actions
 also receive results. Model-provided effect claims and bookkeeping identities
 are not authoritative.
@@ -29,7 +29,6 @@ terminal state remain outside ordinary model context.
 | Action | Use | Important boundary |
 | --- | --- | --- |
 | `say` | Present progress, completion, or a blocker to the user. | It is display-only and cannot execute text that resembles a command or patch. |
-| `request_capability` | Ask the controller to expose a coarse action family for this turn. | It is not a user permission prompt. |
 | `shell_command` | Local shell inspection, commands, validation, and filesystem operations. | Uses the effective native or pane shell mode and can require approval. |
 | `apply_patch` | Semantic file-content add, update, move, or delete using `*** Begin Patch` format. | It is a MAAP action, never a shell executable. |
 | `web_search`, `fetch_url` | User-requested current web search or HTTP(S) retrieval. | They are runtime network actions, not local-path readers. |
@@ -37,11 +36,13 @@ terminal state remain outside ordinary model context.
 | `config_change` | Supported live leaf configuration mutation. | Set values accept strings, signed integers, booleans, or string arrays; execution-boundary settings remain direct-user-only. |
 | `mcp_call` | Call a currently available configured MCP tool. | External capability and approval policy still apply. |
 | `memory_search`, `memory_store` | Retrieve or retain runtime-owned durable memory when enabled. | Records must be safe, durable, and non-secret. |
-| `issue_add`, `issue_update`, `issue_query`, `issue_delete` | Manage runtime-owned local issues for the active project. | Issue records remain subject to the active action surface and project-store rules. |
+| `issue_add`, `issue_update`, `issue_query`, `issue_delete` | Manage runtime-owned local issues for the active project. | Issue records remain subject to the configured action set and project-store rules. |
 
-The controller exposes only actions available to the current turn. An absent
-action family should be requested through `request_capability`, not simulated
-with prose or a different local mechanism.
+The provider schema is a request-independent catalog of every valid action.
+`agents.enabled_actions` determines the static subset accepted on ordinary
+turns and defaults to every executable action. The model uses enabled actions
+directly; integration availability, permissions, and action arguments remain
+runtime-validated and failures return explicit action results.
 
 ## Local mutation and recovery
 

@@ -63,8 +63,7 @@ pub fn assemble_model_request_from_context(
         })
         .filter_map(|metadata| metadata.execution_group_id().cloned())
         .collect::<BTreeSet<_>>();
-    let prompt_profile = AgentPromptProfile::default_for(identity.agent_id, identity.pane_id)
-        .with_provider(&profile.provider);
+    let prompt_profile = AgentPromptProfile::for_model(&profile.model);
     let mut messages = Vec::with_capacity(blocks.len() + 1);
     messages.push(ModelMessage {
         role: ModelMessageRole::System,
@@ -156,8 +155,8 @@ pub fn assemble_model_request_from_context(
             .provider_options
             .get("issue_actions_enabled")
             .is_none_or(|value| value != "false"),
-        interaction_kind: ModelInteractionKind::CapabilityDecision,
-        allowed_actions: AllowedActionSet::capability_decision(),
+        interaction_kind: ModelInteractionKind::ActionExecution,
+        allowed_actions: AllowedActionSet::all_enabled(),
         stop: is_deepseek.then(|| vec!["\n}".to_string()]),
         recovery_input: None,
         messages: messages.into(),

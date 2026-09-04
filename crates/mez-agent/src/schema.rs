@@ -5,7 +5,7 @@
 //! provider adapters.
 
 use crate::{
-    AgentCapability, AllowedAction, AllowedActionSet, CONFIG_CHANGE_OPERATION_NAMES,
+    AllowedAction, AllowedActionSet, CONFIG_CHANGE_OPERATION_NAMES,
     CONFIG_CHANGE_SETTING_PATH_DESCRIPTION, CONFIG_CHANGE_VALUE_DESCRIPTION, McpPromptTool,
 };
 
@@ -47,10 +47,8 @@ impl OpenAiMaapToolSurface {
     /// Shared provider-local instruction that treats the function call as the
     /// current action envelope rather than a separate setup step.
     const ACTION_BATCH_ENVELOPE_RULE: &str = "The function call is only the transport envelope for the action batch, not a prerequisite task step; do not emit a say-only or progress batch claiming that an initial or schema-valid batch is needed before the executable action, and do not put required-function-call compliance language in rationale or thought fields. If an executable action is available and useful, put that action in this function call now.";
-    /// Shared capability map for provider-local MAAP tool descriptions.
-    const CAPABILITY_MAP: &str = "Capability map: shell=local files, rg/sed/cat, git, builds, tests, shell_command, and apply_patch; network_search=web_search; network_fetch=fetch_url; mcp=mcp_call; subagent=send_message or spawn_agent; config_change=config_change; memory=memory_search or memory_store; issues=issue_add, issue_update, issue_query, or issue_delete; respond_only=final text only.";
     /// Shared anti-pattern corrections for provider-local MAAP tool descriptions.
-    const ANTI_EXAMPLES: &str = "Wrong: say(blocked, \"Need shell capability\"). Right: request_capability(capability=\"shell\", reason=\"Need to inspect repository files\"). Wrong: *** Replace File. Right: *** Update File with anchored hunks. Wrong: inferred apply_patch old context. Right: copy old/context lines verbatim from read file evidence.";
+    const ANTI_EXAMPLES: &str = "Wrong: *** Replace File. Right: *** Update File with anchored hunks. Wrong: inferred apply_patch old context. Right: copy old/context lines verbatim from read file evidence.";
 
     /// Returns legacy surface names accepted while parsing provider output.
     pub fn stable_surfaces() -> &'static [Self] {
@@ -88,15 +86,10 @@ impl OpenAiMaapToolSurface {
 
 /// Returns the provider-facing description for the current MAAP action-batch tool.
 pub fn maap_current_action_batch_description(
-    allowed_actions: &AllowedActionSet,
-    available_mcp_tools: &[McpPromptTool],
+    _allowed_actions: &AllowedActionSet,
+    _available_mcp_tools: &[McpPromptTool],
 ) -> String {
-    let mcp_manifest = if allowed_actions.contains(AllowedAction::McpCall) {
-        mcp_tool_manifest_for_description(available_mcp_tools)
-    } else {
-        "No mcp_call action is active on this request surface.".to_string()
-    };
-    maap_action_batch_description_with_mcp_manifest(&mcp_manifest)
+    maap_cache_stable_action_batch_description()
 }
 
 /// Returns the request-independent OpenAI Responses MAAP tool description.
@@ -109,11 +102,10 @@ pub fn maap_cache_stable_action_batch_description() -> String {
 /// Builds shared MAAP tool guidance with the selected MCP routing contract.
 fn maap_action_batch_description_with_mcp_manifest(mcp_manifest: &str) -> String {
     format!(
-        "Submit one validated Mezzanine MAAP action batch for the currently allowed actions. {} {} Use only the action objects in this function schema. The function call is only the transport envelope for the chosen action batch, not a prerequisite task step; do not put required-function-call, current-actions-call, or schema-wrapper compliance language in rationale or thought fields. Choose the smallest action that makes concrete progress: direct inspection or execution beats placeholder setup. If an executable action is available and useful, put that action in this function call now. If the needed action family is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. If missing information, parameters, or identifiers can be safely gathered from current context, action results, local artifacts, web results, MCP results, or another available or requestable action, request or use the relevant capability instead of asking the user. Do not ask for task-local facts such as identifiers, URLs, versions, paths, command forms, config names, repo owner/name, branch, commit, remote URL, issue/PR numbers, or CI targets when they can be safely discovered. Do not use memory_search or memory_store to rehydrate, preserve, or look up facts already present in current action results. Model-selected skill lookup/loading is disabled; request_skills and call_skill are never valid actions. {} {} {}",
+        "Submit one validated Mezzanine MAAP action batch. {} {} The schema is a static catalog of every valid action; runtime configuration determines which catalog actions are enabled and runtime validation rejects disabled actions, unavailable integrations, or invalid arguments. Use only action objects in this function schema and use enabled actions directly without capability negotiation. The function call is only the transport envelope for the chosen action batch, not a prerequisite task step; do not put required-function-call or schema-wrapper compliance language in rationale or thought fields. Choose the smallest action that makes concrete progress: direct inspection or execution beats placeholder setup. If an executable action is useful, put that action in this function call now. Safely gather task-local facts from current context, action results, local artifacts, web results, MCP results, or another enabled action instead of asking the user. Do not ask for identifiers, URLs, versions, paths, command forms, config names, repository metadata, or CI targets when they can be safely discovered. Do not use memory actions to rehydrate facts already present in current action results. Model-selected skill lookup/loading and capability negotiation are not valid actions. {} {}",
         OpenAiMaapToolSurface::FUNCTION_CALL_DISCIPLINE,
         OpenAiMaapToolSurface::ACTION_BATCH_ENVELOPE_RULE,
         mcp_manifest,
-        OpenAiMaapToolSurface::CAPABILITY_MAP,
         OpenAiMaapToolSurface::ANTI_EXAMPLES
     )
 }
@@ -224,8 +216,8 @@ fn mcp_server_purpose_from_description(description: &str) -> Option<String> {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub fn maap_action_batch_schema(
-    allowed_actions: &AllowedActionSet,
-    available_mcp_tools: &[McpPromptTool],
+    _allowed_actions: &AllowedActionSet,
+    _available_mcp_tools: &[McpPromptTool],
 ) -> serde_json::Value {
     serde_json::json!({
         "type": "object",
@@ -243,7 +235,7 @@ pub fn maap_action_batch_schema(
                 "type": "array",
                 "minItems": 1,
                 "description": "At least one visible or executable action from this function tool's currently active MAAP action surface.",
-                "items": maap_action_schema(allowed_actions, available_mcp_tools)
+                "items": maap_action_schema()
             }
         },
         "required": ["rationale", "thought", "actions"],
@@ -256,21 +248,17 @@ pub fn maap_action_batch_schema(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn maap_action_schema(
-    allowed_actions: &AllowedActionSet,
-    available_mcp_tools: &[McpPromptTool],
-) -> serde_json::Value {
+fn maap_action_schema() -> serde_json::Value {
     let mut action_schemas = Vec::new();
-    for action in &allowed_actions.actions {
+    for action in &AllowedActionSet::all_enabled().actions {
         match action {
             AllowedAction::Say => action_schemas.push(maap_say_action_schema()),
-            AllowedAction::RequestCapability => {
-                action_schemas.push(maap_request_capability_action_schema())
-            }
+            AllowedAction::RequestCapability => {}
             AllowedAction::RequestSkills => {
-                action_schemas.push(maap_request_skills_action_schema())
+                // Model-selected skill discovery is not part of the static
+                // provider action surface.
             }
-            AllowedAction::CallSkill => action_schemas.push(maap_call_skill_action_schema()),
+            AllowedAction::CallSkill => {}
             AllowedAction::ShellCommand => action_schemas.push(maap_shell_command_action_schema()),
             AllowedAction::ApplyPatch => action_schemas.push(maap_apply_patch_action_schema()),
             AllowedAction::WebSearch => action_schemas.push(maap_web_search_action_schema()),
@@ -278,9 +266,7 @@ fn maap_action_schema(
             AllowedAction::SendMessage => action_schemas.push(maap_send_message_action_schema()),
             AllowedAction::SpawnAgent => action_schemas.push(maap_spawn_agent_action_schema()),
             AllowedAction::ConfigChange => action_schemas.push(maap_config_change_action_schema(
-                allowed_actions
-                    .config_change_setting_path_description()
-                    .unwrap_or(CONFIG_CHANGE_SETTING_PATH_DESCRIPTION),
+                CONFIG_CHANGE_SETTING_PATH_DESCRIPTION,
             )),
             AllowedAction::MemorySearch => action_schemas.push(maap_memory_search_action_schema()),
             AllowedAction::MemoryStore => action_schemas.push(maap_memory_store_action_schema()),
@@ -288,11 +274,7 @@ fn maap_action_schema(
             AllowedAction::IssueUpdate => action_schemas.push(maap_issue_update_action_schema()),
             AllowedAction::IssueQuery => action_schemas.push(maap_issue_query_action_schema()),
             AllowedAction::IssueDelete => action_schemas.push(maap_issue_delete_action_schema()),
-            AllowedAction::McpCall => action_schemas.extend(
-                sorted_mcp_prompt_tools(available_mcp_tools)
-                    .into_iter()
-                    .filter_map(maap_mcp_call_action_schema_for_tool),
-            ),
+            AllowedAction::McpCall => action_schemas.push(maap_generic_mcp_call_action_schema()),
         }
     }
     if action_schemas.is_empty() {
@@ -411,70 +393,6 @@ fn maap_say_action_schema() -> serde_json::Value {
             ),
         ],
         &["status", "content_type", "text"],
-    )
-}
-
-/// Runs the maap request capability action schema operation for this subsystem.
-fn maap_request_capability_action_schema() -> serde_json::Value {
-    maap_action_object_schema(
-        "request_capability",
-        [
-            (
-                "capability",
-                serde_json::json!({
-                    "type": "string",
-                    "enum": AgentCapability::all_names(),
-                    "description": "Coarse action family to expose through the controller when the current schema lacks actions needed for the task. This is not a user permission request. Use the relevant capability to safely gather missing task-local information before another action can proceed: shell for local workspace or process inspection, network_search for current external facts, network_fetch for explicit URLs, mcp for integration data, subagent for local agent messaging or delegation, config_change for Mezzanine configuration state, memory for durable prior context, issues for local project issue records, and respond_only for final text only. Capability map: shell exposes shell_command and apply_patch for local files, rg/sed/cat, git, builds, tests, and patch edits; network_search exposes web_search; network_fetch exposes fetch_url; mcp exposes mcp_call; subagent exposes send_message and spawn_agent; config_change exposes config_change; memory exposes memory_search and memory_store; issues exposes issue_add, issue_update, issue_query, and issue_delete; respond_only is only for final text."
-                }),
-            ),
-            (
-                "reason",
-                serde_json::json!({
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "Brief task-specific explanation naming the next concrete action or evidence needed. Do not ask the user to grant access here."
-                }),
-            ),
-        ],
-        &["capability", "reason"],
-    )
-}
-
-/// Runs the maap request skills action schema operation for this subsystem.
-fn maap_request_skills_action_schema() -> serde_json::Value {
-    let mut schema = maap_action_object_schema(
-        "request_skills",
-        std::iter::empty::<(&'static str, serde_json::Value)>(),
-        &[],
-    );
-    schema["description"] = serde_json::json!(
-        "Exceptional workflow discovery action. Do not use as a default preflight, merely because skills exist, or before ordinary repository inspection, implementation, validation, or reporting. Incorrect for tasks that name a concrete file, path, symbol, command, failing test, issue backlog, documentation page, or repo-state plan/review target; request or use shell capability instead. Use only when the user asks for skills/workflows, names a skill, or the task clearly needs a specialized reusable workflow that would materially change the next action."
-    );
-    schema
-}
-
-/// Runs the maap call skill action schema operation for this subsystem.
-fn maap_call_skill_action_schema() -> serde_json::Value {
-    maap_action_object_schema(
-        "call_skill",
-        [
-            (
-                "name",
-                serde_json::json!({
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "Skill name returned by request_skills. Use this only after an appropriate skill discovery result identifies a workflow that materially changes the next action; skills add context only and do not grant permissions or capabilities."
-                }),
-            ),
-            (
-                "additional_context",
-                serde_json::json!({
-                    "type": ["string", "null"],
-                    "description": "Optional task-specific context to append under an Additional context heading in the loaded skill context."
-                }),
-            ),
-        ],
-        &["name", "additional_context"],
     )
 }
 
@@ -1151,15 +1069,18 @@ pub fn normalize_openai_strict_schema(mut value: serde_json::Value) -> serde_jso
 mod tests {
     use super::*;
 
-    /// Verifies provider-neutral action-batch construction follows the active
-    /// lower-crate action surface rather than silently exposing product actions.
+    /// Verifies provider-neutral action-batch construction is byte-stable and
+    /// exposes every executable action independently of request-local state.
     #[test]
-    fn action_batch_schema_tracks_allowed_actions() {
-        let schema = maap_action_batch_schema(
+    fn action_batch_schema_is_static_across_allowed_action_inputs() {
+        let narrow = maap_action_batch_schema(
             &AllowedActionSet::from_actions([AllowedAction::Say, AllowedAction::ShellCommand]),
             &[],
         );
-        let variants = schema["properties"]["actions"]["items"]["anyOf"]
+        let complete = maap_action_batch_schema(&AllowedActionSet::all_enabled(), &[]);
+        assert_eq!(narrow, complete);
+
+        let variants = narrow["properties"]["actions"]["items"]["anyOf"]
             .as_array()
             .expect("action variants should be an array");
         let action_types = variants
@@ -1167,7 +1088,26 @@ mod tests {
             .filter_map(|variant| variant["properties"]["type"]["enum"][0].as_str())
             .collect::<Vec<_>>();
 
-        assert_eq!(action_types, ["say", "shell_command"]);
+        assert_eq!(
+            action_types,
+            [
+                "say",
+                "shell_command",
+                "apply_patch",
+                "web_search",
+                "fetch_url",
+                "send_message",
+                "spawn_agent",
+                "config_change",
+                "mcp_call",
+                "memory_search",
+                "memory_store",
+                "issue_add",
+                "issue_update",
+                "issue_query",
+                "issue_delete",
+            ]
+        );
     }
 
     /// Verifies MCP argument schemas are normalized to the strict provider

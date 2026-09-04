@@ -7,12 +7,11 @@
 //! response parsing lives in the sibling `deepseek_response` module.
 
 use crate::{
-    AgentCapability, AllowedAction, AllowedActionSet,
-    MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME, McpPromptTool,
+    AllowedActionSet, MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME, McpPromptTool,
     ModelInteractionKind, ModelMessageRole, ModelRequest, ProviderApiCompatibility,
     ProviderCapabilities, ProviderEndpointError, ProviderEndpointResult,
     ProviderRequestAssemblyError, ProviderRequestAssemblyResult, ProviderTranscriptEvent,
-    maap_action_batch_schema, mcp_tool_manifest_for_description,
+    maap_action_batch_schema,
 };
 
 /// Default DeepSeek Chat Completions API endpoint.
@@ -83,18 +82,7 @@ pub(crate) enum DeepSeekMaapShimKind {
 
 impl DeepSeekMaapShimKind {
     /// Selects the DeepSeek-facing shim surface for the active request.
-    fn for_request(request: &ModelRequest) -> Self {
-        if request.interaction_kind == ModelInteractionKind::CapabilityDecision
-            && request.allowed_actions == AllowedActionSet::capability_decision()
-        {
-            return Self::CapabilityDecision;
-        }
-        if request.allowed_actions == AllowedActionSet::say_only()
-            || request.allowed_actions
-                == AllowedActionSet::for_capability(AgentCapability::RespondOnly)
-        {
-            return Self::RespondOnly;
-        }
+    fn for_request(_request: &ModelRequest) -> Self {
         Self::ActionDispatch
     }
 
@@ -398,107 +386,18 @@ fn deepseek_maap_tool_choice(shim_kind: DeepSeekMaapShimKind) -> serde_json::Val
 /// corrections. Provider-specific behavior such as thinking-mode tool-choice
 /// strategy still lives outside this shared prompt text.
 fn chat_completions_maap_tool_description(
-    request: &ModelRequest,
-    shim_kind: DeepSeekMaapShimKind,
+    _request: &ModelRequest,
+    _shim_kind: DeepSeekMaapShimKind,
 ) -> String {
-    let capability_map = "Capability map: shell=local files, rg/sed/cat, git, builds, tests, shell_command, and apply_patch; network_search=web_search; network_fetch=fetch_url; mcp=mcp_call; subagent=send_message or spawn_agent; config_change=config_change; memory=memory_search or memory_store; issues=issue_add, issue_update, issue_query, or issue_delete; respond_only=final text only.";
-    let anti_examples = "Wrong: say(blocked, \"Need shell capability\"). Right: request_capability(capability=\"shell\", reason=\"Need to inspect repository files\"). Wrong: say(blocked, \"Shell capability is absent\") or say describing what is missing. Right: request_capability for the missing capability immediately. Wrong: *** Replace File. Right: *** Update File with anchored hunks. Wrong: inferred apply_patch old context. Right: copy old/context lines verbatim from read file evidence.";
-    let routing_rule = "CRITICAL ROUTING RULE: When request_capability is in the allowed action types and an executable action type is needed but absent, request_capability is the ONLY correct response. Never emit a say action describing, diagnosing, or lamenting the absence of a capability. request_capability IS how you obtain the missing capability within the same turn; emit it immediately without any preceding say. If missing information, parameters, or identifiers can be safely gathered from current context, local artifacts, web results, MCP results, or another requestable action, request the relevant capability instead of asking the user.";
-    let action_batch_envelope_rule = "The function call is only the transport envelope for the action batch, not a prerequisite task step; do not emit a say-only or progress batch claiming that an initial or schema-valid batch is needed before the executable action, and do not put required-function-call compliance language in rationale or thought fields. If an executable action is available and useful, put that action in this function call now.";
-    match shim_kind {
-        DeepSeekMaapShimKind::CapabilityDecision => format!(
-            "Decide the next Mezzanine capability through this function. Return a function call, not prose. The arguments are translated into one internal MAAP/1 request_capability batch unless no external action capability is needed. {routing_rule} If any local or external action would help, choose request_capability via the capability and reason fields only; a missing shell, network_search, network_fetch, mcp, subagent, config_change, memory, issues, or respond_only action surface is not a blocker. {capability_map} {anti_examples}"
-        ),
-        DeepSeekMaapShimKind::RespondOnly => {
-            "Submit one user-facing response through this function. Return a function call, not prose. The arguments are translated into one internal MAAP/1 say action. Only progress, final, or blocked say text is valid; do not request tools or capabilities from this response-only surface.".to_string()
-        }
-        DeepSeekMaapShimKind::ActionDispatch => format!(
-            "Submit exactly one MAAP/1 action batch through this function. Return a function call, not prose. {action_batch_envelope_rule} Current allowed action types: {}. Use only the action objects in this function schema. {} {} {routing_rule} If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. {capability_map} {anti_examples}",
-            request.allowed_actions.action_type_names().join(","),
-            deepseek_mcp_memory_routing_guidance(request),
-            mcp_tool_manifest_for_description(&request.available_mcp_tools),
-        ),
-    }
-}
-
-/// Builds MCP-specific routing guidance for composite DeepSeek action surfaces.
-fn deepseek_mcp_memory_routing_guidance(request: &ModelRequest) -> &'static str {
-    if !request
-        .allowed_actions
-        .actions
-        .contains(&AllowedAction::McpCall)
-    {
-        return "";
-    }
-    "If this schema includes mcp_call, the MCP server and tool names are visible in the mcp_call variants; use them directly when the user names a matching server or the task matches visible MCP metadata. Do not use memory_search, memory_store, shell preflight, or request_capability for shell, network_search, or network_fetch merely to set up a useful MCP call. If MCP arguments such as identifiers, URLs, paths, repo owner/name, branch, commit, issue/PR number, or CI target can be derived from current action results or safely gathered context, use those results directly; if they require another absent capability, request it. Do not use memory_search to decide whether visible MCP metadata, action descriptions, or current action results are sufficient. Memory is optional support here, not a prerequisite for acting. If a direct path is unclear, use current action results, adjust or broaden a direct integration query, inspect a direct artifact, or report a bounded blocker. If runtime skips or rejects a memory action, continue with current action results, MCP, shell, web, or a bounded report instead of searching memory again unless new evidence creates a specific durable prior-context gap. If memory_search is present, use it only for a concrete durable prior-context gap; use at most one focused search in ordinary turns, never more than two in one user turn, and never emit duplicate memory_search actions in one batch."
+    crate::schema::maap_cache_stable_action_batch_description()
 }
 
 /// Builds the DeepSeek shim argument schema for the selected function.
 fn deepseek_maap_tool_schema(
-    request: &ModelRequest,
-    shim_kind: DeepSeekMaapShimKind,
+    _request: &ModelRequest,
+    _shim_kind: DeepSeekMaapShimKind,
 ) -> serde_json::Value {
-    match shim_kind {
-        DeepSeekMaapShimKind::CapabilityDecision => deepseek_capability_decision_schema(),
-        DeepSeekMaapShimKind::RespondOnly => deepseek_respond_schema(),
-        DeepSeekMaapShimKind::ActionDispatch => deepseek_maap_action_batch_schema(
-            &request.allowed_actions,
-            &request.available_mcp_tools,
-        ),
-    }
-}
-
-/// Builds the compact DeepSeek capability-decision shim schema.
-fn deepseek_capability_decision_schema() -> serde_json::Value {
-    serde_json::json!({
-        "type": "object",
-        "properties": {
-            "rationale": {
-                "type": "string",
-                "description": "Terse reason this capability decision is next."
-            },
-            "capability": {
-                "type": "string",
-                "enum": AgentCapability::all_names(),
-                "description": "Coarse Mezzanine capability to expose next. Use shell for local files, commands, builds, tests, and apply_patch; respond_only only for final text."
-            },
-            "reason": {
-                "type": "string",
-                "description": "Brief task-specific reason naming the next concrete action or evidence needed."
-            }
-        },
-        "required": ["rationale", "capability", "reason"],
-        "additionalProperties": false
-    })
-}
-
-/// Builds the compact DeepSeek respond-only shim schema.
-fn deepseek_respond_schema() -> serde_json::Value {
-    serde_json::json!({
-        "type": "object",
-        "properties": {
-            "rationale": {
-                "type": "string",
-                "description": "Terse reason this visible response is next."
-            },
-            "status": {
-                "type": "string",
-                "enum": ["progress", "final", "blocked"],
-                "description": "progress for nonterminal updates, final when complete, blocked when user or external input is required."
-            },
-            "content_type": {
-                "type": "string",
-                "enum": ["text/plain; charset=utf-8", "text/markdown; charset=utf-8", "text/x-diff; charset=utf-8"],
-                "description": "HTTP-style media type for text."
-            },
-            "text": {
-                "type": "string",
-                "description": "User-visible text. Commands and patch blocks here are display-only."
-            }
-        },
-        "required": ["rationale", "status", "text"],
-        "additionalProperties": false
-    })
+    deepseek_maap_action_batch_schema(&AllowedActionSet::all_enabled(), &[])
 }
 
 /// Maps Mezzanine reasoning effort levels to DeepSeek-supported values.
@@ -675,7 +574,7 @@ mod tests {
         assert_eq!(body["thinking"]["type"], "disabled");
         assert_eq!(
             body["tool_choice"]["function"]["name"],
-            DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME
+            DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME
         );
     }
 

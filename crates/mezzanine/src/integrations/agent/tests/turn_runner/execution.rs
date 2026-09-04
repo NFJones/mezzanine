@@ -186,7 +186,7 @@ fn turn_runner_accepts_multiple_capability_requests_in_one_batch() {
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[1].interaction_kind,
-        mez_agent::ModelInteractionKind::CapabilityContinuation
+        mez_agent::ModelInteractionKind::MaapRepair
     );
     let allowed_actions = requests[1].allowed_actions.action_type_names();
     assert!(allowed_actions.contains(&"shell_command"));
@@ -197,10 +197,10 @@ fn turn_runner_accepts_multiple_capability_requests_in_one_batch() {
         requests[1]
             .messages
             .iter()
-            .find(|message| message.content.contains("[capability decisions]"))
+            .find(|message| message.content.contains("[MAAP repair state]"))
             .unwrap()
             .content
-            .contains("[capability decisions]"),
+            .contains("[MAAP repair state]"),
         "{:?}",
         requests[1].messages
     );
@@ -298,16 +298,16 @@ fn turn_runner_accepts_say_with_capability_request() {
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[1].interaction_kind,
-        mez_agent::ModelInteractionKind::CapabilityContinuation
+        mez_agent::ModelInteractionKind::MaapRepair
     );
     assert!(
         requests[1]
             .messages
             .iter()
-            .find(|message| message.content.contains("[capability granted]"))
+            .find(|message| message.content.contains("[MAAP repair state]"))
             .unwrap()
             .content
-            .contains("[capability granted]"),
+            .contains("[MAAP repair state]"),
         "{:?}",
         requests[1].messages
     );
@@ -414,21 +414,19 @@ fn turn_runner_keeps_skill_actions_suppressed_after_capability_request() {
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[0].allowed_actions.action_type_names(),
-        vec!["say", "request_capability"]
+        mez_agent::AllowedActionSet::all_enabled().action_type_names()
     );
     assert_eq!(
         requests[1].allowed_actions.action_type_names(),
-        vec!["say", "request_capability", "shell_command", "apply_patch"]
+        mez_agent::AllowedActionSet::all_enabled().action_type_names()
     );
     let capability_context = requests[1]
         .messages
         .iter()
-        .find(|message| message.content.contains("[capability granted]"))
-        .expect("missing capability context");
+        .find(|message| message.content.contains("[MAAP repair state]"))
+        .expect("missing MAAP repair context");
     assert!(
-        capability_context
-            .content
-            .contains("allowed_actions=say,request_capability,shell_command,apply_patch"),
+        capability_context.content.contains("request_capability"),
         "{}",
         capability_context.content
     );
@@ -539,6 +537,6 @@ fn turn_runner_plans_codex_style_apply_patch_after_capability_request() {
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[1].interaction_kind,
-        mez_agent::ModelInteractionKind::CapabilityContinuation
+        mez_agent::ModelInteractionKind::MaapRepair
     );
 }

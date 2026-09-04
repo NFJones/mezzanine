@@ -601,13 +601,13 @@ fn openai_responses_request_body_describes_config_change_schema() {
 }
 
 #[test]
-/// Verifies openai responses request body exposes the current executable
-/// action schema through one canonical tool.
+/// Verifies OpenAI Responses exposes the static executable action catalog
+/// through one canonical tool while retaining configured runtime validation.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
-fn openai_responses_request_body_exposes_granted_execution_actions_and_capability_routing() {
+fn openai_responses_request_body_exposes_static_execution_action_catalog() {
     let mut request = assemble_model_request(
         &ModelProfile {
             provider: "openai".to_string(),
@@ -647,8 +647,10 @@ fn openai_responses_request_body_exposes_granted_execution_actions_and_capabilit
     );
     let shell_description = shell_tool["description"].as_str().unwrap();
     assert!(shell_description.contains("Return a function call, not prose"));
-    assert!(shell_description.contains("Use only the action objects in this function schema"));
-    assert!(shell_description.contains("emit request_capability for that capability"));
+    assert!(shell_description.contains("Use only action objects in this function schema"));
+    assert!(
+        shell_description.contains("use enabled actions directly without capability negotiation")
+    );
     assert!(shell_description.contains("Wrong: *** Replace File"));
     assert!(shell_description.contains("copy old/context lines verbatim"));
     assert_eq!(
@@ -665,7 +667,7 @@ fn openai_responses_request_body_exposes_granted_execution_actions_and_capabilit
     assert!(!action_types.contains(&"call_skill".to_string()));
     let removed_user_input_action = ["request", "user_input"].join("_");
     assert!(!action_types.contains(&removed_user_input_action));
-    assert!(action_types.contains(&"request_capability".to_string()));
+    assert!(!action_types.contains(&"request_capability".to_string()));
     assert!(!action_types.contains(&"abort".to_string()));
     assert!(action_types.contains(&"fetch_url".to_string()));
     assert!(action_types.contains(&"web_search".to_string()));
@@ -775,14 +777,12 @@ fn openai_responses_request_body_uses_auto_sizing_schema_for_router() {
 }
 
 #[test]
-/// Verifies uncommon composite capability grants still get provider-enforced
-/// current-schema narrowing instead of falling back to an all-action MAAP
-/// schema.
+/// Verifies request-local allowed-action changes cannot mutate the static
+/// provider schema.
 ///
-/// Multiple request_capability actions can be granted in one continuation. The
-/// canonical function for this request must expose exactly the composite
-/// surface.
-fn openai_responses_request_body_uses_current_schema_for_composite_action_surface() {
+/// Runtime validation still receives the configured request action set, while
+/// the provider tool remains byte-stable and exposes the complete catalog.
+fn openai_responses_request_body_keeps_schema_static_for_narrow_runtime_surface() {
     let mut request = assemble_model_request(
         &ModelProfile {
             provider: "openai".to_string(),
@@ -819,7 +819,7 @@ fn openai_responses_request_body_uses_current_schema_for_composite_action_surfac
     assert_eq!(value["tool_choice"]["name"], "submit_maap_action_batch");
     assert_eq!(value["tools"].as_array().unwrap().len(), 1);
     assert!(action_types.contains(&"say".to_string()));
-    assert!(action_types.contains(&"request_capability".to_string()));
+    assert!(!action_types.contains(&"request_capability".to_string()));
     assert!(action_types.contains(&"shell_command".to_string()));
     assert!(action_types.contains(&"apply_patch".to_string()));
     assert!(action_types.contains(&"fetch_url".to_string()));
@@ -898,7 +898,7 @@ fn openai_responses_request_body_uses_mcp_tool_argument_schemas() {
         .filter(|schema| schema["properties"]["type"]["enum"][0] == "mcp_call")
         .collect::<Vec<_>>();
 
-    assert_eq!(action_schemas.len(), 16);
+    assert_eq!(action_schemas.len(), 15);
     let action_types = openai_tool_action_types(mcp_tool);
     assert!(!action_types.contains(&"request_skills".to_string()));
     assert!(!action_types.contains(&"call_skill".to_string()));

@@ -4601,9 +4601,11 @@ append continuity as the provider-prefix result. A logical stable-only
 projection MAY be retained as a secondary diagnostic but MUST NOT be presented
 as proof of provider cache continuity.
 Static invariant agent behavior SHOULD remain in the front-loaded OpenAI
-`instructions` field. Dynamic model-relevant facts such as compaction notices
-and current OpenAI action eligibility SHOULD be rendered as later
-role-preserving model input rather than mutating the static instructions
+`instructions` field. The selected model name MUST be the only variable agent
+profile value included in that durable instruction prefix; provider, pane,
+agent, capability, and scope state MUST remain outside the agent profile.
+Dynamic model-relevant facts such as compaction notices SHOULD be rendered as
+later role-preserving model input rather than mutating the static instructions
 prefix. Controller-enforced readiness, scheduling, permission, retry, and scope
 state MUST remain controller data unless an actual denial or failure becomes a
 chronological event.
@@ -4738,23 +4740,14 @@ auto-sizing, and macro judging MUST be represented by typed interaction modes.
 Mode-static behavioral rules for exceptional repair, retry, routing, and
 summary requests belong in the mode's system instruction profile; dynamic
 errors and prior output belong in chronological evidence or one bounded factual
-live-state block. Routine capability-continuation guidance MUST instead append
-with the accepted controller decision so capability acquisition does not alter
-the conversation's front-loaded instruction profile. The runtime MUST replace
-older state for the same exceptional mode rather than accumulate retry prompts.
-Context diagnostics MUST label only intentional instruction-profile changes as
-expected cache breaks; capability continuation is not such a break.
-An accepted capability decision MUST become a neutral controller-evidence event
-at its actual occurrence boundary before the assistant action response it
-enabled. It MUST NOT become a late task prelude, direct-user message, or
-request-local reminder. The cumulative allowed-action surface and its
-capability-continuation interaction kind MUST remain actor-owned state for the
-logical turn and MUST survive every provider-worker, action-execution, approval,
-and provider-continuation boundary. A continuation request MUST NOT restart from
-the default capability-decision surface merely because the previous action was
-executed outside the provider worker. Live MCP, memory, and issue availability
-MUST still remove retained actions that are no longer executable before the
-next provider request.
+live-state block. The runtime MUST replace older state for the same exceptional
+mode rather than accumulate retry prompts. Context diagnostics MUST label only
+intentional instruction-profile changes as expected cache breaks. The
+configured allowed-action set MUST remain actor-owned state and MUST survive
+every provider-worker, action-execution, approval, and provider-continuation
+boundary without capability negotiation. Live MCP, memory, and issue
+availability MUST be enforced when an action is validated or executed; it MUST
+NOT mutate the provider-visible static action catalog.
 Settled action evidence MUST use one bounded canonical model-visible projection
 before it first enters cache-eligible chronology. That exact projection,
 including captured shell, patch, MCP, web, fetch, skill, and other action output,
@@ -5984,42 +5977,18 @@ The model response MAY contain user-facing text, shell command proposals, local
 message proposals, subagent spawn proposals, configuration change proposals,
 MCP tool proposals, approval responses, or completion status.
 
-Model interaction for one turn MAY be split into capability-decision,
-action-execution, and repair requests. A capability-decision request without
-runtime-owned default action gates MUST expose only non-executing response
-actions, including `say` and `request_capability`. It MUST NOT expose shell,
-local filesystem, network, subagent, configuration mutation, or model-authored
-abort actions. A capability-decision request MAY also expose default,
-runtime-owned diagnostic or integration actions that are already available
-without additional capability routing, such as `mcp_call` or memory actions,
-and those actions remain subject to the active allowed-action validation before
-execution. Issue-tracker actions are exposed only when the issue capability is
-granted and the local issue tracker is enabled.
-
-`request_capability` is a non-executing control signal from the model to the
-harness. It MUST include a coarse capability name and a task-specific reason.
-The harness MUST decide deterministically whether that capability may be exposed
-for the current turn and MUST feed the decision back to the model as context.
-The model MAY include `say` in the same capability-decision batch as one or more
-`request_capability` actions; the harness MUST treat the batch as one combined
-capability request. If a batch combines `request_capability` with executable,
-blocking, mutation, MCP, subagent, or configuration actions, the harness MUST
-NOT execute any action from that mixed batch. It MUST handle the
-`request_capability` actions as a capability request and feed the model
-corrective context to re-emit any deferred work on the resulting action surface.
-When any requested capability is granted, the next action-execution request
-MUST expose the union of action subsets associated with granted capabilities,
-the non-executing `request_capability` action, and
-visible responses such as `say`. If
-`request_capability` is emitted during action execution, the next
-action-execution request MUST retain the already granted action surface and add
-any newly granted capability action subset. When all requested capabilities are
-denied during the initial capability-decision phase, the next request MUST
-remain a capability-decision request and MUST NOT expose the denied executable
-actions.
-
-The baseline capability names are `respond_only`, `shell`, `network_search`,
-`network_fetch`, `mcp`, `subagent`, `config_change`, and `memory`.
+Ordinary model interaction MUST use a static provider action schema containing
+every valid executable MAAP action. The schema MUST NOT vary with turn phase,
+capability decisions, integration discovery, or request-local availability.
+`agents.enabled_actions` MUST define the static action subset accepted by
+runtime validation and MUST default to every executable action. The model MUST
+use enabled actions directly without first emitting `request_capability`;
+capability and model-selected skill actions MUST NOT appear in the ordinary
+provider schema or configurable action set. Integration availability,
+permission policy, approval, and argument validation remain runtime-owned and
+MUST return explicit action results when a selected enabled action cannot run.
+Repair and internal structured-output interactions MAY constrain response
+semantics without changing the provider-visible action catalog.
 
 The harness MUST parse model action proposals into Mezzanine Agent Action
 Protocol version 1 objects before executing them.
@@ -6225,9 +6194,6 @@ The baseline action types are:
 
 - `say`: Present user-facing text with an HTTP-style content type used for
   presentation decisions.
-- `request_capability`: Ask the harness controller to expose a coarse
-  executable action surface for the current turn without making a user-facing
-  permission request.
 - `request_skills`: Reserved skill-catalog action. While model-selected skill
   actions are disabled, this action MUST NOT be exposed in provider action
   surfaces.
@@ -9134,9 +9100,9 @@ unavailable or omit it from available tools and MUST prohibit attempts to use
 that server for the remainder of the session unless the user explicitly retries
 or re-enables it.
 
-When one or more MCP tools are available for an agent turn, Mezzanine SHOULD
-expose `mcp_call` on the main model's default action surface so the model can
-use those tools without first routing through `request_capability`.
+When `mcp_call` is present in `agents.enabled_actions`, the static provider
+schema MUST expose it on ordinary turns. The live MCP registry MUST still
+reject calls to unavailable, disabled, or blacklisted tools.
 
 The `/list-mcp` command and configuration shell MUST show session-blacklisted MCP
 servers, their failure reason, and whether the server may be retried.
@@ -9385,9 +9351,9 @@ instruct that agent to work until the user's requested goal is handled or
 clearly blocked.
 The prompt MUST make the default execution posture explicit before detailed
 tool mechanics: for code, configuration, documentation, debugging, and design
-tasks, the first useful model response SHOULD normally request or use execution
-capability and inspect the smallest relevant context rather than describe a
-future approach.
+tasks, the first useful model response SHOULD normally use an enabled execution
+action and inspect the smallest relevant context rather than describe a future
+approach.
 
 The prompt MUST contain an early autonomy and execution-loop section before the
 detailed action catalog. Unless the user explicitly asks for a plan, review,
@@ -9397,9 +9363,9 @@ finish. It MUST express the intended loop in concrete operational terms:
 inspect enough context, make the smallest coherent change, validate it, repair
 failures, and report evidence-backed results. It MUST prohibit stopping at a
 plan when an executable action can make progress.
-If a needed action family is absent from the current allowed-action surface,
-the prompt MUST instruct the agent to emit `request_capability` immediately
-when it is allowed, without a user-facing plan or progress explanation.
+The prompt MUST instruct the agent to use enabled actions directly and to
+recover from or report explicit runtime rejection results instead of attempting
+capability negotiation.
 When the user explicitly asks the agent to form a plan from repository state,
 such as an issue backlog, bug report, failing test, design note, or named
 source file, the prompt MUST instruct the agent to inspect the referenced
@@ -9838,8 +9804,8 @@ The prompt MUST instruct the agent to avoid exposing secrets, to use exposed
 MAAP actions for work, and to treat permission denials or blocked approvals as
 explicit action results to recover from or report. It MUST instruct the model
 not to ask the user to grant workspace write access, shell access, network
-access, or other action capability; missing action families MUST be requested
-with `request_capability`.
+access, or other action capability. Runtime-disabled actions and unavailable
+integrations MUST be reported through explicit action results.
 
 The prompt MUST instruct the agent to keep `say` actions and action rationales
 terse but informative. It SHOULD guide ordinary progress updates toward one or

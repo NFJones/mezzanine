@@ -244,6 +244,8 @@ pub(crate) struct RuntimeAgentComponent {
     agent_response_styles: BTreeMap<String, String>,
     /// Configured default provider-routing state.
     agent_routing: bool,
+    /// Static action set permitted for every ordinary provider request.
+    agent_enabled_actions: Box<mez_agent::AllowedActionSet>,
     /// Explicit pane-local provider-routing overrides.
     agent_routing_overrides: BTreeMap<String, bool>,
     /// Configured default shell execution mode for agent actions.
@@ -584,6 +586,7 @@ impl RuntimeAgentComponent {
     ) -> Self {
         Self {
             agent_routing,
+            agent_enabled_actions: Box::new(mez_agent::AllowedActionSet::all_enabled()),
             agent_auto_sizing,
             agent_compaction_raw_retention_percent,
             agent_loop_limit,
@@ -2417,6 +2420,16 @@ impl RuntimeSessionService {
     /// Returns the raw-context percentage retained after compaction.
     pub(crate) fn agent_compaction_raw_retention_percent(&self) -> usize {
         self.agent.agent_compaction_raw_retention_percent
+    }
+
+    /// Returns the configured static provider action set.
+    pub(crate) fn agent_enabled_actions(&self) -> &mez_agent::AllowedActionSet {
+        &self.agent.agent_enabled_actions
+    }
+
+    /// Replaces the static provider action set for subsequent requests.
+    pub(crate) fn set_agent_enabled_actions(&mut self, actions: mez_agent::AllowedActionSet) {
+        *self.agent.agent_enabled_actions = actions;
     }
 
     /// Returns the configured host power policy for active agent turns.

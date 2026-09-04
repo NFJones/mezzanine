@@ -316,6 +316,7 @@ pub fn validate_config_text(
     diagnostics.extend(validate_provider_models_config(format, text));
     diagnostics.extend(validate_group_whitelist_config(format, text));
     diagnostics.extend(validate_env_whitelist_config(format, text));
+    diagnostics.extend(validate_agent_enabled_actions_config(format, text));
 
     for (backend, display_name) in [("bubblewrap", "Bubblewrap"), ("seatbelt", "Seatbelt")] {
         let git_user_name = values.get(&format!("permissions.{backend}.git_user_name"));
@@ -549,6 +550,68 @@ pub fn validate_config_text(
     diagnostics.sort_by(|left, right| left.path.cmp(&right.path));
     diagnostics.dedup();
     ConfigValidation::from_diagnostics(diagnostics)
+}
+
+/// Validates the static provider action allowlist and rejects controller-only actions.
+fn validate_agent_enabled_actions_config(
+    format: ConfigFormat,
+    text: &str,
+) -> Vec<ConfigDiagnostic> {
+    let Ok(root) = parse_config_json_value(format, text) else {
+        return Vec::new();
+    };
+    let Some(value) = root
+        .get("agents")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|agents| agents.get("enabled_actions"))
+    else {
+        return Vec::new();
+    };
+    let Some(values) = value.as_array() else {
+        return vec![ConfigDiagnostic {
+            path: "agents.enabled_actions".to_string(),
+            message: "agents.enabled_actions must be a non-empty string array".to_string(),
+        }];
+    };
+    if values.is_empty() {
+        return vec![ConfigDiagnostic {
+            path: "agents.enabled_actions".to_string(),
+            message: "agents.enabled_actions must contain at least one action".to_string(),
+        }];
+    }
+    let configurable = mez_agent::AllowedActionSet::all_enabled();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut diagnostics = Vec::new();
+    for value in values {
+        let Some(name) = value.as_str() else {
+            diagnostics.push(ConfigDiagnostic {
+                path: "agents.enabled_actions".to_string(),
+                message: "agents.enabled_actions must contain only action names".to_string(),
+            });
+            continue;
+        };
+        let Some(action) = mez_agent::AllowedAction::from_action_type(name) else {
+            diagnostics.push(ConfigDiagnostic {
+                path: "agents.enabled_actions".to_string(),
+                message: format!("agents.enabled_actions contains unknown action `{name}`"),
+            });
+            continue;
+        };
+        if !configurable.contains(action) {
+            diagnostics.push(ConfigDiagnostic {
+                path: "agents.enabled_actions".to_string(),
+                message: format!(
+                    "agents.enabled_actions cannot enable controller-only action `{name}`"
+                ),
+            });
+        } else if !seen.insert(action) {
+            diagnostics.push(ConfigDiagnostic {
+                path: "agents.enabled_actions".to_string(),
+                message: format!("agents.enabled_actions contains duplicate action `{name}`"),
+            });
+        }
+    }
+    diagnostics
 }
 
 /// Validates structured external-editor argv candidates without interpreting

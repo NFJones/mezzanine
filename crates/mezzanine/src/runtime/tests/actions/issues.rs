@@ -147,7 +147,7 @@ fn runtime_issue_query_continuation_preserves_capability_state_and_chronology() 
     assert_eq!(first_execution.terminal_state, AgentTurnState::Running);
     assert_eq!(
         first_execution.request.interaction_kind,
-        mez_agent::ModelInteractionKind::CapabilityContinuation
+        mez_agent::ModelInteractionKind::ActionExecution
     );
     assert!(
         first_execution
@@ -200,7 +200,7 @@ fn runtime_issue_query_continuation_preserves_capability_state_and_chronology() 
     let request = second_provider.last_request.borrow().clone().unwrap();
     assert_eq!(
         request.interaction_kind,
-        mez_agent::ModelInteractionKind::CapabilityContinuation
+        mez_agent::ModelInteractionKind::ActionExecution
     );
     assert!(
         request
@@ -218,37 +218,6 @@ fn runtime_issue_query_continuation_preserves_capability_state_and_chronology() 
                     .contains("query the open issues and then fix them")
         })
         .expect("the original user instruction should remain in chronology");
-    let capability_index = request
-        .messages
-        .iter()
-        .position(|message| {
-            message.source == ContextSourceKind::CommittedEvidence
-                && message
-                    .content
-                    .starts_with("[controller capability decision]")
-        })
-        .expect("the issues capability decision should be durable evidence");
-    let capability_message = &request.messages[capability_index];
-    assert_eq!(
-        capability_message.placement,
-        mez_agent::ContextPlacement::ConversationAppend
-    );
-    assert_eq!(
-        capability_message.role,
-        mez_agent::ModelMessageRole::Context
-    );
-    assert_eq!(
-        request
-            .messages
-            .iter()
-            .filter(|message| {
-                message
-                    .content
-                    .starts_with("[controller capability decision]")
-            })
-            .count(),
-        1
-    );
     let assistant_index = request
         .messages
         .iter()
@@ -278,9 +247,7 @@ fn runtime_issue_query_continuation_preserves_capability_state_and_chronology() 
         })
         .expect("the settled issue-query result should remain in chronology");
     assert!(
-        user_index < capability_index
-            && capability_index < assistant_index
-            && assistant_index < result_index,
+        user_index < assistant_index && assistant_index < result_index,
         "provider continuation messages were not causally ordered: {:?}",
         request
             .messages

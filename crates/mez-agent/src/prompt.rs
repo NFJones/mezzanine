@@ -78,40 +78,20 @@ pub const AGENT_PROMPT_PROFILE_NAME: &str = "default";
 /// Current version of the default agent prompt profile.
 pub const AGENT_PROMPT_PROFILE_VERSION: u32 = 32;
 
-/// Provider-neutral state used to assemble one agent system prompt.
+/// Model identity used to assemble one agent system prompt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentPromptProfile {
-    /// Stable agent identifier included in the prompt.
-    pub agent_id: String,
-    /// Stable pane identifier included in the prompt.
-    pub pane_id: String,
-    /// Optional provider kind used for provider-specific guidance.
-    pub provider: Option<String>,
-    /// Optional subagent cooperation mode.
-    pub cooperation_mode: Option<String>,
-    /// Declared read scopes for a subagent.
-    pub read_scopes: Vec<String>,
-    /// Declared write scopes for a subagent.
-    pub write_scopes: Vec<String>,
+    /// Selected provider model name. This is the only variable profile value
+    /// included in the durable system-prompt prefix.
+    pub model: String,
 }
 
 impl AgentPromptProfile {
-    /// Creates the default prompt profile for one agent and pane.
-    pub fn default_for(agent_id: impl Into<String>, pane_id: impl Into<String>) -> Self {
+    /// Creates a prompt profile for the selected model.
+    pub fn for_model(model: impl Into<String>) -> Self {
         Self {
-            agent_id: agent_id.into(),
-            pane_id: pane_id.into(),
-            provider: None,
-            cooperation_mode: None,
-            read_scopes: Vec::new(),
-            write_scopes: Vec::new(),
+            model: model.into(),
         }
-    }
-
-    /// Sets the provider kind used for provider-specific prompt guidance.
-    pub fn with_provider(mut self, provider: impl Into<String>) -> Self {
-        self.provider = Some(provider.into());
-        self
     }
 }
 
@@ -134,11 +114,14 @@ pub fn assemble_agent_system_prompt(
     repository_instruction_blocks: &[String],
     assets: &impl AgentPromptAssetSource,
 ) -> AgentPromptResult<String> {
-    validate_agent_prompt_required("agent id", &profile.agent_id)?;
-    validate_agent_prompt_required("pane id", &profile.pane_id)?;
+    validate_agent_prompt_required("model", &profile.model)?;
 
     let mut prompt = String::new();
-    push_section(&mut prompt, "1. Identity", &identity_prompt(assets)?);
+    push_section(
+        &mut prompt,
+        "1. Identity",
+        &identity_prompt(profile, assets)?,
+    );
     push_section(
         &mut prompt,
         "2. Autonomy",
@@ -174,7 +157,7 @@ pub fn assemble_agent_system_prompt(
     push_section(
         &mut prompt,
         "10. Subagents",
-        &subagent_prompt(profile, assets)?,
+        assets.system_fragment("subagents.md")?,
     );
     push_section(
         &mut prompt,
@@ -192,27 +175,23 @@ pub fn assemble_agent_system_prompt(
         assets.system_fragment("format.md")?,
     );
     push_section(&mut prompt, "14. MCP", assets.system_fragment("mcp.md")?);
-    let provider_fragment = match profile.provider.as_deref() {
-        Some("deepseek") => Some(("15. DeepSeek Provider", "deepseek.md")),
-        Some("anthropic") => Some(("15. Anthropic Provider", "anthropic.md")),
-        _ => None,
-    };
-    if let Some((title, path)) = provider_fragment {
-        push_section(&mut prompt, title, assets.provider_fragment(path)?);
-    }
     append_repository_instructions(&mut prompt, repository_instruction_blocks);
     Ok(prompt)
 }
 
 /// Builds the templated identity section.
-fn identity_prompt(assets: &impl AgentPromptAssetSource) -> AgentPromptResult<String> {
+fn identity_prompt(
+    profile: &AgentPromptProfile,
+    assets: &impl AgentPromptAssetSource,
+) -> AgentPromptResult<String> {
     Ok(assets
         .system_fragment("identity.md")?
         .replace("{profile_name}", AGENT_PROMPT_PROFILE_NAME)
         .replace(
             "{profile_version}",
             &AGENT_PROMPT_PROFILE_VERSION.to_string(),
-        ))
+        )
+        .replace("{model}", &profile.model))
 }
 
 /// Appends active repository contents after all invariant prompt policy.
@@ -228,22 +207,6 @@ fn append_repository_instructions(prompt: &mut String, repository_instruction_bl
     }
 }
 
-/// Builds the subagent section with optional scope details.
-fn subagent_prompt(
-    profile: &AgentPromptProfile,
-    assets: &impl AgentPromptAssetSource,
-) -> AgentPromptResult<String> {
-    let mut lines = vec![assets.system_fragment("subagents.md")?.to_string()];
-    if let Some(mode) = &profile.cooperation_mode {
-        lines.push(format!(
-            "Subagent scope: cooperation_mode={mode}; Read scopes: {}; Write scopes: {}.",
-            list_or_none(&profile.read_scopes),
-            list_or_none(&profile.write_scopes)
-        ));
-    }
-    Ok(lines.join(" "))
-}
-
 /// Appends one numbered section with stable blank-line separation.
 fn push_section(prompt: &mut String, title: &str, body: &str) {
     if !prompt.is_empty() {
@@ -252,15 +215,6 @@ fn push_section(prompt: &mut String, title: &str, body: &str) {
     prompt.push_str(title);
     prompt.push('\n');
     prompt.push_str(body);
-}
-
-/// Formats a scope list without exposing an empty field.
-fn list_or_none(values: &[String]) -> String {
-    if values.is_empty() {
-        "none".to_string()
-    } else {
-        values.join(", ")
-    }
 }
 
 #[cfg(test)]
@@ -277,7 +231,7 @@ mod tests {
     impl AgentPromptAssetSource for TestPromptAssets {
         fn system_fragment<'a>(&'a self, path: &str) -> AgentPromptResult<&'a str> {
             Ok(match path {
-                "identity.md" => "profile {profile_name} version {profile_version}",
+                "identity.md" => "profile {profile_name} version {profile_version} model {model}",
                 "repository_instructions.md" => "repository contract",
                 "subagents.md" => "subagent contract",
                 "mcp.md" => "mcp contract",
@@ -303,7 +257,7 @@ mod tests {
     #[test]
     fn prompt_assembly_injects_assets_and_repository_guidance() {
         let prompt = assemble_agent_system_prompt(
-            &AgentPromptProfile::default_for("agent-1", "%1"),
+            &AgentPromptProfile::for_model("test-model"),
             &[
                 "first repository rule".to_string(),
                 "second rule".to_string(),
@@ -312,7 +266,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(prompt.starts_with("1. Identity\nprofile default version 32"));
+        assert!(prompt.starts_with("1. Identity\nprofile default version 32 model test-model"));
         assert!(prompt.contains("3. Repository Instructions\nrepository contract"));
         assert!(prompt.contains("Embedded active repository instruction contents:"));
         assert!(prompt.contains("first repository rule\n\nsecond rule"));
@@ -324,53 +278,45 @@ mod tests {
         assert!(!prompt.contains("15. "));
     }
 
-    /// Verifies provider and subagent profile fields select only the requested
-    /// guidance and format empty and populated scopes deterministically.
+    /// Verifies model identity is the only variable prompt-profile field and
+    /// provider or subagent state cannot alter the durable prompt shape.
     #[test]
-    fn prompt_assembly_selects_provider_and_subagent_scope() {
-        let mut profile =
-            AgentPromptProfile::default_for("agent-1", "%1").with_provider("anthropic");
-        profile.cooperation_mode = Some("isolated".to_string());
-        profile.read_scopes = vec!["src".to_string()];
+    fn prompt_assembly_varies_only_by_model() {
+        let first = assemble_agent_system_prompt(
+            &AgentPromptProfile::for_model("model-a"),
+            &[],
+            &TestPromptAssets,
+        )
+        .unwrap();
+        let second = assemble_agent_system_prompt(
+            &AgentPromptProfile::for_model("model-b"),
+            &[],
+            &TestPromptAssets,
+        )
+        .unwrap();
 
-        let prompt = assemble_agent_system_prompt(&profile, &[], &TestPromptAssets).unwrap();
-
-        assert!(prompt.contains("10. Subagents\nsubagent contract Subagent scope:"));
-        assert!(prompt.contains("cooperation_mode=isolated"));
-        assert!(prompt.contains("Read scopes: src; Write scopes: none."));
-        assert!(prompt.contains("15. Anthropic Provider\nanthropic contract"));
-        assert!(!prompt.contains("deepseek contract"));
+        assert_eq!(first.replace("model-a", "model-b"), second);
+        assert!(first.contains("10. Subagents\nsubagent contract"));
+        assert!(!first.contains("Subagent scope:"));
+        assert!(!first.contains("anthropic contract"));
+        assert!(!first.contains("deepseek contract"));
     }
 
     #[test]
-    /// Verifies a default profile contains only dependency-neutral prompt state.
-    fn prompt_profile_defaults_are_dependency_neutral() {
-        let profile = AgentPromptProfile::default_for("agent-1", "%1");
+    /// Verifies the prompt profile contains only the selected model identity.
+    fn prompt_profile_contains_only_model_identity() {
+        let profile = AgentPromptProfile::for_model("model-a");
 
-        assert_eq!(profile.agent_id, "agent-1");
-        assert_eq!(profile.pane_id, "%1");
-        assert_eq!(profile.provider, None);
-        assert!(profile.read_scopes.is_empty());
-        assert!(profile.write_scopes.is_empty());
-    }
-
-    #[test]
-    /// Verifies builder methods preserve identity while replacing provider context.
-    fn prompt_profile_builders_preserve_identity() {
-        let profile = AgentPromptProfile::default_for("agent-1", "%1").with_provider("anthropic");
-
-        assert_eq!(profile.agent_id, "agent-1");
-        assert_eq!(profile.pane_id, "%1");
-        assert_eq!(profile.provider.as_deref(), Some("anthropic"));
+        assert_eq!(profile.model, "model-a");
     }
 
     #[test]
     /// Verifies required prompt identity fields reject whitespace while prompt
     /// asset failures retain their distinct invalid-state category.
     fn prompt_errors_preserve_validation_and_asset_categories() {
-        let error = validate_agent_prompt_required("agent id", " \t ").unwrap_err();
+        let error = validate_agent_prompt_required("model", " \t ").unwrap_err();
         assert_eq!(error.kind(), AgentPromptErrorKind::InvalidArgs);
-        assert_eq!(error.message(), "agent id must not be empty");
+        assert_eq!(error.message(), "model must not be empty");
 
         let error = AgentPromptError::invalid_state("prompt asset is missing");
         assert_eq!(error.kind(), AgentPromptErrorKind::InvalidState);

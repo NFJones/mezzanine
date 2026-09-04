@@ -520,10 +520,7 @@ fn model_request_keeps_skill_actions_disabled_after_skill_catalog_result() {
     )
     .unwrap();
 
-    assert_eq!(
-        request.allowed_actions.action_type_names(),
-        vec!["say", "request_capability"]
-    );
+    assert_eq!(request.allowed_actions, AllowedActionSet::all_enabled());
 }
 
 #[test]
@@ -854,8 +851,5 @@ fn model_request_suppresses_skill_actions_when_skill_context_loaded() {
     )
     .unwrap();
 
-    assert_eq!(
-        request.allowed_actions.action_type_names(),
-        vec!["say", "request_capability"]
-    );
+    assert_eq!(request.allowed_actions, AllowedActionSet::all_enabled());
 }

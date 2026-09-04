@@ -12,18 +12,18 @@ use super::{
     discover_project_root, fs, json_escape, runtime_active_turn_sleep_inhibition_from_config,
     runtime_agent_action_failure_retry_limit_from_config, runtime_agent_auto_sizing_from_config,
     runtime_agent_compaction_raw_retention_percent_from_config,
-    runtime_agent_custom_system_prompt_from_config, runtime_agent_loop_limit_from_config,
-    runtime_agent_personality_profiles_from_config, runtime_agent_root_routing_policy_from_config,
-    runtime_agent_routing_from_config, runtime_agent_turn_timeout_ms_from_config,
-    runtime_always_exposed_mcp_servers_from_config, runtime_audit_config_present,
-    runtime_audit_log_from_config, runtime_configured_permissions_from_config,
-    runtime_default_agent_personality_from_config, runtime_default_models_for_provider,
-    runtime_effective_config_value, runtime_history_limit_from_config,
-    runtime_history_rotate_lines_from_config, runtime_hook_definitions_from_config,
-    runtime_host_clipboard_from_config, runtime_max_concurrent_agents_from_config,
-    runtime_max_queued_agent_bytes_from_config, runtime_max_queued_agent_turns_from_config,
-    runtime_max_root_subagents_from_config, runtime_max_subagent_depth_from_config,
-    runtime_max_subagent_panes_per_window_from_config,
+    runtime_agent_custom_system_prompt_from_config, runtime_agent_enabled_actions_from_config,
+    runtime_agent_loop_limit_from_config, runtime_agent_personality_profiles_from_config,
+    runtime_agent_root_routing_policy_from_config, runtime_agent_routing_from_config,
+    runtime_agent_turn_timeout_ms_from_config, runtime_always_exposed_mcp_servers_from_config,
+    runtime_audit_config_present, runtime_audit_log_from_config,
+    runtime_configured_permissions_from_config, runtime_default_agent_personality_from_config,
+    runtime_default_models_for_provider, runtime_effective_config_value,
+    runtime_history_limit_from_config, runtime_history_rotate_lines_from_config,
+    runtime_hook_definitions_from_config, runtime_host_clipboard_from_config,
+    runtime_max_concurrent_agents_from_config, runtime_max_queued_agent_bytes_from_config,
+    runtime_max_queued_agent_turns_from_config, runtime_max_root_subagents_from_config,
+    runtime_max_subagent_depth_from_config, runtime_max_subagent_panes_per_window_from_config,
     runtime_max_subagents_per_subagent_from_config, runtime_mcp_registry_from_config,
     runtime_preset_registry_from_config, runtime_provider_auth_refresh_leeway_seconds_from_config,
     runtime_provider_error_retry_policy_from_config, runtime_provider_registry_from_config,
@@ -453,6 +453,7 @@ impl RuntimeSessionService {
             self.set_agent_compaction_raw_retention_percent(
                 runtime_agent_compaction_raw_retention_percent_from_config(&structured)?,
             );
+            self.set_agent_enabled_actions(runtime_agent_enabled_actions_from_config(&structured)?);
             self.set_agent_default_routing(runtime_agent_routing_from_config(&structured)?);
             self.set_agent_default_shell_mode(runtime_shell_mode_from_config(&structured)?);
             self.set_agent_action_failure_retry_limit(

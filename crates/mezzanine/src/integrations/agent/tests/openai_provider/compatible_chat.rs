@@ -393,9 +393,7 @@ fn openai_compatible_chat_completions_provider_describes_callable_mcp_tools() {
         .as_str()
         .unwrap();
     assert!(
-        description.contains(
-            "Available MCP tools callable with mcp_call: gitlab/get_issue: Read one GitLab issue."
-        ),
+        description.contains("The schema is a static catalog of every valid action"),
         "{description}"
     );
     assert!(

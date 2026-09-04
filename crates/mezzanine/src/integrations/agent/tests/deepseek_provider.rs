@@ -82,7 +82,7 @@ fn deepseek_chat_completions_request_body_disables_thinking_when_profile_toggle_
 /// surface instead of choosing the narrow capability selector from
 /// `interaction_kind` alone, or the model cannot directly call available MCP
 /// tools and may drift into no-op memory actions.
-fn deepseek_chat_completions_request_body_dispatches_default_mcp_actions_on_initial_surface() {
+fn deepseek_chat_completions_request_body_dispatches_static_actions_on_initial_surface() {
     let mut request = assemble_model_request(
         &ModelProfile {
             provider: "deepseek".to_string(),
@@ -103,6 +103,7 @@ fn deepseek_chat_completions_request_body_dispatches_default_mcp_actions_on_init
         .unwrap(),
     )
     .unwrap();
+    request.thinking_enabled = Some(false);
     request.allowed_actions.extend([
         mez_agent::AllowedAction::McpCall,
         mez_agent::AllowedAction::MemorySearch,
@@ -141,48 +142,19 @@ fn deepseek_chat_completions_request_body_dispatches_default_mcp_actions_on_init
     assert!(action_types.contains(&"mcp_call".to_string()));
     assert!(action_types.contains(&"memory_search".to_string()));
     assert!(action_types.contains(&"memory_store".to_string()));
-    assert!(action_types.contains(&"request_capability".to_string()));
+    assert!(!action_types.contains(&"request_capability".to_string()));
     assert!(
-        description.contains("If this schema includes mcp_call"),
+        description.contains("The schema is a static catalog of every valid action"),
         "{description}"
     );
     assert!(
-        description.contains("Do not use memory_search to decide whether visible MCP metadata"),
+        description.contains("The schema includes a generic mcp_call action"),
         "{description}"
     );
     assert!(
-        description.contains("the task matches visible MCP metadata"),
+        description.contains("runtime validation rejects unavailable tools and invalid arguments"),
         "{description}"
     );
-    assert!(
-        !description.contains("routing_match=available_mcp"),
-        "{description}"
-    );
-    assert!(
-        description.contains("merely to set up a useful MCP call"),
-        "{description}"
-    );
-    assert!(
-        description.contains("current action results"),
-        "{description}"
-    );
-    assert!(
-        description.contains("adjust or broaden a direct integration query"),
-        "{description}"
-    );
-    assert!(
-        description.contains("report a bounded blocker"),
-        "{description}"
-    );
-    assert!(
-        description.contains("never more than two in one user turn"),
-        "{description}"
-    );
-    assert!(
-        description.contains("safely gathered context"),
-        "{description}"
-    );
-    assert!(description.contains("request it"), "{description}");
     assert!(
         !description.contains("routing_match=available_mcp"),
         "{description}"
@@ -197,12 +169,6 @@ fn deepseek_chat_completions_request_body_dispatches_default_mcp_actions_on_init
     );
     assert!(
         description.contains("do not emit a say-only or progress batch claiming"),
-        "{description}"
-    );
-    assert!(
-        description.contains(
-            "Available MCP tools callable with mcp_call: gitlab/get_issue: Read one GitLab issue."
-        ),
         "{description}"
     );
     assert!(
@@ -274,8 +240,8 @@ fn deepseek_chat_completions_request_body_enables_thinking_without_reasoning_eff
 }
 
 #[test]
-/// Verifies DeepSeek capability-decision requests disable thinking before
-/// forcing the MAAP tool call instead of allowing an ordinary prose response.
+/// Verifies DeepSeek initial requests use the static action-dispatch schema
+/// without forcing a capability-selection tool.
 ///
 /// The DeepSeek Chat Completions API defaults to `tool_choice=auto` whenever a
 /// tool list is present. Mezzanine's first provider turn still requires a
@@ -284,8 +250,7 @@ fn deepseek_chat_completions_request_body_enables_thinking_without_reasoning_eff
 /// forced `tool_choice` in thinking mode, so this regression protects both the
 /// explicit non-thinking toggle and the narrow say/request-capability schema
 /// used by the initial turn.
-fn deepseek_chat_completions_request_body_forces_maap_tool_without_thinking_for_capability_decision()
- {
+fn deepseek_chat_completions_request_body_uses_static_schema_for_initial_action_request() {
     let request = assemble_model_request(
         &ModelProfile {
             provider: "deepseek".to_string(),
@@ -321,44 +286,28 @@ fn deepseek_chat_completions_request_body_forces_maap_tool_without_thinking_for_
     assert_eq!(
         value["thinking"],
         serde_json::json!({
-            "type": "disabled"
+            "type": "enabled"
         })
     );
-    assert!(value.get("reasoning_effort").is_none());
-    assert_eq!(
-        value["tool_choice"],
-        serde_json::json!({
-            "type": "function",
-            "function": {
-                "name": DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME
-            }
-        })
-    );
+    assert_eq!(value["reasoning_effort"], "max");
+    assert!(value.get("tool_choice").is_none());
     assert_eq!(value["tools"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        tool["function"]["name"],
+        DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME
+    );
     let description = tool["function"]["description"].as_str().unwrap();
-    assert!(description.contains("Decide the next Mezzanine capability"));
+    assert!(description.contains("The schema is a static catalog of every valid action"));
     assert!(description.contains("Return a function call, not prose"));
-    assert!(description.contains("Capability map: shell=local files"));
-    assert!(description.contains("network_search=web_search"));
-    assert!(description.contains("network_fetch=fetch_url"));
-    assert!(description.contains("mcp=mcp_call"));
-    assert!(description.contains("memory=memory_search or memory_store"));
-    assert!(description.contains("issues=issue_add, issue_update, issue_query, or issue_delete"));
-    assert!(description.contains("a missing shell, network_search, network_fetch, mcp, subagent, config_change, memory, issues, or respond_only action surface is not a blocker"));
-    assert!(!description.contains("missing shell, patch, web, MCP, messaging"));
-    assert!(description.contains("Wrong: say(blocked"));
-    assert!(description.contains("Right: request_capability(capability=\"shell\""));
+    assert!(description.contains("use enabled actions directly without capability negotiation"));
     assert!(description.contains("Wrong: *** Replace File"));
     assert!(description.contains("Right: *** Update File with anchored hunks"));
     assert!(description.contains("Wrong: inferred apply_patch old context"));
     assert!(description.contains("copy old/context lines verbatim from read file evidence"));
     let parameters = &tool["function"]["parameters"];
-    assert!(parameters["properties"].get("capability").is_some());
-    assert!(parameters["properties"].get("reason").is_some());
-    assert!(parameters["properties"].get("actions").is_none());
-    let parameters_text = serde_json::to_string(parameters).unwrap();
-    assert!(!parameters_text.contains("minLength"));
-    assert!(!parameters_text.contains("minItems"));
+    assert!(parameters["properties"].get("capability").is_none());
+    assert!(parameters["properties"].get("reason").is_none());
+    assert!(parameters["properties"].get("actions").is_some());
 }
 
 #[test]
@@ -426,23 +375,18 @@ fn deepseek_chat_completions_request_body_forces_maap_tool_without_thinking_for_
         })
     );
     assert!(action_types.contains(&"say".to_string()));
-    assert!(action_types.contains(&"request_capability".to_string()));
+    assert!(!action_types.contains(&"request_capability".to_string()));
     assert!(action_types.contains(&"send_message".to_string()));
     assert!(action_types.contains(&"spawn_agent".to_string()));
+    assert!(description.contains("The schema is a static catalog of every valid action"));
     assert!(
-        description.contains(
-            "Current allowed action types: say,request_capability,send_message,spawn_agent"
-        )
-    );
-    assert!(
-        description.contains("request_capability for that capability instead of say(blocked)"),
+        description.contains("use enabled actions directly without capability negotiation"),
         "{description}"
     );
     assert!(
-        description.contains("Capability map: shell=local files"),
+        description.contains("Wrong: *** Replace File"),
         "{description}"
     );
-    assert!(description.contains("Wrong: say(blocked"), "{description}");
 }
 
 #[test]
@@ -639,9 +583,9 @@ fn deepseek_provider_accepts_openai_compatible_provider_identity() {
         .as_str()
         .unwrap();
     assert!(description.contains("Return a function call, not prose"));
-    assert!(description.contains("Capability map: shell=local files"));
-    assert!(description.contains("Wrong: say(blocked"));
-    assert!(description.contains("Right: request_capability(capability=\"shell\""));
+    assert!(description.contains("The schema is a static catalog of every valid action"));
+    assert!(description.contains("use enabled actions directly without capability negotiation"));
+    assert!(description.contains("Wrong: *** Replace File"));
     let batch = response.action_batch.unwrap();
     assert_eq!(
         batch.rationale,
@@ -741,7 +685,7 @@ fn deepseek_provider_rejects_missing_maap_after_strict_retry() {
     assert_eq!(second_body["thinking"]["type"], "disabled");
     assert_eq!(
         second_body["tool_choice"]["function"]["name"],
-        DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME
+        DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME
     );
     assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
     assert_eq!(error.provider_raw_text(), Some("Still no tool call."));
@@ -880,7 +824,7 @@ async fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_p
         assert_eq!(second_body["thinking"]["type"], "disabled");
         assert_eq!(
             second_body["tool_choice"]["function"]["name"],
-            DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME
+            DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME
         );
     }
     assert_eq!(response.usage.input_tokens, 22);

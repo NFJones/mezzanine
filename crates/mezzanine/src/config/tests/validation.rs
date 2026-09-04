@@ -752,6 +752,40 @@ fn rejects_invalid_agent_shell_mode_values() {
     }
 }
 
+/// Verifies the static action allowlist accepts executable actions and rejects
+/// empty, duplicate, unknown, non-string, and controller-only entries.
+#[test]
+fn validates_agent_enabled_action_names() {
+    let valid = validate_config_text(
+        ConfigFormat::Toml,
+        "[agents]\nenabled_actions = [\"say\", \"shell_command\", \"apply_patch\"]\n",
+        ConfigScope::Primary,
+    );
+    assert!(valid.valid, "{:?}", valid.diagnostics);
+
+    for value in [
+        "[]",
+        "[\"say\", \"say\"]",
+        "[\"unknown\"]",
+        "[\"request_capability\"]",
+        "[\"say\", 3]",
+        "\"say\"",
+    ] {
+        let validation = validate_config_text(
+            ConfigFormat::Toml,
+            &format!("[agents]\nenabled_actions = {value}\n"),
+            ConfigScope::Primary,
+        );
+        assert!(!validation.valid, "accepted enabled_actions {value}");
+        assert!(
+            validation
+                .diagnostics
+                .iter()
+                .any(|diagnostic| { diagnostic.path == "agents.enabled_actions" })
+        );
+    }
+}
+
 /// Verifies schema 20 rejects the removed implementation-pressure setting.
 ///
 /// Primary migration deletes the schema-19 key before validation. A document
