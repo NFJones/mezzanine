@@ -72,13 +72,23 @@ fn nested_attach_rejects_parent_session_before_connecting() {
     loop {
         match listener.accept() {
             Ok((mut stream, _)) => {
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(1)))
-                    .unwrap();
-                assert_eq!(stream.read(&mut [0; 1]).unwrap(), 0);
+                stream.set_nonblocking(true).unwrap();
+                match stream.read(&mut [0; 1]) {
+                    Ok(0) => {}
+                    Ok(bytes_read) => {
+                        panic!("nested attach sent {bytes_read} protocol byte(s) to its parent")
+                    }
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::ConnectionReset
+                        ) => {}
+                    Err(error) => panic!("failed to verify closed probe connection: {error}"),
+                }
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
-            Err(error) => panic!("{error}"),
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionAborted => {}
+            Err(error) => panic!("failed to drain parent listener: {error}"),
         }
     }
     let _ = fs::remove_dir_all(home);
