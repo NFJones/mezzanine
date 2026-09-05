@@ -2786,6 +2786,9 @@ mod tests {
 
     /// Verifies an explicitly configured direct port is reused across a clean
     /// endpoint restart while the protected endpoint identity remains stable.
+    /// Socket release can trail endpoint shutdown while background tasks drop
+    /// their references, so restart must succeed on the same port within a
+    /// bounded deadline rather than on the first scheduler turn.
     #[tokio::test(flavor = "current_thread")]
     async fn iroh_endpoint_rebinds_stable_configured_port() {
         let reservation = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
@@ -2812,13 +2815,34 @@ mod tests {
                 .iter()
                 .all(|addr| addr.port() == bind_port)
         );
-        first.close().await;
+        assert!(
+            first.close().await,
+            "first endpoint shutdown should complete"
+        );
         drop(first);
 
-        let second = bind_runtime_iroh_endpoint(policy, secret_key)
+        // Closing drains QUIC, but background endpoint references can retain
+        // the UDP sockets until their tasks finish dropping. Yield between
+        // attempts without changing the configured port or protected identity.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        let second = loop {
+            let result = tokio::time::timeout_at(
+                deadline,
+                bind_runtime_iroh_endpoint(policy.clone(), secret_key.clone()),
+            )
             .await
-            .unwrap()
-            .unwrap();
+            .expect("endpoint restart should finish within the socket-release deadline");
+            match result {
+                Ok(endpoint) => break endpoint.expect("Iroh transport should remain enabled"),
+                Err(error) => {
+                    assert!(
+                        tokio::time::Instant::now() < deadline,
+                        "endpoint should rebind configured port {bind_port}: {error}"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            }
+        };
         assert_eq!(second.endpoint().id(), endpoint_id);
         assert!(
             second
@@ -2827,7 +2851,10 @@ mod tests {
                 .iter()
                 .all(|addr| addr.port() == bind_port)
         );
-        second.close().await;
+        assert!(
+            second.close().await,
+            "second endpoint shutdown should complete"
+        );
     }
 
     /// Verifies endpoint loss while the daemon remains running is surfaced as
