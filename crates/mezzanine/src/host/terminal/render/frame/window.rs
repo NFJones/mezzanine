@@ -8,10 +8,9 @@ use super::super::{
     sanitize_frame_text,
 };
 use super::{
-    WindowFramePillboxTarget, compact_pane_working_directory,
-    pane_agent_status_field_from_frame_field, pane_frame_fill_char, pane_frame_row_layout,
-    pillbox_segment_local_columns, window_action_pillbox_entries, window_frame_action_entry,
-    window_frame_field_value, window_frame_pillbox_entries_from_context,
+    WindowFramePillboxTarget, compact_pane_working_directory, pane_frame_fill_char,
+    pane_frame_row_layout, pillbox_segment_local_columns, window_action_pillbox_entries,
+    window_frame_action_entry, window_frame_field_value, window_frame_pillbox_entries_from_context,
     window_frame_pillbox_segments, window_frame_pillbox_text_from_entries,
     window_pillbox_rendition,
 };
@@ -430,7 +429,9 @@ pub fn pane_frame_agent_status_pillbox_cells(
                 .right_status_segments
                 .into_iter()
                 .flat_map(move |segment| {
-                    let Some(field) = pane_agent_status_field_from_frame_field(segment.key) else {
+                    let crate::host::terminal::PaneStatusAction::Builtin(field) =
+                        segment.key.action
+                    else {
                         return Vec::new();
                     };
                     pillbox_segment_local_columns(segment.start, segment.width, width)
@@ -443,6 +444,7 @@ pub fn pane_frame_agent_status_pillbox_cells(
                                 row,
                                 pane_index: pane_plan.source_index,
                                 field,
+                                identity: segment.key.clone(),
                             })
                         })
                         .collect::<Vec<_>>()

@@ -1407,6 +1407,7 @@ impl RuntimeSessionService {
                 .settings
                 .terminal_completion_attention_flashing,
             window_status: self.runtime_window_status_context(),
+            pane_status: self.presentation.settings.pane_status.clone(),
             ..TerminalFrameContext::default()
         };
         let active_window_id = self

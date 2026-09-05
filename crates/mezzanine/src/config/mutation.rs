@@ -19,6 +19,31 @@ const MUTABLE_MCP_EXTERNAL_CAPABILITY_KEYS: &[&str] = &[
     "accesses_credentials_outside_shell",
 ];
 
+const MUTABLE_WINDOW_STATUS_PILL_KEYS: &[&str] = &[
+    "label",
+    "command",
+    "interval_seconds",
+    "initial",
+    "timeout_ms",
+    "empty_behavior",
+    "error_behavior",
+    "max_output_chars",
+    "style",
+];
+
+const MUTABLE_PANE_STATUS_PILL_KEYS: &[&str] = &[
+    "field",
+    "label",
+    "format",
+    "compact_format",
+    "when",
+    "min_width",
+    "max_width",
+    "priority",
+    "style",
+    "on_click",
+];
+
 // TOML, YAML, and JSON mutation logic.
 
 /// Runs the parse mutation path operation for this subsystem.
@@ -56,7 +81,26 @@ pub(super) fn reject_unsupported_mutation_path(segments: &[String]) -> Result<()
         && segments.get(3).is_some_and(|segment| {
             MUTABLE_MCP_EXTERNAL_CAPABILITY_KEYS.contains(&segment.as_str())
         });
-    if segments.len() > 3 && !allow_nested_mcp_external_capability {
+    let allow_named_status_pill_leaf = segments.len() == 5
+        && segments.first().map(String::as_str) == Some("frames")
+        && segments.get(2).map(String::as_str) == Some("pills")
+        && segments.get(3).is_some_and(|name| !name.is_empty())
+        && match segments.get(1).map(String::as_str) {
+            Some("window") => segments
+                .get(4)
+                .is_some_and(|key| MUTABLE_WINDOW_STATUS_PILL_KEYS.contains(&key.as_str())),
+            Some("pane") => segments
+                .get(4)
+                .is_some_and(|key| MUTABLE_PANE_STATUS_PILL_KEYS.contains(&key.as_str())),
+            _ => false,
+        };
+    if segments.len() > 3 && !allow_nested_mcp_external_capability && !allow_named_status_pill_leaf
+    {
+        if segments.first().map(String::as_str) == Some("frames") {
+            return Err(MezError::config(
+                "configuration mutation path is not supported for pane or window status pills",
+            ));
+        }
         return Err(MezError::config(
             "configuration mutation supports only scalar paths up to three segments except supported MCP capability paths",
         ));

@@ -304,7 +304,7 @@ pub(in crate::host::terminal::render) fn write_pane_frame_layout_cells(
     pane: &mez_mux::layout::Pane,
     frame_context: &TerminalFrameContext,
     template: &str,
-) -> PaneFrameRowLayout<&'static str> {
+) -> PaneFrameRowLayout<crate::host::terminal::PaneStatusSegmentIdentity> {
     let layout = pane_frame_row_layout(
         window,
         pane,

@@ -8,9 +8,9 @@
 
 use super::{
     AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS, GraphicRendition, MezError,
-    MousePaneAgentStatusCell, MouseWindowActionFrameCell, PaneAgentStatusField, Result,
-    TerminalClientLoopConfig, TerminalFrameContext, TerminalPaneFrameContext, TerminalScreen,
-    TerminalStyleSpan, TerminalStyledLine, WindowFrameAction,
+    MousePaneAgentStatusCell, MouseWindowActionFrameCell, Result, TerminalClientLoopConfig,
+    TerminalFrameContext, TerminalPaneFrameContext, TerminalScreen, TerminalStyleSpan,
+    TerminalStyledLine, WindowFrameAction,
 };
 #[cfg(test)]
 use super::{BTreeMap, PaneRenderInput};
@@ -25,16 +25,14 @@ use mez_mux::presentation::{
 use mez_mux::presentation::{WindowPresentationOptions, plan_window_presentation};
 use mez_mux::render::line_slice;
 use mez_mux::render::{
-    FramePillboxEntry, FramePillboxSegment, FrameStatusSegment, FrameStatusValue,
-    PositionedFrameStatus, RenderedFrameStatus, TerminalRenderCell, compose_frame_pillbox_row,
-    compose_frame_text_row, compose_pane_frame_row,
-    display_overlay_targets as agent_display_overlay_targets, fit_styled_width, fitted_text_width,
-    frame_pillbox_segment_columns, frame_style_rendition,
+    FramePillboxEntry, FramePillboxSegment, FrameStatusSegment, PositionedFrameStatus,
+    RenderedFrameStatus, TerminalRenderCell, compose_frame_pillbox_row, compose_frame_text_row,
+    compose_pane_frame_status_row, display_overlay_targets as agent_display_overlay_targets,
+    fit_styled_width, fitted_text_width, frame_pillbox_segment_columns, frame_style_rendition,
     overlay_display_lines as overlay_agent_display_lines, overlay_fixed_column_style_spans,
     position_frame_status, render_frame_pillbox_segments, render_frame_pillbox_text,
-    render_frame_status, sanitize_frame_text, style_span_overlaps_columns,
-    style_span_segments_outside_range, styled_frame_line_with_rendition,
-    write_text_cells_with_width as write_frame_text_cells,
+    sanitize_frame_text, style_span_overlaps_columns, style_span_segments_outside_range,
+    styled_frame_line_with_rendition, write_text_cells_with_width as write_frame_text_cells,
 };
 #[cfg(test)]
 use mez_mux::render::{fit_width, normalize_overlay_style_spans};
@@ -128,20 +126,6 @@ pub const DEFAULT_PANE_FRAME_VISIBLE_FIELDS: &[&str] = &[
     "policy.mode",
 ];
 
-/// Pane frame fields that can occupy the right side of the standard pane bar.
-/// Scrollback position takes over this slot while copy-mode is away from bottom.
-pub const DEFAULT_PANE_FRAME_RIGHT_ALIGNED: &[&str] = &[
-    "history.position",
-    "agent.model",
-    "agent.reasoning",
-    "agent.thinking",
-    "agent.planning",
-    "agent.routing",
-    "agent.latency",
-    "policy.mode",
-    "agent.context_usage",
-    "agent.status",
-];
 /// Defines the DEFAULT WINDOW FRAME TEMPLATE const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module

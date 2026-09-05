@@ -550,7 +550,7 @@ pub(crate) use config::{
     RuntimeIrohTransportPolicy, RuntimeIrohX11Policy,
     external_editor_argument_contains_ascii_control, runtime_audit_log_from_config,
     runtime_external_editor_config_from_config, runtime_iroh_transport_policy_from_config,
-    runtime_validate_key_binding_collisions,
+    runtime_pane_status_config_from_config, runtime_validate_key_binding_collisions,
 };
 pub use config::{runtime_effective_config_value, runtime_ui_theme_from_config};
 

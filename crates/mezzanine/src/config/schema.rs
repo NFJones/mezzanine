@@ -87,6 +87,20 @@ pub fn config_change_setting_path_annotations() -> Vec<ConfigChangePathAnnotatio
             operations: CONFIG_CHANGE_OPERATION_NAMES,
         },
         ConfigChangePathAnnotation {
+            pattern: "frames.window.pills.<name>.<key>",
+            purpose: "Adjust one supported command-backed window status-pill setting.",
+            value_type: "string or integer",
+            format: "`<name>` is an ASCII identifier; `<key>` is one of label, command, interval_seconds, initial, timeout_ms, empty_behavior, error_behavior, max_output_chars, or style.",
+            operations: CONFIG_CHANGE_OPERATION_NAMES,
+        },
+        ConfigChangePathAnnotation {
+            pattern: "frames.pane.pills.<name>.<key>",
+            purpose: "Adjust one supported named built-in pane status-pill setting.",
+            value_type: "string, integer, or string array",
+            format: "`<name>` is an ASCII identifier; `<key>` is one of field, label, format, compact_format, when, min_width, max_width, priority, style, or on_click.",
+            operations: CONFIG_CHANGE_OPERATION_NAMES,
+        },
+        ConfigChangePathAnnotation {
             pattern: "theme.active",
             purpose: "Switch the active built-in or configured UI theme.",
             value_type: "string",
@@ -267,12 +281,13 @@ pub fn config_change_option_reference_markdown() -> String {
 /// Builds provider-facing path guidance for model-authored live config changes.
 ///
 /// The returned text intentionally mirrors the conservative live mutation
-/// planner: dotted ASCII paths, scalar targets only, and at most three path
-/// segments. Dynamic `<name>` segments are caller-selected identifiers such as a
-/// model profile name, provider name, MCP server name, hook name, or theme alias.
+/// planner: dotted ASCII paths and scalar targets, with narrowly whitelisted
+/// deeper status-pill and MCP capability leaves. Dynamic `<name>` segments are
+/// caller-selected identifiers such as a model profile name, provider name,
+/// status pill, MCP server, hook, or theme alias.
 pub fn config_change_setting_path_description() -> String {
     format!(
-        "Dotted live Mezzanine config path. Use only ASCII path segments [A-Za-z0-9_-]. The live mutation planner supports scalar paths up to three segments, plus mcp_servers.<name>.external_capability.<key> where key is one of [purpose, usage_instructions, mutates_filesystem_outside_shell, executes_processes_outside_shell, accesses_credentials_outside_shell]; inspect current config with shell_command before changing dynamic names. Supported patterns: version (integer); terminal.<key> where key is one of [{}]; keys.<key> where key is one of [{}]; frames.window.<key> where key is one of [{}]; frames.pane.<key> where key is one of [{}]; theme.active, theme.aliases.<alias>, theme.colors.<slot>; history.<key> where key is one of [{}]; memory.<key> where key is one of [{}]; issues.<key> where key is one of [{}]; agents.<key> where key is one of [{}], plus agents.auto_sizing.<key> where key is one of [{}]; model_profiles.<name>.<key> where key is one of [{}] except provider_options; providers.<name>.<key> where key is one of [{}] except options; subagents.<name>.<key> where key is one of [{}] except shell_env; personalities.<name>.<key> where key is one of [{}]; permissions.<key> where key is one of [{}] except user-only sandbox authority and command rule arrays; mcp_servers.<name>.<key> where key is one of [{}] except env/http_headers/tool_approvals/external_capability; mcp_servers.<name>.external_capability.<key> where key is one of [purpose, usage_instructions, mutates_filesystem_outside_shell, executes_processes_outside_shell, accesses_credentials_outside_shell]; auth.<key> where key is one of [{}]; instructions.<key> where key is one of [{}]; hooks.<name>.<key> where key is one of [{}] except env/match/matches; audit.<key> where key is one of [{}]. Runtime validation still rejects secrets, unsafe shell override paths, unsupported enum values, invalid colors, container targets, user-only sandbox authority, and array-entry mutation paths. Schema annotations: {}",
+        "Dotted live Mezzanine config path. Use only ASCII path segments [A-Za-z0-9_-]. The live mutation planner supports scalar paths up to three segments, whitelisted frames.window.pills.<name>.<key> and frames.pane.pills.<name>.<key> leaves, plus mcp_servers.<name>.external_capability.<key> where key is one of [purpose, usage_instructions, mutates_filesystem_outside_shell, executes_processes_outside_shell, accesses_credentials_outside_shell]; inspect current config with shell_command before changing dynamic names. Supported patterns: version (integer); terminal.<key> where key is one of [{}]; keys.<key> where key is one of [{}]; frames.window.<key> where key is one of [{}]; frames.pane.<key> where key is one of [{}]; theme.active, theme.aliases.<alias>, theme.colors.<slot>; history.<key> where key is one of [{}]; memory.<key> where key is one of [{}]; issues.<key> where key is one of [{}]; agents.<key> where key is one of [{}], plus agents.auto_sizing.<key> where key is one of [{}]; model_profiles.<name>.<key> where key is one of [{}] except provider_options; providers.<name>.<key> where key is one of [{}] except options; subagents.<name>.<key> where key is one of [{}] except shell_env; personalities.<name>.<key> where key is one of [{}]; permissions.<key> where key is one of [{}] except user-only sandbox authority and command rule arrays; mcp_servers.<name>.<key> where key is one of [{}] except env/http_headers/tool_approvals/external_capability; mcp_servers.<name>.external_capability.<key> where key is one of [purpose, usage_instructions, mutates_filesystem_outside_shell, executes_processes_outside_shell, accesses_credentials_outside_shell]; auth.<key> where key is one of [{}]; instructions.<key> where key is one of [{}]; hooks.<name>.<key> where key is one of [{}] except env/match/matches; audit.<key> where key is one of [{}]. Runtime validation still rejects secrets, unsafe shell override paths, unsupported enum values, invalid colors, container targets, user-only sandbox authority, and array-entry mutation paths. Schema annotations: {}",
         TERMINAL_KEYS.join(", "),
         KEY_BINDING_KEYS.join(", "),
         WINDOW_FRAME_KEYS.join(", "),
@@ -629,8 +644,16 @@ pub(super) const WINDOW_FRAME_KEYS: &[&str] = &[
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-pub(super) const PANE_FRAME_KEYS: &[&str] =
-    &["enabled", "position", "template", "style", "visible_fields"];
+pub(super) const PANE_FRAME_KEYS: &[&str] = &[
+    "enabled",
+    "position",
+    "template",
+    "left_status",
+    "right_status",
+    "pills",
+    "style",
+    "visible_fields",
+];
 
 /// Defines the THEME KEYS const used by this subsystem.
 ///

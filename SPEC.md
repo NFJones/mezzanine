@@ -1051,7 +1051,12 @@ status pills and command-button pills.
 The default pane frame template, when pane framing is enabled, MUST display at
 least `pane.index` plus `pane.title` or `pane.id`; the built-in default MUST
 contain raw semantic text in the form `<index> <title>` without an idle agent
-marker. The renderer MUST add exactly one styled padding cell to each side of
+marker. The default title-adjacent status template MUST be
+`#{pane.progress}`. The default right-status template MUST place `pane.pwd`
+before agent fields and `history.position` last. Built-in field conditions MUST
+hide `pane.pwd` and `history.position` outside scrollback and hide agent fields
+outside agent view or when unavailable. The renderer MUST add exactly one
+styled padding cell to each side of
 every non-empty pane-title, window-title, group-title, action, and textual
 status pill. Literal spaces in status templates MUST remain structural
 separators between pills rather than serving as pill padding.
@@ -3813,6 +3818,32 @@ state. Command stdout MUST be trimmed to the first line before display and
 bounded by the configured maximum output length. Empty output behavior MUST be
 one of `hide`, `show_empty`, or `keep_previous`; error behavior MUST be one of
 `hide`, `show_error`, or `keep_previous`.
+
+`frames.pane` MUST additionally support `left_status`, `right_status`, and
+`pills`. The two status templates MUST independently select and order padded
+pane-scoped status items; an explicitly empty template MUST render no items and
+MUST NOT trigger implicit progress, history, or agent-status insertion.
+`frames.pane.pills` MUST be a map keyed by ASCII pill name. Every definition
+MUST name one built-in `field` and MAY set `label`, `format`,
+`compact_format`, `when`, `min_width`, `max_width`, `priority`, `style`, and
+`on_click`. Supported conditions MUST be the finite AND-combined vocabulary
+`agent-view`, `shell-view`, `focused`, `unfocused`, `busy`, `idle`,
+`supported`, `nonempty`, and `scrollback`; contradictory conditions MUST be
+rejected. `on_click` MUST be limited to `builtin` or `none`. Unsupported
+command providers, working-directory execution, custom terminal or agent
+actions, overflow, presets, and diagnostic settings MUST be rejected until
+their owning contracts are implemented. Each rendered occurrence MUST retain
+stable pane, rail, ordinal, source-field, style, action, configuration, and
+pane-context identity. Rendering, styling, and hit testing MUST consume that
+same semantic occurrence rather than infer actions from display text.
+
+`frames.pane.visible_fields` MUST remain only the fallback used to construct
+the pane title template when `frames.pane.template` is empty. It MUST NOT
+filter or reorder either pane status rail. Pane status rail changes MUST apply
+atomically on live configuration reload; invalid replacements MUST retain the
+previous complete working snapshot. Pane status rails MUST NOT allocate an
+additional row or change pane PTY dimensions, and zen mode MUST suppress their
+rendering and hit targets with the rest of the pane frame.
 
 `#{iroh.status}` MUST be a non-clickable, client-local window-status field. It
 MUST render padded plain text indicating the quality (`good`, `degraded`,
@@ -11211,7 +11242,9 @@ The pill MUST display the fixed label `plan`, use the reasoning color when
 enabled and the idle-status color when disabled, and be omitted for shell-only
 panes. Activating the pill MUST apply the same pane-scoped mutation as
 `/plan toggle`, including running-turn safety, without opening a dropdown.
-`frames.pane.visible_fields` MUST remain the visibility and ordering control.
+The default `frames.pane.right_status` template MUST retain this ordering.
+Custom pane status templates and named built-in definitions MAY reorder or
+omit the control while preserving its typed pane-scoped action.
 
 When `agents.routing` or the pane-local `/routing` preference is
 enabled, Mezzanine MUST run an auto-sizing decision before the normal provider

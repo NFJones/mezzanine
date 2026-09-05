@@ -806,7 +806,7 @@ mod tests {
         })
         .unwrap();
 
-        let server_future = server.serve(std::future::pending());
+        let server_future = Box::pin(server.serve(std::future::pending()));
         let client_future = async {
             let status = request_host(&env, "host/get", serde_json::json!({}))
                 .await

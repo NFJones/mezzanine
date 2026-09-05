@@ -1518,3 +1518,55 @@ fn persistent_host_policy_is_validated_and_primary_only() {
         );
     }
 }
+
+/// Verifies pane status rails and named built-in pills accept only the typed
+/// foundation vocabulary, including finite conditions and bounded metadata.
+#[test]
+fn validates_typed_pane_status_configuration() {
+    let valid = validate_config_text(
+        ConfigFormat::Toml,
+        &format!(
+            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[frames.pane]\nleft_status = \"#{{pane.progress}}\"\nright_status = \"#{{pill.model}} #{{history.position}}\"\n[frames.pane.pills.model]\nfield = \"agent.model\"\nlabel = \"Model\"\nformat = \"short\"\ncompact_format = \"short\"\nwhen = [\"agent-view\", \"supported\", \"nonempty\"]\nmin_width = 4\nmax_width = 24\npriority = 80\nstyle = \"agent-model\"\non_click = \"builtin\"\n"
+        ),
+        ConfigScope::Primary,
+    );
+    assert!(valid.valid, "{:?}", valid.diagnostics);
+
+    for (body, expected) in [
+        (
+            "field = \"agent.model\"\ncommand = \"git status\"",
+            "command",
+        ),
+        (
+            "field = \"agent.model\"\nwhen = [\"agent-view\", \"shell-view\"]",
+            "contradictory",
+        ),
+        ("field = \"agent.model\"\nformat = \"percent\"", "format"),
+        (
+            "field = \"agent.model\"\nmin_width = 12\nmax_width = 4",
+            "min_width",
+        ),
+        ("field = \"agent.model\"\npriority = 101", "priority"),
+        (
+            "field = \"agent.model\"\non_click = \"terminal:new-window\"",
+            "on_click",
+        ),
+    ] {
+        let validation = validate_config_text(
+            ConfigFormat::Toml,
+            &format!(
+                "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[frames.pane]\nright_status = \"#{{pill.item}}\"\n[frames.pane.pills.item]\n{body}\n"
+            ),
+            ConfigScope::Primary,
+        );
+        assert!(
+            !validation.valid
+                && validation
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.message.contains(expected)),
+            "{body}: {:?}",
+            validation.diagnostics
+        );
+    }
+}

@@ -80,6 +80,8 @@ pub(crate) struct RuntimePresentationSettings {
     pane_frames_enabled: bool,
     /// Pane frame template rendered around each visible pane.
     pane_frame_template: String,
+    /// Typed title-adjacent and right-aligned pane status configuration.
+    pane_status: crate::host::terminal::PaneStatusConfig,
     /// Placement of pane frame rows.
     pane_frame_position: TerminalFramePosition,
     /// Visual treatment of pane frame rows.
@@ -136,6 +138,7 @@ impl Default for RuntimePresentationSettings {
                 .collect(),
             pane_frames_enabled: true,
             pane_frame_template: crate::host::terminal::DEFAULT_PANE_FRAME_TEMPLATE.to_string(),
+            pane_status: crate::host::terminal::PaneStatusConfig::default(),
             pane_frame_position: TerminalFramePosition::Top,
             pane_frame_style: TerminalFrameStyle::Default,
             pane_frame_visible_fields: crate::host::terminal::DEFAULT_PANE_FRAME_VISIBLE_FIELDS
@@ -206,6 +209,7 @@ impl RuntimePresentationSettings {
             || self.window_frame_visible_fields != replacement.window_frame_visible_fields
             || self.pane_frames_enabled != replacement.pane_frames_enabled
             || self.pane_frame_template != replacement.pane_frame_template
+            || self.pane_status != replacement.pane_status
             || self.pane_frame_position != replacement.pane_frame_position
             || self.pane_frame_style != replacement.pane_frame_style
             || self.pane_frame_visible_fields != replacement.pane_frame_visible_fields
@@ -245,6 +249,7 @@ impl RuntimePresentationSettings {
                 crate::runtime::runtime_window_frame_visible_fields_from_config(root)?,
             pane_frames_enabled: crate::runtime::runtime_pane_frames_enabled_from_config(root)?,
             pane_frame_template: crate::runtime::runtime_pane_frame_template_from_config(root)?,
+            pane_status: crate::runtime::runtime_pane_status_config_from_config(root)?,
             pane_frame_position: crate::runtime::runtime_pane_frame_position_from_config(root)?,
             pane_frame_style: crate::runtime::runtime_pane_frame_style_from_config(root)?,
             pane_frame_visible_fields:
@@ -2181,6 +2186,12 @@ impl RuntimeSessionService {
     /// Returns the configured pane frame template.
     pub(crate) fn pane_frame_template(&self) -> &str {
         &self.presentation.settings.pane_frame_template
+    }
+
+    /// Returns the atomically resolved pane-status configuration.
+    #[cfg(test)]
+    pub(crate) fn pane_status_config(&self) -> &crate::host::terminal::PaneStatusConfig {
+        &self.presentation.settings.pane_status
     }
 
     /// Returns the configured pane frame placement.

@@ -3,13 +3,17 @@
 #[cfg(test)]
 use super::super::fit_width;
 use super::super::{
-    AgentPromptBlock, DEFAULT_PANE_FRAME_RIGHT_ALIGNED, DEFAULT_PANE_FRAME_TEMPLATE,
-    FrameStatusSegment, FrameStatusValue, RenderedFrameStatus, TerminalFrameContext,
-    TerminalFramePosition, TerminalFrameRenderOptions, TerminalPaneFrameContext,
-    TerminalStyledLine, UiTheme, Window, compose_pane_frame_row, fit_styled_width,
-    fitted_text_width, overlay_agent_display_lines, render_agent_prompt_block, render_frame_status,
+    AgentPromptBlock, DEFAULT_PANE_FRAME_TEMPLATE, FrameStatusSegment, RenderedFrameStatus,
+    TerminalFrameContext, TerminalFramePosition, TerminalFrameRenderOptions,
+    TerminalPaneFrameContext, TerminalStyledLine, UiTheme, Window, compose_pane_frame_status_row,
+    fit_styled_width, fitted_text_width, overlay_agent_display_lines, render_agent_prompt_block,
+    sanitize_frame_text,
 };
 use super::{pane_frame_field_value, styled_pane_frame_line};
+use crate::host::terminal::{
+    PaneStatusCondition, PaneStatusField, PaneStatusFormat, PaneStatusOccurrenceId,
+    PaneStatusPillDefinition, PaneStatusRail, PaneStatusSegmentIdentity,
+};
 use mez_mux::render::PaneFrameRowLayout;
 
 /// Runs the render styled pane lines operation for this subsystem.
@@ -225,25 +229,13 @@ pub(in crate::host::terminal::render) fn render_pane_frame_text(
     pane_frame_row_layout(window, pane, frame_context, template, width, ' ').text
 }
 
-/// Carries Pane Frame Right Status Segment state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
+/// Semantic segment shared by pane-status rendering, styling, and hit testing.
 pub(in crate::host::terminal::render) type PaneFrameRightStatusSegment =
-    FrameStatusSegment<&'static str>;
+    FrameStatusSegment<PaneStatusSegmentIdentity>;
 
-/// Carries Pane Frame Right Value state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-pub(in crate::host::terminal::render) type PaneFrameRightValue = FrameStatusValue<&'static str>;
-
-/// Carries Rendered Pane Frame Right Status state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
+/// Rendered semantic pane-status rail.
 pub(in crate::host::terminal::render) type RenderedPaneFrameRightStatus =
-    RenderedFrameStatus<&'static str>;
+    RenderedFrameStatus<PaneStatusSegmentIdentity>;
 
 /// Runs the pane frame row layout operation for this subsystem.
 ///
@@ -257,39 +249,17 @@ pub(in crate::host::terminal::render) fn pane_frame_row_layout(
     template: &str,
     width: usize,
     fill: char,
-) -> PaneFrameRowLayout<&'static str> {
-    let mut text = render_pane_frame_template(window, pane, frame_context, template);
-    let title_width = fitted_text_width(&text, usize::MAX).saturating_add(2);
-    let progress_segment = if template == DEFAULT_PANE_FRAME_TEMPLATE {
-        frame_context
-            .panes
-            .get(pane.id.as_str())
-            .and_then(|context| context.terminal_progress_percent)
-            .map(|percent| {
-                let display = format!("{percent}%");
-                let padded_display = mez_mux::render::render_frame_pill_text(&display);
-                let start = title_width.saturating_add(1);
-                text.push_str("   ");
-                text.push_str(&display);
-                FrameStatusSegment {
-                    start,
-                    width: fitted_text_width(&padded_display, usize::MAX),
-                    key: "pane.progress",
-                    value: percent.to_string(),
-                }
-            })
-    } else {
-        None
-    };
-    let right_status = pane_frame_right_status(window, pane, frame_context, template);
-    let mut layout = compose_pane_frame_row(&text, right_status, width, fill);
-    if let Some(segment) = progress_segment
-        && segment.start.saturating_add(segment.width) <= layout.left_text_width
-    {
-        layout.left_text_width = title_width;
-        layout.right_status_segments.push(segment);
-    }
-    layout
+) -> PaneFrameRowLayout<PaneStatusSegmentIdentity> {
+    let title = render_pane_frame_template(window, pane, frame_context, template);
+    let left_status = pane_frame_status_rail(window, pane, frame_context, PaneStatusRail::Left);
+    let right_status = pane_frame_status_rail(window, pane, frame_context, PaneStatusRail::Right);
+    compose_pane_frame_status_row(
+        &title,
+        left_status,
+        (!right_status.text.is_empty()).then_some(right_status),
+        width,
+        fill,
+    )
 }
 
 /// Returns the background fill glyph for a pane frame template.
@@ -301,82 +271,248 @@ pub(in crate::host::terminal::render) fn pane_frame_fill_char(template: &str) ->
     }
 }
 
-/// Builds the pane-frame right status, appending scrollback position after
-/// pane-local agent state.
-pub(in crate::host::terminal::render) fn pane_frame_right_status(
+/// Resolves one configured pane-status rail into typed semantic segments.
+fn pane_frame_status_rail(
     window: &Window,
     pane: &mez_mux::layout::Pane,
     frame_context: &TerminalFrameContext,
-    template: &str,
-) -> Option<RenderedPaneFrameRightStatus> {
-    let history_field = "history.position";
-    let history_value = pane_frame_field_value(window, pane, frame_context, history_field);
-    let mut right_fields = pane_frame_right_aligned_values(window, pane, frame_context, template);
-    if !history_value.is_empty() && !template.contains("#{history.position}") {
-        right_fields.push(PaneFrameRightValue {
-            key: history_field,
-            value: history_value.clone(),
-            display: history_value,
-        });
-    }
-
-    (!right_fields.is_empty()).then(|| render_pane_frame_right_status(&right_fields))
-}
-
-/// Runs the pane frame right aligned values operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(in crate::host::terminal::render) fn pane_frame_right_aligned_values(
-    window: &Window,
-    pane: &mez_mux::layout::Pane,
-    frame_context: &TerminalFrameContext,
-    template: &str,
-) -> Vec<PaneFrameRightValue> {
-    let agent_mode = pane_agent_shell_visible(frame_context, pane.id.as_str());
-    DEFAULT_PANE_FRAME_RIGHT_ALIGNED
-        .iter()
-        .filter(|field| **field != "history.position")
-        .filter(|field| agent_mode || (!field.starts_with("agent.") && **field != "policy.mode"))
-        .filter(|field| !template.contains(&format!("#{{{field}}}")))
-        .filter_map(|field| {
-            let display_value = pane_frame_field_value(window, pane, frame_context, field);
-            if display_value.is_empty() {
-                None
-            } else {
-                let value = if *field == "pane.status" {
-                    frame_context
-                        .panes
-                        .get(pane.id.as_str())
-                        .and_then(|context| context.pane_status_state.clone())
-                        .unwrap_or_else(|| display_value.clone())
-                } else {
-                    display_value.clone()
-                };
-                let segment_value = pane_frame_right_aligned_segment_value(field, &display_value);
-                if segment_value.is_empty() {
-                    return None;
-                }
-                Some(PaneFrameRightValue {
-                    key: field,
-                    display: pane_frame_right_aligned_display_value(field, segment_value),
-                    value,
-                })
-            }
-        })
-        .collect()
-}
-
-/// Runs the render pane frame right status operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(in crate::host::terminal::render) fn render_pane_frame_right_status(
-    values: &[PaneFrameRightValue],
+    rail: PaneStatusRail,
 ) -> RenderedPaneFrameRightStatus {
-    render_frame_status(values)
+    let status_config = &frame_context.pane_status;
+    let template = match rail {
+        PaneStatusRail::Left => &status_config.left_status,
+        PaneStatusRail::Right => &status_config.right_status,
+    };
+    let config_generation = status_config.generation();
+    let mut text = String::new();
+    let mut segments = Vec::new();
+    let mut remaining = template.as_str();
+    let mut ordinal = 0u16;
+    while let Some(start) = remaining.find("#{") {
+        let literal = &remaining[..start];
+        let after_start = &remaining[start + 2..];
+        let Some(end) = after_start.find('}') else {
+            break;
+        };
+        let marker = &after_start[..end];
+        let component = resolve_pane_status_component(
+            window,
+            pane,
+            frame_context,
+            marker,
+            PaneStatusOccurrenceId { rail, ordinal },
+            config_generation,
+        );
+        ordinal = ordinal.saturating_add(1);
+        if !component.text.is_empty() {
+            append_pane_status_literal(&mut text, literal);
+            let component_start = fitted_text_width(&text, usize::MAX);
+            text.push_str(&component.text);
+            segments.extend(component.segments.into_iter().map(|mut segment| {
+                segment.start = component_start.saturating_add(segment.start);
+                segment
+            }));
+        } else if !literal.trim().is_empty() {
+            append_pane_status_literal(&mut text, literal);
+        }
+        remaining = &after_start[end + 1..];
+    }
+    if !remaining.trim().is_empty() {
+        append_pane_status_literal(&mut text, remaining);
+    }
+    RenderedFrameStatus {
+        text: sanitize_frame_text(&text),
+        segments,
+    }
+}
+
+/// Appends template literal text without retaining orphan whitespace between
+/// unavailable status fields.
+fn append_pane_status_literal(text: &mut String, literal: &str) {
+    if literal.trim().is_empty() {
+        if !text.is_empty() {
+            text.push_str(literal);
+        }
+    } else {
+        text.push_str(literal);
+    }
+}
+
+/// Resolves one bare or named built-in marker to its padded display segment.
+fn resolve_pane_status_component(
+    window: &Window,
+    pane: &mez_mux::layout::Pane,
+    frame_context: &TerminalFrameContext,
+    marker: &str,
+    occurrence: PaneStatusOccurrenceId,
+    config_generation: u64,
+) -> RenderedPaneFrameRightStatus {
+    let definition = marker
+        .strip_prefix("pill.")
+        .and_then(|name| frame_context.pane_status.pills.get(name).cloned())
+        .or_else(|| PaneStatusField::parse(marker).map(PaneStatusPillDefinition::builtin));
+    let Some(definition) = definition else {
+        return RenderedFrameStatus {
+            text: String::new(),
+            segments: Vec::new(),
+        };
+    };
+    let field_name = definition.field.as_str();
+    let display_value = pane_frame_field_value(window, pane, frame_context, field_name);
+    let raw_value = if definition.field == PaneStatusField::PaneStatus {
+        frame_context
+            .panes
+            .get(pane.id.as_str())
+            .and_then(|context| context.pane_status_state.clone())
+            .unwrap_or_else(|| display_value.clone())
+    } else {
+        display_value.clone()
+    };
+    if display_value.is_empty()
+        || !pane_status_conditions_match(pane, frame_context, &definition, &display_value)
+    {
+        return RenderedFrameStatus {
+            text: String::new(),
+            segments: Vec::new(),
+        };
+    }
+    let mut display =
+        pane_status_display_value(definition.field, definition.format, &display_value);
+    let mut compact_display =
+        pane_status_display_value(definition.field, definition.compact_format, &display_value);
+    if let Some(label) = definition
+        .label
+        .as_deref()
+        .filter(|label| !label.trim().is_empty())
+    {
+        display = format!("{} {display}", label.trim());
+        compact_display = format!("{} {compact_display}", label.trim());
+    }
+    if let Some(max_width) = definition.max_width {
+        display = mez_mux::render::line_slice(&display, 0, max_width);
+        compact_display = mez_mux::render::line_slice(&compact_display, 0, max_width);
+    }
+    let text = mez_mux::render::render_frame_pill_text(&display);
+    if text.is_empty() {
+        return RenderedFrameStatus {
+            text,
+            segments: Vec::new(),
+        };
+    }
+    let context_generation =
+        pane_status_context_generation(pane, frame_context, definition.field, &raw_value);
+    let width = fitted_text_width(&text, usize::MAX);
+    RenderedFrameStatus {
+        text,
+        segments: vec![FrameStatusSegment {
+            start: 0,
+            width,
+            key: PaneStatusSegmentIdentity {
+                owner_pane_id: pane.id.clone(),
+                occurrence,
+                field: definition.field,
+                style: definition.style,
+                action: definition.action,
+                compact_display,
+                min_width: definition.min_width,
+                max_width: definition.max_width,
+                priority: definition.priority,
+                config_generation,
+                context_generation,
+            },
+            value: raw_value,
+        }],
+    }
+}
+
+/// Evaluates the finite AND-combined condition vocabulary for one pane.
+fn pane_status_conditions_match(
+    pane: &mez_mux::layout::Pane,
+    frame_context: &TerminalFrameContext,
+    definition: &PaneStatusPillDefinition,
+    display_value: &str,
+) -> bool {
+    let pane_context = frame_context.panes.get(pane.id.as_str());
+    let agent_view = pane_context.and_then(|context| context.mode.as_deref()) == Some("agent");
+    let scrollback = pane_context
+        .and_then(|context| context.history_position.as_deref())
+        .is_some_and(|value| !value.trim().is_empty());
+    let busy = pane_context
+        .and_then(|context| context.agent_status.as_deref())
+        .is_some_and(|value| {
+            matches!(
+                value,
+                "queued"
+                    | "running"
+                    | "thinking"
+                    | "executing"
+                    | "waiting"
+                    | "bootstrapping"
+                    | "certifying_sandbox"
+                    | "compacting"
+                    | "memorizing"
+            )
+        });
+    definition.when.iter().all(|condition| match condition {
+        PaneStatusCondition::AgentView => agent_view,
+        PaneStatusCondition::ShellView => !agent_view,
+        PaneStatusCondition::Focused => pane.active,
+        PaneStatusCondition::Unfocused => !pane.active,
+        PaneStatusCondition::Busy => busy,
+        PaneStatusCondition::Idle => !busy,
+        PaneStatusCondition::Supported | PaneStatusCondition::Nonempty => {
+            !display_value.trim().is_empty()
+        }
+        PaneStatusCondition::Scrollback => scrollback,
+    })
+}
+
+/// Formats one built-in value without evaluating arbitrary user expressions.
+fn pane_status_display_value(
+    field: PaneStatusField,
+    format: PaneStatusFormat,
+    value: &str,
+) -> String {
+    let value = value.trim();
+    match format {
+        PaneStatusFormat::Full => value.to_string(),
+        PaneStatusFormat::Percent => {
+            if value.ends_with('%') {
+                value.to_string()
+            } else {
+                format!("{value}%")
+            }
+        }
+        PaneStatusFormat::Short => match field {
+            PaneStatusField::AgentName if value == "manager" => String::new(),
+            PaneStatusField::AgentRouting => "route".to_string(),
+            PaneStatusField::AgentThinking => "thinking".to_string(),
+            PaneStatusField::AgentPlanning => "plan".to_string(),
+            _ => value.to_string(),
+        },
+    }
+}
+
+/// Hashes relevant pane-local state for stale semantic-action detection.
+fn pane_status_context_generation(
+    pane: &mez_mux::layout::Pane,
+    frame_context: &TerminalFrameContext,
+    field: PaneStatusField,
+    value: &str,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    pane.id.hash(&mut hasher);
+    pane.active.hash(&mut hasher);
+    field.hash(&mut hasher);
+    value.hash(&mut hasher);
+    if let Some(context) = frame_context.panes.get(pane.id.as_str()) {
+        context.mode.hash(&mut hasher);
+        context.agent_status.hash(&mut hasher);
+        context.history_position.hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 /// Runs the pane agent shell visible operation for this subsystem.
@@ -422,39 +558,6 @@ pub(in crate::host::terminal::render) fn pane_agent_prompt_transparent(
         .get(pane_id)
         .and_then(|context| context.mode.as_deref())
         == Some("copy")
-}
-
-/// Runs the pane frame right aligned display value operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(in crate::host::terminal::render) fn pane_frame_right_aligned_display_value(
-    _field: &str,
-    value: String,
-) -> String {
-    value
-}
-
-/// Returns right-status display text while retaining raw values for style
-/// selection, animation, and mouse hitbox semantics.
-pub(in crate::host::terminal::render) fn pane_frame_right_aligned_segment_value(
-    field: &str,
-    value: &str,
-) -> String {
-    if field == "agent.name" && value.trim() == "manager" {
-        return String::new();
-    }
-    if field == "agent.routing" && !value.trim().is_empty() {
-        return "route".to_string();
-    }
-    if field == "agent.thinking" && !value.trim().is_empty() {
-        return "thinking".to_string();
-    }
-    if field == "agent.planning" && !value.trim().is_empty() {
-        return "plan".to_string();
-    }
-    value.to_string()
 }
 
 /// Compacts a home-relative or absolute pane working-directory display path to

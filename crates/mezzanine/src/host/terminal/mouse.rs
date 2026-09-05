@@ -9,6 +9,8 @@ use mez_mux::copy::CopyPosition;
 use mez_mux::attached_client::AttachedMouseAction;
 use mez_terminal::MouseEvent;
 
+use super::pane_status::PaneStatusSegmentIdentity;
+
 // Mouse event parsing and policy classification.
 
 /// Kind of command executed by a window status-bar action button.
@@ -161,7 +163,7 @@ pub struct MouseWindowActionFrameCell {
 }
 
 /// Clickable pane-frame agent status fields that expose selectors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PaneAgentStatusField {
     /// Active provider model shown in the pane-frame status pills.
     Model,
@@ -182,7 +184,7 @@ pub enum PaneAgentStatusField {
 }
 
 /// A zero-based terminal cell occupied by a selectable pane agent status pill.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MousePaneAgentStatusCell {
     /// The zero-based rendered terminal column for the status pill cell.
     pub column: u16,
@@ -192,6 +194,8 @@ pub struct MousePaneAgentStatusCell {
     pub pane_index: usize,
     /// The selectable agent status field represented by this cell.
     pub field: PaneAgentStatusField,
+    /// Stable pane, occurrence, action, and generation identity from rendering.
+    pub identity: PaneStatusSegmentIdentity,
 }
 
 /// A zero-based terminal cell occupied by an open pane agent selector item.
@@ -259,12 +263,21 @@ pub enum MouseAction {
     },
     /// Clears a pressed window status-bar action without running it.
     CancelWindowAction,
-    /// Opens a pane agent status selector for model or reasoning changes.
+    /// Opens a pane agent status selector from an internal compatibility path.
+    #[allow(
+        dead_code,
+        reason = "direct runtime tests inject typed selector actions without terminal hit cells"
+    )]
     OpenPaneAgentStatusSelector {
         /// Pane index targeted by the selector.
         pane_index: usize,
         /// Agent status field to select.
         field: PaneAgentStatusField,
+    },
+    /// Opens a selector from one current rendered pane-status occurrence.
+    OpenPaneAgentStatusSelectorIdentity {
+        /// Stable pane, occurrence, action, and generation identity.
+        identity: PaneStatusSegmentIdentity,
     },
     /// Updates the highlighted pane agent selector item during mouse movement.
     HoverPaneAgentStatusSelector {

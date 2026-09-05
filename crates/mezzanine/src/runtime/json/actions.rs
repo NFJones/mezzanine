@@ -430,7 +430,10 @@ pub(crate) fn mouse_action_name(action: MouseAction) -> &'static str {
         MouseAction::PressWindowAction { .. } => "press-window-action",
         MouseAction::ReleaseWindowAction { .. } => "release-window-action",
         MouseAction::CancelWindowAction => "cancel-window-action",
-        MouseAction::OpenPaneAgentStatusSelector { .. } => "open-pane-agent-status-selector",
+        MouseAction::OpenPaneAgentStatusSelector { .. }
+        | MouseAction::OpenPaneAgentStatusSelectorIdentity { .. } => {
+            "open-pane-agent-status-selector"
+        }
         MouseAction::HoverPaneAgentStatusSelector { .. } => "hover-pane-agent-status-selector",
         MouseAction::SelectPaneAgentStatusSelector { .. } => "select-pane-agent-status-selector",
         MouseAction::ScrollPaneAgentStatusSelector { .. } => "scroll-pane-agent-status-selector",

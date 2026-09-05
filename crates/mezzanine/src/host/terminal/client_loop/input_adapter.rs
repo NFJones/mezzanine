@@ -179,9 +179,8 @@ fn route_mouse_event(
         return Ok(TerminalClientLoopAction::HandleMouse(
             match (event.kind, event.button) {
                 (super::MouseEventKind::Release, super::MouseButton::Left) => {
-                    MouseAction::OpenPaneAgentStatusSelector {
-                        pane_index: cell.pane_index,
-                        field: cell.field,
+                    MouseAction::OpenPaneAgentStatusSelectorIdentity {
+                        identity: cell.identity.clone(),
                     }
                 }
                 _ => MouseAction::Ignore,

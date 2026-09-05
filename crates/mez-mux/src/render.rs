@@ -1016,6 +1016,67 @@ pub fn compose_pane_frame_row<K>(
     )
 }
 
+/// Composes a padded pane title with semantic title-adjacent and right rails.
+///
+/// Status values are already padded by their product resolver. This compositor
+/// preserves the title's renderer-owned edge padding, clips both rails to the
+/// available row, and returns one semantic segment list for styling and hit
+/// testing without introducing overflow policy.
+pub fn compose_pane_frame_status_row<K>(
+    title: &str,
+    left_status: RenderedFrameStatus<K>,
+    right_status: Option<RenderedFrameStatus<K>>,
+    width: usize,
+    fill: char,
+) -> PaneFrameRowLayout<K> {
+    let mut row = blank_render_row(width, fill);
+    let positioned_right = right_status.and_then(|status| position_frame_status(status, width));
+    let left_limit = positioned_right
+        .as_ref()
+        .map(|status| status.start.saturating_sub(1))
+        .unwrap_or(width);
+    let title_text = render_frame_pill_text_fitted(title, left_limit);
+    let title_width = write_text_cells_with_width(&mut row, 0, left_limit, &title_text);
+    let left_start =
+        title_width.saturating_add(usize::from(title_width > 0 && !left_status.text.is_empty()));
+    let left_available = left_limit.saturating_sub(left_start);
+    write_text_cells_with_width(&mut row, left_start, left_available, &left_status.text);
+    if let Some(status) = positioned_right.as_ref() {
+        write_text_cells_with_width(&mut row, status.start, status.width, &status.text);
+    }
+    let mut semantic_segments = left_status
+        .segments
+        .into_iter()
+        .filter_map(|segment| {
+            clip_style_span(
+                TerminalStyleSpan {
+                    start: segment.start,
+                    length: segment.width,
+                    rendition: GraphicRendition::default(),
+                },
+                left_available,
+            )
+            .map(|span| FrameStatusSegment {
+                start: left_start.saturating_add(span.start),
+                width: span.length,
+                key: segment.key,
+                value: segment.value,
+            })
+        })
+        .collect::<Vec<_>>();
+    semantic_segments.extend(
+        positioned_right
+            .map(|status| status.segments)
+            .unwrap_or_default(),
+    );
+    semantic_segments.sort_by_key(|segment| segment.start);
+    PaneFrameRowLayout {
+        text: collect_text_cells(row),
+        left_text_width: title_width,
+        right_status_segments: semantic_segments,
+    }
+}
+
 fn right_aligned_status_bounds(text: &str, width: usize) -> Option<(usize, usize)> {
     let status_limit = width.saturating_sub(usize::from(width > 1));
     let status_width = fitted_text_width(text, status_limit);

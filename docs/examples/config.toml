@@ -8,7 +8,7 @@
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 85
+version = 86
 
 # Persistent multi-session host policy. The host and inbound Iroh listener are
 # disabled until explicitly started or enabled by the primary user.
@@ -218,8 +218,24 @@ visible_fields = ["window.list", "window.index", "window.name", "window.id", "pa
 enabled = true
 position = "border"
 template = "#{pane.index} #{pane.title}"
+left_status = "#{pane.progress}"
+right_status = "#{pane.pwd} #{agent.model} #{agent.reasoning} #{agent.thinking} #{agent.planning} #{agent.routing} #{agent.latency} #{policy.mode} #{agent.context_usage} #{agent.status} #{history.position}"
 style = "default"
 visible_fields = ["pane.index", "pane.title", "pane.id", "pane.status", "history.position", "agent.model", "agent.reasoning", "agent.thinking", "agent.planning", "agent.routing", "agent.latency", "agent.preset", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
+
+[frames.pane.pills]
+# Optional named built-in pill referenced as #{pill.<name>} in a status rail.
+#? [frames.pane.pills.model]
+#? field = "agent.model"
+#? label = "Model"
+#? format = "short"
+#? compact_format = "short"
+#? when = ["agent-view", "supported", "nonempty"]
+#? min_width = 4
+#? max_width = 24
+#? priority = 80
+#? style = "agent-model"
+#? on_click = "builtin"
 
 # Select the active built-in or custom theme.
 [theme]

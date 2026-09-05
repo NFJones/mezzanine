@@ -104,7 +104,7 @@ fn runtime_config_reload_applies_layered_zen_mode() {
     .unwrap();
     fs::write(
         &project_path,
-        "version = 85\n[terminal]\nzen_mode = false\n",
+        "version = 86\n[terminal]\nzen_mode = false\n",
     )
     .unwrap();
     service
@@ -137,7 +137,7 @@ fn runtime_config_reload_applies_layered_zen_mode() {
         Size::new(100, 38).unwrap()
     );
 
-    fs::write(&project_path, "version = 85\n[terminal]\nzen_mode = true\n").unwrap();
+    fs::write(&project_path, "version = 86\n[terminal]\nzen_mode = true\n").unwrap();
     let response = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"reload","method":"config/reload","params":{"idempotency_key":"reload-zen-mode"}}"#,
         &primary,
@@ -154,7 +154,7 @@ fn runtime_config_reload_applies_layered_zen_mode() {
 
     fs::write(
         &project_path,
-        "version = 85\n[terminal]\nzen_mode = false\n",
+        "version = 86\n[terminal]\nzen_mode = false\n",
     )
     .unwrap();
     let response = service.dispatch_runtime_control_body(
@@ -171,7 +171,7 @@ fn runtime_config_reload_applies_layered_zen_mode() {
 
     fs::write(
         &project_path,
-        "version = 85\n[terminal]\nzen_mode = \"sometimes\"\n",
+        "version = 86\n[terminal]\nzen_mode = \"sometimes\"\n",
     )
     .unwrap();
     let response = service.dispatch_runtime_control_body(
@@ -188,6 +188,51 @@ fn runtime_config_reload_applies_layered_zen_mode() {
         Size::new(100, 38).unwrap()
     );
     service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies an invalid pane-status replacement leaves the complete previously
+/// applied rail and named-pill snapshot intact.
+///
+/// Runtime presentation settings are parsed before replacement, so a bad
+/// condition or unsupported action must not partially change either rail.
+#[test]
+fn runtime_config_reload_rolls_back_invalid_pane_status_snapshot() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let root = temp_root("runtime-pane-status-reload");
+    let path = root.join("config.toml");
+    fs::write(
+        &path,
+        "version = 86\n[frames.pane]\nleft_status = \"#{pane.progress}\"\nright_status = \"#{pill.model}\"\n[frames.pane.pills.model]\nfield = \"agent.model\"\nlabel = \"Model\"\nwhen = [\"agent-view\", \"nonempty\"]\n",
+    )
+    .unwrap();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: Some(path.clone()),
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: fs::read_to_string(&path).unwrap(),
+        }])
+        .unwrap();
+    let before = service.pane_status_config().clone();
+
+    fs::write(
+        &path,
+        "version = 86\n[frames.pane]\nleft_status = \"changed\"\nright_status = \"#{pill.model}\"\n[frames.pane.pills.model]\nfield = \"agent.model\"\nwhen = [\"agent-view\", \"shell-view\"]\n",
+    )
+    .unwrap();
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"reload-pane-status","method":"config/reload","params":{"idempotency_key":"reload-invalid-pane-status"}}"#,
+        &primary,
+    );
+
+    assert!(response.contains(r#""error""#), "{response}");
+    assert_eq!(service.pane_status_config(), &before);
     let _ = fs::remove_dir_all(root);
 }
 

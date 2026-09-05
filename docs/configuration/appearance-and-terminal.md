@@ -40,6 +40,16 @@ and pane status presentation; `theme`, `themes`, and aliases configure colors.
 Use `Ctrl+A ?` or the `list-keys` terminal command to inspect effective bindings
 before replacing one. Live-mutability is shown by configuration diagnostics.
 
+Pane titles and pane status rails are configured independently. Keep identity
+in `frames.pane.template`, place title-adjacent items in
+`frames.pane.left_status`, and order right-aligned items with
+`frames.pane.right_status`. Bare built-in markers use their standard behavior;
+named definitions under `frames.pane.pills.<name>` can change labels, finite
+visibility conditions, supported formatting, width metadata, theme roles, and
+whether the existing built-in selector is clickable. Empty rail strings remain
+empty. `frames.pane.visible_fields` remains only the fallback used when the
+title template is empty; it does not filter either status rail.
+
 Changing the effective theme or another visual presentation setting queues an
 immediate full redraw for every attached client. The redraw restyles Mez-owned
 frames, prompts, overlays, and transcript surfaces without waiting for unrelated

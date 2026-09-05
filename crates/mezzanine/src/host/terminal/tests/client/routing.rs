@@ -110,12 +110,29 @@ fn client_loop_routes_input_to_pane_mux_and_mouse_actions() {
         TerminalClientLoopAction::HandleMouse(MouseAction::CancelWindowAction)
     );
 
+    let identity = crate::host::terminal::PaneStatusSegmentIdentity {
+        owner_pane_id: mez_core::ids::PaneId::parse('%', "%1").unwrap(),
+        occurrence: crate::host::terminal::PaneStatusOccurrenceId {
+            rail: crate::host::terminal::PaneStatusRail::Right,
+            ordinal: 0,
+        },
+        field: crate::host::terminal::PaneStatusField::AgentModel,
+        style: crate::host::terminal::PaneStatusStyle::Automatic,
+        action: crate::host::terminal::PaneStatusAction::Builtin(PaneAgentStatusField::Model),
+        compact_display: "gpt".to_string(),
+        min_width: None,
+        max_width: None,
+        priority: 50,
+        config_generation: 1,
+        context_generation: 2,
+    };
     let mut pane_status_config = frame_config.clone();
     pane_status_config.mouse_pane_agent_status_cells = vec![MousePaneAgentStatusCell {
         column: 11,
         row: 4,
         pane_index: 0,
         field: PaneAgentStatusField::Model,
+        identity: identity.clone(),
     }];
     assert_eq!(
         route_client_input(b"\x1b[<0;12;5M", &pane_status_config).unwrap(),
@@ -123,9 +140,8 @@ fn client_loop_routes_input_to_pane_mux_and_mouse_actions() {
     );
     assert_eq!(
         route_client_input(b"\x1b[<0;12;5m", &pane_status_config).unwrap(),
-        TerminalClientLoopAction::HandleMouse(MouseAction::OpenPaneAgentStatusSelector {
-            pane_index: 0,
-            field: PaneAgentStatusField::Model,
+        TerminalClientLoopAction::HandleMouse(MouseAction::OpenPaneAgentStatusSelectorIdentity {
+            identity,
         })
     );
 

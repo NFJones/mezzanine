@@ -13,6 +13,10 @@ use std::collections::BTreeMap;
 
 use crate::config::EffectiveConfig;
 use crate::error::{MezError, Result};
+use crate::host::terminal::{
+    PaneStatusAction, PaneStatusCondition, PaneStatusConfig, PaneStatusField, PaneStatusFormat,
+    PaneStatusPillDefinition, PaneStatusStyle,
+};
 use crate::runtime::service_state::RuntimeCommandBinding;
 use crate::ui::command::key_chord_notation;
 
@@ -109,6 +113,245 @@ pub(crate) fn runtime_pane_frame_template_from_config(root: &Value) -> Result<St
         crate::host::terminal::DEFAULT_PANE_FRAME_TEMPLATE,
         crate::host::terminal::DEFAULT_PANE_FRAME_VISIBLE_FIELDS,
     )
+}
+
+/// Parses pane-status rails and named built-in pill definitions.
+///
+/// The complete value is built before runtime presentation settings are
+/// replaced, so an invalid definition cannot partially update a live frame.
+pub(crate) fn runtime_pane_status_config_from_config(root: &Value) -> Result<PaneStatusConfig> {
+    let Some(frames) = runtime_json_object(root, "frames") else {
+        return Ok(PaneStatusConfig::default());
+    };
+    let Some(pane) = frames.get("pane").and_then(Value::as_object) else {
+        return Ok(PaneStatusConfig::default());
+    };
+    let mut config = PaneStatusConfig::default();
+    if let Some(value) = pane.get("left_status") {
+        config.left_status = value
+            .as_str()
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| MezError::config("frames.pane.left_status must be a string"))?;
+    }
+    if let Some(value) = pane.get("right_status") {
+        config.right_status = value
+            .as_str()
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| MezError::config("frames.pane.right_status must be a string"))?;
+    }
+    let Some(pills_value) = pane.get("pills") else {
+        return Ok(config);
+    };
+    let pills = pills_value
+        .as_object()
+        .ok_or_else(|| MezError::config("frames.pane.pills must be a table"))?;
+    for (name, value) in pills {
+        if name.is_empty()
+            || !name.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
+            })
+        {
+            return Err(MezError::config(format!(
+                "frames.pane.pills.{name} name must contain only ASCII letters, digits, underscores, or hyphens"
+            )));
+        }
+        let object = value
+            .as_object()
+            .ok_or_else(|| MezError::config(format!("frames.pane.pills.{name} must be a table")))?;
+        for key in object.keys() {
+            if !matches!(
+                key.as_str(),
+                "field"
+                    | "label"
+                    | "format"
+                    | "compact_format"
+                    | "when"
+                    | "min_width"
+                    | "max_width"
+                    | "priority"
+                    | "style"
+                    | "on_click"
+            ) {
+                return Err(MezError::config(format!(
+                    "frames.pane.pills.{name}.{key} is not a supported pane status pill setting"
+                )));
+            }
+        }
+        let field_name = object.get("field").and_then(Value::as_str).ok_or_else(|| {
+            MezError::config(format!(
+                "frames.pane.pills.{name}.field must name a built-in pane status field"
+            ))
+        })?;
+        let field = PaneStatusField::parse(field_name).ok_or_else(|| {
+            MezError::config(format!(
+                "frames.pane.pills.{name}.field `{field_name}` is not a supported built-in pane status field"
+            ))
+        })?;
+        let mut definition = PaneStatusPillDefinition::builtin(field);
+        definition.label = optional_pane_status_string(object.get("label"), name, "label")?;
+        if let Some(value) = optional_pane_status_string(object.get("format"), name, "format")? {
+            definition.format = parse_pane_status_format(name, "format", field, &value)?;
+        }
+        if let Some(value) =
+            optional_pane_status_string(object.get("compact_format"), name, "compact_format")?
+        {
+            definition.compact_format =
+                parse_pane_status_format(name, "compact_format", field, &value)?;
+        }
+        if let Some(value) = object.get("when") {
+            let values = value.as_array().ok_or_else(|| {
+                MezError::config(format!(
+                    "frames.pane.pills.{name}.when must be a string array"
+                ))
+            })?;
+            definition.when = values
+                .iter()
+                .map(|value| {
+                    let value = value.as_str().ok_or_else(|| {
+                        MezError::config(format!(
+                            "frames.pane.pills.{name}.when must be a string array"
+                        ))
+                    })?;
+                    PaneStatusCondition::parse(value).ok_or_else(|| {
+                        MezError::config(format!(
+                            "frames.pane.pills.{name}.when contains unsupported condition `{value}`"
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            validate_pane_status_conditions(name, &definition.when)?;
+        }
+        definition.min_width =
+            pane_status_optional_width(object.get("min_width"), name, "min_width")?;
+        definition.max_width =
+            pane_status_optional_width(object.get("max_width"), name, "max_width")?;
+        if definition
+            .min_width
+            .zip(definition.max_width)
+            .is_some_and(|(minimum, maximum)| minimum > maximum)
+        {
+            return Err(MezError::config(format!(
+                "frames.pane.pills.{name}.min_width must not exceed max_width"
+            )));
+        }
+        if let Some(value) = object.get("priority") {
+            let priority = value
+                .as_u64()
+                .filter(|value| *value <= 100)
+                .ok_or_else(|| {
+                    MezError::config(format!(
+                        "frames.pane.pills.{name}.priority must be an integer from 0 to 100"
+                    ))
+                })?;
+            definition.priority = u8::try_from(priority).map_err(|_| {
+                MezError::config(format!(
+                    "frames.pane.pills.{name}.priority must be an integer from 0 to 100"
+                ))
+            })?;
+        }
+        if let Some(value) = optional_pane_status_string(object.get("style"), name, "style")? {
+            definition.style = PaneStatusStyle::parse(&value).ok_or_else(|| {
+                MezError::config(format!(
+                    "frames.pane.pills.{name}.style `{value}` is not a supported pane status style"
+                ))
+            })?;
+        }
+        if let Some(value) = optional_pane_status_string(object.get("on_click"), name, "on_click")?
+        {
+            definition.action = match value.as_str() {
+                "none" => PaneStatusAction::None,
+                "builtin" => field.builtin_action().map(PaneStatusAction::Builtin).ok_or_else(|| {
+                    MezError::config(format!(
+                        "frames.pane.pills.{name}.on_click cannot be builtin because `{field_name}` has no built-in action"
+                    ))
+                })?,
+                _ => {
+                    return Err(MezError::config(format!(
+                        "frames.pane.pills.{name}.on_click must be builtin or none"
+                    )));
+                }
+            };
+        }
+        config.pills.insert(name.clone(), definition);
+    }
+    Ok(config)
+}
+
+fn optional_pane_status_string(
+    value: Option<&Value>,
+    name: &str,
+    key: &str,
+) -> Result<Option<String>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value.as_str().ok_or_else(|| {
+        MezError::config(format!("frames.pane.pills.{name}.{key} must be a string"))
+    })?;
+    if value.chars().any(char::is_control) {
+        return Err(MezError::config(format!(
+            "frames.pane.pills.{name}.{key} must not contain control characters"
+        )));
+    }
+    Ok(Some(value.to_string()))
+}
+
+fn parse_pane_status_format(
+    name: &str,
+    key: &str,
+    field: PaneStatusField,
+    value: &str,
+) -> Result<PaneStatusFormat> {
+    let format = PaneStatusFormat::parse(value).ok_or_else(|| {
+        MezError::config(format!(
+            "frames.pane.pills.{name}.{key} must be full, short, or percent"
+        ))
+    })?;
+    if format == PaneStatusFormat::Percent && !field.supports_percent() {
+        return Err(MezError::config(format!(
+            "frames.pane.pills.{name}.{key} percent format is not supported for `{}`",
+            field.as_str()
+        )));
+    }
+    Ok(format)
+}
+
+fn pane_status_optional_width(
+    value: Option<&Value>,
+    name: &str,
+    key: &str,
+) -> Result<Option<usize>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let width = value
+        .as_u64()
+        .filter(|width| (1..=4096).contains(width))
+        .and_then(|width| usize::try_from(width).ok())
+        .ok_or_else(|| {
+            MezError::config(format!(
+                "frames.pane.pills.{name}.{key} must be an integer from 1 to 4096"
+            ))
+        })?;
+    Ok(Some(width))
+}
+
+fn validate_pane_status_conditions(name: &str, conditions: &[PaneStatusCondition]) -> Result<()> {
+    for (left, right) in [
+        (
+            PaneStatusCondition::AgentView,
+            PaneStatusCondition::ShellView,
+        ),
+        (PaneStatusCondition::Focused, PaneStatusCondition::Unfocused),
+        (PaneStatusCondition::Busy, PaneStatusCondition::Idle),
+    ] {
+        if conditions.contains(&left) && conditions.contains(&right) {
+            return Err(MezError::config(format!(
+                "frames.pane.pills.{name}.when contains contradictory conditions"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Runs the runtime window frame position from config operation for this subsystem.

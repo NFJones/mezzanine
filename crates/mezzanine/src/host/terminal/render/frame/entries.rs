@@ -1,29 +1,12 @@
 //! Entries ownership for terminal frame rendering.
 
 use super::super::{
-    FramePillboxEntry, FramePillboxSegment, MouseWindowGroupFrameCell, PaneAgentStatusField,
-    TerminalFrameContext, TerminalWindowFrameContext, TerminalWindowGroupFrameContext,
-    WindowFrameAction, frame_pillbox_segment_columns, group_frame_visible,
-    render_frame_pillbox_segments, render_frame_pillbox_text, sanitize_frame_text,
+    FramePillboxEntry, FramePillboxSegment, MouseWindowGroupFrameCell, TerminalFrameContext,
+    TerminalWindowFrameContext, TerminalWindowGroupFrameContext, WindowFrameAction,
+    frame_pillbox_segment_columns, group_frame_visible, render_frame_pillbox_segments,
+    render_frame_pillbox_text, sanitize_frame_text,
 };
 use mez_mux::layout::Window;
-
-/// Maps an internal pane-frame field name to a clickable selector field.
-pub(in crate::host::terminal::render) fn pane_agent_status_field_from_frame_field(
-    field: &str,
-) -> Option<PaneAgentStatusField> {
-    match field {
-        "agent.model" => Some(PaneAgentStatusField::Model),
-        "agent.reasoning" => Some(PaneAgentStatusField::Reasoning),
-        "agent.thinking" => Some(PaneAgentStatusField::Thinking),
-        "agent.planning" => Some(PaneAgentStatusField::Planning),
-        "agent.routing" => Some(PaneAgentStatusField::Routing),
-        "agent.latency" => Some(PaneAgentStatusField::Latency),
-        "agent.preset" => Some(PaneAgentStatusField::Preset),
-        "policy.mode" => Some(PaneAgentStatusField::ApprovalPolicy),
-        _ => None,
-    }
-}
 
 /// Returns rendered cells occupied by each default window-group pill.
 pub fn window_group_frame_pillbox_cells(

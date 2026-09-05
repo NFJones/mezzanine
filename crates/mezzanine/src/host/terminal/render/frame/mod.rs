@@ -11,8 +11,7 @@ mod window;
 
 pub use entries::window_group_frame_pillbox_cells;
 pub(in crate::host::terminal::render) use entries::{
-    WindowFramePillboxTarget, group_frame_pillbox_entries,
-    pane_agent_status_field_from_frame_field, pillbox_segment_local_columns,
+    WindowFramePillboxTarget, group_frame_pillbox_entries, pillbox_segment_local_columns,
     window_action_pillbox_entries, window_frame_action_entry, window_frame_field_value,
     window_frame_pillbox_entries, window_frame_pillbox_entries_from_context,
     window_frame_pillbox_segments, window_frame_pillbox_text_from_entries,

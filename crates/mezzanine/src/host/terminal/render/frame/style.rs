@@ -289,7 +289,7 @@ pub(in crate::host::terminal::render) fn styled_pane_frame_line(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(in crate::host::terminal::render) fn pane_frame_right_status_style_spans(
-    layout: &PaneFrameRowLayout<&'static str>,
+    layout: &PaneFrameRowLayout<crate::host::terminal::PaneStatusSegmentIdentity>,
     column_offset: usize,
     frame_context: &TerminalFrameContext,
     ui_theme: &UiTheme,
@@ -315,7 +315,12 @@ pub(in crate::host::terminal::render) fn pane_frame_right_status_segment_style_s
     frame_context: &TerminalFrameContext,
     ui_theme: &UiTheme,
 ) -> Vec<TerminalStyleSpan> {
-    if matches!(segment.key, "agent.status" | "pane.status")
+    if segment.key.style == crate::host::terminal::PaneStatusStyle::Automatic
+        && matches!(
+            segment.key.field,
+            crate::host::terminal::PaneStatusField::AgentStatus
+                | crate::host::terminal::PaneStatusField::PaneStatus
+        )
         && pane_frame_agent_status_is_active(&segment.value)
         && !frame_context.reduced_motion
     {
@@ -342,23 +347,49 @@ pub(in crate::host::terminal::render) fn pane_frame_right_status_rendition(
     segment: &PaneFrameRightStatusSegment,
     ui_theme: &UiTheme,
 ) -> GraphicRendition {
-    match segment.key {
-        "history.position" => ui_theme.colors.scroll_indicator.rendition(),
-        "pane.progress" => ui_theme.colors.pane_progress.rendition(),
-        "pane.pwd" => ui_theme.colors.pane_pwd.rendition(),
-        "pane.status" => pane_frame_agent_status_rendition(&segment.value, ui_theme),
-        "agent.model" => ui_theme.colors.agent_model.rendition(),
-        "agent.reasoning" => ui_theme.colors.agent_reasoning.rendition(),
-        "agent.thinking" => pane_frame_agent_thinking_rendition(&segment.value, ui_theme),
-        "agent.planning" => pane_frame_agent_planning_rendition(&segment.value, ui_theme),
-        "agent.routing" => pane_frame_agent_routing_rendition(&segment.value, ui_theme),
-        "agent.latency" => pane_frame_latency_rendition(&segment.value, ui_theme),
-        "agent.preset" => ui_theme.colors.agent_model.rendition(),
-        "agent.name" => ui_theme.colors.agent_model.rendition(),
-        "agent.context_usage" => pane_frame_agent_context_usage_rendition(&segment.value, ui_theme),
-        "agent.status" => pane_frame_agent_status_rendition(&segment.value, ui_theme),
-        "policy.mode" => pane_frame_policy_mode_rendition(&segment.value, ui_theme),
-        _ => ui_theme.colors.scroll_indicator.rendition(),
+    use crate::host::terminal::{PaneStatusField, PaneStatusStyle};
+
+    match segment.key.style {
+        PaneStatusStyle::ScrollIndicator => ui_theme.colors.scroll_indicator.rendition(),
+        PaneStatusStyle::PaneProgress => ui_theme.colors.pane_progress.rendition(),
+        PaneStatusStyle::PaneWorkingDirectory => ui_theme.colors.pane_pwd.rendition(),
+        PaneStatusStyle::AgentModel => ui_theme.colors.agent_model.rendition(),
+        PaneStatusStyle::AgentReasoning => ui_theme.colors.agent_reasoning.rendition(),
+        PaneStatusStyle::AgentStatusIdle => ui_theme.colors.agent_status_idle.rendition(),
+        PaneStatusStyle::AgentStatusRunning => ui_theme.colors.agent_status_running.rendition(),
+        PaneStatusStyle::AgentStatusBlocked => ui_theme.colors.agent_status_blocked.rendition(),
+        PaneStatusStyle::AgentStatusFailed => ui_theme.colors.agent_status_failed.rendition(),
+        PaneStatusStyle::Automatic => match segment.key.field {
+            PaneStatusField::HistoryPosition => ui_theme.colors.scroll_indicator.rendition(),
+            PaneStatusField::PaneProgress => ui_theme.colors.pane_progress.rendition(),
+            PaneStatusField::PaneWorkingDirectory => ui_theme.colors.pane_pwd.rendition(),
+            PaneStatusField::PaneStatus => {
+                pane_frame_agent_status_rendition(&segment.value, ui_theme)
+            }
+            PaneStatusField::AgentModel
+            | PaneStatusField::AgentPreset
+            | PaneStatusField::AgentName => ui_theme.colors.agent_model.rendition(),
+            PaneStatusField::AgentReasoning => ui_theme.colors.agent_reasoning.rendition(),
+            PaneStatusField::AgentThinking => {
+                pane_frame_agent_thinking_rendition(&segment.value, ui_theme)
+            }
+            PaneStatusField::AgentPlanning => {
+                pane_frame_agent_planning_rendition(&segment.value, ui_theme)
+            }
+            PaneStatusField::AgentRouting => {
+                pane_frame_agent_routing_rendition(&segment.value, ui_theme)
+            }
+            PaneStatusField::AgentLatency => pane_frame_latency_rendition(&segment.value, ui_theme),
+            PaneStatusField::AgentContextUsage => {
+                pane_frame_agent_context_usage_rendition(&segment.value, ui_theme)
+            }
+            PaneStatusField::AgentStatus => {
+                pane_frame_agent_status_rendition(&segment.value, ui_theme)
+            }
+            PaneStatusField::PolicyMode => {
+                pane_frame_policy_mode_rendition(&segment.value, ui_theme)
+            }
+        },
     }
 }
 

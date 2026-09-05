@@ -494,7 +494,7 @@ pub(super) fn validate_frames_path(segments: &[&str]) -> Option<String> {
     if !frame_keys.contains(&key) {
         return Some("unknown frame configuration key".to_string());
     }
-    if target == "window" && key == "pills" {
+    if key == "pills" {
         if segments.len() < 4 {
             return None;
         }
@@ -503,23 +503,40 @@ pub(super) fn validate_frames_path(segments: &[&str]) -> Option<String> {
         }
         if segments.len() == 5 {
             let setting = segments[4];
-            if matches!(
-                setting,
-                "label"
-                    | "command"
-                    | "interval_seconds"
-                    | "initial"
-                    | "timeout_ms"
-                    | "empty_behavior"
-                    | "error_behavior"
-                    | "max_output_chars"
-                    | "style"
-            ) {
+            let supported = if target == "window" {
+                matches!(
+                    setting,
+                    "label"
+                        | "command"
+                        | "interval_seconds"
+                        | "initial"
+                        | "timeout_ms"
+                        | "empty_behavior"
+                        | "error_behavior"
+                        | "max_output_chars"
+                        | "style"
+                )
+            } else {
+                matches!(
+                    setting,
+                    "field"
+                        | "label"
+                        | "format"
+                        | "compact_format"
+                        | "when"
+                        | "min_width"
+                        | "max_width"
+                        | "priority"
+                        | "style"
+                        | "on_click"
+                )
+            };
+            if supported {
                 return None;
             }
-            return Some("unknown status pill configuration key".to_string());
+            return Some("pane or window status pill setting is not supported".to_string());
         }
-        return Some("status pill setting must not contain nested keys".to_string());
+        return Some("nested status pill setting is not supported".to_string());
     }
     if segments.len() > 3 {
         return Some("scalar frame setting must not contain nested keys".to_string());

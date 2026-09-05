@@ -2197,7 +2197,7 @@ fn migrates_schema_66_with_disabled_iroh_transport() {
 /// single bidirectional control stream enforced by the v1 Iroh protocol.
 #[test]
 fn migrates_schema_67_to_fixed_iroh_stream_limit() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 85);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 86);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2262,7 +2262,7 @@ fn migrates_schema_68_with_separate_outbound_iroh_permission() {
 /// changing the existing ephemeral behavior unless the owner configures it.
 #[test]
 fn migrates_schema_69_with_iroh_bind_port() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 85);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 86);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2293,7 +2293,7 @@ fn migrates_schema_69_with_iroh_bind_port() {
 /// supported primary configuration format without enabling the Iroh listener.
 #[test]
 fn migrates_schema_70_with_iroh_compression_defaults() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 85);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 86);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2509,7 +2509,7 @@ fn migrates_schema_74_without_enabling_streaming_compression() {
 
         assert_eq!(plan.from_version, 74);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 85);
+        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 86);
         assert_eq!(
             root.pointer("/transport/iroh/compression_codecs"),
             Some(&expected_codecs)
@@ -2647,7 +2647,7 @@ fn migrates_schema_76_provider_models_to_structured_records() {
 
         assert_eq!(plan.from_version, 76);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 85);
+        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 86);
         assert_eq!(
             root.pointer("/providers/custom/models/alpha-model/id"),
             Some(&serde_json::json!("alpha/model"))
@@ -2758,7 +2758,7 @@ fn migrates_schema_78_external_editor_defaults() {
 
         assert_eq!(plan.from_version, 78);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 85);
+        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 86);
         assert_eq!(
             root.pointer("/external_editor/command"),
             Some(&serde_json::json!(["editor", "{file}"]))
@@ -3050,8 +3050,11 @@ fn migrates_schema_84_zen_mode() {
             let root = parse_config_json_value(format, &plan.text).unwrap();
 
             assert_eq!(plan.from_version, 84);
-            assert_eq!(plan.to_version, 85);
-            assert_eq!(root.pointer("/version"), Some(&serde_json::json!(85)));
+            assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+            assert_eq!(
+                root.pointer("/version"),
+                Some(&serde_json::json!(CURRENT_CONFIG_SCHEMA_VERSION))
+            );
             assert_eq!(
                 root.pointer("/terminal/zen_mode"),
                 Some(&serde_json::json!(expected))
@@ -3061,5 +3064,108 @@ fn migrates_schema_84_zen_mode() {
             assert!(!repeated.changed);
             assert_eq!(repeated.text, plan.text);
         }
+    }
+}
+
+/// Schema v86 materializes pane status rails while preserving the exact legacy
+/// implicit composition and suppressing fields already present in custom titles.
+#[test]
+fn migrates_schema_85_pane_status_rails() {
+    for (format, missing, custom, explicit) in [
+        (
+            ConfigFormat::Toml,
+            "version = 85\n",
+            "version = 85\n[frames.pane]\ntemplate = \"#{pane.index} #{agent.model} #{history.position}\"\n",
+            "version = 85\n[frames.pane]\nleft_status = \"\"\nright_status = \"#{agent.status}\"\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":85}"#,
+            r##"{"version":85,"frames":{"pane":{"template":"#{pane.index} #{agent.model} #{history.position}"}}}"##,
+            r##"{"version":85,"frames":{"pane":{"left_status":"","right_status":"#{agent.status}"}}}"##,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 85\n",
+            "version: 85\nframes:\n  pane:\n    template: '#{pane.index} #{agent.model} #{history.position}'\n",
+            "version: 85\nframes:\n  pane:\n    left_status: ''\n    right_status: '#{agent.status}'\n",
+        ),
+    ] {
+        let missing_plan = migrate_config_text(format, missing).unwrap();
+        let missing_root = parse_config_json_value(format, &missing_plan.text).unwrap();
+        assert_eq!(missing_plan.from_version, 85);
+        assert_eq!(missing_plan.to_version, 86);
+        assert_eq!(
+            missing_root.pointer("/frames/pane/left_status"),
+            Some(&serde_json::json!("#{pane.progress}"))
+        );
+        assert_eq!(
+            missing_root.pointer("/frames/pane/right_status"),
+            Some(&serde_json::json!(
+                "#{agent.model} #{agent.reasoning} #{agent.thinking} #{agent.planning} #{agent.routing} #{agent.latency} #{policy.mode} #{agent.context_usage} #{agent.status} #{history.position}"
+            ))
+        );
+
+        let custom_root =
+            parse_config_json_value(format, &migrate_config_text(format, custom).unwrap().text)
+                .unwrap();
+        assert_eq!(
+            custom_root.pointer("/frames/pane/left_status"),
+            Some(&serde_json::json!(""))
+        );
+        let custom_right = custom_root
+            .pointer("/frames/pane/right_status")
+            .and_then(serde_json::Value::as_str)
+            .unwrap();
+        assert!(!custom_right.contains("agent.model"), "{custom_right}");
+        assert!(!custom_right.contains("history.position"), "{custom_right}");
+
+        let explicit_plan = migrate_config_text(format, explicit).unwrap();
+        let explicit_root = parse_config_json_value(format, &explicit_plan.text).unwrap();
+        assert_eq!(
+            explicit_root.pointer("/frames/pane/left_status"),
+            Some(&serde_json::json!(""))
+        );
+        assert_eq!(
+            explicit_root.pointer("/frames/pane/right_status"),
+            Some(&serde_json::json!("#{agent.status}"))
+        );
+        let repeated = migrate_config_text(format, &explicit_plan.text).unwrap();
+        assert!(!repeated.changed);
+        assert_eq!(repeated.text, explicit_plan.text);
+    }
+}
+
+/// Schema v86 resolves an empty legacy pane title through `visible_fields`
+/// before suppressing duplicate status fields in the materialized rails.
+#[test]
+fn migrates_schema_85_pane_status_rails_from_visible_fields() {
+    for (format, text) in [
+        (
+            ConfigFormat::Toml,
+            "version = 85\n[frames.pane]\ntemplate = \"\"\nvisible_fields = [\"pane.index\", \"agent.model\", \"history.position\"]\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r##"{"version":85,"frames":{"pane":{"template":"","visible_fields":["pane.index","agent.model","history.position"]}}}"##,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 85\nframes:\n  pane:\n    template: ''\n    visible_fields: [pane.index, agent.model, history.position]\n",
+        ),
+    ] {
+        let plan = migrate_config_text(format, text).unwrap();
+        let root = parse_config_json_value(format, &plan.text).unwrap();
+        let right = root
+            .pointer("/frames/pane/right_status")
+            .and_then(serde_json::Value::as_str)
+            .unwrap();
+
+        assert_eq!(
+            root.pointer("/frames/pane/left_status"),
+            Some(&serde_json::json!(""))
+        );
+        assert!(!right.contains("agent.model"), "{right}");
+        assert!(!right.contains("history.position"), "{right}");
     }
 }

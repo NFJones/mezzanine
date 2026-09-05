@@ -466,13 +466,39 @@ max_output_chars = 32
 | `frames.pane.enabled` | boolean | `true` | Render pane frame or border metadata. |
 | `frames.pane.position` | string | `"border"` | `top`, `bottom`, or `border`. |
 | `frames.pane.template` | string | `"#{pane.index} #{pane.title}"` | Pane frame template. Pill padding is added by the renderer. |
+| `frames.pane.left_status` | string | `"#{pane.progress}"` | Status rail rendered immediately after the pane title. An empty string disables it. |
+| `frames.pane.right_status` | string | see example config | Right-aligned ordered built-in or named status pills. An empty string disables it. |
+| `frames.pane.pills` | table | `{}` | Named built-in definitions referenced from either rail as `#{pill.<name>}`. |
 | `frames.pane.style` | string | `"default"` | Frame text style. |
-| `frames.pane.visible_fields` | string array | `[...]` | Allowed template fields for pane frames. |
+| `frames.pane.visible_fields` | string array | `[...]` | Fallback fields used only when `frames.pane.template` is empty; this does not filter status rails. |
 
 Default `frames.pane.visible_fields`:
 
 ```toml
 ["pane.index", "pane.title", "pane.id", "pane.status", "history.position", "agent.model", "agent.reasoning", "agent.thinking", "agent.planning", "agent.routing", "agent.latency", "agent.preset", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
+```
+
+Pane status rails accept bare built-ins such as `#{pane.progress}`,
+`#{pane.pwd}`, `#{agent.model}`, and `#{history.position}`. A named definition
+requires `field` and may set `label`, `format`, `compact_format`, `when`,
+`min_width`, `max_width`, `priority`, `style`, and `on_click`. Supported
+formats are `full`, `short`, and `percent` where the field is numeric. `when`
+is an AND-combined array drawn from `agent-view`, `shell-view`, `focused`,
+`unfocused`, `busy`, `idle`, `supported`, `nonempty`, and `scrollback`;
+contradictory pairs are rejected. `on_click` is limited to `builtin` or `none`.
+Command providers, working-directory execution, custom actions, overflow,
+presets, and diagnostics are not part of this schema.
+
+```toml
+[frames.pane.pills.model]
+field = "agent.model"
+label = "Model"
+format = "short"
+when = ["agent-view", "supported", "nonempty"]
+max_width = 24
+priority = 80
+style = "agent-model"
+on_click = "builtin"
 ```
 
 ### Frame template fields

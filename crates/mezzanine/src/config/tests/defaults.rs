@@ -513,6 +513,8 @@ fn initial_config_is_complete_annotated_and_provider_free() {
         "[frames.window.pills]",
         "#? [frames.window.pills.example]",
         "[frames.pane]",
+        "[frames.pane.pills]",
+        "#? [frames.pane.pills.model]",
         "[theme]",
         "[theme.aliases]",
         "[theme.colors]",

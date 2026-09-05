@@ -471,3 +471,55 @@ fn config_mutation_batch_rejects_invalid_final_document() {
     assert!(error.message().contains("mutation batch rejected"));
     assert!(error.message().contains("permissions.approval_policy"));
 }
+
+/// Verifies live mutation opens only the documented named-pill leaves instead
+/// of broadly allowing arbitrary deep frame configuration paths.
+#[test]
+fn config_mutation_allows_only_supported_named_pill_leaves() {
+    let source = format!(
+        "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[frames.pane]\nright_status = \"#{{pill.model}}\"\n[frames.pane.pills.model]\nfield = \"agent.model\"\n"
+    );
+    let label = plan_config_mutation(
+        ConfigFormat::Toml,
+        &source,
+        ConfigScope::Primary,
+        set_string("frames.pane.pills.model.label", "Model"),
+    )
+    .unwrap();
+    assert!(label.changed);
+
+    let conditions = plan_config_mutation(
+        ConfigFormat::Toml,
+        &label.text,
+        ConfigScope::Primary,
+        set_string_array("frames.pane.pills.model.when", &["agent-view", "nonempty"]),
+    )
+    .unwrap();
+    assert!(conditions.changed);
+
+    let window = plan_config_mutation(
+        ConfigFormat::Toml,
+        &format!("version = {CURRENT_CONFIG_SCHEMA_VERSION}\n"),
+        ConfigScope::Primary,
+        set_string("frames.window.pills.build.command", "printf ok"),
+    )
+    .unwrap();
+    assert!(window.changed);
+
+    for path in [
+        "frames.pane.pills.model.command",
+        "frames.pane.pills.model.cwd",
+        "frames.pane.pills.model.unknown",
+        "frames.window.pills.build.unknown",
+        "frames.pane.pills.model.style.extra",
+    ] {
+        let error = plan_config_mutation(
+            ConfigFormat::Toml,
+            &conditions.text,
+            ConfigScope::Primary,
+            set_string(path, "value"),
+        )
+        .unwrap_err();
+        assert!(error.message().contains("not supported"), "{path}: {error}");
+    }
+}

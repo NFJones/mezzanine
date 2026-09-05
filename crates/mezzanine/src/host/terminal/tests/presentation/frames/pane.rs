@@ -2,7 +2,8 @@
 
 use crate::host::terminal::tests::fixtures::display_column_for_fragment;
 use crate::host::terminal::{
-    BTreeMap, DEFAULT_PANE_FRAME_TEMPLATE, PaneAgentStatusField, PaneRenderInput,
+    BTreeMap, DEFAULT_PANE_FRAME_TEMPLATE, PaneAgentStatusField, PaneRenderInput, PaneStatusAction,
+    PaneStatusField, PaneStatusPillDefinition, PaneStatusRail, PaneStatusStyle,
     TerminalClientLoopConfig, TerminalFrameContext, TerminalFrameRenderOptions,
     TerminalPaneFrameContext, pane_frame_agent_status_pillbox_cells, render_attached_client_view,
     render_window_with_pane_frame_template,
@@ -94,6 +95,8 @@ fn render_frame_templates_use_runtime_context_fields() {
         session_id: Some("$1".to_string()),
         ..TerminalFrameContext::default()
     };
+    frame_context.pane_status.left_status.clear();
+    frame_context.pane_status.right_status.clear();
     frame_context
         .window_agent_active_counts
         .insert(window.id.to_string(), 2);
@@ -245,6 +248,8 @@ fn render_custom_pane_frame_can_show_terminal_progress() {
         lines: vec!["body".to_string()],
     }];
     let mut frame_context = TerminalFrameContext::default();
+    frame_context.pane_status.left_status.clear();
+    frame_context.pane_status.right_status.clear();
     frame_context.panes.insert(
         pane_id,
         TerminalPaneFrameContext {
@@ -423,6 +428,110 @@ fn render_default_pane_frame_agent_model_and_reasoning_pills_are_clickable() {
             && thinking_columns.iter().max() < planning_columns.iter().min()
             && planning_columns.iter().max() < routing_columns.iter().min(),
         "planning should sit between thinking and routing pills: {cells:?}"
+    );
+}
+
+/// Verifies duplicate named built-in occurrences retain distinct semantic
+/// identities while sharing their stable pane owner, configured style, and
+/// built-in action. A read-only occurrence renders but exposes no hit cells.
+#[test]
+fn render_configured_pane_status_occurrences_keep_semantic_identity() {
+    let mut ids = IdFactory::default();
+    let window = Window::new(&mut ids, 0, "main", Size::new(120, 3).unwrap());
+    let pane_id = window.panes()[0].id.clone();
+    let mut frame_context = TerminalFrameContext::default();
+    frame_context.pane_status.left_status.clear();
+    frame_context.pane_status.right_status =
+        "#{pill.model} #{pill.readonly} #{pill.model}".to_string();
+    let mut model = PaneStatusPillDefinition::builtin(PaneStatusField::AgentModel);
+    model.label = Some("Model".to_string());
+    model.style = PaneStatusStyle::AgentStatusFailed;
+    model.priority = 80;
+    let mut readonly = model.clone();
+    readonly.label = Some("Read".to_string());
+    readonly.action = PaneStatusAction::None;
+    frame_context
+        .pane_status
+        .pills
+        .insert("model".to_string(), model);
+    frame_context
+        .pane_status
+        .pills
+        .insert("readonly".to_string(), readonly);
+    frame_context.panes.insert(
+        pane_id.to_string(),
+        TerminalPaneFrameContext {
+            mode: Some("agent".to_string()),
+            agent_model: Some("gpt-5.6".to_string()),
+            ..TerminalPaneFrameContext::default()
+        },
+    );
+    let plan = plan_window_presentation(
+        &window,
+        WindowPresentationOptions {
+            pane_frames_visible: true,
+            ..WindowPresentationOptions::default()
+        },
+    )
+    .unwrap();
+    let cells = pane_frame_agent_status_pillbox_cells(
+        &window,
+        &frame_context,
+        DEFAULT_PANE_FRAME_TEMPLATE,
+        &plan,
+    );
+    let ordinals = cells
+        .iter()
+        .map(|cell| cell.identity.occurrence.ordinal)
+        .collect::<std::collections::BTreeSet<_>>();
+
+    assert_eq!(ordinals, [0, 2].into_iter().collect());
+    assert!(cells.iter().all(|cell| {
+        cell.identity.owner_pane_id == pane_id
+            && cell.identity.occurrence.rail == PaneStatusRail::Right
+            && cell.identity.style == PaneStatusStyle::AgentStatusFailed
+            && cell.identity.priority == 80
+            && cell.identity.action == PaneStatusAction::Builtin(PaneAgentStatusField::Model)
+    }));
+}
+
+/// Verifies explicit empty rails suppress every implicit progress, agent, and
+/// history item while leaving the pane title row itself enabled.
+#[test]
+fn render_explicit_empty_pane_status_rails_have_no_implicit_items() {
+    let mut ids = IdFactory::default();
+    let window = Window::new(&mut ids, 0, "main", Size::new(48, 3).unwrap());
+    let pane_id = window.panes()[0].id.to_string();
+    let mut frame_context = TerminalFrameContext::default();
+    frame_context.pane_status.left_status.clear();
+    frame_context.pane_status.right_status.clear();
+    frame_context.panes.insert(
+        pane_id,
+        TerminalPaneFrameContext {
+            mode: Some("agent".to_string()),
+            terminal_progress_percent: Some(40),
+            agent_model: Some("gpt-5.6".to_string()),
+            history_position: Some("scroll:4".to_string()),
+            ..TerminalPaneFrameContext::default()
+        },
+    );
+    let plan = plan_window_presentation(
+        &window,
+        WindowPresentationOptions {
+            pane_frames_visible: true,
+            ..WindowPresentationOptions::default()
+        },
+    )
+    .unwrap();
+
+    assert!(
+        pane_frame_agent_status_pillbox_cells(
+            &window,
+            &frame_context,
+            DEFAULT_PANE_FRAME_TEMPLATE,
+            &plan,
+        )
+        .is_empty()
     );
 }
 

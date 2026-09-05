@@ -317,6 +317,7 @@ pub fn validate_config_text(
     diagnostics.extend(validate_group_whitelist_config(format, text));
     diagnostics.extend(validate_env_whitelist_config(format, text));
     diagnostics.extend(validate_agent_enabled_actions_config(format, text));
+    diagnostics.extend(validate_pane_status_config(format, text));
 
     for (backend, display_name) in [("bubblewrap", "Bubblewrap"), ("seatbelt", "Seatbelt")] {
         let git_user_name = values.get(&format!("permissions.{backend}.git_user_name"));
@@ -560,6 +561,23 @@ pub fn validate_config_text(
     diagnostics.sort_by(|left, right| left.path.cmp(&right.path));
     diagnostics.dedup();
     ConfigValidation::from_diagnostics(diagnostics)
+}
+
+/// Validates typed pane-status rails and named built-in definitions as one
+/// atomic runtime configuration value.
+fn validate_pane_status_config(format: ConfigFormat, text: &str) -> Vec<ConfigDiagnostic> {
+    let Ok(root) = parse_config_json_value(format, text) else {
+        return Vec::new();
+    };
+    crate::runtime::runtime_pane_status_config_from_config(&root)
+        .err()
+        .map(|error| {
+            vec![ConfigDiagnostic {
+                path: "frames.pane".to_string(),
+                message: error.message().to_string(),
+            }]
+        })
+        .unwrap_or_default()
 }
 
 /// Validates the static provider action allowlist and rejects controller-only actions.

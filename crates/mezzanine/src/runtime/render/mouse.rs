@@ -352,7 +352,21 @@ impl RuntimeSessionService {
                 Ok((true, None))
             }
             MouseAction::OpenPaneAgentStatusSelector { pane_index, field } => {
-                self.open_pane_agent_status_selector(primary_client_id, pane_index, field)?;
+                self.open_pane_agent_status_selector(primary_client_id, pane_index, field, None)?;
+                Ok((true, None))
+            }
+            MouseAction::OpenPaneAgentStatusSelectorIdentity { identity } => {
+                let crate::host::terminal::PaneStatusAction::Builtin(field) = identity.action
+                else {
+                    self.presentation.pane_agent_status_selector = None;
+                    return Ok((true, None));
+                };
+                self.open_pane_agent_status_selector(
+                    primary_client_id,
+                    usize::MAX,
+                    field,
+                    Some(&identity),
+                )?;
                 Ok((true, None))
             }
             MouseAction::HoverPaneAgentStatusSelector {
@@ -742,16 +756,41 @@ impl RuntimeSessionService {
         _primary_client_id: &mez_core::ids::ClientId,
         pane_index: usize,
         field: PaneAgentStatusField,
+        identity: Option<&crate::host::terminal::PaneStatusSegmentIdentity>,
     ) -> Result<()> {
         let Some(window) = self.session.active_window() else {
             self.presentation.pane_agent_status_selector = None;
             return Ok(());
         };
-        let Some(pane) = window.panes().iter().find(|pane| pane.index == pane_index) else {
+        let pane = identity
+            .and_then(|identity| {
+                window
+                    .panes()
+                    .iter()
+                    .find(|pane| pane.id == identity.owner_pane_id)
+            })
+            .or_else(|| window.panes().iter().find(|pane| pane.index == pane_index));
+        let Some(pane) = pane else {
             self.presentation.pane_agent_status_selector = None;
             return Ok(());
         };
+        let pane_index = pane.index;
         let pane_id = pane.id.to_string();
+        if let Some(identity) = identity {
+            if identity.action != crate::host::terminal::PaneStatusAction::Builtin(field) {
+                self.presentation.pane_agent_status_selector = None;
+                return Ok(());
+            }
+            let frame_context = self.terminal_frame_context();
+            let identity_is_current = self
+                .active_window_mouse_pane_agent_status_cells(&frame_context)
+                .iter()
+                .any(|cell| &cell.identity == identity);
+            if !identity_is_current {
+                self.presentation.pane_agent_status_selector = None;
+                return Ok(());
+            }
+        }
         if field == PaneAgentStatusField::Routing {
             self.presentation.pane_agent_status_selector = None;
             let outcome = self.execute_agent_shell_routing_command(&pane_id, "/routing toggle")?;
@@ -802,8 +841,13 @@ impl RuntimeSessionService {
         let cells = self.active_window_mouse_pane_agent_status_cells(&frame_context);
         let field_cells = cells
             .iter()
-            .filter(|cell| cell.pane_index == pane_index && cell.field == field)
-            .copied()
+            .filter(|cell| {
+                identity.map_or_else(
+                    || cell.pane_index == pane_index && cell.field == field,
+                    |identity| &cell.identity == identity,
+                )
+            })
+            .cloned()
             .collect::<Vec<_>>();
         let Some(anchor_column) = field_cells.iter().map(|cell| cell.column).min() else {
             self.presentation.pane_agent_status_selector = None;

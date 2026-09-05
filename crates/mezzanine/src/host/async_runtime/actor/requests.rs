@@ -58,6 +58,7 @@ impl AsyncRuntimeSessionActor {
                         | crate::host::terminal::MouseAction::PressWindowAction { .. }
                         | crate::host::terminal::MouseAction::ReleaseWindowAction { .. }
                         | crate::host::terminal::MouseAction::OpenPaneAgentStatusSelector { .. }
+                        | crate::host::terminal::MouseAction::OpenPaneAgentStatusSelectorIdentity { .. }
                         | crate::host::terminal::MouseAction::HoverPaneAgentStatusSelector { .. }
                         | crate::host::terminal::MouseAction::SelectPaneAgentStatusSelector { .. }
                         | crate::host::terminal::MouseAction::BeginDisplayOverlaySelection { .. }

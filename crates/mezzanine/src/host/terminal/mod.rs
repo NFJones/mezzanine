@@ -46,6 +46,7 @@ mod host_clipboard;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod mouse;
+mod pane_status;
 /// Exposes the render module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -91,6 +92,11 @@ pub use host_clipboard::{
 pub use mouse::{
     MouseAction, MousePaneAgentSelectorCell, MousePaneAgentStatusCell, MouseWindowActionFrameCell,
     PaneAgentStatusField, WindowFrameAction, WindowFrameCommandKind,
+};
+pub use pane_status::{
+    PaneStatusAction, PaneStatusCondition, PaneStatusConfig, PaneStatusField, PaneStatusFormat,
+    PaneStatusOccurrenceId, PaneStatusPillDefinition, PaneStatusRail, PaneStatusSegmentIdentity,
+    PaneStatusStyle,
 };
 pub use render::{
     DEFAULT_PANE_FRAME_TEMPLATE, DEFAULT_PANE_FRAME_VISIBLE_FIELDS,

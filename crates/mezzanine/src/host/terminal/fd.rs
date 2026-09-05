@@ -6,8 +6,8 @@
 
 use super::{
     BTreeMap, BorrowedFd, Errno, MezError, MousePaneAgentSelectorCell, MousePaneAgentStatusCell,
-    MouseWindowActionFrameCell, OptionalActions, RawFd, Result, Termios, WindowFrameAction,
-    borrow_raw_fd, fcntl_getfl, tcgetattr, tcgetwinsize, tcsetattr,
+    MouseWindowActionFrameCell, OptionalActions, PaneStatusConfig, RawFd, Result, Termios,
+    WindowFrameAction, borrow_raw_fd, fcntl_getfl, tcgetattr, tcgetwinsize, tcsetattr,
 };
 use crate::ui::readline::ReadlinePrompt;
 use mez_mux::copy::CopyPosition;
@@ -74,6 +74,8 @@ pub struct TerminalFrameContext {
     pub approval_attention_groups: std::collections::BTreeSet<String>,
     /// Right-side status fields rendered into the active pane frame.
     pub window_status: Option<TerminalWindowStatusContext>,
+    /// Typed pane-status rails and named built-in definitions.
+    pub pane_status: PaneStatusConfig,
     /// Per-pane runtime metadata keyed by stable pane id.
     pub panes: BTreeMap<String, TerminalPaneFrameContext>,
 }
