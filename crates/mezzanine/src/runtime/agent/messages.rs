@@ -209,7 +209,32 @@ impl RuntimeSessionService {
             return Ok(result);
         }
         let sender = self.runtime_message_sender_identity(turn)?;
-        let recipient_target = runtime_message_recipient(recipient)?;
+        let recipient_target = match runtime_message_recipient(recipient) {
+            Ok(target) => target,
+            Err(error) => {
+                let mut result = ActionResult::failed(
+                    turn,
+                    action,
+                    ActionStatus::Failed,
+                    "invalid_message_recipient",
+                    error.message().to_string(),
+                )?;
+                result.structured_content_json = Some(
+                    serde_json::json!({
+                        "recipient": recipient,
+                        "message_id": null,
+                        "delivery_status": "rejected",
+                        "delivery_applied": false,
+                        "accepted_recipient_forms": [
+                            "session", "agent:<id>", "pane:<id>", "window:<id>",
+                            "role:<name>", "capability:<name>", "group:<name>"
+                        ]
+                    })
+                    .to_string(),
+                );
+                return Ok(result);
+            }
+        };
         let message_id = format!("{}:{}", turn.turn_id, action.id);
         let now_ms = current_unix_seconds().saturating_mul(1000);
         let envelope = Envelope {

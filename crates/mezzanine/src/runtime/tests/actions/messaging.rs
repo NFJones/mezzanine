@@ -601,10 +601,79 @@ fn runtime_executes_send_message_action_through_message_service() {
     assert_eq!(messages[0].payload, "hello worker");
 }
 
-/// Verifies that MAAP `send_message` canonicalizes the common model-emitted
-/// `text/plain` shorthand before MMP delivery. The transport endpoint remains
-/// strict, but model-produced coordination messages should not fail a subagent
-/// turn when the payload is otherwise valid UTF-8 text.
+/// Malformed recipient arguments must yield durable correction feedback without
+/// delivery; a subsequent model-authored correction delivers exactly once.
+#[test]
+fn runtime_invalid_message_recipient_queues_correction_without_delivery() {
+    let (mut service, execution, target) =
+        execute_runtime_send_message_to("parent", "text/plain", "handoff");
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    let result = &execution.action_results[0];
+    assert_eq!(result.status, ActionStatus::Failed);
+    assert_eq!(
+        result.error.as_ref().unwrap().code,
+        "invalid_message_recipient"
+    );
+    assert!(
+        result
+            .structured_content_json
+            .as_deref()
+            .unwrap()
+            .contains("accepted_recipient_forms")
+    );
+    assert!(
+        service
+            .message_service()
+            .receive_for(&target, u64::MAX)
+            .is_empty()
+    );
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == "turn-1")
+    );
+    let mut response = execution.response.clone();
+    let action = &mut response.action_batch.as_mut().unwrap().actions[0];
+    action.id = "msg-corrected".to_string();
+    if let mez_agent::AgentActionPayload::SendMessage { recipient, .. } = &mut action.payload {
+        *recipient = format!("agent:{target}");
+    }
+    let corrected = service
+        .poll_agent_provider_tasks_with_provider(&RuntimeBatchProvider { response }, 1)
+        .unwrap()
+        .remove(0);
+    assert_eq!(corrected.action_results[0].status, ActionStatus::Succeeded);
+    let messages = service.message_service().receive_for(&target, u64::MAX);
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].payload, "handoff");
+}
+
+/// Repeating an invalid recipient consumes the existing correction budget and
+/// terminates without delivering messages or scheduling unbounded continuations.
+#[test]
+fn runtime_invalid_message_recipient_exhausts_correction_budget() {
+    let (mut service, execution, target) =
+        execute_runtime_send_message_to("parent", "text/plain", "handoff");
+    service.set_agent_action_failure_retry_limit(1);
+    let mut response = execution.response.clone();
+    response.action_batch.as_mut().unwrap().actions[0].id = "msg-repeated".to_string();
+    let repeated = service
+        .poll_agent_provider_tasks_with_provider(&RuntimeBatchProvider { response }, 1)
+        .unwrap()
+        .remove(0);
+    assert_eq!(repeated.terminal_state, AgentTurnState::Failed);
+    assert!(service.pending_agent_provider_tasks().is_empty());
+    assert!(
+        service
+            .message_service()
+            .receive_for(&target, u64::MAX)
+            .is_empty()
+    );
+}
+
+/// The text/plain shorthand is canonicalized before accepted MMP delivery;
+/// correcting malformed recipients must not change this valid payload behavior.
 #[test]
 fn runtime_canonicalizes_send_message_text_plain_alias() {
     let (service, execution, target_agent) =

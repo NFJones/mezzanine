@@ -6927,6 +6927,10 @@ reason.
 For `send_message` actions, `structured_content` MUST include recipient
 identity, message identity when assigned, delivery status, and any protocol
 error returned by the local message passing protocol.
+Malformed recipient arguments MUST settle as `invalid_message_recipient` with
+accepted recipient forms and `delivery_applied=false`. They MUST enter existing
+bounded model correction without replaying completed sibling actions or changing
+policy-denial, target-availability, or transport-error handling.
 
 For `config_change` actions, `structured_content` MUST include a stable
 mutation identity, canonical setting path and operation, normalized requested

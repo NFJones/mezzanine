@@ -1390,6 +1390,19 @@ fn execute_runtime_send_message_action(
     mez_agent::AgentTurnExecution,
     AgentId,
 ) {
+    execute_runtime_send_message_to("agent:agent-%2", content_type, payload)
+}
+
+/// Executes a message against an explicit recipient to exercise validation feedback.
+fn execute_runtime_send_message_to(
+    recipient: &str,
+    content_type: &str,
+    payload: &str,
+) -> (
+    RuntimeSessionService,
+    mez_agent::AgentTurnExecution,
+    AgentId,
+) {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -1440,7 +1453,7 @@ fn execute_runtime_send_message_action(
                     id: "msg-1".to_string(),
                     rationale: "coordinate with another local agent".to_string(),
                     payload: mez_agent::AgentActionPayload::SendMessage {
-                        recipient: "agent:agent-%2".to_string(),
+                        recipient: recipient.to_string(),
                         content_type: content_type.to_string(),
                         payload: payload.to_string(),
                     },
