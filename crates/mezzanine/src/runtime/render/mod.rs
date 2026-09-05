@@ -2359,7 +2359,13 @@ impl RuntimeSessionService {
 
     /// Replaces the desktop clipboard adapter after configuration changes.
     pub(crate) fn set_host_clipboard(&mut self, host_clipboard: HostClipboard) {
-        self.presentation.copy.host_clipboard = host_clipboard;
+        self.presentation.copy.host_clipboard =
+            self.host_clipboard_with_session_environment(host_clipboard);
+    }
+
+    /// Rebinds the existing clipboard after the session proxy is installed.
+    pub(super) fn refresh_host_clipboard_environment(&mut self) {
+        self.set_host_clipboard(self.presentation.copy.host_clipboard.clone());
     }
 
     /// Returns the configured OSC 52 terminal clipboard policy.

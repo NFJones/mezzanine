@@ -1799,6 +1799,118 @@ fn runtime_service_restarts_restored_panes_from_home_when_saved_cwd_fails() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Clipboard children must receive the session proxy environment both when
+/// the proxy is installed and when configuration replaces the adapter. Shell
+/// helpers observe copy and paste without accessing a desktop clipboard, and
+/// a separate client adapter must retain its original inherited environment.
+#[tokio::test(flavor = "current_thread")]
+async fn runtime_x11_environment_reaches_clipboard_after_install_and_reload() {
+    use crate::host::terminal::{
+        HostClipboard, HostClipboardCommand, read_host_clipboard_plan_async,
+    };
+
+    let root = temp_root("x11-clipboard-environment");
+    let output = root.join("clipboard.txt");
+    let command = HostClipboardCommand::new("sh", vec![
+        "-c".to_string(),
+        "cat >/dev/null; printf '%s\\n%s\\n' \"${DISPLAY-unset}\" \"${XAUTHORITY-unset}\" > \"$1\"".to_string(),
+        "clipboard-test".to_string(),
+        output.to_string_lossy().into_owned(),
+    ]);
+    let read = HostClipboardCommand::new(
+        "sh",
+        vec![
+            "-c".to_string(),
+            "printf '%s\\n%s\\n' \"${DISPLAY-unset}\" \"${XAUTHORITY-unset}\"".to_string(),
+        ],
+    );
+    let clipboard = HostClipboard::configured(Some(command), Some(read))
+        .with_read_limits(Duration::from_secs(2), 4096);
+    let client_before = read_host_clipboard_plan_async(clipboard.read_plan()).await;
+    let proxy = crate::runtime::x11::RuntimeX11Proxy::prepare(&root).unwrap();
+    let handle = proxy.handle();
+    let expected = format!(
+        "{}\n{}\n",
+        handle.display(),
+        handle.authority_path().display()
+    );
+    let mut service = test_runtime_service();
+    service.set_host_clipboard(clipboard.clone());
+    service.set_runtime_x11_proxy(handle);
+
+    for replacement in [false, true] {
+        if replacement {
+            fs::remove_file(&output).unwrap();
+            service.set_host_clipboard(clipboard.clone());
+        }
+        service
+            .copy_text_to_buffer_and_host_clipboard(
+                "clipboard",
+                "payload".to_string(),
+                "test".to_string(),
+                false,
+            )
+            .unwrap();
+        assert_eq!(wait_for_x11_environment_file(&output), expected);
+        assert_eq!(
+            read_host_clipboard_plan_async(service.host_clipboard_for_tests().read_plan()).await,
+            Some(expected.clone())
+        );
+    }
+    assert_eq!(
+        read_host_clipboard_plan_async(clipboard.read_plan()).await,
+        client_before
+    );
+    fs::remove_file(&output).unwrap();
+    service
+        .copy_text_to_buffer_and_host_clipboard(
+            "clipboard",
+            "client-routed".to_string(),
+            "test".to_string(),
+            true,
+        )
+        .unwrap();
+    assert!(
+        !output.exists(),
+        "client-routed copies must suppress the server helper"
+    );
+    drop(service);
+    drop(proxy);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// An installed clipboard helper can fail after spawning (for example xclip
+/// without a usable display). The asynchronous copy worker must then execute
+/// the next helper rather than treating process creation as completed copy.
+#[test]
+fn runtime_clipboard_copy_falls_back_after_command_failure() {
+    use crate::host::terminal::{HostClipboard, HostClipboardCommand};
+
+    let root = temp_root("clipboard-copy-fallback");
+    let output = root.join("copied.txt");
+    let clipboard = HostClipboard::commands(
+        vec![
+            HostClipboardCommand::new(
+                "sh",
+                vec!["-c".to_string(), "cat >/dev/null; exit 1".to_string()],
+            ),
+            HostClipboardCommand::new(
+                "sh",
+                vec![
+                    "-c".to_string(),
+                    "cat > \"$1\"".to_string(),
+                    "clipboard-test".to_string(),
+                    output.to_string_lossy().into_owned(),
+                ],
+            ),
+        ],
+        Vec::new(),
+    );
+    assert!(clipboard.copy("first\nsecond\n"));
+    assert_eq!(wait_for_x11_environment_file(&output), "first\nsecond\n");
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Protected X11 environment values must reach every later window and split
 /// through the same centralized pane-start boundary as the initial process.
 #[tokio::test(flavor = "current_thread")]

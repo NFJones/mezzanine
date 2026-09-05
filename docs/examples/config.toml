@@ -88,6 +88,8 @@ bracketed_paste = true
 clipboard = "external"
 # Optional explicit host clipboard commands. Copy commands receive content on
 # stdin; paste commands return clipboard text on stdout.
+# Server commands use the session X11 proxy environment when enabled.
+# Negotiated Iroh copies instead use the attaching client's local configuration.
 #? clipboard_copy_command = "xclip -selection clipboard"
 #? clipboard_paste_command = "xclip -selection clipboard -out"
 # Maximum time to wait for a host clipboard read.

@@ -2,11 +2,15 @@
 //!
 //! Generic paste-buffer state lives in `mez_mux::paste`; this module retains
 //! platform command discovery and host clipboard process execution.
+//! Session X11 overrides travel with command values, never through global
+//! environment mutation. Copy acceptance means queued work, not delivery;
+//! completion and ordered fallback run outside the serialized runtime.
 
+use std::ffi::OsString;
 use std::fmt;
 use std::io::Write;
+use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -16,14 +20,6 @@ use tokio::io::AsyncReadExt;
 pub const DEFAULT_HOST_CLIPBOARD_READ_TIMEOUT: Duration = Duration::from_millis(250);
 /// Default maximum host-clipboard payload retained for one paste.
 pub const DEFAULT_HOST_CLIPBOARD_READ_MAX_BYTES: usize = 1024 * 1024;
-
-/// Copies text to the host clipboard using common platform clipboard tools.
-///
-/// The operation returns `false` instead of surfacing errors because clipboard
-/// access is best-effort in headless, SSH, and restricted desktop sessions.
-pub fn copy_to_host_clipboard(content: &str) -> bool {
-    copy_to_host_clipboard_with_commands(content, &host_clipboard_copy_commands())
-}
 
 /// Runtime clipboard access strategy.
 ///
@@ -48,6 +44,7 @@ enum HostClipboardCopyBackend {
     /// Uses the ordered command list until one command succeeds.
     Commands(Vec<HostClipboardCommand>),
     /// Uses a fixed function pointer.
+    #[cfg(test)]
     Function(fn(&str) -> bool),
 }
 
@@ -132,7 +129,7 @@ impl HostClipboard {
     /// Returns the system clipboard strategy backed by host clipboard tools.
     pub fn system() -> Self {
         Self {
-            copy: HostClipboardCopyBackend::Function(copy_to_host_clipboard),
+            copy: HostClipboardCopyBackend::Commands(host_clipboard_copy_commands()),
             read: HostClipboardReadBackend::Commands(host_clipboard_paste_commands()),
             read_timeout: DEFAULT_HOST_CLIPBOARD_READ_TIMEOUT,
             read_max_bytes: DEFAULT_HOST_CLIPBOARD_READ_MAX_BYTES,
@@ -214,13 +211,45 @@ impl HostClipboard {
         self
     }
 
-    /// Copies text into the configured host clipboard, returning whether it was
-    /// accepted by the backend.
+    /// Binds command children to one session's stable X11 proxy endpoints.
+    ///
+    /// Only DISPLAY and XAUTHORITY are overridden; test function backends and
+    /// independent client adapters remain unchanged. Rebinding replaces old
+    /// values and read plans retain the environment of their adapter snapshot.
+    pub(crate) fn with_x11_environment(mut self, display: &str, authority: &Path) -> Self {
+        let environment = vec![
+            (OsString::from("DISPLAY"), OsString::from(display)),
+            (
+                OsString::from("XAUTHORITY"),
+                authority.as_os_str().to_owned(),
+            ),
+        ];
+        match &mut self.copy {
+            HostClipboardCopyBackend::Commands(commands) => {
+                for command in commands {
+                    command.environment = environment.clone();
+                }
+            }
+            #[cfg(test)]
+            HostClipboardCopyBackend::Function(_) => {}
+        }
+        if let HostClipboardReadBackend::Commands(commands) = &mut self.read {
+            for command in commands {
+                command.environment = environment.clone();
+            }
+        }
+        self
+    }
+
+    /// Queues a best-effort copy, returning whether the worker was started.
+    /// Delivery is not acknowledged. Failed commands fall through in that
+    /// worker; a live selection owner may remain running without blocking callers.
     pub fn copy(&self, content: &str) -> bool {
         match &self.copy {
             HostClipboardCopyBackend::Commands(commands) => {
                 copy_to_host_clipboard_with_commands(content, commands)
             }
+            #[cfg(test)]
             HostClipboardCopyBackend::Function(copy) => copy(content),
         }
     }
@@ -289,6 +318,8 @@ pub struct HostClipboardCommand {
     program: String,
     /// Stores the executable arguments.
     args: Vec<String>,
+    /// Session-scoped child environment overrides, never authority contents.
+    environment: Vec<(OsString, OsString)>,
 }
 
 impl HostClipboardCommand {
@@ -301,6 +332,7 @@ impl HostClipboardCommand {
         Self {
             program: program.into(),
             args,
+            environment: Vec::new(),
         }
     }
 }
@@ -314,9 +346,19 @@ pub(super) fn copy_to_host_clipboard_with_commands(
     content: &str,
     commands: &[HostClipboardCommand],
 ) -> bool {
-    commands
-        .iter()
-        .any(|command| run_clipboard_copy_command(command, content))
+    if commands.is_empty() {
+        return false;
+    }
+    let commands = commands.to_vec();
+    let content = content.to_string();
+    thread::Builder::new()
+        .name("mez-host-clipboard-copy".to_string())
+        .spawn(move || {
+            commands
+                .iter()
+                .any(|command| run_clipboard_copy_command(command, &content))
+        })
+        .is_ok()
 }
 
 /// Executes one host-clipboard read plan with a total deadline and byte cap.
@@ -400,6 +442,7 @@ async fn read_host_clipboard_commands_async(
         let mut process = tokio::process::Command::new(&command.program);
         process
             .args(&command.args)
+            .envs(command.environment.iter().cloned())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -477,40 +520,24 @@ async fn read_bounded_clipboard_stdout(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn run_clipboard_copy_command(command: &HostClipboardCommand, content: &str) -> bool {
-    let (started_tx, started_rx) = mpsc::sync_channel(1);
-    let command = command.clone();
-    let content = content.to_string();
-    let spawned = thread::Builder::new()
-        .name("mez-host-clipboard-copy".to_string())
-        .spawn(move || {
-            let Ok(mut child) = Command::new(&command.program)
-                .args(&command.args)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-            else {
-                let _ = started_tx.send(false);
-                return;
-            };
-            let Some(mut stdin) = child.stdin.take() else {
-                let _ = started_tx.send(false);
-                let _ = child.kill();
-                let _ = child.wait();
-                return;
-            };
-            let _ = started_tx.send(true);
-            let write_ok = stdin.write_all(content.as_bytes()).is_ok();
-            drop(stdin);
-            if !write_ok {
-                let _ = child.kill();
-            }
-            let _ = child.wait();
-        });
-    if spawned.is_err() {
+    let Ok(mut child) = Command::new(&command.program)
+        .args(&command.args)
+        .envs(command.environment.iter().cloned())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
         return false;
+    };
+    let write_ok = child
+        .stdin
+        .take()
+        .is_some_and(|mut stdin| stdin.write_all(content.as_bytes()).is_ok());
+    if !write_ok {
+        let _ = child.kill();
     }
-    started_rx.recv().unwrap_or(false)
+    child.wait().is_ok_and(|status| status.success()) && write_ok
 }
 
 /// PowerShell command body that decodes redirected WSL stdin as UTF-8 before

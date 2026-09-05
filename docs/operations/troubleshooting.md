@@ -193,6 +193,15 @@ If Windows executable interoperability is disabled, configure an explicit
 `terminal.clipboard_copy_command` or restore interoperability. Headless sessions
 may have no usable provider.
 
+Server-host commands, including explicit `copy-selection` and clipboard paste,
+use the session proxy's `DISPLAY` and `XAUTHORITY` when X11 forwarding is enabled.
+This binding survives clipboard configuration reload and does not change the
+attaching client's environment. A live authorized X11 route is still required;
+enabling the proxy alone does not provide access to a desktop. Copy helpers run
+in the background and unsuccessful helpers fall through to the next command.
+Acceptance means queued work rather than confirmed clipboard delivery; a helper
+that remains alive to own an X11 selection is not killed just for staying alive.
+
 Clipboard writes are best-effort and bounded to 8 MiB. A local provider failure
 does not undo the server internal paste buffer, and it does not interrupt
 rendering or input. With an active client clipboard route, server-host

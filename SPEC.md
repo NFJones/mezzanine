@@ -3714,6 +3714,16 @@ default copy list MUST first attempt the Windows host clipboard through Windows
 PowerShell with explicit UTF-8 stdin decoding before Linux display-server
 helpers.
 
+In X11-enabled sessions, server-host clipboard command children MUST inherit
+the session proxy's stable `DISPLAY` and `XAUTHORITY` overrides, including after
+clipboard configuration reload. These overrides MUST NOT mutate the process
+environment or alter the attaching client's independently configured clipboard
+adapter. Negotiated client-local copies MUST retain server-copy suppression.
+Copy acceptance acknowledges background work, not clipboard delivery. Ordered
+copy fallback MUST continue after a helper fails to spawn, accept stdin, or
+exit successfully. Waiting for a live selection-owning helper MUST NOT block
+the serialized runtime or terminate that helper merely for remaining alive.
+
 `terminal.clipboard_read_timeout_ms` and `terminal.clipboard_read_max_bytes`
 MUST be positive integers and default to 250 milliseconds and 1,048,576 bytes.
 Host clipboard reads MUST execute outside serialized runtime ownership under one

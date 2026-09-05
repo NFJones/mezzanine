@@ -1041,6 +1041,20 @@ impl RuntimeSessionService {
     ) {
         self.process.applied_x11_policy = proxy.policy().clone();
         self.process.x11_proxy = Some(proxy);
+        self.refresh_host_clipboard_environment();
+    }
+
+    /// Binds a server clipboard adapter to the applied session proxy, if any.
+    /// Stable paths survive route changes; credentials remain in the proxy's
+    /// authority file and are never copied into adapter state.
+    pub(super) fn host_clipboard_with_session_environment(
+        &self,
+        clipboard: crate::host::terminal::HostClipboard,
+    ) -> crate::host::terminal::HostClipboard {
+        match self.process.x11_proxy.as_ref() {
+            Some(proxy) => clipboard.with_x11_environment(proxy.display(), proxy.authority_path()),
+            None => clipboard,
+        }
     }
 
     /// Binds the actor-owned X11 proxy to one concrete Iroh connection state.
