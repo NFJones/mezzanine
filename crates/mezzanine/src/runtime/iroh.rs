@@ -4509,6 +4509,16 @@ mod tests {
         })
         .await
         .expect("exact trust revocation should deactivate the direct X11 route");
+        // Route diagnostics can settle before deferred authority publication
+        // is even scheduled. Observe the file itself rather than treating route
+        // revocation or a clear repair-pending flag as publication completion.
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while !std::fs::read(&authority_path).unwrap().is_empty() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("exact trust revocation should clear the direct X11 authority file");
         assert_eq!(std::fs::read(&authority_path).unwrap(), Vec::<u8>::new());
         let mut byte = [0u8; 1];
         let x11_closed =
