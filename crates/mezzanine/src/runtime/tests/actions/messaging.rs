@@ -672,6 +672,248 @@ fn runtime_invalid_message_recipient_exhausts_correction_budget() {
     );
 }
 
+/// A joined child must retain a partially successful batch while correcting an
+/// invalid parent recipient, then deliver and hand off each effect exactly once.
+///
+/// This composes recipient correction with the spawned-child lifecycle. The
+/// successful sibling action must not be replayed during correction, the child
+/// must keep both first-attempt results as provider context, and its corrected
+/// `agent:<parent-id>` delivery must not displace the normal joined handoff.
+#[test]
+fn runtime_spawned_child_corrects_parent_recipient_without_replaying_sibling() {
+    let mut service = test_runtime_service();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    service
+        .agent_scheduler_mut()
+        .set_max_concurrent_agents(2)
+        .unwrap();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let sibling_target = AgentId::opaque("agent-message-sibling").unwrap();
+    service
+        .message_service_mut()
+        .ensure_agent_identity(
+            SenderIdentity {
+                agent_id: sibling_target.clone(),
+                pane_id: None,
+                window_id: None,
+                role: Some("worker".to_string()),
+                capabilities: Vec::new(),
+            },
+            0,
+        )
+        .unwrap();
+
+    let parent = service
+        .start_agent_prompt_turn("%1", "delegate messaging")
+        .unwrap();
+    let spawn_provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "spawn messaging child".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "delegate the messaging task".to_string(),
+                thought: None,
+                turn_id: parent.turn_id.clone(),
+                agent_id: parent.agent_id.clone(),
+                actions: vec![runtime_spawn_agent_action(
+                    "spawn-messaging-child",
+                    "send both handoff messages",
+                )],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    service
+        .execute_agent_turn_with_provider(
+            &parent.turn_id,
+            &spawn_provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    let child = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id != parent.turn_id)
+        .cloned()
+        .expect("spawned child turn");
+    assert_eq!(child.state, AgentTurnState::Running);
+
+    let send_action = |id: &str, recipient: String, payload: &str| mez_agent::AgentAction {
+        id: id.to_string(),
+        rationale: "send a local coordination message".to_string(),
+        payload: mez_agent::AgentActionPayload::SendMessage {
+            recipient,
+            content_type: "text/plain".to_string(),
+            payload: payload.to_string(),
+        },
+    };
+    let first_provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "send sibling and parent messages".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "send the completed sibling before the parent handoff".to_string(),
+                thought: None,
+                turn_id: child.turn_id.clone(),
+                agent_id: child.agent_id.clone(),
+                actions: vec![
+                    send_action(
+                        "message-sibling-once",
+                        format!("agent:{sibling_target}"),
+                        "completed sibling delivery",
+                    ),
+                    send_action(
+                        "message-parent-invalid",
+                        "parent".to_string(),
+                        "child handoff",
+                    ),
+                ],
+                final_turn: true,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    let first = service
+        .execute_agent_turn_with_provider(
+            &child.turn_id,
+            &first_provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    assert_eq!(first.terminal_state, AgentTurnState::Running);
+    assert!(first.action_results.iter().any(|result| {
+        result.action_id == "message-sibling-once" && result.status == ActionStatus::Succeeded
+    }));
+    assert!(first.action_results.iter().any(|result| {
+        result.action_id == "message-parent-invalid"
+            && result.status == ActionStatus::Failed
+            && result
+                .error
+                .as_ref()
+                .is_some_and(|error| error.code == "invalid_message_recipient")
+    }));
+    assert_eq!(
+        service
+            .message_service()
+            .receive_for(&sibling_target, u64::MAX)
+            .len(),
+        1
+    );
+    let child_context = runtime_prepared_context_for_turn(&service, &child.turn_id);
+    assert!(child_context.blocks().iter().any(|block| {
+        block
+            .content
+            .contains("[action_result message-sibling-once send_message succeeded]")
+    }));
+    assert!(child_context.blocks().iter().any(|block| {
+        block
+            .content
+            .contains("[action_result message-parent-invalid send_message failed]")
+            && block.content.contains("invalid_message_recipient")
+    }));
+    assert!(service.has_joined_subagent_dependency(&child.turn_id));
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| { task.turn_id == child.turn_id })
+    );
+
+    let corrected_provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "correct the parent recipient".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "deliver the corrected parent handoff".to_string(),
+                thought: None,
+                turn_id: child.turn_id.clone(),
+                agent_id: child.agent_id.clone(),
+                actions: vec![send_action(
+                    "message-parent-corrected",
+                    format!("agent:{}", parent.agent_id),
+                    "child handoff",
+                )],
+                final_turn: true,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    let corrected = service
+        .poll_agent_provider_tasks_with_provider(&corrected_provider, 1)
+        .unwrap();
+    assert_eq!(corrected.len(), 1);
+    assert_eq!(corrected[0].terminal_state, AgentTurnState::Completed);
+    assert_eq!(
+        service
+            .message_service()
+            .receive_for(&sibling_target, u64::MAX)
+            .len(),
+        1
+    );
+    let parent_id = AgentId::opaque(parent.agent_id.clone()).unwrap();
+    let parent_messages = service.message_service().receive_for(&parent_id, u64::MAX);
+    assert_eq!(
+        parent_messages
+            .iter()
+            .filter(|message| message.payload == "child handoff")
+            .count(),
+        1
+    );
+    assert!(!service.has_joined_subagent_dependency(&child.turn_id));
+    let parent_context = service.agent_turn_contexts().get(&parent.turn_id).unwrap();
+    assert_eq!(
+        parent_context
+            .blocks()
+            .iter()
+            .filter(|block| {
+                block.source == ContextSourceKind::LocalMessage
+                    && block.content.contains("child handoff")
+            })
+            .count(),
+        1
+    );
+    assert_eq!(
+        parent_context
+            .blocks()
+            .iter()
+            .filter(|block| block.label == "action result spawn-messaging-child")
+            .count(),
+        1
+    );
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| { task.turn_id == parent.turn_id })
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// The text/plain shorthand is canonicalized before accepted MMP delivery;
 /// correcting malformed recipients must not change this valid payload behavior.
 #[test]
