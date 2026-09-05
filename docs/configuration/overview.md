@@ -66,6 +66,7 @@ target overlay within a trusted project. For example:
 ```sh
 mez config set terminal.emoji_width narrow
 mez config unset terminal.emoji_width
+mez config set terminal.zen_mode true
 mez config set --scope project agents.routing true
 mez config validate
 ```

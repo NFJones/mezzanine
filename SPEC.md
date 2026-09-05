@@ -863,6 +863,18 @@ render either pane frames, pane borders, or an equivalent pane status surface
 that identifies split boundaries, the active pane, and current window/pane
 state.
 
+When the effective session-wide `terminal.zen_mode` setting is true,
+Mezzanine MUST suppress passive group, window, and pane frame/status rows,
+their title, action, status, and connection pills, and their full-row fills.
+It MUST retain actual pane split divider cells and connected junctions and MUST
+reallocate every otherwise reserved standalone chrome row to pane content. It
+MUST NOT add a replacement empty status row or outer perimeter. Zen mode MUST
+preserve layout, focus, zoom, and the configured `frames.*` values and templates
+so disabling it restores the then-current underlying frame configuration.
+Application-rendered status bars remain pane content. Required command and
+agent input, explicit overlays, copy/search controls, and approval or trust
+interactions are not passive chrome and MUST remain available.
+
 Default foreground rendering MUST include thin visible pane dividers for split
 boundaries, including horizontal divider rows between stacked panes when pane
 frames are enabled. Where split boundaries meet, foreground rendering MUST use
@@ -3626,7 +3638,7 @@ creation.
 The `terminal` table MUST support `profile`, `term`, `pane_spawn_directory`, `pane_spawn_view`, `true_color`, `mouse`,
 `bracketed_paste`, `clipboard`, `clipboard_copy_command`,
 `clipboard_paste_command`, `alternate_screen`, `focus_events`, `nested_multiplexer`,
-`passthrough`, `emoji_width`, `reduced_motion`, `streaming_output`, `completion_attention_flashing`, `resize_debounce_ms`,
+`passthrough`, `emoji_width`, `zen_mode`, `reduced_motion`, `streaming_output`, `completion_attention_flashing`, `resize_debounce_ms`,
 `render_rate_limit_fps`, `cursor_style`, `cursor_blink`, and
 `cursor_blink_interval_ms`.
 
@@ -3634,6 +3646,12 @@ The `terminal` table MUST support `profile`, `term`, `pane_spawn_directory`, `pa
 `narrow`. `wide` MUST preserve the default Unicode emoji-presentation width
 behavior. `narrow` MUST select the one-cell text-fallback status-glyph policy
 defined by the active terminal compatibility settings.
+
+`terminal.zen_mode` MUST be a boolean and MUST default to false. It is a live,
+session-wide presentation setting. Configuration layers and runtime overrides
+MUST use normal configuration precedence; changing it MUST NOT mutate
+`frames.window.enabled`, `frames.pane.enabled`, or any frame template. The
+presentation and geometry behavior when it is true is defined in section 6.4.
 
 `terminal.pane_spawn_directory` MUST default to `home` and MUST accept `home`
 or `same-directory`. For ordinary pane, window, and group creation without an

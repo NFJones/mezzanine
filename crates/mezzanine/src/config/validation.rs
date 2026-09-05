@@ -1615,6 +1615,7 @@ pub(super) fn validate_terminal_value(path: &str, value: &str) -> Option<String>
             }
         }
         "terminal.cursor_blink"
+        | "terminal.zen_mode"
         | "terminal.reduced_motion"
         | "terminal.streaming_output"
         | "terminal.enhanced_keyboard_reporting"

@@ -2197,7 +2197,7 @@ fn migrates_schema_66_with_disabled_iroh_transport() {
 /// single bidirectional control stream enforced by the v1 Iroh protocol.
 #[test]
 fn migrates_schema_67_to_fixed_iroh_stream_limit() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 84);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 85);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2262,7 +2262,7 @@ fn migrates_schema_68_with_separate_outbound_iroh_permission() {
 /// changing the existing ephemeral behavior unless the owner configures it.
 #[test]
 fn migrates_schema_69_with_iroh_bind_port() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 84);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 85);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2293,7 +2293,7 @@ fn migrates_schema_69_with_iroh_bind_port() {
 /// supported primary configuration format without enabling the Iroh listener.
 #[test]
 fn migrates_schema_70_with_iroh_compression_defaults() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 84);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 85);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2509,7 +2509,7 @@ fn migrates_schema_74_without_enabling_streaming_compression() {
 
         assert_eq!(plan.from_version, 74);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 84);
+        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 85);
         assert_eq!(
             root.pointer("/transport/iroh/compression_codecs"),
             Some(&expected_codecs)
@@ -2647,7 +2647,7 @@ fn migrates_schema_76_provider_models_to_structured_records() {
 
         assert_eq!(plan.from_version, 76);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 84);
+        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 85);
         assert_eq!(
             root.pointer("/providers/custom/models/alpha-model/id"),
             Some(&serde_json::json!("alpha/model"))
@@ -2758,7 +2758,7 @@ fn migrates_schema_78_external_editor_defaults() {
 
         assert_eq!(plan.from_version, 78);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 84);
+        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 85);
         assert_eq!(
             root.pointer("/external_editor/command"),
             Some(&serde_json::json!(["editor", "{file}"]))
@@ -3012,5 +3012,54 @@ fn migrates_schema_83_native_shell_timeout() {
             configured.pointer("/agents/native_shell_timeout_ms"),
             Some(&serde_json::json!(12_345))
         );
+    }
+}
+
+/// Schema v85 adds disabled zen mode without replacing an explicit choice.
+///
+/// Every durable format must receive the same default while preserving both
+/// explicit boolean values selected by the primary configuration owner.
+#[test]
+fn migrates_schema_84_zen_mode() {
+    for (format, missing, configured_true, configured_false) in [
+        (
+            ConfigFormat::Toml,
+            "version = 84\n",
+            "version = 84\n[terminal]\nzen_mode = true\n",
+            "version = 84\n[terminal]\nzen_mode = false\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":84}"#,
+            r#"{"version":84,"terminal":{"zen_mode":true}}"#,
+            r#"{"version":84,"terminal":{"zen_mode":false}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 84\n",
+            "version: 84\nterminal:\n  zen_mode: true\n",
+            "version: 84\nterminal:\n  zen_mode: false\n",
+        ),
+    ] {
+        for (text, expected) in [
+            (missing, false),
+            (configured_true, true),
+            (configured_false, false),
+        ] {
+            let plan = migrate_config_text(format, text).unwrap();
+            let root = parse_config_json_value(format, &plan.text).unwrap();
+
+            assert_eq!(plan.from_version, 84);
+            assert_eq!(plan.to_version, 85);
+            assert_eq!(root.pointer("/version"), Some(&serde_json::json!(85)));
+            assert_eq!(
+                root.pointer("/terminal/zen_mode"),
+                Some(&serde_json::json!(expected))
+            );
+
+            let repeated = migrate_config_text(format, &plan.text).unwrap();
+            assert!(!repeated.changed);
+            assert_eq!(repeated.text, plan.text);
+        }
     }
 }

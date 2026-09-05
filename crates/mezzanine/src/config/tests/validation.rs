@@ -1079,7 +1079,7 @@ fn rejects_invalid_terminal_term_and_profile_values() {
 fn rejects_invalid_terminal_presentation_values() {
     let validation = validate_config_text(
         ConfigFormat::Toml,
-        "[terminal]\npane_spawn_directory = \"daemon\"\npane_spawn_view = \"editor\"\ncursor_style = \"beam\"\ncursor_blink = \"sometimes\"\nemoji_width = \"auto\"\nreduced_motion = \"sometimes\"\nstreaming_output = \"sometimes\"\nenhanced_keyboard_reporting = \"sometimes\"\ncompletion_attention_flashing = \"sometimes\"\ncursor_blink_interval_ms = 0\nresize_debounce_ms = 0\nclipboard_read_timeout_ms = 0\nclipboard_read_max_bytes = 0\nrender_rate_limit_fps = -1\n",
+        "[terminal]\npane_spawn_directory = \"daemon\"\npane_spawn_view = \"editor\"\ncursor_style = \"beam\"\ncursor_blink = \"sometimes\"\nemoji_width = \"auto\"\nzen_mode = \"sometimes\"\nreduced_motion = \"sometimes\"\nstreaming_output = \"sometimes\"\nenhanced_keyboard_reporting = \"sometimes\"\ncompletion_attention_flashing = \"sometimes\"\ncursor_blink_interval_ms = 0\nresize_debounce_ms = 0\nclipboard_read_timeout_ms = 0\nclipboard_read_max_bytes = 0\nrender_rate_limit_fps = -1\n",
         ConfigScope::Primary,
     );
 
@@ -1099,6 +1099,10 @@ fn rejects_invalid_terminal_presentation_values() {
     assert!(validation.diagnostics.iter().any(|diagnostic| {
         diagnostic.path == "terminal.cursor_blink"
             && diagnostic.message == "terminal.cursor_blink must be true or false"
+    }));
+    assert!(validation.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "terminal.zen_mode"
+            && diagnostic.message == "terminal.zen_mode must be true or false"
     }));
     assert!(validation.diagnostics.iter().any(|diagnostic| {
         diagnostic.path == "terminal.reduced_motion"

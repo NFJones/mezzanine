@@ -100,6 +100,8 @@ pub(crate) struct RuntimePresentationSettings {
     terminal_agent_wrap_column_cap: usize,
     /// Whether optional terminal animation is disabled.
     terminal_reduced_motion: bool,
+    /// Whether passive Mezzanine chrome is configured to be hidden.
+    terminal_zen_mode: bool,
     /// Whether provisional provider output is rendered while it arrives.
     terminal_streaming_output: bool,
     /// Whether Mez-owned readline prompts may request enhanced keyboard input.
@@ -147,6 +149,7 @@ impl Default for RuntimePresentationSettings {
             terminal_render_rate_limit_fps: 30,
             terminal_agent_wrap_column_cap: crate::host::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP,
             terminal_reduced_motion: false,
+            terminal_zen_mode: false,
             terminal_streaming_output: true,
             terminal_enhanced_keyboard_reporting: false,
             terminal_completion_attention_flashing: true,
@@ -191,6 +194,7 @@ impl RuntimePresentationSettings {
             || self.pane_frame_visible_fields != replacement.pane_frame_visible_fields
             || self.terminal_agent_wrap_column_cap != replacement.terminal_agent_wrap_column_cap
             || self.terminal_reduced_motion != replacement.terminal_reduced_motion
+            || self.terminal_zen_mode != replacement.terminal_zen_mode
             || self.terminal_streaming_output != replacement.terminal_streaming_output
             || self.terminal_completion_attention_flashing
                 != replacement.terminal_completion_attention_flashing
@@ -241,6 +245,7 @@ impl RuntimePresentationSettings {
             terminal_reduced_motion: crate::runtime::runtime_terminal_reduced_motion_from_config(
                 root,
             )?,
+            terminal_zen_mode: crate::runtime::runtime_terminal_zen_mode_from_config(root)?,
             terminal_streaming_output:
                 crate::runtime::runtime_terminal_streaming_output_from_config(root)?,
             terminal_enhanced_keyboard_reporting:
@@ -2079,6 +2084,12 @@ impl RuntimeSessionService {
     /// Reports whether product window frames are enabled.
     pub(crate) fn window_frames_enabled(&self) -> bool {
         self.presentation.settings.window_frames_enabled
+    }
+
+    /// Reports whether passive Mezzanine chrome is configured to be hidden.
+    #[cfg(test)]
+    pub(crate) fn terminal_zen_mode(&self) -> bool {
+        self.presentation.settings.terminal_zen_mode
     }
 
     /// Returns the configured window frame template.

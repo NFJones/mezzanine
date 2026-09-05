@@ -83,6 +83,83 @@ fn runtime_config_reload_reloads_layers_and_applies_live_policy() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies zen mode follows normal layer precedence and live reload semantics.
+///
+/// A trusted project layer must override the primary value, and reloading that
+/// same layer must atomically replace the stored presentation boolean without
+/// changing the independently configured frame toggles.
+#[test]
+fn runtime_config_reload_applies_layered_zen_mode() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    let root = temp_root("runtime-zen-mode-reload");
+    let primary_path = root.join("config.toml");
+    let project_path = root.join("project.toml");
+    fs::write(
+        &primary_path,
+        "[terminal]\nzen_mode = false\n[frames.window]\nenabled = true\n[frames.pane]\nenabled = true\n",
+    )
+    .unwrap();
+    fs::write(&project_path, "version = 85\n[terminal]\nzen_mode = true\n").unwrap();
+    service
+        .replace_config_layers(vec![
+            ConfigLayer {
+                name: "primary".to_string(),
+                path: Some(primary_path.clone()),
+                format: ConfigFormat::Toml,
+                scope: ConfigScope::Primary,
+                trusted: true,
+                text: fs::read_to_string(&primary_path).unwrap(),
+            },
+            ConfigLayer {
+                name: "project".to_string(),
+                path: Some(project_path.clone()),
+                format: ConfigFormat::Toml,
+                scope: ConfigScope::ProjectOverlay,
+                trusted: true,
+                text: fs::read_to_string(&project_path).unwrap(),
+            },
+        ])
+        .unwrap();
+
+    assert!(service.terminal_zen_mode());
+    assert!(service.window_frames_enabled());
+    assert!(service.pane_frames_enabled());
+
+    fs::write(
+        &project_path,
+        "version = 85\n[terminal]\nzen_mode = false\n",
+    )
+    .unwrap();
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"reload","method":"config/reload","params":{"idempotency_key":"reload-zen-mode"}}"#,
+        &primary,
+    );
+
+    assert!(response.contains(r#""operation":"reload""#), "{response}");
+    assert!(!service.terminal_zen_mode());
+    assert!(service.window_frames_enabled());
+    assert!(service.pane_frames_enabled());
+
+    fs::write(
+        &project_path,
+        "version = 85\n[terminal]\nzen_mode = \"sometimes\"\n",
+    )
+    .unwrap();
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"reload-invalid","method":"config/reload","params":{"idempotency_key":"reload-invalid-zen-mode"}}"#,
+        &primary,
+    );
+
+    assert!(response.contains(r#""error""#), "{response}");
+    assert!(!service.terminal_zen_mode());
+    assert!(service.window_frames_enabled());
+    assert!(service.pane_frames_enabled());
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies runtime config reload applies history limit to live screens.
 ///
 /// This regression scenario documents the behavior being protected so a

@@ -556,6 +556,7 @@ pub(super) const TERMINAL_KEYS: &[&str] = &[
     "nested_multiplexer",
     "passthrough",
     "emoji_width",
+    "zen_mode",
     "reduced_motion",
     "streaming_output",
     "enhanced_keyboard_reporting",

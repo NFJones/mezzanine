@@ -120,6 +120,7 @@ pub(super) use terminal_options::{
     runtime_terminal_resize_debounce_ms_from_config,
     runtime_terminal_shell_output_preview_lines_from_config,
     runtime_terminal_streaming_output_from_config, runtime_terminal_term_from_config,
+    runtime_terminal_zen_mode_from_config,
 };
 pub use theme::runtime_ui_theme_from_config;
 pub(super) use trust::{

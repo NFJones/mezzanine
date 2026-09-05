@@ -81,6 +81,24 @@ fn default_config_disables_enhanced_keyboard_reporting() {
     );
 }
 
+/// Verifies zen mode remains opt-in in newly generated configuration files.
+///
+/// The presentation feature must not silently remove normal frame chrome for
+/// existing or first-run users until they explicitly enable the setting.
+#[test]
+fn default_config_disables_zen_mode() {
+    let parsed: toml::Value = toml::from_str(DEFAULT_CONFIG_TOML).unwrap();
+    let terminal = parsed
+        .get("terminal")
+        .and_then(toml::Value::as_table)
+        .unwrap();
+
+    assert_eq!(
+        terminal.get("zen_mode").and_then(toml::Value::as_bool),
+        Some(false)
+    );
+}
+
 /// Verifies active-turn sleep inhibition remains disabled until the primary
 /// user explicitly chooses a host power policy in generated configuration.
 #[test]

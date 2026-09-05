@@ -18,6 +18,14 @@ emoji width, and agent transcript wrapping. `xterm-compatible` is a supported
 subset, not a claim to emulate every xterm feature. Use `terminal.emoji_width`
 when status glyphs occupy the wrong number of cells in the host terminal.
 
+Set `terminal.zen_mode = true` to hide passive Mezzanine group, window, and pane
+bars and pills for the session while keeping pane split dividers visible. Zen
+mode is live and session-wide. It does not rewrite `frames.window.enabled`,
+`frames.pane.enabled`, or frame templates, so setting it back to `false`
+restores the currently configured chrome. Application-drawn status bars remain
+pane content, and command prompts, explicit overlays, copy/search controls, and
+approval or trust interactions remain available.
+
 `terminal.agent_wrap_column_cap` limits structured Mezzanine-owned agent rows,
 including transcript text, statuses, errors, diagnostics, action headers,
 result previews, and structured persistence fallbacks. The limit applies per
