@@ -282,6 +282,84 @@ fn runtime_primary_command_prompt_immediate_command_does_not_open_overlay() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies invalid zen input submitted interactively remains visible while
+/// zen suppresses passive status rows. The command prompt must use its modal
+/// error surface rather than silently retaining an unrendered status notice.
+#[test]
+fn runtime_primary_command_prompt_shows_invalid_zen_error_while_zen_is_active() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(50, 8).unwrap(), 120)
+        .unwrap();
+    service
+        .execute_terminal_command(&primary, "zen on")
+        .unwrap();
+    service.enter_primary_command_prompt("").unwrap();
+
+    let report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(
+                    b"zen invalid\r".to_vec(),
+                )],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert!(report.view_refresh_required);
+    assert!(service.primary_prompt_input().is_none());
+    let overlay = service.primary_display_overlay().unwrap();
+    assert!(
+        overlay
+            .lines
+            .iter()
+            .any(|line| line.contains("usage: zen on|off|toggle")),
+        "{:?}",
+        overlay.lines
+    );
+    assert!(service.primary_error_status_overlay().is_none());
+}
+
+/// Verifies a successful zen mutation submitted through the interactive
+/// command prompt closes the prompt without opening a pager or transient
+/// status notice. The structured outcome remains available to control callers.
+#[test]
+fn runtime_primary_command_prompt_applies_zen_silently() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(50, 8).unwrap(), 120)
+        .unwrap();
+    service.enter_primary_command_prompt("").unwrap();
+
+    let report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(
+                    b"zen on\r".to_vec(),
+                )],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert!(report.view_refresh_required);
+    assert!(service.terminal_zen_mode());
+    assert!(service.primary_prompt_input().is_none());
+    assert!(service.primary_display_overlay().is_none());
+    assert!(service.primary_error_status_overlay().is_none());
+}
+
 /// Verifies that the primary command prompt retains submitted commands across
 /// prompt openings and exposes them through the same readline Up/Down and
 /// Ctrl+R reverse-search behavior used by agent prompts. The command history

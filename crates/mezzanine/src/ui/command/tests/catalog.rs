@@ -71,6 +71,10 @@ fn help_command_describes_mezzanine_command_set() {
     );
     assert!(help.contains("synchronize-panes"), "{help}");
     assert!(help.contains("set-theme"), "{help}");
+    assert!(
+        help.contains("|  | `zen` | hide or restore passive Mezzanine chrome. |"),
+        "{help}"
+    );
     assert!(help.contains("agent-shell"), "{help}");
     assert!(help.contains("save-layout"), "{help}");
     assert!(help.contains("\n## Key bindings\n"), "{help}");

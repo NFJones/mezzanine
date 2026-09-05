@@ -227,6 +227,7 @@ pub(super) const BASELINE_COMMAND_NAMES: &[&str] = &[
     "list-themes",
     "set-key-preset",
     "set-theme",
+    "zen",
     "bind-key",
     "unbind-key",
     "add-options",
@@ -261,6 +262,7 @@ fn baseline_command_status(name: &str) -> BaselineCommandStatus {
         }
         "bind-key" | "unbind-key" | "set-key-preset" | "set-theme" | "set-option"
         | "source-file" | "mark-pane-ready" => BaselineCommandStatus::StoreRequired,
+        "zen" => BaselineCommandStatus::RuntimeRequired,
         "attach-session" | "list-sessions" | "save-layout" | "load-layout" => {
             BaselineCommandStatus::ControlRequired
         }

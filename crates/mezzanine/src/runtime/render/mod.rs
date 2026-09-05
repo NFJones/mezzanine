@@ -2143,7 +2143,6 @@ impl RuntimeSessionService {
     }
 
     /// Reports whether passive Mezzanine chrome is configured to be hidden.
-    #[cfg(test)]
     pub(crate) fn terminal_zen_mode(&self) -> bool {
         self.presentation.settings.terminal_zen_mode
     }

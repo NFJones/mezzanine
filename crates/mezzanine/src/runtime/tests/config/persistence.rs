@@ -935,3 +935,51 @@ fn runtime_prompt_edit_binding_is_listed_and_collision_checked() {
         );
     }
 }
+
+/// Verifies configured command bindings route zen through the same runtime
+/// handler as prompt and control invocations rather than maintaining a second
+/// presentation toggle or rewriting configured frame settings.
+#[test]
+fn runtime_command_binding_executes_zen_toggle_through_terminal_handler() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[keys.command_bindings]\ny = \"zen toggle\"\n".to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let action = crate::host::terminal::route_client_input(b"\x01y", &config).unwrap();
+
+    assert_eq!(
+        action,
+        TerminalClientLoopAction::ExecuteCommand("zen toggle".to_string())
+    );
+    let report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![action],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(report.mux_actions_applied, 1);
+    assert!(service.terminal_zen_mode());
+    assert!(service.primary_display_overlay().is_none());
+    assert!(service.primary_error_status_overlay().is_none());
+}

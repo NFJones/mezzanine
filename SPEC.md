@@ -1802,6 +1802,7 @@ The command language MUST include commands equivalent to:
 - `set-option`
 - `source-file`
 - `refresh-client`
+- `zen`
 - `agent-shell`
 - `save-layout`
 - `load-layout`
@@ -1882,6 +1883,7 @@ The baseline commands MUST have the following semantics:
 | `add-options` | Display the supported live configuration option reference as a rendered table with option path pattern, purpose, value type, and available values or format requirements. |
 | `show-options` | Return effective options for the requested scope, including source layer and whether each option is live-mutable. |
 | `set-option` | Set a live-mutable option. Persisted changes MUST identify the target configuration layer. |
+| `zen` | Set the session-wide live `terminal.zen_mode` override. It MUST accept exactly one lowercase mode: `on`, `off`, or `toggle`; reject all other raw argument shapes without mutation; make explicit `on` and `off` idempotent against the effective value; and evaluate each `toggle` after preceding commands in the same sequence. It MUST preserve configured frame settings. Successful execution MUST return a structured mutation or no-op outcome without opening a pager or transient status notice. Invalid interactive input MUST remain visible through the command error surface when zen mode suppresses passive status notices. It MUST require attached-primary authority and use the normal terminal-command path for command bindings and control requests. |
 | `source-file` | Parse and apply a configuration file according to configuration trust and precedence rules. Untrusted project files MUST block until trust is decided. |
 | `refresh-client` | Redraw the invoking client and recompute client-local display state without changing pane pty sizes unless the invoking client is the primary client and its terminal size changed. |
 | `agent-shell` | Show, hide, or toggle the agent shell for the target pane. Hiding MUST request `/stop` for any in-progress pane-local agent task before the shell is hidden. |

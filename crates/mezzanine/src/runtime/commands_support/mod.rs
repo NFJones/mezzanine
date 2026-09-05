@@ -273,6 +273,18 @@ pub(super) fn execute_runtime_live_terminal_command(
             command: invocation.name.clone(),
             body: runtime_set_option_command(service, invocation)?,
         })),
+        "zen" => {
+            let changed = runtime_zen_command(service, invocation)?;
+            Ok(Some(if changed {
+                CommandOutcome::Mutated {
+                    command: invocation.name.clone(),
+                }
+            } else {
+                CommandOutcome::Noop {
+                    command: invocation.name.clone(),
+                }
+            }))
+        }
         "source-file" => Ok(Some(CommandOutcome::Display {
             command: invocation.name.clone(),
             body: runtime_source_file_command(service, invocation)?,

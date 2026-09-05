@@ -110,7 +110,9 @@ for the required prompt boundary and bootstrap behavior.
 Use `mez new` to create a new session, `mez list` to discover resumable sessions,
 and `mez attach` to return to one. In a running session, `Ctrl+A :` opens the
 Mezzanine command prompt, `Ctrl+A ?` shows effective key bindings, and
-`Ctrl+A a` toggles the agent shell.
+`Ctrl+A a` toggles the agent shell. From the command prompt, `zen on`, `zen off`,
+and `zen toggle` hide or restore passive Mezzanine chrome for the live session;
+set `terminal.zen_mode` in configuration for persistent startup behavior.
 
 Within an agent pane, plan-only mode is available when you want to review an
 approach before allowing changes. See the [agent guide](docs/agent/README.md)

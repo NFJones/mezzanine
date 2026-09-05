@@ -59,6 +59,11 @@ fn selector_plans_mezzanine_command_argument_candidates() {
     assert_eq!(theme_plan.candidates[0].value, "tokyo_night");
     assert_eq!(theme_plan.candidates[0].kind, SelectorCandidateKind::Value);
 
+    let zen_plan = plan_selector(SelectorSurface::MezzanineCommand, "zen t", 5).unwrap();
+    assert_eq!(zen_plan.replacement_start, "zen ".len());
+    assert_eq!(zen_plan.candidates[0].value, "toggle");
+    assert_eq!(zen_plan.candidates[0].kind, SelectorCandidateKind::Value);
+
     let preset_plan = plan_selector(
         SelectorSurface::MezzanineCommand,
         "set-key-preset si",
@@ -808,6 +813,10 @@ fn selector_shadow_hint_hides_placeholder_after_param_input() {
     )
     .unwrap();
     assert_eq!(theme_placeholder.text, " <theme>");
+
+    let zen_placeholder =
+        shadow_hint(SelectorSurface::MezzanineCommand, "zen ", "zen ".len()).unwrap();
+    assert_eq!(zen_placeholder.text, " <on|off|toggle>");
 
     let preset_placeholder = shadow_hint(
         SelectorSurface::MezzanineCommand,

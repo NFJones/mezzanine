@@ -31,6 +31,7 @@ pub(super) fn mezzanine_parameter_hint(command: &str) -> Option<&'static str> {
         "set-option" => Some(" [-g|-w|-p] <option> <value>"),
         "set-key-preset" => Some(" <preset>"),
         "set-theme" => Some(" <theme>"),
+        "zen" => Some(" <on|off|toggle>"),
         "source-file" => Some(" <path>"),
         "agent-shell" => Some(" <show|hide|toggle>"),
         "save-layout" => Some(" [--name name]"),

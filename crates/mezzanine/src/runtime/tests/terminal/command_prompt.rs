@@ -202,3 +202,142 @@ fn runtime_terminal_command_unknown_input_is_invalid_params() {
         "{response}"
     );
 }
+
+/// Verifies zen commands mutate the ordinary session live override in sequence
+/// and return structured mutation outcomes without display payloads. Reading
+/// the effective value for every toggle keeps semicolon execution causal.
+#[test]
+fn runtime_zen_command_mutates_live_override_sequentially_and_silently() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+
+    let output = service
+        .execute_terminal_command(&primary, "zen on; zen toggle; zen toggle; zen off")
+        .unwrap();
+    let output: serde_json::Value = serde_json::from_str(&output).unwrap();
+
+    assert_eq!(output["executed"], 4);
+    assert_eq!(output["outcomes"].as_array().unwrap().len(), 4);
+    assert!(
+        output["outcomes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|outcome| {
+                outcome["command"] == "zen"
+                    && outcome["kind"] == "mutated"
+                    && outcome.get("body").is_none()
+            })
+    );
+    assert!(!service.terminal_zen_mode());
+    assert!(service.primary_display_overlay().is_none());
+    assert!(service.primary_error_status_overlay().is_none());
+}
+
+/// Verifies explicit zen modes are idempotent against the effective setting,
+/// including the default-off state before a live override layer exists. A
+/// no-op remains structured but must not advance configuration generation.
+#[test]
+fn runtime_zen_command_reports_effective_noops_without_config_mutation() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let config_event_count = |service: &RuntimeSessionService| {
+        service
+            .event_log()
+            .unwrap()
+            .replay_for(&EventAudience::AllPrimaries)
+            .into_iter()
+            .filter(|event| event.kind == EventKind::ConfigChanged)
+            .count()
+    };
+    let initial_config_events = config_event_count(&service);
+
+    let off = service
+        .execute_terminal_command(&primary, "zen off")
+        .unwrap();
+    let off: serde_json::Value = serde_json::from_str(&off).unwrap();
+    assert_eq!(off["outcomes"][0]["kind"], "noop");
+    assert_eq!(config_event_count(&service), initial_config_events);
+
+    let on = service
+        .execute_terminal_command(&primary, "zen on; zen on")
+        .unwrap();
+    let on: serde_json::Value = serde_json::from_str(&on).unwrap();
+    assert_eq!(on["outcomes"][0]["kind"], "mutated");
+    assert_eq!(on["outcomes"][1]["kind"], "noop");
+    assert_eq!(config_event_count(&service), initial_config_events + 1);
+    assert!(service.terminal_zen_mode());
+}
+
+/// Verifies zen validates its raw command arguments exactly, including flags
+/// that positional parsing would otherwise discard, and leaves effective state
+/// unchanged after every rejected form.
+#[test]
+fn runtime_zen_command_rejects_noncanonical_raw_arguments_without_mutation() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+
+    for input in [
+        "zen",
+        "zen maybe",
+        "zen ON",
+        "zen --toggle",
+        "zen -t on",
+        "zen on extra",
+    ] {
+        let error = service
+            .execute_terminal_command(&primary, input)
+            .unwrap_err();
+        assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+        assert_eq!(error.message(), "usage: zen on|off|toggle", "{input}");
+        assert!(!service.terminal_zen_mode(), "{input}");
+    }
+}
+
+/// Verifies the terminal-command authorization boundary rejects observer
+/// callers before zen can alter the shared session presentation setting.
+#[test]
+fn runtime_zen_command_requires_attached_primary_authority() {
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let observer = service
+        .session
+        .attach_observer_with_terminal("observer", None, 121)
+        .unwrap();
+
+    let error = service
+        .execute_terminal_command(&observer, "zen on")
+        .unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+    assert!(!service.terminal_zen_mode());
+}
+
+/// Verifies the JSON-RPC terminal command route invokes the same zen handler
+/// and returns the same structured silent outcome as direct runtime callers.
+#[test]
+fn runtime_control_terminal_command_uses_zen_live_override_handler() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"zen-on","method":"terminal/command","params":{"idempotency_key":"zen-on","input":"zen on"}}"#,
+        &primary,
+    );
+    let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+
+    assert_eq!(response["result"]["executed"], 1);
+    assert_eq!(response["result"]["outcomes"][0]["command"], "zen");
+    assert_eq!(response["result"]["outcomes"][0]["kind"], "mutated");
+    assert!(service.terminal_zen_mode());
+}

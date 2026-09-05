@@ -88,7 +88,7 @@ fn terminal_command_category(name: &str) -> &'static str {
         "agent-shell" => "agent and integrations",
         "add-options" | "bind-key" | "list-key-presets" | "list-keys" | "set-key-preset"
         | "set-option" | "set-theme" | "show-options" | "source-file" | "unbind-key"
-        | "list-themes" => "configuration",
+        | "list-themes" | "zen" => "configuration",
         "capture-pane" | "choose-buffer" | "clear-history" | "copy-mode" | "copy-selection"
         | "create-buffer" | "delete-buffer" | "export-history" | "list-buffers"
         | "paste-buffer" | "paste-clipboard" | "pipe-pane" | "save-buffer" | "search-history" => {
@@ -173,6 +173,7 @@ fn terminal_command_description(name: &str) -> &'static str {
         "set-key-preset" => "switch active key-assignment preset by name.",
         "set-option" => "set a live-mutable option.",
         "set-theme" => "switch active UI theme by name.",
+        "zen" => "hide or restore passive Mezzanine chrome.",
         "show-messages" => "show diagnostics, pending approvals, and hook failures.",
         "show-metrics" => "show async runtime counters and histograms.",
         "show-iroh-status" => "show the invoking client's live Iroh path quality.",

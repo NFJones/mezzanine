@@ -324,6 +324,40 @@ pub(crate) fn runtime_set_option_command(
     ))
 }
 
+/// Applies `zen on|off|toggle` through the terminal-command live override.
+///
+/// Returns whether the live override document changed. Arguments are checked
+/// directly so flags cannot be discarded by generic positional parsing.
+pub(crate) fn runtime_zen_command(
+    service: &mut RuntimeSessionService,
+    invocation: &CommandInvocation,
+) -> Result<bool> {
+    let enabled = match invocation.args.as_slice() {
+        [mode] if mode == "on" => true,
+        [mode] if mode == "off" => false,
+        [mode] if mode == "toggle" => !service.terminal_zen_mode(),
+        _ => return Err(MezError::invalid_args("usage: zen on|off|toggle")),
+    };
+    if service.terminal_zen_mode() == enabled {
+        return Ok(false);
+    }
+    let mutation = ConfigMutation {
+        path: "terminal.zen_mode".to_string(),
+        operation: ConfigMutationOperation::Set(ConfigMutationValue::Boolean(enabled)),
+    };
+    let plan = runtime_plan_live_override_mutation(service, mutation)?;
+    if !plan.changed {
+        return Ok(false);
+    }
+    runtime_store_live_override_plan(service, &plan.text);
+    let report = service.apply_runtime_config_layers()?;
+    service.append_lifecycle_event(
+        EventKind::ConfigChanged,
+        runtime_config_apply_event_payload("terminal/command:zen", &report),
+    )?;
+    Ok(true)
+}
+
 /// Runs the runtime set theme command operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

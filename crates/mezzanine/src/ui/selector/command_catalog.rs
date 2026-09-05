@@ -317,6 +317,9 @@ pub(super) fn mezzanine_argument_candidates(command: &str) -> Vec<SelectorCandid
         "set-theme" => {
             candidates.extend(value_candidates(mez_mux::theme::BUILTIN_UI_THEME_NAMES));
         }
+        "zen" => {
+            candidates.extend(value_candidates(&["on", "off", "toggle"]));
+        }
         "set-key-preset" => {
             candidates.extend(value_candidates(
                 mez_mux::key_preset::BUILTIN_KEY_PRESET_NAMES,

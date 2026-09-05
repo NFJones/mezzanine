@@ -30,7 +30,7 @@ state can affect what is available.
 | Manage windows and panes | `new-window`, `split-window`, `select-pane`, `resize-pane`, `rename-pane`, `list-windows`, and `list-panes` |
 | Work with sessions and clients | `list-sessions`, `attach-session`, `detach-client`, `list-clients`, and `kill-session` |
 | Copy and retain output | `copy-mode`, `copy-selection`, `paste-clipboard`, `paste-buffer`, `list-buffers`, `search-history`, `export-history`, and `clear-history` |
-| Inspect and adjust the interface | `show-messages`, `show-iroh-status`, `list-keys`, `list-key-presets`, `set-key-preset`, `list-themes`, `set-theme`, `add-options`, `show-options`, `set-option`, `bind-key`, and `unbind-key` |
+| Inspect and adjust the interface | `zen`, `show-messages`, `show-iroh-status`, `list-keys`, `list-key-presets`, `set-key-preset`, `list-themes`, `set-theme`, `add-options`, `show-options`, `set-option`, `bind-key`, and `unbind-key` |
 | Save or load layout state | `save-layout` and `load-layout` |
 
 ## Baseline command inventory
@@ -72,6 +72,15 @@ client.
 configuration paths, including purpose, type, and constrained value or format
 guidance. `show-options` remains the separate view of effective configured
 values and their source layers.
+
+`zen on`, `zen off`, and `zen toggle` control the session-wide live
+`terminal.zen_mode` override. Successful changes are silent because their
+effect is immediately visible; control clients still receive a structured
+`mutated` or `noop` outcome. The command does not write configuration files or
+change frame settings, so `zen off` restores the current configured frames.
+Set `terminal.zen_mode = true` in configuration for persistent startup
+behavior. Normal command bindings may invoke `zen toggle`. The command requires
+an attached primary client, and accepts exactly one lowercase mode.
 
 `show-iroh-status` displays a table for the invoking remote client's selected
 Iroh path. It includes RTT, jitter, recent transfer rates, loss and congestion
