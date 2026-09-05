@@ -583,4 +583,34 @@ mod tests {
         assert_eq!(lines, ["plain"]);
         assert_eq!(spans, [Vec::new()]);
     }
+
+    /// Verifies replacement terminal views do not retain client-local Iroh
+    /// slot metadata across a zen transition, and that a later non-zen view
+    /// can restore composition from newly supplied metadata. Attach loops
+    /// replace their cached frame with each decoded view, so this sequence
+    /// models both primary and observer snapshot transitions.
+    #[test]
+    fn terminal_view_iroh_slot_transition_removes_and_restores_composition() {
+        let visible_response = r#"{"result":{"view":{"lines":["base    tail"],"line_style_spans":[[]],"cursor":{"row":0,"column":0,"visible":false},"output_modes":{},"iroh_status_slot":{"row":0,"column":4,"width":4,"good":{"foreground":null,"background":{"kind":"indexed","index":2}},"degraded":{"foreground":null,"background":{"kind":"indexed","index":3}},"poor":{"foreground":null,"background":{"kind":"indexed","index":1}},"unknown":{"foreground":null,"background":{"kind":"indexed","index":8}}}}}}"#;
+        let zen_response = r#"{"result":{"view":{"lines":["zen-content"],"line_style_spans":[[]],"cursor":{"row":0,"column":0,"visible":false},"output_modes":{}}}}"#;
+
+        let visible = terminal_step_response_client_frame(visible_response)
+            .unwrap()
+            .expect("visible frame should decode");
+        let (visible_lines, _) = visible.with_iroh_status(true, TerminalIrohStatusQuality::Good);
+        assert_eq!(visible_lines, ["base up tail"]);
+
+        let zen = terminal_step_response_client_frame(zen_response)
+            .unwrap()
+            .expect("zen frame should decode");
+        let (zen_lines, zen_spans) = zen.with_iroh_status(true, TerminalIrohStatusQuality::Good);
+        assert_eq!(zen_lines, ["zen-content"]);
+        assert_eq!(zen_spans, [Vec::new()]);
+
+        let restored = terminal_step_response_client_frame(visible_response)
+            .unwrap()
+            .expect("restored frame should decode");
+        let (restored_lines, _) = restored.with_iroh_status(false, TerminalIrohStatusQuality::Poor);
+        assert_eq!(restored_lines, ["base dn tail"]);
+    }
 }

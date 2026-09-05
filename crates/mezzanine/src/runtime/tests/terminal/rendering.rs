@@ -866,6 +866,79 @@ fn runtime_zen_mode_reclaims_frame_rows_without_changing_configured_flags() {
     assert!(config.mouse_pane_agent_status_cells.is_empty());
 }
 
+/// Verifies stacked zen panes reclaim only passive frame rows while retaining
+/// their structural horizontal divider and content hit regions. Clicking the
+/// first row below that divider must focus the lower pane rather than target a
+/// hidden pane pill or an obsolete pre-zen coordinate.
+#[test]
+fn runtime_zen_stacked_panes_keep_divider_and_retarget_reclaimed_content() {
+    let size = Size::new(20, 8).unwrap();
+    let mut service = test_runtime_service_with_size(size);
+    let primary = service.attach_primary("primary", true, size, 120).unwrap();
+    assert!(
+        service
+            .apply_attached_mux_action(&primary, MuxAction::SplitPaneHorizontal)
+            .unwrap()
+    );
+    service.set_terminal_zen_mode_for_tests(true);
+    service.session.select_pane(&primary, "%1").unwrap();
+
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let window = service.session().active_window().unwrap();
+    let plan = service.window_presentation_plan_for_tests(window).unwrap();
+    assert_eq!(plan.panes.len(), 2);
+    assert!(plan.panes.iter().all(|pane| pane.frame_row.is_none()));
+    assert_eq!(
+        plan.panes
+            .iter()
+            .map(|pane| pane.content_region.rows)
+            .sum::<u16>(),
+        7
+    );
+
+    let lower_row = plan.panes[1].content_region.row;
+    let divider_row = lower_row.saturating_sub(1);
+    assert!(plan.pane_content_target_at(divider_row, 0).is_none());
+    assert_eq!(
+        plan.pane_content_target_at(lower_row, 0)
+            .map(|target| target.source_index),
+        Some(1)
+    );
+    let view = service
+        .render_client_view(ClientViewRole::Primary, size, &config)
+        .unwrap()
+        .unwrap();
+    assert!(view.lines[usize::from(divider_row)].contains('─'));
+    assert!(config.mouse_pane_agent_status_cells.is_empty());
+
+    let report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::HandleMouse(
+                    MouseAction::FocusPaneOnly(CopyPosition {
+                        line: usize::from(lower_row),
+                        column: 0,
+                    }),
+                )],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert!(report.view_refresh_required);
+    assert_eq!(
+        service.session().windows()[0].active_pane().id.as_str(),
+        "%2"
+    );
+}
+
 /// Verifies that a live agent footer re-enables animated frame ticks so active
 /// agent progress indicators keep their motion while work is still running.
 #[test]

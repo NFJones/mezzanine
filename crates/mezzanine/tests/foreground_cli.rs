@@ -347,6 +347,79 @@ fn foreground_serve_attach_primary_renders_default_frames_and_restores_presentat
     process.wait_for_exit(Duration::from_secs(5)).unwrap();
 }
 
+/// Verifies the real foreground command path resizes the pane PTY when zen
+/// reclaims frame rows, propagates an outer-terminal resize through SIGWINCH,
+/// and restores configured frame reservations when zen is disabled again.
+/// This protects the application-visible geometry rather than only inspecting
+/// renderer rectangles or in-memory terminal screens.
+#[test]
+fn foreground_serve_zen_round_trip_resizes_real_pane_pty() {
+    let root = test_root("foreground-serve-zen-size");
+    let home = root.join("home");
+    let runtime = root.join("runtime");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&runtime).unwrap();
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+    let socket = runtime.join("foreground-zen.sock");
+
+    let mut process = spawn_foreground_serve(&root, &home, &runtime, &socket);
+    let mut output = Vec::new();
+    process
+        .read_until(&mut output, Duration::from_secs(10), |text| {
+            text.contains("serving: true") && contains_default_shell_pane_frame(text)
+        })
+        .unwrap();
+
+    process
+        .write_input(
+            b"last=; while :; do size=$(stty size); if [ \"$size\" != \"$last\" ]; then printf 'mez-app-size %s\\n' \"$size\"; last=$size; fi; sleep 0.05; done\n",
+        )
+        .unwrap();
+    process
+        .read_until(&mut output, Duration::from_secs(10), |text| {
+            text.contains("mez-app-size 22 80")
+        })
+        .unwrap();
+
+    output.clear();
+    process.write_input(b"\x01:zen on\r").unwrap();
+    process
+        .read_until(&mut output, Duration::from_secs(10), |text| {
+            text.contains("mez-app-size 24 80")
+        })
+        .unwrap();
+
+    process
+        .resize_pty(PtySize {
+            rows: 12,
+            cols: 40,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    process
+        .read_until(&mut output, Duration::from_secs(10), |text| {
+            text.contains("mez-app-size 12 40")
+        })
+        .unwrap();
+
+    process.write_input(b"\x01:zen off\r").unwrap();
+    process
+        .read_until(&mut output, Duration::from_secs(10), |text| {
+            text.contains("mez-app-size 10 40") && contains_default_shell_pane_frame(text)
+        })
+        .unwrap();
+
+    process.write_input(b"\x01:exit\r").unwrap();
+    process
+        .read_until_exit(&mut output, Duration::from_secs(5))
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output);
+    assert!(!text.contains("Broken pipe"), "{text}");
+    assert!(!text.contains("mez: Io"), "{text}");
+}
+
 /// Launches a real foreground primary session and exits the pane shell normally.
 /// This covers the clean primary-exit path where the terminal endpoint may
 /// disappear while Mezzanine is restoring presentation state; that condition
