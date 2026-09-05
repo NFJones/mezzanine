@@ -8,15 +8,18 @@ use super::{
     CopyMode, CopyPosition, DOUBLE_CLICK_WORD_SELECTION_HIGHLIGHT_MS,
     DOUBLE_CLICK_WORD_SELECTION_WINDOW_MS, MezError, MouseAction, MousePaneTarget,
     MouseSelectionDragState, MouseSelectionEdge, MouseSelectionTarget, PaneAgentStatusField,
-    Result, RuntimeMouseClickState, RuntimePaneAgentStatusSelector, RuntimeSessionService,
-    SelectorInputOutcome, Size, TerminalClientLoopAction, WindowFrameAction,
-    WindowFrameCommandKind, agent_command_link_at_line_column, agent_prompt_error_display_lines,
-    apply_selector_input, current_unix_millis, runtime_agent_shell_command_response_json,
+    PaneStatusAction, PaneStatusSegmentIdentity, Result, RuntimeMouseClickState,
+    RuntimePaneAgentStatusSelector, RuntimeSessionService, SelectorInputOutcome, Size,
+    TerminalClientLoopAction, WindowFrameAction, WindowFrameCommandKind,
+    agent_command_link_at_line_column, agent_prompt_error_display_lines, apply_selector_input,
+    current_unix_millis, runtime_agent_shell_command_response_json,
     runtime_agent_shell_display_output, runtime_agent_shell_visibility,
     runtime_approval_policy_name, runtime_copy_position_for_view,
     runtime_pane_agent_status_selector_layout, runtime_scroll_selector, runtime_set_selector_index,
     selector_input_action,
 };
+use crate::host::terminal::{DEFAULT_PANE_FRAME_TEMPLATE, pane_frame_row_layout};
+use crate::runtime::service_state::RuntimePaneSettingsEntry;
 use crate::runtime::{MIN_PANE_COLUMNS, MIN_PANE_ROWS, MouseResizeDragState, PaneGeometry};
 use mez_mux::layout::range_overlap_u16;
 
@@ -356,17 +359,7 @@ impl RuntimeSessionService {
                 Ok((true, None))
             }
             MouseAction::OpenPaneAgentStatusSelectorIdentity { identity } => {
-                let crate::host::terminal::PaneStatusAction::Builtin(field) = identity.action
-                else {
-                    self.presentation.pane_agent_status_selector = None;
-                    return Ok((true, None));
-                };
-                self.open_pane_agent_status_selector(
-                    primary_client_id,
-                    usize::MAX,
-                    field,
-                    Some(&identity),
-                )?;
+                self.apply_pane_status_identity(primary_client_id, &identity)?;
                 Ok((true, None))
             }
             MouseAction::HoverPaneAgentStatusSelector {
@@ -750,6 +743,161 @@ impl RuntimeSessionService {
             .max(1)
     }
 
+    /// Opens the configured pane-status controls for one stable pane owner.
+    pub(crate) fn open_pane_settings_selector(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        pane_id: &mez_core::ids::PaneId,
+    ) -> Result<()> {
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
+        }
+        let frame_context = self.terminal_frame_context();
+        let Some((pane_index, layout)) = self.pane_status_layout_for_owner(pane_id, &frame_context)
+        else {
+            return Err(MezError::new(
+                crate::error::MezErrorKind::NotFound,
+                "pane not found",
+            ));
+        };
+        let settings_entries = layout
+            .status_items
+            .into_iter()
+            .filter(|item| item.key.action != PaneStatusAction::OpenSettings)
+            .map(|item| {
+                let state = match item.state {
+                    mez_mux::render::PaneStatusLayoutState::Visible => "visible",
+                    mez_mux::render::PaneStatusLayoutState::Compacted => "compact",
+                    mez_mux::render::PaneStatusLayoutState::Hidden => "hidden",
+                    mez_mux::render::PaneStatusLayoutState::Overflowed => "overflow",
+                };
+                let interaction = match item.key.action {
+                    PaneStatusAction::None => "read-only",
+                    PaneStatusAction::Builtin(_) => "control",
+                    PaneStatusAction::OpenSettings => "menu",
+                };
+                let value = item.display.trim();
+                let label = if value.is_empty() {
+                    format!("{} [{state}; {interaction}]", item.key.field.as_str())
+                } else {
+                    format!(
+                        "{}: {value} [{state}; {interaction}]",
+                        item.key.field.as_str()
+                    )
+                };
+                (label, RuntimePaneSettingsEntry { identity: item.key })
+            })
+            .collect::<Vec<_>>();
+        let items = settings_entries
+            .iter()
+            .map(|(label, _)| label.clone())
+            .collect::<Vec<_>>();
+        let settings_entries = settings_entries
+            .into_iter()
+            .map(|(_, entry)| entry)
+            .collect::<Vec<_>>();
+        self.presentation.pane_agent_status_selector = Some(RuntimePaneAgentStatusSelector {
+            navigation: mez_mux::overlay::AnchoredSelector {
+                pane_id: pane_id.to_string(),
+                pane_index,
+                field: PaneAgentStatusField::Settings,
+                items,
+                active_index: 0,
+                scroll_offset: 0,
+                anchor_column: 0,
+                anchor_row: 0,
+                anchor_width: 8,
+            },
+            source_identity: None,
+            settings_entries,
+        });
+        Ok(())
+    }
+
+    /// Resolves the current semantic pane-status layout for one stable owner.
+    fn pane_status_layout_for_owner(
+        &self,
+        pane_id: &mez_core::ids::PaneId,
+        frame_context: &crate::host::terminal::TerminalFrameContext,
+    ) -> Option<(
+        usize,
+        mez_mux::render::PaneFrameRowLayout<PaneStatusSegmentIdentity>,
+    )> {
+        let window = self
+            .session
+            .windows()
+            .iter()
+            .find(|window| window.panes().iter().any(|pane| pane.id == *pane_id))?;
+        let pane = window.panes().iter().find(|pane| pane.id == *pane_id)?;
+        let width = self
+            .window_presentation_plan(window)
+            .and_then(|plan| {
+                plan.pane(pane.index)
+                    .map(|pane_plan| usize::from(pane_plan.render_region_size.columns))
+            })
+            .unwrap_or_else(|| usize::from(pane.size.columns));
+        let fill = if self.presentation.settings.pane_frame_template == DEFAULT_PANE_FRAME_TEMPLATE
+        {
+            '─'
+        } else {
+            ' '
+        };
+        Some((
+            pane.index,
+            pane_frame_row_layout(
+                window,
+                pane,
+                frame_context,
+                &self.presentation.settings.pane_frame_template,
+                width,
+                fill,
+            ),
+        ))
+    }
+
+    /// Applies one current semantic action after stable identity revalidation.
+    fn apply_pane_status_identity(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        identity: &PaneStatusSegmentIdentity,
+    ) -> Result<()> {
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
+        }
+        let frame_context = self.terminal_frame_context();
+        let Some((_pane_index, layout)) =
+            self.pane_status_layout_for_owner(&identity.owner_pane_id, &frame_context)
+        else {
+            self.presentation.pane_agent_status_selector = None;
+            return Err(MezError::conflict(
+                "pane status action owner is no longer available",
+            ));
+        };
+        let current = layout
+            .status_items
+            .iter()
+            .find(|item| &item.key == identity)
+            .map(|item| item.key.clone())
+            .ok_or_else(|| MezError::conflict("pane status action is stale"))?;
+        match current.action {
+            PaneStatusAction::None => Ok(()),
+            PaneStatusAction::OpenSettings => {
+                let pane_id = current.owner_pane_id.clone();
+                self.open_pane_settings_selector(primary_client_id, &pane_id)
+            }
+            PaneStatusAction::Builtin(field) => self.open_pane_agent_status_selector(
+                primary_client_id,
+                usize::MAX,
+                field,
+                Some(&current),
+            ),
+        }
+    }
+
     /// Opens or applies the pane-frame selector for a pane.
     fn open_pane_agent_status_selector(
         &mut self,
@@ -758,7 +906,17 @@ impl RuntimeSessionService {
         field: PaneAgentStatusField,
         identity: Option<&crate::host::terminal::PaneStatusSegmentIdentity>,
     ) -> Result<()> {
-        let Some(window) = self.session.active_window() else {
+        let window = identity
+            .and_then(|identity| {
+                self.session.windows().iter().find(|window| {
+                    window
+                        .panes()
+                        .iter()
+                        .any(|pane| pane.id == identity.owner_pane_id)
+                })
+            })
+            .or_else(|| self.session.active_window());
+        let Some(window) = window else {
             self.presentation.pane_agent_status_selector = None;
             return Ok(());
         };
@@ -783,9 +941,10 @@ impl RuntimeSessionService {
             }
             let frame_context = self.terminal_frame_context();
             let identity_is_current = self
-                .active_window_mouse_pane_agent_status_cells(&frame_context)
-                .iter()
-                .any(|cell| &cell.identity == identity);
+                .pane_status_layout_for_owner(&identity.owner_pane_id, &frame_context)
+                .is_some_and(|(_, layout)| {
+                    layout.status_items.iter().any(|item| &item.key == identity)
+                });
             if !identity_is_current {
                 self.presentation.pane_agent_status_selector = None;
                 return Ok(());
@@ -849,10 +1008,11 @@ impl RuntimeSessionService {
             })
             .cloned()
             .collect::<Vec<_>>();
-        let Some(anchor_column) = field_cells.iter().map(|cell| cell.column).min() else {
-            self.presentation.pane_agent_status_selector = None;
-            return Ok(());
-        };
+        let anchor_column = field_cells
+            .iter()
+            .map(|cell| cell.column)
+            .min()
+            .unwrap_or(0);
         let anchor_row = field_cells.iter().map(|cell| cell.row).min().unwrap_or(0);
         let anchor_width = field_cells
             .iter()
@@ -860,7 +1020,7 @@ impl RuntimeSessionService {
             .max()
             .and_then(|max_column| max_column.checked_sub(anchor_column))
             .map(|width| width.saturating_add(1))
-            .unwrap_or(1);
+            .unwrap_or(8);
         let items = match field {
             PaneAgentStatusField::Model | PaneAgentStatusField::Preset => {
                 self.configured_model_names_for_pane(&pane_id)?
@@ -895,6 +1055,7 @@ impl RuntimeSessionService {
                 }
             }
             PaneAgentStatusField::Routing => Vec::new(),
+            PaneAgentStatusField::Settings => Vec::new(),
         };
         if items.is_empty() {
             self.presentation.pane_agent_status_selector = None;
@@ -906,15 +1067,19 @@ impl RuntimeSessionService {
             .and_then(|value| items.iter().position(|item| item == value))
             .unwrap_or(0);
         self.presentation.pane_agent_status_selector = Some(RuntimePaneAgentStatusSelector {
-            pane_id,
-            pane_index,
-            field,
-            items,
-            active_index,
-            scroll_offset: active_index,
-            anchor_column,
-            anchor_row,
-            anchor_width,
+            navigation: mez_mux::overlay::AnchoredSelector {
+                pane_id,
+                pane_index,
+                field,
+                items,
+                active_index,
+                scroll_offset: active_index,
+                anchor_column,
+                anchor_row,
+                anchor_width,
+            },
+            source_identity: identity.cloned(),
+            settings_entries: Vec::new(),
         });
         let visible_rows = self.pane_agent_status_selector_visible_rows();
         if let Some(selector) = self.presentation.pane_agent_status_selector.as_mut() {
@@ -958,6 +1123,23 @@ impl RuntimeSessionService {
         if selector.pane_index != pane_index || selector.field != field {
             return Ok(());
         }
+        if field == PaneAgentStatusField::Settings {
+            let Some(entry) = selector.settings_entries.get(item_index).cloned() else {
+                return Ok(());
+            };
+            return self.apply_pane_status_identity(primary_client_id, &entry.identity);
+        }
+        if let Some(identity) = selector.source_identity.as_ref() {
+            let frame_context = self.terminal_frame_context();
+            let current = self
+                .pane_status_layout_for_owner(&identity.owner_pane_id, &frame_context)
+                .is_some_and(|(_, layout)| {
+                    layout.status_items.iter().any(|item| &item.key == identity)
+                });
+            if !current {
+                return Err(MezError::conflict("pane status action is stale"));
+            }
+        }
         let Some(value) = selector.items.get(item_index).cloned() else {
             return Ok(());
         };
@@ -968,7 +1150,9 @@ impl RuntimeSessionService {
             PaneAgentStatusField::Reasoning => {
                 self.apply_pane_reasoning_picker_selection(&selector.pane_id, &value)?
             }
-            PaneAgentStatusField::Thinking | PaneAgentStatusField::Planning => return Ok(()),
+            PaneAgentStatusField::Thinking
+            | PaneAgentStatusField::Planning
+            | PaneAgentStatusField::Settings => return Ok(()),
             PaneAgentStatusField::ApprovalPolicy => {
                 let outcome = self.execute_agent_shell_approval_command(
                     &selector.pane_id,
@@ -1005,6 +1189,7 @@ impl RuntimeSessionService {
                 PaneAgentStatusField::ApprovalPolicy => "/approval",
                 PaneAgentStatusField::Latency => "/latency",
                 PaneAgentStatusField::Preset => "/model",
+                PaneAgentStatusField::Settings => return Ok(()),
             },
             Some(&outcome),
         );
@@ -1084,6 +1269,7 @@ impl RuntimeSessionService {
             PaneAgentStatusField::Preset => self
                 .active_model_preset_name_for_pane(pane_id)
                 .map(|preset| format!("preset: {preset}")),
+            PaneAgentStatusField::Settings => None,
         }
     }
 

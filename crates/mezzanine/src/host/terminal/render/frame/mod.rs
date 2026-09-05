@@ -21,12 +21,13 @@ pub(in crate::host::terminal::render) use layout::write_merged_pane_frames_on_di
 pub(in crate::host::terminal::render) use layout::{
     pane_frame_field_value, write_styled_merged_pane_frames_on_dividers,
 };
+pub(crate) use pane::pane_frame_row_layout;
 #[cfg(test)]
 pub(in crate::host::terminal::render) use pane::render_pane_lines;
 pub(in crate::host::terminal::render) use pane::{
     PaneFrameRightStatusSegment, compact_pane_working_directory, pane_agent_prompt_space_reserved,
     pane_agent_prompt_transparent, pane_agent_shell_visible, pane_frame_fill_char,
-    pane_frame_row_layout, render_styled_pane_lines,
+    render_styled_pane_lines,
 };
 #[cfg(test)]
 pub(in crate::host::terminal::render) use style::group_frame_text;

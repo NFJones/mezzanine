@@ -1496,7 +1496,16 @@ impl RuntimePresentationComponent {
         settings: RuntimePresentationSettings,
     ) -> Option<RenderInvalidationReason> {
         let invalidation_reason = self.settings.invalidation_reason(&settings);
+        let pane_status_changed = self.settings.pane_status != settings.pane_status;
         self.settings = settings;
+        if pane_status_changed {
+            self.pane_agent_status_selector = None;
+            for state in self.client_states.values_mut() {
+                if state.pane_agent_status_selector.take().is_some() {
+                    state.presentation_revision = state.presentation_revision.saturating_add(1);
+                }
+            }
+        }
         self.agent_presentation_projection_cache.clear();
         self.agent_presentation_replay_cache.clear_entries();
         invalidation_reason
@@ -2722,6 +2731,14 @@ impl RuntimeSessionService {
         self.presentation.pane_agent_status_selector.as_ref()
     }
 
+    /// Returns mutable pane-agent selector state for focused interaction tests.
+    #[cfg(test)]
+    pub(crate) fn pane_agent_status_selector_mut_for_tests(
+        &mut self,
+    ) -> Option<&mut RuntimePaneAgentStatusSelector> {
+        self.presentation.pane_agent_status_selector.as_mut()
+    }
+
     /// Returns pane styled-row cache hit, miss, and entry counts for tests.
     #[cfg(test)]
     pub(crate) fn pane_styled_row_cache_stats_for_tests(&self) -> (u64, u64, usize) {
@@ -2754,8 +2771,8 @@ impl RuntimeSessionService {
 }
 
 use crate::host::terminal::{
-    MousePaneAgentSelectorCell, MousePaneAgentStatusCell, PaneAgentStatusField,
-    WindowFrameCommandKind, compose_modal_display_overlay_lines,
+    MousePaneAgentSelectorCell, MousePaneAgentStatusCell, PaneAgentStatusField, PaneStatusAction,
+    PaneStatusSegmentIdentity, WindowFrameCommandKind, compose_modal_display_overlay_lines,
     compose_prompt_overlay_presentation_with_styles, pane_frame_agent_status_pillbox_cells,
     window_group_frame_pillbox_cells,
 };

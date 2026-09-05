@@ -1703,6 +1703,7 @@ pub(crate) fn runtime_pane_agent_selector_rendition(
             PaneAgentStatusField::ApprovalPolicy => ui_theme.colors.agent_status_blocked,
             PaneAgentStatusField::Latency => ui_theme.colors.agent_reasoning,
             PaneAgentStatusField::Preset => ui_theme.colors.agent_model,
+            PaneAgentStatusField::Settings => ui_theme.colors.display_overlay,
         }
     } else {
         ui_theme.colors.display_overlay

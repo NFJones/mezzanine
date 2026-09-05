@@ -1694,6 +1694,17 @@ pub(super) fn validate_frame_value(path: &str, value: &str) -> Option<String> {
                 ))
             }
         }
+        "frames.pane.overflow" => {
+            if matches!(value, "compact" | "hide" | "menu") {
+                None
+            } else {
+                Some("frames.pane.overflow must be compact, hide, or menu".to_string())
+            }
+        }
+        "frames.pane.title_min_width" => match value.parse::<u64>() {
+            Ok(width) if (1..=4096).contains(&width) => None,
+            _ => Some("frames.pane.title_min_width must be an integer from 1 to 4096".to_string()),
+        },
         _ => None,
     }
 }

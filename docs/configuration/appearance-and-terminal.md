@@ -50,6 +50,15 @@ whether the existing built-in selector is clickable. Empty rail strings remain
 empty. `frames.pane.visible_fields` remains only the fallback used when the
 title template is empty; it does not filter either status rail.
 
+Narrow panes use `frames.pane.overflow = "menu"` by default. Both rails share
+one priority pool, with lower-priority pills compacted or removed first and
+equal priorities removed from the end of template order. `compact` omits the
+overflow menu, while `hide` skips compact forms. `frames.pane.title_min_width`
+reserves eight terminal cells for the title by default, and the renderer always
+preserves the trailing structural cell. Use `pane-settings [-t pane]` for
+keyboard access to configured controls and overflowed or read-only entries;
+opening it does not move focus to the target pane.
+
 Changing the effective theme or another visual presentation setting queues an
 immediate full redraw for every attached client. The redraw restyles Mez-owned
 frames, prompts, overlays, and transcript surfaces without waiting for unrelated

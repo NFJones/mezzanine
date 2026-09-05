@@ -149,6 +149,7 @@ fn terminal_command_description(name: &str) -> &'static str {
         "next-layout" => "select the next pane layout.",
         "next-pane" => "focus the next pane.",
         "next-window" => "focus the next window.",
+        "pane-settings" => "open pane-scoped status and configuration controls.",
         "paste-buffer" => "paste a named or recent paste buffer.",
         "paste-clipboard" => "paste host clipboard text into the active pane.",
         "pipe-pane" => "pipe future pane output to a file or command.",

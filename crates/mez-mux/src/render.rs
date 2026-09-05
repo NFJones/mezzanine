@@ -750,6 +750,87 @@ pub struct PaneFrameRowLayout<K> {
     pub left_text_width: usize,
     /// Right-status segments in absolute row columns.
     pub right_status_segments: Vec<FrameStatusSegment<K>>,
+    /// Resolution state for every candidate status item in template order.
+    pub status_items: Vec<ResolvedPaneStatusLayoutItem<K>>,
+}
+
+/// Overflow behavior for pane-scoped status items that do not fit.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum PaneStatusOverflowPolicy {
+    /// Try compact displays before hiding the lowest-priority items.
+    Compact,
+    /// Hide whole lowest-priority items without first compacting them.
+    Hide,
+    /// Compact first, move evicted items into a menu, and show an indicator.
+    #[default]
+    Menu,
+}
+
+/// Placement rail for one pane-scoped status item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneStatusLayoutRail {
+    /// Title-adjacent rail.
+    Left,
+    /// Right-aligned rail.
+    Right,
+}
+
+/// One whole pane-status item supplied to the neutral layout planner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneStatusLayoutItem<K> {
+    /// Caller-owned semantic identity.
+    pub key: K,
+    /// Caller-owned raw value retained for actions and inspection.
+    pub value: String,
+    /// Full padded display text.
+    pub display: String,
+    /// Compact padded display text.
+    pub compact_display: String,
+    /// Literal separator preceding this item when another rail item is visible.
+    pub separator: String,
+    /// Retention priority from zero through one hundred.
+    pub priority: u8,
+    /// Optional minimum useful inner display width, excluding pill padding.
+    pub min_width: Option<usize>,
+}
+
+/// Fitting policy supplied to the neutral pane-status layout planner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneStatusLayoutOptions<K> {
+    /// Minimum display-cell budget retained for the pane title when possible.
+    pub title_min_width: usize,
+    /// Policy applied when all pane-status items do not fit.
+    pub overflow_policy: PaneStatusOverflowPolicy,
+    /// Optional whole-item indicator shown when menu overflow is active.
+    pub overflow_indicator: Option<PaneStatusLayoutItem<K>>,
+}
+
+/// Final presentation state selected for one pane-status item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneStatusLayoutState {
+    /// The full display is visible.
+    Visible,
+    /// The compact display is visible.
+    Compacted,
+    /// The item is omitted without an overflow-menu entry.
+    Hidden,
+    /// The item is omitted from the row and exposed through overflow controls.
+    Overflowed,
+}
+
+/// Resolved state retained for rendering, hit testing, menus, and diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedPaneStatusLayoutItem<K> {
+    /// Caller-owned semantic identity.
+    pub key: K,
+    /// Caller-owned raw value.
+    pub value: String,
+    /// Rail that owned this item.
+    pub rail: PaneStatusLayoutRail,
+    /// Final fitting decision.
+    pub state: PaneStatusLayoutState,
+    /// Display text selected for visible or compacted items.
+    pub display: String,
 }
 
 /// Exact-width window or group frame row with semantic pill and status placement.
@@ -903,6 +984,7 @@ pub fn compose_frame_text_row<K>(
             text: String::new(),
             left_text_width: 0,
             right_status_segments: Vec::new(),
+            status_items: Vec::new(),
         };
     }
     let Some(right_status) = right_status else {
@@ -911,6 +993,7 @@ pub fn compose_frame_text_row<K>(
             text,
             left_text_width,
             right_status_segments: Vec::new(),
+            status_items: Vec::new(),
         };
     };
     let mut row = blank_render_row(width, fill);
@@ -921,6 +1004,7 @@ pub fn compose_frame_text_row<K>(
             text,
             left_text_width,
             right_status_segments: Vec::new(),
+            status_items: Vec::new(),
         };
     };
     let left_width = status_start.saturating_sub(1);
@@ -950,6 +1034,7 @@ pub fn compose_frame_text_row<K>(
         text: collect_text_cells(row),
         left_text_width,
         right_status_segments,
+        status_items: Vec::new(),
     }
 }
 
@@ -1074,6 +1159,269 @@ pub fn compose_pane_frame_status_row<K>(
         text: collect_text_cells(row),
         left_text_width: title_width,
         right_status_segments: semantic_segments,
+        status_items: Vec::new(),
+    }
+}
+
+/// Composes pane-scoped status items without clipping a semantic item.
+///
+/// Left and right rail entries compete in one priority pool. The lowest
+/// priority entry is compacted or removed first, with equal-priority entries
+/// processed in reverse template order. The returned item states are the
+/// authoritative source for rendering, hit testing, overflow controls, and
+/// product diagnostics.
+pub fn compose_pane_status_layout<K: Clone>(
+    title: &str,
+    left_items: Vec<PaneStatusLayoutItem<K>>,
+    right_items: Vec<PaneStatusLayoutItem<K>>,
+    width: usize,
+    fill: char,
+    options: PaneStatusLayoutOptions<K>,
+) -> PaneFrameRowLayout<K> {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Selection {
+        Full,
+        Compact,
+        Omitted,
+    }
+
+    struct Candidate<K> {
+        item: PaneStatusLayoutItem<K>,
+        rail: PaneStatusLayoutRail,
+        order: usize,
+        selection: Selection,
+    }
+
+    fn display_is_useful<K>(item: &PaneStatusLayoutItem<K>, display: &str) -> bool {
+        let width = fitted_text_width(display, usize::MAX);
+        width > 0
+            && item
+                .min_width
+                .is_none_or(|minimum| width.saturating_sub(2) >= minimum)
+    }
+
+    fn selected_display<K>(candidate: &Candidate<K>) -> Option<&str> {
+        match candidate.selection {
+            Selection::Full => Some(candidate.item.display.as_str()),
+            Selection::Compact => Some(candidate.item.compact_display.as_str()),
+            Selection::Omitted => None,
+        }
+    }
+
+    fn rail_width<K>(candidates: &[Candidate<K>], rail: PaneStatusLayoutRail) -> usize {
+        let mut width = 0usize;
+        let mut any = false;
+        for candidate in candidates.iter().filter(|candidate| candidate.rail == rail) {
+            let Some(display) = selected_display(candidate) else {
+                continue;
+            };
+            if any {
+                width =
+                    width.saturating_add(fitted_text_width(&candidate.item.separator, usize::MAX));
+            }
+            width = width.saturating_add(fitted_text_width(display, usize::MAX));
+            any = true;
+        }
+        width
+    }
+
+    fn required_status_width<K>(candidates: &[Candidate<K>]) -> usize {
+        let left_width = rail_width(candidates, PaneStatusLayoutRail::Left);
+        let right_width = rail_width(candidates, PaneStatusLayoutRail::Right);
+        left_width
+            .saturating_add(right_width)
+            .saturating_add(usize::from(left_width > 0 && right_width > 0))
+    }
+
+    fn render_rail<K: Clone>(
+        candidates: &[Candidate<K>],
+        rail: PaneStatusLayoutRail,
+    ) -> RenderedFrameStatus<K> {
+        let mut text = String::new();
+        let mut segments = Vec::new();
+        for candidate in candidates.iter().filter(|candidate| candidate.rail == rail) {
+            let Some(display) = selected_display(candidate) else {
+                continue;
+            };
+            if !text.is_empty() {
+                text.push_str(&candidate.item.separator);
+            }
+            let start = fitted_text_width(&text, usize::MAX);
+            text.push_str(display);
+            let item_width = fitted_text_width(display, usize::MAX);
+            segments.push(FrameStatusSegment {
+                start,
+                width: item_width,
+                key: candidate.item.key.clone(),
+                value: candidate.item.value.clone(),
+            });
+        }
+        RenderedFrameStatus {
+            text: sanitize_frame_text(&text),
+            segments,
+        }
+    }
+
+    let PaneStatusLayoutOptions {
+        title_min_width,
+        overflow_policy,
+        overflow_indicator,
+    } = options;
+    let trailing_width = usize::from(width > 0);
+    let available_before_title = width.saturating_sub(trailing_width);
+    let title_budget = title_min_width.min(available_before_title);
+    let status_gap = usize::from(title_budget > 0);
+    let status_capacity = available_before_title
+        .saturating_sub(title_budget)
+        .saturating_sub(status_gap);
+    let left_len = left_items.len();
+    let mut candidates = left_items
+        .into_iter()
+        .enumerate()
+        .map(|(order, item)| Candidate {
+            item,
+            rail: PaneStatusLayoutRail::Left,
+            order,
+            selection: Selection::Full,
+        })
+        .chain(
+            right_items
+                .into_iter()
+                .enumerate()
+                .map(|(offset, item)| Candidate {
+                    item,
+                    rail: PaneStatusLayoutRail::Right,
+                    order: left_len.saturating_add(offset),
+                    selection: Selection::Full,
+                }),
+        )
+        .collect::<Vec<_>>();
+    let ordinary_len = candidates.len();
+    let mut eviction_order = (0..ordinary_len).collect::<Vec<_>>();
+    eviction_order.sort_by(|left, right| {
+        candidates[*left]
+            .item
+            .priority
+            .cmp(&candidates[*right].item.priority)
+            .then_with(|| candidates[*right].order.cmp(&candidates[*left].order))
+    });
+
+    if overflow_policy != PaneStatusOverflowPolicy::Hide {
+        for index in eviction_order.iter().copied() {
+            if required_status_width(&candidates) <= status_capacity {
+                break;
+            }
+            let compact = candidates[index].item.compact_display.as_str();
+            if compact != candidates[index].item.display
+                && display_is_useful(&candidates[index].item, compact)
+            {
+                candidates[index].selection = Selection::Compact;
+            }
+        }
+    }
+
+    let mut overflow_started = false;
+    if required_status_width(&candidates) > status_capacity {
+        for index in eviction_order.iter().copied() {
+            if required_status_width(&candidates) <= status_capacity && overflow_started {
+                break;
+            }
+            candidates[index].selection = Selection::Omitted;
+            overflow_started = true;
+            if overflow_policy == PaneStatusOverflowPolicy::Menu
+                && candidates.len() == ordinary_len
+                && let Some(indicator) = overflow_indicator.clone()
+            {
+                candidates.push(Candidate {
+                    item: indicator,
+                    rail: PaneStatusLayoutRail::Right,
+                    order: usize::MAX,
+                    selection: Selection::Full,
+                });
+            }
+        }
+    }
+    if overflow_policy == PaneStatusOverflowPolicy::Menu && overflow_started {
+        while required_status_width(&candidates) > status_capacity {
+            let Some(index) = eviction_order
+                .iter()
+                .copied()
+                .find(|index| candidates[*index].selection != Selection::Omitted)
+            else {
+                break;
+            };
+            candidates[index].selection = Selection::Omitted;
+        }
+        if required_status_width(&candidates) > status_capacity && candidates.len() > ordinary_len {
+            candidates[ordinary_len].selection = Selection::Omitted;
+        }
+    }
+
+    let left_status = render_rail(&candidates, PaneStatusLayoutRail::Left);
+    let right_status = render_rail(&candidates, PaneStatusLayoutRail::Right);
+    let left_width = fitted_text_width(&left_status.text, usize::MAX);
+    let right_width = fitted_text_width(&right_status.text, usize::MAX);
+    let between_rails = usize::from(left_width > 0 && right_width > 0);
+    let status_used = left_width
+        .saturating_add(right_width)
+        .saturating_add(between_rails);
+    let title_available = available_before_title
+        .saturating_sub(status_used)
+        .saturating_sub(usize::from(status_used > 0));
+    let mut row = blank_render_row(width, fill);
+    let title_text = render_frame_pill_text_fitted(title, title_available);
+    let title_width = write_text_cells_with_width(&mut row, 0, title_available, &title_text);
+    let left_start = title_width.saturating_add(usize::from(left_width > 0 && title_width > 0));
+    write_text_cells_with_width(&mut row, left_start, left_width, &left_status.text);
+    let right_start = available_before_title.saturating_sub(right_width);
+    write_text_cells_with_width(&mut row, right_start, right_width, &right_status.text);
+
+    let mut segments = left_status
+        .segments
+        .into_iter()
+        .map(|mut segment| {
+            segment.start = segment.start.saturating_add(left_start);
+            segment
+        })
+        .collect::<Vec<_>>();
+    segments.extend(right_status.segments.into_iter().map(|mut segment| {
+        segment.start = segment.start.saturating_add(right_start);
+        segment
+    }));
+    segments.sort_by_key(|segment| segment.start);
+
+    let status_items = candidates
+        .into_iter()
+        .enumerate()
+        .map(|(index, candidate)| {
+            let state = match candidate.selection {
+                Selection::Full => PaneStatusLayoutState::Visible,
+                Selection::Compact => PaneStatusLayoutState::Compacted,
+                Selection::Omitted
+                    if overflow_policy == PaneStatusOverflowPolicy::Menu
+                        && index < ordinary_len =>
+                {
+                    PaneStatusLayoutState::Overflowed
+                }
+                Selection::Omitted => PaneStatusLayoutState::Hidden,
+            };
+            let display = selected_display(&candidate)
+                .unwrap_or(candidate.item.display.as_str())
+                .to_string();
+            ResolvedPaneStatusLayoutItem {
+                key: candidate.item.key,
+                value: candidate.item.value,
+                rail: candidate.rail,
+                state,
+                display,
+            }
+        })
+        .collect();
+    PaneFrameRowLayout {
+        text: collect_text_cells(row),
+        left_text_width: title_width,
+        right_status_segments: segments,
+        status_items,
     }
 }
 
@@ -1433,15 +1781,17 @@ mod overlay_cell_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        FramePillboxEntry, FrameStatusValue, blank_render_row, char_count, collect_text_cells,
-        compose_frame_pillbox_row, compose_pane_frame_row, display_overlay_targets,
-        fit_styled_width, frame_pillbox_hit_cells, frame_pillbox_segment_columns,
-        frame_status_hit_cells, frame_style_rendition, line_slice, overlay_display_lines,
-        overlay_fixed_column_style_spans, pane_frame_text_with_fill, position_frame_status,
-        render_frame_pill_text, render_frame_pill_text_fitted, render_frame_pillbox_segments,
-        render_frame_pillbox_text, render_frame_status, render_frame_status_template,
-        render_frame_template, sanitize_frame_text, styled_frame_line_with_rendition,
-        write_single_width_cell, write_text_cells, write_text_cells_with_width,
+        FramePillboxEntry, FrameStatusValue, PaneStatusLayoutItem, PaneStatusLayoutState,
+        PaneStatusOverflowPolicy, blank_render_row, char_count, collect_text_cells,
+        compose_frame_pillbox_row, compose_pane_frame_row, compose_pane_status_layout,
+        display_overlay_targets, fit_styled_width, frame_pillbox_hit_cells,
+        frame_pillbox_segment_columns, frame_status_hit_cells, frame_style_rendition, line_slice,
+        overlay_display_lines, overlay_fixed_column_style_spans, pane_frame_text_with_fill,
+        position_frame_status, render_frame_pill_text, render_frame_pill_text_fitted,
+        render_frame_pillbox_segments, render_frame_pillbox_text, render_frame_status,
+        render_frame_status_template, render_frame_template, sanitize_frame_text,
+        styled_frame_line_with_rendition, write_single_width_cell, write_text_cells,
+        write_text_cells_with_width,
     };
     use crate::presentation::TerminalFrameStyle;
     use mez_terminal::{GraphicRendition, TerminalStyleSpan, TerminalStyledLine};
@@ -1646,6 +1996,144 @@ mod tests {
         assert_eq!(layout.right_status_segments[1].key, "state");
         assert_eq!(layout.right_status_segments[1].value, "running");
         assert!(layout.right_status_segments[0].start > layout.left_text_width);
+    }
+
+    /// Verifies left and right pane-status rails compete in one priority pool
+    /// and only whole semantic pills survive. A lower-priority left item must
+    /// disappear before a higher-priority right item even though the rails are
+    /// positioned independently, and the final structural cell stays unused.
+    #[test]
+    fn pane_status_layout_uses_shared_priority_pool_without_partial_targets() {
+        let left = vec![PaneStatusLayoutItem {
+            key: "progress",
+            value: "40".to_string(),
+            display: " low ".to_string(),
+            compact_display: " lo ".to_string(),
+            separator: String::new(),
+            priority: 10,
+            min_width: None,
+        }];
+        let right = vec![PaneStatusLayoutItem {
+            key: "model",
+            value: "important".to_string(),
+            display: " high ".to_string(),
+            compact_display: " hi ".to_string(),
+            separator: String::new(),
+            priority: 90,
+            min_width: None,
+        }];
+
+        let layout = compose_pane_status_layout(
+            "pane title",
+            left,
+            right,
+            20,
+            '─',
+            super::PaneStatusLayoutOptions {
+                title_min_width: 8,
+                overflow_policy: PaneStatusOverflowPolicy::Hide,
+                overflow_indicator: None,
+            },
+        );
+
+        assert_eq!(char_count(&layout.text), 20);
+        assert!(layout.text.ends_with('─'));
+        assert_eq!(layout.right_status_segments.len(), 1);
+        assert_eq!(layout.right_status_segments[0].key, "model");
+        assert_eq!(layout.right_status_segments[0].width, 6);
+        assert_eq!(
+            layout
+                .status_items
+                .iter()
+                .map(|item| (&item.key, item.state))
+                .collect::<Vec<_>>(),
+            vec![
+                (&"progress", PaneStatusLayoutState::Hidden),
+                (&"model", PaneStatusLayoutState::Visible),
+            ]
+        );
+    }
+
+    /// Verifies menu overflow evicts equal-priority items from the end of
+    /// template order, reserves an indicator, and compacts Unicode content on
+    /// grapheme/display-cell boundaries rather than exposing clipped targets.
+    #[test]
+    fn pane_status_layout_compacts_unicode_and_evicts_ties_in_reverse_order() {
+        let right = vec![
+            PaneStatusLayoutItem {
+                key: "first",
+                value: "first".to_string(),
+                display: " one ".to_string(),
+                compact_display: " 界 ".to_string(),
+                separator: String::new(),
+                priority: 50,
+                min_width: Some(2),
+            },
+            PaneStatusLayoutItem {
+                key: "second",
+                value: "second".to_string(),
+                display: " two ".to_string(),
+                compact_display: " 二 ".to_string(),
+                separator: " ".to_string(),
+                priority: 50,
+                min_width: Some(2),
+            },
+            PaneStatusLayoutItem {
+                key: "third",
+                value: "third".to_string(),
+                display: " tri ".to_string(),
+                compact_display: " 三 ".to_string(),
+                separator: " ".to_string(),
+                priority: 50,
+                min_width: Some(2),
+            },
+        ];
+        let indicator = PaneStatusLayoutItem {
+            key: "overflow",
+            value: String::new(),
+            display: " … ".to_string(),
+            compact_display: " … ".to_string(),
+            separator: " ".to_string(),
+            priority: 100,
+            min_width: None,
+        };
+
+        let layout = compose_pane_status_layout(
+            "pane",
+            Vec::new(),
+            right,
+            18,
+            '─',
+            super::PaneStatusLayoutOptions {
+                title_min_width: 8,
+                overflow_policy: PaneStatusOverflowPolicy::Menu,
+                overflow_indicator: Some(indicator),
+            },
+        );
+
+        assert_eq!(char_count(&layout.text), 18);
+        assert!(layout.text.ends_with('─'));
+        assert_eq!(
+            layout
+                .status_items
+                .iter()
+                .map(|item| (&item.key, item.state))
+                .collect::<Vec<_>>(),
+            vec![
+                (&"first", PaneStatusLayoutState::Compacted),
+                (&"second", PaneStatusLayoutState::Overflowed),
+                (&"third", PaneStatusLayoutState::Overflowed),
+                (&"overflow", PaneStatusLayoutState::Visible),
+            ]
+        );
+        assert_eq!(
+            layout
+                .right_status_segments
+                .iter()
+                .map(|segment| (segment.key, segment.width))
+                .collect::<Vec<_>>(),
+            vec![("first", 4), ("overflow", 3)]
+        );
     }
 
     /// Verifies generic frame-status placement clips semantic segments and

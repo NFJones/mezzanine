@@ -5,16 +5,18 @@ use super::super::fit_width;
 use super::super::{
     AgentPromptBlock, DEFAULT_PANE_FRAME_TEMPLATE, FrameStatusSegment, RenderedFrameStatus,
     TerminalFrameContext, TerminalFramePosition, TerminalFrameRenderOptions,
-    TerminalPaneFrameContext, TerminalStyledLine, UiTheme, Window, compose_pane_frame_status_row,
-    fit_styled_width, fitted_text_width, overlay_agent_display_lines, render_agent_prompt_block,
-    sanitize_frame_text,
+    TerminalPaneFrameContext, TerminalStyledLine, UiTheme, Window, fit_styled_width,
+    fitted_text_width, overlay_agent_display_lines, render_agent_prompt_block, sanitize_frame_text,
 };
 use super::{pane_frame_field_value, styled_pane_frame_line};
 use crate::host::terminal::{
     PaneStatusCondition, PaneStatusField, PaneStatusFormat, PaneStatusOccurrenceId,
     PaneStatusPillDefinition, PaneStatusRail, PaneStatusSegmentIdentity,
 };
-use mez_mux::render::PaneFrameRowLayout;
+use mez_mux::render::{
+    PaneFrameRowLayout, PaneStatusLayoutItem, PaneStatusLayoutOptions, compose_pane_status_layout,
+    line_slice, render_frame_pill_text,
+};
 
 /// Runs the render styled pane lines operation for this subsystem.
 ///
@@ -242,7 +244,7 @@ pub(in crate::host::terminal::render) type RenderedPaneFrameRightStatus =
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::host::terminal::render) fn pane_frame_row_layout(
+pub(crate) fn pane_frame_row_layout(
     window: &Window,
     pane: &mez_mux::layout::Pane,
     frame_context: &TerminalFrameContext,
@@ -253,13 +255,78 @@ pub(in crate::host::terminal::render) fn pane_frame_row_layout(
     let title = render_pane_frame_template(window, pane, frame_context, template);
     let left_status = pane_frame_status_rail(window, pane, frame_context, PaneStatusRail::Left);
     let right_status = pane_frame_status_rail(window, pane, frame_context, PaneStatusRail::Right);
-    compose_pane_frame_status_row(
+    let left_items = pane_status_layout_items(left_status, PaneStatusRail::Left);
+    let right_items = pane_status_layout_items(right_status, PaneStatusRail::Right);
+    let config_generation = frame_context.pane_status.generation();
+    let overflow_identity = PaneStatusSegmentIdentity {
+        owner_pane_id: pane.id.clone(),
+        occurrence: PaneStatusOccurrenceId {
+            rail: PaneStatusRail::Right,
+            ordinal: u16::MAX,
+        },
+        field: PaneStatusField::PaneStatus,
+        style: crate::host::terminal::PaneStatusStyle::Automatic,
+        action: crate::host::terminal::PaneStatusAction::OpenSettings,
+        compact_display: "…".to_string(),
+        min_width: None,
+        max_width: None,
+        priority: 100,
+        config_generation,
+        context_generation: pane_status_context_generation(
+            pane,
+            frame_context,
+            PaneStatusField::PaneStatus,
+            "overflow",
+        ),
+    };
+    compose_pane_status_layout(
         &title,
-        left_status,
-        (!right_status.text.is_empty()).then_some(right_status),
+        left_items,
+        right_items,
         width,
         fill,
+        PaneStatusLayoutOptions {
+            title_min_width: frame_context.pane_status.title_min_width,
+            overflow_policy: frame_context.pane_status.overflow,
+            overflow_indicator: Some(PaneStatusLayoutItem {
+                key: overflow_identity,
+                value: String::new(),
+                display: " … ".to_string(),
+                compact_display: " … ".to_string(),
+                separator: " ".to_string(),
+                priority: 100,
+                min_width: None,
+            }),
+        },
     )
+}
+
+/// Converts resolved semantic rail segments into whole layout candidates.
+fn pane_status_layout_items(
+    status: RenderedPaneFrameRightStatus,
+    _rail: PaneStatusRail,
+) -> Vec<PaneStatusLayoutItem<PaneStatusSegmentIdentity>> {
+    let mut previous_end = 0usize;
+    status
+        .segments
+        .into_iter()
+        .map(|segment| {
+            let separator = line_slice(&status.text, previous_end, segment.start);
+            let end = segment.start.saturating_add(segment.width);
+            let display = line_slice(&status.text, segment.start, end);
+            previous_end = end;
+            let compact_display = render_frame_pill_text(&segment.key.compact_display);
+            PaneStatusLayoutItem {
+                key: segment.key.clone(),
+                value: segment.value,
+                display,
+                compact_display,
+                separator,
+                priority: segment.key.priority,
+                min_width: segment.key.min_width,
+            }
+        })
+        .collect()
 }
 
 /// Returns the background fill glyph for a pane frame template.

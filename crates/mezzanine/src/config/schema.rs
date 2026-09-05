@@ -650,6 +650,8 @@ pub(super) const PANE_FRAME_KEYS: &[&str] = &[
     "template",
     "left_status",
     "right_status",
+    "overflow",
+    "title_min_width",
     "pills",
     "style",
     "visible_fields",

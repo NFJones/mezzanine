@@ -3819,8 +3819,8 @@ bounded by the configured maximum output length. Empty output behavior MUST be
 one of `hide`, `show_empty`, or `keep_previous`; error behavior MUST be one of
 `hide`, `show_error`, or `keep_previous`.
 
-`frames.pane` MUST additionally support `left_status`, `right_status`, and
-`pills`. The two status templates MUST independently select and order padded
+`frames.pane` MUST additionally support `left_status`, `right_status`,
+`overflow`, `title_min_width`, and `pills`. The two status templates MUST independently select and order padded
 pane-scoped status items; an explicitly empty template MUST render no items and
 MUST NOT trigger implicit progress, history, or agent-status insertion.
 `frames.pane.pills` MUST be a map keyed by ASCII pill name. Every definition
@@ -3829,10 +3829,20 @@ MUST name one built-in `field` and MAY set `label`, `format`,
 `on_click`. Supported conditions MUST be the finite AND-combined vocabulary
 `agent-view`, `shell-view`, `focused`, `unfocused`, `busy`, `idle`,
 `supported`, `nonempty`, and `scrollback`; contradictory conditions MUST be
-rejected. `on_click` MUST be limited to `builtin` or `none`. Unsupported
-command providers, working-directory execution, custom terminal or agent
-actions, overflow, presets, and diagnostic settings MUST be rejected until
-their owning contracts are implemented. Each rendered occurrence MUST retain
+rejected. `on_click` MUST be limited to `builtin` or `none`. `overflow` MUST
+be `compact`, `hide`, or `menu` and MUST default to `menu`;
+`title_min_width` MUST default to eight terminal cells. Left and right items
+MUST compete in one retention-priority pool. Lower priorities MUST compact or
+leave the row first, ties MUST evict in reverse template order, and retained
+items MUST keep template order. The renderer MUST retain the trailing
+structural cell and MUST NOT render or expose a hit target for a partial pill.
+Menu overflow MUST expose omitted items through `pane-settings [-t pane]`,
+which MUST also include read-only items and use the same typed action validation
+as mouse input. Actions MUST retain stable pane, occurrence, configuration, and
+pane-context identity, reject stale or closed targets, and MUST NOT retarget
+focus. Unsupported command providers, working-directory execution, custom
+terminal or agent actions, presets, and diagnostic settings MUST be rejected
+until their owning contracts are implemented. Each rendered occurrence MUST retain
 stable pane, rail, ordinal, source-field, style, action, configuration, and
 pane-context identity. Rendering, styling, and hit testing MUST consume that
 same semantic occurrence rather than infer actions from display text.

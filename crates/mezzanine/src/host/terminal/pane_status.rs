@@ -11,6 +11,8 @@ use std::hash::{Hash, Hasher};
 
 use mez_core::ids::PaneId;
 
+pub use mez_mux::render::PaneStatusOverflowPolicy;
+
 use super::PaneAgentStatusField;
 
 /// Default title-adjacent pane status rail.
@@ -253,6 +255,8 @@ pub enum PaneStatusAction {
     None,
     /// Invoke the field's existing built-in selector or toggle.
     Builtin(PaneAgentStatusField),
+    /// Open the pane-settings selector for the owning pane.
+    OpenSettings,
 }
 
 /// Rail containing a pane-status occurrence.
@@ -380,6 +384,10 @@ pub struct PaneStatusConfig {
     pub left_status: String,
     /// Right-aligned template.
     pub right_status: String,
+    /// Whole-pill fitting behavior when configured status items do not fit.
+    pub overflow: PaneStatusOverflowPolicy,
+    /// Minimum display-cell budget retained for the pane title when possible.
+    pub title_min_width: usize,
     /// Named built-in definitions referenced as `pill.<name>`.
     pub pills: BTreeMap<String, PaneStatusPillDefinition>,
 }
@@ -398,6 +406,8 @@ impl Default for PaneStatusConfig {
         Self {
             left_status: DEFAULT_PANE_FRAME_LEFT_STATUS_TEMPLATE.to_string(),
             right_status: DEFAULT_PANE_FRAME_RIGHT_STATUS_TEMPLATE.to_string(),
+            overflow: PaneStatusOverflowPolicy::Menu,
+            title_min_width: 8,
             pills: BTreeMap::new(),
         }
     }

@@ -468,6 +468,8 @@ max_output_chars = 32
 | `frames.pane.template` | string | `"#{pane.index} #{pane.title}"` | Pane frame template. Pill padding is added by the renderer. |
 | `frames.pane.left_status` | string | `"#{pane.progress}"` | Status rail rendered immediately after the pane title. An empty string disables it. |
 | `frames.pane.right_status` | string | see example config | Right-aligned ordered built-in or named status pills. An empty string disables it. |
+| `frames.pane.overflow` | string | `"menu"` | Narrow-pane policy: `compact` uses compact forms then hides, `hide` removes whole low-priority pills, and `menu` uses compact forms then exposes omitted items through `pane-settings`. |
+| `frames.pane.title_min_width` | integer | `8` | Minimum terminal-cell budget reserved for the pane title when status items compete for a row. |
 | `frames.pane.pills` | table | `{}` | Named built-in definitions referenced from either rail as `#{pill.<name>}`. |
 | `frames.pane.style` | string | `"default"` | Frame text style. |
 | `frames.pane.visible_fields` | string array | `[...]` | Fallback fields used only when `frames.pane.template` is empty; this does not filter status rails. |
@@ -486,8 +488,13 @@ formats are `full`, `short`, and `percent` where the field is numeric. `when`
 is an AND-combined array drawn from `agent-view`, `shell-view`, `focused`,
 `unfocused`, `busy`, `idle`, `supported`, `nonempty`, and `scrollback`;
 contradictory pairs are rejected. `on_click` is limited to `builtin` or `none`.
-Command providers, working-directory execution, custom actions, overflow,
-presets, and diagnostics are not part of this schema.
+Left and right items share one priority pool. Lower-priority items compact or
+disappear first; equal priorities evict in reverse template order while retained
+items keep their configured order. Fitting is Unicode display-cell aware and
+never leaves a partial clickable pill. `pane-settings [-t pane]` opens the
+keyboard-accessible list, including read-only and overflowed entries, without
+changing pane focus. Command providers, working-directory execution, custom
+actions, presets, and diagnostics are not part of this schema.
 
 ```toml
 [frames.pane.pills.model]

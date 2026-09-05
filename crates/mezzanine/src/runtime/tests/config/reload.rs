@@ -104,7 +104,7 @@ fn runtime_config_reload_applies_layered_zen_mode() {
     .unwrap();
     fs::write(
         &project_path,
-        "version = 86\n[terminal]\nzen_mode = false\n",
+        "version = 87\n[terminal]\nzen_mode = false\n",
     )
     .unwrap();
     service
@@ -137,7 +137,7 @@ fn runtime_config_reload_applies_layered_zen_mode() {
         Size::new(100, 38).unwrap()
     );
 
-    fs::write(&project_path, "version = 86\n[terminal]\nzen_mode = true\n").unwrap();
+    fs::write(&project_path, "version = 87\n[terminal]\nzen_mode = true\n").unwrap();
     let response = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"reload","method":"config/reload","params":{"idempotency_key":"reload-zen-mode"}}"#,
         &primary,
@@ -154,7 +154,7 @@ fn runtime_config_reload_applies_layered_zen_mode() {
 
     fs::write(
         &project_path,
-        "version = 86\n[terminal]\nzen_mode = false\n",
+        "version = 87\n[terminal]\nzen_mode = false\n",
     )
     .unwrap();
     let response = service.dispatch_runtime_control_body(
@@ -171,7 +171,7 @@ fn runtime_config_reload_applies_layered_zen_mode() {
 
     fs::write(
         &project_path,
-        "version = 86\n[terminal]\nzen_mode = \"sometimes\"\n",
+        "version = 87\n[terminal]\nzen_mode = \"sometimes\"\n",
     )
     .unwrap();
     let response = service.dispatch_runtime_control_body(
@@ -206,7 +206,7 @@ fn runtime_config_reload_rolls_back_invalid_pane_status_snapshot() {
     let path = root.join("config.toml");
     fs::write(
         &path,
-        "version = 86\n[frames.pane]\nleft_status = \"#{pane.progress}\"\nright_status = \"#{pill.model}\"\n[frames.pane.pills.model]\nfield = \"agent.model\"\nlabel = \"Model\"\nwhen = [\"agent-view\", \"nonempty\"]\n",
+        "version = 87\n[frames.pane]\nleft_status = \"#{pane.progress}\"\nright_status = \"#{pill.model}\"\n[frames.pane.pills.model]\nfield = \"agent.model\"\nlabel = \"Model\"\nwhen = [\"agent-view\", \"nonempty\"]\n",
     )
     .unwrap();
     service
@@ -223,7 +223,7 @@ fn runtime_config_reload_rolls_back_invalid_pane_status_snapshot() {
 
     fs::write(
         &path,
-        "version = 86\n[frames.pane]\nleft_status = \"changed\"\nright_status = \"#{pill.model}\"\n[frames.pane.pills.model]\nfield = \"agent.model\"\nwhen = [\"agent-view\", \"shell-view\"]\n",
+        "version = 87\n[frames.pane]\nleft_status = \"changed\"\nright_status = \"#{pill.model}\"\n[frames.pane.pills.model]\nfield = \"agent.model\"\nwhen = [\"agent-view\", \"shell-view\"]\n",
     )
     .unwrap();
     let response = service.dispatch_runtime_control_body(

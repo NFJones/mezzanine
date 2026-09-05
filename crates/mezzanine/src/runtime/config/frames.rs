@@ -15,7 +15,7 @@ use crate::config::EffectiveConfig;
 use crate::error::{MezError, Result};
 use crate::host::terminal::{
     PaneStatusAction, PaneStatusCondition, PaneStatusConfig, PaneStatusField, PaneStatusFormat,
-    PaneStatusPillDefinition, PaneStatusStyle,
+    PaneStatusOverflowPolicy, PaneStatusPillDefinition, PaneStatusStyle,
 };
 use crate::runtime::service_state::RuntimeCommandBinding;
 use crate::ui::command::key_chord_notation;
@@ -138,6 +138,27 @@ pub(crate) fn runtime_pane_status_config_from_config(root: &Value) -> Result<Pan
             .as_str()
             .map(ToOwned::to_owned)
             .ok_or_else(|| MezError::config("frames.pane.right_status must be a string"))?;
+    }
+    if let Some(value) = pane.get("overflow") {
+        config.overflow = match value.as_str() {
+            Some("compact") => PaneStatusOverflowPolicy::Compact,
+            Some("hide") => PaneStatusOverflowPolicy::Hide,
+            Some("menu") => PaneStatusOverflowPolicy::Menu,
+            _ => {
+                return Err(MezError::config(
+                    "frames.pane.overflow must be compact, hide, or menu",
+                ));
+            }
+        };
+    }
+    if let Some(value) = pane.get("title_min_width") {
+        config.title_min_width = value
+            .as_u64()
+            .filter(|width| (1..=4096).contains(width))
+            .and_then(|width| usize::try_from(width).ok())
+            .ok_or_else(|| {
+                MezError::config("frames.pane.title_min_width must be an integer from 1 to 4096")
+            })?;
     }
     let Some(pills_value) = pane.get("pills") else {
         return Ok(config);

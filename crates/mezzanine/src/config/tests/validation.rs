@@ -1526,7 +1526,7 @@ fn validates_typed_pane_status_configuration() {
     let valid = validate_config_text(
         ConfigFormat::Toml,
         &format!(
-            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[frames.pane]\nleft_status = \"#{{pane.progress}}\"\nright_status = \"#{{pill.model}} #{{history.position}}\"\n[frames.pane.pills.model]\nfield = \"agent.model\"\nlabel = \"Model\"\nformat = \"short\"\ncompact_format = \"short\"\nwhen = [\"agent-view\", \"supported\", \"nonempty\"]\nmin_width = 4\nmax_width = 24\npriority = 80\nstyle = \"agent-model\"\non_click = \"builtin\"\n"
+            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[frames.pane]\nleft_status = \"#{{pane.progress}}\"\nright_status = \"#{{pill.model}} #{{history.position}}\"\noverflow = \"compact\"\ntitle_min_width = 12\n[frames.pane.pills.model]\nfield = \"agent.model\"\nlabel = \"Model\"\nformat = \"short\"\ncompact_format = \"short\"\nwhen = [\"agent-view\", \"supported\", \"nonempty\"]\nmin_width = 4\nmax_width = 24\npriority = 80\nstyle = \"agent-model\"\non_click = \"builtin\"\n"
         ),
         ConfigScope::Primary,
     );
@@ -1566,6 +1566,27 @@ fn validates_typed_pane_status_configuration() {
                     .iter()
                     .any(|diagnostic| diagnostic.message.contains(expected)),
             "{body}: {:?}",
+            validation.diagnostics
+        );
+    }
+
+    for (setting, expected) in [
+        ("overflow = \"truncate\"", "overflow"),
+        ("title_min_width = 0", "title_min_width"),
+        ("title_min_width = 4097", "title_min_width"),
+    ] {
+        let validation = validate_config_text(
+            ConfigFormat::Toml,
+            &format!("version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[frames.pane]\n{setting}\n"),
+            ConfigScope::Primary,
+        );
+        assert!(
+            !validation.valid
+                && validation
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.message.contains(expected)),
+            "{setting}: {:?}",
             validation.diagnostics
         );
     }

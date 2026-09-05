@@ -162,7 +162,7 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 86
+version = 87
 
 # Persistent multi-session host policy. The host and inbound Iroh listener are
 # disabled until explicitly started or enabled by the primary user.
@@ -374,6 +374,8 @@ position = "border"
 template = "#{pane.index} #{pane.title}"
 left_status = "#{pane.progress}"
 right_status = "#{pane.pwd} #{agent.model} #{agent.reasoning} #{agent.thinking} #{agent.planning} #{agent.routing} #{agent.latency} #{policy.mode} #{agent.context_usage} #{agent.status} #{history.position}"
+overflow = "menu"
+title_min_width = 8
 style = "default"
 visible_fields = ["pane.index", "pane.title", "pane.id", "pane.status", "history.position", "agent.model", "agent.reasoning", "agent.thinking", "agent.planning", "agent.routing", "agent.latency", "agent.preset", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
 

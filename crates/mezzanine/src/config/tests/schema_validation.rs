@@ -25,7 +25,7 @@ fn rejects_unknown_top_level_keys() {
 fn rejects_unknown_nested_schema_keys() {
     let validation = validate_config_text(
         ConfigFormat::Toml,
-        "[terminal]\nextra = true\n[frames.status]\nenabled = true\n[frames.pane]\noverflow = \"menu\"\n[providers.openai]\nunknown = true\n",
+        "[terminal]\nextra = true\n[frames.status]\nenabled = true\n[frames.pane]\noverflow_mode = \"menu\"\n[providers.openai]\nunknown = true\n",
         ConfigScope::Primary,
     );
 
@@ -39,7 +39,7 @@ fn rejects_unknown_nested_schema_keys() {
             && diagnostic.message == "unknown frames configuration target"
     }));
     assert!(validation.diagnostics.iter().any(|diagnostic| {
-        diagnostic.path == "frames.pane.overflow"
+        diagnostic.path == "frames.pane.overflow_mode"
             && diagnostic.message == "unknown frame configuration key"
     }));
     assert!(validation.diagnostics.iter().any(|diagnostic| {

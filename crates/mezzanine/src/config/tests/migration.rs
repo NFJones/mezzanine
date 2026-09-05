@@ -2197,7 +2197,7 @@ fn migrates_schema_66_with_disabled_iroh_transport() {
 /// single bidirectional control stream enforced by the v1 Iroh protocol.
 #[test]
 fn migrates_schema_67_to_fixed_iroh_stream_limit() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 86);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 87);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2262,7 +2262,7 @@ fn migrates_schema_68_with_separate_outbound_iroh_permission() {
 /// changing the existing ephemeral behavior unless the owner configures it.
 #[test]
 fn migrates_schema_69_with_iroh_bind_port() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 86);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 87);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2293,7 +2293,7 @@ fn migrates_schema_69_with_iroh_bind_port() {
 /// supported primary configuration format without enabling the Iroh listener.
 #[test]
 fn migrates_schema_70_with_iroh_compression_defaults() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 86);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 87);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2509,7 +2509,7 @@ fn migrates_schema_74_without_enabling_streaming_compression() {
 
         assert_eq!(plan.from_version, 74);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 86);
+        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 87);
         assert_eq!(
             root.pointer("/transport/iroh/compression_codecs"),
             Some(&expected_codecs)
@@ -2647,7 +2647,7 @@ fn migrates_schema_76_provider_models_to_structured_records() {
 
         assert_eq!(plan.from_version, 76);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 86);
+        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 87);
         assert_eq!(
             root.pointer("/providers/custom/models/alpha-model/id"),
             Some(&serde_json::json!("alpha/model"))
@@ -2758,7 +2758,7 @@ fn migrates_schema_78_external_editor_defaults() {
 
         assert_eq!(plan.from_version, 78);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 86);
+        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 87);
         assert_eq!(
             root.pointer("/external_editor/command"),
             Some(&serde_json::json!(["editor", "{file}"]))
@@ -3094,7 +3094,7 @@ fn migrates_schema_85_pane_status_rails() {
         let missing_plan = migrate_config_text(format, missing).unwrap();
         let missing_root = parse_config_json_value(format, &missing_plan.text).unwrap();
         assert_eq!(missing_plan.from_version, 85);
-        assert_eq!(missing_plan.to_version, 86);
+        assert_eq!(missing_plan.to_version, 87);
         assert_eq!(
             missing_root.pointer("/frames/pane/left_status"),
             Some(&serde_json::json!("#{pane.progress}"))
@@ -3167,5 +3167,55 @@ fn migrates_schema_85_pane_status_rails_from_visible_fields() {
         );
         assert!(!right.contains("agent.model"), "{right}");
         assert!(!right.contains("history.position"), "{right}");
+    }
+}
+
+/// Schema v87 materializes deterministic pane-status fitting defaults while
+/// preserving explicit choices in every supported configuration format.
+#[test]
+fn migrates_schema_86_pane_status_overflow_defaults() {
+    for (format, missing, explicit) in [
+        (
+            ConfigFormat::Toml,
+            "version = 86\n",
+            "version = 86\n[frames.pane]\noverflow = \"hide\"\ntitle_min_width = 16\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":86}"#,
+            r#"{"version":86,"frames":{"pane":{"overflow":"hide","title_min_width":16}}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 86\n",
+            "version: 86\nframes:\n  pane:\n    overflow: hide\n    title_min_width: 16\n",
+        ),
+    ] {
+        let missing_plan = migrate_config_text(format, missing).unwrap();
+        let missing_root = parse_config_json_value(format, &missing_plan.text).unwrap();
+        assert_eq!(missing_plan.from_version, 86);
+        assert_eq!(missing_plan.to_version, 87);
+        assert_eq!(
+            missing_root.pointer("/frames/pane/overflow"),
+            Some(&serde_json::json!("menu"))
+        );
+        assert_eq!(
+            missing_root.pointer("/frames/pane/title_min_width"),
+            Some(&serde_json::json!(8))
+        );
+
+        let explicit_plan = migrate_config_text(format, explicit).unwrap();
+        let explicit_root = parse_config_json_value(format, &explicit_plan.text).unwrap();
+        assert_eq!(
+            explicit_root.pointer("/frames/pane/overflow"),
+            Some(&serde_json::json!("hide"))
+        );
+        assert_eq!(
+            explicit_root.pointer("/frames/pane/title_min_width"),
+            Some(&serde_json::json!(16))
+        );
+        let repeated = migrate_config_text(format, &explicit_plan.text).unwrap();
+        assert!(!repeated.changed);
+        assert_eq!(repeated.text, explicit_plan.text);
     }
 }

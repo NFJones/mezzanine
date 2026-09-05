@@ -30,7 +30,7 @@ state can affect what is available.
 | Manage windows and panes | `new-window`, `split-window`, `select-pane`, `resize-pane`, `rename-pane`, `list-windows`, and `list-panes` |
 | Work with sessions and clients | `list-sessions`, `attach-session`, `detach-client`, `list-clients`, and `kill-session` |
 | Copy and retain output | `copy-mode`, `copy-selection`, `paste-clipboard`, `paste-buffer`, `list-buffers`, `search-history`, `export-history`, and `clear-history` |
-| Inspect and adjust the interface | `zen`, `show-messages`, `show-iroh-status`, `list-keys`, `list-key-presets`, `set-key-preset`, `list-themes`, `set-theme`, `add-options`, `show-options`, `set-option`, `bind-key`, and `unbind-key` |
+| Inspect and adjust the interface | `zen`, `pane-settings`, `show-messages`, `show-iroh-status`, `list-keys`, `list-key-presets`, `set-key-preset`, `list-themes`, `set-theme`, `add-options`, `show-options`, `set-option`, `bind-key`, and `unbind-key` |
 | Save or load layout state | `save-layout` and `load-layout` |
 
 ## Baseline command inventory
@@ -51,7 +51,7 @@ runtime requirements.
 - **Panes and presentation:** `split-window`, `kill-pane`, `select-pane`,
   `resize-pane`, `next-pane`, `previous-pane`, `last-pane`, `rotate-pane`,
   `synchronize-panes`, `zoom-pane`, `swap-pane`, `break-pane`, `join-pane`,
-  `display-panes`, `list-panes`, `rename-pane`, `capture-pane`, `pipe-pane`,
+  `display-panes`, `pane-settings`, `list-panes`, `rename-pane`, `capture-pane`, `pipe-pane`,
   and `mark-pane-ready`.
 - **Sessions and clients:** `list-clients`, `detach-client`, `attach-session`,
   `list-sessions`, `rename-session`, `kill-session`, `save-layout`,
@@ -72,6 +72,14 @@ client.
 configuration paths, including purpose, type, and constrained value or format
 guidance. `show-options` remains the separate view of effective configured
 values and their source layers.
+
+`pane-settings [-t pane]` opens a keyboard selector for the active or requested
+pane's configured status entries, including values moved into menu overflow.
+Read-only entries are labeled as such; built-in controls use the same typed
+pane-scoped action as their mouse pills. The target is held by stable pane and
+configuration identity, so focus does not move and stale, closed, or changed
+targets are rejected instead of applying to another pane. Only attached primary
+clients may open or apply the selector.
 
 `zen on`, `zen off`, and `zen toggle` control the session-wide live
 `terminal.zen_mode` override. Successful changes are silent because their

@@ -181,6 +181,8 @@ pub enum PaneAgentStatusField {
     Latency,
     /// Active model preset shown in the pane-frame status pills.
     Preset,
+    /// Configured pane-status entries shown by the pane-settings selector.
+    Settings,
 }
 
 /// A zero-based terminal cell occupied by a selectable pane agent status pill.

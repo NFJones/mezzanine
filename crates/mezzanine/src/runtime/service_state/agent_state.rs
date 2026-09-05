@@ -1,8 +1,9 @@
 //! Subagent, macro, shell transaction, hook, profile, and overlay state records.
 
 use super::{ActionStatus, HookExecutionPlan, PaneId, RuntimeHookPipelineBlock, Size, WindowId};
-use crate::host::terminal::PaneAgentStatusField;
+use crate::host::terminal::{PaneAgentStatusField, PaneStatusSegmentIdentity};
 use mez_agent::LocalActionPlan;
+use mez_mux::overlay::AnchoredSelector;
 use std::collections::BTreeMap;
 
 /// Describes whether a parent turn waits for spawned subagents before it can
@@ -158,9 +159,37 @@ pub(crate) enum RuntimeRecordBrowserOverlaySource {
     },
 }
 
-/// Pane-local mux selector specialized with product agent-status identity.
-pub(crate) type RuntimePaneAgentStatusSelector =
-    mez_mux::overlay::AnchoredSelector<PaneAgentStatusField>;
+/// One configured pane-status occurrence shown by `pane-settings`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimePaneSettingsEntry {
+    /// Stable semantic identity revalidated before an action is applied.
+    pub(crate) identity: PaneStatusSegmentIdentity,
+}
+
+/// Pane-local selector with stable source identities for delayed actions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimePaneAgentStatusSelector {
+    /// Product-neutral navigation and placement state.
+    pub(crate) navigation: AnchoredSelector<PaneAgentStatusField>,
+    /// Status occurrence that opened a built-in value selector.
+    pub(crate) source_identity: Option<PaneStatusSegmentIdentity>,
+    /// Per-row semantic identities for the pane-settings selector.
+    pub(crate) settings_entries: Vec<RuntimePaneSettingsEntry>,
+}
+
+impl std::ops::Deref for RuntimePaneAgentStatusSelector {
+    type Target = AnchoredSelector<PaneAgentStatusField>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.navigation
+    }
+}
+
+impl std::ops::DerefMut for RuntimePaneAgentStatusSelector {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.navigation
+    }
+}
 
 /// Carries Pane Descriptor state for this subsystem.
 ///

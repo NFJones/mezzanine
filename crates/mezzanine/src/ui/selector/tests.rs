@@ -818,6 +818,14 @@ fn selector_shadow_hint_hides_placeholder_after_param_input() {
         shadow_hint(SelectorSurface::MezzanineCommand, "zen ", "zen ".len()).unwrap();
     assert_eq!(zen_placeholder.text, " <on|off|toggle>");
 
+    let pane_settings_placeholder = shadow_hint(
+        SelectorSurface::MezzanineCommand,
+        "pane-settings ",
+        "pane-settings ".len(),
+    )
+    .unwrap();
+    assert_eq!(pane_settings_placeholder.text, " [-t target-pane]");
+
     let preset_placeholder = shadow_hint(
         SelectorSurface::MezzanineCommand,
         "set-key-preset ",

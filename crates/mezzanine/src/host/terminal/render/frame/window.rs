@@ -429,10 +429,12 @@ pub fn pane_frame_agent_status_pillbox_cells(
                 .right_status_segments
                 .into_iter()
                 .flat_map(move |segment| {
-                    let crate::host::terminal::PaneStatusAction::Builtin(field) =
-                        segment.key.action
-                    else {
-                        return Vec::new();
+                    let field = match segment.key.action {
+                        crate::host::terminal::PaneStatusAction::Builtin(field) => field,
+                        crate::host::terminal::PaneStatusAction::OpenSettings => {
+                            crate::host::terminal::PaneAgentStatusField::Settings
+                        }
+                        crate::host::terminal::PaneStatusAction::None => return Vec::new(),
                     };
                     pillbox_segment_local_columns(segment.start, segment.width, width)
                         .filter_map(move |column| {

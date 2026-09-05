@@ -3,8 +3,8 @@
 use crate::host::terminal::tests::fixtures::display_column_for_fragment;
 use crate::host::terminal::{
     BTreeMap, DEFAULT_PANE_FRAME_TEMPLATE, PaneAgentStatusField, PaneRenderInput, PaneStatusAction,
-    PaneStatusField, PaneStatusPillDefinition, PaneStatusRail, PaneStatusStyle,
-    TerminalClientLoopConfig, TerminalFrameContext, TerminalFrameRenderOptions,
+    PaneStatusField, PaneStatusOverflowPolicy, PaneStatusPillDefinition, PaneStatusRail,
+    PaneStatusStyle, TerminalClientLoopConfig, TerminalFrameContext, TerminalFrameRenderOptions,
     TerminalPaneFrameContext, pane_frame_agent_status_pillbox_cells, render_attached_client_view,
     render_window_with_pane_frame_template,
 };
@@ -76,7 +76,7 @@ fn render_pane_frame_template_fits_narrow_panes() {
     )
     .unwrap();
 
-    assert_eq!(rendered[0], " 0:shel ");
+    assert_eq!(rendered[0], " 0:she  ");
 }
 
 /// Verifies that runtime-supplied frame context values are available through
@@ -532,6 +532,69 @@ fn render_explicit_empty_pane_status_rails_have_no_implicit_items() {
             &plan,
         )
         .is_empty()
+    );
+}
+
+/// Verifies a narrow pane selects status controls as complete semantic pills
+/// from the shared priority pool. The lower-priority control must expose no
+/// hit cells, while every cell of the retained control remains actionable.
+#[test]
+fn render_narrow_pane_status_has_only_complete_priority_selected_hit_targets() {
+    let mut ids = IdFactory::default();
+    let window = Window::new(&mut ids, 0, "main", Size::new(20, 3).unwrap());
+    let pane_id = window.panes()[0].id.clone();
+    let mut frame_context = TerminalFrameContext::default();
+    frame_context.pane_status.left_status = "#{pill.low}".to_string();
+    frame_context.pane_status.right_status = "#{pill.high}".to_string();
+    frame_context.pane_status.overflow = PaneStatusOverflowPolicy::Hide;
+    frame_context.pane_status.title_min_width = 8;
+    let mut low = PaneStatusPillDefinition::builtin(PaneStatusField::AgentReasoning);
+    low.priority = 10;
+    let mut high = PaneStatusPillDefinition::builtin(PaneStatusField::AgentModel);
+    high.priority = 90;
+    frame_context
+        .pane_status
+        .pills
+        .insert("low".to_string(), low);
+    frame_context
+        .pane_status
+        .pills
+        .insert("high".to_string(), high);
+    frame_context.panes.insert(
+        pane_id.to_string(),
+        TerminalPaneFrameContext {
+            mode: Some("agent".to_string()),
+            agent_model: Some("model".to_string()),
+            agent_reasoning: Some("medium".to_string()),
+            ..TerminalPaneFrameContext::default()
+        },
+    );
+    let plan = plan_window_presentation(
+        &window,
+        WindowPresentationOptions {
+            pane_frames_visible: true,
+            ..WindowPresentationOptions::default()
+        },
+    )
+    .unwrap();
+
+    let cells = pane_frame_agent_status_pillbox_cells(
+        &window,
+        &frame_context,
+        DEFAULT_PANE_FRAME_TEMPLATE,
+        &plan,
+    );
+
+    assert!(
+        cells
+            .iter()
+            .all(|cell| cell.field == PaneAgentStatusField::Model),
+        "lower-priority reasoning pill must not expose clipped cells: {cells:?}"
+    );
+    assert_eq!(cells.len(), " model ".chars().count());
+    assert_eq!(
+        cells.iter().map(|cell| cell.column).collect::<Vec<_>>(),
+        (12..19).collect::<Vec<_>>()
     );
 }
 

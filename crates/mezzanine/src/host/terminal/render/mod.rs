@@ -27,8 +27,8 @@ use mez_mux::render::line_slice;
 use mez_mux::render::{
     FramePillboxEntry, FramePillboxSegment, FrameStatusSegment, PositionedFrameStatus,
     RenderedFrameStatus, TerminalRenderCell, compose_frame_pillbox_row, compose_frame_text_row,
-    compose_pane_frame_status_row, display_overlay_targets as agent_display_overlay_targets,
-    fit_styled_width, fitted_text_width, frame_pillbox_segment_columns, frame_style_rendition,
+    display_overlay_targets as agent_display_overlay_targets, fit_styled_width, fitted_text_width,
+    frame_pillbox_segment_columns, frame_style_rendition,
     overlay_display_lines as overlay_agent_display_lines, overlay_fixed_column_style_spans,
     position_frame_status, render_frame_pillbox_segments, render_frame_pillbox_text,
     sanitize_frame_text, style_span_overlaps_columns, style_span_segments_outside_range,
@@ -49,6 +49,7 @@ mod text;
 
 pub(crate) use dividers::project_provisional_pane_resize;
 use dividers::{merged_pane_frame_boundary_style_spans, pane_divider_rendition};
+pub(crate) use frame::pane_frame_row_layout;
 pub(crate) use frame::window_iroh_status_slot_layout;
 use frame::{
     AGENT_STATUS_SCAN_BAND_WIDTH, pane_agent_prompt_space_reserved, pane_agent_prompt_transparent,

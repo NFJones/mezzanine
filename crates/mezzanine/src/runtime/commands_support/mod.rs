@@ -190,6 +190,29 @@ pub(super) fn execute_runtime_live_terminal_command(
             command: invocation.name.clone(),
             body: runtime_display_panes_display(service)?,
         })),
+        "pane-settings" => {
+            let target = match invocation.args.as_slice() {
+                [] => None,
+                [flag, target] if flag == "-t" => Some(target.as_str()),
+                _ => {
+                    return Err(MezError::invalid_args("usage: pane-settings [-t pane]"));
+                }
+            };
+            let descriptor = match target {
+                None => service.active_window_pane_descriptor(None)?,
+                Some(target) => service
+                    .active_window_pane_descriptor(Some(target))
+                    .or_else(|_| {
+                        service.find_pane_descriptor(target).ok_or_else(|| {
+                            MezError::new(crate::error::MezErrorKind::NotFound, "pane not found")
+                        })
+                    })?,
+            };
+            service.open_pane_settings_selector(primary_client_id, &descriptor.pane_id)?;
+            Ok(Some(CommandOutcome::Mutated {
+                command: invocation.name.clone(),
+            }))
+        }
         "choose-client" => Ok(Some(CommandOutcome::Display {
             command: invocation.name.clone(),
             body: runtime_choose_client_display(service),
