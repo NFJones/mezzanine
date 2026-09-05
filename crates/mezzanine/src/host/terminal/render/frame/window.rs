@@ -434,6 +434,10 @@ pub fn pane_frame_agent_status_pillbox_cells(
                         crate::host::terminal::PaneStatusAction::OpenSettings => {
                             crate::host::terminal::PaneAgentStatusField::Settings
                         }
+                        crate::host::terminal::PaneStatusAction::Terminal { .. }
+                        | crate::host::terminal::PaneStatusAction::Agent { .. } => {
+                            crate::host::terminal::PaneAgentStatusField::Settings
+                        }
                         crate::host::terminal::PaneStatusAction::None => return Vec::new(),
                     };
                     pillbox_segment_local_columns(segment.start, segment.width, width)

@@ -185,6 +185,8 @@ pub enum RuntimeEvent {
     HostClipboard(HostClipboardEvent),
     /// A command-backed status-pill worker completed outside the runtime actor.
     StatusPill(crate::runtime::RuntimeStatusPillEvent),
+    /// A sandboxed pane-scoped status provider completed outside the runtime actor.
+    PaneStatusProvider(crate::runtime::RuntimePaneStatusProviderEvent),
     /// A runtime-owned timer fired.
     Timer(TimerEvent),
     /// The supervisor requested runtime shutdown.
@@ -212,6 +214,7 @@ impl RuntimeEvent {
             Self::Persistence(_) => "persistence",
             Self::HostClipboard(_) => "host_clipboard",
             Self::StatusPill(_) => "status_pill",
+            Self::PaneStatusProvider(_) => "pane_status_provider",
             Self::Timer(_) => "timer",
             Self::Shutdown(_) => "shutdown",
         }
@@ -842,6 +845,13 @@ pub enum RuntimeSideEffect {
         /// Immutable generation-stamped refresh plan.
         plan: crate::runtime::RuntimeStatusPillRefreshPlan,
     },
+    /// Ask the serialized runtime to claim and admit due pane-status providers.
+    PreparePaneStatusProviders,
+    /// Refresh one admitted pane-scoped status provider on the bounded worker.
+    RefreshPaneStatusProvider {
+        /// Immutable sandboxed pane-provider plan.
+        plan: Box<crate::runtime::RuntimePaneStatusProviderRefreshPlan>,
+    },
     /// Start an agent provider request outside the actor.
     DispatchAgentProvider {
         /// Stores the agent id value for this data structure.
@@ -1188,7 +1198,8 @@ const fn runtime_event_application_priority(event: &RuntimeEvent) -> u8 {
         | RuntimeEvent::Hook(_)
         | RuntimeEvent::Persistence(_)
         | RuntimeEvent::HostClipboard(_)
-        | RuntimeEvent::StatusPill(_) => 2,
+        | RuntimeEvent::StatusPill(_)
+        | RuntimeEvent::PaneStatusProvider(_) => 2,
     }
 }
 

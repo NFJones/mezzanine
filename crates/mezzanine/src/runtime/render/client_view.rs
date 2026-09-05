@@ -213,6 +213,7 @@ impl RuntimeSessionService {
                 self.session.activate_client_navigation(&source_client_id)?;
             }
         }
+        self.reconcile_pane_status_providers();
         Ok(())
     }
 
@@ -1727,6 +1728,7 @@ impl RuntimeSessionService {
                         agent_preset: self.agent_preset_display_value_for_pane(pane_id.as_str()),
                         agent_context_usage,
                         history_position,
+                        status_pills: self.pane_status_provider_values(&pane_id),
                         agent_prompt: agent_session
                             .is_some_and(|session| {
                                 matches!(session.visibility, AgentShellVisibility::Visible)

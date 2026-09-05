@@ -515,6 +515,358 @@ fn runtime_pane_settings_keyboard_action_revalidates_stable_occurrence() {
     );
 }
 
+/// Verifies configured terminal and agent actions execute against the stable
+/// pill owner rather than the pane that has focus when the action is applied.
+#[test]
+fn runtime_pane_settings_custom_actions_target_stable_owner_without_focus_change() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[frames.pane]\nright_status = \"#{pill.rename} #{pill.plan}\"\n[frames.pane.pills.rename]\nfield = \"policy.mode\"\non_click = \"terminal:rename-pane -t {pane} provider-owner\"\n[frames.pane.pills.plan]\nfield = \"policy.mode\"\non_click = \"agent:/plan on\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    assert!(
+        service
+            .apply_attached_mux_action(&primary, MuxAction::SplitPaneVertical)
+            .unwrap()
+    );
+    service.session.select_pane(&primary, "%1").unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%2")
+        .unwrap();
+
+    service
+        .execute_terminal_command(&primary, "pane-settings -t %2")
+        .unwrap();
+    let terminal_index = service
+        .pane_agent_status_selector()
+        .and_then(|selector| {
+            selector.settings_entries.iter().position(|entry| {
+                matches!(
+                    &entry.identity.action,
+                    crate::host::terminal::PaneStatusAction::Terminal { actions, origin }
+                        if actions == &[crate::host::terminal::PaneStatusTerminalAction {
+                            command: crate::host::terminal::PaneStatusTerminalCommand::RenamePane,
+                            arguments: vec!["provider-owner".to_string()],
+                        }] && origin.as_ref().is_some_and(|origin| origin.trusted)
+                )
+            })
+        })
+        .expect("pane-settings should contain the terminal action");
+    service
+        .pane_agent_status_selector_mut_for_tests()
+        .expect("pane-settings selector should remain open")
+        .active_index = terminal_index;
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"\r".to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    let window = service.session().active_window().unwrap();
+    assert_eq!(
+        window
+            .panes()
+            .iter()
+            .find(|pane| pane.id.as_str() == "%2")
+            .map(|pane| pane.title.as_str()),
+        Some("provider-owner")
+    );
+    assert_ne!(
+        window
+            .panes()
+            .iter()
+            .find(|pane| pane.id.as_str() == "%1")
+            .map(|pane| pane.title.as_str()),
+        Some("provider-owner")
+    );
+    assert_eq!(
+        service
+            .session()
+            .active_window()
+            .unwrap()
+            .active_pane()
+            .id
+            .as_str(),
+        "%1"
+    );
+
+    service
+        .execute_terminal_command(&primary, "pane-settings -t %2")
+        .unwrap();
+    let agent_index = service
+        .pane_agent_status_selector()
+        .and_then(|selector| {
+            selector.settings_entries.iter().position(|entry| {
+                matches!(
+                    &entry.identity.action,
+                    crate::host::terminal::PaneStatusAction::Agent { command, origin }
+                        if command == "/plan on"
+                            && origin.as_ref().is_some_and(|origin| origin.trusted)
+                )
+            })
+        })
+        .expect("pane-settings should contain the agent action");
+    service
+        .pane_agent_status_selector_mut_for_tests()
+        .expect("pane-settings selector should remain open")
+        .active_index = agent_index;
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"\r".to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert!(service.agent_planning_enabled("%2"));
+    assert!(!service.agent_planning_enabled("%1"));
+    assert_eq!(
+        service
+            .session()
+            .active_window()
+            .unwrap()
+            .active_pane()
+            .id
+            .as_str(),
+        "%1"
+    );
+}
+
+/// Verifies a configured custom action cannot outlive its stable pane owner.
+#[test]
+fn runtime_pane_settings_custom_action_rejects_closed_owner() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[frames.pane]\nright_status = \"#{pill.rename}\"\n[frames.pane.pills.rename]\nfield = \"policy.mode\"\nwhen = []\non_click = \"terminal:rename-pane -t {pane} provider-owner\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    assert!(
+        service
+            .apply_attached_mux_action(&primary, MuxAction::SplitPaneVertical)
+            .unwrap()
+    );
+    service.session.select_pane(&primary, "%1").unwrap();
+    service
+        .execute_terminal_command(&primary, "pane-settings -t %2")
+        .unwrap();
+    let action_index = service
+        .pane_agent_status_selector()
+        .and_then(|selector| {
+            selector.settings_entries.iter().position(|entry| {
+                matches!(
+                    entry.identity.action,
+                    crate::host::terminal::PaneStatusAction::Terminal { .. }
+                )
+            })
+        })
+        .expect("pane-settings should contain the terminal action");
+    service
+        .pane_agent_status_selector_mut_for_tests()
+        .expect("pane-settings selector should remain open")
+        .active_index = action_index;
+    service
+        .execute_terminal_command(&primary, "kill-pane --force -t %2")
+        .unwrap();
+
+    let error = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"\r".to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::Conflict);
+    assert!(
+        error
+            .message()
+            .contains("pane status action owner is no longer available")
+    );
+    assert_ne!(
+        service
+            .session()
+            .active_window()
+            .unwrap()
+            .active_pane()
+            .title,
+        "provider-owner"
+    );
+}
+
+/// Verifies configured agent-action ingress rejects commands outside its
+/// narrow pane-local control surface even when called directly at runtime.
+/// Parser validation is not sufficient because restored or synthesized action
+/// state must not gain access to generic security and global command dispatch.
+#[test]
+fn runtime_pane_status_agent_action_ingress_rejects_security_commands() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let error = service
+        .execute_agent_shell_command_for_pane(&primary, "%1", "/sandbox disable --global")
+        .unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+    assert!(error.message().contains("only /plan and /stop"));
+}
+
+/// Verifies the runtime custom-action trust gate rejects both missing and
+/// explicitly untrusted exact-source provenance while admitting a trusted
+/// effective source. Static document validation intentionally has no such
+/// provenance object, so enforcement belongs at live action dispatch.
+#[test]
+fn runtime_pane_status_custom_action_origin_fails_closed() {
+    let missing = crate::runtime::commands_support::require_runtime_pane_status_action_origin(None)
+        .unwrap_err();
+    assert_eq!(missing.kind(), crate::error::MezErrorKind::Forbidden);
+
+    let untrusted = crate::host::terminal::PaneStatusProviderOrigin {
+        layer_name: "project".to_string(),
+        scope: crate::host::terminal::PaneStatusProviderScope::ProjectOverlay,
+        path: Some("/repo/.mezzanine/config.toml".to_string()),
+        trusted: false,
+    };
+    let rejected = crate::runtime::commands_support::require_runtime_pane_status_action_origin(
+        Some(&untrusted),
+    )
+    .unwrap_err();
+    assert_eq!(rejected.kind(), crate::error::MezErrorKind::Forbidden);
+
+    let trusted = crate::host::terminal::PaneStatusProviderOrigin {
+        trusted: true,
+        ..untrusted
+    };
+    crate::runtime::commands_support::require_runtime_pane_status_action_origin(Some(&trusted))
+        .unwrap();
+}
+
+/// Verifies live pane-status action dispatch uses the trust bit from the exact
+/// effective layer that supplied `on_click`. Even an otherwise supported
+/// owner-targeted rename must remain inert when that source layer is untrusted.
+#[test]
+fn runtime_pane_status_custom_action_rejects_untrusted_effective_source() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "untrusted-primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: false,
+            text: "[frames.pane]\nright_status = \"#{pill.rename}\"\n[frames.pane.pills.rename]\nfield = \"policy.mode\"\nwhen = []\non_click = \"terminal:rename-pane -t {pane} untrusted-name\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .execute_terminal_command(&primary, "pane-settings -t %1")
+        .unwrap();
+    let action_index = service
+        .pane_agent_status_selector()
+        .and_then(|selector| {
+            selector.settings_entries.iter().position(|entry| {
+                matches!(
+                    &entry.identity.action,
+                    crate::host::terminal::PaneStatusAction::Terminal { .. }
+                )
+            })
+        })
+        .expect("pane-settings should retain the configured terminal action");
+    let action_origin = service
+        .pane_agent_status_selector()
+        .and_then(|selector| selector.settings_entries.get(action_index))
+        .and_then(|entry| match &entry.identity.action {
+            crate::host::terminal::PaneStatusAction::Terminal { origin, .. } => origin.as_ref(),
+            _ => None,
+        })
+        .expect("live terminal action should retain exact source provenance");
+    assert_eq!(action_origin.layer_name, "untrusted-primary");
+    assert!(!action_origin.trusted);
+    service
+        .pane_agent_status_selector_mut_for_tests()
+        .expect("pane-settings selector should remain open")
+        .active_index = action_index;
+
+    let error = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"\r".to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+    assert!(
+        error
+            .message()
+            .contains("trusted effective source provenance")
+    );
+    assert_ne!(
+        service
+            .session()
+            .active_window()
+            .unwrap()
+            .active_pane()
+            .title,
+        "untrusted-name"
+    );
+}
+
 /// Verifies an overflowed dropdown control remains keyboard-accessible through
 /// `pane-settings` even though the pane frame exposes no direct hit cells for
 /// that omitted occurrence. Opening the value selector must retain the same

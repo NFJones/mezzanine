@@ -520,6 +520,14 @@ pub(super) fn validate_frames_path(segments: &[&str]) -> Option<String> {
                 matches!(
                     setting,
                     "field"
+                        | "command"
+                        | "cwd"
+                        | "interval_seconds"
+                        | "initial"
+                        | "timeout_ms"
+                        | "empty_behavior"
+                        | "error_behavior"
+                        | "max_output_chars"
                         | "label"
                         | "format"
                         | "compact_format"

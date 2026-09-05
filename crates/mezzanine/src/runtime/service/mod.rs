@@ -75,6 +75,21 @@ fn runtime_status_refresh_required_by_config(config: &TerminalClientLoopConfig) 
             .is_some_and(|status| {
                 runtime_window_status_template_requires_periodic_refresh(&status.template)
             });
+    let pane_provider_requires_refresh = config.pane_frames_enabled
+        && config
+            .frame_context
+            .pane_status
+            .pills
+            .iter()
+            .any(|(name, definition)| {
+                definition.provider.is_some()
+                    && [
+                        &config.frame_context.pane_status.left_status,
+                        &config.frame_context.pane_status.right_status,
+                    ]
+                    .iter()
+                    .any(|template| template.contains(&format!("#{{pill.{name}}}")))
+            });
     let agent_status_requires_refresh = config.frame_context.panes.values().any(|pane| {
         let active = matches!(
             pane.agent_status.as_deref(),
@@ -94,7 +109,9 @@ fn runtime_status_refresh_required_by_config(config: &TerminalClientLoopConfig) 
             || pane.mode.as_deref() == Some("agent");
         active && visible_surface
     });
-    window_status_requires_refresh || agent_status_requires_refresh
+    window_status_requires_refresh
+        || pane_provider_requires_refresh
+        || agent_status_requires_refresh
 }
 
 /// Returns the periodic status-refresh interval for one terminal configuration.

@@ -94,6 +94,14 @@ pending until the primary user decides whether to trust the project. Even a
 trusted overlay cannot change primary-user-only execution boundaries such as
 sandbox backend, scopes, network policy, approval policy, or bypass state.
 
+Pane command-backed status pills are executable configuration and therefore
+retain the provenance of the exact layer that supplied each command. A provider
+remains inert unless that layer is trusted, permission planning returns an
+explicit `Allow`, live pane CWD and filesystem authority are available, and Mez
+can compile a Bubblewrap or Seatbelt launch. `Prompt` does not create periodic
+approval requests. See [Appearance and terminal](appearance-and-terminal.md)
+for provider syntax and scheduling behavior.
+
 Only one overlay format may exist in each directory. Multiple supported
 overlay files in that directory are a configuration error; Mez does not select
 one by filename order or merge them.
@@ -107,14 +115,14 @@ the decision.
 
 ## Schema versions and examples
 
-The current schema is version `86`. Older primary user configurations migrate
+The current schema is version `88`. Older primary user configurations migrate
 on launch; a configuration declaring a newer schema is rejected. Existing
 project overlays must declare the current schema version and are not migrated
 automatically. When `mez config set --scope project` creates or updates an
 eligible overlay, it writes the current version for that managed file.
 
 The checked-in [example configuration](../examples/config.toml) is the
-provider-free first-launch template for version 86. Actual generation adjusts
+provider-free first-launch template for version 88. Actual generation adjusts
 `permissions.approval_policy` and `permissions.sandbox` for the current
 platform and fixed Bubblewrap or Seatbelt executable presence, so those values
 can differ from the portable checked-in template. Presence is not capability,

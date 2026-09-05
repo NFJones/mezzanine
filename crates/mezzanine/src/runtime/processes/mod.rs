@@ -23,7 +23,9 @@ pub(crate) use native_bubblewrap::{NativeBubblewrapActivityLease, NativeSandboxC
 pub(crate) use native_shell_inference::{NativeShellContext, infer_native_shell_context};
 #[cfg(test)]
 pub(crate) use spawned_shell::execute_native_shell_dispatch;
-pub(crate) use spawned_shell::execute_native_shell_dispatch_with_progress;
+pub(crate) use spawned_shell::{
+    execute_native_shell_dispatch_with_progress, execute_pane_status_provider_launch,
+};
 
 pub(super) use managed_shell_handoff::ManagedShellKind;
 use managed_shell_handoff::{
@@ -2478,13 +2480,22 @@ impl RuntimeSessionService {
         pane_id: impl Into<String>,
         path: PathBuf,
     ) {
+        let pane_id = pane_id.into();
+        self.presentation
+            .pane_status_provider_cache
+            .borrow_mut()
+            .remove_pane(&pane_id);
         self.process
             .pane_current_working_directories
-            .insert(pane_id.into(), path);
+            .insert(pane_id, path);
     }
 
     /// Removes one pane's best-known working directory during rollback.
     pub(crate) fn remove_pane_current_working_directory(&mut self, pane_id: &str) {
+        self.presentation
+            .pane_status_provider_cache
+            .borrow_mut()
+            .remove_pane(pane_id);
         self.process
             .pane_current_working_directories
             .remove(pane_id);

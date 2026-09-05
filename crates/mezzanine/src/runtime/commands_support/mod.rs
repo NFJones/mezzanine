@@ -122,6 +122,46 @@ fn execute_runtime_planned_terminal_command(
     Ok(outcome)
 }
 
+/// Executes compiled pane-status actions after revalidating their stable owner.
+pub(crate) fn execute_runtime_pane_status_terminal_actions(
+    service: &mut RuntimeSessionService,
+    primary_client_id: &mez_core::ids::ClientId,
+    owner_pane_id: &str,
+    origin: Option<&crate::host::terminal::PaneStatusProviderOrigin>,
+    actions: &[crate::host::terminal::PaneStatusTerminalAction],
+) -> Result<()> {
+    require_runtime_pane_status_action_origin(origin)?;
+    service
+        .find_pane_descriptor(owner_pane_id)
+        .ok_or_else(|| MezError::conflict("pane status action owner is no longer available"))?;
+    let mut active_client_id = primary_client_id.clone();
+    for action in actions {
+        service
+            .find_pane_descriptor(owner_pane_id)
+            .ok_or_else(|| MezError::conflict("pane status action owner is no longer available"))?;
+        let mut args = vec!["-t".to_string(), owner_pane_id.to_string()];
+        args.extend(action.arguments.iter().cloned());
+        let invocation = CommandInvocation {
+            name: action.command.as_str().to_string(),
+            args,
+        };
+        execute_runtime_planned_terminal_command(service, &mut active_client_id, &invocation)?;
+    }
+    Ok(())
+}
+
+/// Requires the exact effective source of a configured pane-status action to be trusted.
+pub(crate) fn require_runtime_pane_status_action_origin(
+    origin: Option<&crate::host::terminal::PaneStatusProviderOrigin>,
+) -> Result<()> {
+    if origin.is_some_and(|origin| origin.trusted) {
+        return Ok(());
+    }
+    Err(MezError::forbidden(
+        "pane status custom action requires trusted effective source provenance",
+    ))
+}
+
 /// Runs the runtime send prefix command operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

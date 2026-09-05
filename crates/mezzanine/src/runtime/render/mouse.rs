@@ -777,6 +777,8 @@ impl RuntimeSessionService {
                     PaneStatusAction::None => "read-only",
                     PaneStatusAction::Builtin(_) => "control",
                     PaneStatusAction::OpenSettings => "menu",
+                    PaneStatusAction::Terminal { .. } => "terminal-action",
+                    PaneStatusAction::Agent { .. } => "agent-action",
                 };
                 let value = item.display.trim();
                 let label = if value.is_empty() {
@@ -895,6 +897,26 @@ impl RuntimeSessionService {
                 field,
                 Some(&current),
             ),
+            PaneStatusAction::Terminal { actions, origin } => {
+                crate::runtime::commands_support::execute_runtime_pane_status_terminal_actions(
+                    self,
+                    primary_client_id,
+                    current.owner_pane_id.as_str(),
+                    origin.as_ref(),
+                    &actions,
+                )
+            }
+            PaneStatusAction::Agent { command, origin } => {
+                crate::runtime::commands_support::require_runtime_pane_status_action_origin(
+                    origin.as_ref(),
+                )?;
+                self.execute_agent_shell_command_for_pane(
+                    primary_client_id,
+                    current.owner_pane_id.as_str(),
+                    &command,
+                )?;
+                Ok(())
+            }
         }
     }
 

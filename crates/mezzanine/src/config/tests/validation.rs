@@ -1532,10 +1532,90 @@ fn validates_typed_pane_status_configuration() {
     );
     assert!(valid.valid, "{:?}", valid.diagnostics);
 
+    let provider = validate_config_text(
+        ConfigFormat::Toml,
+        &format!(
+            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[frames.pane]\nright_status = \"#{{pill.branch}}\"\n[frames.pane.pills.branch]\ncommand = \"git branch --show-current\"\ncwd = \"pane\"\nlabel = \"Branch\"\ninterval_seconds = 10\ntimeout_ms = 1000\ninitial = \"checking\"\nmax_output_chars = 80\nempty_behavior = \"hide\"\nerror_behavior = \"show_error\"\nstyle = \"pane-pwd\"\non_click = \"terminal:copy-mode -t {{pane}}\"\n"
+        ),
+        ConfigScope::Primary,
+    );
+    assert!(provider.valid, "{:?}", provider.diagnostics);
+
+    let agent_action = validate_config_text(
+        ConfigFormat::Toml,
+        &format!(
+            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[frames.pane]\nright_status = \"#{{pill.stop}}\"\n[frames.pane.pills.stop]\nfield = \"agent.status\"\non_click = \"agent:/stop\"\n"
+        ),
+        ConfigScope::Primary,
+    );
+    assert!(agent_action.valid, "{:?}", agent_action.diagnostics);
+
     for (body, expected) in [
         (
             "field = \"agent.model\"\ncommand = \"git status\"",
-            "command",
+            "exactly one",
+        ),
+        ("command = \"pwd\"", "cwd"),
+        ("command = \"pwd\"\ncwd = \"daemon\"", "cwd"),
+        (
+            "command = \"pwd\"\ncwd = \"pane\"\ninterval_seconds = 0",
+            "interval_seconds",
+        ),
+        (
+            "command = \"pwd\"\ncwd = \"pane\"\ntimeout_ms = 0",
+            "timeout_ms",
+        ),
+        (
+            "command = \"pwd\"\ncwd = \"pane\"\ntimeout_ms = 60001",
+            "must not exceed 60000",
+        ),
+        (
+            "command = \"pwd\"\ncwd = \"pane\"\nmax_output_chars = 0",
+            "max_output_chars",
+        ),
+        (
+            "command = \"pwd\"\ncwd = \"pane\"\nformat = \"percent\"",
+            "format",
+        ),
+        (
+            "command = \"pwd\"\ncwd = \"pane\"\non_click = \"terminal:new-window\"",
+            "not a supported pane-targeted action",
+        ),
+        (
+            "field = \"agent.status\"\non_click = \"terminal:pipe-pane -t {pane} -o /tmp/status.log\"",
+            "not a supported pane-targeted action",
+        ),
+        (
+            "field = \"agent.status\"\non_click = \"terminal:export-history -t {pane} /tmp/history.txt\"",
+            "not a supported pane-targeted action",
+        ),
+        (
+            "field = \"agent.status\"\non_click = \"terminal:set-option -t {pane} terminal.zen_mode true\"",
+            "not a supported pane-targeted action",
+        ),
+        (
+            "field = \"agent.status\"\non_click = \"terminal:source-file -t {pane} ./project.toml\"",
+            "not a supported pane-targeted action",
+        ),
+        (
+            "field = \"agent.status\"\non_click = \"terminal:resize-pane -t {pane} -Z\"",
+            "not a supported pane-targeted action",
+        ),
+        (
+            "field = \"agent.status\"\non_click = \"terminal:resizep --zoom -t {pane}\"",
+            "not a supported pane-targeted action",
+        ),
+        (
+            "field = \"agent.status\"\non_click = \"agent:stop\"",
+            "agent:/",
+        ),
+        (
+            "field = \"agent.status\"\non_click = \"agent:/sandbox disable --global\"",
+            "only /plan and /stop",
+        ),
+        (
+            "field = \"agent.status\"\non_click = \"agent:/approval full-access\"",
+            "only /plan and /stop",
         ),
         (
             "field = \"agent.model\"\nwhen = [\"agent-view\", \"shell-view\"]",
@@ -1548,7 +1628,7 @@ fn validates_typed_pane_status_configuration() {
         ),
         ("field = \"agent.model\"\npriority = 101", "priority"),
         (
-            "field = \"agent.model\"\non_click = \"terminal:new-window\"",
+            "field = \"agent.model\"\non_click = \"shell:pwd\"",
             "on_click",
         ),
     ] {

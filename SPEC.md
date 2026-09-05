@@ -3824,12 +3824,21 @@ one of `hide`, `show_empty`, or `keep_previous`; error behavior MUST be one of
 pane-scoped status items; an explicitly empty template MUST render no items and
 MUST NOT trigger implicit progress, history, or agent-status insertion.
 `frames.pane.pills` MUST be a map keyed by ASCII pill name. Every definition
-MUST name one built-in `field` and MAY set `label`, `format`,
-`compact_format`, `when`, `min_width`, `max_width`, `priority`, `style`, and
-`on_click`. Supported conditions MUST be the finite AND-combined vocabulary
+MUST name exactly one source: a built-in `field` or a pane-scoped `command`.
+Command providers MUST set `cwd = "pane"` and MAY set bounded
+`interval_seconds`, `timeout_ms`, `initial`, `max_output_chars`,
+`empty_behavior`, and `error_behavior`. Every definition MAY set `label`,
+`format`, `compact_format`, `when`, `min_width`, `max_width`, `priority`,
+`style`, and `on_click`. Supported conditions MUST be the finite AND-combined vocabulary
 `agent-view`, `shell-view`, `focused`, `unfocused`, `busy`, `idle`,
 `supported`, `nonempty`, and `scrollback`; contradictory conditions MUST be
-rejected. `on_click` MUST be limited to `builtin` or `none`. `overflow` MUST
+rejected. `on_click` MUST be `builtin`, `none`, `terminal:rename-pane`,
+`terminal:copy-mode`, or `terminal:copy-selection` with exactly one
+`-t {pane}` target, or the agent controls `agent:/plan ...` and `agent:/stop`.
+Every custom action MUST retain the exact effective layer that supplied
+`on_click`; runtime dispatch MUST reject missing or untrusted provenance.
+Other terminal, host-writing, security, session, and global effects MUST be
+rejected even if they include an inert `-t {pane}` pair. `overflow` MUST
 be `compact`, `hide`, or `menu` and MUST default to `menu`;
 `title_min_width` MUST default to eight terminal cells. Left and right items
 MUST compete in one retention-priority pool. Lower priorities MUST compact or
@@ -3840,12 +3849,39 @@ Menu overflow MUST expose omitted items through `pane-settings [-t pane]`,
 which MUST also include read-only items and use the same typed action validation
 as mouse input. Actions MUST retain stable pane, occurrence, configuration, and
 pane-context identity, reject stale or closed targets, and MUST NOT retarget
-focus. Unsupported command providers, working-directory execution, custom
-terminal or agent actions, presets, and diagnostic settings MUST be rejected
-until their owning contracts are implemented. Each rendered occurrence MUST retain
+focus. Terminal actions MUST inject the revalidated stable owner into their
+typed pane-target argument immediately before dispatch; allowlisted agent
+actions MUST use a distinct configured-action ingress and execute directly
+against that owner without being classified as direct primary input.
+Presets and diagnostic settings remain unsupported. Each rendered occurrence MUST retain
 stable pane, rail, ordinal, source-field, style, action, configuration, and
 pane-context identity. Rendering, styling, and hit testing MUST consume that
 same semantic occurrence rather than infer actions from display text.
+
+Pane command providers MUST execute only when referenced by a status rail,
+condition-eligible, and owned by a pane presented to an attached client while
+pane frames are visible and zen mode is off. Overflow MUST NOT suspend an
+otherwise eligible provider. Scheduling MUST deduplicate panes across clients,
+permit at most one in-flight refresh per exact pane/surface/name/CWD/config and
+context identity, retain at most 128 pending refreshes and 256 provider states,
+and run at most four provider processes concurrently with fair rotation.
+Hiding frames or entering zen mode MUST cancel work while retaining bounded
+same-context values; pane close, CWD change, provider removal, config change,
+permission change, and shutdown MUST cancel and invalidate affected work.
+Late completions MUST NOT cross any of those identity or generation fences.
+Pane-provider `timeout_ms` MUST be between 1 and 60000 milliseconds.
+
+Provider execution MUST fail closed unless the exact source configuration layer
+is trusted, a structured permission evaluation returns `Allow`, live pane CWD
+and filesystem authority are available, and Bubblewrap or Seatbelt compilation
+succeeds. `Prompt` and `Forbid` MUST remain inert without timer-created approval
+requests. Policy-only or host access, unavailable sandboxing, missing context,
+and untrusted or missing provenance MUST NOT spawn. The outer launcher MUST NOT
+inherit daemon or arbitrary pane environment values; the sandbox payload MUST
+receive only documented minimal environment including `MEZ_PANE_ID`. Provider
+output MUST remain plain normalized display text and MUST never become template,
+style, or action syntax. The existing window-status command runner and behavior
+MUST remain separate and unchanged.
 
 `frames.pane.visible_fields` MUST remain only the fallback used to construct
 the pane title template when `frames.pane.template` is empty. It MUST NOT

@@ -389,6 +389,7 @@ pub(in crate::host::terminal::render) fn pane_frame_right_status_rendition(
             PaneStatusField::PolicyMode => {
                 pane_frame_policy_mode_rendition(&segment.value, ui_theme)
             }
+            PaneStatusField::Provider => ui_theme.colors.pane_pwd.rendition(),
         },
     }
 }

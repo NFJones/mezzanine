@@ -13,7 +13,7 @@ use super::{
 };
 #[cfg(test)]
 use super::{ClientStatusLine, TerminalClientLoopConfig};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -30,7 +30,8 @@ use crate::integrations::hooks::{
     execute_program_hook_async_with_cancellation,
 };
 use crate::runtime::{
-    SessionArchiveOperation, apply_registry_update_async,
+    MAX_CONCURRENT_PANE_STATUS_PROVIDERS, SessionArchiveOperation, apply_registry_update_async,
+    execute_pane_status_provider_launch,
     execute_runtime_status_pill_refresh_plan_with_cancellation,
 };
 use crate::security::audit::AuditRetentionPolicy;
@@ -659,6 +660,87 @@ pub fn build_async_host_clipboard_side_effect_service(
 
 /// Drains status-pill refresh plans, executes each drained batch concurrently,
 /// and reports typed completions to the serialized actor.
+async fn submit_status_pill_worker_event(
+    handle: &AsyncRuntimeSessionHandle,
+    report: &mut AsyncStatusPillSideEffectServiceReport,
+    event: RuntimeEvent,
+) -> Result<()> {
+    let mut batch = RuntimeEventBatch::new();
+    batch.push(event);
+    let ingress = handle.submit_runtime_events(batch).await?;
+    report.submitted_events = report.submitted_events.saturating_add(ingress.accepted);
+    report.applied_events = report.applied_events.saturating_add(ingress.applied);
+    Ok(())
+}
+
+/// Cancels all pane work owned by a drained batch on every exit path.
+/// Blocking tasks observe these fences even if their async wrappers are aborted.
+struct PaneStatusBatchCancellation(Vec<crate::runtime::RuntimePaneStatusProviderCancellation>);
+
+impl Drop for PaneStatusBatchCancellation {
+    /// Signals queued and dispatched plans without waiting on actor availability.
+    fn drop(&mut self) {
+        for cancellation in &self.0 {
+            cancellation.cancel();
+        }
+    }
+}
+
+/// Starts pane work only while the continuous concurrency bound has capacity.
+fn spawn_bounded_pane_status_provider_tasks(
+    tasks: &mut JoinSet<Result<Option<RuntimeEvent>>>,
+    queue: &mut VecDeque<Box<crate::runtime::RuntimePaneStatusProviderRefreshPlan>>,
+    lifecycle: &watch::Receiver<RuntimeLifecycleState>,
+) {
+    if is_terminal_runtime_lifecycle_state(*lifecycle.borrow()) {
+        for plan in queue.drain(..) {
+            plan.cancellation.cancel();
+        }
+        return;
+    }
+    while tasks.len() < MAX_CONCURRENT_PANE_STATUS_PROVIDERS {
+        let Some(plan) = queue.pop_front() else {
+            break;
+        };
+        let cancellation = plan.cancellation.clone();
+        let mut lifecycle = lifecycle.clone();
+        tasks.spawn(async move {
+            if is_terminal_runtime_lifecycle_state(*lifecycle.borrow()) {
+                cancellation.cancel();
+                return Ok(None);
+            }
+            let worker = tokio::task::spawn_blocking(move || {
+                execute_pane_status_provider_launch(*plan).map(RuntimeEvent::PaneStatusProvider)
+            });
+            tokio::pin!(worker);
+            loop {
+                tokio::select! {
+                    completion = &mut worker => {
+                        return completion.map_err(|error| {
+                            MezError::invalid_state(format!(
+                                "pane status provider worker task failed: {error}"
+                            ))
+                        });
+                    }
+                    changed = lifecycle.changed() => {
+                        if changed.is_err()
+                            || is_terminal_runtime_lifecycle_state(*lifecycle.borrow())
+                        {
+                            cancellation.cancel();
+                            let _ = (&mut worker).await.map_err(|error| {
+                                MezError::invalid_state(format!(
+                                    "pane status provider cancellation task failed: {error}"
+                                ))
+                            })?;
+                            return Ok(None);
+                        }
+                    }
+                }
+            }
+        });
+    }
+}
+
 pub async fn run_async_status_pill_side_effect_service<S>(
     handle: &AsyncRuntimeSessionHandle,
     config: AsyncRuntimeSideEffectServiceConfig,
@@ -705,39 +787,91 @@ where
         report.drained = report
             .drained
             .saturating_add(u64::try_from(effects.len()).unwrap_or(u64::MAX));
-        let mut tasks = JoinSet::new();
-        for effect in effects {
-            let RuntimeSideEffect::RefreshStatusPill { plan } = effect else {
-                continue;
-            };
-            let mut cancellation = handle.lifecycle_state_watcher();
-            tasks.spawn(async move {
-                execute_runtime_status_pill_refresh_plan_with_cancellation(plan, async move {
-                    loop {
-                        let state = *cancellation.borrow();
-                        if is_terminal_runtime_lifecycle_state(state)
-                            || cancellation.changed().await.is_err()
-                        {
-                            return;
-                        }
+        let mut window_tasks = JoinSet::new();
+        let mut pane_tasks = JoinSet::new();
+        let mut pane_plans = VecDeque::new();
+        let _batch_cancellation = PaneStatusBatchCancellation(
+            effects
+                .iter()
+                .filter_map(|effect| match effect {
+                    RuntimeSideEffect::RefreshPaneStatusProvider { plan } => {
+                        Some(plan.cancellation.clone())
                     }
+                    _ => None,
                 })
-                .await
-            });
-        }
-        let mut batch = RuntimeEventBatch::new();
-        while let Some(completion) = tasks.join_next().await {
-            let event = completion.map_err(|error| {
-                MezError::invalid_state(format!("status pill worker task failed: {error}"))
-            })?;
-            if let Some(event) = event {
-                batch.push(RuntimeEvent::StatusPill(event));
+                .collect(),
+        );
+        for effect in effects {
+            match effect {
+                RuntimeSideEffect::RefreshStatusPill { plan } => {
+                    let mut cancellation = handle.lifecycle_state_watcher();
+                    window_tasks.spawn(async move {
+                        execute_runtime_status_pill_refresh_plan_with_cancellation(
+                            plan,
+                            async move {
+                                loop {
+                                    let state = *cancellation.borrow();
+                                    if is_terminal_runtime_lifecycle_state(state)
+                                        || cancellation.changed().await.is_err()
+                                    {
+                                        return;
+                                    }
+                                }
+                            },
+                        )
+                        .await
+                        .map(RuntimeEvent::StatusPill)
+                    });
+                }
+                RuntimeSideEffect::RefreshPaneStatusProvider { plan } => {
+                    pane_plans.push_back(plan);
+                }
+                _ => {}
             }
         }
-        if !batch.events.is_empty() {
-            let ingress = handle.submit_runtime_events(batch).await?;
-            report.submitted_events = report.submitted_events.saturating_add(ingress.accepted);
-            report.applied_events = report.applied_events.saturating_add(ingress.applied);
+        spawn_bounded_pane_status_provider_tasks(
+            &mut pane_tasks,
+            &mut pane_plans,
+            &lifecycle_watcher,
+        );
+        while !window_tasks.is_empty() || !pane_tasks.is_empty() || !pane_plans.is_empty() {
+            tokio::select! {
+                completion = window_tasks.join_next(), if !window_tasks.is_empty() => {
+                    let Some(completion) = completion else {
+                        return Err(MezError::invalid_state(
+                            "non-empty window status task set yielded no completion",
+                        ));
+                    };
+                    let event = completion.map_err(|error| {
+                            MezError::invalid_state(format!(
+                                "status pill worker task failed: {error}"
+                            ))
+                        })?;
+                    if let Some(event) = event {
+                        submit_status_pill_worker_event(handle, &mut report, event).await?;
+                    }
+                }
+                completion = pane_tasks.join_next(), if !pane_tasks.is_empty() => {
+                    let Some(completion) = completion else {
+                        return Err(MezError::invalid_state(
+                            "non-empty pane status task set yielded no completion",
+                        ));
+                    };
+                    let event = completion.map_err(|error| {
+                            MezError::invalid_state(format!(
+                                "pane status provider join failed: {error}"
+                            ))
+                        })??;
+                    if let Some(event) = event {
+                        submit_status_pill_worker_event(handle, &mut report, event).await?;
+                    }
+                    spawn_bounded_pane_status_provider_tasks(
+                        &mut pane_tasks,
+                        &mut pane_plans,
+                        &lifecycle_watcher,
+                    );
+                }
+            }
         }
     }
 

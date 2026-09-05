@@ -75,11 +75,16 @@ values and their source layers.
 
 `pane-settings [-t pane]` opens a keyboard selector for the active or requested
 pane's configured status entries, including values moved into menu overflow.
-Read-only entries are labeled as such; built-in controls use the same typed
-pane-scoped action as their mouse pills. The target is held by stable pane and
-configuration identity, so focus does not move and stale, closed, or changed
-targets are rejected instead of applying to another pane. Only attached primary
-clients may open or apply the selector.
+Read-only entries are labeled as such. Configured actions are limited to
+`rename-pane`, `copy-mode`, and `copy-selection` terminal commands with exactly
+one `-t {pane}`, and agent `/plan` and `/stop` controls. They use the same typed
+pane-scoped action as their mouse pills. The target is held by stable pane,
+configuration, and pane-context identity, so focus does not move and stale,
+closed, or changed targets are rejected instead of applying to another pane.
+`{pane}` is replaced only after revalidation with the stable owner pane. The
+exact effective `on_click` source must be present and trusted at execution;
+other terminal or agent effects are rejected. Only attached primary clients
+may open or apply the selector.
 
 `zen on`, `zen off`, and `zen toggle` control the session-wide live
 `terminal.zen_mode` override. Successful changes are silent because their

@@ -72,6 +72,17 @@ pub(super) fn coalesce_output_side_effects_for_enqueue(
                     retained.push(effect);
                 }
             }
+            RuntimeSideEffect::PreparePaneStatusProviders => {
+                let already_queued = queued
+                    .iter()
+                    .chain(retained.iter())
+                    .any(|effect| matches!(effect, RuntimeSideEffect::PreparePaneStatusProviders));
+                if already_queued {
+                    coalesced = coalesced.saturating_add(1);
+                } else {
+                    retained.push(RuntimeSideEffect::PreparePaneStatusProviders);
+                }
+            }
             effect => retained.push(effect),
         }
     }
@@ -249,6 +260,7 @@ pub(super) fn runtime_event_requires_registry_persistence(event: &RuntimeEvent) 
         | RuntimeEvent::Persistence(_)
         | RuntimeEvent::HostClipboard(_)
         | RuntimeEvent::StatusPill(_)
+        | RuntimeEvent::PaneStatusProvider(_)
         | RuntimeEvent::Timer(_)
         | RuntimeEvent::NativeShellProgress(_) => false,
         RuntimeEvent::Client(_)
@@ -382,6 +394,8 @@ pub(super) fn runtime_side_effect_kind(effect: &RuntimeSideEffect) -> &'static s
         RuntimeSideEffect::CancelTimer { .. } => "cancel-timer",
         RuntimeSideEffect::ReadHostClipboard { .. } => "read-host-clipboard",
         RuntimeSideEffect::RefreshStatusPill { .. } => "refresh-status-pill",
+        RuntimeSideEffect::PreparePaneStatusProviders => "prepare-pane-status-providers",
+        RuntimeSideEffect::RefreshPaneStatusProvider { .. } => "refresh-pane-status-provider",
         RuntimeSideEffect::DispatchAgentProvider { .. } => "dispatch-agent-provider",
         RuntimeSideEffect::DispatchApprovedExternalAction { .. } => {
             "dispatch-approved-external-action"

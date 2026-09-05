@@ -497,6 +497,43 @@ fn config_mutation_allows_only_supported_named_pill_leaves() {
     .unwrap();
     assert!(conditions.changed);
 
+    let command_source = format!(
+        "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[frames.pane]\nright_status = \"#{{pill.branch}}\"\n[frames.pane.pills.branch]\ncommand = \"pwd\"\ncwd = \"pane\"\n"
+    );
+    let command = plan_config_mutation(
+        ConfigFormat::Toml,
+        &command_source,
+        ConfigScope::Primary,
+        set_string(
+            "frames.pane.pills.branch.command",
+            "git branch --show-current",
+        ),
+    )
+    .unwrap();
+    assert!(command.changed);
+    let interval = plan_config_mutation(
+        ConfigFormat::Toml,
+        &command.text,
+        ConfigScope::Primary,
+        ConfigMutation {
+            path: "frames.pane.pills.branch.interval_seconds".to_string(),
+            operation: ConfigMutationOperation::Set(ConfigMutationValue::Integer(10)),
+        },
+    )
+    .unwrap();
+    assert!(interval.changed);
+    let action = plan_config_mutation(
+        ConfigFormat::Toml,
+        &interval.text,
+        ConfigScope::Primary,
+        set_string(
+            "frames.pane.pills.branch.on_click",
+            "terminal:copy-mode -t {pane}",
+        ),
+    )
+    .unwrap();
+    assert!(action.changed);
+
     let window = plan_config_mutation(
         ConfigFormat::Toml,
         &format!("version = {CURRENT_CONFIG_SCHEMA_VERSION}\n"),
@@ -507,8 +544,6 @@ fn config_mutation_allows_only_supported_named_pill_leaves() {
     assert!(window.changed);
 
     for path in [
-        "frames.pane.pills.model.command",
-        "frames.pane.pills.model.cwd",
         "frames.pane.pills.model.unknown",
         "frames.window.pills.build.unknown",
         "frames.pane.pills.model.style.extra",

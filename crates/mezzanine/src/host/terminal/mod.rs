@@ -95,8 +95,10 @@ pub use mouse::{
 };
 pub use pane_status::{
     PaneStatusAction, PaneStatusCondition, PaneStatusConfig, PaneStatusField, PaneStatusFormat,
-    PaneStatusOccurrenceId, PaneStatusOverflowPolicy, PaneStatusPillDefinition, PaneStatusRail,
-    PaneStatusSegmentIdentity, PaneStatusStyle,
+    PaneStatusOccurrenceId, PaneStatusOverflowPolicy, PaneStatusPillDefinition,
+    PaneStatusProviderDefinition, PaneStatusProviderEmptyBehavior, PaneStatusProviderErrorBehavior,
+    PaneStatusProviderOrigin, PaneStatusProviderScope, PaneStatusRail, PaneStatusSegmentIdentity,
+    PaneStatusStyle, PaneStatusTerminalAction, PaneStatusTerminalCommand,
 };
 pub(crate) use render::pane_frame_row_layout;
 pub use render::{

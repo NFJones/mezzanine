@@ -95,9 +95,9 @@ pub fn config_change_setting_path_annotations() -> Vec<ConfigChangePathAnnotatio
         },
         ConfigChangePathAnnotation {
             pattern: "frames.pane.pills.<name>.<key>",
-            purpose: "Adjust one supported named built-in pane status-pill setting.",
+            purpose: "Adjust one supported built-in or command-backed pane status-pill setting.",
             value_type: "string, integer, or string array",
-            format: "`<name>` is an ASCII identifier; `<key>` is one of field, label, format, compact_format, when, min_width, max_width, priority, style, or on_click.",
+            format: "`<name>` is an ASCII identifier; `<key>` is one of field, command, cwd, interval_seconds, initial, timeout_ms, empty_behavior, error_behavior, max_output_chars, label, format, compact_format, when, min_width, max_width, priority, style, or on_click. Exactly one of field or command is required; command providers require cwd=pane.",
             operations: CONFIG_CHANGE_OPERATION_NAMES,
         },
         ConfigChangePathAnnotation {

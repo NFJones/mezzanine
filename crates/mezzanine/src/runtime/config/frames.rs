@@ -5,24 +5,33 @@
 //! separates terminal layout and input shortcut parsing from agent, provider,
 //! permission, and hook config domains.
 
+use mez_agent::parse_slash_command;
 use mez_mux::command::parse_command_sequence;
 use mez_mux::input::{ConfigurableKeyAction, KeyBindings, KeyChord, classify_prefix_binding};
 use mez_mux::presentation::{TerminalFramePosition, TerminalFrameStyle};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-use crate::config::EffectiveConfig;
+use crate::config::{ConfigLayer, ConfigScope, EffectiveConfig};
 use crate::error::{MezError, Result};
 use crate::host::terminal::{
     PaneStatusAction, PaneStatusCondition, PaneStatusConfig, PaneStatusField, PaneStatusFormat,
-    PaneStatusOverflowPolicy, PaneStatusPillDefinition, PaneStatusStyle,
+    PaneStatusOverflowPolicy, PaneStatusPillDefinition, PaneStatusProviderDefinition,
+    PaneStatusProviderEmptyBehavior, PaneStatusProviderErrorBehavior, PaneStatusProviderOrigin,
+    PaneStatusProviderScope, PaneStatusStyle, PaneStatusTerminalAction, PaneStatusTerminalCommand,
 };
 use crate::runtime::service_state::RuntimeCommandBinding;
+use crate::runtime::status_pills::{
+    DEFAULT_STATUS_PILL_MAX_OUTPUT_CHARS, DEFAULT_STATUS_PILL_TIMEOUT_MS,
+};
 use crate::ui::command::key_chord_notation;
 
 use super::{
     runtime_active_key_preset, runtime_json_object, runtime_json_string, runtime_json_string_array,
 };
+
+/// Maximum wall-clock duration allowed for one passive pane-status provider.
+const MAX_PANE_STATUS_PROVIDER_TIMEOUT_MS: u64 = 60_000;
 
 /// Runs the runtime pane frames enabled from config operation for this subsystem.
 ///
@@ -120,6 +129,23 @@ pub(crate) fn runtime_pane_frame_template_from_config(root: &Value) -> Result<St
 /// The complete value is built before runtime presentation settings are
 /// replaced, so an invalid definition cannot partially update a live frame.
 pub(crate) fn runtime_pane_status_config_from_config(root: &Value) -> Result<PaneStatusConfig> {
+    runtime_pane_status_config(root, None, &[])
+}
+
+/// Parses pane status configuration and retains exact executable-source provenance.
+pub(crate) fn runtime_pane_status_config_from_effective(
+    root: &Value,
+    effective: &EffectiveConfig,
+    layers: &[ConfigLayer],
+) -> Result<PaneStatusConfig> {
+    runtime_pane_status_config(root, Some(effective), layers)
+}
+
+fn runtime_pane_status_config(
+    root: &Value,
+    effective: Option<&EffectiveConfig>,
+    layers: &[ConfigLayer],
+) -> Result<PaneStatusConfig> {
     let Some(frames) = runtime_json_object(root, "frames") else {
         return Ok(PaneStatusConfig::default());
     };
@@ -183,6 +209,14 @@ pub(crate) fn runtime_pane_status_config_from_config(root: &Value) -> Result<Pan
             if !matches!(
                 key.as_str(),
                 "field"
+                    | "command"
+                    | "cwd"
+                    | "interval_seconds"
+                    | "initial"
+                    | "timeout_ms"
+                    | "empty_behavior"
+                    | "error_behavior"
+                    | "max_output_chars"
                     | "label"
                     | "format"
                     | "compact_format"
@@ -198,17 +232,86 @@ pub(crate) fn runtime_pane_status_config_from_config(root: &Value) -> Result<Pan
                 )));
             }
         }
-        let field_name = object.get("field").and_then(Value::as_str).ok_or_else(|| {
-            MezError::config(format!(
-                "frames.pane.pills.{name}.field must name a built-in pane status field"
-            ))
-        })?;
-        let field = PaneStatusField::parse(field_name).ok_or_else(|| {
-            MezError::config(format!(
-                "frames.pane.pills.{name}.field `{field_name}` is not a supported built-in pane status field"
-            ))
-        })?;
+        let field_name = object.get("field").and_then(Value::as_str);
+        let command = optional_pane_status_string(object.get("command"), name, "command")?
+            .filter(|value| !value.trim().is_empty());
+        if field_name.is_some() == command.is_some() {
+            return Err(MezError::config(format!(
+                "frames.pane.pills.{name} must configure exactly one of field or command"
+            )));
+        }
+        let field = if let Some(field_name) = field_name {
+            PaneStatusField::parse(field_name).ok_or_else(|| {
+                MezError::config(format!(
+                    "frames.pane.pills.{name}.field `{field_name}` is not a supported built-in pane status field"
+                ))
+            })?
+        } else {
+            PaneStatusField::Provider
+        };
         let mut definition = PaneStatusPillDefinition::builtin(field);
+        if let Some(command) = command {
+            if object.get("cwd").and_then(Value::as_str) != Some("pane") {
+                return Err(MezError::config(format!(
+                    "frames.pane.pills.{name}.cwd must be pane for command providers"
+                )));
+            }
+            let interval_seconds = positive_pane_status_u64(
+                object.get("interval_seconds"),
+                name,
+                "interval_seconds",
+                30,
+            )?;
+            let timeout_ms = positive_pane_status_u64(
+                object.get("timeout_ms"),
+                name,
+                "timeout_ms",
+                DEFAULT_STATUS_PILL_TIMEOUT_MS,
+            )?;
+            if timeout_ms > MAX_PANE_STATUS_PROVIDER_TIMEOUT_MS {
+                return Err(MezError::config(format!(
+                    "frames.pane.pills.{name}.timeout_ms must not exceed {MAX_PANE_STATUS_PROVIDER_TIMEOUT_MS}"
+                )));
+            }
+            let max_output_chars = positive_pane_status_u64(
+                object.get("max_output_chars"),
+                name,
+                "max_output_chars",
+                DEFAULT_STATUS_PILL_MAX_OUTPUT_CHARS as u64,
+            )?;
+            definition.provider = Some(PaneStatusProviderDefinition {
+                command,
+                origin: pane_status_provider_origin(effective, layers, name, "command"),
+                interval_ms: interval_seconds.saturating_mul(1_000),
+                initial: optional_pane_status_string(object.get("initial"), name, "initial")?,
+                timeout_ms,
+                empty_behavior: parse_pane_status_empty_behavior(
+                    object.get("empty_behavior"),
+                    name,
+                )?,
+                error_behavior: parse_pane_status_error_behavior(
+                    object.get("error_behavior"),
+                    name,
+                )?,
+                max_output_chars: usize::try_from(max_output_chars).map_err(|_| {
+                    MezError::config(format!(
+                        "frames.pane.pills.{name}.max_output_chars is too large"
+                    ))
+                })?,
+            });
+            definition.when.clear();
+        } else if object.contains_key("cwd")
+            || object.contains_key("interval_seconds")
+            || object.contains_key("initial")
+            || object.contains_key("timeout_ms")
+            || object.contains_key("empty_behavior")
+            || object.contains_key("error_behavior")
+            || object.contains_key("max_output_chars")
+        {
+            return Err(MezError::config(format!(
+                "frames.pane.pills.{name} provider settings require command"
+            )));
+        }
         definition.label = optional_pane_status_string(object.get("label"), name, "label")?;
         if let Some(value) = optional_pane_status_string(object.get("format"), name, "format")? {
             definition.format = parse_pane_status_format(name, "format", field, &value)?;
@@ -281,14 +384,32 @@ pub(crate) fn runtime_pane_status_config_from_config(root: &Value) -> Result<Pan
         {
             definition.action = match value.as_str() {
                 "none" => PaneStatusAction::None,
-                "builtin" => field.builtin_action().map(PaneStatusAction::Builtin).ok_or_else(|| {
-                    MezError::config(format!(
-                        "frames.pane.pills.{name}.on_click cannot be builtin because `{field_name}` has no built-in action"
-                    ))
-                })?,
+                "builtin" => field
+                    .builtin_action()
+                    .map(PaneStatusAction::Builtin)
+                    .ok_or_else(|| {
+                        MezError::config(format!(
+                            "frames.pane.pills.{name}.on_click cannot be builtin because its source has no built-in action"
+                        ))
+                    })?,
+                terminal if terminal.starts_with("terminal:") => {
+                    let command = terminal.trim_start_matches("terminal:").trim();
+                    PaneStatusAction::Terminal {
+                        actions: compile_owner_targeted_terminal_actions(name, command)?,
+                        origin: pane_status_provider_origin(effective, layers, name, "on_click"),
+                    }
+                }
+                agent if agent.starts_with("agent:/") && agent.len() > "agent:/".len() => {
+                    let command = agent.trim_start_matches("agent:");
+                    validate_pane_status_agent_action(name, command)?;
+                    PaneStatusAction::Agent {
+                        command: command.to_string(),
+                        origin: pane_status_provider_origin(effective, layers, name, "on_click"),
+                    }
+                }
                 _ => {
                     return Err(MezError::config(format!(
-                        "frames.pane.pills.{name}.on_click must be builtin or none"
+                        "frames.pane.pills.{name}.on_click must be builtin, none, terminal:<owner-targeted command>, or agent:/<command>"
                     )));
                 }
             };
@@ -296,6 +417,48 @@ pub(crate) fn runtime_pane_status_config_from_config(root: &Value) -> Result<Pan
         config.pills.insert(name.clone(), definition);
     }
     Ok(config)
+}
+
+fn pane_status_provider_origin(
+    effective: Option<&EffectiveConfig>,
+    layers: &[ConfigLayer],
+    name: &str,
+    key: &str,
+) -> Option<PaneStatusProviderOrigin> {
+    let path = format!("frames.pane.pills.{name}.{key}");
+    let layer_name = effective?.source_for(&path)?;
+    let layer = layers.iter().find(|layer| layer.name == layer_name)?;
+    let scope = match layer.scope {
+        ConfigScope::Primary => PaneStatusProviderScope::Primary,
+        ConfigScope::ProjectOverlay => PaneStatusProviderScope::ProjectOverlay,
+        ConfigScope::LiveOverride => PaneStatusProviderScope::LiveOverride,
+    };
+    Some(PaneStatusProviderOrigin {
+        layer_name: layer.name.clone(),
+        scope,
+        path: layer.path.as_ref().map(|path| path.display().to_string()),
+        trusted: layer.trusted,
+    })
+}
+
+fn validate_pane_status_agent_action(name: &str, command: &str) -> Result<()> {
+    let invocation = parse_slash_command(command)
+        .map_err(|error| {
+            MezError::config(format!(
+                "frames.pane.pills.{name}.on_click agent action is invalid: {error}"
+            ))
+        })?
+        .ok_or_else(|| {
+            MezError::config(format!(
+                "frames.pane.pills.{name}.on_click agent action must be a slash command"
+            ))
+        })?;
+    if !matches!(invocation.name.as_str(), "plan" | "stop") {
+        return Err(MezError::config(format!(
+            "frames.pane.pills.{name}.on_click agent action supports only /plan and /stop"
+        )));
+    }
+    Ok(())
 }
 
 fn optional_pane_status_string(
@@ -315,6 +478,106 @@ fn optional_pane_status_string(
         )));
     }
     Ok(Some(value.to_string()))
+}
+
+fn positive_pane_status_u64(
+    value: Option<&Value>,
+    name: &str,
+    key: &str,
+    default: u64,
+) -> Result<u64> {
+    match value {
+        None => Ok(default),
+        Some(value) => value.as_u64().filter(|value| *value > 0).ok_or_else(|| {
+            MezError::config(format!(
+                "frames.pane.pills.{name}.{key} must be a positive integer"
+            ))
+        }),
+    }
+}
+
+fn parse_pane_status_empty_behavior(
+    value: Option<&Value>,
+    name: &str,
+) -> Result<PaneStatusProviderEmptyBehavior> {
+    match value.and_then(Value::as_str).unwrap_or("hide") {
+        "hide" => Ok(PaneStatusProviderEmptyBehavior::Hide),
+        "show_empty" => Ok(PaneStatusProviderEmptyBehavior::ShowEmpty),
+        "keep_previous" => Ok(PaneStatusProviderEmptyBehavior::KeepPrevious),
+        _ => Err(MezError::config(format!(
+            "frames.pane.pills.{name}.empty_behavior must be hide, show_empty, or keep_previous"
+        ))),
+    }
+}
+
+fn parse_pane_status_error_behavior(
+    value: Option<&Value>,
+    name: &str,
+) -> Result<PaneStatusProviderErrorBehavior> {
+    match value.and_then(Value::as_str).unwrap_or("hide") {
+        "hide" => Ok(PaneStatusProviderErrorBehavior::Hide),
+        "show_error" => Ok(PaneStatusProviderErrorBehavior::ShowError),
+        "keep_previous" => Ok(PaneStatusProviderErrorBehavior::KeepPrevious),
+        _ => Err(MezError::config(format!(
+            "frames.pane.pills.{name}.error_behavior must be hide, show_error, or keep_previous"
+        ))),
+    }
+}
+
+fn compile_owner_targeted_terminal_actions(
+    name: &str,
+    command: &str,
+) -> Result<Vec<PaneStatusTerminalAction>> {
+    if command.is_empty() {
+        return Err(MezError::config(format!(
+            "frames.pane.pills.{name}.on_click terminal action must not be empty"
+        )));
+    }
+    let invocations = parse_command_sequence(command).map_err(|error| {
+        MezError::config(format!(
+            "frames.pane.pills.{name}.on_click terminal action is invalid: {error}"
+        ))
+    })?;
+    let mut actions = Vec::with_capacity(invocations.len());
+    for invocation in invocations {
+        let command = PaneStatusTerminalCommand::parse(&invocation.name).ok_or_else(|| {
+            MezError::config(format!(
+                "frames.pane.pills.{name}.on_click terminal command `{}` is not a supported pane-targeted action",
+                invocation.name
+            ))
+        })?;
+        let mut arguments = Vec::with_capacity(invocation.args.len().saturating_sub(2));
+        let mut target_seen = false;
+        let mut index = 0;
+        while index < invocation.args.len() {
+            let argument = &invocation.args[index];
+            if argument == "-t" {
+                let target = invocation.args.get(index + 1).map(String::as_str);
+                if target_seen || target != Some("{pane}") {
+                    return Err(MezError::config(format!(
+                        "frames.pane.pills.{name}.on_click terminal actions must contain exactly one -t {{pane}} target"
+                    )));
+                }
+                target_seen = true;
+                index += 2;
+                continue;
+            }
+            if argument.contains("{pane}") {
+                return Err(MezError::config(format!(
+                    "frames.pane.pills.{name}.on_click may use {{pane}} only as the -t target"
+                )));
+            }
+            arguments.push(argument.clone());
+            index += 1;
+        }
+        if !target_seen {
+            return Err(MezError::config(format!(
+                "frames.pane.pills.{name}.on_click terminal actions must contain exactly one -t {{pane}} target"
+            )));
+        }
+        actions.push(PaneStatusTerminalAction { command, arguments });
+    }
+    Ok(actions)
 }
 
 fn parse_pane_status_format(

@@ -394,6 +394,7 @@ impl RuntimeSessionService {
             self.session.set_lifecycle_state(previous_state);
             return Err(error.into());
         }
+        self.cancel_pane_status_provider_work();
         self.presentation.clear_mouse_resize_drag_state();
         self.stop_all_active_pane_pipes();
         let terminated = self.terminate_all_runtime_pane_processes(force)?;
@@ -497,6 +498,7 @@ impl RuntimeSessionService {
             .set_lifecycle_state(RuntimeLifecycleState::Stopping);
         self.reconcile_active_turn_sleep_inhibition();
         self.session.state = mez_mux::session::SessionState::Stopping;
+        self.cancel_pane_status_provider_work();
         self.presentation.clear_mouse_resize_drag_state();
 
         if !force {
@@ -579,6 +581,7 @@ impl RuntimeSessionService {
         let terminated_mcp_servers = self.clear_runtime_mcp_transports();
         self.session
             .set_lifecycle_state(RuntimeLifecycleState::Failed);
+        self.cancel_pane_status_provider_work();
         self.presentation.clear_mouse_resize_drag_state();
         self.reconcile_active_turn_sleep_inhibition();
         self.session.state = mez_mux::session::SessionState::Failed;

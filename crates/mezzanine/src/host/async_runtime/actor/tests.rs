@@ -1,10 +1,12 @@
 //! Focused actor boundary tests.
 
+use super::coalesce::coalesce_output_side_effects_for_enqueue;
 use super::{
     DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS, DEFAULT_PROVIDER_TIMEOUT_MS, RuntimeSideEffect,
     coalesce_config_persistence_effects,
 };
 use crate::runtime::{PersistenceTarget, PersistenceWriteMode};
+use std::collections::VecDeque;
 use std::path::PathBuf;
 
 /// Verifies that the provider worker watchdog cannot fire before the
@@ -68,4 +70,22 @@ fn coalesce_config_persistence_effects_keeps_latest_text_per_target() {
         RuntimeSideEffect::Persist { target: PersistenceTarget::ProjectConfig, path, bytes, .. }
             if path == &project_path && bytes == b"project"
     ));
+}
+
+/// Verifies render bursts retain only one level-triggered request for the
+/// actor to claim and admit due pane-status providers.
+#[test]
+fn pane_status_provider_preparation_signals_are_coalesced() {
+    let mut queued = VecDeque::from([RuntimeSideEffect::PreparePaneStatusProviders]);
+    let (retained, coalesced) = coalesce_output_side_effects_for_enqueue(
+        &mut queued,
+        vec![
+            RuntimeSideEffect::PreparePaneStatusProviders,
+            RuntimeSideEffect::PreparePaneStatusProviders,
+        ],
+    );
+
+    assert!(retained.is_empty());
+    assert_eq!(coalesced, 2);
+    assert_eq!(queued.len(), 1);
 }

@@ -346,6 +346,23 @@ impl AsyncRuntimeSessionActor {
                     side_effects,
                 })
             }
+            RuntimeEvent::PaneStatusProvider(provider_event) => {
+                let Some(changed) = self
+                    .service
+                    .apply_pane_status_provider_event(provider_event)
+                else {
+                    return Ok(RuntimeTransition::default());
+                };
+                let side_effects = if changed {
+                    self.render_side_effects(RenderInvalidationReason::StatusLine)
+                } else {
+                    Vec::new()
+                };
+                Ok(RuntimeTransition {
+                    applied: true,
+                    side_effects,
+                })
+            }
             RuntimeEvent::Shutdown(shutdown) => self.apply_runtime_shutdown_event(shutdown),
             RuntimeEvent::Timer(timer) => self.apply_runtime_timer_event(timer),
             RuntimeEvent::Process(process_event) => {

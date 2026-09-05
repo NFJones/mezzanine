@@ -46,9 +46,11 @@ in `frames.pane.template`, place title-adjacent items in
 `frames.pane.right_status`. Bare built-in markers use their standard behavior;
 named definitions under `frames.pane.pills.<name>` can change labels, finite
 visibility conditions, supported formatting, width metadata, theme roles, and
-whether the existing built-in selector is clickable. Empty rail strings remain
-empty. `frames.pane.visible_fields` remains only the fallback used when the
-title template is empty; it does not filter either status rail.
+actions. A named definition selects exactly one source: a built-in `field` or a
+pane-scoped `command` with `cwd = "pane"`. Command values are cached outside the
+renderer and normalized to bounded, inert single-line text. Empty rail strings
+remain empty. `frames.pane.visible_fields` remains only the fallback used when
+the title template is empty; it does not filter either status rail.
 
 Narrow panes use `frames.pane.overflow = "menu"` by default. Both rails share
 one priority pool, with lower-priority pills compacted or removed first and
@@ -58,6 +60,15 @@ reserves eight terminal cells for the title by default, and the renderer always
 preserves the trailing structural cell. Use `pane-settings [-t pane]` for
 keyboard access to configured controls and overflowed or read-only entries;
 opening it does not move focus to the target pane.
+
+Command providers run only while referenced and condition-eligible on a
+presented pane with frames visible and zen mode off. Overflow does not suspend
+them. Mez requires trusted source provenance, an explicit permission `Allow`,
+live pane CWD/authority, and a compiled Bubblewrap or Seatbelt launch; blocked
+providers do not prompt on each timer tick. Provider launchers receive no daemon
+or arbitrary pane credentials, while the sandbox payload receives the documented
+`MEZ_PANE_ID`. `terminal:...{pane}...` and `agent:/...` pill actions retain the
+stable owner pane and reject stale or closed targets without changing focus.
 
 Changing the effective theme or another visual presentation setting queues an
 immediate full redraw for every attached client. The redraw restyles Mez-owned

@@ -372,7 +372,11 @@ impl RuntimeSessionService {
         let mut presentation_invalidation = None;
         let previous_frame_geometry = self.effective_frame_geometry();
         let prepared_presentation = if affected.presentation {
-            let settings = RuntimePresentationSettings::from_config(&structured, &effective)?;
+            let settings = RuntimePresentationSettings::from_config(
+                &structured,
+                &effective,
+                self.integration.config_layers(),
+            )?;
             let host_clipboard = runtime_host_clipboard_from_config(&structured)?;
             let disable_streaming = self.presentation.effective_agent_streaming_output()
                 && !settings.effective_agent_streaming_output();
@@ -542,6 +546,10 @@ impl RuntimeSessionService {
             }
             self.integration
                 .replace_configured_permissions(configured_permissions);
+            self.presentation
+                .pane_status_provider_cache
+                .borrow_mut()
+                .invalidate_all();
         }
         if affected.providers {
             self.integration.set_provider_auth_refresh_leeway_seconds(

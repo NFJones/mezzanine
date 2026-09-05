@@ -638,6 +638,8 @@ pub struct TerminalPaneFrameContext<Prompt = (), DisplayLines = Vec<String>> {
     pub agent_context_usage: Option<String>,
     /// Scrollback position shown by `history.position` when not at the live bottom.
     pub history_position: Option<String>,
+    /// Cached pane-scoped command-provider values keyed by configured pill name.
+    pub status_pills: BTreeMap<String, String>,
     /// Product-owned prompt state rendered inside the pane body.
     pub agent_prompt: Option<Prompt>,
     /// Product-owned supplemental lines rendered above the prompt.
@@ -669,6 +671,7 @@ impl<Prompt, DisplayLines: Default> Default for TerminalPaneFrameContext<Prompt,
             agent_preset: None,
             agent_context_usage: None,
             history_position: None,
+            status_pills: BTreeMap::new(),
             agent_prompt: None,
             agent_display_lines: DisplayLines::default(),
         }

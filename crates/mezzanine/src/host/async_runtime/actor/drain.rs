@@ -388,16 +388,35 @@ impl AsyncRuntimeSessionActor {
         }
         let mut drained = Vec::new();
         let mut retained = VecDeque::with_capacity(self.side_effects.len());
+        let mut prepare_pane_providers = false;
         while let Some(effect) = self.side_effects.pop_front() {
-            if drained.len() < limit
-                && matches!(effect, RuntimeSideEffect::RefreshStatusPill { .. })
-            {
-                drained.push(effect);
-            } else {
-                retained.push_back(effect);
+            match effect {
+                RuntimeSideEffect::PreparePaneStatusProviders => {
+                    prepare_pane_providers = true;
+                }
+                RuntimeSideEffect::RefreshStatusPill { .. }
+                | RuntimeSideEffect::RefreshPaneStatusProvider { .. }
+                    if drained.len() < limit =>
+                {
+                    drained.push(effect);
+                }
+                _ => retained.push_back(effect),
             }
         }
         self.side_effects = retained;
+        if prepare_pane_providers || drained.len() < limit {
+            let pane_limit = limit
+                .saturating_sub(drained.len())
+                .min(crate::runtime::MAX_CONCURRENT_PANE_STATUS_PROVIDERS);
+            drained.extend(
+                self.service
+                    .prepare_pane_status_provider_refreshes(pane_limit)
+                    .into_iter()
+                    .map(|plan| RuntimeSideEffect::RefreshPaneStatusProvider {
+                        plan: Box::new(plan),
+                    }),
+            );
+        }
         self.record_side_effect_drain(drained.len());
         Ok(drained)
     }

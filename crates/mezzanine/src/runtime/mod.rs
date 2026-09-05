@@ -426,6 +426,7 @@ pub use pane_io::{
 #[cfg(test)]
 pub(crate) use processes::execute_native_shell_dispatch;
 pub(crate) use processes::execute_native_shell_dispatch_with_progress;
+pub(crate) use processes::execute_pane_status_provider_launch;
 pub use service_state::{
     DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT, DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
     DEFAULT_AGENT_LOOP_LIMIT, DEFAULT_AGENT_ROUTING, DEFAULT_MAX_ROOT_SUBAGENTS,
@@ -454,13 +455,16 @@ pub use sockets::{
 pub use sockets::{
     authorize_unix_peer, authorize_unix_peer_raw_fd, authorize_unix_peer_uid, pane_environment,
 };
+pub(crate) use status_pills::{
+    MAX_CONCURRENT_PANE_STATUS_PROVIDERS, RuntimePaneStatusProviderCancellation,
+};
 use status_pills::{
-    RuntimeStatusPillCache, RuntimeStatusPillDefinition,
+    RuntimePaneStatusProviderCache, RuntimeStatusPillCache, RuntimeStatusPillDefinition,
     runtime_status_pill_definitions_from_config,
 };
 pub use status_pills::{
-    RuntimeStatusPillEvent, RuntimeStatusPillRefreshPlan,
-    execute_runtime_status_pill_refresh_plan_with_cancellation,
+    RuntimePaneStatusProviderEvent, RuntimePaneStatusProviderRefreshPlan, RuntimeStatusPillEvent,
+    RuntimeStatusPillRefreshPlan, execute_runtime_status_pill_refresh_plan_with_cancellation,
 };
 #[cfg(test)]
 pub(crate) use transitions::MAX_CLIENT_CLIPBOARD_BYTES;

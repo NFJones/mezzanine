@@ -34,6 +34,8 @@ pub(crate) enum AgentShellCommandOrigin {
     AuthenticatedPrimaryInput,
     /// Input submitted through the authenticated control protocol.
     AuthenticatedControlRequest,
+    /// A trusted configured pane-status action with a separately restricted command set.
+    TrustedPaneStatusAction,
 }
 
 impl AgentShellCommandOrigin {
@@ -41,6 +43,13 @@ impl AgentShellCommandOrigin {
     pub(crate) const fn is_authenticated_primary_input(self) -> bool {
         matches!(self, Self::AuthenticatedPrimaryInput)
     }
+}
+
+/// Stable ingress metadata for one agent-shell command invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AgentShellCommandIngress<'a> {
+    target_pane_id: Option<&'a str>,
+    origin: AgentShellCommandOrigin,
 }
 
 /// Result of applying the live side effects for an agent-shell exit request.
@@ -283,9 +292,12 @@ impl RuntimeSessionService {
     ) -> Result<String> {
         self.execute_agent_shell_command_with_origin(
             primary_client_id,
+            AgentShellCommandIngress {
+                target_pane_id: None,
+                origin: AgentShellCommandOrigin::AuthenticatedPrimaryInput,
+            },
             input,
             input,
-            AgentShellCommandOrigin::AuthenticatedPrimaryInput,
             false,
             ReadlineHistoryEntry::literal(input),
         )
@@ -321,9 +333,12 @@ impl RuntimeSessionService {
     ) -> Result<String> {
         self.execute_agent_shell_command_with_origin(
             primary_client_id,
+            AgentShellCommandIngress {
+                target_pane_id: None,
+                origin: AgentShellCommandOrigin::AuthenticatedControlRequest,
+            },
             input,
             input,
-            AgentShellCommandOrigin::AuthenticatedControlRequest,
             false,
             ReadlineHistoryEntry::literal(input),
         )
@@ -340,9 +355,12 @@ impl RuntimeSessionService {
     ) -> Result<String> {
         self.execute_agent_shell_command_with_origin(
             primary_client_id,
+            AgentShellCommandIngress {
+                target_pane_id: None,
+                origin: AgentShellCommandOrigin::AuthenticatedPrimaryInput,
+            },
             input,
             display_input,
-            AgentShellCommandOrigin::AuthenticatedPrimaryInput,
             false,
             ReadlineHistoryEntry {
                 text: input.to_string(),
@@ -356,19 +374,26 @@ impl RuntimeSessionService {
     fn execute_agent_shell_command_with_origin(
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
+        ingress: AgentShellCommandIngress<'_>,
         input: &str,
         display_input: &str,
-        origin: AgentShellCommandOrigin,
         queue_external_effects_for_adapter: bool,
         history_entry: ReadlineHistoryEntry,
     ) -> Result<String> {
+        let AgentShellCommandIngress {
+            target_pane_id,
+            origin,
+        } = ingress;
         self.require_live()?;
         if !self.session.is_attached_primary(primary_client_id) {
             return Err(MezError::forbidden(
                 "operation requires an attached primary client",
             ));
         }
-        let pane_id = self.active_pane_id()?;
+        let pane_id = match target_pane_id {
+            Some(pane_id) => pane_id.to_string(),
+            None => self.active_pane_id()?,
+        };
         let visible = self
             .agent_shell_store()
             .get(&pane_id)
@@ -1029,6 +1054,35 @@ impl RuntimeSessionService {
         self.queue_agent_shell_remember_command_with_model(pane_id, input)
     }
 
+    /// Executes one configured pane-status agent action against its stable owner.
+    pub(crate) fn execute_agent_shell_command_for_pane(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        pane_id: &str,
+        input: &str,
+    ) -> Result<String> {
+        let allowed = parse_slash_command(input)
+            .ok()
+            .flatten()
+            .is_some_and(|invocation| matches!(invocation.name.as_str(), "plan" | "stop"));
+        if !allowed {
+            return Err(MezError::forbidden(
+                "pane status agent actions support only /plan and /stop",
+            ));
+        }
+        self.execute_agent_shell_command_with_origin(
+            primary_client_id,
+            AgentShellCommandIngress {
+                target_pane_id: Some(pane_id),
+                origin: AgentShellCommandOrigin::TrustedPaneStatusAction,
+            },
+            input,
+            input,
+            false,
+            ReadlineHistoryEntry::literal(input),
+        )
+    }
+
     /// Executes one agent-shell input through a typed sync/awaited plan.
     pub async fn execute_agent_shell_command_async(
         &mut self,
@@ -1039,9 +1093,12 @@ impl RuntimeSessionService {
         let AgentShellCommandPlan::Awaited(awaited_command) = plan else {
             return self.execute_agent_shell_command_with_origin(
                 primary_client_id,
+                AgentShellCommandIngress {
+                    target_pane_id: None,
+                    origin: AgentShellCommandOrigin::AuthenticatedPrimaryInput,
+                },
                 input,
                 input,
-                AgentShellCommandOrigin::AuthenticatedPrimaryInput,
                 true,
                 ReadlineHistoryEntry::literal(input),
             );

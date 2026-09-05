@@ -20,6 +20,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -55,6 +56,21 @@ pub(crate) struct NativeBubblewrapCapabilityProbe {
 }
 
 impl NativeBubblewrapCapabilityProbe {
+    /// Builds one exact native probe for an admitted non-agent workload.
+    pub(crate) fn new(
+        pane_id: String,
+        pane_environment_signature: String,
+        config_generation: u64,
+        plan: crate::security::sandbox::BubblewrapCapabilityProbePlan,
+    ) -> Self {
+        Self {
+            pane_id,
+            pane_environment_signature,
+            config_generation,
+            plan,
+        }
+    }
+
     /// Runs the exact native probe outside the serialized runtime actor.
     pub(crate) fn run(self) -> Result<crate::security::sandbox::BubblewrapCapability> {
         run_native_bubblewrap_capability_probe(
@@ -62,6 +78,22 @@ impl NativeBubblewrapCapabilityProbe {
             &self.pane_environment_signature,
             self.config_generation,
             &self.plan,
+            None,
+        )
+    }
+
+    /// Runs the exact native probe while observing a caller-owned lifecycle
+    /// cancellation fence.
+    pub(crate) fn run_with_cancellation(
+        self,
+        cancellation: &AtomicBool,
+    ) -> Result<crate::security::sandbox::BubblewrapCapability> {
+        run_native_bubblewrap_capability_probe(
+            &self.pane_id,
+            &self.pane_environment_signature,
+            self.config_generation,
+            &self.plan,
+            Some(cancellation),
         )
     }
 
@@ -122,6 +154,22 @@ impl NativeSeatbeltCapabilityProbe {
             &self.pane_environment_signature,
             self.config_generation,
             &self.plan,
+            None,
+        )
+    }
+
+    /// Runs the exact native probe while observing a caller-owned lifecycle
+    /// cancellation fence.
+    pub(crate) fn run_with_cancellation(
+        self,
+        cancellation: &AtomicBool,
+    ) -> Result<crate::security::sandbox::SeatbeltCapability> {
+        run_native_seatbelt_capability_probe(
+            &self.pane_id,
+            &self.pane_environment_signature,
+            self.config_generation,
+            &self.plan,
+            Some(cancellation),
         )
     }
 
@@ -177,6 +225,22 @@ impl NativeSandboxCapabilityProbe {
                 .map(crate::security::sandbox::SandboxCapability::Seatbelt),
         }
     }
+
+    /// Runs the backend probe while observing a caller-owned lifecycle
+    /// cancellation fence.
+    pub(crate) fn run_with_cancellation(
+        self,
+        cancellation: &AtomicBool,
+    ) -> Result<crate::security::sandbox::SandboxCapability> {
+        match self {
+            Self::Bubblewrap(probe) => probe
+                .run_with_cancellation(cancellation)
+                .map(crate::security::sandbox::SandboxCapability::Bubblewrap),
+            Self::Seatbelt(probe) => probe
+                .run_with_cancellation(cancellation)
+                .map(crate::security::sandbox::SandboxCapability::Seatbelt),
+        }
+    }
 }
 
 /// Cloneable managed-home lease retained by both actor state and the external
@@ -226,6 +290,250 @@ pub(crate) struct NativeSeatbeltDispatch {
 }
 
 impl crate::runtime::RuntimeSessionService {
+    /// Compiles one trusted and explicitly allowed pane-status provider into a
+    /// fail-closed sandbox launch. No unsandboxed fallback is available.
+    pub(crate) fn compile_pane_status_provider_launch(
+        &mut self,
+        pane_id: &str,
+        command: &str,
+        context: &NativeShellContext,
+        maximum_authority: &PathScopes,
+        evaluation: &PermissionEvaluation,
+    ) -> Result<crate::runtime::status_pills::RuntimePaneStatusProviderLaunch> {
+        if evaluation.decision != mez_agent::permissions::RuleDecision::Allow {
+            return Err(MezError::forbidden(
+                "pane status provider requires an explicitly allowed permission evaluation",
+            ));
+        }
+        let sandbox_config = self.sandbox_config_for_pane(pane_id);
+        let policy = self.permission_policy_for_pane(pane_id);
+        if !crate::runtime::config::sandbox_applies_to_policy(&sandbox_config, &policy) {
+            return Err(MezError::forbidden(
+                "pane status provider requires an active OS sandbox",
+            ));
+        }
+        let canonical_cwd = std::fs::canonicalize(context.working_directory()).map_err(|error| {
+            MezError::invalid_state(format!(
+                "pane status provider could not canonicalize its pane working directory: {error}"
+            ))
+        })?;
+        if maximum_authority.current_directory != canonical_cwd.to_string_lossy() {
+            return Err(MezError::conflict(
+                "pane status provider context changed before sandbox admission",
+            ));
+        }
+        let signature = native_environment_signature_for_context(
+            context,
+            self.primary_pid_for_live_pane_process(pane_id),
+        )?;
+        let environment_request =
+            mez_agent::shell::PaneEnvironmentRequest::new(vec!["MEZ_PANE_ID".to_string()])
+                .map_err(|error| MezError::invalid_args(error.message()))?;
+        let environment_evidence = PaneEnvironmentEvidence::from_parts(
+            &environment_request,
+            BTreeMap::from([("MEZ_PANE_ID".to_string(), pane_id.to_string())]),
+            BTreeMap::new(),
+        )
+        .map_err(|error| MezError::invalid_args(error.message()))?;
+        let effective_policy = crate::security::sandbox::effective_sandbox_policy_for_authority(
+            maximum_authority,
+            evaluation,
+            false,
+            self.configured_permissions().resources.network_policy,
+            match &sandbox_config {
+                crate::runtime::SandboxConfig::Bubblewrap(config) => config.network,
+                crate::runtime::SandboxConfig::Seatbelt(config) => config.network,
+                crate::runtime::SandboxConfig::PolicyOnly => {
+                    return Err(MezError::forbidden(
+                        "pane status provider requires an active OS sandbox",
+                    ));
+                }
+            },
+            match &sandbox_config {
+                crate::runtime::SandboxConfig::Bubblewrap(config) => config.environment,
+                crate::runtime::SandboxConfig::Seatbelt(config) => config.environment,
+                crate::runtime::SandboxConfig::PolicyOnly => unreachable!(
+                    "policy-only pane providers are rejected before policy compilation"
+                ),
+            },
+        )
+        .map_err(|error| MezError::forbidden(error.message()))?;
+        let context_generation = self.session.config_generation;
+        let restricted_context = context.restricted_for_pane_status_provider();
+
+        match sandbox_config {
+            crate::runtime::SandboxConfig::Bubblewrap(config) => {
+                let identity = crate::security::sandbox::resolve_sandbox_identity(
+                    &config.group_whitelist,
+                    &signature,
+                )
+                .map_err(|error| MezError::invalid_state(error.message()))?;
+                let probe_plan =
+                    crate::security::sandbox::bubblewrap_capability_probe_plan_for_identity(
+                        &config,
+                        context.shell_path().to_string_lossy().as_ref(),
+                        &identity,
+                        &environment_evidence,
+                    )
+                    .map_err(|error| MezError::invalid_state(error.message()))?;
+                let signature_hash = signature.stable_hash();
+                let cache_key = crate::security::sandbox::bubblewrap_capability_cache_key(
+                    pane_id,
+                    &signature_hash,
+                    context_generation,
+                    &probe_plan,
+                )
+                .map_err(|error| MezError::invalid_state(error.message()))?;
+                let (capability, capability_probe) = match self.bubblewrap_capability(&cache_key) {
+                    Some(capability) => (capability, None),
+                    None => (
+                        crate::security::sandbox::BubblewrapCapability {
+                            cache_key: cache_key.clone(),
+                        },
+                        Some(NativeSandboxCapabilityProbe::Bubblewrap(
+                            NativeBubblewrapCapabilityProbe::new(
+                                pane_id.to_string(),
+                                signature_hash.clone(),
+                                context_generation,
+                                probe_plan,
+                            ),
+                        )),
+                    ),
+                };
+                let launch_plan = crate::security::sandbox::compile_sandbox_launch_plan(
+                    crate::security::sandbox::SandboxCompileRequest::Bubblewrap(
+                        crate::security::sandbox::BubblewrapCompileRequest {
+                            config: &config,
+                            identity,
+                            capability,
+                            pane_environment_signature: &signature_hash,
+                            environment_evidence: &environment_evidence,
+                            network_policy: self.configured_permissions().resources.network_policy,
+                            maximum_authority,
+                            permission_evaluation: evaluation,
+                            preserve_maximum_authority: false,
+                            child_shell_path: context.shell_path().to_string_lossy().as_ref(),
+                            command_file_host_path:
+                                crate::security::sandbox::BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER,
+                            managed_home: None,
+                            pane_home_directory: signature.home_directory.as_deref().map(Path::new),
+                            stateful: false,
+                            interactive: false,
+                        },
+                    ),
+                )
+                .map_err(|error| MezError::forbidden(error.message()))?;
+                let arguments = launch_plan
+                    .arguments
+                    .into_iter()
+                    .map(|argument| {
+                        if argument
+                            == crate::security::sandbox::BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER
+                        {
+                            ShellChildArgument::MaterializedCommandFile
+                        } else {
+                            ShellChildArgument::Literal(argument)
+                        }
+                    })
+                    .collect();
+                let child_launch = ShellChildLaunch::new(launch_plan.executable, arguments)
+                    .map_err(|error| MezError::invalid_state(error.message()))?
+                    .with_status_fd(crate::security::sandbox::BUBBLEWRAP_STATUS_FD)
+                    .map_err(|error| MezError::invalid_state(error.message()))?;
+                Ok(
+                    crate::runtime::status_pills::RuntimePaneStatusProviderLaunch {
+                        context: restricted_context,
+                        capability_probe,
+                        sandbox_backend: crate::runtime::SandboxBackend::Bubblewrap,
+                        child_launch,
+                        bubblewrap_activity_lease: None,
+                        seatbelt_workload_lease: None,
+                    },
+                )
+            }
+            crate::runtime::SandboxConfig::Seatbelt(config) => {
+                let signature_hash = signature.stable_hash();
+                let probe_plan = crate::security::sandbox::seatbelt_capability_probe_plan(
+                    &config,
+                    context.shell_path().to_string_lossy().as_ref(),
+                    &signature,
+                    &environment_evidence,
+                )
+                .map_err(|error| MezError::invalid_state(error.message()))?;
+                let cache_key = crate::security::sandbox::seatbelt_capability_cache_key(
+                    pane_id,
+                    &signature_hash,
+                    context_generation,
+                    &probe_plan,
+                )
+                .map_err(|error| MezError::invalid_state(error.message()))?;
+                let capability_probe = self.seatbelt_capability(&cache_key).is_none().then(|| {
+                    NativeSandboxCapabilityProbe::Seatbelt(NativeSeatbeltCapabilityProbe::new(
+                        pane_id.to_string(),
+                        signature_hash,
+                        context_generation,
+                        probe_plan,
+                    ))
+                });
+                let trusted_project_root = self.trusted_project_root_for_pane(pane_id);
+                let artifacts = crate::security::sandbox::prepare_seatbelt_workload_artifacts(
+                    self.integration.config_root(),
+                    trusted_project_root.as_deref(),
+                    command,
+                    None,
+                )
+                .map_err(|error| MezError::invalid_state(error.message()))?;
+                let child_launcher = std::env::current_exe()
+                    .and_then(std::fs::canonicalize)
+                    .map_err(|error| {
+                        MezError::invalid_state(format!(
+                            "pane status provider launcher discovery failed: {error}"
+                        ))
+                    })?;
+                let child_launcher = child_launcher.to_str().ok_or_else(|| {
+                    MezError::invalid_state("pane status provider launcher path is not UTF-8")
+                })?;
+                let launch_plan = crate::security::sandbox::seatbelt::compile_seatbelt_launch_plan(
+                    crate::security::sandbox::seatbelt::SeatbeltCompileRequest {
+                        config: &config,
+                        policy: &effective_policy,
+                        child_shell_path: context.shell_path().to_string_lossy().as_ref(),
+                        child_launcher_path: child_launcher,
+                        command_file_path: &artifacts.command_file_path.to_string_lossy(),
+                        environment_file_path: &artifacts.environment_file_path.to_string_lossy(),
+                        home_directory: &artifacts.home_directory.to_string_lossy(),
+                        temporary_directory: &artifacts.temporary_directory.to_string_lossy(),
+                        user_name: &signature.user,
+                        environment_evidence: &environment_evidence,
+                        stateful: false,
+                        interactive: false,
+                    },
+                )
+                .map_err(|error| MezError::forbidden(error.message()))?;
+                artifacts
+                    .write_environment_document(&launch_plan.environment_document)
+                    .map_err(|error| MezError::invalid_state(error.message()))?;
+                let child_launch = launch_plan
+                    .child_launch
+                    .with_status_fd(crate::security::sandbox::SANDBOX_STATUS_FD)
+                    .map_err(|error| MezError::invalid_state(error.message()))?;
+                Ok(
+                    crate::runtime::status_pills::RuntimePaneStatusProviderLaunch {
+                        context: restricted_context,
+                        capability_probe,
+                        sandbox_backend: crate::runtime::SandboxBackend::Seatbelt,
+                        child_launch,
+                        bubblewrap_activity_lease: None,
+                        seatbelt_workload_lease: Some(artifacts.lease),
+                    },
+                )
+            }
+            crate::runtime::SandboxConfig::PolicyOnly => Err(MezError::forbidden(
+                "pane status provider requires an active OS sandbox",
+            )),
+        }
+    }
+
     /// Builds an uncached native Seatbelt probe from exact root-process
     /// environment evidence, or returns `None` when that identity is cached.
     pub(crate) fn native_seatbelt_capability_probe_for_action(
@@ -555,6 +863,62 @@ impl crate::runtime::RuntimeSessionService {
     /// transactions. `None` means the configured permissions and trusted
     /// project store grant no filesystem authority for the root-process
     /// working directory.
+    pub(crate) fn native_path_scopes_for_pane_status_provider(
+        &mut self,
+        pane_id: &str,
+        context: &NativeShellContext,
+    ) -> Result<Option<PathScopes>> {
+        self.refresh_project_trust_store_from_disk_if_changed()?;
+        let resources = &self.configured_permissions().resources;
+        let (read_scopes, write_scopes) =
+            if !resources.read_scopes.is_empty() || !resources.write_scopes.is_empty() {
+                (
+                    resources.read_scopes.clone(),
+                    resources.write_scopes.clone(),
+                )
+            } else if let Some(project_root) = self.native_trusted_project_root(context) {
+                let project_root = project_root.to_string_lossy().into_owned();
+                (vec![project_root.clone()], vec![project_root])
+            } else {
+                return Ok(None);
+            };
+        let primary = host_resolved_path_scopes(
+            context.working_directory(),
+            &read_scopes,
+            &write_scopes,
+            &[],
+        )?;
+        let agent_id = format!("agent-{pane_id}");
+        let Some(scope) = self.subagent_scope_declaration(&agent_id) else {
+            return Ok(Some(primary));
+        };
+        let child = host_resolved_path_scopes(
+            Path::new(&scope.current_directory),
+            &scope.read_scopes,
+            &scope.write_scopes,
+            &[],
+        )?;
+        let restricted = primary
+            .intersection(&child)
+            .map_err(|error| MezError::invalid_state(error.message()))?;
+        let canonical_cwd = std::fs::canonicalize(context.working_directory()).map_err(|error| {
+            MezError::invalid_state(format!(
+                "pane status provider could not canonicalize its pane working directory: {error}"
+            ))
+        })?;
+        if restricted.current_directory != canonical_cwd.to_string_lossy() {
+            return Err(MezError::conflict(
+                "pane status provider live working directory differs from delegated authority",
+            ));
+        }
+        Ok(Some(restricted))
+    }
+
+    /// Resolves native filesystem authority directly from host metadata for
+    /// one agent turn, preserving inherited subagent restrictions.
+    ///
+    /// `None` means the configured permissions and trusted project store grant
+    /// no filesystem authority for the root-process working directory.
     pub(crate) fn native_path_scopes_for_turn(
         &mut self,
         turn: &AgentTurnRecord,
@@ -927,6 +1291,7 @@ fn run_native_bubblewrap_capability_probe(
     pane_environment_signature: &str,
     config_generation: u64,
     probe_plan: &crate::security::sandbox::BubblewrapCapabilityProbePlan,
+    cancellation: Option<&AtomicBool>,
 ) -> Result<crate::security::sandbox::BubblewrapCapability> {
     let status_sink = std::fs::OpenOptions::new()
         .write(true)
@@ -976,6 +1341,13 @@ fn run_native_bubblewrap_capability_probe(
     let stderr_reader = child.stderr.take().map(spawn_bounded_probe_reader);
     let deadline = Instant::now() + NATIVE_BUBBLEWRAP_PROBE_TIMEOUT;
     let status = loop {
+        if cancellation.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(MezError::conflict(
+                "native Bubblewrap capability probe was cancelled",
+            ));
+        }
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() >= deadline => {
@@ -1040,6 +1412,7 @@ fn run_native_seatbelt_capability_probe(
     pane_environment_signature: &str,
     config_generation: u64,
     probe_plan: &crate::security::sandbox::SeatbeltCapabilityProbePlan,
+    cancellation: Option<&AtomicBool>,
 ) -> Result<crate::security::sandbox::SeatbeltCapability> {
     let mut child = Command::new(&probe_plan.executable)
         .args(&probe_plan.arguments)
@@ -1056,6 +1429,13 @@ fn run_native_seatbelt_capability_probe(
     let stderr_reader = child.stderr.take().map(spawn_bounded_probe_reader);
     let deadline = Instant::now() + NATIVE_BUBBLEWRAP_PROBE_TIMEOUT;
     let status = loop {
+        if cancellation.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(MezError::conflict(
+                "native Seatbelt capability probe was cancelled",
+            ));
+        }
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() >= deadline => {
@@ -1241,5 +1621,41 @@ mod tests {
 
         assert!(error.to_string().contains("read scope does not exist"));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Verifies pane-provider lifecycle cancellation kills and reaps an
+    /// in-flight Bubblewrap capability probe without waiting for its timeout.
+    #[test]
+    fn native_bubblewrap_probe_honors_provider_cancellation() {
+        let probe = NativeBubblewrapCapabilityProbe::for_test(
+            "/bin/sh",
+            vec!["-c".to_string(), "sleep 30".to_string()],
+            "mez-native-probe-ok",
+        );
+        let cancellation = AtomicBool::new(true);
+        let started = Instant::now();
+
+        let error = probe.run_with_cancellation(&cancellation).unwrap_err();
+
+        assert!(error.to_string().contains("was cancelled"));
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    /// Verifies pane-provider lifecycle cancellation kills and reaps an
+    /// in-flight Seatbelt capability probe without waiting for its timeout.
+    #[test]
+    fn native_seatbelt_probe_honors_provider_cancellation() {
+        let probe = NativeSeatbeltCapabilityProbe::for_test(
+            "/bin/sh",
+            vec!["-c".to_string(), "sleep 30".to_string()],
+            "mez-native-seatbelt-ok",
+        );
+        let cancellation = AtomicBool::new(true);
+        let started = Instant::now();
+
+        let error = probe.run_with_cancellation(&cancellation).unwrap_err();
+
+        assert!(error.to_string().contains("was cancelled"));
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 }

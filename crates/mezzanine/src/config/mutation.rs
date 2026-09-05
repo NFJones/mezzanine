@@ -33,6 +33,14 @@ const MUTABLE_WINDOW_STATUS_PILL_KEYS: &[&str] = &[
 
 const MUTABLE_PANE_STATUS_PILL_KEYS: &[&str] = &[
     "field",
+    "command",
+    "cwd",
+    "interval_seconds",
+    "initial",
+    "timeout_ms",
+    "empty_behavior",
+    "error_behavior",
+    "max_output_chars",
     "label",
     "format",
     "compact_format",

@@ -54,6 +54,8 @@ pub enum PaneStatusField {
     AgentStatus,
     /// Effective approval policy.
     PolicyMode,
+    /// Cached value produced by a configured pane-scoped command provider.
+    Provider,
 }
 
 impl PaneStatusField {
@@ -97,6 +99,7 @@ impl PaneStatusField {
             Self::AgentContextUsage => "agent.context_usage",
             Self::AgentStatus => "agent.status",
             Self::PolicyMode => "policy.mode",
+            Self::Provider => "provider",
         }
     }
 
@@ -249,7 +252,7 @@ impl PaneStatusStyle {
 }
 
 /// Typed action attached to a rendered pane-status occurrence.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PaneStatusAction {
     /// The segment is read-only.
     None,
@@ -257,6 +260,130 @@ pub enum PaneStatusAction {
     Builtin(PaneAgentStatusField),
     /// Open the pane-settings selector for the owning pane.
     OpenSettings,
+    /// Execute trusted compiled terminal commands against the owning pane.
+    Terminal {
+        /// Commands admitted by the narrow configured-action allowlist.
+        actions: Vec<PaneStatusTerminalAction>,
+        /// Exact effective layer that supplied `on_click`.
+        origin: Option<PaneStatusProviderOrigin>,
+    },
+    /// Execute one trusted, allowlisted agent control against the owning pane.
+    Agent {
+        /// Canonical slash command text.
+        command: String,
+        /// Exact effective layer that supplied `on_click`.
+        origin: Option<PaneStatusProviderOrigin>,
+    },
+}
+
+/// One terminal command whose implementation consumes an explicit pane target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PaneStatusTerminalCommand {
+    /// Rename the owning pane.
+    RenamePane,
+    /// Enter or update copy mode for the owning pane.
+    CopyMode,
+    /// Copy the owning pane's active selection.
+    CopySelection,
+}
+
+impl PaneStatusTerminalCommand {
+    /// Parses only commands whose runtime handlers consume `-t` as a pane target.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "rename-pane" => Some(Self::RenamePane),
+            "copy-mode" => Some(Self::CopyMode),
+            "copy-selection" => Some(Self::CopySelection),
+            _ => None,
+        }
+    }
+
+    /// Returns the canonical runtime command name.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::RenamePane => "rename-pane",
+            Self::CopyMode => "copy-mode",
+            Self::CopySelection => "copy-selection",
+        }
+    }
+}
+
+/// Compiled arguments for one allowlisted pane-targeted terminal command.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PaneStatusTerminalAction {
+    /// Typed command identity; arbitrary command names cannot enter dispatch.
+    pub command: PaneStatusTerminalCommand,
+    /// Validated arguments excluding the renderer-owned `-t <pane>` pair.
+    pub arguments: Vec<String>,
+}
+
+/// Empty-output behavior for a pane-scoped command provider.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum PaneStatusProviderEmptyBehavior {
+    /// Hide the pill when the command emits no usable output.
+    #[default]
+    Hide,
+    /// Render the configured label without a value.
+    ShowEmpty,
+    /// Retain the previous non-empty value for the same context.
+    KeepPrevious,
+}
+
+/// Failure behavior for a pane-scoped command provider.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum PaneStatusProviderErrorBehavior {
+    /// Hide the pill after a failed command.
+    #[default]
+    Hide,
+    /// Render a compact error value.
+    ShowError,
+    /// Retain the previous value for the same context.
+    KeepPrevious,
+}
+
+/// Validated configuration for one pane-scoped command provider.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PaneStatusProviderDefinition {
+    /// Shell-shaped source evaluated by permission policy before sandboxing.
+    pub command: String,
+    /// Exact effective configuration layer that supplied the command.
+    pub origin: Option<PaneStatusProviderOrigin>,
+    /// Minimum refresh interval in milliseconds.
+    pub interval_ms: u64,
+    /// Optional value shown before the first successful refresh.
+    pub initial: Option<String>,
+    /// Maximum execution time in milliseconds.
+    pub timeout_ms: u64,
+    /// Empty-output behavior.
+    pub empty_behavior: PaneStatusProviderEmptyBehavior,
+    /// Execution-failure behavior.
+    pub error_behavior: PaneStatusProviderErrorBehavior,
+    /// Maximum Unicode scalar values retained from the first output line.
+    pub max_output_chars: usize,
+}
+
+/// Trusted configuration provenance retained for provider admission.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PaneStatusProviderOrigin {
+    /// Stable configured layer name recorded by effective-config composition.
+    pub layer_name: String,
+    /// Configuration scope of the exact source layer.
+    pub scope: PaneStatusProviderScope,
+    /// Optional source document path.
+    pub path: Option<String>,
+    /// Whether the exact source layer is trusted for executable configuration.
+    pub trusted: bool,
+}
+
+/// Configuration scope retained without coupling terminal presentation to config parsing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PaneStatusProviderScope {
+    /// Primary user configuration.
+    Primary,
+    /// Project overlay configuration.
+    ProjectOverlay,
+    /// Session-local live override.
+    LiveOverride,
 }
 
 /// Rail containing a pane-status occurrence.
@@ -309,6 +436,8 @@ pub struct PaneStatusSegmentIdentity {
 pub struct PaneStatusPillDefinition {
     /// Built-in source field.
     pub field: PaneStatusField,
+    /// Command provider source when `field` is [`PaneStatusField::Provider`].
+    pub provider: Option<PaneStatusProviderDefinition>,
     /// Optional text prepended to the formatted value.
     pub label: Option<String>,
     /// Primary display format.
@@ -361,6 +490,7 @@ impl PaneStatusPillDefinition {
         };
         Self {
             field,
+            provider: None,
             label: None,
             format,
             compact_format: PaneStatusFormat::Short,

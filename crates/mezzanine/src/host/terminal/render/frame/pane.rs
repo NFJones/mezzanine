@@ -425,7 +425,21 @@ fn resolve_pane_status_component(
         };
     };
     let field_name = definition.field.as_str();
-    let display_value = pane_frame_field_value(window, pane, frame_context, field_name);
+    let provider_name = marker.strip_prefix("pill.");
+    let display_value = if definition.field == PaneStatusField::Provider {
+        provider_name
+            .and_then(|name| {
+                frame_context
+                    .panes
+                    .get(pane.id.as_str())?
+                    .status_pills
+                    .get(name)
+            })
+            .cloned()
+            .unwrap_or_default()
+    } else {
+        pane_frame_field_value(window, pane, frame_context, field_name)
+    };
     let raw_value = if definition.field == PaneStatusField::PaneStatus {
         frame_context
             .panes
@@ -435,7 +449,12 @@ fn resolve_pane_status_component(
     } else {
         display_value.clone()
     };
-    if display_value.is_empty()
+    let provider_label_only = definition.field == PaneStatusField::Provider
+        && definition
+            .label
+            .as_deref()
+            .is_some_and(|label| !label.trim().is_empty());
+    if (display_value.is_empty() && !provider_label_only)
         || !pane_status_conditions_match(pane, frame_context, &definition, &display_value)
     {
         return RenderedFrameStatus {

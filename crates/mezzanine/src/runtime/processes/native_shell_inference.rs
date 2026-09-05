@@ -26,6 +26,8 @@ pub(crate) struct NativeShellContext {
     environment: Vec<RawEnvironmentEntry>,
     /// Root-process working directory for the spawned shell.
     working_directory: PathBuf,
+    /// Whether the spawned outer process inherits the daemon environment.
+    inherit_parent_environment: bool,
 }
 
 impl NativeShellContext {
@@ -48,6 +50,26 @@ impl NativeShellContext {
     pub(crate) fn working_directory(&self) -> &Path {
         &self.working_directory
     }
+
+    /// Reports whether the outer process inherits the daemon environment.
+    pub(crate) const fn inherit_parent_environment(&self) -> bool {
+        self.inherit_parent_environment
+    }
+
+    /// Builds a credential-free context for one admitted pane-status provider.
+    ///
+    /// The compiled sandbox launch supplies its own minimal payload environment;
+    /// the outer sandbox executable therefore receives neither daemon nor pane
+    /// environment values.
+    pub(crate) fn restricted_for_pane_status_provider(&self) -> Self {
+        Self {
+            shell_path: self.shell_path.clone(),
+            classification: self.classification,
+            environment: Vec::new(),
+            working_directory: self.working_directory.clone(),
+            inherit_parent_environment: false,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -64,6 +86,7 @@ impl NativeShellContext {
             classification,
             environment,
             working_directory,
+            inherit_parent_environment: true,
         }
     }
 }
@@ -105,6 +128,7 @@ pub(crate) fn infer_native_shell_context(
         classification,
         environment,
         working_directory,
+        inherit_parent_environment: true,
     })
 }
 

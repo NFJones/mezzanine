@@ -38,12 +38,12 @@ use super::{
     PaneInputDispatch, PaneNavigationDirection, PaneSurfaceKind, PasteBuffers,
     ReadlineInputDecoder, ReadlineOutcome, ReadlinePrompt, ReadlinePromptKind,
     RenderInvalidationReason, RenderedClientView, Result, RuntimeAgentPromptInput,
-    RuntimeCommandBinding, RuntimeSessionService, RuntimeSideEffect, RuntimeStatusPillCache,
-    RuntimeStatusPillDefinition, RuntimeTransition, Size, SplitDirection, TerminalClientLoopAction,
-    TerminalClientLoopConfig, TerminalFrameContext, TerminalScreen, WindowFrameAction,
-    agent_prompt_reserved_line_count, current_unix_millis, current_unix_seconds, json_escape,
-    mouse_action_name, mux_action_command_prompt_prefill, mux_action_name,
-    pane_navigation_direction, parse_command_sequence,
+    RuntimeCommandBinding, RuntimePaneStatusProviderCache, RuntimeSessionService,
+    RuntimeSideEffect, RuntimeStatusPillCache, RuntimeStatusPillDefinition, RuntimeTransition,
+    Size, SplitDirection, TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFrameContext,
+    TerminalScreen, WindowFrameAction, agent_prompt_reserved_line_count, current_unix_millis,
+    current_unix_seconds, json_escape, mouse_action_name, mux_action_command_prompt_prefill,
+    mux_action_name, pane_navigation_direction, parse_command_sequence,
     render_attached_client_view_with_screen_and_row_resolvers,
     runtime_agent_shell_command_response_json, runtime_agent_turn_duration_display,
     runtime_agent_turn_state_name, runtime_approval_policy_name, runtime_copy_position_for_view,
@@ -81,7 +81,7 @@ pub(crate) struct RuntimePresentationSettings {
     /// Pane frame template rendered around each visible pane.
     pane_frame_template: String,
     /// Typed title-adjacent and right-aligned pane status configuration.
-    pane_status: crate::host::terminal::PaneStatusConfig,
+    pub(super) pane_status: crate::host::terminal::PaneStatusConfig,
     /// Placement of pane frame rows.
     pane_frame_position: TerminalFramePosition,
     /// Visual treatment of pane frame rows.
@@ -231,6 +231,7 @@ impl RuntimePresentationSettings {
     pub(crate) fn from_config(
         root: &serde_json::Value,
         effective: &EffectiveConfig,
+        layers: &[crate::config::ConfigLayer],
     ) -> Result<Self> {
         let key_bindings = crate::runtime::runtime_key_bindings_from_config(root)?;
         let command_bindings =
@@ -249,7 +250,9 @@ impl RuntimePresentationSettings {
                 crate::runtime::runtime_window_frame_visible_fields_from_config(root)?,
             pane_frames_enabled: crate::runtime::runtime_pane_frames_enabled_from_config(root)?,
             pane_frame_template: crate::runtime::runtime_pane_frame_template_from_config(root)?,
-            pane_status: crate::runtime::runtime_pane_status_config_from_config(root)?,
+            pane_status: crate::runtime::config::runtime_pane_status_config_from_effective(
+                root, effective, layers,
+            )?,
             pane_frame_position: crate::runtime::runtime_pane_frame_position_from_config(root)?,
             pane_frame_style: crate::runtime::runtime_pane_frame_style_from_config(root)?,
             pane_frame_visible_fields:
@@ -408,7 +411,7 @@ struct RuntimeClientPresentationState {
 #[derive(Debug, Default)]
 pub(crate) struct RuntimePresentationComponent {
     /// Current atomically replaceable presentation configuration.
-    settings: RuntimePresentationSettings,
+    pub(super) settings: RuntimePresentationSettings,
     /// Client renders deferred until the current runtime operation succeeds.
     deferred_render_effects: Vec<RuntimeSideEffect>,
     /// Generation-keyed immutable visible rows for pane composition.
@@ -417,6 +420,8 @@ pub(crate) struct RuntimePresentationComponent {
     window_presentation_plan_cache: std::cell::RefCell<RuntimeWindowPresentationPlanCache>,
     /// Cached output for command-backed window status pills.
     window_status_pill_cache: std::cell::RefCell<RuntimeStatusPillCache>,
+    /// Cached output and bounded work for admitted pane-scoped status providers.
+    pub(super) pane_status_provider_cache: std::cell::RefCell<RuntimePaneStatusProviderCache>,
     /// Exact-client transient interaction state retained between operations.
     client_states:
         std::collections::HashMap<mez_core::ids::ClientId, RuntimeClientPresentationState>,
@@ -1424,6 +1429,9 @@ impl RuntimePresentationComponent {
 
     /// Removes every pane-keyed agent presentation artifact during teardown.
     pub(crate) fn remove_agent_presentation_state(&mut self, pane_id: &str) {
+        self.pane_status_provider_cache
+            .borrow_mut()
+            .remove_pane(pane_id);
         self.agent_prompt_inputs.remove(pane_id);
         self.external_agent_prompt_edits.remove(pane_id);
         self.agent_prompt_selector_refreshes
@@ -1497,7 +1505,17 @@ impl RuntimePresentationComponent {
     ) -> Option<RenderInvalidationReason> {
         let invalidation_reason = self.settings.invalidation_reason(&settings);
         let pane_status_changed = self.settings.pane_status != settings.pane_status;
+        let pane_provider_visibility_changed = self.settings.pane_frames_enabled
+            != settings.pane_frames_enabled
+            || self.settings.terminal_zen_mode != settings.terminal_zen_mode;
         self.settings = settings;
+        if pane_status_changed {
+            self.pane_status_provider_cache
+                .borrow_mut()
+                .invalidate_all();
+        } else if pane_provider_visibility_changed {
+            self.pane_status_provider_cache.borrow_mut().suspend_all();
+        }
         if pane_status_changed {
             self.pane_agent_status_selector = None;
             for state in self.client_states.values_mut() {
@@ -2560,16 +2578,25 @@ impl RuntimeSessionService {
 
     /// Drains command-backed status pill refreshes scheduled during rendering.
     pub(crate) fn drain_status_pill_refresh_transition(&self) -> RuntimeTransition {
-        let plans = self
+        let window_plans = self
             .presentation
             .window_status_pill_cache
             .borrow_mut()
             .drain_refresh_plans();
+        let pane_preparation_needed = self
+            .presentation
+            .pane_status_provider_cache
+            .borrow()
+            .preparation_needed();
         RuntimeTransition {
             applied: false,
-            side_effects: plans
+            side_effects: window_plans
                 .into_iter()
                 .map(|plan| RuntimeSideEffect::RefreshStatusPill { plan })
+                .chain(
+                    pane_preparation_needed
+                        .then_some(RuntimeSideEffect::PreparePaneStatusProviders),
+                )
                 .collect(),
         }
     }
@@ -2590,6 +2617,28 @@ impl RuntimeSessionService {
                     .window_frame_right_status_template,
                 event,
             )
+    }
+
+    /// Applies one exact pane-provider completion after lifecycle reconciliation.
+    pub(crate) fn apply_pane_status_provider_event(
+        &self,
+        event: crate::runtime::RuntimePaneStatusProviderEvent,
+    ) -> Option<bool> {
+        self.presentation
+            .pane_status_provider_cache
+            .borrow_mut()
+            .apply_event(event)
+    }
+
+    /// Returns renderer-pure cached values for one stable pane owner.
+    pub(crate) fn pane_status_provider_values(
+        &self,
+        pane_id: &str,
+    ) -> std::collections::BTreeMap<String, String> {
+        self.presentation
+            .pane_status_provider_cache
+            .borrow()
+            .values_for_pane(pane_id)
     }
 }
 

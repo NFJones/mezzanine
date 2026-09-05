@@ -30,6 +30,11 @@ use mez_agent::{
 };
 
 use crate::error::{MezError, Result};
+use crate::runtime::status_pills::{
+    RuntimePaneStatusProviderEvent, RuntimePaneStatusProviderLaunch,
+    RuntimePaneStatusProviderOutcome, RuntimePaneStatusProviderRefreshPlan,
+    STATUS_PILL_OUTPUT_LIMIT_BYTES, runtime_status_pill_normalize_output,
+};
 
 use super::native_shell_inference::NativeShellContext;
 
@@ -213,6 +218,14 @@ impl SpawnedShellExecutor {
         }
     }
 
+    /// Builds an executor with a caller-owned lifecycle cancellation fence.
+    fn with_interrupted(context: NativeShellContext, interrupted: Arc<AtomicBool>) -> Self {
+        Self {
+            context,
+            interrupted,
+        }
+    }
+
     /// Returns a cancellation handle for the next execution.
     #[cfg(test)]
     pub(crate) fn interrupt_handle(&self) -> SpawnedShellInterrupt {
@@ -353,6 +366,9 @@ impl SpawnedShellExecutor {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0);
+        if !self.context.inherit_parent_environment() {
+            command.env_clear();
+        }
         // Preserve the environment inherited by the parent `mez` process so
         // native actions retain its PATH and credentials. Pane-root entries
         // are applied afterward as the authoritative live-context overlay.
@@ -581,6 +597,100 @@ pub(crate) fn execute_native_shell_dispatch(
     dispatch: crate::runtime::RuntimeNativeShellDispatch,
 ) -> crate::runtime::RuntimeNativeShellOutcome {
     execute_native_shell_dispatch_inner(dispatch, None)
+}
+
+/// Executes one actor-admitted pane provider through its compiled sandbox launch.
+pub(crate) fn execute_pane_status_provider_launch(
+    plan: RuntimePaneStatusProviderRefreshPlan,
+) -> Option<RuntimePaneStatusProviderEvent> {
+    let RuntimePaneStatusProviderRefreshPlan {
+        key,
+        generation,
+        definition,
+        launch,
+        cancellation,
+    } = plan;
+    if cancellation.is_cancelled() {
+        return None;
+    }
+    let RuntimePaneStatusProviderLaunch {
+        context,
+        capability_probe,
+        sandbox_backend,
+        child_launch,
+        bubblewrap_activity_lease: _bubblewrap_activity_lease,
+        seatbelt_workload_lease: _seatbelt_workload_lease,
+    } = launch;
+    let cancellation_flag = cancellation.flag();
+    let outcome = capability_probe
+        .map_or(Ok(()), |probe| {
+            probe.run_with_cancellation(&cancellation_flag).map(|_| ())
+        })
+        .and_then(|()| {
+            if cancellation.is_cancelled() {
+                return Err(MezError::conflict("pane status provider was cancelled"));
+            }
+            let marker = mez_agent::MarkerToken::new("00000000000000000000000000000000")
+                .map_err(|error| MezError::invalid_state(error.message()))?;
+            let transaction = mez_agent::ShellTransaction::new(
+                marker,
+                "pane-status-provider",
+                "pane-status-provider",
+                &key.pane_id,
+                context.shell_path(),
+                &definition.command,
+            )
+            .map_err(|error| MezError::invalid_state(error.message()))?
+            .with_child_launch(child_launch)
+            .with_output_max_raw_bytes(STATUS_PILL_OUTPUT_LIMIT_BYTES);
+            let request = mez_agent::ShellExecutionRequest {
+                action_id: format!("pane-status:{}:{}", key.pane_id, key.name),
+                transaction,
+                timeout_ms: Some(definition.timeout_ms),
+                interactive: false,
+                stateful: false,
+            };
+            let executor =
+                SpawnedShellExecutor::with_interrupted(context, Arc::clone(&cancellation_flag));
+            let materialized = executor.materialize_launch(&request.transaction)?;
+            let result = executor
+                .spawn_child(&request.transaction, &materialized)
+                .and_then(|child| {
+                    executor.collect(
+                        child,
+                        request.timeout_ms,
+                        request.transaction.output_max_raw_bytes,
+                        None,
+                        Some(sandbox_backend),
+                    )
+                });
+            materialized.cleanup();
+            result
+        });
+    let outcome = if cancellation.is_cancelled() {
+        RuntimePaneStatusProviderOutcome::Cancelled
+    } else {
+        match outcome {
+            Ok(output)
+                if output.exit_code == Some(0)
+                    && !output.timed_out
+                    && !output.interrupted
+                    && !output.stdout.contains('\u{fffd}') =>
+            {
+                RuntimePaneStatusProviderOutcome::Succeeded(runtime_status_pill_normalize_output(
+                    &output.stdout,
+                    definition.max_output_chars,
+                ))
+            }
+            _ => RuntimePaneStatusProviderOutcome::Failed,
+        }
+    };
+    Some(RuntimePaneStatusProviderEvent {
+        key,
+        generation,
+        definition,
+        outcome,
+    })
 }
 
 /// Executes a native shell dispatch while publishing bounded output previews.

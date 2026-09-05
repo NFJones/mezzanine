@@ -470,7 +470,7 @@ max_output_chars = 32
 | `frames.pane.right_status` | string | see example config | Right-aligned ordered built-in or named status pills. An empty string disables it. |
 | `frames.pane.overflow` | string | `"menu"` | Narrow-pane policy: `compact` uses compact forms then hides, `hide` removes whole low-priority pills, and `menu` uses compact forms then exposes omitted items through `pane-settings`. |
 | `frames.pane.title_min_width` | integer | `8` | Minimum terminal-cell budget reserved for the pane title when status items compete for a row. |
-| `frames.pane.pills` | table | `{}` | Named built-in definitions referenced from either rail as `#{pill.<name>}`. |
+| `frames.pane.pills` | table | `{}` | Named built-in or pane command-provider definitions referenced from either rail as `#{pill.<name>}`. |
 | `frames.pane.style` | string | `"default"` | Frame text style. |
 | `frames.pane.visible_fields` | string array | `[...]` | Fallback fields used only when `frames.pane.template` is empty; this does not filter status rails. |
 
@@ -482,19 +482,31 @@ Default `frames.pane.visible_fields`:
 
 Pane status rails accept bare built-ins such as `#{pane.progress}`,
 `#{pane.pwd}`, `#{agent.model}`, and `#{history.position}`. A named definition
-requires `field` and may set `label`, `format`, `compact_format`, `when`,
-`min_width`, `max_width`, `priority`, `style`, and `on_click`. Supported
+requires exactly one source: `field` or `command`. Both forms may set `label`,
+`format`, `compact_format`, `when`, `min_width`, `max_width`, `priority`,
+`style`, and `on_click`. Command providers additionally require `cwd = "pane"`
+and support bounded `interval_seconds`, `timeout_ms`, `initial`,
+`max_output_chars`, `empty_behavior`, and `error_behavior`. Supported
 formats are `full`, `short`, and `percent` where the field is numeric. `when`
 is an AND-combined array drawn from `agent-view`, `shell-view`, `focused`,
 `unfocused`, `busy`, `idle`, `supported`, `nonempty`, and `scrollback`;
-contradictory pairs are rejected. `on_click` is limited to `builtin` or `none`.
+contradictory pairs are rejected. `on_click` accepts `builtin`, `none`,
+`terminal:rename-pane`, `terminal:copy-mode`, or `terminal:copy-selection`
+with exactly one `-t {pane}`, plus the agent controls `agent:/plan ...` and
+`agent:/stop`. All other terminal and agent commands are rejected, including
+host-writing, security, session, and global effects. Pane-provider `timeout_ms`
+is limited to 60000.
 Left and right items share one priority pool. Lower-priority items compact or
 disappear first; equal priorities evict in reverse template order while retained
 items keep their configured order. Fitting is Unicode display-cell aware and
 never leaves a partial clickable pill. `pane-settings [-t pane]` opens the
 keyboard-accessible list, including read-only and overflowed entries, without
-changing pane focus. Command providers, working-directory execution, custom
-actions, presets, and diagnostics are not part of this schema.
+changing pane focus. Terminal and agent actions retain the pill's stable owner
+and exact effective `on_click` source, reject missing or untrusted provenance
+and stale or closed occurrences, and never retarget focus. Static document
+validation can validate action syntax without effective-source metadata;
+runtime execution always fails closed when that metadata is unavailable.
+Presets and diagnostics are not part of this schema.
 
 ```toml
 [frames.pane.pills.model]
@@ -507,6 +519,43 @@ priority = 80
 style = "agent-model"
 on_click = "builtin"
 ```
+
+```toml
+[frames.pane.pills.branch]
+command = "git branch --show-current"
+cwd = "pane"
+label = "Branch"
+interval_seconds = 10
+timeout_ms = 1000
+initial = "checking"
+max_output_chars = 80
+empty_behavior = "hide"
+error_behavior = "show_error"
+style = "pane-pwd"
+on_click = "terminal:copy-mode -t {pane}"
+```
+
+Pane providers are presentation work, not general background jobs. Mez schedules
+them only while referenced and condition-eligible on presented panes with frames
+visible and zen mode off; overflow alone does not stop them. Work is deduplicated
+across clients, limited to one in-flight refresh per exact pane context, 128
+pending refreshes, 256 retained states, and four concurrent processes. Pane
+close, CWD/config/permission changes, hiding, zen mode, and shutdown cancel work;
+stale completions are rejected. Dropping the refresh worker also cancels its
+queued and running pane work. Visibility and focus eligibility are unioned over
+attached primary views (and observers' source views), honoring each view's zoom:
+a provider runs when at least one presented view satisfies its conditions.
+
+Execution requires trusted source-layer provenance, a structured permission
+decision of `Allow`, concrete live pane CWD and filesystem authority, and a
+compiled Bubblewrap or Seatbelt launch. `Prompt`, `Forbid`, policy-only or host
+access, unavailable sandboxing, and missing context remain blocked without
+periodic approval prompts or repeated admission attempts. A changed definition,
+configuration generation, or pane context permits a fresh admission attempt.
+The outer launcher inherits neither daemon nor pane
+credentials. The sandbox payload receives a minimal environment with the
+documented `MEZ_PANE_ID` binding. Output is trimmed to one bounded line and is
+always inert display text.
 
 ### Frame template fields
 
