@@ -834,6 +834,38 @@ fn runtime_window_presentation_plan_cache_tracks_geometry_changes() {
     );
 }
 
+/// Verifies zen mode suppresses configured frame rows and their mouse targets.
+///
+/// Configured frame flags remain available for restoration, while the shared
+/// presentation plan must reclaim both standalone rows and expose the full
+/// single-pane body without any clickable passive chrome.
+#[test]
+fn runtime_zen_mode_reclaims_frame_rows_without_changing_configured_flags() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.set_terminal_zen_mode_for_tests(true);
+
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let window = service.session().active_window().unwrap();
+    let plan = service.window_presentation_plan_for_tests(window).unwrap();
+
+    assert!(service.window_frames_enabled());
+    assert!(service.pane_frames_enabled());
+    assert!(!config.window_frames_enabled);
+    assert!(!config.pane_frames_enabled);
+    assert_eq!(plan.window_frame_row, None);
+    assert_eq!(plan.panes[0].frame_row, None);
+    assert_eq!(plan.panes[0].content_region.rows, 24);
+    assert!(config.mouse_window_frame_cells.is_empty());
+    assert!(config.mouse_window_action_frame_cells.is_empty());
+    assert!(config.mouse_window_group_frame_cells.is_empty());
+    assert!(config.mouse_pane_agent_status_cells.is_empty());
+}
+
 /// Verifies that a live agent footer re-enables animated frame ticks so active
 /// agent progress indicators keep their motion while work is still running.
 #[test]

@@ -163,6 +163,23 @@ impl Default for RuntimePresentationSettings {
 }
 
 impl RuntimePresentationSettings {
+    /// Returns the geometry-affecting frame policy after zen-mode suppression.
+    fn effective_frame_geometry(
+        &self,
+        group_frame_available: bool,
+    ) -> (
+        bool,
+        Option<TerminalFramePosition>,
+        Option<TerminalFramePosition>,
+    ) {
+        let chrome_visible = !self.terminal_zen_mode;
+        (
+            chrome_visible && group_frame_available,
+            (chrome_visible && self.window_frames_enabled).then_some(self.window_frame_position),
+            (chrome_visible && self.pane_frames_enabled).then_some(self.pane_frame_position),
+        )
+    }
+
     /// Classifies the client repaint required by one resolved settings replacement.
     pub(crate) fn invalidation_reason(
         &self,
@@ -1650,6 +1667,28 @@ impl RuntimePresentationComponent {
         self.redispatch_pending_agent_presentation_resizes();
     }
 
+    /// Clears pointer state whose coordinates were derived from old frame geometry.
+    pub(crate) fn clear_stale_frame_coordinate_state(&mut self) {
+        self.capture_projected_client_state();
+        for state in self.client_states.values_mut() {
+            let changed = state.mouse_selection_drag_state.is_some()
+                || state.last_mouse_click_state.is_some()
+                || state.pressed_window_action.is_some()
+                || state.pane_agent_status_selector.is_some();
+            state.mouse_selection_drag_state = None;
+            state.last_mouse_click_state = None;
+            state.pressed_window_action = None;
+            state.pane_agent_status_selector = None;
+            if changed {
+                state.presentation_revision = state.presentation_revision.saturating_add(1);
+            }
+        }
+        self.mouse_selection_drag_state = None;
+        self.last_mouse_click_state = None;
+        self.pressed_window_action = None;
+        self.pane_agent_status_selector = None;
+    }
+
     /// Reports whether a pane-divider resize gesture is active.
     pub(crate) fn mouse_resize_drag_active(&self) -> bool {
         self.mouse_resize_drag_state.is_some()
@@ -2056,6 +2095,12 @@ impl RuntimeSessionService {
         self.presentation.settings.pane_frames_enabled = pane_frames_enabled;
     }
 
+    /// Replaces zen-mode visibility for a presentation integration fixture.
+    #[cfg(test)]
+    pub(crate) fn set_terminal_zen_mode_for_tests(&mut self, enabled: bool) {
+        self.presentation.settings.terminal_zen_mode = enabled;
+    }
+
     /// Replaces pane frame placement for a presentation integration fixture.
     #[cfg(test)]
     pub(crate) fn set_pane_frame_position_for_tests(&mut self, position: TerminalFramePosition) {
@@ -2084,6 +2129,17 @@ impl RuntimeSessionService {
     /// Reports whether product window frames are enabled.
     pub(crate) fn window_frames_enabled(&self) -> bool {
         self.presentation.settings.window_frames_enabled
+    }
+
+    /// Reports whether window frame rows are visible after zen-mode policy.
+    pub(crate) fn effective_window_frames_enabled(&self) -> bool {
+        self.presentation.settings.window_frames_enabled
+            && !self.presentation.settings.terminal_zen_mode
+    }
+
+    /// Reports whether a conditional window-group frame is visible.
+    pub(crate) fn effective_group_frame_visible(&self) -> bool {
+        !self.presentation.settings.terminal_zen_mode && self.session.window_groups().len() > 1
     }
 
     /// Reports whether passive Mezzanine chrome is configured to be hidden.
@@ -2115,6 +2171,12 @@ impl RuntimeSessionService {
     /// Reports whether product pane frames are enabled.
     pub(crate) fn pane_frames_enabled(&self) -> bool {
         self.presentation.settings.pane_frames_enabled
+    }
+
+    /// Reports whether pane frame rows are visible after zen-mode policy.
+    pub(crate) fn effective_pane_frames_enabled(&self) -> bool {
+        self.presentation.settings.pane_frames_enabled
+            && !self.presentation.settings.terminal_zen_mode
     }
 
     /// Returns the configured pane frame template.
@@ -2513,6 +2575,19 @@ impl RuntimeSessionService {
 }
 
 impl RuntimeSessionService {
+    /// Returns the effective frame policy that can change pane content geometry.
+    pub(crate) fn effective_frame_geometry(
+        &self,
+    ) -> (
+        bool,
+        Option<TerminalFramePosition>,
+        Option<TerminalFramePosition>,
+    ) {
+        self.presentation
+            .settings
+            .effective_frame_geometry(self.session.window_groups().len() > 1)
+    }
+
     /// Returns the exact render identity currently owned by an attached primary.
     pub(crate) fn client_render_identity(
         &mut self,

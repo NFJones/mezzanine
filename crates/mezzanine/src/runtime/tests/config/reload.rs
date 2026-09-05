@@ -102,7 +102,11 @@ fn runtime_config_reload_applies_layered_zen_mode() {
         "[terminal]\nzen_mode = false\n[frames.window]\nenabled = true\n[frames.pane]\nenabled = true\n",
     )
     .unwrap();
-    fs::write(&project_path, "version = 85\n[terminal]\nzen_mode = true\n").unwrap();
+    fs::write(
+        &project_path,
+        "version = 85\n[terminal]\nzen_mode = false\n",
+    )
+    .unwrap();
     service
         .replace_config_layers(vec![
             ConfigLayer {
@@ -124,9 +128,29 @@ fn runtime_config_reload_applies_layered_zen_mode() {
         ])
         .unwrap();
 
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    assert!(!service.terminal_zen_mode());
+    assert!(service.window_frames_enabled());
+    assert!(service.pane_frames_enabled());
+    assert_eq!(
+        service.process_pane_screen("%1").unwrap().size(),
+        Size::new(100, 38).unwrap()
+    );
+
+    fs::write(&project_path, "version = 85\n[terminal]\nzen_mode = true\n").unwrap();
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"reload","method":"config/reload","params":{"idempotency_key":"reload-zen-mode"}}"#,
+        &primary,
+    );
+
+    assert!(response.contains(r#""operation":"reload""#), "{response}");
     assert!(service.terminal_zen_mode());
     assert!(service.window_frames_enabled());
     assert!(service.pane_frames_enabled());
+    assert_eq!(
+        service.process_pane_screen("%1").unwrap().size(),
+        Size::new(100, 40).unwrap()
+    );
 
     fs::write(
         &project_path,
@@ -134,14 +158,16 @@ fn runtime_config_reload_applies_layered_zen_mode() {
     )
     .unwrap();
     let response = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"reload","method":"config/reload","params":{"idempotency_key":"reload-zen-mode"}}"#,
+        r#"{"jsonrpc":"2.0","id":"restore","method":"config/reload","params":{"idempotency_key":"restore-zen-mode"}}"#,
         &primary,
     );
 
     assert!(response.contains(r#""operation":"reload""#), "{response}");
     assert!(!service.terminal_zen_mode());
-    assert!(service.window_frames_enabled());
-    assert!(service.pane_frames_enabled());
+    assert_eq!(
+        service.process_pane_screen("%1").unwrap().size(),
+        Size::new(100, 38).unwrap()
+    );
 
     fs::write(
         &project_path,
@@ -157,6 +183,11 @@ fn runtime_config_reload_applies_layered_zen_mode() {
     assert!(!service.terminal_zen_mode());
     assert!(service.window_frames_enabled());
     assert!(service.pane_frames_enabled());
+    assert_eq!(
+        service.process_pane_screen("%1").unwrap().size(),
+        Size::new(100, 38).unwrap()
+    );
+    service.terminate_all_pane_processes().unwrap();
     let _ = fs::remove_dir_all(root);
 }
 

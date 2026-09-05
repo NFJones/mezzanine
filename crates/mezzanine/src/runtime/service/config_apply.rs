@@ -370,6 +370,7 @@ impl RuntimeSessionService {
         affected: RuntimeConfigAffectedSubsystems,
     ) -> Result<RuntimeConfigApplyReport> {
         let mut presentation_invalidation = None;
+        let previous_frame_geometry = self.effective_frame_geometry();
         let prepared_presentation = if affected.presentation {
             let settings = RuntimePresentationSettings::from_config(&structured, &effective)?;
             let host_clipboard = runtime_host_clipboard_from_config(&structured)?;
@@ -419,6 +420,11 @@ impl RuntimeSessionService {
         if let Some((presentation_settings, host_clipboard)) = prepared_presentation {
             presentation_invalidation = self.presentation.apply_settings(presentation_settings);
             self.set_host_clipboard(host_clipboard);
+            if previous_frame_geometry != self.effective_frame_geometry() {
+                self.presentation.clear_mouse_resize_drag_state();
+                self.presentation.clear_stale_frame_coordinate_state();
+                self.sync_tracked_pty_sizes()?;
+            }
         }
         if affected.audit {
             let audit_log = if runtime_audit_config_present(&structured) {

@@ -114,12 +114,14 @@ pub fn draw_styled_window_from_screen_and_row_resolvers<'a>(
         &config.ui_theme,
         presentation_plan,
     )?;
-    if let Some(frame) = styled_group_frame_line(
-        &config.frame_context,
-        usize::from(window.size.columns),
-        config.window_frame_style,
-        &config.ui_theme,
-    ) {
+    if presentation_plan.group_frame_row.is_some()
+        && let Some(frame) = styled_group_frame_line(
+            &config.frame_context,
+            usize::from(window.size.columns),
+            config.window_frame_style,
+            &config.ui_theme,
+        )
+    {
         place_group_frame(&mut lines, frame, window.size.rows);
     }
     Ok(lines)

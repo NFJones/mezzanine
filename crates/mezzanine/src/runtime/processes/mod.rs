@@ -5465,8 +5465,8 @@ impl RuntimeSessionService {
             .panes()
             .iter()
             .find(|pane| pane.id.as_str() == pane_id)?;
-        let window_frame_visible = self.window_frames_enabled();
-        let group_rows = u16::from(self.session.window_groups().len() > 1);
+        let window_frame_visible = self.effective_window_frames_enabled();
+        let group_rows = u16::from(self.effective_group_frame_visible());
         let display_size = Size::new(
             window.size.columns,
             window.size.rows.saturating_sub(group_rows).max(1),
@@ -5484,7 +5484,7 @@ impl RuntimeSessionService {
             let content_size = pane_content_size_for_geometry(
                 &geometry,
                 std::slice::from_ref(&geometry),
-                self.pane_frames_enabled(),
+                self.effective_pane_frames_enabled(),
                 self.pane_frame_position(),
             );
             return Some(content_size);
@@ -5498,7 +5498,7 @@ impl RuntimeSessionService {
         let content_size = pane_content_size_for_geometry(
             geometry,
             &geometries,
-            self.pane_frames_enabled(),
+            self.effective_pane_frames_enabled(),
             self.pane_frame_position(),
         );
         Some(content_size)

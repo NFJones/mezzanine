@@ -593,6 +593,9 @@ impl RuntimeSessionService {
 
     /// Returns the client row used for transient primary error notices.
     fn primary_error_status_overlay_row(&self, view: &RenderedClientView) -> Option<usize> {
+        if self.presentation.settings.terminal_zen_mode {
+            return None;
+        }
         let rows = usize::from(view.authoritative_size.rows);
         if rows == 0 {
             return None;
@@ -689,10 +692,10 @@ impl RuntimeSessionService {
         window: &mez_mux::layout::Window,
     ) -> Option<std::sync::Arc<WindowPresentationPlan>> {
         let options = WindowPresentationOptions {
-            group_frame_visible: self.session.window_groups().len() > 1,
-            window_frame_visible: self.presentation.settings.window_frames_enabled,
+            group_frame_visible: self.effective_group_frame_visible(),
+            window_frame_visible: self.effective_window_frames_enabled(),
             window_frame_position: self.presentation.settings.window_frame_position,
-            pane_frames_visible: self.presentation.settings.pane_frames_enabled,
+            pane_frames_visible: self.effective_pane_frames_enabled(),
             pane_frame_position: self.presentation.settings.pane_frame_position,
         };
         let mut cache = self
@@ -897,7 +900,7 @@ impl RuntimeSessionService {
             .map(|(chord, binding)| (*chord, binding.command.clone()))
             .collect();
         config.prefix_key_pending = self.presentation.primary_prefix_key_pending;
-        config.window_frames_enabled = self.presentation.settings.window_frames_enabled;
+        config.window_frames_enabled = self.effective_window_frames_enabled();
         config.window_frame_template = self.presentation.settings.window_frame_template.clone();
         config.window_frame_position = self.presentation.settings.window_frame_position;
         config.window_frame_style = self.presentation.settings.window_frame_style;
@@ -906,7 +909,7 @@ impl RuntimeSessionService {
             .settings
             .window_frame_visible_fields
             .clone();
-        config.pane_frames_enabled = self.presentation.settings.pane_frames_enabled;
+        config.pane_frames_enabled = self.effective_pane_frames_enabled();
         config.pane_frame_template = self.presentation.settings.pane_frame_template.clone();
         config.pane_frame_position = self.presentation.settings.pane_frame_position;
         config.pane_frame_style = self.presentation.settings.pane_frame_style;
@@ -1098,7 +1101,7 @@ impl RuntimeSessionService {
         let Some(window) = self.session.active_window() else {
             return Vec::new();
         };
-        if !self.presentation.settings.window_frames_enabled {
+        if !self.effective_window_frames_enabled() {
             return Vec::new();
         }
         if self.presentation.settings.window_frame_template
@@ -1123,7 +1126,7 @@ impl RuntimeSessionService {
         let Some(window) = self.session.active_window() else {
             return Vec::new();
         };
-        if !self.presentation.settings.window_frames_enabled {
+        if !self.effective_window_frames_enabled() {
             return Vec::new();
         }
         if self
@@ -1169,7 +1172,7 @@ impl RuntimeSessionService {
         let Some(window) = self.session.active_window() else {
             return Vec::new();
         };
-        if !self.presentation.settings.pane_frames_enabled {
+        if !self.effective_pane_frames_enabled() {
             return Vec::new();
         }
         let Some(plan) = self.window_presentation_plan(window) else {
@@ -1210,6 +1213,7 @@ impl RuntimeSessionService {
     }
     /// Reports whether the active window currently needs agent animation.
     fn active_window_has_agent_animation(&self) -> bool {
+        let pane_frames_visible = self.effective_pane_frames_enabled();
         self.session
             .active_window()
             .into_iter()
@@ -1217,13 +1221,11 @@ impl RuntimeSessionService {
             .any(|pane| {
                 let pane_id = pane.id.as_str();
                 self.pane_has_live_agent_footer(pane_id)
-                    || self.pane_has_active_agent_frame_status(pane_id)
-                    || self
-                        .presentation
-                        .pane_harness_status(pane_id)
-                        .is_some_and(|status| {
-                            matches!(status.state.as_str(), "running" | "waiting")
-                        })
+                    || pane_frames_visible
+                        && (self.pane_has_active_agent_frame_status(pane_id)
+                            || self.presentation.pane_harness_status(pane_id).is_some_and(
+                                |status| matches!(status.state.as_str(), "running" | "waiting"),
+                            ))
             })
     }
 
@@ -1287,16 +1289,16 @@ impl RuntimeSessionService {
         if self.presentation.completion_attention_panes.is_empty() {
             return false;
         }
-        let pane_titles_visible = self.presentation.settings.pane_frames_enabled
+        let pane_titles_visible = self.effective_pane_frames_enabled()
             && self
                 .presentation
                 .settings
                 .pane_frame_template
                 .contains("#{pane.title}");
-        let window_titles_visible = self.presentation.settings.window_frames_enabled
+        let window_titles_visible = self.effective_window_frames_enabled()
             && self.presentation.settings.window_frame_template
                 == crate::host::terminal::DEFAULT_WINDOW_FRAME_TEMPLATE;
-        let group_titles_visible = self.session.window_groups().len() > 1;
+        let group_titles_visible = self.effective_group_frame_visible();
         let active_window_id = self
             .session
             .active_window()
@@ -1332,12 +1334,13 @@ impl RuntimeSessionService {
     }
     /// Builds right-status context only for fields the active template uses.
     fn runtime_window_status_context(&self) -> Option<TerminalWindowStatusContext> {
-        if self
-            .presentation
-            .settings
-            .window_frame_right_status_template
-            .trim()
-            .is_empty()
+        if !self.effective_window_frames_enabled()
+            || self
+                .presentation
+                .settings
+                .window_frame_right_status_template
+                .trim()
+                .is_empty()
         {
             return None;
         }
@@ -1414,16 +1417,16 @@ impl RuntimeSessionService {
             .session
             .active_group()
             .map(|group| group.id.to_string());
-        let pane_title_attention = self.presentation.settings.pane_frames_enabled
+        let pane_title_attention = self.effective_pane_frames_enabled()
             && self
                 .presentation
                 .settings
                 .pane_frame_template
                 .contains("#{pane.title}");
-        let window_title_attention = self.presentation.settings.window_frames_enabled
+        let window_title_attention = self.effective_window_frames_enabled()
             && self.presentation.settings.window_frame_template
                 == crate::host::terminal::DEFAULT_WINDOW_FRAME_TEMPLATE;
-        let group_title_attention = self.session.window_groups().len() > 1;
+        let group_title_attention = self.effective_group_frame_visible();
         let mut attention_panes = std::collections::BTreeSet::new();
         let mut attention_windows = std::collections::BTreeSet::new();
         let mut attention_groups = std::collections::BTreeSet::new();

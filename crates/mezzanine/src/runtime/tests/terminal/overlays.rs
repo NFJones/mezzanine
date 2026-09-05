@@ -181,6 +181,29 @@ fn runtime_iroh_status_slot_hides_while_primary_display_overlay_is_active() {
     );
 }
 
+/// Verifies zen mode removes the client-local Iroh pill slot.
+///
+/// Remote attach clients compose the connection pill from optional server
+/// metadata, so a zen transition must omit the slot rather than merely erase
+/// the server-rendered window frame text.
+#[test]
+fn runtime_zen_mode_omits_iroh_status_slot() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(40, 6).unwrap(), 120)
+        .unwrap();
+    service.set_terminal_zen_mode_for_tests(true);
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let view = service
+        .render_client_view(ClientViewRole::Primary, Size::new(40, 6).unwrap(), &config)
+        .unwrap()
+        .unwrap();
+
+    assert!(service.terminal_iroh_status_slot(&view, &config).is_none());
+}
+
 /// Verifies ordinary input that has no pager binding remains captured by the
 /// modal overlay instead of falling through to the active pane.
 #[test]
@@ -305,6 +328,41 @@ fn runtime_non_pager_command_feedback_stays_out_of_pane_log() {
             .normal_content_lines(),
         before
     );
+}
+
+/// Verifies zen mode does not recreate a status bar for transient feedback.
+///
+/// Feedback remains retained for explicit history and command surfaces, but
+/// rendering must preserve the reclaimed bottom content row instead of using
+/// the legacy no-window-frame fallback.
+#[test]
+fn runtime_zen_mode_does_not_overlay_transient_status_on_content() {
+    let mut service = test_runtime_service_with_size(Size::new(20, 4).unwrap());
+    let primary = service
+        .attach_primary("primary", true, Size::new(20, 4).unwrap(), 120)
+        .unwrap();
+    service.set_terminal_zen_mode_for_tests(true);
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+    screen.feed(b"one\r\ntwo\r\nthree\r\nbottom");
+    service.set_pane_screen("%1".to_string(), screen);
+    service
+        .execute_attached_display_command(&primary, "refresh-client")
+        .unwrap();
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let view = service
+        .render_client_view(ClientViewRole::Primary, Size::new(20, 4).unwrap(), &config)
+        .unwrap()
+        .unwrap();
+
+    assert!(service.primary_error_status_overlay().is_some());
+    assert!(
+        view.lines
+            .last()
+            .is_some_and(|line| line.contains("bottom"))
+    );
+    assert!(!view.lines.iter().any(|line| line.contains("refreshed")));
 }
 
 /// Verifies topology list commands open the command pager with rendered table
