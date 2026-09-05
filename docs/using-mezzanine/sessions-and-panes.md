@@ -29,6 +29,12 @@ Use `mez list` to find a session ID, then pass it to `mez attach <session-id>`
 when more than one resumable session is available. Omitting the ID uses the
 selected socket or the default attach-selection behavior.
 
+Inside a Mezzanine pane, local attachment to the containing parent session is
+rejected to prevent recursive rendering. This applies to bare `mez`, primary
+and observer attachment, and explicit session IDs or socket selectors pointing
+to the parent. Attach from an outside terminal or select a different session.
+Ordinary in-pane control commands such as `mez list` remain available.
+
 The `mezctl/2` runtime permits up to 16 attached primaries with independent
 group, window, and pane navigation, zoom, prompts, overlays, copy mode, mouse
 state, and viewport. One elected layout owner controls canonical pane geometry.

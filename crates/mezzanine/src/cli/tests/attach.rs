@@ -2,6 +2,132 @@
 
 use super::*;
 
+/// A pane must not attach a renderer to its own containing session, even when
+/// selection passes through the registry or an explicit socket alias. Reject
+/// before the attach handshake so neither primary nor observer initialization
+/// can mutate the parent or start a recursive terminal-output loop. Startup
+/// socket liveness probes may connect but must not send protocol requests.
+#[test]
+fn nested_attach_rejects_parent_session_before_connecting() {
+    let (mut env, home) = test_env("nested-attach-parent");
+    let directory = default_socket_directory(&env.runtime).unwrap();
+    let socket = directory.path.join("parent.sock");
+    let listener = bind_control_socket(&socket, env.runtime.uid).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    env.mez = Some(OsString::from(format!(
+        "{}{}session=$1",
+        socket.display(),
+        MEZ_ENV_FIELD_SEPARATOR
+    )));
+    SessionRegistry::new(directory.path.clone(), env.runtime.uid)
+        .upsert(SessionRecord {
+            record_version: 2,
+            control_version: 2,
+            session_id: "$1".to_string(),
+            name: "parent".to_string(),
+            state: RegistrySessionState::Detached,
+            socket_path: socket.clone(),
+            created_at_unix_seconds: 100,
+            last_attach_at_unix_seconds: None,
+            window_count: 1,
+            attached_client_count: 0,
+            attached_primary_count: 0,
+            max_attached_primaries: 16,
+            layout_owner_client_id: None,
+            accepts_primary: true,
+            authoritative_columns: 80,
+            authoritative_rows: 24,
+        })
+        .unwrap();
+    let alias = directory.path.join("alias.sock");
+    std::os::unix::fs::symlink(&socket, &alias).unwrap();
+    let explicit = socket.to_string_lossy().into_owned();
+    let alias = alias.to_string_lossy().into_owned();
+    for arguments in [
+        vec![],
+        vec!["attach"],
+        vec!["attach", "--observer"],
+        vec!["attach", "$1"],
+        vec!["-S", &explicit, "attach"],
+        vec!["-L", "parent.sock", "attach", "--observer"],
+        vec!["-S", &alias, "attach"],
+    ] {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let error = run_with(
+            std::iter::once("mez")
+                .chain(arguments.iter().copied())
+                .map(str::to_string)
+                .collect(),
+            env.clone(),
+            true,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+        assert!(error.message().contains("parent session"), "{error}");
+        assert!(stdout.is_empty());
+    }
+    loop {
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(1)))
+                    .unwrap();
+                assert_eq!(stream.read(&mut [0; 1]).unwrap(), 0);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) => panic!("{error}"),
+        }
+    }
+    let _ = fs::remove_dir_all(home);
+}
+
+/// Inherited pane identity must not ban nesting altogether: an explicit socket
+/// for a different session still completes primary initialization and returns
+/// session state. The inherited parent need not still have a live socket.
+#[test]
+fn nested_attach_allows_different_session() {
+    let (mut env, home) = test_env("nested-attach-other");
+    let socket = home.join("runtime/other.sock");
+    env.mez = Some(OsString::from(format!(
+        "{}{}session=$1",
+        home.join("parent.sock").display(),
+        MEZ_ENV_FIELD_SEPARATOR
+    )));
+    let listener = bind_control_socket(&socket, env.runtime.uid).unwrap();
+    let server = spawn_noninteractive_attach_stub_server(
+        listener,
+        Some(r#""method":"session/get""#),
+        r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"primary","client_id":"c1"}}"#,
+        Some(r#"{"jsonrpc":"2.0","id":"cli","result":{"session":{"session_id":"$2"}}}"#),
+    );
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "-S".to_string(),
+            socket.to_string_lossy().into_owned(),
+            "attach".to_string(),
+        ],
+        env,
+        true,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    server.join().unwrap();
+    assert!(
+        String::from_utf8(stdout)
+            .unwrap()
+            .contains(r#""session_id":"$2""#)
+    );
+    assert!(stderr.is_empty());
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Verifies parses socket selection before command.
 ///
 /// This regression scenario documents the behavior being protected so a

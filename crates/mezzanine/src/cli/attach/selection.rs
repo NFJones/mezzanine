@@ -1,4 +1,8 @@
 //! Session listing, attach argument resolution, and registry selection.
+//!
+//! Local render attachments must reject the inherited containing session before
+//! connecting, regardless of how its socket was selected. Non-rendering control
+//! commands retain their ordinary in-pane endpoint selection.
 
 use super::super::{ControlTargetSelection, open_persistent_iroh_control_channel};
 use super::observer::{
@@ -156,6 +160,7 @@ pub(in crate::cli) async fn run_attach<W: Write>(
         return run_result;
     }
     let socket_path = selected_socket_path(&request.socket_selection);
+    ensure_not_parent_session(socket_path, &env)?;
     let mut stream = UnixStream::connect(socket_path)?;
     let detach_primary_on_disconnect = request.requested_role == "primary";
     let initialize = format!(
@@ -213,6 +218,34 @@ pub(in crate::cli) async fn run_attach<W: Write>(
     }
     let (second_body, _) = decode_control_frame(&response[first_consumed..], 1024 * 1024)?;
     write_control_response(stdout, output_format, &second_body)?;
+    Ok(())
+}
+
+/// Rejects a local render attachment to the session containing the invoking pane.
+///
+/// Checks both path equality and filesystem identity so explicit selectors,
+/// registry resolution, symlinks, and hard links cannot bypass the guard. Missing
+/// socket metadata is left to the connection error path; malformed inherited
+/// endpoint information propagates the existing environment parser's error.
+fn ensure_not_parent_session(socket: &std::path::Path, env: &CliEnv) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    let Some(parent) = super::super::env::socket_selection_from_mez(env.mez.as_ref())? else {
+        return Ok(());
+    };
+    let parent = selected_socket_path(&parent);
+    let same_socket = socket == parent
+        || std::fs::metadata(socket)
+            .ok()
+            .zip(std::fs::metadata(parent).ok())
+            .is_some_and(|(target, parent)| {
+                target.dev() == parent.dev() && target.ino() == parent.ino()
+            });
+    if same_socket {
+        return Err(MezError::forbidden(
+            "cannot attach to the parent session from inside one of its panes; select a different session or attach from outside Mezzanine",
+        ));
+    }
     Ok(())
 }
 

@@ -604,6 +604,14 @@ MUST use `MEZ` to locate the current control endpoint. When `mez` is invoked
 outside a pane and no `-S` or `-L` flag is provided, it MUST use the default
 socket name and directory.
 
+A local CLI render attachment invoked inside a pane MUST reject its containing
+session before sending an attach handshake or initializing a primary or observer
+client. Socket liveness probes MAY still connect without sending requests. This
+restriction MUST apply to bare `mez`, explicit attach commands, registry session
+targets, and explicit socket selectors, including filesystem aliases of the
+inherited `MEZ` socket. Attachments to other sessions and non-rendering in-pane
+control commands MUST remain available.
+
 The CLI MUST support long-form aliases for common session operations, including
 `new-session`, `attach-session`, `list-sessions`, `kill-session`, and
 `detach-client`, in addition to any shorter aliases.
