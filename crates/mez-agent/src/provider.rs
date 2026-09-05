@@ -403,11 +403,15 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 /// Builds a stable, non-secret OpenAI prompt-cache routing key.
 ///
-/// The key intentionally includes provider compatibility identity and prompt
-/// lineage while excluding the model and rendered prompt text. This keeps
-/// related requests in one provider cache namespace without making the key a
-/// substitute for the provider's exact-prefix matching.
-pub fn openai_prompt_cache_key(provider: &str, lineage_id: Option<&str>) -> String {
+/// The key includes provider compatibility identity, prompt lineage, and session
+/// identity while excluding the model and rendered prompt text. Forks retain
+/// their lineage but use independent routing keys. Missing metadata uses stable
+/// unknown components; the key does not replace provider exact-prefix matching.
+pub fn openai_prompt_cache_key(
+    provider: &str,
+    lineage_id: Option<&str>,
+    session_id: Option<&str>,
+) -> String {
     let mut material = String::new();
     material.push_str("mezzanine\n");
     material.push_str("prompt_profile=");
@@ -422,7 +426,10 @@ pub fn openai_prompt_cache_key(provider: &str, lineage_id: Option<&str>) -> Stri
     material.push_str("lineage_id=");
     material.push_str(lineage_id.unwrap_or("lineage-unknown"));
     material.push('\n');
-    material.push_str("cache_family=responses-routing-v4\n");
+    material.push_str("session_id=");
+    material.push_str(session_id.unwrap_or("session-unknown"));
+    material.push('\n');
+    material.push_str("cache_family=responses-routing-v5\n");
     let digest = sha2::Sha256::digest(material.as_bytes());
     let digest_hex = digest
         .iter()
@@ -1205,18 +1212,23 @@ mod request_assembly_tests {
         assert_eq!(MAAP_ACTION_BATCH_TOOL_NAME, "submit_maap_action_batch");
     }
 
-    /// OpenAI prompt-cache routing keys follow provider and lineage identity
-    /// while deliberately ignoring model identity and rendered prompt text.
+    /// OpenAI routing keys isolate fork sessions even with inherited lineage,
+    /// remain stable for the same session, and handle absent metadata without
+    /// generating per-request identities. Model and prompt text are not inputs.
     #[test]
     fn openai_prompt_cache_keys_use_provider_and_lineage_namespace() {
-        let inherited = openai_prompt_cache_key("openai", Some("lineage-parent"));
-        let resumed = openai_prompt_cache_key("openai", Some("lineage-parent"));
-        let fresh = openai_prompt_cache_key("openai", Some("lineage-fresh"));
-        let compatible_provider = openai_prompt_cache_key("deepseek", Some("lineage-parent"));
-        let unknown_a = openai_prompt_cache_key("openai", None);
-        let unknown_b = openai_prompt_cache_key("openai", None);
+        let inherited =
+            openai_prompt_cache_key("openai", Some("lineage-parent"), Some("session-a"));
+        let resumed = openai_prompt_cache_key("openai", Some("lineage-parent"), Some("session-a"));
+        let forked = openai_prompt_cache_key("openai", Some("lineage-parent"), Some("session-b"));
+        let fresh = openai_prompt_cache_key("openai", Some("lineage-fresh"), Some("session-a"));
+        let compatible_provider =
+            openai_prompt_cache_key("deepseek", Some("lineage-parent"), Some("session-a"));
+        let unknown_a = openai_prompt_cache_key("openai", None, None);
+        let unknown_b = openai_prompt_cache_key("openai", None, None);
 
         assert_eq!(inherited, resumed);
+        assert_ne!(inherited, forked);
         assert_ne!(inherited, fresh);
         assert_ne!(inherited, compatible_provider);
         assert_eq!(unknown_a, unknown_b);

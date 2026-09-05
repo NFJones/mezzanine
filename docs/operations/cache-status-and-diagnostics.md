@@ -64,6 +64,16 @@ current compaction epoch; live registry validation remains required. An
 unchanged directory must not increase the snapshot count or create an
 MCP-caused provider-prefix divergence.
 
+OpenAI prompt-cache routing keys include the agent session UUID in addition to
+prompt profile/version, provider, lineage, and cache-family identity. Forked
+sessions and forked subagents retain their parent's lineage but receive distinct
+routing keys. Requests within the same session retain their key when those
+inputs are unchanged; changing only the model does not change the key. Missing
+session or lineage metadata uses stable unknown components. Session isolation
+does not guarantee cache hits or provider eviction/billing isolation, and can
+reduce reuse of a parent's cached prefix. Existing keys change once on upgrade
+to the session-scoped `responses-routing-v5` family.
+
 Changes to the model, provider routing namespace, prompt-cache lineage, stream
 shape, compaction epoch, or an explicitly exceptional interaction start a new
 cache epoch. Other changes to cache-affecting instructions, tools, tool choice,

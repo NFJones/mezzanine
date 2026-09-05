@@ -4598,9 +4598,13 @@ API-key requests. These options MUST NOT be sent to ChatGPT browser/device
 credential backends.
 OpenAI Responses requests SHOULD include a stable, non-secret
 `prompt_cache_key` derived from Mezzanine's prompt profile, provider, lineage,
-and cache-family identity, not the exact selected model. When no stable lineage id is available, the key
-MUST use a stable unknown-lineage component rather than the live runtime session
-UUID. The key SHOULD NOT vary only because the interaction kind, exposed action
+agent session UUID, and cache-family identity, not the exact selected model.
+Forked sessions and forked subagents MUST retain inherited lineage but use
+distinct routing keys through their independent session UUIDs. Requests within
+the same session MUST retain the same key when the other namespace inputs are
+unchanged. Missing lineage or session metadata MUST use stable unknown-lineage
+or unknown-session components respectively, not per-request random values.
+The key SHOULD NOT vary only because the interaction kind, exposed action
 surface, MCP tool catalog, or current user prompt changed;
 the provider's exact prompt-prefix hashing provides the correctness boundary
 for those differences, and over-fragmenting the routing key reduces cache hit

@@ -898,10 +898,10 @@ fn openai_prompt_cache_diagnostics_ignore_prompt_cache_retention_option() {
 }
 
 #[test]
-/// Verifies OpenAI prompt-cache routing keys include lineage and provider identity.
+/// Verifies OpenAI prompt-cache routing keys include session, lineage, and provider identity.
 ///
-/// The local routing namespace should follow explicit lineage ids and survive
-/// resume-like session-id changes when provider and lineage stay the same.
+/// Forks sharing explicit lineage ids must have separate routing namespaces
+/// when their session ids differ, while requests within one session stay stable.
 /// Same-provider OpenAI model switches should reuse one routing key so
 /// auto-sizing does not fragment provider prompt-cache affinity, while different
 /// provider compatibility targets must not share one routing key.
@@ -1004,7 +1004,7 @@ fn openai_prompt_cache_key_uses_lineage_provider_and_model_namespace() {
         inherited_lineage_value["prompt_cache_key"],
         inherited_lineage_other_provider_value["prompt_cache_key"]
     );
-    assert_eq!(
+    assert_ne!(
         inherited_lineage_value["prompt_cache_key"],
         resumed_session_value["prompt_cache_key"]
     );
@@ -1012,7 +1012,7 @@ fn openai_prompt_cache_key_uses_lineage_provider_and_model_namespace() {
         inherited_lineage_value["prompt_cache_key"],
         fresh_lineage_value["prompt_cache_key"]
     );
-    assert_eq!(
+    assert_ne!(
         fallback_a_value["prompt_cache_key"],
         fallback_b_value["prompt_cache_key"]
     );
@@ -1130,10 +1130,10 @@ fn openai_prompt_cache_key_uses_stable_namespace_not_rendered_prefix_hash() {
 }
 
 #[test]
-/// Verifies OpenAI prompt-cache routing keys do not use live session fallback.
+/// Verifies OpenAI prompt-cache routing keys isolate sessions without lineage.
 ///
-/// When no explicit lineage id is present, the key should use the stable unknown
-/// lineage namespace plus provider identity instead of volatile session ids.
+/// When no explicit lineage id is present, the stable unknown-lineage component
+/// must not erase the independent session and provider namespace components.
 fn openai_prompt_cache_key_uses_unknown_lineage_without_session_identity() {
     let context_for_session = |session_id: &str| {
         AgentContext::new(vec![ContextBlock {
@@ -1188,7 +1188,7 @@ fn openai_prompt_cache_key_uses_unknown_lineage_without_session_identity() {
         session_a_value["prompt_cache_key"],
         session_a_other_value["prompt_cache_key"]
     );
-    assert_eq!(
+    assert_ne!(
         session_a_value["prompt_cache_key"],
         session_b_value["prompt_cache_key"]
     );

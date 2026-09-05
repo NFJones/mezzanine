@@ -245,6 +245,7 @@ pub(super) fn openai_prompt_cache_key(request: &ModelRequest) -> String {
     provider_prompt_cache_key(
         &request.provider,
         request.prompt_cache_lineage_id.as_deref(),
+        request.prompt_cache_session_id.as_deref(),
     )
 }
 
