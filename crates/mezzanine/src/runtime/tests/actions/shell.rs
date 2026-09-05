@@ -2063,6 +2063,18 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
 /// mutation strategy after seeing the timeout diagnostic.
 #[test]
 fn runtime_shell_action_timeout_queues_model_self_correction() {
+    assert_shell_timeout_queues_model_self_correction(false);
+}
+
+/// Native shell timeout evidence must queue a model continuation rather than
+/// terminate the workflow or automatically replay the timed-out command.
+#[test]
+fn runtime_native_shell_timeout_queues_model_self_correction() {
+    assert_shell_timeout_queues_model_self_correction(true);
+}
+
+/// Exercises the common timeout settlement boundary for both shell payloads.
+fn assert_shell_timeout_queues_model_self_correction(native: bool) {
     let mut service = test_runtime_service();
     service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -2088,9 +2100,19 @@ fn runtime_shell_action_timeout_queues_model_self_correction() {
     let action = mez_agent::AgentAction {
         id: "patch-timeout".to_string(),
         rationale: "write a file through the pane shell".to_string(),
-        payload: mez_agent::AgentActionPayload::ApplyPatch {
-            patch: "*** Begin Patch\n*** Add File: note.txt\n+hello\n*** End Patch".to_string(),
-            strip: None,
+        payload: if native {
+            mez_agent::AgentActionPayload::ShellCommand {
+                summary: "Run bounded inspection".to_string(),
+                command: "sleep 30".to_string(),
+                interactive: false,
+                stateful: false,
+                timeout_ms: Some(30000),
+            }
+        } else {
+            mez_agent::AgentActionPayload::ApplyPatch {
+                patch: "*** Begin Patch\n*** Add File: note.txt\n+hello\n*** End Patch".to_string(),
+                strip: None,
+            }
         },
     };
     let timed_out = mez_agent::ActionResult::failed(
@@ -2148,9 +2170,11 @@ fn runtime_shell_action_timeout_queues_model_self_correction() {
     let context = runtime_prepared_context_for_turn(&service, &turn.turn_id);
     assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
-            && block
-                .content
-                .contains("[action_result patch-timeout apply_patch timed_out]")
+            && block.content.contains(if native {
+                "[action_result patch-timeout shell_command timed_out]"
+            } else {
+                "[action_result patch-timeout apply_patch timed_out]"
+            })
             && block
                 .content
                 .contains("shell command timed out after 30000 ms")

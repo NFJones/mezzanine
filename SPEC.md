@@ -5741,7 +5741,12 @@ values MUST inherit the remaining turn-wide timeout budget in pane mode; native
 `shell_command` actions instead use the snapshotted
 `agents.native_shell_timeout_ms` default. The effective shell-action timeout
 MUST be bounded by the remaining turn-wide timeout budget, so no shell action
-can outlive its enclosing turn. Expired turns MUST be
+can outlive its enclosing turn. Settled `shell_command` timeout results with
+`shell_timeout` MUST be eligible for bounded model correction under
+`agents.action_failure_retry_limit`, retaining their command and timeout evidence.
+Correction MUST request a new model decision, never automatically replay the
+command; user interruption, cancellation, and policy denials remain excluded.
+Expired turns MUST be
 rejected before provider or shell dispatch rather than represented as a
 minimum-duration shell transaction. Non-stateful shell
 transactions that wait for a deferred command payload receiver MUST also use a

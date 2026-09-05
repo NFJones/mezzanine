@@ -495,7 +495,8 @@ pub fn runtime_action_result_is_feedback_candidate(result: &ActionResult) -> boo
         return false;
     }
     if result.status == ActionStatus::TimedOut {
-        return runtime_action_type_is_model_correctable(result.action_type)
+        return (runtime_action_type_is_model_correctable(result.action_type)
+            || (result.action_type == "shell_command" && error.code == "shell_timeout"))
             && !runtime_error_code_is_non_correctable(error.code.as_str());
     }
     if result.action_type == "spawn_agent"
@@ -1497,6 +1498,26 @@ mod tests {
         )
         .unwrap();
         assert!(runtime_action_result_is_feedback_candidate(&result));
+    }
+
+    /// Shell timeouts permit bounded model correction, but cancellation and
+    /// policy denials must never become retries merely because of their type.
+    #[test]
+    fn shell_timeout_is_model_correctable_without_retrying_denials() {
+        for (status, code, expected) in [
+            (ActionStatus::TimedOut, "shell_timeout", true),
+            (ActionStatus::TimedOut, "forbidden", false),
+            (ActionStatus::Interrupted, "shell_interrupted", false),
+            (ActionStatus::Failed, "shell_failed", false),
+        ] {
+            let result =
+                ActionResult::failed(&turn(), &shell_action(), status, code, "test").unwrap();
+            assert_eq!(
+                runtime_action_result_is_feedback_candidate(&result),
+                expected,
+                "{code}"
+            );
+        }
     }
 
     /// Verifies only structured issue dependency validation failures enter
