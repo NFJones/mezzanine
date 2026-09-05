@@ -402,6 +402,108 @@ fn runtime_pane_settings_targets_stable_pane_without_retargeting_focus() {
     assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
 }
 
+/// Verifies blocked pane-provider inspection remains available in zen mode,
+/// exposes only sanitized state, and does not reconcile or schedule work.
+#[test]
+fn runtime_pane_settings_provider_inspection_is_zen_safe_and_side_effect_free() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "blocked-provider-inspection".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[frames.pane]\nright_status = \"#{pill.branch}\"\n[frames.pane.pills.branch]\ncommand = \"printf TOP_SECRET_PROVIDER_OUTPUT\"\ncwd = \"pane\"\nwhen = []\n"
+                .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.reconcile_pane_status_providers();
+    assert!(service.prepare_pane_status_provider_refreshes(1).is_empty());
+    service
+        .execute_terminal_command(&primary, "zen on")
+        .unwrap();
+
+    let output = service
+        .execute_terminal_command(&primary, "pane-settings --providers -t %1")
+        .unwrap();
+    let output: serde_json::Value = serde_json::from_str(&output).unwrap();
+    let body = output["outcomes"][0]["body"].as_str().unwrap();
+
+    assert!(body.contains("provider=branch"), "{body}");
+    assert!(body.contains("state=blocked"), "{body}");
+    assert!(body.contains("reason="), "{body}");
+    assert!(!body.contains("TOP_SECRET_PROVIDER_OUTPUT"), "{body}");
+    assert!(service.terminal_zen_mode());
+    assert!(service.prepare_pane_status_provider_refreshes(1).is_empty());
+}
+
+/// Verifies explicit retry is primary-authorized, clears only a matching
+/// current block, and then encounters the unchanged admission decision again.
+#[test]
+fn runtime_pane_settings_retry_provider_preserves_authority_and_rejects_stale_state() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "blocked-provider-retry".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[frames.pane]\nright_status = \"#{pill.branch}\"\n[frames.pane.pills.branch]\ncommand = \"printf ready\"\ncwd = \"pane\"\nwhen = []\n"
+                .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.reconcile_pane_status_providers();
+    assert!(service.prepare_pane_status_provider_refreshes(1).is_empty());
+    let observer = service
+        .session
+        .attach_observer_with_terminal("observer", None, 121)
+        .unwrap();
+
+    let forbidden = service
+        .execute_terminal_command(&observer, "pane-settings --retry-provider branch -t %1")
+        .unwrap_err();
+    assert_eq!(forbidden.kind(), crate::error::MezErrorKind::Forbidden);
+
+    let output = service
+        .execute_terminal_command(&primary, "pane-settings --retry-provider branch -t %1")
+        .unwrap();
+    let output: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(output["outcomes"][0]["kind"], "mutated");
+
+    let duplicate = service
+        .execute_terminal_command(&primary, "pane-settings --retry-provider branch -t %1")
+        .unwrap_err();
+    assert_eq!(duplicate.kind(), crate::error::MezErrorKind::Conflict);
+    assert!(service.prepare_pane_status_provider_refreshes(1).is_empty());
+    let blocked_again = service
+        .execute_terminal_command(&primary, "pane-settings --providers -t %1")
+        .unwrap();
+    assert!(blocked_again.contains("state=blocked"), "{blocked_again}");
+
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "provider-removed".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[frames.pane]\nright_status = \"\"\n".to_string(),
+        }])
+        .unwrap();
+    let stale = service
+        .execute_terminal_command(&primary, "pane-settings --retry-provider branch -t %1")
+        .unwrap_err();
+    assert_eq!(stale.kind(), crate::error::MezErrorKind::Conflict);
+}
+
 /// Verifies keyboard selection from `pane-settings` executes the same typed
 /// pane-owned action as a mouse hit without moving focus to the target pane.
 /// The stored occurrence identity must survive only while its configuration
@@ -948,8 +1050,8 @@ fn runtime_pane_settings_opens_overflowed_dropdown_without_visible_hit_cells() {
     );
 }
 
-/// Verifies `pane-settings` accepts only an optional exact `-t` target so
-/// unsupported flags or extra arguments cannot be reinterpreted as pane IDs.
+/// Verifies `pane-settings` accepts only its documented selector, provider
+/// inspection, and provider retry forms so malformed options stay inert.
 #[test]
 fn runtime_pane_settings_rejects_noncanonical_arguments() {
     let mut service = test_runtime_service();
@@ -962,6 +1064,11 @@ fn runtime_pane_settings_rejects_noncanonical_arguments() {
         "pane-settings --target %1",
         "pane-settings -t",
         "pane-settings -t %1 extra",
+        "pane-settings --providers extra",
+        "pane-settings --providers -t",
+        "pane-settings --retry-provider",
+        "pane-settings --retry-provider branch extra",
+        "pane-settings --retry-provider branch -t",
     ] {
         let error = service
             .execute_terminal_command(&primary, input)
@@ -971,7 +1078,11 @@ fn runtime_pane_settings_rejects_noncanonical_arguments() {
             crate::error::MezErrorKind::InvalidArgs,
             "{input}"
         );
-        assert_eq!(error.message(), "usage: pane-settings [-t pane]", "{input}");
+        assert_eq!(
+            error.message(),
+            "usage: pane-settings [--providers | --retry-provider NAME] [-t pane]",
+            "{input}"
+        );
         assert!(service.pane_agent_status_selector().is_none(), "{input}");
     }
 }

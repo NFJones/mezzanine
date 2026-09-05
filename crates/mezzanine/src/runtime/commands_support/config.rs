@@ -9,10 +9,10 @@
 use super::super::{
     CommandInvocation, ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation,
     ConfigMutationValue, ConfigPaths, ConfigScope, EventKind, MezError, PathBuf, Result,
-    RuntimeSessionService, RuntimeSideEffect, UiThemeDefinition, Value,
-    builtin_ui_theme_definition, compose_effective_config, fs, json_escape, persist_config_text,
-    plan_config_mutation, resolve_ui_theme, runtime_config_apply_event_payload,
-    runtime_effective_config_value, validate_config_text,
+    RuntimeConfigAffectedSubsystems, RuntimeSessionService, RuntimeSideEffect, UiThemeDefinition,
+    Value, builtin_ui_theme_definition, compose_effective_config, fs, json_escape,
+    persist_config_text, plan_config_mutation, resolve_ui_theme,
+    runtime_config_apply_event_payload, runtime_effective_config_value, validate_config_text,
 };
 use super::{
     TERMINAL_COMMAND_LIVE_OVERRIDE_LAYER, binding_config_key, key_chord_notation,
@@ -349,8 +349,12 @@ pub(crate) fn runtime_zen_command(
     if !plan.changed {
         return Ok(false);
     }
+    let previous_structured = runtime_effective_config_value(service.integration.config_layers())?;
     runtime_store_live_override_plan(service, &plan.text);
-    let report = service.apply_runtime_config_layers()?;
+    let effective = compose_effective_config(service.integration.config_layers())?;
+    let structured = runtime_effective_config_value(service.integration.config_layers())?;
+    let affected = RuntimeConfigAffectedSubsystems::between(&previous_structured, &structured);
+    let report = service.apply_prepared_runtime_config(effective, structured, affected)?;
     service.append_lifecycle_event(
         EventKind::ConfigChanged,
         runtime_config_apply_event_payload("terminal/command:zen", &report),

@@ -684,6 +684,40 @@ struct RuntimePaneStatusProviderState {
     last_used_sequence: u64,
 }
 
+/// Secret-safe diagnostic for one currently blocked pane provider.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimePaneStatusProviderBlockedState {
+    /// Configured provider name, which is already constrained by the pane-pill schema.
+    pub(crate) name: String,
+    /// Finite product-owned reason code; internal admission text is never retained here.
+    pub(crate) reason: &'static str,
+}
+
+/// Maps internal admission failures onto a finite, secret-safe operator vocabulary.
+fn pane_status_provider_blocked_reason(reason: &str) -> &'static str {
+    if reason.contains("requires explicit approval") {
+        "approval-required"
+    } else if reason.contains("denied by permission policy") {
+        "permission-denied"
+    } else if reason.contains("source provenance") || reason.contains("source layer is not trusted")
+    {
+        "untrusted-source"
+    } else if reason.contains("configuration changed") || reason.contains("definition changed") {
+        "configuration-changed"
+    } else if reason.contains("pane owner is unavailable") {
+        "owner-unavailable"
+    } else if reason.contains("pane context")
+        || reason.contains("working directory")
+        || reason.contains("path authority")
+    {
+        "context-unavailable"
+    } else if reason.contains("sandbox admission failed") {
+        "sandbox-unavailable"
+    } else {
+        "unavailable"
+    }
+}
+
 /// Actor-owned pane-provider cache and fair bounded scheduler.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct RuntimePaneStatusProviderCache {
@@ -883,6 +917,55 @@ impl RuntimePaneStatusProviderCache {
             .collect()
     }
 
+    /// Returns one sanitized block only when the supplied exact context is current in the cache.
+    fn blocked_provider_state(
+        &self,
+        key: &RuntimePaneStatusProviderKey,
+    ) -> Option<RuntimePaneStatusProviderBlockedState> {
+        let state = self.states.get(key)?;
+        let reason = state.blocked_reason.as_deref()?;
+        Some(RuntimePaneStatusProviderBlockedState {
+            name: key.name.clone(),
+            reason: pane_status_provider_blocked_reason(reason),
+        })
+    }
+
+    /// Returns one sanitized block matching the current provider and pane context.
+    ///
+    /// Inspection deliberately ignores only the cache key's session-wide configuration
+    /// generation so an unrelated zen-mode override cannot hide a retained block.
+    fn blocked_provider_state_for_context(
+        &self,
+        key: &RuntimePaneStatusProviderKey,
+        definition: &PaneStatusProviderDefinition,
+    ) -> Option<RuntimePaneStatusProviderBlockedState> {
+        self.states
+            .iter()
+            .rev()
+            .find(|(candidate, state)| {
+                candidate.surface == key.surface
+                    && candidate.pane_id == key.pane_id
+                    && candidate.name == key.name
+                    && candidate.cwd == key.cwd
+                    && candidate.context_generation == key.context_generation
+                    && state.definition.as_ref() == Some(definition)
+                    && state.blocked_reason.is_some()
+            })
+            .and_then(|(candidate, _)| self.blocked_provider_state(candidate))
+    }
+
+    /// Clears only an exact current block and marks that context due for normal admission.
+    fn retry_blocked_provider(&mut self, key: &RuntimePaneStatusProviderKey) -> bool {
+        let Some(state) = self.states.get_mut(key) else {
+            return false;
+        };
+        if state.blocked_reason.take().is_none() {
+            return false;
+        }
+        state.next_refresh_at_ms = 0;
+        true
+    }
+
     /// Applies only the exact current pane/config/context completion.
     pub(super) fn apply_event(&mut self, event: RuntimePaneStatusProviderEvent) -> Option<bool> {
         let state = self.states.get_mut(&event.key)?;
@@ -962,6 +1045,86 @@ impl crate::runtime::RuntimeSessionService {
             .pane_status_provider_cache
             .borrow_mut()
             .suspend_all();
+    }
+
+    /// Derives the exact current cache identity for one configured pane provider.
+    ///
+    /// This lookup reads existing runtime and configuration state only. It does not
+    /// reconcile providers, perform admission, or enqueue external work.
+    fn current_pane_status_provider_key(
+        &self,
+        pane_id: &str,
+        name: &str,
+    ) -> Option<RuntimePaneStatusProviderKey> {
+        self.find_pane_descriptor(pane_id)?;
+        self.presentation
+            .settings
+            .pane_status
+            .pills
+            .get(name)?
+            .provider
+            .as_ref()?;
+        let cwd = self
+            .pane_current_working_directory(pane_id)
+            .map(|cwd| cwd.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "<unavailable>".to_string());
+        let context_generation = pane_provider_context_generation(
+            pane_id,
+            &cwd,
+            self.primary_pid_for_live_pane_process(pane_id),
+            self.pane_environment_signature(pane_id)
+                .map(mez_agent::EnvironmentSignature::stable_hash)
+                .as_deref(),
+        );
+        Some(RuntimePaneStatusProviderKey {
+            surface: RuntimeStatusPillSurface::Pane,
+            pane_id: pane_id.to_string(),
+            name: name.to_string(),
+            cwd,
+            config_generation: self.session.config_generation,
+            context_generation,
+        })
+    }
+
+    /// Returns current secret-safe blocks for one pane without scheduling providers.
+    pub(crate) fn pane_status_provider_blocked_states(
+        &self,
+        pane_id: &str,
+    ) -> Vec<RuntimePaneStatusProviderBlockedState> {
+        let providers = self
+            .presentation
+            .settings
+            .pane_status
+            .pills
+            .iter()
+            .filter_map(|(name, definition)| {
+                definition
+                    .provider
+                    .as_ref()
+                    .map(|provider| (name.clone(), provider.clone()))
+            })
+            .collect::<Vec<_>>();
+        let cache = self.presentation.pane_status_provider_cache.borrow();
+        providers
+            .iter()
+            .filter_map(|(name, provider)| {
+                self.current_pane_status_provider_key(pane_id, name)
+                    .and_then(|key| cache.blocked_provider_state_for_context(&key, provider))
+            })
+            .collect()
+    }
+
+    /// Clears one exact current block and marks it due for ordinary admission.
+    ///
+    /// Retry changes no trust, approval, permission, or sandbox state.
+    pub(crate) fn retry_pane_status_provider(&self, pane_id: &str, name: &str) -> bool {
+        let Some(key) = self.current_pane_status_provider_key(pane_id, name) else {
+            return false;
+        };
+        self.presentation
+            .pane_status_provider_cache
+            .borrow_mut()
+            .retry_blocked_provider(&key)
     }
 
     /// Reconciles pane-provider work for every window currently presented by an attached client.
@@ -1750,6 +1913,73 @@ mod tests {
             cache
                 .states
                 .get(&key)
+                .and_then(|state| state.blocked_reason.as_deref()),
+            Some("provider command requires explicit approval")
+        );
+    }
+
+    /// Verifies blocked-provider inspection exposes only a finite reason code,
+    /// never the internal admission diagnostic that may contain sensitive data.
+    #[test]
+    fn pane_provider_cache_inspection_sanitizes_blocked_reason() {
+        let key = pane_provider_key("%1", "branch", "/secret/workspace");
+        let request = pane_provider_request(key.clone(), pane_provider_definition(None));
+        let mut cache = RuntimePaneStatusProviderCache::default();
+        cache.reconcile(vec![request]);
+        let preparation = cache.claim_due_preparations(1).remove(0);
+        assert!(
+            cache
+                .complete_preparation(
+                    preparation,
+                    Err("sandbox admission failed: private path /secret/workspace".to_string()),
+                )
+                .is_none()
+        );
+
+        let blocked = cache
+            .blocked_provider_state_for_context(&key, &pane_provider_definition(None))
+            .expect("current blocked provider should remain inspectable");
+
+        assert_eq!(blocked.name, "branch");
+        assert_eq!(blocked.reason, "sandbox-unavailable");
+        assert!(!format!("{blocked:?}").contains("/secret/workspace"));
+    }
+
+    /// Verifies retry clears only the exact current blocked provider and marks
+    /// it due without changing sibling blocks or granting execution authority.
+    #[test]
+    fn pane_provider_cache_retry_requires_exact_blocked_key_and_marks_only_it_due() {
+        let first_key = pane_provider_key("%1", "branch", "/workspace/one");
+        let second_key = pane_provider_key("%1", "clock", "/workspace/one");
+        let stale_key = pane_provider_key("%1", "branch", "/workspace/stale");
+        let definition = pane_provider_definition(None);
+        let mut cache = RuntimePaneStatusProviderCache::default();
+        cache.reconcile(vec![
+            pane_provider_request(first_key.clone(), definition.clone()),
+            pane_provider_request(second_key.clone(), definition.clone()),
+        ]);
+        for preparation in cache.claim_due_preparations(2) {
+            assert!(
+                cache
+                    .complete_preparation(
+                        preparation,
+                        Err("provider command requires explicit approval".to_string()),
+                    )
+                    .is_none()
+            );
+        }
+
+        assert!(!cache.retry_blocked_provider(&stale_key));
+        assert!(cache.retry_blocked_provider(&first_key));
+        assert!(!cache.retry_blocked_provider(&first_key));
+        let due = cache.claim_due_preparations(2);
+
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].key, first_key);
+        assert_eq!(
+            cache
+                .states
+                .get(&second_key)
                 .and_then(|state| state.blocked_reason.as_deref()),
             Some("provider command requires explicit approval")
         );

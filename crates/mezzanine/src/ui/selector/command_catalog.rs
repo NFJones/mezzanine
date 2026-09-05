@@ -278,6 +278,9 @@ pub(super) fn mezzanine_argument_candidates(command: &str) -> Vec<SelectorCandid
             ]));
             candidates.extend(value_candidates(&["rendered", "source"]));
         }
+        "pane-settings" => {
+            candidates.extend(flag_candidates(&["--providers", "--retry-provider"]));
+        }
         "paste-buffer" | "create-buffer" | "delete-buffer" | "save-buffer" | "choose-buffer" => {
             candidates.extend(flag_candidates(&[
                 "-b",

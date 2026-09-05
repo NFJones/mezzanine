@@ -3883,6 +3883,20 @@ output MUST remain plain normalized display text and MUST never become template,
 style, or action syntax. The existing window-status command runner and behavior
 MUST remain separate and unchanged.
 
+`pane-settings --providers [-t pane]` MUST inspect only already-retained blocked
+provider state for the active or requested pane. Inspection MUST remain usable in
+zen mode and MUST NOT reconcile, claim, schedule, admit, or execute providers.
+It MUST expose only the schema-constrained provider name and a finite
+product-owned reason code; command text, command output, environment values,
+source paths, working directories, and raw admission diagnostics MUST NOT be
+included. `pane-settings --retry-provider NAME [-t pane]` MUST require an
+attached primary, a live pane owner, and an exact current blocked provider
+identity. Retry MUST only clear that matching block and mark it due for ordinary
+admission; it MUST NOT create an approval, alter permission or trust state,
+bypass policy, weaken sandboxing, or execute the provider inline. Observers,
+closed owners, stale definitions, stale pane contexts, missing names, and
+providers that are not currently blocked MUST be rejected.
+
 `frames.pane.visible_fields` MUST remain only the fallback used to construct
 the pane title template when `frames.pane.template` is empty. It MUST NOT
 filter or reorder either pane status rail. Pane status rail changes MUST apply

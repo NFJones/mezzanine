@@ -824,7 +824,10 @@ fn selector_shadow_hint_hides_placeholder_after_param_input() {
         "pane-settings ".len(),
     )
     .unwrap();
-    assert_eq!(pane_settings_placeholder.text, " [-t target-pane]");
+    assert_eq!(
+        pane_settings_placeholder.text,
+        " [--providers | --retry-provider NAME] [-t target-pane]"
+    );
 
     let preset_placeholder = shadow_hint(
         SelectorSurface::MezzanineCommand,
@@ -1017,6 +1020,25 @@ fn selector_shadow_hint_completes_status_extended_flag() {
     assert_eq!(hint.insert_at, "/status --e".len());
     assert_eq!(hint.text, "xtended");
     assert_eq!(hint.kind, SelectorCandidateKind::Flag);
+}
+
+/// Verifies pane-settings completion advertises the read-only provider view
+/// and explicit retry operation without suggesting a broader status surface.
+#[test]
+fn selector_shadow_hint_completes_pane_settings_provider_operations() {
+    for (line, expected) in [
+        ("pane-settings --p", "roviders"),
+        ("pane-settings --r", "etry-provider"),
+    ] {
+        let hint = shadow_hint(SelectorSurface::MezzanineCommand, line, line.len()).unwrap();
+        assert_eq!(hint.insert_at, line.len(), "completion for {line}");
+        assert_eq!(hint.text, expected, "completion for {line}");
+        assert_eq!(
+            hint.kind,
+            SelectorCandidateKind::Flag,
+            "completion for {line}"
+        );
+    }
 }
 
 /// Verifies argument-bearing slash commands expose parameter shadow hints

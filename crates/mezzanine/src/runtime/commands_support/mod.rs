@@ -231,11 +231,32 @@ pub(super) fn execute_runtime_live_terminal_command(
             body: runtime_display_panes_display(service)?,
         })),
         "pane-settings" => {
-            let target = match invocation.args.as_slice() {
-                [] => None,
-                [flag, target] if flag == "-t" => Some(target.as_str()),
+            enum PaneSettingsOperation<'a> {
+                Selector,
+                Providers,
+                Retry(&'a str),
+            }
+            let (operation, target) = match invocation.args.as_slice() {
+                [] => (PaneSettingsOperation::Selector, None),
+                [flag, target] if flag == "-t" => {
+                    (PaneSettingsOperation::Selector, Some(target.as_str()))
+                }
+                [providers] if providers == "--providers" => {
+                    (PaneSettingsOperation::Providers, None)
+                }
+                [providers, flag, target] if providers == "--providers" && flag == "-t" => {
+                    (PaneSettingsOperation::Providers, Some(target.as_str()))
+                }
+                [retry, name] if retry == "--retry-provider" => {
+                    (PaneSettingsOperation::Retry(name), None)
+                }
+                [retry, name, flag, target] if retry == "--retry-provider" && flag == "-t" => {
+                    (PaneSettingsOperation::Retry(name), Some(target.as_str()))
+                }
                 _ => {
-                    return Err(MezError::invalid_args("usage: pane-settings [-t pane]"));
+                    return Err(MezError::invalid_args(
+                        "usage: pane-settings [--providers | --retry-provider NAME] [-t pane]",
+                    ));
                 }
             };
             let descriptor = match target {
@@ -248,10 +269,44 @@ pub(super) fn execute_runtime_live_terminal_command(
                         })
                     })?,
             };
-            service.open_pane_settings_selector(primary_client_id, &descriptor.pane_id)?;
-            Ok(Some(CommandOutcome::Mutated {
-                command: invocation.name.clone(),
-            }))
+            match operation {
+                PaneSettingsOperation::Selector => {
+                    service.open_pane_settings_selector(primary_client_id, &descriptor.pane_id)?;
+                    Ok(Some(CommandOutcome::Mutated {
+                        command: invocation.name.clone(),
+                    }))
+                }
+                PaneSettingsOperation::Providers => {
+                    let blocked =
+                        service.pane_status_provider_blocked_states(descriptor.pane_id.as_str());
+                    let body = if blocked.is_empty() {
+                        format!("pane={}:providers=0", descriptor.pane_id)
+                    } else {
+                        blocked
+                            .iter()
+                            .map(|provider| {
+                                format!(
+                                    "pane={}:provider={}:state=blocked:reason={}",
+                                    descriptor.pane_id, provider.name, provider.reason
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    };
+                    Ok(Some(CommandOutcome::Display {
+                        command: invocation.name.clone(),
+                        body,
+                    }))
+                }
+                PaneSettingsOperation::Retry(name) => {
+                    if !service.retry_pane_status_provider(descriptor.pane_id.as_str(), name) {
+                        return Err(MezError::conflict("pane provider is not currently blocked"));
+                    }
+                    Ok(Some(CommandOutcome::Mutated {
+                        command: invocation.name.clone(),
+                    }))
+                }
+            }
         }
         "choose-client" => Ok(Some(CommandOutcome::Display {
             command: invocation.name.clone(),

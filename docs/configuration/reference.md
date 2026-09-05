@@ -546,6 +546,13 @@ queued and running pane work. Visibility and focus eligibility are unioned over
 attached primary views (and observers' source views), honoring each view's zoom:
 a provider runs when at least one presented view satisfies its conditions.
 
+Use `pane-settings --providers [-t pane]` to inspect retained blocked providers,
+including while zen mode is active. The display contains only configured names
+and finite sanitized reason codes and does not schedule work. An attached primary
+may use `pane-settings --retry-provider NAME [-t pane]` after addressing the
+reported condition. Retry only clears the exact current block and marks it due;
+normal permission, trust, context, and sandbox admission still apply.
+
 Execution requires trusted source-layer provenance, a structured permission
 decision of `Allow`, concrete live pane CWD and filesystem authority, and a
 compiled Bubblewrap or Seatbelt launch. `Prompt`, `Forbid`, policy-only or host

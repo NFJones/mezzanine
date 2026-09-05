@@ -73,7 +73,7 @@ fn help_command_describes_mezzanine_command_set() {
     assert!(help.contains("set-theme"), "{help}");
     assert!(
         help.contains(
-            "|  | `pane-settings` | open pane-scoped status and configuration controls. |"
+            "|  | `pane-settings` | open pane controls or inspect and explicitly retry blocked status providers. |"
         ),
         "{help}"
     );

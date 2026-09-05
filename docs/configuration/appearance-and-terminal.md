@@ -69,6 +69,12 @@ providers do not prompt on each timer tick. Provider launchers receive no daemon
 or arbitrary pane credentials, while the sandbox payload receives the documented
 `MEZ_PANE_ID`. `terminal:...{pane}...` and `agent:/...` pill actions retain the
 stable owner pane and reject stale or closed targets without changing focus.
+Use `pane-settings --providers [-t pane]` to inspect retained blocked state,
+including in zen mode, without refreshing or executing providers. The display
+contains only provider names and sanitized reason codes. An attached primary may
+use `pane-settings --retry-provider NAME [-t pane]` to clear an exact current
+block and make it due for normal admission; retry does not approve the command,
+change trust or permissions, bypass policy, or weaken sandboxing.
 
 Changing the effective theme or another visual presentation setting queues an
 immediate full redraw for every attached client. The redraw restyles Mez-owned

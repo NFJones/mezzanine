@@ -86,6 +86,17 @@ exact effective `on_click` source must be present and trusted at execution;
 other terminal or agent effects are rejected. Only attached primary clients
 may open or apply the selector.
 
+`pane-settings --providers [-t pane]` lists already-retained blocked pane
+providers using only provider names and sanitized reason codes. It is safe to
+use while zen mode hides pane chrome and does not refresh, admit, or execute a
+provider. After changing the underlying approval, permission, trust, context,
+or sandbox condition separately, use
+`pane-settings --retry-provider NAME [-t pane]` to clear that exact current
+block and make the provider due for normal admission. Retry does not approve a
+command, change trust or permissions, bypass policy, weaken sandboxing, or run
+the command inline. Observer callers and stale, closed, missing, or unblocked
+targets are rejected.
+
 `zen on`, `zen off`, and `zen toggle` control the session-wide live
 `terminal.zen_mode` override. Successful changes are silent because their
 effect is immediately visible; control clients still receive a structured
