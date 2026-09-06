@@ -1,5 +1,6 @@
 //! Regression tests for terminal presentation frames pane behavior.
 
+use crate::host::terminal::render::pane_frame_status_diagnostic_projection;
 use crate::host::terminal::tests::fixtures::display_column_for_fragment;
 use crate::host::terminal::{
     BTreeMap, DEFAULT_PANE_FRAME_TEMPLATE, PaneAgentStatusField, PaneRenderInput, PaneStatusAction,
@@ -596,6 +597,65 @@ fn render_narrow_pane_status_has_only_complete_priority_selected_hit_targets() {
         cells.iter().map(|cell| cell.column).collect::<Vec<_>>(),
         (12..19).collect::<Vec<_>>()
     );
+}
+
+/// Verifies diagnostics reuse the authoritative whole-pill layout while also
+/// retaining configured occurrences that rendering omits before fitting.
+#[test]
+fn pane_status_diagnostic_projects_unavailable_conditioned_and_overflowed_occurrences() {
+    let mut ids = IdFactory::default();
+    let window = Window::new(&mut ids, 0, "main", Size::new(21, 3).unwrap());
+    let pane = &window.panes()[0];
+    let mut frame_context = TerminalFrameContext::default();
+    frame_context.pane_status.left_status = "#{pill.missing} #{pill.shell_only}".to_string();
+    frame_context.pane_status.right_status = "#{pill.low} #{pill.high}".to_string();
+    frame_context.pane_status.overflow = PaneStatusOverflowPolicy::Menu;
+    frame_context.pane_status.title_min_width = 8;
+    let missing = PaneStatusPillDefinition::builtin(PaneStatusField::AgentPlanning);
+    let mut shell_only = PaneStatusPillDefinition::builtin(PaneStatusField::AgentModel);
+    shell_only.when = vec![crate::host::terminal::PaneStatusCondition::ShellView];
+    let mut low = PaneStatusPillDefinition::builtin(PaneStatusField::AgentReasoning);
+    low.priority = 10;
+    let mut high = PaneStatusPillDefinition::builtin(PaneStatusField::AgentModel);
+    high.priority = 90;
+    frame_context.pane_status.pills.extend([
+        ("missing".to_string(), missing),
+        ("shell_only".to_string(), shell_only),
+        ("low".to_string(), low),
+        ("high".to_string(), high),
+    ]);
+    frame_context.panes.insert(
+        pane.id.to_string(),
+        TerminalPaneFrameContext {
+            mode: Some("agent".to_string()),
+            agent_model: Some("model".to_string()),
+            agent_reasoning: Some("medium".to_string()),
+            ..TerminalPaneFrameContext::default()
+        },
+    );
+
+    let diagnostic = pane_frame_status_diagnostic_projection(
+        &window,
+        pane,
+        &frame_context,
+        DEFAULT_PANE_FRAME_TEMPLATE,
+        21,
+        '─',
+    );
+
+    assert_eq!(diagnostic.owner_pane_id, pane.id);
+    assert_eq!(diagnostic.pane_width_cells, 21);
+    assert_eq!(diagnostic.title_min_width_cells, 8);
+    assert_eq!(diagnostic.occurrences.len(), 4);
+    assert_eq!(diagnostic.occurrences[0].source, "pill.missing");
+    assert_eq!(diagnostic.occurrences[0].availability, "unavailable");
+    assert_eq!(diagnostic.occurrences[1].availability, "condition-hidden");
+    assert_eq!(diagnostic.occurrences[2].layout_state, Some("overflow"));
+    assert_eq!(diagnostic.occurrences[3].layout_state, Some("full"));
+    assert_eq!(diagnostic.occurrences[3].identity.owner_pane_id, pane.id);
+    assert_eq!(diagnostic.occurrences[3].identity.occurrence.ordinal, 1);
+    assert!(diagnostic.occurrences[3].full_cells >= diagnostic.occurrences[3].selected_cells);
+    assert!(diagnostic.status_budget_cells >= diagnostic.status_used_cells);
 }
 
 /// Verifies that split-pane box drawing glyphs carry only a foreground color

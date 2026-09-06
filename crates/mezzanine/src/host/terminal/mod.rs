@@ -100,7 +100,6 @@ pub use pane_status::{
     PaneStatusProviderOrigin, PaneStatusProviderScope, PaneStatusRail, PaneStatusSegmentIdentity,
     PaneStatusStyle, PaneStatusTerminalAction, PaneStatusTerminalCommand,
 };
-pub(crate) use render::pane_frame_row_layout;
 pub use render::{
     DEFAULT_PANE_FRAME_TEMPLATE, DEFAULT_PANE_FRAME_VISIBLE_FIELDS,
     DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE, DEFAULT_WINDOW_FRAME_TEMPLATE,
@@ -109,6 +108,9 @@ pub use render::{
     pane_frame_agent_status_pillbox_cells,
     render_attached_client_view_with_screen_and_row_resolvers, window_frame_action_pillbox_cells,
     window_frame_pillbox_cells, window_group_frame_pillbox_cells,
+};
+pub(crate) use render::{
+    PaneStatusDiagnosticProjection, pane_frame_row_layout, pane_frame_status_diagnostic_projection,
 };
 #[cfg(test)]
 pub use render::{

@@ -5,10 +5,132 @@
 //! metrics so the command-support parent can remain focused on dispatch.
 
 use super::{
-    BTreeMap, EventAudience, HookExecutionStatus, ModelTokenUsage, ModelTokenUsageKey,
-    RuntimeSessionService, event_type_name, runtime_hook_event_name,
+    BTreeMap, EventAudience, HookExecutionStatus, ModelTokenUsage, ModelTokenUsageKey, Result,
+    RuntimeSessionService, compose_effective_config, event_type_name, runtime_hook_event_name,
     runtime_hook_execution_status_name,
 };
+
+/// Builds the read-only pane-status diagnostic from authoritative frame layout
+/// and retained provider-cache state. No provider reconciliation or work claim
+/// scheduling occurs on this path.
+pub(super) fn runtime_show_pane_status_display(
+    service: &RuntimeSessionService,
+    pane_id: &mez_core::ids::PaneId,
+) -> Result<String> {
+    let projection = service
+        .pane_status_diagnostic_projection(pane_id)
+        .ok_or_else(|| {
+            crate::error::MezError::new(crate::error::MezErrorKind::NotFound, "pane not found")
+        })?;
+    let effective = compose_effective_config(service.integration.config_layers())?;
+    let pane_status = &service.presentation.settings.pane_status;
+    let preset_source = bounded_diagnostic_atom(
+        effective
+            .source_for("frames.pane.status_preset")
+            .unwrap_or("default"),
+    );
+    let inherited_source = format!("preset:{}", pane_status.preset_name());
+    let source = |path: &str| {
+        bounded_diagnostic_atom(
+            effective
+                .source_for(path)
+                .unwrap_or(inherited_source.as_str()),
+        )
+    };
+    let overflow = match pane_status.overflow {
+        crate::host::terminal::PaneStatusOverflowPolicy::Compact => "compact",
+        crate::host::terminal::PaneStatusOverflowPolicy::Hide => "hide",
+        crate::host::terminal::PaneStatusOverflowPolicy::Menu => "menu",
+    };
+    let mut lines = vec![
+        format!(
+            "pane={} preset={} preset_source={} left_status_source={} right_status_source={} overflow={} overflow_source={} title_min_width_source={}",
+            pane_id,
+            pane_status.preset_name(),
+            preset_source,
+            source("frames.pane.left_status"),
+            source("frames.pane.right_status"),
+            overflow,
+            source("frames.pane.overflow"),
+            source("frames.pane.title_min_width"),
+        ),
+        format!(
+            "pane_width_cells={} title_min_width_cells={} title_used_cells={} budget_cells={} status_used_cells={}",
+            projection.pane_width_cells,
+            projection.title_min_width_cells,
+            projection.title_used_cells,
+            projection.status_budget_cells,
+            projection.status_used_cells,
+        ),
+    ];
+    for occurrence in projection.occurrences {
+        let rail = match occurrence.identity.occurrence.rail {
+            crate::host::terminal::PaneStatusRail::Left => "left",
+            crate::host::terminal::PaneStatusRail::Right => "right",
+        };
+        let definition_source = occurrence
+            .source
+            .strip_prefix("pill.")
+            .map(|name| {
+                let field_path = format!("frames.pane.pills.{name}.field");
+                let command_path = format!("frames.pane.pills.{name}.command");
+                effective
+                    .source_for(&field_path)
+                    .or_else(|| effective.source_for(&command_path))
+                    .map(bounded_diagnostic_atom)
+                    .unwrap_or_else(|| inherited_source.clone())
+            })
+            .unwrap_or_else(|| "builtin".to_string());
+        lines.push(format!(
+            "source={} definition_source={} owner={} occurrence={}:{} field={} action_owner={} availability={} layout={} full_cells={} compact_cells={} selected_cells={} config_generation={} context_generation={}",
+            bounded_diagnostic_atom(&occurrence.source),
+            definition_source,
+            occurrence.identity.owner_pane_id,
+            rail,
+            occurrence.identity.occurrence.ordinal,
+            occurrence.identity.field.as_str(),
+            bounded_diagnostic_atom(&occurrence.identity.action_owner),
+            occurrence.availability,
+            occurrence.layout_state.unwrap_or("omitted"),
+            occurrence.full_cells,
+            occurrence.compact_cells,
+            occurrence.selected_cells,
+            occurrence.identity.config_generation,
+            occurrence.identity.context_generation,
+        ));
+    }
+    for provider in service.pane_status_provider_diagnostics(pane_id.as_str()) {
+        lines.push(format!(
+            "provider={} state={} pending={} blocked={} error={} stale={} refresh_age_ms={}",
+            bounded_diagnostic_atom(&provider.name),
+            provider.state,
+            provider.pending,
+            provider.blocked_reason.unwrap_or("none"),
+            provider.error,
+            provider.stale,
+            provider
+                .refresh_age_ms
+                .map(|age| age.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+        ));
+    }
+    Ok(lines.join("\n"))
+}
+
+/// Sanitizes one metadata atom and bounds it independently of source text.
+fn bounded_diagnostic_atom(value: &str) -> String {
+    value
+        .chars()
+        .take(64)
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-' | ':') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
 
 /// Runs the runtime show messages display operation for this subsystem.
 ///

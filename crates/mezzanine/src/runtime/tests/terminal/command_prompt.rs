@@ -441,6 +441,78 @@ fn runtime_pane_settings_provider_inspection_is_zen_safe_and_side_effect_free() 
     assert!(service.prepare_pane_status_provider_refreshes(1).is_empty());
 }
 
+/// Verifies `show-pane-status` resolves an optional stable pane target, remains
+/// usable in zen mode, reports preset provenance and shared layout decisions,
+/// and does not activate provider work while inspecting retained state.
+#[test]
+fn runtime_show_pane_status_is_zen_safe_targeted_and_side_effect_free() {
+    let mut service = test_runtime_service_with_size(Size::new(24, 6).unwrap());
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "project-pane-status".to_string(),
+            path: Some(PathBuf::from("/TOP/SECRET/project.toml")),
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::ProjectOverlay,
+            trusted: true,
+            text: "version = 89\n[frames.pane]\nstatus_preset = \"minimal\"\nright_status = \"#{pill.model} #{pill.branch}\"\n[frames.pane.pills.model]\nfield = \"agent.model\"\nlabel = \"Selected model\"\n[frames.pane.pills.branch]\ncommand = \"printf TOP_SECRET_OUTPUT\"\ncwd = \"pane\"\nwhen = []\n"
+                .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(24, 6).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .execute_terminal_command(&primary, "zen on")
+        .unwrap();
+
+    let before = service.pending_pane_status_provider_refresh_count_for_tests();
+    let output = service
+        .execute_terminal_command(&primary, "show-pane-status -t %1")
+        .unwrap();
+    let output: serde_json::Value = serde_json::from_str(&output).unwrap();
+    let body = output["outcomes"][0]["body"].as_str().unwrap();
+
+    assert!(body.contains("pane=%1"), "{body}");
+    assert!(body.contains("preset=minimal"), "{body}");
+    assert!(body.contains("preset_source=project-pane-status"), "{body}");
+    assert!(
+        body.contains("right_status_source=project-pane-status"),
+        "{body}"
+    );
+    assert!(body.contains("source=pill.model"), "{body}");
+    assert!(body.contains("owner=%1"), "{body}");
+    assert!(body.contains("occurrence=right:0"), "{body}");
+    assert!(body.contains("layout="), "{body}");
+    assert!(body.contains("budget_cells="), "{body}");
+    assert!(body.contains("provider=branch"), "{body}");
+    assert!(!body.contains("TOP_SECRET"), "{body}");
+    assert!(!body.contains("project.toml"), "{body}");
+    assert_eq!(
+        service.pending_pane_status_provider_refresh_count_for_tests(),
+        before,
+        "diagnostic inspection must not reconcile, admit, or schedule providers"
+    );
+    assert!(service.terminal_zen_mode());
+
+    let observer = service
+        .session
+        .attach_observer_with_terminal("observer", None, 121)
+        .unwrap();
+    let forbidden = service
+        .execute_terminal_command(&observer, "show-pane-status -t %1")
+        .unwrap_err();
+    assert_eq!(forbidden.kind(), crate::error::MezErrorKind::Forbidden);
+
+    let stale = service
+        .execute_terminal_command(&primary, "show-pane-status -t %999")
+        .unwrap_err();
+    assert_eq!(stale.kind(), crate::error::MezErrorKind::NotFound);
+}
+
 /// Verifies explicit retry is primary-authorized, clears only a matching
 /// current block, and then encounters the unchanged admission decision again.
 #[test]

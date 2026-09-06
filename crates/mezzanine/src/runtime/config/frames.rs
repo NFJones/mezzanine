@@ -152,7 +152,21 @@ fn runtime_pane_status_config(
     let Some(pane) = frames.get("pane").and_then(Value::as_object) else {
         return Ok(PaneStatusConfig::default());
     };
-    let mut config = PaneStatusConfig::default();
+    let preset_name = pane
+        .get("status_preset")
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| MezError::config("frames.pane.status_preset must be a string"))
+        })
+        .transpose()?
+        .unwrap_or("standard");
+    let mut config = PaneStatusConfig::from_preset_name(preset_name).ok_or_else(|| {
+        MezError::config(
+            "frames.pane.status_preset must be standard, minimal, agent-focused, or full-controls",
+        )
+    })?;
+    debug_assert_eq!(config.preset_name(), preset_name);
     if let Some(value) = pane.get("left_status") {
         config.left_status = value
             .as_str()
@@ -232,10 +246,11 @@ fn runtime_pane_status_config(
                 )));
             }
         }
+        let preset_definition = config.pills.get(name).cloned();
         let field_name = object.get("field").and_then(Value::as_str);
         let command = optional_pane_status_string(object.get("command"), name, "command")?
             .filter(|value| !value.trim().is_empty());
-        if field_name.is_some() == command.is_some() {
+        if field_name.is_some() && command.is_some() {
             return Err(MezError::config(format!(
                 "frames.pane.pills.{name} must configure exactly one of field or command"
             )));
@@ -246,10 +261,29 @@ fn runtime_pane_status_config(
                     "frames.pane.pills.{name}.field `{field_name}` is not a supported built-in pane status field"
                 ))
             })?
-        } else {
+        } else if command.is_some() {
             PaneStatusField::Provider
+        } else if let Some(definition) = preset_definition.as_ref() {
+            definition.field
+        } else {
+            return Err(MezError::config(format!(
+                "frames.pane.pills.{name} must configure exactly one of field or command"
+            )));
         };
-        let mut definition = PaneStatusPillDefinition::builtin(field);
+        let mut definition =
+            preset_definition.unwrap_or_else(|| PaneStatusPillDefinition::builtin(field));
+        if field_name.is_some() {
+            definition.field = field;
+            definition.provider = None;
+            definition.action = field
+                .builtin_action()
+                .map(PaneStatusAction::Builtin)
+                .unwrap_or(PaneStatusAction::None);
+        } else if command.is_some() {
+            definition.field = PaneStatusField::Provider;
+            definition.provider = None;
+            definition.action = PaneStatusAction::None;
+        }
         if let Some(command) = command {
             if object.get("cwd").and_then(Value::as_str) != Some("pane") {
                 return Err(MezError::config(format!(
@@ -312,7 +346,9 @@ fn runtime_pane_status_config(
                 "frames.pane.pills.{name} provider settings require command"
             )));
         }
-        definition.label = optional_pane_status_string(object.get("label"), name, "label")?;
+        if object.contains_key("label") {
+            definition.label = optional_pane_status_string(object.get("label"), name, "label")?;
+        }
         if let Some(value) = optional_pane_status_string(object.get("format"), name, "format")? {
             definition.format = parse_pane_status_format(name, "format", field, &value)?;
         }
@@ -345,10 +381,14 @@ fn runtime_pane_status_config(
                 .collect::<Result<Vec<_>>>()?;
             validate_pane_status_conditions(name, &definition.when)?;
         }
-        definition.min_width =
-            pane_status_optional_width(object.get("min_width"), name, "min_width")?;
-        definition.max_width =
-            pane_status_optional_width(object.get("max_width"), name, "max_width")?;
+        if object.contains_key("min_width") {
+            definition.min_width =
+                pane_status_optional_width(object.get("min_width"), name, "min_width")?;
+        }
+        if object.contains_key("max_width") {
+            definition.max_width =
+                pane_status_optional_width(object.get("max_width"), name, "max_width")?;
+        }
         if definition
             .min_width
             .zip(definition.max_width)
@@ -1058,4 +1098,103 @@ pub(crate) fn runtime_decode_binding_config_key(encoded: &str) -> Result<String>
         bytes.push(byte);
     }
     String::from_utf8(bytes).map_err(|_| MezError::config("encoded key binding is not valid UTF-8"))
+}
+
+#[cfg(test)]
+mod pane_status_preset_tests {
+    use super::*;
+    use crate::config::{ConfigFormat, DEFAULT_CONFIG_TOML, parse_config_json_value};
+    use crate::host::terminal::PaneAgentStatusField;
+
+    fn parse(text: &str) -> PaneStatusConfig {
+        let root: Value = toml::from_str::<toml::Value>(text)
+            .unwrap()
+            .try_into()
+            .unwrap();
+        runtime_pane_status_config_from_config(&root).unwrap()
+    }
+
+    /// Each preset expands to a distinct typed composition before any explicit overrides.
+    #[test]
+    fn pane_status_presets_expand_to_typed_defaults() {
+        let standard = parse("[frames.pane]\nstatus_preset = \"standard\"\n");
+        let minimal = parse("[frames.pane]\nstatus_preset = \"minimal\"\n");
+        let agent = parse("[frames.pane]\nstatus_preset = \"agent-focused\"\n");
+        let full = parse("[frames.pane]\nstatus_preset = \"full-controls\"\n");
+
+        assert_eq!(standard.preset_name(), "standard");
+        assert_eq!(minimal.preset_name(), "minimal");
+        assert_eq!(agent.preset_name(), "agent-focused");
+        assert_eq!(full.preset_name(), "full-controls");
+        assert_ne!(minimal.right_status, standard.right_status);
+        assert!(agent.pills.contains_key("inactive"));
+        assert!(agent.pills.contains_key("thinking"));
+        assert!(agent.pills.contains_key("preset"));
+        assert!(full.pills.contains_key("thinking"));
+        assert!(full.pills.contains_key("preset"));
+    }
+
+    /// A generated configuration leaves rails inherited, so changing only the
+    /// selected preset changes the effective pane-status composition.
+    #[test]
+    fn generated_config_switches_pane_status_rails_with_only_the_preset() {
+        let standard_root = parse_config_json_value(ConfigFormat::Toml, DEFAULT_CONFIG_TOML)
+            .expect("generated configuration should parse");
+        let standard = runtime_pane_status_config_from_config(&standard_root).unwrap();
+        let mut minimal_root = standard_root;
+        minimal_root["frames"]["pane"]["status_preset"] = Value::String("minimal".to_string());
+        let minimal = runtime_pane_status_config_from_config(&minimal_root).unwrap();
+
+        assert_eq!(standard.preset_name(), "standard");
+        assert_eq!(minimal.preset_name(), "minimal");
+        assert_ne!(standard.right_status, minimal.right_status);
+        assert_eq!(
+            minimal.right_status,
+            "#{pane.pwd} #{agent.status} #{history.position}"
+        );
+    }
+
+    /// Explicit empty/custom rails and scalar layout values override preset defaults verbatim.
+    #[test]
+    fn pane_status_explicit_values_override_preset_defaults() {
+        let config = parse(
+            "[frames.pane]\nstatus_preset = \"full-controls\"\nleft_status = \"\"\nright_status = \"#{pane.status}\"\noverflow = \"hide\"\ntitle_min_width = 17\n",
+        );
+
+        assert_eq!(config.left_status, "");
+        assert_eq!(config.right_status, "#{pane.status}");
+        assert_eq!(config.overflow, PaneStatusOverflowPolicy::Hide);
+        assert_eq!(config.title_min_width, 17);
+    }
+
+    /// Named preset pills merge by stable id so one explicit leaf does not need to restate source.
+    #[test]
+    fn pane_status_named_pill_leaf_merges_with_preset_definition() {
+        let config = parse(
+            "[frames.pane]\nstatus_preset = \"full-controls\"\n[frames.pane.pills.model]\nlabel = \"Runtime\"\npriority = 99\n",
+        );
+        let model = &config.pills["model"];
+
+        assert_eq!(model.field, PaneStatusField::AgentModel);
+        assert_eq!(model.label.as_deref(), Some("Runtime"));
+        assert_eq!(model.priority, 99);
+        assert!(matches!(model.action, PaneStatusAction::Builtin(_)));
+    }
+
+    /// An explicit source leaf replaces only that leaf while the remaining
+    /// stable-ID metadata continues to inherit from the selected preset.
+    #[test]
+    fn pane_status_named_pill_source_leaf_preserves_preset_metadata() {
+        let config = parse(
+            "[frames.pane]\nstatus_preset = \"agent-focused\"\n[frames.pane.pills.model]\nfield = \"agent.reasoning\"\n",
+        );
+        let model = &config.pills["model"];
+
+        assert_eq!(model.field, PaneStatusField::AgentReasoning);
+        assert!(model.when.contains(&PaneStatusCondition::Focused));
+        assert!(matches!(
+            model.action,
+            PaneStatusAction::Builtin(PaneAgentStatusField::Reasoning)
+        ));
+    }
 }

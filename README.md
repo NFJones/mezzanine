@@ -113,6 +113,10 @@ Mezzanine command prompt, `Ctrl+A ?` shows effective key bindings, and
 `Ctrl+A a` toggles the agent shell. From the command prompt, `zen on`, `zen off`,
 and `zen toggle` hide or restore passive Mezzanine chrome for the live session;
 set `terminal.zen_mode` in configuration for persistent startup behavior.
+Pane-status presets provide standard, minimal, agent-focused, and full-controls
+layouts that can still be refined with explicit overrides. Use
+`show-pane-status [-t pane]` for a bounded, secret-safe explanation of the
+resolved layout and retained provider state, including while zen mode is on.
 
 Within an agent pane, plan-only mode is available when you want to review an
 approach before allowing changes. See the [agent guide](docs/agent/README.md)

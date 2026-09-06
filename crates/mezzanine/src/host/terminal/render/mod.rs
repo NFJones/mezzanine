@@ -49,12 +49,14 @@ mod text;
 
 pub(crate) use dividers::project_provisional_pane_resize;
 use dividers::{merged_pane_frame_boundary_style_spans, pane_divider_rendition};
-pub(crate) use frame::pane_frame_row_layout;
 pub(crate) use frame::window_iroh_status_slot_layout;
 use frame::{
     AGENT_STATUS_SCAN_BAND_WIDTH, pane_agent_prompt_space_reserved, pane_agent_prompt_transparent,
     pane_agent_shell_visible, pane_border_rendition, render_styled_pane_lines,
     styled_group_frame_line, styled_window_frame_line, write_styled_merged_pane_frames_on_dividers,
+};
+pub(crate) use frame::{
+    PaneStatusDiagnosticProjection, pane_frame_row_layout, pane_frame_status_diagnostic_projection,
 };
 #[cfg(test)]
 use frame::{

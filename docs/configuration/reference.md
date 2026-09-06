@@ -466,6 +466,7 @@ max_output_chars = 32
 | `frames.pane.enabled` | boolean | `true` | Render pane frame or border metadata. |
 | `frames.pane.position` | string | `"border"` | `top`, `bottom`, or `border`. |
 | `frames.pane.template` | string | `"#{pane.index} #{pane.title}"` | Pane frame template. Pill padding is added by the renderer. |
+| `frames.pane.status_preset` | string | `"standard"` | Typed pane-status composition expanded before explicit pane overrides. Values: `standard`, `minimal`, `agent-focused`, or `full-controls`. |
 | `frames.pane.left_status` | string | `"#{pane.progress}"` | Status rail rendered immediately after the pane title. An empty string disables it. |
 | `frames.pane.right_status` | string | see example config | Right-aligned ordered built-in or named status pills. An empty string disables it. |
 | `frames.pane.overflow` | string | `"menu"` | Narrow-pane policy: `compact` uses compact forms then hides, `hide` removes whole low-priority pills, and `menu` uses compact forms then exposes omitted items through `pane-settings`. |
@@ -506,7 +507,10 @@ and exact effective `on_click` source, reject missing or untrusted provenance
 and stale or closed occurrences, and never retarget focus. Static document
 validation can validate action syntax without effective-source metadata;
 runtime execution always fails closed when that metadata is unavailable.
-Presets and diagnostics are not part of this schema.
+The selected preset supplies complete typed defaults before explicitly
+configured rails, overflow policy, title width, and named-pill leaves are
+merged. `show-pane-status [-t pane]` is a runtime diagnostic command, not a
+configuration setting.
 
 ```toml
 [frames.pane.pills.model]
@@ -552,6 +556,16 @@ and finite sanitized reason codes and does not schedule work. An attached primar
 may use `pane-settings --retry-provider NAME [-t pane]` after addressing the
 reported condition. Retry only clears the exact current block and marks it due;
 normal permission, trust, context, and sandbox admission still apply.
+
+Use `show-pane-status [-t pane]` to inspect the active or requested live pane's
+resolved status composition. The bounded display reports effective preset and
+override provenance, stable occurrence and action ownership, unavailable and
+condition-hidden entries, authoritative full/compact/hidden/overflow fitting,
+cell budgets, and retained provider pending/blocked/error/stale/refresh-age
+metadata. It remains available in zen mode and only reads existing runtime and
+cache state: it does not reconcile, schedule, admit, refresh, or execute a
+provider. Provider commands, output, environment, source paths, working
+directories, and raw admission errors are omitted.
 
 Execution requires trusted source-layer provenance, a structured permission
 decision of `Allow`, concrete live pane CWD and filesystem authority, and a

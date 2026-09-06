@@ -87,6 +87,13 @@ pub fn config_change_setting_path_annotations() -> Vec<ConfigChangePathAnnotatio
             operations: CONFIG_CHANGE_OPERATION_NAMES,
         },
         ConfigChangePathAnnotation {
+            pattern: "frames.pane.status_preset",
+            purpose: "Select the pane-status composition expanded before explicit pane overrides.",
+            value_type: "string",
+            format: "One of standard, minimal, agent-focused, or full-controls.",
+            operations: CONFIG_CHANGE_OPERATION_NAMES,
+        },
+        ConfigChangePathAnnotation {
             pattern: "frames.window.pills.<name>.<key>",
             purpose: "Adjust one supported command-backed window status-pill setting.",
             value_type: "string or integer",
@@ -648,6 +655,7 @@ pub(super) const PANE_FRAME_KEYS: &[&str] = &[
     "enabled",
     "position",
     "template",
+    "status_preset",
     "left_status",
     "right_status",
     "overflow",

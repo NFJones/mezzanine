@@ -340,6 +340,29 @@ pub(super) fn execute_runtime_live_terminal_command(
             command: invocation.name.clone(),
             body: runtime_show_metrics_display(service),
         })),
+        "show-pane-status" => {
+            let target = match invocation.args.as_slice() {
+                [] => None,
+                [flag, target] if flag == "-t" => Some(target.as_str()),
+                _ => {
+                    return Err(MezError::invalid_args("usage: show-pane-status [-t pane]"));
+                }
+            };
+            let descriptor = match target {
+                None => service.active_window_pane_descriptor(None)?,
+                Some(target) => service
+                    .active_window_pane_descriptor(Some(target))
+                    .or_else(|_| {
+                        service.find_pane_descriptor(target).ok_or_else(|| {
+                            MezError::new(crate::error::MezErrorKind::NotFound, "pane not found")
+                        })
+                    })?,
+            };
+            Ok(Some(CommandOutcome::Display {
+                command: invocation.name.clone(),
+                body: runtime_show_pane_status_display(service, &descriptor.pane_id)?,
+            }))
+        }
         "show-iroh-status" => Ok(Some(CommandOutcome::LiveDisplay {
             command: invocation.name.clone(),
             body: runtime_show_iroh_status_display(service, primary_client_id),

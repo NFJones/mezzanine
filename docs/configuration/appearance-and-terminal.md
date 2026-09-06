@@ -52,6 +52,15 @@ renderer and normalized to bounded, inert single-line text. Empty rail strings
 remain empty. `frames.pane.visible_fields` remains only the fallback used when
 the title template is empty; it does not filter either status rail.
 
+Select `frames.pane.status_preset` as `standard`, `minimal`, `agent-focused`,
+or `full-controls`. Presets supply defaults before explicit rail and named-pill
+overrides; partial named definitions inherit by stable ID. Generated configuration
+leaves rails omitted so changing only the preset takes effect. Migrated explicit
+rails, including empty rails, remain overrides. Presets never change agent settings
+or pane geometry. Use `show-pane-status [-t pane]` to inspect resolved conditions,
+layout decisions, provenance, and retained provider state without running providers,
+including while zen mode is active.
+
 Narrow panes use `frames.pane.overflow = "menu"` by default. Both rails share
 one priority pool, with lower-priority pills compacted or removed first and
 equal priorities removed from the end of template order. `compact` omits the

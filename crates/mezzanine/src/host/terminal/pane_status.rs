@@ -21,6 +21,124 @@ pub const DEFAULT_PANE_FRAME_LEFT_STATUS_TEMPLATE: &str = "#{pane.progress}";
 /// Default right-aligned pane status rail for new configurations.
 pub const DEFAULT_PANE_FRAME_RIGHT_STATUS_TEMPLATE: &str = "#{pane.pwd} #{agent.model} #{agent.reasoning} #{agent.thinking} #{agent.planning} #{agent.routing} #{agent.latency} #{policy.mode} #{agent.context_usage} #{agent.status} #{history.position}";
 
+/// Named pane-status compositions expanded before explicit frame overrides.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum PaneStatusPreset {
+    /// Preserve the established pane status composition.
+    #[default]
+    Standard,
+    /// Retain pane identity, activity, and scrollback state with minimal controls.
+    Minimal,
+    /// Show full agent controls on focused panes and compact status on inactive panes.
+    AgentFocused,
+    /// Expose every supported built-in agent control through named pills.
+    FullControls,
+}
+
+impl PaneStatusPreset {
+    /// Parses one public preset name.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "standard" => Some(Self::Standard),
+            "minimal" => Some(Self::Minimal),
+            "agent-focused" => Some(Self::AgentFocused),
+            "full-controls" => Some(Self::FullControls),
+            _ => None,
+        }
+    }
+
+    /// Returns the canonical public preset name.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::Minimal => "minimal",
+            Self::AgentFocused => "agent-focused",
+            Self::FullControls => "full-controls",
+        }
+    }
+
+    /// Expands this preset into typed defaults before user overrides are applied.
+    pub fn defaults(self) -> PaneStatusConfig {
+        let mut config = PaneStatusConfig {
+            preset: self,
+            left_status: DEFAULT_PANE_FRAME_LEFT_STATUS_TEMPLATE.to_string(),
+            right_status: DEFAULT_PANE_FRAME_RIGHT_STATUS_TEMPLATE.to_string(),
+            overflow: PaneStatusOverflowPolicy::Menu,
+            title_min_width: 8,
+            pills: BTreeMap::new(),
+        };
+        match self {
+            Self::Standard => {}
+            Self::Minimal => {
+                config.right_status = "#{pane.pwd} #{agent.status} #{history.position}".to_string();
+            }
+            Self::AgentFocused => {
+                config.right_status = "#{pane.pwd} #{pill.model} #{pill.reasoning} #{pill.thinking} #{pill.planning} #{pill.routing} #{pill.latency} #{pill.preset} #{pill.policy} #{pill.status} #{pill.inactive} #{history.position}".to_string();
+                for (name, field) in [
+                    ("model", PaneStatusField::AgentModel),
+                    ("reasoning", PaneStatusField::AgentReasoning),
+                    ("thinking", PaneStatusField::AgentThinking),
+                    ("planning", PaneStatusField::AgentPlanning),
+                    ("routing", PaneStatusField::AgentRouting),
+                    ("latency", PaneStatusField::AgentLatency),
+                    ("preset", PaneStatusField::AgentPreset),
+                    ("policy", PaneStatusField::PolicyMode),
+                ] {
+                    config.pills.insert(
+                        name.to_string(),
+                        preset_pill(field, &[PaneStatusCondition::Focused]),
+                    );
+                }
+                config.pills.insert(
+                    "status".to_string(),
+                    preset_pill(
+                        PaneStatusField::AgentStatus,
+                        &[PaneStatusCondition::Focused],
+                    ),
+                );
+                let mut inactive = preset_pill(
+                    PaneStatusField::AgentStatus,
+                    &[PaneStatusCondition::Unfocused],
+                );
+                inactive.format = PaneStatusFormat::Short;
+                inactive.priority = 90;
+                config.pills.insert("inactive".to_string(), inactive);
+            }
+            Self::FullControls => {
+                config.right_status = "#{pane.pwd} #{pill.model} #{pill.reasoning} #{pill.thinking} #{pill.planning} #{pill.routing} #{pill.latency} #{pill.preset} #{pill.policy} #{agent.context_usage} #{agent.status} #{history.position}".to_string();
+                for (name, field) in [
+                    ("model", PaneStatusField::AgentModel),
+                    ("reasoning", PaneStatusField::AgentReasoning),
+                    ("thinking", PaneStatusField::AgentThinking),
+                    ("planning", PaneStatusField::AgentPlanning),
+                    ("routing", PaneStatusField::AgentRouting),
+                    ("latency", PaneStatusField::AgentLatency),
+                    ("preset", PaneStatusField::AgentPreset),
+                    ("policy", PaneStatusField::PolicyMode),
+                ] {
+                    config
+                        .pills
+                        .insert(name.to_string(), preset_pill(field, &[]));
+                }
+            }
+        }
+        config
+    }
+}
+
+fn preset_pill(
+    field: PaneStatusField,
+    additional_conditions: &[PaneStatusCondition],
+) -> PaneStatusPillDefinition {
+    let mut definition = PaneStatusPillDefinition::builtin(field);
+    for condition in additional_conditions {
+        if !definition.when.contains(condition) {
+            definition.when.push(*condition);
+        }
+    }
+    definition
+}
+
 /// One built-in pane-scoped status value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PaneStatusField {
@@ -510,6 +628,8 @@ impl PaneStatusPillDefinition {
 /// Complete effective pane-status configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PaneStatusConfig {
+    /// Selected preset expanded before explicit configuration overrides.
+    pub preset: PaneStatusPreset,
     /// Title-adjacent template.
     pub left_status: String,
     /// Right-aligned template.
@@ -523,6 +643,16 @@ pub struct PaneStatusConfig {
 }
 
 impl PaneStatusConfig {
+    /// Expands one public preset name into typed defaults.
+    pub fn from_preset_name(name: &str) -> Option<Self> {
+        PaneStatusPreset::parse(name).map(PaneStatusPreset::defaults)
+    }
+
+    /// Returns the selected preset's canonical public name.
+    pub const fn preset_name(&self) -> &'static str {
+        self.preset.as_str()
+    }
+
     /// Returns a deterministic generation for stable segment identities.
     pub fn generation(&self) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -533,12 +663,6 @@ impl PaneStatusConfig {
 
 impl Default for PaneStatusConfig {
     fn default() -> Self {
-        Self {
-            left_status: DEFAULT_PANE_FRAME_LEFT_STATUS_TEMPLATE.to_string(),
-            right_status: DEFAULT_PANE_FRAME_RIGHT_STATUS_TEMPLATE.to_string(),
-            overflow: PaneStatusOverflowPolicy::Menu,
-            title_min_width: 8,
-            pills: BTreeMap::new(),
-        }
+        PaneStatusPreset::Standard.defaults()
     }
 }

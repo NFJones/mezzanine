@@ -68,6 +68,15 @@ Open the Mezzanine command prompt with `Ctrl+A :` for commands such as
 Use `Ctrl+A ?` or `list-keys` for the effective bindings; configuration can
 change them.
 
+Pane status can use the `standard`, `minimal`, `agent-focused`, or
+`full-controls` preset, with explicit pane-frame settings layered over the
+selected preset. Run `show-pane-status` for the active pane or
+`show-pane-status -t <pane>` for another live pane to inspect the resolved
+occurrences, fitting decisions, cell budgets, configuration provenance, and
+retained provider lifecycle state. The diagnostic remains available in zen
+mode, does not change focus or activate providers, and omits command, output,
+environment, and path data.
+
 ## Detach and reattach
 
 Detaching normally leaves the live session, pane processes, retained terminal

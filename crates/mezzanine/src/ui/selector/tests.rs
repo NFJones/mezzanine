@@ -73,6 +73,16 @@ fn selector_plans_mezzanine_command_argument_candidates() {
     assert_eq!(preset_plan.replacement_start, "set-key-preset ".len());
     assert_eq!(preset_plan.candidates[0].value, "simple");
     assert_eq!(preset_plan.candidates[0].kind, SelectorCandidateKind::Value);
+
+    let pane_status_plan = plan_selector(
+        SelectorSurface::MezzanineCommand,
+        "show-pane-status -",
+        "show-pane-status -".len(),
+    )
+    .unwrap();
+    assert!(pane_status_plan.candidates.iter().any(|candidate| {
+        candidate.value == "-t" && candidate.kind == SelectorCandidateKind::Flag
+    }));
 }
 
 /// Verifies selector plans agent argument candidates.

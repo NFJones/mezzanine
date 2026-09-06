@@ -137,3 +137,53 @@ fn invalid_layer_prevents_effective_config() {
 
     assert_eq!(error.kind(), crate::error::MezErrorKind::Config);
 }
+
+/// Pane status preset and leaf overrides retain ordinary layer precedence and
+/// source attribution so runtime expansion can apply the final values once.
+#[test]
+fn pane_status_preset_and_overrides_follow_effective_layer_precedence() {
+    let effective = compose_effective_config(&[
+        ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: format!(
+                "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[frames.pane]\nstatus_preset = \"minimal\"\n[frames.pane.pills.model]\nfield = \"agent.model\"\nlabel = \"Primary\"\n"
+            ),
+        },
+        ConfigLayer {
+            name: "live".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::LiveOverride,
+            trusted: true,
+            text: "[frames.pane]\nstatus_preset = \"full-controls\"\n[frames.pane.pills.model]\nlabel = \"Live\"\n"
+                .to_string(),
+        },
+    ])
+    .unwrap();
+
+    assert_eq!(
+        effective.get("frames.pane.status_preset"),
+        Some("full-controls")
+    );
+    assert_eq!(
+        effective.source_for("frames.pane.status_preset"),
+        Some("live")
+    );
+    assert_eq!(
+        effective.get("frames.pane.pills.model.field"),
+        Some("agent.model")
+    );
+    assert_eq!(
+        effective.source_for("frames.pane.pills.model.field"),
+        Some("primary")
+    );
+    assert_eq!(effective.get("frames.pane.pills.model.label"), Some("Live"));
+    assert_eq!(
+        effective.source_for("frames.pane.pills.model.label"),
+        Some("live")
+    );
+}

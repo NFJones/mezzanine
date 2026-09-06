@@ -14,9 +14,70 @@ use crate::host::terminal::{
     PaneStatusPillDefinition, PaneStatusRail, PaneStatusSegmentIdentity,
 };
 use mez_mux::render::{
-    PaneFrameRowLayout, PaneStatusLayoutItem, PaneStatusLayoutOptions, compose_pane_status_layout,
-    line_slice, render_frame_pill_text,
+    PaneFrameRowLayout, PaneStatusLayoutItem, PaneStatusLayoutOptions, PaneStatusLayoutState,
+    compose_pane_status_layout, line_slice, render_frame_pill_text,
 };
+
+/// Secret-safe stable identity for one configured pane-status occurrence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PaneStatusDiagnosticIdentity {
+    /// Stable pane that owns the occurrence.
+    pub(crate) owner_pane_id: mez_core::ids::PaneId,
+    /// Stable rail and template ordinal.
+    pub(crate) occurrence: PaneStatusOccurrenceId,
+    /// Product-owned field identity.
+    pub(crate) field: PaneStatusField,
+    /// Finite action owner; custom command and argument payloads are excluded.
+    pub(crate) action_owner: String,
+    /// Effective configuration generation used by semantic actions.
+    pub(crate) config_generation: u64,
+    /// Relevant pane-context generation used by semantic actions.
+    pub(crate) context_generation: u64,
+}
+
+/// Diagnostic projection for one configured status occurrence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PaneStatusDiagnosticOccurrence {
+    /// Bounded configured marker identity.
+    pub(crate) source: String,
+    /// Stable owner, occurrence, field, and action-owner identity.
+    pub(crate) identity: PaneStatusDiagnosticIdentity,
+    /// Resolution result before width fitting.
+    pub(crate) availability: &'static str,
+    /// Authoritative shared layout result when the occurrence was available.
+    pub(crate) layout_state: Option<&'static str>,
+    /// Full padded display-cell requirement.
+    pub(crate) full_cells: usize,
+    /// Compact padded display-cell requirement.
+    pub(crate) compact_cells: usize,
+    /// Cells selected by the authoritative shared layout.
+    pub(crate) selected_cells: usize,
+}
+
+/// Complete read-only projection of one pane's resolved status layout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PaneStatusDiagnosticProjection {
+    /// Stable pane owner.
+    pub(crate) owner_pane_id: mez_core::ids::PaneId,
+    /// Exact pane-frame row width supplied to the shared resolver.
+    pub(crate) pane_width_cells: usize,
+    /// Configured minimum title budget.
+    pub(crate) title_min_width_cells: usize,
+    /// Cells retained by the rendered title.
+    pub(crate) title_used_cells: usize,
+    /// Maximum status-cell budget after title reservation and row padding.
+    pub(crate) status_budget_cells: usize,
+    /// Cells selected across visible, compact, and overflow-indicator items.
+    pub(crate) status_used_cells: usize,
+    /// Every configured occurrence in stable left-then-right template order.
+    pub(crate) occurrences: Vec<PaneStatusDiagnosticOccurrence>,
+}
+
+#[derive(Debug, Clone)]
+struct PaneStatusRailResolution {
+    rendered: RenderedPaneFrameRightStatus,
+    occurrences: Vec<PaneStatusDiagnosticOccurrence>,
+}
 
 /// Runs the render styled pane lines operation for this subsystem.
 ///
@@ -252,11 +313,92 @@ pub(crate) fn pane_frame_row_layout(
     width: usize,
     fill: char,
 ) -> PaneFrameRowLayout<PaneStatusSegmentIdentity> {
+    pane_frame_row_layout_with_diagnostics(window, pane, frame_context, template, width, fill).0
+}
+
+/// Projects the same resolved conditions and whole-pill layout used by rendering.
+pub(crate) fn pane_frame_status_diagnostic_projection(
+    window: &Window,
+    pane: &mez_mux::layout::Pane,
+    frame_context: &TerminalFrameContext,
+    template: &str,
+    width: usize,
+    fill: char,
+) -> PaneStatusDiagnosticProjection {
+    let title_min_width_cells = frame_context.pane_status.title_min_width;
+    let (layout, mut occurrences) =
+        pane_frame_row_layout_with_diagnostics(window, pane, frame_context, template, width, fill);
+    for item in &layout.status_items {
+        if item.key.occurrence.ordinal == u16::MAX {
+            continue;
+        }
+        if let Some(occurrence) = occurrences.iter_mut().find(|occurrence| {
+            occurrence.identity.occurrence == item.key.occurrence
+                && occurrence.identity.owner_pane_id == item.key.owner_pane_id
+        }) {
+            occurrence.layout_state = Some(pane_status_layout_state_name(item.state));
+            occurrence.selected_cells = match item.state {
+                PaneStatusLayoutState::Visible | PaneStatusLayoutState::Compacted => {
+                    fitted_text_width(&item.display, usize::MAX)
+                }
+                PaneStatusLayoutState::Hidden | PaneStatusLayoutState::Overflowed => 0,
+            };
+        }
+    }
+    let selected_rail_width = |rail: PaneStatusRail| {
+        let mut bounds = layout
+            .right_status_segments
+            .iter()
+            .filter(|segment| segment.key.occurrence.rail == rail)
+            .map(|segment| (segment.start, segment.start.saturating_add(segment.width)));
+        let Some((first_start, first_end)) = bounds.next() else {
+            return 0;
+        };
+        let (start, end) = bounds.fold(
+            (first_start, first_end),
+            |(start, end), (next_start, next_end)| (start.min(next_start), end.max(next_end)),
+        );
+        end.saturating_sub(start)
+    };
+    let left_used_cells = selected_rail_width(PaneStatusRail::Left);
+    let right_used_cells = selected_rail_width(PaneStatusRail::Right);
+    let status_used_cells = left_used_cells
+        .saturating_add(right_used_cells)
+        .saturating_add(usize::from(left_used_cells > 0 && right_used_cells > 0));
+    let available_before_title = width.saturating_sub(usize::from(width > 0));
+    let title_budget = title_min_width_cells.min(available_before_title);
+    let status_budget_cells = available_before_title
+        .saturating_sub(title_budget)
+        .saturating_sub(usize::from(title_budget > 0));
+    PaneStatusDiagnosticProjection {
+        owner_pane_id: pane.id.clone(),
+        pane_width_cells: width,
+        title_min_width_cells,
+        title_used_cells: layout.left_text_width,
+        status_budget_cells,
+        status_used_cells,
+        occurrences,
+    }
+}
+
+fn pane_frame_row_layout_with_diagnostics(
+    window: &Window,
+    pane: &mez_mux::layout::Pane,
+    frame_context: &TerminalFrameContext,
+    template: &str,
+    width: usize,
+    fill: char,
+) -> (
+    PaneFrameRowLayout<PaneStatusSegmentIdentity>,
+    Vec<PaneStatusDiagnosticOccurrence>,
+) {
     let title = render_pane_frame_template(window, pane, frame_context, template);
     let left_status = pane_frame_status_rail(window, pane, frame_context, PaneStatusRail::Left);
     let right_status = pane_frame_status_rail(window, pane, frame_context, PaneStatusRail::Right);
-    let left_items = pane_status_layout_items(left_status, PaneStatusRail::Left);
-    let right_items = pane_status_layout_items(right_status, PaneStatusRail::Right);
+    let mut occurrences = left_status.occurrences;
+    occurrences.extend(right_status.occurrences);
+    let left_items = pane_status_layout_items(left_status.rendered, PaneStatusRail::Left);
+    let right_items = pane_status_layout_items(right_status.rendered, PaneStatusRail::Right);
     let config_generation = frame_context.pane_status.generation();
     let overflow_identity = PaneStatusSegmentIdentity {
         owner_pane_id: pane.id.clone(),
@@ -279,7 +421,7 @@ pub(crate) fn pane_frame_row_layout(
             "overflow",
         ),
     };
-    compose_pane_status_layout(
+    let layout = compose_pane_status_layout(
         &title,
         left_items,
         right_items,
@@ -298,7 +440,17 @@ pub(crate) fn pane_frame_row_layout(
                 min_width: None,
             }),
         },
-    )
+    );
+    (layout, occurrences)
+}
+
+fn pane_status_layout_state_name(state: PaneStatusLayoutState) -> &'static str {
+    match state {
+        PaneStatusLayoutState::Visible => "full",
+        PaneStatusLayoutState::Compacted => "compact",
+        PaneStatusLayoutState::Hidden => "hidden",
+        PaneStatusLayoutState::Overflowed => "overflow",
+    }
 }
 
 /// Converts resolved semantic rail segments into whole layout candidates.
@@ -344,7 +496,7 @@ fn pane_frame_status_rail(
     pane: &mez_mux::layout::Pane,
     frame_context: &TerminalFrameContext,
     rail: PaneStatusRail,
-) -> RenderedPaneFrameRightStatus {
+) -> PaneStatusRailResolution {
     let status_config = &frame_context.pane_status;
     let template = match rail {
         PaneStatusRail::Left => &status_config.left_status,
@@ -353,6 +505,7 @@ fn pane_frame_status_rail(
     let config_generation = status_config.generation();
     let mut text = String::new();
     let mut segments = Vec::new();
+    let mut occurrences = Vec::new();
     let mut remaining = template.as_str();
     let mut ordinal = 0u16;
     while let Some(start) = remaining.find("#{") {
@@ -371,6 +524,8 @@ fn pane_frame_status_rail(
             config_generation,
         );
         ordinal = ordinal.saturating_add(1);
+        occurrences.push(component.diagnostic);
+        let component = component.rendered;
         if !component.text.is_empty() {
             append_pane_status_literal(&mut text, literal);
             let component_start = fitted_text_width(&text, usize::MAX);
@@ -387,9 +542,12 @@ fn pane_frame_status_rail(
     if !remaining.trim().is_empty() {
         append_pane_status_literal(&mut text, remaining);
     }
-    RenderedFrameStatus {
-        text: sanitize_frame_text(&text),
-        segments,
+    PaneStatusRailResolution {
+        rendered: RenderedFrameStatus {
+            text: sanitize_frame_text(&text),
+            segments,
+        },
+        occurrences,
     }
 }
 
@@ -413,16 +571,19 @@ fn resolve_pane_status_component(
     marker: &str,
     occurrence: PaneStatusOccurrenceId,
     config_generation: u64,
-) -> RenderedPaneFrameRightStatus {
+) -> PaneStatusComponentResolution {
     let definition = marker
         .strip_prefix("pill.")
         .and_then(|name| frame_context.pane_status.pills.get(name).cloned())
         .or_else(|| PaneStatusField::parse(marker).map(PaneStatusPillDefinition::builtin));
     let Some(definition) = definition else {
-        return RenderedFrameStatus {
-            text: String::new(),
-            segments: Vec::new(),
-        };
+        return unavailable_pane_status_component(
+            pane,
+            frame_context,
+            marker,
+            occurrence,
+            config_generation,
+        );
     };
     let field_name = definition.field.as_str();
     let provider_name = marker.strip_prefix("pill.");
@@ -454,12 +615,41 @@ fn resolve_pane_status_component(
             .label
             .as_deref()
             .is_some_and(|label| !label.trim().is_empty());
-    if (display_value.is_empty() && !provider_label_only)
-        || !pane_status_conditions_match(pane, frame_context, &definition, &display_value)
-    {
-        return RenderedFrameStatus {
-            text: String::new(),
-            segments: Vec::new(),
+    let context_generation =
+        pane_status_context_generation(pane, frame_context, definition.field, &raw_value);
+    let identity = pane_status_diagnostic_identity(
+        pane,
+        occurrence,
+        &definition,
+        config_generation,
+        context_generation,
+    );
+    if display_value.is_empty() && !provider_label_only {
+        return PaneStatusComponentResolution {
+            rendered: empty_rendered_pane_status(),
+            diagnostic: PaneStatusDiagnosticOccurrence {
+                source: pane_status_diagnostic_source(marker),
+                identity,
+                availability: "unavailable",
+                layout_state: None,
+                full_cells: 0,
+                compact_cells: 0,
+                selected_cells: 0,
+            },
+        };
+    }
+    if !pane_status_conditions_match(pane, frame_context, &definition, &display_value) {
+        return PaneStatusComponentResolution {
+            rendered: empty_rendered_pane_status(),
+            diagnostic: PaneStatusDiagnosticOccurrence {
+                source: pane_status_diagnostic_source(marker),
+                identity,
+                availability: "condition-hidden",
+                layout_state: None,
+                full_cells: 0,
+                compact_cells: 0,
+                selected_cells: 0,
+            },
         };
     }
     let mut display =
@@ -480,35 +670,155 @@ fn resolve_pane_status_component(
     }
     let text = mez_mux::render::render_frame_pill_text(&display);
     if text.is_empty() {
-        return RenderedFrameStatus {
-            text,
-            segments: Vec::new(),
+        return PaneStatusComponentResolution {
+            rendered: RenderedFrameStatus {
+                text,
+                segments: Vec::new(),
+            },
+            diagnostic: PaneStatusDiagnosticOccurrence {
+                source: pane_status_diagnostic_source(marker),
+                identity,
+                availability: "unavailable",
+                layout_state: None,
+                full_cells: 0,
+                compact_cells: 0,
+                selected_cells: 0,
+            },
         };
     }
-    let context_generation =
-        pane_status_context_generation(pane, frame_context, definition.field, &raw_value);
     let width = fitted_text_width(&text, usize::MAX);
+    let compact_text = mez_mux::render::render_frame_pill_text(&compact_display);
+    let segment_identity = PaneStatusSegmentIdentity {
+        owner_pane_id: pane.id.clone(),
+        occurrence,
+        field: definition.field,
+        style: definition.style,
+        action: definition.action,
+        compact_display,
+        min_width: definition.min_width,
+        max_width: definition.max_width,
+        priority: definition.priority,
+        config_generation,
+        context_generation,
+    };
+    PaneStatusComponentResolution {
+        rendered: RenderedFrameStatus {
+            text,
+            segments: vec![FrameStatusSegment {
+                start: 0,
+                width,
+                key: segment_identity,
+                value: raw_value,
+            }],
+        },
+        diagnostic: PaneStatusDiagnosticOccurrence {
+            source: pane_status_diagnostic_source(marker),
+            identity,
+            availability: "available",
+            layout_state: None,
+            full_cells: width,
+            compact_cells: fitted_text_width(&compact_text, usize::MAX),
+            selected_cells: 0,
+        },
+    }
+}
+
+struct PaneStatusComponentResolution {
+    rendered: RenderedPaneFrameRightStatus,
+    diagnostic: PaneStatusDiagnosticOccurrence,
+}
+
+fn empty_rendered_pane_status() -> RenderedPaneFrameRightStatus {
     RenderedFrameStatus {
-        text,
-        segments: vec![FrameStatusSegment {
-            start: 0,
-            width,
-            key: PaneStatusSegmentIdentity {
-                owner_pane_id: pane.id.clone(),
+        text: String::new(),
+        segments: Vec::new(),
+    }
+}
+
+fn unavailable_pane_status_component(
+    pane: &mez_mux::layout::Pane,
+    frame_context: &TerminalFrameContext,
+    marker: &str,
+    occurrence: PaneStatusOccurrenceId,
+    config_generation: u64,
+) -> PaneStatusComponentResolution {
+    let field = PaneStatusField::PaneStatus;
+    let context_generation = pane_status_context_generation(pane, frame_context, field, "");
+    let definition = PaneStatusPillDefinition::builtin(field);
+    PaneStatusComponentResolution {
+        rendered: empty_rendered_pane_status(),
+        diagnostic: PaneStatusDiagnosticOccurrence {
+            source: pane_status_diagnostic_source(marker),
+            identity: pane_status_diagnostic_identity(
+                pane,
                 occurrence,
-                field: definition.field,
-                style: definition.style,
-                action: definition.action,
-                compact_display,
-                min_width: definition.min_width,
-                max_width: definition.max_width,
-                priority: definition.priority,
+                &definition,
                 config_generation,
                 context_generation,
-            },
-            value: raw_value,
-        }],
+            ),
+            availability: "unavailable",
+            layout_state: None,
+            full_cells: 0,
+            compact_cells: 0,
+            selected_cells: 0,
+        },
     }
+}
+
+fn pane_status_diagnostic_identity(
+    pane: &mez_mux::layout::Pane,
+    occurrence: PaneStatusOccurrenceId,
+    definition: &PaneStatusPillDefinition,
+    config_generation: u64,
+    context_generation: u64,
+) -> PaneStatusDiagnosticIdentity {
+    let action_owner = match &definition.action {
+        crate::host::terminal::PaneStatusAction::None => "none".to_string(),
+        crate::host::terminal::PaneStatusAction::Builtin(field) => {
+            format!("builtin:{}", pane_agent_status_field_name(*field))
+        }
+        crate::host::terminal::PaneStatusAction::OpenSettings => "settings".to_string(),
+        crate::host::terminal::PaneStatusAction::Terminal { .. } => "terminal".to_string(),
+        crate::host::terminal::PaneStatusAction::Agent { .. } => "agent".to_string(),
+    };
+    PaneStatusDiagnosticIdentity {
+        owner_pane_id: pane.id.clone(),
+        occurrence,
+        field: definition.field,
+        action_owner,
+        config_generation,
+        context_generation,
+    }
+}
+
+fn pane_agent_status_field_name(
+    field: crate::host::terminal::PaneAgentStatusField,
+) -> &'static str {
+    match field {
+        crate::host::terminal::PaneAgentStatusField::Model => "model",
+        crate::host::terminal::PaneAgentStatusField::Reasoning => "reasoning",
+        crate::host::terminal::PaneAgentStatusField::Thinking => "thinking",
+        crate::host::terminal::PaneAgentStatusField::Planning => "planning",
+        crate::host::terminal::PaneAgentStatusField::Routing => "routing",
+        crate::host::terminal::PaneAgentStatusField::ApprovalPolicy => "approval-policy",
+        crate::host::terminal::PaneAgentStatusField::Latency => "latency",
+        crate::host::terminal::PaneAgentStatusField::Preset => "preset",
+        crate::host::terminal::PaneAgentStatusField::Settings => "settings",
+    }
+}
+
+fn pane_status_diagnostic_source(marker: &str) -> String {
+    marker
+        .chars()
+        .take(64)
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 /// Evaluates the finite AND-combined condition vocabulary for one pane.

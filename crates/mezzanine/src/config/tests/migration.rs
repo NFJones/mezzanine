@@ -2197,7 +2197,7 @@ fn migrates_schema_66_with_disabled_iroh_transport() {
 /// single bidirectional control stream enforced by the v1 Iroh protocol.
 #[test]
 fn migrates_schema_67_to_fixed_iroh_stream_limit() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 88);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 89);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2262,7 +2262,7 @@ fn migrates_schema_68_with_separate_outbound_iroh_permission() {
 /// changing the existing ephemeral behavior unless the owner configures it.
 #[test]
 fn migrates_schema_69_with_iroh_bind_port() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 88);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 89);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2293,7 +2293,7 @@ fn migrates_schema_69_with_iroh_bind_port() {
 /// supported primary configuration format without enabling the Iroh listener.
 #[test]
 fn migrates_schema_70_with_iroh_compression_defaults() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 88);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 89);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2509,7 +2509,7 @@ fn migrates_schema_74_without_enabling_streaming_compression() {
 
         assert_eq!(plan.from_version, 74);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 88);
+        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 89);
         assert_eq!(
             root.pointer("/transport/iroh/compression_codecs"),
             Some(&expected_codecs)
@@ -2647,7 +2647,7 @@ fn migrates_schema_76_provider_models_to_structured_records() {
 
         assert_eq!(plan.from_version, 76);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 88);
+        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 89);
         assert_eq!(
             root.pointer("/providers/custom/models/alpha-model/id"),
             Some(&serde_json::json!("alpha/model"))
@@ -2758,7 +2758,7 @@ fn migrates_schema_78_external_editor_defaults() {
 
         assert_eq!(plan.from_version, 78);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 88);
+        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 89);
         assert_eq!(
             root.pointer("/external_editor/command"),
             Some(&serde_json::json!(["editor", "{file}"]))
@@ -3251,7 +3251,7 @@ fn migrates_schema_87_without_enabling_pane_status_providers() {
 
         assert_eq!(plan.from_version, 87);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 88);
+        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 89);
         assert_eq!(
             root.pointer("/frames/pane/pills/branch/command")
                 .and_then(serde_json::Value::as_str),
@@ -3265,5 +3265,75 @@ fn migrates_schema_87_without_enabling_pane_status_providers() {
         let repeated = migrate_config_text(format, &plan.text).unwrap();
         assert!(!repeated.changed);
         assert_eq!(repeated.text, plan.text);
+    }
+}
+
+/// Schema v89 selects standard while preserving every explicit legacy pane-status override.
+#[test]
+fn migrates_schema_88_to_standard_pane_status_preset_without_visual_changes() {
+    for (format, text) in [
+        (
+            ConfigFormat::Toml,
+            "version = 88\n[frames.pane]\nleft_status = \"\"\nright_status = \"#{pane.status}\"\noverflow = \"hide\"\ntitle_min_width = 19\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r##"{"version":88,"frames":{"pane":{"left_status":"","right_status":"#{pane.status}","overflow":"hide","title_min_width":19}}}"##,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 88\nframes:\n  pane:\n    left_status: ''\n    right_status: '#{pane.status}'\n    overflow: hide\n    title_min_width: 19\n",
+        ),
+    ] {
+        let plan = migrate_config_text(format, text).unwrap();
+        let root = parse_config_json_value(format, &plan.text).unwrap();
+
+        assert_eq!(plan.from_version, 88);
+        assert_eq!(plan.to_version, 89);
+        assert_eq!(
+            root.pointer("/frames/pane/status_preset"),
+            Some(&serde_json::json!("standard"))
+        );
+        assert_eq!(
+            root.pointer("/frames/pane/left_status"),
+            Some(&serde_json::json!(""))
+        );
+        assert_eq!(
+            root.pointer("/frames/pane/right_status"),
+            Some(&serde_json::json!("#{pane.status}"))
+        );
+        assert_eq!(
+            root.pointer("/frames/pane/overflow"),
+            Some(&serde_json::json!("hide"))
+        );
+        assert_eq!(
+            root.pointer("/frames/pane/title_min_width"),
+            Some(&serde_json::json!(19))
+        );
+
+        let repeated = migrate_config_text(format, &plan.text).unwrap();
+        assert!(!repeated.changed);
+        assert_eq!(repeated.text, plan.text);
+    }
+}
+
+/// Schema v89 adds only the standard selector when legacy rails were omitted;
+/// it must not pin new explicit rails that would make later preset changes inert.
+#[test]
+fn migrates_schema_88_without_materializing_pane_status_rails() {
+    for (format, text) in [
+        (ConfigFormat::Toml, "version = 88\n"),
+        (ConfigFormat::Json, r#"{"version":88}"#),
+        (ConfigFormat::Yaml, "version: 88\n"),
+    ] {
+        let plan = migrate_config_text(format, text).unwrap();
+        let root = parse_config_json_value(format, &plan.text).unwrap();
+
+        assert_eq!(
+            root.pointer("/frames/pane/status_preset"),
+            Some(&serde_json::json!("standard"))
+        );
+        assert!(root.pointer("/frames/pane/left_status").is_none());
+        assert!(root.pointer("/frames/pane/right_status").is_none());
     }
 }

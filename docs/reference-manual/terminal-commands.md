@@ -30,7 +30,7 @@ state can affect what is available.
 | Manage windows and panes | `new-window`, `split-window`, `select-pane`, `resize-pane`, `rename-pane`, `list-windows`, and `list-panes` |
 | Work with sessions and clients | `list-sessions`, `attach-session`, `detach-client`, `list-clients`, and `kill-session` |
 | Copy and retain output | `copy-mode`, `copy-selection`, `paste-clipboard`, `paste-buffer`, `list-buffers`, `search-history`, `export-history`, and `clear-history` |
-| Inspect and adjust the interface | `zen`, `pane-settings`, `show-messages`, `show-iroh-status`, `list-keys`, `list-key-presets`, `set-key-preset`, `list-themes`, `set-theme`, `add-options`, `show-options`, `set-option`, `bind-key`, and `unbind-key` |
+| Inspect and adjust the interface | `zen`, `pane-settings`, `show-pane-status`, `show-messages`, `show-iroh-status`, `list-keys`, `list-key-presets`, `set-key-preset`, `list-themes`, `set-theme`, `add-options`, `show-options`, `set-option`, `bind-key`, and `unbind-key` |
 | Save or load layout state | `save-layout` and `load-layout` |
 
 ## Baseline command inventory
@@ -51,7 +51,7 @@ runtime requirements.
 - **Panes and presentation:** `split-window`, `kill-pane`, `select-pane`,
   `resize-pane`, `next-pane`, `previous-pane`, `last-pane`, `rotate-pane`,
   `synchronize-panes`, `zoom-pane`, `swap-pane`, `break-pane`, `join-pane`,
-  `display-panes`, `pane-settings`, `list-panes`, `rename-pane`, `capture-pane`, `pipe-pane`,
+  `display-panes`, `pane-settings`, `show-pane-status`, `list-panes`, `rename-pane`, `capture-pane`, `pipe-pane`,
   and `mark-pane-ready`.
 - **Sessions and clients:** `list-clients`, `detach-client`, `attach-session`,
   `list-sessions`, `rename-session`, `kill-session`, `save-layout`,
@@ -61,7 +61,7 @@ runtime requirements.
   `choose-buffer`, `delete-buffer`, `save-buffer`, `clear-history`,
   `search-history`, and `export-history`.
 - **Agent and diagnostics:** `agent-shell`, `show-messages`, `show-metrics`,
-  and `show-iroh-status`.
+  `show-iroh-status`, and `show-pane-status`.
 
 Some commands require an active runtime, control endpoint, or primary-client
 authority. Use `help <command>` when available and review the resulting prompt
@@ -96,6 +96,18 @@ block and make the provider due for normal admission. Retry does not approve a
 command, change trust or permissions, bypass policy, weaken sandboxing, or run
 the command inline. Observer callers and stale, closed, missing, or unblocked
 targets are rejected.
+
+`show-pane-status [-t pane]` diagnoses the active or requested live pane without
+changing focus. It reports the effective pane-status preset and override
+sources, stable rail/occurrence/action ownership, unavailable or
+condition-hidden entries, authoritative full/compact/hidden/overflow decisions,
+cell budgets, and retained provider pending/blocked/error/stale/refresh-age
+state. It uses the same condition and layout resolver as rendering, remains
+available in zen mode, and does not reconcile, schedule, admit, refresh, or run
+providers. Output omits provider command/output/environment data, source paths,
+working directories, and raw admission failures. Missing and stale pane targets
+are errors. The command requires the same attached-primary read authority as
+other terminal diagnostic commands.
 
 `zen on`, `zen off`, and `zen toggle` control the session-wide live
 `terminal.zen_mode` override. Successful changes are silent because their

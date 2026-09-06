@@ -8,7 +8,7 @@
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 88
+version = 89
 
 # Persistent multi-session host policy. The host and inbound Iroh listener are
 # disabled until explicitly started or enabled by the primary user.
@@ -218,8 +218,11 @@ visible_fields = ["window.list", "window.index", "window.name", "window.id", "pa
 enabled = true
 position = "border"
 template = "#{pane.index} #{pane.title}"
-left_status = "#{pane.progress}"
-right_status = "#{pane.pwd} #{agent.model} #{agent.reasoning} #{agent.thinking} #{agent.planning} #{agent.routing} #{agent.latency} #{policy.mode} #{agent.context_usage} #{agent.status} #{history.position}"
+status_preset = "standard"
+# Presets supply both rails. Uncomment either line to override that rail;
+# an explicitly empty string intentionally keeps that rail empty.
+#? left_status = "#{pane.progress}"
+#? right_status = "#{pane.pwd} #{agent.model} #{agent.reasoning} #{agent.thinking} #{agent.planning} #{agent.routing} #{agent.latency} #{policy.mode} #{agent.context_usage} #{agent.status} #{history.position}"
 overflow = "menu"
 title_min_width = 8
 style = "default"

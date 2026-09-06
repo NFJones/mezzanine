@@ -680,8 +680,29 @@ struct RuntimePaneStatusProviderState {
     pending_generation: Option<u64>,
     cancellation: Option<RuntimePaneStatusProviderCancellation>,
     blocked_reason: Option<String>,
+    last_refresh_at_ms: Option<u64>,
+    last_refresh_failed: bool,
     active: bool,
     last_used_sequence: u64,
+}
+
+/// Secret-free retained lifecycle metadata for one pane provider context.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimePaneStatusProviderDiagnostic {
+    /// Bounded schema-validated provider name.
+    pub(crate) name: String,
+    /// Finite aggregate lifecycle state.
+    pub(crate) state: &'static str,
+    /// Whether actor-owned work is currently pending.
+    pub(crate) pending: bool,
+    /// Whether the last execution attempt failed.
+    pub(crate) error: bool,
+    /// Whether the retained entry no longer exactly matches current activity.
+    pub(crate) stale: bool,
+    /// Finite product-owned admission reason.
+    pub(crate) blocked_reason: Option<&'static str>,
+    /// Milliseconds since the latest retained settlement, bounded by `u64`.
+    pub(crate) refresh_age_ms: Option<u64>,
 }
 
 /// Secret-safe diagnostic for one currently blocked pane provider.
@@ -898,6 +919,8 @@ impl RuntimePaneStatusProviderCache {
                 state.pending_generation = None;
                 state.cancellation = None;
                 state.blocked_reason = Some(reason);
+                state.last_refresh_at_ms = Some(current_unix_millis());
+                state.last_refresh_failed = false;
                 None
             }
         }
@@ -954,6 +977,75 @@ impl RuntimePaneStatusProviderCache {
             .and_then(|(candidate, _)| self.blocked_provider_state(candidate))
     }
 
+    /// Returns retained secret-free lifecycle metadata without reconciling or scheduling work.
+    fn diagnostic_for_context(
+        &self,
+        key: &RuntimePaneStatusProviderKey,
+        definition: &PaneStatusProviderDefinition,
+        now_ms: u64,
+    ) -> RuntimePaneStatusProviderDiagnostic {
+        let exact = self.states.iter().rev().find(|(candidate, state)| {
+            candidate.surface == key.surface
+                && candidate.pane_id == key.pane_id
+                && candidate.name == key.name
+                && candidate.cwd == key.cwd
+                && candidate.context_generation == key.context_generation
+                && state.definition.as_ref() == Some(definition)
+        });
+        let retained = exact.or_else(|| {
+            self.states.iter().rev().find(|(candidate, state)| {
+                candidate.surface == key.surface
+                    && candidate.pane_id == key.pane_id
+                    && candidate.name == key.name
+                    && state.definition.as_ref() == Some(definition)
+            })
+        });
+        let Some((candidate, state)) = retained else {
+            return RuntimePaneStatusProviderDiagnostic {
+                name: key.name.chars().take(64).collect(),
+                state: "unavailable",
+                pending: false,
+                error: false,
+                stale: false,
+                blocked_reason: None,
+                refresh_age_ms: None,
+            };
+        };
+        let pending = state.pending_generation.is_some();
+        let blocked_reason = state
+            .blocked_reason
+            .as_deref()
+            .map(pane_status_provider_blocked_reason);
+        let stale = !state.active
+            || candidate.cwd != key.cwd
+            || candidate.config_generation != key.config_generation
+            || candidate.context_generation != key.context_generation;
+        let aggregate = if pending {
+            "pending"
+        } else if blocked_reason.is_some() {
+            "blocked"
+        } else if state.last_refresh_failed {
+            "error"
+        } else if stale {
+            "stale"
+        } else if state.display.is_some() {
+            "ready"
+        } else {
+            "unavailable"
+        };
+        RuntimePaneStatusProviderDiagnostic {
+            name: key.name.chars().take(64).collect(),
+            state: aggregate,
+            pending,
+            error: state.last_refresh_failed,
+            stale,
+            blocked_reason,
+            refresh_age_ms: state
+                .last_refresh_at_ms
+                .map(|refreshed| now_ms.saturating_sub(refreshed)),
+        }
+    }
+
     /// Clears only an exact current block and marks that context due for normal admission.
     fn retry_blocked_provider(&mut self, key: &RuntimePaneStatusProviderKey) -> bool {
         let Some(state) = self.states.get_mut(key) else {
@@ -977,6 +1069,9 @@ impl RuntimePaneStatusProviderCache {
         }
         state.pending_generation = None;
         state.cancellation = None;
+        state.last_refresh_at_ms = Some(current_unix_millis());
+        state.last_refresh_failed =
+            matches!(event.outcome, RuntimePaneStatusProviderOutcome::Failed);
         let previous = state.display.clone();
         state.display = match event.outcome {
             RuntimePaneStatusProviderOutcome::Succeeded(output) if output.is_empty() => {
@@ -1125,6 +1220,47 @@ impl crate::runtime::RuntimeSessionService {
             .pane_status_provider_cache
             .borrow_mut()
             .retry_blocked_provider(&key)
+    }
+
+    /// Returns secret-free diagnostics for configured providers without activating them.
+    pub(crate) fn pane_status_provider_diagnostics(
+        &self,
+        pane_id: &str,
+    ) -> Vec<RuntimePaneStatusProviderDiagnostic> {
+        let providers = self
+            .presentation
+            .settings
+            .pane_status
+            .pills
+            .iter()
+            .filter_map(|(name, definition)| {
+                definition
+                    .provider
+                    .as_ref()
+                    .map(|provider| (name.as_str(), provider))
+            })
+            .collect::<Vec<_>>();
+        let now_ms = current_unix_millis();
+        let cache = self.presentation.pane_status_provider_cache.borrow();
+        providers
+            .into_iter()
+            .filter_map(|(name, definition)| {
+                let key = self.current_pane_status_provider_key(pane_id, name)?;
+                Some(cache.diagnostic_for_context(&key, definition, now_ms))
+            })
+            .collect()
+    }
+
+    /// Returns the number of in-flight provider generations for side-effect regression tests.
+    #[cfg(test)]
+    pub(crate) fn pending_pane_status_provider_refresh_count_for_tests(&self) -> usize {
+        self.presentation
+            .pane_status_provider_cache
+            .borrow()
+            .states
+            .values()
+            .filter(|state| state.pending_generation.is_some())
+            .count()
     }
 
     /// Reconciles pane-provider work for every window currently presented by an attached client.
@@ -1640,6 +1776,7 @@ mod tests {
         PaneStatusCondition, PaneStatusProviderDefinition, PaneStatusProviderEmptyBehavior,
         PaneStatusProviderErrorBehavior,
     };
+    use crate::runtime::current_unix_millis;
     use crate::runtime::processes::NativeShellContext;
     use mez_agent::ShellChildLaunch;
     use mez_mux::layout::{Size, SplitDirection};
@@ -1838,6 +1975,74 @@ mod tests {
                 .map(String::as_str),
             Some("two")
         );
+    }
+
+    /// Verifies diagnostics expose only finite retained lifecycle metadata and
+    /// never reveal provider commands, output, environment, or working paths.
+    #[test]
+    fn pane_provider_cache_diagnostic_is_bounded_secret_safe_and_side_effect_free() {
+        let definition = pane_provider_definition(Some("TOP_SECRET_OUTPUT"));
+        let key = pane_provider_key("%1", "branch", "/TOP/SECRET/worktree");
+        let mut cache = RuntimePaneStatusProviderCache::default();
+        cache.reconcile(vec![pane_provider_request(key.clone(), definition.clone())]);
+        let preparation = cache.claim_due_preparations(1).remove(0);
+        cache.complete_preparation(
+            preparation,
+            Err("denied by permission policy: command=printf SECRET env=TOKEN".to_string()),
+        );
+
+        let before = cache.clone();
+        let diagnostic = cache.diagnostic_for_context(&key, &definition, 1_000);
+
+        assert_eq!(
+            cache, before,
+            "inspection must not mutate or schedule cache work"
+        );
+        assert_eq!(diagnostic.name, "branch");
+        assert_eq!(diagnostic.state, "blocked");
+        assert_eq!(diagnostic.blocked_reason, Some("permission-denied"));
+        assert!(diagnostic.refresh_age_ms.is_some());
+        let rendered = format!("{diagnostic:?}");
+        assert!(!rendered.contains("TOP_SECRET"), "{rendered}");
+        assert!(!rendered.contains("TOKEN"), "{rendered}");
+        assert!(!rendered.contains("/TOP/SECRET"), "{rendered}");
+        assert!(cache.claim_due_preparations(1).is_empty());
+    }
+
+    /// Verifies inspection distinguishes pending, failed, and retained stale
+    /// contexts while exposing no old working-directory or output values.
+    #[test]
+    fn pane_provider_cache_diagnostic_projects_pending_error_and_stale_states() {
+        let definition = pane_provider_definition(None);
+        let key = pane_provider_key("%1", "branch", "/workspace/one");
+        let mut cache = RuntimePaneStatusProviderCache::default();
+        cache.reconcile(vec![pane_provider_request(key.clone(), definition.clone())]);
+        let plan = claim_and_admit(&mut cache, 1).remove(0);
+
+        let pending = cache.diagnostic_for_context(&key, &definition, current_unix_millis());
+        assert_eq!(pending.state, "pending");
+        assert!(pending.pending);
+
+        cache.apply_event(RuntimePaneStatusProviderEvent {
+            key: plan.key,
+            generation: plan.generation,
+            definition: plan.definition,
+            outcome: RuntimePaneStatusProviderOutcome::Failed,
+        });
+        let failed = cache.diagnostic_for_context(&key, &definition, current_unix_millis());
+        assert_eq!(failed.state, "error");
+        assert!(failed.error);
+        assert!(failed.refresh_age_ms.is_some());
+
+        cache.suspend_all();
+        let changed = pane_provider_key("%1", "branch", "/workspace/TOP_SECRET_CHANGED");
+        let stale = cache.diagnostic_for_context(&changed, &definition, current_unix_millis());
+        assert_eq!(stale.state, "error");
+        assert!(stale.error);
+        assert!(stale.stale);
+        let rendered = format!("{stale:?}");
+        assert!(!rendered.contains("TOP_SECRET_CHANGED"), "{rendered}");
+        assert_eq!(cache, cache.clone(), "inspection must remain read-only");
     }
 
     /// Verifies suspension and pane removal cancel outstanding work and fence

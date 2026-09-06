@@ -95,7 +95,7 @@ fn terminal_command_category(name: &str) -> &'static str {
             "copy, buffers, and history"
         }
         "help" | "mark-pane-ready" | "refresh-client" | "show-messages" | "show-metrics"
-        | "show-iroh-status" => "diagnostics and help",
+        | "show-iroh-status" | "show-pane-status" => "diagnostics and help",
         "attach-session" | "detach-client" | "exit" | "kill-session" | "list-clients"
         | "list-sessions" | "rename-session" | "load-layout" | "save-layout" => {
             "sessions and clients"
@@ -180,6 +180,7 @@ fn terminal_command_description(name: &str) -> &'static str {
         "show-messages" => "show diagnostics, pending approvals, and hook failures.",
         "show-metrics" => "show async runtime counters and histograms.",
         "show-iroh-status" => "show the invoking client's live Iroh path quality.",
+        "show-pane-status" => "diagnose resolved pane status layout and retained provider state.",
         "show-options" => "show effective options.",
         "save-layout" => "create a structured session snapshot.",
         "source-file" => "load a configuration file.",

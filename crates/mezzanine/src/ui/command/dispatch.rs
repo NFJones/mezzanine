@@ -719,6 +719,10 @@ pub fn execute_command(
             command: invocation.name.clone(),
             body: show_metrics_display(),
         }),
+        "show-pane-status" => Ok(CommandOutcome::Display {
+            command: invocation.name.clone(),
+            body: "pane status diagnostics require the live runtime".to_string(),
+        }),
         "show-iroh-status" => Ok(CommandOutcome::Display {
             command: invocation.name.clone(),
             body: "Iroh connection status requires the live runtime".to_string(),

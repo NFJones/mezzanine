@@ -47,6 +47,25 @@ fn default_config_pane_frame_template_uses_raw_title_content() {
     );
 }
 
+/// Generated configuration selects the standard preset without pinning either rail.
+/// This keeps a status-preset-only mutation effective on a fresh installation.
+#[test]
+fn default_config_leaves_pane_status_rails_to_the_selected_preset() {
+    let parsed: toml::Value = toml::from_str(DEFAULT_CONFIG_TOML).unwrap();
+    let pane = parsed
+        .get("frames")
+        .and_then(|frames| frames.get("pane"))
+        .and_then(toml::Value::as_table)
+        .unwrap();
+
+    assert_eq!(
+        pane.get("status_preset").and_then(toml::Value::as_str),
+        Some("standard")
+    );
+    assert!(!pane.contains_key("left_status"));
+    assert!(!pane.contains_key("right_status"));
+}
+
 /// Verifies generated configuration declares the active saved-session age and
 /// count policy explicitly so first-run and omitted-value behavior agree.
 #[test]

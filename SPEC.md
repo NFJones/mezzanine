@@ -3819,8 +3819,11 @@ bounded by the configured maximum output length. Empty output behavior MUST be
 one of `hide`, `show_empty`, or `keep_previous`; error behavior MUST be one of
 `hide`, `show_error`, or `keep_previous`.
 
-`frames.pane` MUST additionally support `left_status`, `right_status`,
-`overflow`, `title_min_width`, and `pills`. The two status templates MUST independently select and order padded
+`frames.pane` MUST additionally support `status_preset`, `left_status`, `right_status`,
+`overflow`, `title_min_width`, and `pills`. `status_preset` MUST be one of
+`standard`, `minimal`, `agent-focused`, or `full-controls`, MUST default to
+`standard`, and MUST expand to a complete typed pane-status composition before
+explicit pane frame values and named-pill leaves are applied. The two status templates MUST independently select and order padded
 pane-scoped status items; an explicitly empty template MUST render no items and
 MUST NOT trigger implicit progress, history, or agent-status insertion.
 `frames.pane.pills` MUST be a map keyed by ASCII pill name. Every definition
@@ -3853,7 +3856,8 @@ focus. Terminal actions MUST inject the revalidated stable owner into their
 typed pane-target argument immediately before dispatch; allowlisted agent
 actions MUST use a distinct configured-action ingress and execute directly
 against that owner without being classified as direct primary input.
-Presets and diagnostic settings remain unsupported. Each rendered occurrence MUST retain
+Pane-status diagnostics MUST be exposed by `show-pane-status [-t pane]`; they
+MUST NOT add a configuration setting. Each rendered occurrence MUST retain
 stable pane, rail, ordinal, source-field, style, action, configuration, and
 pane-context identity. Rendering, styling, and hit testing MUST consume that
 same semantic occurrence rather than infer actions from display text.
@@ -3896,6 +3900,23 @@ admission; it MUST NOT create an approval, alter permission or trust state,
 bypass policy, weaken sandboxing, or execute the provider inline. Observers,
 closed owners, stale definitions, stale pane contexts, missing names, and
 providers that are not currently blocked MUST be rejected.
+
+`show-pane-status [-t pane]` MUST resolve the active pane or the requested live
+pane using the existing terminal-command target and read-authority rules. A
+missing or stale target MUST be rejected. The command MUST remain usable while
+zen mode hides pane chrome and MUST project the same resolved conditions and
+whole-pill layout used by rendering rather than reproduce fitting logic. Its
+bounded output MUST include the effective preset and explicit-override source
+provenance; pane width, title reservation, and status cell budgets; every
+configured left and right occurrence, including unavailable and
+condition-hidden occurrences; authoritative full, compact, hidden, or overflow
+state; and stable source, rail/ordinal, pane-owner, field, and finite action-owner
+identity. For configured providers it MUST report retained pending, blocked,
+error, stale, and refresh-age metadata. Inspection MUST NOT reconcile, claim,
+schedule, admit, refresh, or execute providers. Command text, command output,
+environment values, configuration source paths, pane working directories, and
+raw admission diagnostics MUST NOT be emitted; all user-derived metadata MUST
+be independently sanitized and bounded.
 
 `frames.pane.visible_fields` MUST remain only the fallback used to construct
 the pane title template when `frames.pane.template` is empty. It MUST NOT

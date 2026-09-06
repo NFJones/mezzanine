@@ -558,3 +558,72 @@ fn config_mutation_allows_only_supported_named_pill_leaves() {
         assert!(error.message().contains("not supported"), "{path}: {error}");
     }
 }
+
+/// Pane status presets support set and removal through the ordinary scalar
+/// mutation path; higher-level reset requests canonicalize to this unset form.
+#[test]
+fn config_mutation_updates_and_removes_pane_status_preset() {
+    let source = format!(
+        "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[frames.pane]\nstatus_preset = \"standard\"\n"
+    );
+    let set = plan_config_mutation(
+        ConfigFormat::Toml,
+        &source,
+        ConfigScope::Primary,
+        set_string("frames.pane.status_preset", "minimal"),
+    )
+    .unwrap();
+    assert_eq!(
+        extract_config_values(ConfigFormat::Toml, &set.text).get("frames.pane.status_preset"),
+        Some(&"minimal".to_string())
+    );
+
+    let unset_plan = plan_config_mutation(
+        ConfigFormat::Toml,
+        &set.text,
+        ConfigScope::Primary,
+        unset("frames.pane.status_preset"),
+    )
+    .unwrap();
+    assert!(
+        !extract_config_values(ConfigFormat::Toml, &unset_plan.text)
+            .contains_key("frames.pane.status_preset")
+    );
+}
+
+/// Invalid preset replacement rejects the complete mutation plan without
+/// yielding partially updated configuration text for persistence.
+#[test]
+fn config_mutation_rejects_invalid_pane_status_preset_atomically() {
+    let source = format!(
+        "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[frames.pane]\nstatus_preset = \"standard\"\n"
+    );
+    let error = plan_config_mutation(
+        ConfigFormat::Toml,
+        &source,
+        ConfigScope::Primary,
+        set_string("frames.pane.status_preset", "dense"),
+    )
+    .unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::Config);
+    assert!(error.message().contains("frames.pane.status_preset"));
+    assert_eq!(
+        extract_config_values(ConfigFormat::Toml, &source).get("frames.pane.status_preset"),
+        Some(&"standard".to_string())
+    );
+}
+
+/// Provider-facing metadata exposes reset for the preset path; reset reaches
+/// this planner as the same removal operation covered above.
+#[test]
+fn pane_status_preset_metadata_advertises_reset() {
+    let annotation = crate::config::schema::config_change_setting_path_annotations()
+        .into_iter()
+        .find(|annotation| annotation.pattern == "frames.pane.status_preset")
+        .expect("pane status preset mutation metadata");
+
+    assert!(annotation.operations.contains(&"set"));
+    assert!(annotation.operations.contains(&"unset"));
+    assert!(annotation.operations.contains(&"reset"));
+}

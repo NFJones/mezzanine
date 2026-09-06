@@ -1550,6 +1550,32 @@ fn validates_typed_pane_status_configuration() {
     );
     assert!(agent_action.valid, "{:?}", agent_action.diagnostics);
 
+    for preset in ["standard", "minimal", "agent-focused", "full-controls"] {
+        let validation = validate_config_text(
+            ConfigFormat::Toml,
+            &format!(
+                "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[frames.pane]\nstatus_preset = \"{preset}\"\n"
+            ),
+            ConfigScope::Primary,
+        );
+        assert!(validation.valid, "{preset}: {:?}", validation.diagnostics);
+    }
+
+    let invalid_preset = validate_config_text(
+        ConfigFormat::Toml,
+        &format!(
+            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[frames.pane]\nstatus_preset = \"dense\"\n"
+        ),
+        ConfigScope::Primary,
+    );
+    assert!(!invalid_preset.valid);
+    assert!(
+        invalid_preset
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("frames.pane.status_preset") })
+    );
+
     for (body, expected) in [
         (
             "field = \"agent.model\"\ncommand = \"git status\"",

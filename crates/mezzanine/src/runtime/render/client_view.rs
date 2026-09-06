@@ -1752,6 +1752,44 @@ impl RuntimeSessionService {
         context
     }
 
+    /// Resolves one pane's diagnostic status projection through the same
+    /// condition evaluation and whole-pill layout used by frame rendering.
+    pub(crate) fn pane_status_diagnostic_projection(
+        &self,
+        pane_id: &mez_core::ids::PaneId,
+    ) -> Option<crate::host::terminal::PaneStatusDiagnosticProjection> {
+        let window = self
+            .session
+            .windows()
+            .iter()
+            .find(|window| window.panes().iter().any(|pane| pane.id == *pane_id))?;
+        let pane = window.panes().iter().find(|pane| pane.id == *pane_id)?;
+        let width = self
+            .window_presentation_plan(window)
+            .and_then(|plan| {
+                plan.pane(pane.index)
+                    .map(|pane_plan| usize::from(pane_plan.render_region_size.columns))
+            })
+            .unwrap_or_else(|| usize::from(pane.size.columns));
+        let fill = if self.presentation.settings.pane_frame_template
+            == crate::host::terminal::DEFAULT_PANE_FRAME_TEMPLATE
+        {
+            '─'
+        } else {
+            ' '
+        };
+        Some(
+            crate::host::terminal::pane_frame_status_diagnostic_projection(
+                window,
+                pane,
+                &self.terminal_frame_context(),
+                &self.presentation.settings.pane_frame_template,
+                width,
+                fill,
+            ),
+        )
+    }
+
     /// Returns the human-readable display name for a pane-associated agent.
     fn runtime_agent_display_name(&self, agent_id: &str) -> String {
         self.subagent_lineage(agent_id)
