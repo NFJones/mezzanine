@@ -210,11 +210,17 @@ impl RuntimeSessionService {
         let live_due_ms = client_id_value
             .as_ref()
             .and_then(|client_id| self.presentation.client_live_overlay_next_due_ms(client_id));
+        let zen_focus_due_ms = client_id_value.as_ref().and_then(|client_id| {
+            self.zen_focus_label_next_due_ms_for_client(client_id, generation_base_ms)
+        });
         let config_due_ms = runtime_status_refresh_required_by_config(&config).then(|| {
             generation_base_ms
                 .saturating_add(runtime_status_refresh_interval_ms_for_config(&config))
         });
-        let next_due_ms = [config_due_ms, live_due_ms].into_iter().flatten().min();
+        let next_due_ms = [config_due_ms, live_due_ms, zen_focus_due_ms]
+            .into_iter()
+            .flatten()
+            .min();
         if !client_attached || next_due_ms.is_none() {
             return Ok(RuntimeTransition {
                 applied: false,

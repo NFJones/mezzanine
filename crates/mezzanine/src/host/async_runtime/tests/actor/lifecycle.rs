@@ -149,6 +149,71 @@ async fn async_actor_honors_cancel_then_reschedule_timer_order() {
     let ((), _) = tokio::join!(client, actor.run());
 }
 
+/// Verifies a quiet zen-mode focus label expires through the existing
+/// generation-checked status timer and does not leave a zero-delay reschedule.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_expires_zen_focus_label_without_terminal_activity() {
+    let mut session = crate::test_support::runtime::SessionFixture::new().build();
+    let primary = session.attach_primary("primary", true).unwrap();
+    let observer = session
+        .attach_observer_with_terminal("observer", None, 1)
+        .unwrap();
+    let mut service =
+        crate::test_support::runtime::RuntimeServiceFixture::new().build_with_session(session);
+    service.set_terminal_zen_mode_for_tests(true);
+    let now_ms = crate::runtime::current_unix_millis();
+    service
+        .execute_terminal_command(&primary, "new-window second")
+        .unwrap();
+    let appearance = service.drain_deferred_effects_transition().side_effects;
+    for client_id in [&primary, &observer] {
+        assert!(appearance.contains(&RuntimeSideEffect::RenderClient {
+            client_id: client_id.clone(),
+            reason: RenderInvalidationReason::Overlay,
+        }));
+    }
+    let timer_effects = service
+        .client_status_refresh_timer_transition(primary.as_str(), None, now_ms)
+        .unwrap()
+        .side_effects;
+    let [RuntimeSideEffect::ScheduleTimer { key, .. }] = timer_effects.as_slice() else {
+        panic!("expected one zen focus-label expiry timer: {timer_effects:?}");
+    };
+    let key = key.clone();
+    let expiry_ms = key.generation;
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .queue_runtime_side_effects(timer_effects)
+            .await
+            .unwrap();
+        handle.drain_timer_side_effects(4).await.unwrap();
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::Timer(TimerEvent {
+            key,
+            now_ms: expiry_ms,
+        }));
+
+        let report = handle.submit_runtime_events(batch).await.unwrap();
+        assert_eq!(report.accepted, 1);
+        assert_eq!(report.applied, 1);
+        let effects = handle.drain_runtime_side_effects(4).await.unwrap();
+        assert_eq!(effects.len(), 2, "expiry must refresh source and observer");
+        for client_id in [primary, observer] {
+            assert!(effects.contains(&RuntimeSideEffect::RenderClient {
+                client_id,
+                reason: RenderInvalidationReason::StatusLine,
+            }));
+        }
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), _) = tokio::join!(client, actor.run());
+}
+
 /// Verifies every effective alternate-screen switch is promoted to a full
 /// redraw, including multiple switches whose final mode is unchanged.
 #[tokio::test(flavor = "current_thread")]

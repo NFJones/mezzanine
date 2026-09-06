@@ -27,8 +27,10 @@ pane content, and command prompts, explicit overlays, copy/search controls, and
 approval or trust interactions remain available.
 
 The staged focus-label configuration is `terminal.zen_focus_label_duration_ms`
-(default `1000`, integer `0`–`60000`; `0` disables labels). Configuration and
-migration support are implemented; transient label rendering is not yet wired.
+(default `1000`, integer `0`–`60000`; `0` disables labels). Configuration,
+migration, client-local focus tracking, and idle expiry are implemented;
+transient label rendering is not yet wired. Observers share their source
+primary's original deadline, and disabling labels clears all pending scopes.
 The intended display uses pane top-left, window bottom-left, and group top-left
 overlays without reserving rows or running status providers. Only the highest
 changed scope flashes; positive duration changes affect future labels only.

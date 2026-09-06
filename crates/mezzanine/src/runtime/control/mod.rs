@@ -765,12 +765,17 @@ impl RuntimeSessionService {
                     self.integration.mcp_registry(),
                 );
             }
-            return dispatch_control_request_cached(
+            let focus_before = self.capture_zen_focus_snapshots();
+            let response = dispatch_control_request_cached(
                 body,
                 &mut self.session,
                 primary_client_id,
                 self.control.idempotency_mut(),
             );
+            if response.contains(r#""result""#) {
+                self.reconcile_zen_focus_snapshots(focus_before);
+            }
+            return response;
         }
 
         let params = request.params.clone().unwrap_or_else(|| "{}".to_string());
@@ -1279,12 +1284,17 @@ impl RuntimeSessionService {
                     self.integration.mcp_registry(),
                 );
             }
-            return dispatch_control_request_for_connection(
+            let focus_before = self.capture_zen_focus_snapshots();
+            let response = dispatch_control_request_for_connection(
                 body,
                 &mut self.session,
                 connection,
                 self.control.idempotency_mut(),
             );
+            if response.contains(r#""result""#) {
+                self.reconcile_zen_focus_snapshots(focus_before);
+            }
+            return response;
         }
         let may_detach_caller =
             matches!(request.method.as_str(), "client/detach" | "terminal/step");

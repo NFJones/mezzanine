@@ -101,6 +101,7 @@ fn execute_runtime_planned_terminal_command(
     active_client_id: &mut mez_core::ids::ClientId,
     invocation: &CommandInvocation,
 ) -> Result<CommandOutcome> {
+    let focus_before = service.capture_zen_focus_snapshots();
     let outcome = if let Some(outcome) =
         execute_runtime_live_terminal_command(service, active_client_id, invocation)?
     {
@@ -119,6 +120,7 @@ fn execute_runtime_planned_terminal_command(
     ) {
         service.acknowledge_focused_pane_completion();
     }
+    service.reconcile_zen_focus_snapshots(focus_before);
     Ok(outcome)
 }
 

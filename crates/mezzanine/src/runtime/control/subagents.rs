@@ -1137,7 +1137,11 @@ impl RuntimeSessionService {
                 controller,
                 &format!(r#"{{"pane_id":"{}","force":true}}"#, json_escape(pane_id)),
             );
-        } else if let Ok(transition) = self.session.kill_pane_session_owned(Some(pane_id), true) {
+        } else {
+            let focus_before = self.capture_zen_focus_snapshots();
+            let Ok(transition) = self.session.kill_pane_session_owned(Some(pane_id), true) else {
+                return;
+            };
             let Some(pane) = transition.pane else {
                 return;
             };
@@ -1146,6 +1150,7 @@ impl RuntimeSessionService {
             let _ = self.terminate_runtime_pane_process(&removed_pane_id, true);
             let _ = self.cleanup_removed_pane_runtime_state(&removed_pane_id);
             let _ = self.sync_pane_resize_effects(&transition.effects);
+            self.reconcile_zen_focus_snapshots(focus_before);
         }
     }
 

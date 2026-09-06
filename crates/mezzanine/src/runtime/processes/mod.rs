@@ -4330,6 +4330,7 @@ impl RuntimeSessionService {
                 "exited pane process has no matching pane",
             )
         })?;
+        let focus_before = self.capture_zen_focus_snapshots();
         let previous_window_count = self.session.windows().len();
 
         let _ = self.stop_active_pane_pipe(process.pane_id.as_str());
@@ -4360,6 +4361,7 @@ impl RuntimeSessionService {
                 .pane_processes
                 .remove_exited(&process.pane_id)?;
         }
+        self.reconcile_zen_focus_snapshots(focus_before);
         self.session
             .set_lifecycle_state(RuntimeLifecycleState::from_session_state(
                 self.session.state,

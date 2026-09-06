@@ -485,10 +485,24 @@ impl AsyncRuntimeSessionActor {
                 let mut application = if let Some(client_id) = client_id {
                     self.service
                         .refresh_live_overlay_for_client(&client_id, timer.now_ms)?;
-                    self.apply_runtime_client_render_signal_event(
-                        client_id,
-                        RenderInvalidationReason::StatusLine,
-                    )
+                    if self
+                        .service
+                        .expire_zen_focus_labels_for_client(&client_id, timer.now_ms)
+                    {
+                        let source = self.service.zen_focus_label_source_client_id(&client_id);
+                        RuntimeTransition {
+                            applied: true,
+                            side_effects: self.service.render_effects_for_primary_projections(
+                                &source.into_iter().collect::<Vec<_>>(),
+                                RenderInvalidationReason::StatusLine,
+                            ),
+                        }
+                    } else {
+                        self.apply_runtime_client_render_signal_event(
+                            client_id,
+                            RenderInvalidationReason::StatusLine,
+                        )
+                    }
                 } else {
                     RuntimeTransition::default()
                 };

@@ -219,8 +219,6 @@ impl RuntimePresentationSettings {
             || self.terminal_agent_wrap_column_cap != replacement.terminal_agent_wrap_column_cap
             || self.terminal_reduced_motion != replacement.terminal_reduced_motion
             || self.terminal_zen_mode != replacement.terminal_zen_mode
-            || self.terminal_zen_focus_label_duration_ms
-                != replacement.terminal_zen_focus_label_duration_ms
             || self.terminal_streaming_output != replacement.terminal_streaming_output
             || self.terminal_completion_attention_flashing
                 != replacement.terminal_completion_attention_flashing
@@ -396,6 +394,7 @@ struct RuntimeClientPresentationState {
     primary_prompt_input: Option<RuntimePrimaryPromptInput>,
     primary_prefix_key_pending: bool,
     primary_display_overlay: Option<RuntimeDisplayOverlay>,
+    zen_focus_labels: RuntimeZenFocusLabelState,
     agent_prompt_inputs: std::collections::BTreeMap<String, RuntimeAgentPromptInput>,
     active_copy_modes: std::collections::BTreeMap<(String, PaneSurfaceKind), CopyMode>,
     scrollback_copy_mode_panes: std::collections::BTreeSet<(String, PaneSurfaceKind)>,
@@ -1249,6 +1248,7 @@ impl RuntimePresentationComponent {
             primary_prompt_input: self.primary_prompt_input.clone(),
             primary_prefix_key_pending: self.primary_prefix_key_pending,
             primary_display_overlay: self.primary_display_overlay.clone(),
+            zen_focus_labels: previous.zen_focus_labels.clone(),
             agent_prompt_inputs: self.agent_prompt_inputs.clone(),
             active_copy_modes: self.copy.active_copy_modes.clone(),
             scrollback_copy_mode_panes: self.copy.scrollback_copy_mode_panes.clone(),
@@ -1511,11 +1511,16 @@ impl RuntimePresentationComponent {
         settings: RuntimePresentationSettings,
     ) -> Option<RenderInvalidationReason> {
         let invalidation_reason = self.settings.invalidation_reason(&settings);
+        let clear_zen_focus_labels =
+            !settings.terminal_zen_mode || settings.terminal_zen_focus_label_duration_ms == 0;
         let pane_status_changed = self.settings.pane_status != settings.pane_status;
         let pane_provider_visibility_changed = self.settings.pane_frames_enabled
             != settings.pane_frames_enabled
             || self.settings.terminal_zen_mode != settings.terminal_zen_mode;
         self.settings = settings;
+        if clear_zen_focus_labels {
+            self.clear_all_zen_focus_labels();
+        }
         if pane_status_changed {
             self.pane_status_provider_cache
                 .borrow_mut()
@@ -2856,9 +2861,11 @@ mod attached_step;
 mod client_view;
 mod copy_mode;
 mod external_prompt;
+mod focus_labels;
 pub(in crate::runtime) use external_prompt::{
     ExternalPromptEditSettlement, normalize_external_agent_prompt,
 };
+use focus_labels::RuntimeZenFocusLabelState;
 mod harness_status;
 pub(crate) use harness_status::RuntimePaneHarnessStatus;
 mod input;

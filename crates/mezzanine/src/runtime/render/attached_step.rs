@@ -799,9 +799,11 @@ impl RuntimeSessionService {
                         }
                         continue;
                     }
+                    let focus_before = self.capture_zen_focus_snapshots();
                     let toggles_agent_shell = *action == MuxAction::ToggleAgentShell;
                     match self.apply_attached_mux_action(primary_client_id, *action) {
                         Ok(true) => {
+                            self.reconcile_zen_focus_snapshots(focus_before);
                             report.mux_actions_applied =
                                 report.mux_actions_applied.saturating_add(1);
                             report.registry_persistence_required |=
@@ -842,6 +844,7 @@ impl RuntimeSessionService {
                     }
                 }
                 TerminalClientLoopAction::HandleMouse(action) => {
+                    let focus_before = self.capture_zen_focus_snapshots();
                     let overlay_was_open = self.presentation.primary_display_overlay.is_some();
                     match self.apply_attached_mouse_action(
                         primary_client_id,
@@ -850,6 +853,7 @@ impl RuntimeSessionService {
                         suppress_host_clipboard_copy,
                     ) {
                         Ok((true, client_clipboard_write)) => {
+                            self.reconcile_zen_focus_snapshots(focus_before);
                             report.mouse_actions_reported =
                                 report.mouse_actions_reported.saturating_add(1);
                             if matches!(

@@ -96,7 +96,8 @@ impl RuntimeSessionService {
         primary_client_id: &mez_core::ids::ClientId,
         params: &str,
     ) -> Result<String> {
-        match method {
+        let focus_before = self.capture_zen_focus_snapshots();
+        let result = match method {
             "window/create" => self.dispatch_runtime_window_create(primary_client_id, params),
             "window/layout" => self.dispatch_runtime_window_layout(primary_client_id, params),
             "window/rebalance" => self.dispatch_runtime_window_rebalance(primary_client_id, params),
@@ -132,7 +133,11 @@ impl RuntimeSessionService {
             _ => Err(MezError::invalid_state(
                 "runtime control method was filtered incorrectly",
             )),
+        };
+        if result.is_ok() {
+            self.reconcile_zen_focus_snapshots(focus_before);
         }
+        result
     }
 
     /// Updates only the authenticated observer's retained terminal geometry.
@@ -497,6 +502,7 @@ impl RuntimeSessionService {
                 "operation requires an attached primary client",
             ));
         }
+        let focus_before = self.capture_zen_focus_snapshots();
         let force = runtime_json_bool_field(params, "force").unwrap_or(false);
         let target = pane_target_checked_resolved(&self.session, params)?;
         let descriptor = match target.as_deref() {
@@ -540,6 +546,7 @@ impl RuntimeSessionService {
             terminated,
             self.session.windows().is_empty(),
         )?;
+        self.reconcile_zen_focus_snapshots(focus_before);
         Ok(format!(
             r#"{{"closed":true,"terminated_panes":{},"session_empty":{}}}"#,
             terminated,
