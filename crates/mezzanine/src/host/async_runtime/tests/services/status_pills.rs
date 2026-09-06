@@ -182,10 +182,10 @@ timeout_ms = 1000
 }
 
 /// Verifies a fast legacy window pill is applied while a larger pane-provider
-/// queue remains blocked. Pane workers must stay continuously bounded without
-/// batching window completion behind the slowest pane chunk.
+/// queue remains blocked. Twelve real helpers must drain through four worker
+/// slots without starving queued work or delaying independent window completion.
 #[tokio::test(flavor = "current_thread")]
-async fn async_status_pill_worker_preserves_window_latency_during_pane_backlog() {
+async fn async_pane_status_worker_preserves_window_latency_during_bounded_backlog() {
     let mut service = test_service();
     service
         .replace_config_layers(vec![ConfigLayer {
@@ -222,7 +222,7 @@ timeout_ms = 1000
     let release = root.join("release");
 
     let client = async {
-        let pane_effects = (0..5)
+        let pane_effects = (0..12)
             .map(|index| {
                 let started = root.join(format!("pane-{index}.started"));
                 let command = format!(
@@ -280,6 +280,10 @@ timeout_ms = 1000
             while !started.iter().all(|path| path.is_file()) && Instant::now() < start_deadline {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
+            assert!(
+                started.iter().all(|path| path.is_file()),
+                "four workers must reach their gates"
+            );
             let render_deadline = Instant::now() + Duration::from_secs(2);
             let mut applied_before_release = false;
             while Instant::now() < render_deadline {
@@ -298,7 +302,13 @@ timeout_ms = 1000
                 }
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
+            let queued_started =
+                (4..12).any(|index| root.join(format!("pane-{index}.started")).exists());
             std::fs::write(&release, b"release").unwrap();
+            assert!(
+                !queued_started,
+                "queued providers exceeded the four-process bound"
+            );
             applied_before_release
         };
 
@@ -307,8 +317,9 @@ timeout_ms = 1000
             applied_before_release,
             "window completion waited for pane backlog"
         );
-        assert_eq!(report.drained, 6);
-        assert_eq!(report.submitted_events, 6);
+        assert_eq!(report.drained, 13);
+        assert_eq!(report.submitted_events, 13);
+        assert!((0..12).all(|index| root.join(format!("pane-{index}.started")).is_file()));
         handle.shutdown().await.unwrap();
     };
 
