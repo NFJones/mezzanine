@@ -142,6 +142,8 @@ fn preset_pill(
 /// One built-in pane-scoped status value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PaneStatusField {
+    /// Stable pane identity.
+    PaneIdentity,
     /// Determinate terminal progress.
     PaneProgress,
     /// Pane working directory.
@@ -180,6 +182,7 @@ impl PaneStatusField {
     /// Parses one public pane-status field name.
     pub fn parse(value: &str) -> Option<Self> {
         match value {
+            "pane.id" => Some(Self::PaneIdentity),
             "pane.progress" => Some(Self::PaneProgress),
             "pane.pwd" => Some(Self::PaneWorkingDirectory),
             "pane.status" => Some(Self::PaneStatus),
@@ -202,6 +205,7 @@ impl PaneStatusField {
     /// Returns the canonical public field name.
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::PaneIdentity => "pane.id",
             Self::PaneProgress => "pane.progress",
             Self::PaneWorkingDirectory => "pane.pwd",
             Self::PaneStatus => "pane.status",

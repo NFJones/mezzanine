@@ -420,6 +420,239 @@ fn foreground_serve_zen_round_trip_resizes_real_pane_pty() {
     assert!(!text.contains("mez: Io"), "{text}");
 }
 
+/// Verifies every pane-status preset can be selected through the real command
+/// prompt, is reported by `show-pane-status`, and changes composition without
+/// changing the application PTY geometry reserved by the pane and window bars.
+/// Overlay dismissal is synchronized on the restored frame, while each size
+/// assertion comes from `stty` inside the pane rather than renderer internals.
+#[test]
+fn foreground_serve_pane_status_presets_switch_with_diagnostics_without_resizing_pty() {
+    let root = test_root("pane-status-presets");
+    let home = root.join("home");
+    let runtime = root.join("runtime");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&runtime).unwrap();
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+    let socket = runtime.join("status.sock");
+
+    let mut process = spawn_foreground_serve(&root, &home, &runtime, &socket);
+    let mut output = Vec::new();
+    process
+        .read_until(&mut output, Duration::from_secs(10), |text| {
+            text.contains("serving: true") && contains_default_shell_pane_frame(text)
+        })
+        .unwrap();
+
+    for (index, (preset, expected_source)) in [
+        ("minimal", "source: agent.status"),
+        ("agent-focused", "source: pill.model"),
+        ("full-controls", "source: pill.model"),
+        ("standard", "source: agent.model"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let preset_config = root.join(format!("{index}.toml"));
+        fs::write(
+            &preset_config,
+            format!("version = 89\n[frames.pane]\nstatus_preset = \"{preset}\"\n"),
+        )
+        .unwrap();
+        output.clear();
+        process
+            .write_input(format!("\x01:source-file {}\r", preset_config.display()).as_bytes())
+            .unwrap();
+        let expected_response = format!("mez: path: {}", preset_config.display());
+        process
+            .read_until(&mut output, Duration::from_secs(10), |text| {
+                text.contains(&expected_response)
+            })
+            .unwrap();
+
+        output.clear();
+        process
+            .write_input(b"\x01:show-pane-status -t %1\r")
+            .unwrap();
+        process
+            .read_until(&mut output, Duration::from_secs(10), |text| {
+                text.contains("pane: %1")
+                    && text.contains(&format!("preset: {preset}"))
+                    && text.contains("preset source:")
+                    && text.contains("source-file:")
+                    && text.contains(expected_source)
+                    && text.contains("pane width cells:")
+            })
+            .unwrap();
+
+        output.clear();
+        process.write_input(b"\x1b").unwrap();
+        process
+            .read_until(&mut output, Duration::from_secs(10), |text| {
+                contains_default_shell_pane_frame(text)
+            })
+            .unwrap();
+
+        output.clear();
+        process
+            .write_input(
+                format!("printf 'mez-pane-status-size {preset} %s\\n' \"$(stty size)\"\n")
+                    .as_bytes(),
+            )
+            .unwrap();
+        process
+            .read_until(&mut output, Duration::from_secs(10), |text| {
+                text.contains(&format!("mez-pane-status-size {preset} 22 80"))
+            })
+            .unwrap();
+    }
+
+    process.write_input(b"\x01:exit\r").unwrap();
+    process
+        .read_until_exit(&mut output, Duration::from_secs(5))
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output);
+    assert!(!text.contains("Broken pipe"), "{text}");
+    assert!(!text.contains("mez: Io"), "{text}");
+}
+
+/// Verifies explicit empty and custom pane-status rails are honored by live
+/// terminal configuration, including while zen hides both frame bars. The
+/// diagnostic must remain available in zen, omit the cleared progress rail,
+/// retain the custom status occurrence, and leave zen-off to restore the bars
+/// and their two-row PTY reservation.
+#[test]
+fn foreground_serve_pane_status_explicit_rails_remain_diagnostic_in_zen() {
+    let root = test_root("pane-status-rails-zen");
+    let home = root.join("home");
+    let runtime = root.join("runtime");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&runtime).unwrap();
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+    let socket = runtime.join("status.sock");
+    let rails_config = root.join("pane-status.toml");
+    fs::write(
+        &rails_config,
+        "version = 89\n[frames.pane]\nstatus_preset = \"standard\"\nleft_status = \"\"\nright_status = \"rail-marker #{pane.status}\"\n",
+    )
+    .unwrap();
+
+    let mut process = spawn_foreground_serve(&root, &home, &runtime, &socket);
+    let mut output = Vec::new();
+    process
+        .read_until(&mut output, Duration::from_secs(10), |text| {
+            text.contains("serving: true") && contains_default_shell_pane_frame(text)
+        })
+        .unwrap();
+
+    output.clear();
+    process
+        .write_input(format!("\x01:source-file {}\r", rails_config.display()).as_bytes())
+        .unwrap();
+    process
+        .read_until(&mut output, Duration::from_secs(10), |text| {
+            text.contains("mez: path:")
+        })
+        .unwrap();
+
+    output.clear();
+    process
+        .write_input(b"\x01:show-pane-status -t %1\r")
+        .unwrap();
+    process
+        .read_until(&mut output, Duration::from_secs(10), |text| {
+            text.contains("pane: %1")
+                && text.contains("preset: standard")
+                && text.contains("left status")
+                && text.contains("right status source:")
+                && text.contains("source-file:")
+                && text.contains("source: pane.status")
+                && text.contains("occurrence:")
+                && text.contains("right:0")
+        })
+        .unwrap();
+    let diagnostic = String::from_utf8_lossy(&output);
+    assert!(
+        !diagnostic.contains("source: pane.progress"),
+        "{diagnostic}"
+    );
+
+    output.clear();
+    process.write_input(b"\x1b").unwrap();
+    process
+        .read_until(&mut output, Duration::from_secs(10), |text| {
+            contains_default_shell_pane_frame(text)
+        })
+        .unwrap();
+
+    process
+        .write_input(
+            b"last=; while :; do size=$(stty size); if [ \"$size\" != \"$last\" ]; then printf 'mez-pane-status-zen-size %s\\n' \"$size\"; last=$size; fi; sleep 0.05; done\n",
+        )
+        .unwrap();
+    process
+        .read_until(&mut output, Duration::from_secs(10), |text| {
+            text.contains("mez-pane-status-zen-size 22 80")
+        })
+        .unwrap();
+
+    output.clear();
+    process.write_input(b"\x01:zen on\r").unwrap();
+    process
+        .read_until(&mut output, Duration::from_secs(10), |text| {
+            text.contains("mez-pane-status-zen-size 24 80")
+        })
+        .unwrap();
+
+    output.clear();
+    process
+        .write_input(b"\x01:show-pane-status -t %1\r")
+        .unwrap();
+    process
+        .read_until(&mut output, Duration::from_secs(10), |text| {
+            text.contains("pane: %1")
+                && text.contains("preset: standard")
+                && text.contains("left status")
+                && text.contains("right status source:")
+                && text.contains("source-file:")
+                && text.contains("source: pane.status")
+                && text.contains("occurrence:")
+                && text.contains("right:0")
+        })
+        .unwrap();
+    let zen_diagnostic = String::from_utf8_lossy(&output);
+    assert!(
+        !zen_diagnostic.contains("source: pane.progress"),
+        "{zen_diagnostic}"
+    );
+
+    output.clear();
+    process.write_input(b"\x1b").unwrap();
+    process
+        .read_until(&mut output, Duration::from_secs(10), |text| {
+            text.contains("mez-pane-status-zen-size 24 80")
+        })
+        .unwrap();
+
+    output.clear();
+    process.write_input(b"\x01:zen off\r").unwrap();
+    process
+        .read_until(&mut output, Duration::from_secs(10), |text| {
+            text.contains("mez-pane-status-zen-size 22 80")
+                && contains_default_shell_pane_frame(text)
+        })
+        .unwrap();
+
+    process.write_input(b"\x01:exit\r").unwrap();
+    process
+        .read_until_exit(&mut output, Duration::from_secs(5))
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output);
+    assert!(!text.contains("Broken pipe"), "{text}");
+    assert!(!text.contains("mez: Io"), "{text}");
+}
+
 /// Launches a real foreground primary session and exits the pane shell normally.
 /// This covers the clean primary-exit path where the terminal endpoint may
 /// disappear while Mezzanine is restoring presentation state; that condition
@@ -1022,10 +1255,18 @@ fn test_root(name: &str) -> PathBuf {
 /// on duplicated control-flow logic.
 fn output_excerpt(output: &[u8]) -> String {
     let escaped = String::from_utf8_lossy(output).escape_debug().to_string();
-    if escaped.len() <= 2000 {
+    const MAX_EXCERPT_LEN: usize = 4000;
+    const HEAD_LEN: usize = 1000;
+    if escaped.len() <= MAX_EXCERPT_LEN {
         escaped
     } else {
-        format!("{}...", &escaped[..2000])
+        let tail_start = escaped.len() - (MAX_EXCERPT_LEN - HEAD_LEN);
+        format!(
+            "{}...<{} escaped bytes omitted>...{}",
+            &escaped[..HEAD_LEN],
+            tail_start - HEAD_LEN,
+            &escaped[tail_start..]
+        )
     }
 }
 

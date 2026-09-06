@@ -362,7 +362,9 @@ pub(in crate::host::terminal::render) fn pane_frame_right_status_rendition(
         PaneStatusStyle::Automatic => match segment.key.field {
             PaneStatusField::HistoryPosition => ui_theme.colors.scroll_indicator.rendition(),
             PaneStatusField::PaneProgress => ui_theme.colors.pane_progress.rendition(),
-            PaneStatusField::PaneWorkingDirectory => ui_theme.colors.pane_pwd.rendition(),
+            PaneStatusField::PaneIdentity | PaneStatusField::PaneWorkingDirectory => {
+                ui_theme.colors.pane_pwd.rendition()
+            }
             PaneStatusField::PaneStatus => {
                 pane_frame_agent_status_rendition(&segment.value, ui_theme)
             }

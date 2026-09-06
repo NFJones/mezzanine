@@ -50,6 +50,38 @@ fn render_pane_frame_uses_named_template_fields() {
     assert_eq!(rendered[1], "body              ");
 }
 
+/// Verifies pane-status rails accept the same stable pane identity field as
+/// pane frame templates. Repeated occurrences must remain visible so a live
+/// rail replacement produces a distinct client presentation.
+#[test]
+fn render_pane_status_rail_uses_pane_identity() {
+    let mut ids = IdFactory::default();
+    let window = Window::new(&mut ids, 0, "main", Size::new(24, 2).unwrap());
+    let pane_id = window.panes()[0].id.to_string();
+    let inputs = vec![PaneRenderInput {
+        pane_id: pane_id.clone(),
+        lines: vec!["body".to_string()],
+    }];
+    let mut frame_context = TerminalFrameContext::default();
+    frame_context.pane_status.left_status.clear();
+    frame_context.pane_status.right_status = "#{pane.id} #{pane.id}".to_string();
+
+    let rendered = render_window_with_pane_frame_template(
+        &window,
+        &inputs,
+        &frame_context,
+        TerminalFrameRenderOptions::plain(false, "", TerminalFramePosition::Top),
+        TerminalFrameRenderOptions::plain(
+            true,
+            DEFAULT_PANE_FRAME_TEMPLATE,
+            TerminalFramePosition::Top,
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(rendered[0].matches(&pane_id).count(), 2, "{}", rendered[0]);
+}
+
 /// Verifies render pane frame template fits narrow panes.
 ///
 /// This regression scenario documents the behavior being protected so a

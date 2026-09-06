@@ -2145,6 +2145,13 @@ mod tests {
             }]),
             Some(true)
         );
+        assert_eq!(
+            iroh_side_effect_render_invalidation(&[RuntimeSideEffect::RenderClient {
+                client_id: mez_core::ids::ClientId::new('c', 1),
+                reason: RenderInvalidationReason::FullRedraw,
+            }]),
+            Some(false)
+        );
     }
 
     /// Verifies ready render events spanning multiple actor batches are
@@ -3149,13 +3156,13 @@ mod tests {
         }
     }
 
-    /// Verifies a paired control and event connection remains usable after an
-    /// application-silent period longer than a production-valid QUIC idle
-    /// timeout. This protects persistent attaches from idle disconnection while
-    /// avoiding sub-policy deadlines that turn ordinary CI scheduler stalls into
-    /// transport failures.
+    /// Verifies a paired primary receives actual pane-status render updates and
+    /// remains usable after an application-silent period longer than a
+    /// production-valid QUIC idle timeout. A same-width explicit rail change
+    /// must arrive as a row delta, while zen transitions must replace retained
+    /// chrome with cleared rows without invalidating the physical output cache.
     #[tokio::test(flavor = "current_thread")]
-    async fn paired_iroh_control_and_events_survive_idle_period_over_direct_listener() {
+    async fn paired_iroh_primary_pane_status_delta_and_zen_updates_survive_idle() {
         use secrecy::ExposeSecret;
 
         use crate::control::encode_control_body;
@@ -3253,6 +3260,10 @@ mod tests {
         })
         .to_string();
         let list = r#"{"jsonrpc":"2.0","id":"list","method":"session/list","params":{}}"#;
+        let change_preset = r#"{"jsonrpc":"2.0","id":"preset","method":"config/set","params":{"path":"frames.pane.status_preset","value":"minimal","idempotency_key":"primary-pane-status-preset"}}"#;
+        let change_rail = r##"{"jsonrpc":"2.0","id":"rail","method":"config/set","params":{"path":"frames.pane.right_status","value":"#{pane.id} #{pane.id}","idempotency_key":"primary-pane-status-rail"}}"##;
+        let zen_on = r#"{"jsonrpc":"2.0","id":"zen-on","method":"terminal/command","params":{"input":"zen on","idempotency_key":"primary-pane-status-zen-on"}}"#;
+        let zen_off = r#"{"jsonrpc":"2.0","id":"zen-off","method":"terminal/command","params":{"input":"zen off","idempotency_key":"primary-pane-status-zen-off"}}"#;
 
         let listener_handle = handle.clone();
         drop(handle);
@@ -3333,6 +3344,96 @@ mod tests {
             .expect("post-idle control response should arrive within the test I/O deadline");
             assert!(list_body.contains(r#""sessions":["#), "{list_body}");
 
+            send.write_all(&encode_control_body(change_preset))
+                .await
+                .unwrap();
+            send.flush().await.unwrap();
+            let preset_body = read_test_control_body(&mut recv).await;
+            assert!(preset_body.contains(r#""applied":true"#), "{preset_body}");
+            let preset_update = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                read_test_control_body(&mut events),
+            )
+            .await
+            .expect("pane-status preset change should push a render delta");
+            assert!(
+                preset_update.contains(r#""method":"render/delta""#),
+                "{preset_update}"
+            );
+            assert!(preset_update.contains(r#""revision":2"#), "{preset_update}");
+            assert!(
+                preset_update.contains(r#""rows":[{"index":0"#),
+                "{preset_update}"
+            );
+
+            send.write_all(&encode_control_body(change_rail))
+                .await
+                .unwrap();
+            send.flush().await.unwrap();
+            let rail_body = read_test_control_body(&mut recv).await;
+            assert!(rail_body.contains(r#""applied":true"#), "{rail_body}");
+            let rail_update = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                read_test_control_body(&mut events),
+            )
+            .await
+            .expect("pane-status rail change should push a render delta");
+            assert!(
+                rail_update.contains(r#""method":"render/delta""#),
+                "{rail_update}"
+            );
+            assert!(rail_update.contains(r#""revision":3"#), "{rail_update}");
+            assert!(rail_update.matches("%1").count() >= 2, "{rail_update}");
+
+            send.write_all(&encode_control_body(zen_on)).await.unwrap();
+            send.flush().await.unwrap();
+            let zen_on_body = read_test_control_body(&mut recv).await;
+            assert!(zen_on_body.contains(r#""command":"zen""#), "{zen_on_body}");
+            let zen = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                read_test_control_body(&mut events),
+            )
+            .await
+            .expect("zen enable should push cleared frame rows");
+            assert!(zen.contains(r#""method":"render/delta""#), "{zen}");
+            assert!(zen.contains(r#""invalidate_output":false"#), "{zen}");
+            let decoded: serde_json::Value = serde_json::from_str(&zen).unwrap();
+            let rows = decoded["params"]["rows"].as_array().unwrap();
+            for index in [0, 23] {
+                assert!(rows.iter().any(|row| {
+                    row["index"] == index
+                        && row["line"]
+                            .as_str()
+                            .is_some_and(|line| line.trim().is_empty())
+                }));
+            }
+            assert!(zen.contains(r#""revision":4"#), "{zen}");
+            assert!(zen.matches("%1").count() < 2, "{zen}");
+
+            send.write_all(&encode_control_body(zen_off)).await.unwrap();
+            send.flush().await.unwrap();
+            let zen_off_body = read_test_control_body(&mut recv).await;
+            assert!(
+                zen_off_body.contains(r#""command":"zen""#),
+                "{zen_off_body}"
+            );
+            let restored = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                read_test_control_body(&mut events),
+            )
+            .await
+            .expect("zen disable should restore pane status rows");
+            assert!(
+                restored.contains(r#""method":"render/delta""#),
+                "{restored}"
+            );
+            assert!(
+                restored.contains(r#""invalidate_output":false"#),
+                "{restored}"
+            );
+            assert!(restored.contains(r#""revision":5"#), "{restored}");
+            assert!(restored.matches("%1").count() >= 2, "{restored}");
+
             assert_eq!(
                 shutdown_handle.shutdown().await.unwrap(),
                 crate::runtime::RuntimeLifecycleState::Running
@@ -3353,12 +3454,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// Verifies an observer v3 stream pushes exact-observer snapshots over a
-    /// direct listener and applies observer-local resize without a view fetch.
+    /// Verifies an observer v3 stream receives actual pane-status deltas and
+    /// replacement snapshots over a direct listener. Primary-owned rail config
+    /// changes must update the observer without granting mutation authority,
+    /// while resize uses a snapshot and zen clears frame rows with a delta.
     #[tokio::test(flavor = "current_thread")]
-    async fn paired_iroh_observer_v3_pushes_resized_snapshot_over_direct_listener() {
+    async fn paired_iroh_observer_pane_status_delta_resize_and_zen_updates() {
         use secrecy::ExposeSecret;
 
+        use crate::control::ControlConnectionState;
         use crate::control::encode_control_body;
         use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionActor};
         use crate::security::remote::{RemoteRoleCeiling, RemoteTrustStore};
@@ -3373,7 +3477,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
 
         let mut service = RuntimeServiceFixture::new().build();
-        service
+        let local_primary = service
             .attach_primary(
                 "local-primary",
                 true,
@@ -3447,7 +3551,7 @@ mod tests {
                     "name": "remote-observer",
                     "interactive": true,
                     "metadata": {"pushed_render_updates": true},
-                    "terminal": {"columns": 70, "rows": 20, "term": "xterm-256color"}
+                    "terminal": {"columns": 80, "rows": 20, "term": "xterm-256color"}
                 },
                 "authentication": {
                     "mechanism": "extension:iroh_invitation",
@@ -3500,9 +3604,64 @@ mod tests {
             );
             assert!(initial.contains(r#""role":"observer""#), "{initial}");
             assert!(
-                initial.contains(r#""client_size":{"columns":70,"rows":20}"#),
+                initial.contains(r#""client_size":{"columns":80,"rows":20}"#),
                 "{initial}"
             );
+
+            let preset_result = shutdown_handle
+                .handle_control_input_for_connection(
+                    encode_control_body(
+                        r#"{"jsonrpc":"2.0","id":"observer-preset","method":"config/set","params":{"path":"frames.pane.status_preset","value":"minimal","idempotency_key":"observer-pane-status-preset"}}"#,
+                    ),
+                    1024 * 1024,
+                    ControlConnectionState::trusted_existing_client(local_primary.clone()),
+                )
+                .await
+                .unwrap();
+            let (preset_body, _) =
+                crate::control::decode_control_frame(&preset_result.output, 1024 * 1024).unwrap();
+            assert!(preset_body.contains(r#""applied":true"#), "{preset_body}");
+            let preset_update = tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                read_test_control_body(&mut events),
+            )
+            .await
+            .expect("primary preset change should push an observer delta");
+            assert!(
+                preset_update.contains(r#""method":"render/delta""#),
+                "{preset_update}"
+            );
+            assert!(preset_update.contains(r#""revision":2"#), "{preset_update}");
+            assert!(
+                preset_update.contains(r#""rows":[{"index":0"#),
+                "{preset_update}"
+            );
+
+            let rail_result = shutdown_handle
+                .handle_control_input_for_connection(
+                    encode_control_body(
+                        r##"{"jsonrpc":"2.0","id":"observer-rail","method":"config/set","params":{"path":"frames.pane.right_status","value":"#{pane.id} #{pane.id}","idempotency_key":"observer-pane-status-rail"}}"##,
+                    ),
+                    1024 * 1024,
+                    ControlConnectionState::trusted_existing_client(local_primary.clone()),
+                )
+                .await
+                .unwrap();
+            let (rail_body, _) =
+                crate::control::decode_control_frame(&rail_result.output, 1024 * 1024).unwrap();
+            assert!(rail_body.contains(r#""applied":true"#), "{rail_body}");
+            let rail_update = tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                read_test_control_body(&mut events),
+            )
+            .await
+            .expect("primary rail change should push an observer delta");
+            assert!(
+                rail_update.contains(r#""method":"render/delta""#),
+                "{rail_update}"
+            );
+            assert!(rail_update.contains(r#""revision":3"#), "{rail_update}");
+            assert!(rail_update.matches("%1").count() >= 2, "{rail_update}");
 
             let resize = r#"{"jsonrpc":"2.0","id":"resize","method":"terminal/resize","params":{"idempotency_key":"observer-resize","client_size":{"columns":100,"rows":30}}}"#;
             send.write_all(&encode_control_body(resize)).await.unwrap();
@@ -3519,12 +3678,43 @@ mod tests {
                 resized.contains(r#""method":"render/snapshot""#),
                 "{resized}"
             );
-            assert!(resized.contains(r#""revision":2"#), "{resized}");
+            assert!(resized.contains(r#""revision":4"#), "{resized}");
             assert!(resized.contains(r#""role":"observer""#), "{resized}");
             assert!(
                 resized.contains(r#""client_size":{"columns":100,"rows":30}"#),
                 "{resized}"
             );
+            assert!(resized.matches("%1").count() >= 2, "{resized}");
+
+            shutdown_handle
+                .execute_terminal_command(local_primary, "zen on".to_string())
+                .await
+                .unwrap();
+            let zen = tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                read_test_control_body(&mut events),
+            )
+            .await
+            .expect("zen enable should replace the observer view");
+            assert!(zen.contains(r#""method":"render/delta""#), "{zen}");
+            assert!(zen.contains(r#""invalidate_output":false"#), "{zen}");
+            let decoded: serde_json::Value = serde_json::from_str(&zen).unwrap();
+            let rows = decoded["params"]["rows"].as_array().unwrap();
+            for index in [0, 23] {
+                assert!(rows.iter().any(|row| {
+                    row["index"] == index
+                        && row["line"]
+                            .as_str()
+                            .is_some_and(|line| line.trim().is_empty())
+                }));
+            }
+            assert!(zen.contains(r#""revision":5"#), "{zen}");
+            assert!(zen.contains(r#""role":"observer""#), "{zen}");
+            assert!(
+                zen.contains(r#""client_size":{"columns":100,"rows":30}"#),
+                "{zen}"
+            );
+            assert!(zen.matches("%1").count() < 2, "{zen}");
 
             assert_eq!(
                 shutdown_handle.shutdown().await.unwrap(),

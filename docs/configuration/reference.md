@@ -481,8 +481,10 @@ Default `frames.pane.visible_fields`:
 ["pane.index", "pane.title", "pane.id", "pane.status", "history.position", "agent.model", "agent.reasoning", "agent.thinking", "agent.planning", "agent.routing", "agent.latency", "agent.preset", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
 ```
 
-Pane status rails accept bare built-ins such as `#{pane.progress}`,
-`#{pane.pwd}`, `#{agent.model}`, and `#{history.position}`. A named definition
+Pane status rails accept bare built-ins such as `#{pane.id}`, `#{pane.progress}`,
+`#{pane.pwd}`, `#{agent.model}`, and `#{history.position}`. The `pane.id` field
+shows the stable pane identity and is available in both shell and agent views.
+A named definition
 requires exactly one source: `field` or `command`. Both forms may set `label`,
 `format`, `compact_format`, `when`, `min_width`, `max_width`, `priority`,
 `style`, and `on_click`. Command providers additionally require `cwd = "pane"`
