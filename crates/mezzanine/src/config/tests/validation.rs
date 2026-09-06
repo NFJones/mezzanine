@@ -2,6 +2,29 @@
 
 use super::*;
 
+/// Duration validation preserves scalar types, including quoted-number rejection,
+/// while accepting both the disable value and the maximum supported lifetime.
+#[test]
+fn zen_focus_duration_typed_validation() {
+    for (value, valid) in [
+        ("0", true),
+        ("1", true),
+        ("60000", true),
+        ("60001", false),
+        ("-1", false),
+        ("1.5", false),
+        ("true", false),
+        ("\"1000\"", false),
+    ] {
+        let result = validate_config_text(
+            ConfigFormat::Toml,
+            &format!("[terminal]\nzen_focus_label_duration_ms = {value}\n"),
+            ConfigScope::Primary,
+        );
+        assert_eq!(result.valid, valid, "{value}: {:?}", result.diagnostics);
+    }
+}
+
 /// Verifies that custom subagent profiles are part of the baseline config
 /// schema, including nested shell environment overrides, while unknown profile
 /// keys remain rejected.

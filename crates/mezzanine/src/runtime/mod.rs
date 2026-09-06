@@ -541,6 +541,7 @@ use config::{
     runtime_terminal_resize_debounce_ms_from_config,
     runtime_terminal_shell_output_preview_lines_from_config,
     runtime_terminal_streaming_output_from_config, runtime_terminal_term_from_config,
+    runtime_terminal_zen_focus_label_duration_ms_from_config,
     runtime_terminal_zen_mode_from_config, runtime_trust_decision_name,
     runtime_trust_decision_param, runtime_user_prompt_hook_payload,
     runtime_validate_latency_preference, runtime_window_frame_position_from_config,

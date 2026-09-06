@@ -579,6 +579,7 @@ pub(super) const TERMINAL_KEYS: &[&str] = &[
     "passthrough",
     "emoji_width",
     "zen_mode",
+    "zen_focus_label_duration_ms",
     "reduced_motion",
     "streaming_output",
     "enhanced_keyboard_reporting",

@@ -104,6 +104,8 @@ pub(crate) struct RuntimePresentationSettings {
     terminal_reduced_motion: bool,
     /// Whether passive Mezzanine chrome is configured to be hidden.
     terminal_zen_mode: bool,
+    /// Transient focus-label lifetime in milliseconds; zero disables labels.
+    terminal_zen_focus_label_duration_ms: u64,
     /// Whether provisional provider output is rendered while it arrives.
     terminal_streaming_output: bool,
     /// Whether Mez-owned readline prompts may request enhanced keyboard input.
@@ -153,6 +155,7 @@ impl Default for RuntimePresentationSettings {
             terminal_agent_wrap_column_cap: crate::host::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP,
             terminal_reduced_motion: false,
             terminal_zen_mode: false,
+            terminal_zen_focus_label_duration_ms: 1000,
             terminal_streaming_output: true,
             terminal_enhanced_keyboard_reporting: false,
             terminal_completion_attention_flashing: true,
@@ -216,6 +219,8 @@ impl RuntimePresentationSettings {
             || self.terminal_agent_wrap_column_cap != replacement.terminal_agent_wrap_column_cap
             || self.terminal_reduced_motion != replacement.terminal_reduced_motion
             || self.terminal_zen_mode != replacement.terminal_zen_mode
+            || self.terminal_zen_focus_label_duration_ms
+                != replacement.terminal_zen_focus_label_duration_ms
             || self.terminal_streaming_output != replacement.terminal_streaming_output
             || self.terminal_completion_attention_flashing
                 != replacement.terminal_completion_attention_flashing
@@ -271,6 +276,8 @@ impl RuntimePresentationSettings {
                 root,
             )?,
             terminal_zen_mode: crate::runtime::runtime_terminal_zen_mode_from_config(root)?,
+            terminal_zen_focus_label_duration_ms:
+                crate::runtime::runtime_terminal_zen_focus_label_duration_ms_from_config(root)?,
             terminal_streaming_output:
                 crate::runtime::runtime_terminal_streaming_output_from_config(root)?,
             terminal_enhanced_keyboard_reporting:

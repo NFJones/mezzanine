@@ -118,6 +118,10 @@ Set `terminal.zen_mode = true` in configuration for persistent startup
 behavior. Normal command bindings may invoke `zen toggle`. The command requires
 an attached primary client, and accepts exactly one lowercase mode.
 
+`terminal.zen_focus_label_duration_ms` is staged configuration for transient zen
+focus labels (1000 ms by default; 0 disables; maximum 60000). It does not change
+the `zen` command syntax. Label rendering is pending implementation.
+
 `show-iroh-status` displays a table for the invoking remote client's selected
 Iroh path. It includes RTT, jitter, recent transfer rates, loss and congestion
 deltas, congestion window, MTU, sample freshness, negotiated codec, and

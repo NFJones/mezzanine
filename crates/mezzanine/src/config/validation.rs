@@ -319,6 +319,17 @@ pub fn validate_config_text(
     diagnostics.extend(validate_agent_enabled_actions_config(format, text));
     diagnostics.extend(validate_pane_status_config(format, text));
 
+    if let Ok(root) = parse_config_json_value(format, text)
+        && let Some(value) = root.pointer("/terminal/zen_focus_label_duration_ms")
+        && !value.as_u64().is_some_and(|duration| duration <= 60000)
+    {
+        diagnostics.push(ConfigDiagnostic {
+            path: "terminal.zen_focus_label_duration_ms".to_string(),
+            message: "terminal.zen_focus_label_duration_ms must be an integer from 0 through 60000"
+                .to_string(),
+        });
+    }
+
     for (backend, display_name) in [("bubblewrap", "Bubblewrap"), ("seatbelt", "Seatbelt")] {
         let git_user_name = values.get(&format!("permissions.{backend}.git_user_name"));
         let git_user_email = values.get(&format!("permissions.{backend}.git_user_email"));
@@ -1652,6 +1663,10 @@ pub(super) fn validate_terminal_value(path: &str, value: &str) -> Option<String>
         | "terminal.agent_wrap_column_cap" => match value.parse::<u64>() {
             Ok(interval) if interval > 0 => None,
             _ => Some(format!("{path} must be a positive integer")),
+        },
+        "terminal.zen_focus_label_duration_ms" => match value.parse::<u64>() {
+            Ok(duration) if duration <= 60000 => None,
+            _ => Some(format!("{path} must be an integer from 0 through 60000")),
         },
         "terminal.render_rate_limit_fps" => match value.parse::<u64>() {
             Ok(_) => None,

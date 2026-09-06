@@ -162,7 +162,7 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 89
+version = 90
 
 # Persistent multi-session host policy. The host and inbound Iroh listener are
 # disabled until explicitly started or enabled by the primary user.
@@ -262,6 +262,8 @@ passthrough = false
 emoji_width = "wide"
 # Hide passive Mezzanine chrome while retaining pane divider lines.
 zen_mode = false
+# Transient zen focus-label lifetime; zero disables labels (maximum 60000).
+zen_focus_label_duration_ms = 1000
 # Disable optional motion and animation when true.
 reduced_motion = false
 # Render provider output incrementally while a validated response is still arriving.

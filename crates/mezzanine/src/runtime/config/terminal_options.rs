@@ -426,6 +426,27 @@ pub(crate) fn runtime_terminal_zen_mode_from_config(root: &Value) -> Result<bool
         .ok_or_else(|| MezError::config("terminal.zen_mode must be true or false"))
 }
 
+/// Returns bounded focus-label milliseconds; zero disables transient labels.
+/// Invalid types or values above one minute reject the configuration.
+pub(crate) fn runtime_terminal_zen_focus_label_duration_ms_from_config(
+    root: &Value,
+) -> Result<u64> {
+    let Some(value) = root
+        .get("terminal")
+        .and_then(|terminal| terminal.get("zen_focus_label_duration_ms"))
+    else {
+        return Ok(1000);
+    };
+    value
+        .as_u64()
+        .filter(|duration| *duration <= 60000)
+        .ok_or_else(|| {
+            MezError::config(
+                "terminal.zen_focus_label_duration_ms must be an integer from 0 through 60000",
+            )
+        })
+}
+
 /// Returns whether provisional provider output should render while it arrives.
 pub(crate) fn runtime_terminal_streaming_output_from_config(root: &Value) -> Result<bool> {
     let Some(terminal) = runtime_json_object(root, "terminal") else {
@@ -624,6 +645,38 @@ fn runtime_clipboard_command_from_arguments(
 #[cfg(test)]
 mod tests {
     use super::runtime_terminal_zen_mode_from_config;
+
+    /// Zen focus feedback accepts bounded integral milliseconds, including zero
+    /// to disable feedback. Invalid types must fail before live settings change.
+    #[test]
+    fn zen_focus_duration_defaults_and_validates() {
+        use super::runtime_terminal_zen_focus_label_duration_ms_from_config as parse;
+        assert_eq!(parse(&serde_json::json!({})).unwrap(), 1000);
+        for value in [0, 1, 1000, 60000] {
+            assert_eq!(
+                parse(&serde_json::json!({"terminal": {
+                    "zen_focus_label_duration_ms": value
+                }}))
+                .unwrap(),
+                value
+            );
+        }
+        for value in [
+            serde_json::json!(-1),
+            serde_json::json!(60001),
+            serde_json::json!(1.5),
+            serde_json::json!(true),
+            serde_json::json!("1000"),
+            serde_json::Value::Null,
+        ] {
+            assert!(
+                parse(&serde_json::json!({"terminal": {
+                    "zen_focus_label_duration_ms": value
+                }}))
+                .is_err()
+            );
+        }
+    }
 
     /// Verifies omitted and explicit zen settings produce strict booleans.
     ///
