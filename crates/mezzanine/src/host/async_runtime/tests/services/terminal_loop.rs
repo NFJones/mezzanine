@@ -461,6 +461,100 @@ async fn async_attached_terminal_loop_times_out_stalled_readiness_poll() {
     assert_eq!(exit.commands_processed, 2);
 }
 
+/// Verifies that an accepted pane-step request may wait longer than the
+/// attached-terminal I/O bound for actor settlement and is still applied once.
+/// Paused time and withholding the actor make the delay deterministic; the old
+/// timeout cancelled the reply future at 250 ms even though the queued actor
+/// mutation subsequently remained eligible to execute.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn async_attached_terminal_loop_awaits_delayed_pane_apply_settlement_once() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client_handle = handle.clone();
+    let client_id = primary.clone();
+    let client = tokio::spawn(async move {
+        let mut io = FakeAttachedTerminalLoopIo {
+            readiness_batches: vec![vec![AttachedTerminalFdReadiness {
+                role: AttachedTerminalFdRole::Input,
+                fd: 0,
+                interest: TerminalFdInterest::read(),
+                readable: true,
+                writable: false,
+                hangup: false,
+                error: false,
+            }]],
+            input_batches: vec![b"delayed\n".to_vec()],
+            written_batches: Vec::new(),
+            write_error_kinds: Vec::new(),
+        };
+        run_async_attached_terminal_client_loop_with_snapshot(
+            &client_handle,
+            &mut io,
+            AsyncAttachedTerminalResolvedLoopRequest {
+                role: ClientViewRole::Primary,
+                client_id: client_id.clone(),
+                primary_client_id: Some(client_id.clone()),
+                client_size: Size::new(80, 24).unwrap(),
+                terminal_config: AsyncTerminalClientConfigSnapshot::new_for_client(
+                    0,
+                    client_id,
+                    TerminalClientLoopConfig::default(),
+                ),
+                loop_config: AttachedTerminalClientLoopConfig {
+                    max_iterations: 1,
+                    max_input_bytes: 64,
+                },
+                host_bracketed_paste_active: false,
+                host_bracketed_paste_buffer: Vec::new(),
+                host_bracketed_paste_started_at: None,
+            },
+            |_| Ok(None),
+        )
+        .await
+    });
+
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_millis(251)).await;
+    assert!(
+        !client.is_finished(),
+        "pane-step application must remain pending across the terminal I/O timeout"
+    );
+
+    let actor = tokio::spawn(actor.run());
+    let report = client.await.unwrap().unwrap();
+    assert_eq!(
+        report.actions,
+        vec![TerminalClientLoopAction::ForwardToPane(
+            b"delayed\n".to_vec()
+        )]
+    );
+    assert_eq!(
+        handle.drain_pane_io_side_effects("%1", 8).await.unwrap(),
+        vec![RuntimeSideEffect::WritePaneInput {
+            pane_id: "%1".to_string(),
+            bytes: b"delayed\n".to_vec(),
+        }]
+    );
+    assert!(
+        handle
+            .drain_pane_io_side_effects("%1", 8)
+            .await
+            .unwrap()
+            .is_empty(),
+        "the delayed pane step must settle exactly once"
+    );
+    assert_eq!(
+        handle.shutdown().await.unwrap(),
+        RuntimeLifecycleState::Running
+    );
+    assert_eq!(actor.await.unwrap().commands_processed, 4);
+}
+
 /// Verifies large foreground input is drained across bounded client reads.
 ///
 /// Host paste payloads can be larger than one attached-terminal read. The

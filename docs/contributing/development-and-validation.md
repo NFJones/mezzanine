@@ -67,6 +67,17 @@ suite:
 Run platform-specific shell and PTY changes on both Linux and macOS when
 available. To reproduce the macOS CI shape, run the full test suite serially.
 
+The managed-shell wrapper builds each library test binary once with a separate
+900-second budget, then runs its harness with a 300-second budget per suite
+(600 seconds for the macOS large semantic-patch case). It prints phase names
+and budgets so compilation timeouts cannot be mistaken for hung tests. Override
+these limits with `MANAGED_SHELL_BUILD_TIMEOUT`, `MANAGED_SHELL_SUITE_TIMEOUT`,
+and `MANAGED_SHELL_LONG_SUITE_TIMEOUT`. Run `timeout 120s sh
+scripts/test-managed-shell-reliability-test.sh` for wrapper regression coverage;
+the real supported shells must be installed for this check too. CI additionally
+bounds macOS workspace tests to 15 minutes, the managed-shell step to 45 minutes,
+and release-load compilation plus execution to 30 minutes.
+
 ## Change discipline
 
 Keep a change in its subsystem owner, add focused happy-path and relevant

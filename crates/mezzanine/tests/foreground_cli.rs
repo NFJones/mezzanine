@@ -309,6 +309,26 @@ fn contains_default_shell_pane_frame(text: &str) -> bool {
         .any(|name| text.contains(&format!("0 {name} ")))
 }
 
+/// Reports whether a rendered pane frame contains a live foreground title.
+///
+/// A pane title alone is insufficient because the polling fixture writes the
+/// current process name to the pane. Requiring the default window-bar actions
+/// keeps this predicate tied to restored chrome.
+fn contains_pane_frame(text: &str, title: &str) -> bool {
+    text.contains(&format!("0 {title} "))
+        && ["□", "⊕", "λ"]
+            .into_iter()
+            .all(|action| text.contains(action))
+}
+
+/// Verifies the restored-pane predicate accepts the polling loop's live
+/// `sleep` process title only when the pane-frame chrome is present.
+#[test]
+fn pane_frame_predicate_accepts_sleep_only_with_restored_chrome() {
+    assert!(contains_pane_frame("0 sleep □ ⊕ λ", "sleep"));
+    assert!(!contains_pane_frame("0 sleep", "sleep"));
+}
+
 /// Launches the real `mez serve --attach-primary` binary inside a PTY so the
 /// foreground path sees interactive stdin/stdout instead of the unit-test
 /// harness. The fixture verifies the default foreground draw includes the
@@ -403,10 +423,11 @@ fn foreground_serve_zen_round_trip_resizes_real_pane_pty() {
         })
         .unwrap();
 
+    output.clear();
     process.write_input(b"\x01:zen off\r").unwrap();
     process
         .read_until(&mut output, Duration::from_secs(10), |text| {
-            text.contains("mez-app-size 10 40") && contains_default_shell_pane_frame(text)
+            text.contains("mez-app-size 10 40") && contains_pane_frame(text, "sleep")
         })
         .unwrap();
 
@@ -638,8 +659,7 @@ fn foreground_serve_pane_status_explicit_rails_remain_diagnostic_in_zen() {
     process.write_input(b"\x01:zen off\r").unwrap();
     process
         .read_until(&mut output, Duration::from_secs(10), |text| {
-            text.contains("mez-pane-status-zen-size 22 80")
-                && contains_default_shell_pane_frame(text)
+            text.contains("mez-pane-status-zen-size 22 80") && contains_pane_frame(text, "sleep")
         })
         .unwrap();
 

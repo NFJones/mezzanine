@@ -2407,6 +2407,11 @@ preview compositor; a lineage mismatch MUST discard stale preview metadata
 without changing the intervening pane content. A settled shell preview MAY keep
 its final bounded tail visible until the next durable pane append, but transient
 preview rows MUST NOT become durable presentation records or resume history.
+An attached-terminal pane-step request accepted by the serialized runtime actor
+MUST await actor settlement without a client-side elapsed-time cutoff, so the
+caller cannot abandon an accepted mutation while it remains eligible to apply.
+Timeouts that bound terminal readiness, reads, writes, and flushes MUST remain
+independent of this actor-settlement boundary.
 Provider streaming and shell previews MUST share one composite screen lineage:
 provider projections MUST update a preview-free provider base and then reapply
 active shell previews in stable owner order, while shell preview updates MUST

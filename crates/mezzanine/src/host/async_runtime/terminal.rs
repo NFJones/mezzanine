@@ -85,15 +85,16 @@ pub(in crate::host::async_runtime) struct AsyncAttachedTerminalResolvedLoopReque
 }
 
 /// Maximum time one attached-terminal loop step may spend in an awaited
-/// terminal, render, flush, or pane-I/O boundary before returning control.
+/// terminal, render, or flush boundary before returning control.
 const ASYNC_ATTACHED_TERMINAL_STEP_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Awaits one attached-terminal operation with a bounded timeout.
 ///
-/// This prevents a single stalled terminal I/O, actor render, output flush, or
-/// pane-input application future from monopolizing an attached-terminal client
-/// service batch indefinitely. On timeout, the caller receives a typed runtime
-/// error that names the stalled operation.
+/// This prevents a single stalled terminal I/O, actor render, or output flush
+/// future from monopolizing an attached-terminal client service batch
+/// indefinitely. Actor-owned pane-step application is excluded because timing
+/// out its reply would cancel the caller after the accepted mutation may have
+/// already begun settling.
 async fn await_attached_terminal_step<T, F>(operation: &'static str, future: F) -> Result<T>
 where
     F: Future<Output = Result<T>>,
@@ -477,15 +478,13 @@ where
             && request.primary_client_id.as_ref() == Some(&request.client_id);
         let primary_step_application = if apply_primary_step_before_output {
             let primary_client_id = request.client_id.clone();
-            let application_result = await_attached_terminal_step(
-                "pane I/O apply",
-                handle.apply_attached_terminal_step_plan_for_frame(
+            let application_result = handle
+                .apply_attached_terminal_step_plan_for_frame(
                     primary_client_id,
                     frame.render_token.clone(),
                     step.clone(),
-                ),
-            )
-            .await;
+                )
+                .await;
             Some(match application_result {
                 Ok(application) => application,
                 Err(error) => {
@@ -575,15 +574,13 @@ where
             && !step.actions.is_empty()
             && let Some(primary_client_id) = request.primary_client_id.as_ref()
         {
-            let application_result = await_attached_terminal_step(
-                "pane I/O apply",
-                handle.apply_attached_terminal_step_plan_for_frame(
+            let application_result = handle
+                .apply_attached_terminal_step_plan_for_frame(
                     primary_client_id.clone(),
                     frame.render_token.clone(),
                     step.clone(),
-                ),
-            )
-            .await;
+                )
+                .await;
             Some(match application_result {
                 Ok(application) => application,
                 Err(error) => {

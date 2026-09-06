@@ -18,15 +18,17 @@ use super::{
     AsyncRuntimeDaemonListeners, AsyncRuntimeEventConnectionConfig, AsyncRuntimeLatencyPhase,
     AsyncRuntimeMessageConnectionConfig, AsyncRuntimeRequestFamily, AsyncRuntimeService,
     AsyncRuntimeServiceExit, AsyncRuntimeServiceReport, AsyncRuntimeServiceSupervisor,
-    AsyncRuntimeSideEffectServiceConfig, AsyncTerminalIoFuture, AsyncTerminalOutputWriteReport,
-    ClientEvent, DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES, Duration, PaneEvent,
-    PaneProcessEvent, PaneProcessInstance, PaneProcessIoEffect, PersistenceTarget,
-    PersistenceWriteMode, ProcessEvent, RenderInvalidationReason, Result, RuntimeEvent,
-    RuntimeEventBatch, RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, ShutdownEvent,
+    AsyncRuntimeSideEffectServiceConfig, AsyncTerminalClientConfigSnapshot, AsyncTerminalIoFuture,
+    AsyncTerminalOutputWriteReport, ClientEvent,
+    DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES, Duration, PaneEvent, PaneProcessEvent,
+    PaneProcessInstance, PaneProcessIoEffect, PersistenceTarget, PersistenceWriteMode,
+    ProcessEvent, RenderInvalidationReason, Result, RuntimeEvent, RuntimeEventBatch,
+    RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, ShutdownEvent,
     SyncAttachedTerminalIoAdapter, TimerEvent, build_async_attached_terminal_client_service,
     build_async_runtime_daemon_services, flush_async_runtime_event_wakeups_to_stream,
     plan_and_apply_async_attached_terminal_client_step, plan_async_attached_terminal_client_step,
     run_async_agent_provider_service, run_async_attached_terminal_client_loop,
+    run_async_attached_terminal_client_loop_with_snapshot,
     run_async_attached_terminal_client_service, run_async_client_output_flush_service,
     run_async_hook_side_effect_service, run_async_host_clipboard_side_effect_service,
     run_async_pane_io_side_effect_service, run_async_pane_process_driver_service,
@@ -88,6 +90,7 @@ use mez_terminal::TerminalStyleSpan;
 mod actor_fixture;
 mod fixtures;
 
+use super::AsyncAttachedTerminalResolvedLoopRequest;
 use fixtures::*;
 
 mod actor;

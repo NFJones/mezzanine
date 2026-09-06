@@ -57,6 +57,7 @@ jobs:
       - name: Lint
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Test
+        timeout-minutes: 15
         run: canonical_tmp="$(cd /tmp && pwd -P)"; TMPDIR="$canonical_tmp" cargo test --workspace --all-targets --all-features --no-fail-fast --quiet -- --test-threads=1
   managed-shell-reliability:
     name: "Managed shells: ${{ matrix.name }}"
@@ -85,7 +86,12 @@ jobs:
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2
       - name: Run managed-shell reliability suite
-        run: canonical_tmp="$(cd /tmp && pwd -P)"; TMPDIR="$canonical_tmp" sh scripts/test-managed-shell-reliability.sh
+        timeout-minutes: 45
+        run: |
+          canonical_tmp="$(cd /tmp && pwd -P)"
+          export TMPDIR="$canonical_tmp"
+          sh scripts/test-managed-shell-reliability-test.sh
+          sh scripts/test-managed-shell-reliability.sh
   release-load:
     name: "Release load: ${{ matrix.name }} (${{ matrix.workers }} workers)"
     runs-on: ${{ matrix.os }}
@@ -125,6 +131,7 @@ jobs:
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2
       - name: Run release responsiveness workload
+        timeout-minutes: 30
         env:
           MEZ_RELEASE_LOAD_REPORT: ${{ github.workspace }}/target/release-load/${{ matrix.artifact }}.json
           MEZ_RELEASE_LOAD_WORKERS: ${{ matrix.workers }}
