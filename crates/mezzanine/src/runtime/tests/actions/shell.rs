@@ -271,12 +271,74 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
     );
 
     service.record_running_shell_transaction_output("%1", b"first output\n");
+    let theme = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap()
+        .ui_theme;
+    let assert_status_output = |service: &RuntimeSessionService, text: &str| {
+        let styled_lines = service
+            .pane_screen("%1")
+            .unwrap()
+            .normal_styled_content_lines();
+        let output_line = styled_lines
+            .iter()
+            .find(|line| line.text.contains(text))
+            .unwrap_or_else(|| panic!("missing shell output `{text}` in {styled_lines:?}"));
+        let output_column = output_line.text.find(text).unwrap();
+        let rendition = styled_line_rendition_at(output_line, output_column);
+        assert_eq!(
+            rendition.foreground,
+            Some(theme.colors.agent_transcript_status.foreground),
+            "shell output should use the configured status foreground in every frame: {:?}",
+            output_line.style_spans
+        );
+        assert!(
+            rendition.dim,
+            "shell output should be dim in every frame: {:?}",
+            output_line.style_spans
+        );
+
+        let view = service
+            .render_client_view(
+                ClientViewRole::Primary,
+                Size::new(80, 12).unwrap(),
+                &TerminalClientLoopConfig::default(),
+            )
+            .unwrap()
+            .expect("active pane should render a primary client view");
+        let view_row = view
+            .lines
+            .iter()
+            .position(|line| line.contains(text))
+            .unwrap_or_else(|| panic!("missing shell output `{text}` in {:?}", view.lines));
+        let view_column = view.lines[view_row].find(text).unwrap();
+        let view_rendition = view.line_style_spans[view_row]
+            .iter()
+            .rev()
+            .find(|span| {
+                view_column >= span.start && view_column < span.start.saturating_add(span.length)
+            })
+            .map(|span| span.rendition)
+            .unwrap_or_default();
+        assert_eq!(
+            view_rendition.foreground,
+            Some(theme.colors.agent_transcript_status.foreground),
+            "client view should preserve the configured status foreground in every frame: {:?}",
+            view.line_style_spans[view_row]
+        );
+        assert!(
+            view_rendition.dim,
+            "client view should preserve dim shell output in every frame: {:?}",
+            view.line_style_spans[view_row]
+        );
+    };
     let first_text = service
         .pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");
     assert!(first_text.contains("first output"), "{first_text}");
+    assert_status_output(&service, "first output");
 
     service
         .update_agent_shell_output_preview(
@@ -309,22 +371,8 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
         .join("\n");
     assert!(second_text.contains("first output"), "{second_text}");
     assert!(second_text.contains("second output"), "{second_text}");
-    let theme = service
-        .terminal_client_loop_config(TerminalClientLoopConfig::default())
-        .unwrap()
-        .ui_theme;
-    let output_line = styled_lines
-        .iter()
-        .find(|line| line.text.contains("second output"))
-        .unwrap();
-    let output_column = output_line.text.find("second output").unwrap();
-    assert!(
-        styled_line_rendition_at(output_line, output_column).foreground
-            == Some(theme.colors.agent_transcript_status.foreground)
-            && styled_line_rendition_at(output_line, output_column).dim,
-        "transient shell output should use muted status/thinking style: {:?}",
-        output_line.style_spans
-    );
+    assert_status_output(&service, "first output");
+    assert_status_output(&service, "second output");
 
     let encoded_tail =
         base64::engine::general_purpose::STANDARD.encode(b"decoded transported output\n");
@@ -345,6 +393,7 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
         !decoded_text.contains("__MEZ_SHELL_OUTPUT_BASE64_BEGIN__"),
         "{decoded_text}"
     );
+    assert_status_output(&service, "decoded transported output");
 
     service.record_running_shell_transaction_output(
         "%1",
@@ -369,6 +418,15 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
             .any(|line| line.trim_end().ends_with(">") && !line.contains("final output")),
         "{final_output_text}"
     );
+    assert_status_output(&service, "final output");
+
+    let settled_owner = crate::runtime::render::RuntimeAgentShellPreviewOwner {
+        turn_id: "turn-1".to_string(),
+        action_id: "shell-1".to_string(),
+        marker: "marker-1".to_string(),
+    };
+    assert!(service.settle_agent_shell_output_preview("%1", &settled_owner));
+    assert_status_output(&service, "final output");
 
     service.record_running_shell_transaction_output("%1", b"~/repo > ");
     let prompt_tail_text = service

@@ -120,6 +120,57 @@ fn attached_terminal_output_update_restyles_command_without_clear() {
     );
 }
 
+/// Verifies the first live command-output text and later appended text are
+/// physically emitted with the same dim status rendition. The incremental
+/// writer must not let newly changed cells inherit the terminal default while
+/// a full-row status span remains logically unchanged.
+#[test]
+fn attached_terminal_output_updates_keep_streaming_status_style_on_every_chunk() {
+    let status_rendition = GraphicRendition {
+        foreground: Some(TerminalColor::Rgb(118, 126, 140)),
+        dim: true,
+        ..GraphicRendition::default()
+    };
+    let modes = AttachedTerminalOutputModes {
+        cursor_visible: false,
+        cursor_blink: false,
+        ..AttachedTerminalOutputModes::default()
+    };
+    let first_lines = vec!["first output        ".to_string()];
+    let later_lines = vec!["first output second ".to_string()];
+    let spans = vec![vec![TerminalStyleSpan {
+        start: 0,
+        length: 20,
+        rendition: status_rendition,
+    }]];
+
+    let first_frame =
+        encode_attached_terminal_output_frame_with_styles(&first_lines, &spans, None, modes);
+    let previous = AttachedTerminalOutputFrameState::new(&first_lines, &spans);
+    let later_frame = encode_attached_terminal_output_update_frame_with_styles(
+        &later_lines,
+        &spans,
+        None,
+        modes,
+        Some(&previous),
+    );
+
+    let mut screen = TerminalScreen::new(Size::new(20, 1).unwrap(), 10).unwrap();
+    screen.feed(&first_frame);
+    let first = &screen.visible_styled_lines()[0];
+    assert_eq!(styled_line_rendition_at(first, 0), status_rendition);
+
+    screen.feed(&later_frame);
+    let later = &screen.visible_styled_lines()[0];
+    assert_eq!(later.text, later_lines[0]);
+    assert_eq!(styled_line_rendition_at(later, 0), status_rendition);
+    assert_eq!(
+        styled_line_rendition_at(later, display_column_for_fragment(&later.text, "second")),
+        status_rendition,
+        "newly appended output inherited a non-status rendition: {later:?}"
+    );
+}
+
 /// Verifies that same-width printable ASCII row changes can update only the
 /// changed span instead of rewriting the whole row. This keeps frequent status
 /// or prompt edits small on slower terminal links while preserving the existing

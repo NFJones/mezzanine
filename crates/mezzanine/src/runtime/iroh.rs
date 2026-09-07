@@ -2347,6 +2347,15 @@ mod tests {
                 .first_mut()
                 .expect("primary view should contain at least one row");
             *row = "changed visible row".to_string();
+            changed.view.line_style_spans[0] = vec![mez_terminal::TerminalStyleSpan {
+                start: 0,
+                length: "changed visible row".len(),
+                rendition: mez_terminal::GraphicRendition {
+                    foreground: Some(mez_terminal::TerminalColor::Rgb(118, 126, 140)),
+                    dim: true,
+                    ..mez_terminal::GraphicRendition::default()
+                },
+            }];
             let delta_update = encode_iroh_render_update_frame(&changed, Some(&base_view), 1, 2)
                 .unwrap()
                 .expect("changed view should produce an update");
@@ -2362,6 +2371,14 @@ mod tests {
             );
             assert!(delta_body.contains(r#""base_revision":1"#), "{delta_body}");
             assert!(delta_body.contains(r#""revision":2"#), "{delta_body}");
+            let delta_value: serde_json::Value = serde_json::from_str(&delta_body).unwrap();
+            let changed_row = &delta_value["params"]["rows"][0];
+            assert_eq!(changed_row["line"], "changed visible row");
+            assert_eq!(changed_row["style_spans"][0]["rendition"]["dim"], true);
+            assert_eq!(
+                changed_row["style_spans"][0]["rendition"]["foreground"],
+                serde_json::json!({"kind": "rgb", "red": 118, "green": 126, "blue": 140})
+            );
             let snapshot_frame = encode_iroh_render_snapshot_frame(&changed, 2, &changed_view);
             assert!(
                 delta_frame.len().saturating_mul(2) <= snapshot_frame.len(),

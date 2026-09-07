@@ -1939,7 +1939,26 @@ mod iroh_tests {
                     }
                 },
                 "rows": [
-                    {"index": 1, "line": "after", "style_spans": []}
+                    {
+                        "index": 1,
+                        "line": "after",
+                        "style_spans": [{
+                            "start": 0,
+                            "length": 5,
+                            "rendition": {
+                                "bold": false,
+                                "dim": true,
+                                "italic": false,
+                                "underline": false,
+                                "double_underline": false,
+                                "strikethrough": false,
+                                "inverse": false,
+                                "hidden": false,
+                                "foreground": {"kind": "rgb", "red": 118, "green": 126, "blue": 140},
+                                "background": null
+                            }
+                        }]
+                    }
                 ]
             }
         });
@@ -1957,6 +1976,12 @@ mod iroh_tests {
 
         assert_eq!(pushed.revision, 2);
         assert_eq!(pushed.frame.lines, ["stable", "after", "tail"]);
+        assert_eq!(pushed.frame.line_style_spans[1].len(), 1);
+        assert!(pushed.frame.line_style_spans[1][0].rendition.dim);
+        assert_eq!(
+            pushed.frame.line_style_spans[1][0].rendition.foreground,
+            Some(mez_terminal::TerminalColor::Rgb(118, 126, 140))
+        );
         assert_eq!(pushed.frame.event_cutoff, Some(7));
         assert!(pushed.frame.modes.focus_events);
         assert!(pushed.frame.modes.alternate_screen);
