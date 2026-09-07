@@ -1900,6 +1900,229 @@ mod tests {
         );
     }
 
+    /// Verifies stale MCP evidence excludes its complete metadata-bearing
+    /// execution group without suppressing safe display rows for that turn.
+    ///
+    /// A complete post-epoch group must retain its original identity and
+    /// ordinals so strict imported-event restoration remains unchanged.
+    #[test]
+    fn runtime_transcript_compaction_epoch_filters_exact_groups_atomically() {
+        let stale_group = mez_agent::ContextExecutionGroupId::new("execution-group-stale").unwrap();
+        let fresh_group = mez_agent::ContextExecutionGroupId::new("execution-group-fresh").unwrap();
+        let stale_events = [
+            TranscriptContextEvent::execution_block_with_metadata(
+                mez_agent::ContextSourceKind::TranscriptAssistant,
+                "stale exact assistant",
+                "rationale: retrieve the filesystem manifest",
+                stale_group.clone(),
+                1,
+                None,
+            )
+            .unwrap(),
+            TranscriptContextEvent::execution_block_with_metadata(
+                mez_agent::ContextSourceKind::ActionResult,
+                "stale exact search result",
+                "[action_result search-1 mcp_server_search succeeded]",
+                stale_group.clone(),
+                2,
+                None,
+            )
+            .unwrap(),
+            TranscriptContextEvent::execution_block_with_metadata(
+                mez_agent::ContextSourceKind::McpRetrievedManifest,
+                "MCP retrieved manifest fs",
+                r#"{"version":"mez-mcp-retrieved-manifest/v1","server_id":"fs","display_name":"Filesystem","purpose":"Read project files","usage_instructions":"Use read_file.","tools":[{"name":"read_file","description":"Read a project file","input_schema":{"type":"object","properties":{"path":{"type":"string"}}}}]}"#,
+                stale_group.clone(),
+                3,
+                None,
+            )
+            .unwrap(),
+            TranscriptContextEvent::execution_block_with_metadata(
+                mez_agent::ContextSourceKind::ActionResult,
+                "stale exact retrieval result",
+                "[action_result get-1 mcp_server_get succeeded]",
+                stale_group,
+                4,
+                None,
+            )
+            .unwrap(),
+        ];
+        let fresh_events = [
+            TranscriptContextEvent::execution_block_with_metadata(
+                mez_agent::ContextSourceKind::TranscriptAssistant,
+                "fresh exact assistant",
+                "rationale: inspect repository history",
+                fresh_group.clone(),
+                1,
+                None,
+            )
+            .unwrap(),
+            TranscriptContextEvent::execution_block_with_metadata(
+                mez_agent::ContextSourceKind::ActionResult,
+                "fresh exact result",
+                "[action_result shell-1 shell_command succeeded]",
+                fresh_group.clone(),
+                2,
+                None,
+            )
+            .unwrap(),
+        ];
+        let mut entries = vec![
+            TranscriptEntry {
+                conversation_id: "conv1".to_string(),
+                sequence: 1,
+                created_at_unix_seconds: 100,
+                role: TranscriptRole::Assistant,
+                turn_id: "turn-stale".to_string(),
+                agent_id: "agent-1".to_string(),
+                pane_id: "%1".to_string(),
+                content: "display fallback for stale execution".to_string(),
+            },
+            TranscriptEntry {
+                conversation_id: "conv1".to_string(),
+                sequence: 2,
+                created_at_unix_seconds: 100,
+                role: TranscriptRole::Tool,
+                turn_id: "turn-stale".to_string(),
+                agent_id: "agent-1".to_string(),
+                pane_id: "%1".to_string(),
+                content: "[action_result display-1 shell_command succeeded]".to_string(),
+            },
+        ];
+        entries.extend(stale_events.into_iter().enumerate().map(|(index, event)| {
+            TranscriptEntry {
+                conversation_id: "conv1".to_string(),
+                sequence: u64::try_from(index).unwrap().saturating_add(3),
+                created_at_unix_seconds: 100,
+                role: TranscriptRole::System,
+                turn_id: "turn-stale".to_string(),
+                agent_id: "agent-1".to_string(),
+                pane_id: "%1".to_string(),
+                content: event.to_transcript_content(),
+            }
+        }));
+        entries.push(TranscriptEntry {
+            conversation_id: "conv1".to_string(),
+            sequence: 7,
+            created_at_unix_seconds: 100,
+            role: TranscriptRole::System,
+            turn_id: "turn-compaction".to_string(),
+            agent_id: "agent-1".to_string(),
+            pane_id: "%1".to_string(),
+            content: TranscriptContextEvent::McpCompactionEpoch.to_transcript_content(),
+        });
+        entries.extend(fresh_events.into_iter().enumerate().map(|(index, event)| {
+            TranscriptEntry {
+                conversation_id: "conv1".to_string(),
+                sequence: u64::try_from(index).unwrap().saturating_add(8),
+                created_at_unix_seconds: 100,
+                role: TranscriptRole::System,
+                turn_id: "turn-fresh".to_string(),
+                agent_id: "agent-1".to_string(),
+                pane_id: "%1".to_string(),
+                content: event.to_transcript_content(),
+            }
+        }));
+
+        let transcript = runtime_agent_transcript_context("%1", &entries);
+
+        assert!(
+            transcript
+                .blocks
+                .iter()
+                .any(|block| block.content == "display fallback for stale execution")
+        );
+        assert!(
+            transcript
+                .blocks
+                .iter()
+                .all(|block| !block.label.starts_with("stale exact"))
+        );
+        assert_eq!(transcript.execution_events.len(), 2);
+        assert!(transcript.execution_events.iter().all(|event| {
+            event.execution_group_id() == &fresh_group && matches!(event.ordinal(), 1 | 2)
+        }));
+        let mut context = AgentContext::import_durable_blocks(transcript.blocks).unwrap();
+        context
+            .restore_imported_execution_events(&transcript.execution_events)
+            .unwrap();
+        context.validate_durable().unwrap();
+        assert!(
+            mez_agent::invoked_mcp_tools_for_context(
+                &context,
+                &mez_agent::McpPromptSummary {
+                    available_servers: Vec::new(),
+                    available_tools: Vec::new(),
+                    unavailable_servers: Vec::new(),
+                },
+            )
+            .is_empty()
+        );
+    }
+
+    /// Verifies a raw replay window beginning after ordinal one drops the
+    /// entire visible suffix instead of passing invalid metadata to import.
+    #[test]
+    fn runtime_transcript_replay_drops_leading_partial_execution_group() {
+        let group = mez_agent::ContextExecutionGroupId::new("execution-group-partial").unwrap();
+        let exact_suffix = [
+            TranscriptContextEvent::execution_block_with_metadata(
+                mez_agent::ContextSourceKind::ActionResult,
+                "partial exact result",
+                "[action_result shell-1 shell_command succeeded]",
+                group.clone(),
+                2,
+                None,
+            )
+            .unwrap(),
+            TranscriptContextEvent::execution_block_with_metadata(
+                mez_agent::ContextSourceKind::ActionResult,
+                "partial exact follow-up",
+                "[action_result shell-2 shell_command succeeded]",
+                group,
+                3,
+                None,
+            )
+            .unwrap(),
+        ];
+        let mut entries = vec![TranscriptEntry {
+            conversation_id: "conv1".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 100,
+            role: TranscriptRole::Assistant,
+            turn_id: "turn-partial".to_string(),
+            agent_id: "agent-1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "display fallback for partial execution".to_string(),
+        }];
+        entries.extend(exact_suffix.into_iter().enumerate().map(|(index, event)| {
+            TranscriptEntry {
+                conversation_id: "conv1".to_string(),
+                sequence: u64::try_from(index).unwrap().saturating_add(2),
+                created_at_unix_seconds: 100,
+                role: TranscriptRole::System,
+                turn_id: "turn-partial".to_string(),
+                agent_id: "agent-1".to_string(),
+                pane_id: "%1".to_string(),
+                content: event.to_transcript_content(),
+            }
+        }));
+
+        let transcript = runtime_agent_transcript_context("%1", &entries);
+
+        assert!(transcript.execution_events.is_empty());
+        assert_eq!(transcript.blocks.len(), 1);
+        assert_eq!(
+            transcript.blocks[0].content,
+            "display fallback for partial execution"
+        );
+        let mut context = AgentContext::import_durable_blocks(transcript.blocks).unwrap();
+        context
+            .restore_imported_execution_events(&transcript.execution_events)
+            .unwrap();
+        context.validate_durable().unwrap();
+    }
+
     /// Verifies a compaction epoch removes a legacy catalog that exposed tool
     /// contracts and replays only the replacement compact directory record.
     #[test]

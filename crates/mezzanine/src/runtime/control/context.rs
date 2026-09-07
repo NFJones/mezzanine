@@ -7,7 +7,7 @@
 
 use super::super::{ContextBlock, ContextSourceKind, Envelope, TranscriptEntry, TranscriptRole};
 use mez_agent::{ProviderTranscriptEvent, TranscriptContextEvent};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 const AGENT_LOCAL_MESSAGE_CONTEXT_PAYLOAD_CHARS: usize = 256 * 1024;
 const AGENT_TRANSCRIPT_TOOL_CONTEXT_LIMIT_BYTES: usize = 256 * 1024;
@@ -36,6 +36,31 @@ pub(super) fn runtime_agent_transcript_context(
                 Some(TranscriptContextEvent::McpCompactionEpoch)
             )
     });
+    let mut latest_execution_group_ordinals = BTreeMap::new();
+    let mut excluded_execution_groups = BTreeSet::new();
+    for (index, entry) in entries.iter().enumerate() {
+        if entry.role != TranscriptRole::System {
+            continue;
+        }
+        let Some(TranscriptContextEvent::ExecutionBlock {
+            source,
+            execution_group_id: Some(execution_group_id),
+            ordinal: Some(ordinal),
+            ..
+        }) = TranscriptContextEvent::from_transcript_content(&entry.content)
+        else {
+            continue;
+        };
+        let previous_ordinal = latest_execution_group_ordinals
+            .insert(execution_group_id.clone(), ordinal)
+            .unwrap_or(0_u64);
+        if ordinal != previous_ordinal.saturating_add(1)
+            || source == ContextSourceKind::McpRetrievedManifest
+                && latest_mcp_compaction_epoch.is_some_and(|epoch| index <= epoch)
+        {
+            excluded_execution_groups.insert(execution_group_id);
+        }
+    }
     let exact_execution_turns = entries
         .iter()
         .enumerate()
@@ -44,9 +69,15 @@ pub(super) fn runtime_agent_transcript_context(
             (entry.role == TranscriptRole::System
                 && matches!(
                     TranscriptContextEvent::from_transcript_content(&entry.content),
-                    Some(TranscriptContextEvent::ExecutionBlock { source, .. })
-                        if source != ContextSourceKind::McpRetrievedManifest
-                            || latest_mcp_compaction_epoch.is_none_or(|epoch| index > epoch)
+                    Some(TranscriptContextEvent::ExecutionBlock {
+                        source,
+                        execution_group_id,
+                        ..
+                    })
+                        if execution_group_id.as_ref().is_none_or(|group| {
+                            !excluded_execution_groups.contains(group)
+                        }) && (source != ContextSourceKind::McpRetrievedManifest
+                            || latest_mcp_compaction_epoch.is_none_or(|epoch| index > epoch))
                 ))
             .then_some(entry.turn_id.as_str())
         })
@@ -63,6 +94,12 @@ pub(super) fn runtime_agent_transcript_context(
                 ..
             }) = TranscriptContextEvent::from_transcript_content(&entry.content)
         {
+            if execution_group_id
+                .as_ref()
+                .is_some_and(|group| excluded_execution_groups.contains(group))
+            {
+                continue;
+            }
             if source == ContextSourceKind::McpRetrievedManifest
                 && latest_mcp_compaction_epoch.is_some_and(|epoch| index <= epoch)
             {
