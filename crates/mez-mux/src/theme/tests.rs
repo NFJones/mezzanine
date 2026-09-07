@@ -1,7 +1,5 @@
 //! Direct regression tests for mux-owned theme behavior.
 
-use std::collections::BTreeMap;
-
 use super::{
     BUILTIN_UI_THEME_NAMES, builtin_ui_theme_definition, deepforest_ui_theme,
     low_chroma_container_palette_hex, parse_hex_color, resolve_ui_theme,
@@ -42,10 +40,6 @@ fn test_srgb_channel_to_linear(channel: u8) -> f64 {
     } else {
         ((normalized + 0.055) / 1.055).powf(2.4)
     }
-}
-
-fn builtin_theme_preserves_exact_snapshot(name: &str) -> bool {
-    name == "acid_lime"
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -390,9 +384,6 @@ fn builtin_themes_use_visible_muted_grey_for_agent_thinking() {
     }
 
     for name in BUILTIN_UI_THEME_NAMES {
-        if builtin_theme_preserves_exact_snapshot(name) {
-            continue;
-        }
         let definition =
             builtin_ui_theme_definition(name).unwrap_or_else(|| panic!("missing theme {name}"));
         let theme = resolve_ui_theme(name, definition).expect("built-in theme must resolve");
@@ -434,9 +425,6 @@ fn builtin_themes_use_visible_muted_grey_for_agent_thinking() {
 #[test]
 fn builtin_themes_keep_low_emphasis_text_pairs_readable() {
     for name in BUILTIN_UI_THEME_NAMES {
-        if builtin_theme_preserves_exact_snapshot(name) {
-            continue;
-        }
         let definition =
             builtin_ui_theme_definition(name).unwrap_or_else(|| panic!("missing theme {name}"));
         let theme = resolve_ui_theme(name, definition).expect("built-in theme must resolve");
@@ -473,9 +461,6 @@ fn builtin_themes_keep_low_emphasis_text_pairs_readable() {
 #[test]
 fn builtin_themes_keep_text_bearing_pairs_readable() {
     for name in BUILTIN_UI_THEME_NAMES {
-        if builtin_theme_preserves_exact_snapshot(name) {
-            continue;
-        }
         let definition =
             builtin_ui_theme_definition(name).unwrap_or_else(|| panic!("missing theme {name}"));
         let theme = resolve_ui_theme(name, definition).expect("built-in theme must resolve");
@@ -559,10 +544,6 @@ fn builtin_themes_use_low_chroma_containers_for_persistent_chrome() {
     }
 
     for name in BUILTIN_UI_THEME_NAMES {
-        if *name == "acid_lime" {
-            continue;
-        }
-
         let definition =
             builtin_ui_theme_definition(name).unwrap_or_else(|| panic!("missing theme {name}"));
         let theme = resolve_ui_theme(name, definition).expect("built-in theme must resolve");
@@ -611,10 +592,6 @@ fn builtin_themes_use_low_chroma_containers_for_persistent_chrome() {
 #[test]
 fn builtin_themes_reserve_accent_fills_for_active_and_semantic_states() {
     for name in BUILTIN_UI_THEME_NAMES {
-        if *name == "acid_lime" {
-            continue;
-        }
-
         let definition =
             builtin_ui_theme_definition(name).unwrap_or_else(|| panic!("missing theme {name}"));
         let theme = resolve_ui_theme(name, definition).expect("built-in theme must resolve");
@@ -724,129 +701,26 @@ fn builtin_theme_registry_includes_common_variants_without_duplicates() {
     }
 }
 
-/// Verifies the built-in acid_lime theme preserves the recorded reference
-/// alias palette and full color-slot mapping.
+/// Verifies the built-in acid_lime theme preserves its defining core palette
+/// anchors while shared derivation owns the complete color-slot map.
 ///
-/// The remaining acid-family built-in theme tasks derive from this exact
-/// reference, so the built-in definition should match the captured user-config
-/// snapshot rather than a contrast-managed approximation.
+/// These anchors retain the vivid lime identity while allowing persistent
+/// chrome, low-emphasis text, and semantic fills to follow shared UX rules.
 #[test]
 fn acid_lime_builtin_theme_matches_documented_reference_palette() {
     let definition = builtin_ui_theme_definition("acid_lime").expect("missing acid_lime theme");
-    let expected_aliases = [
+    for (alias, expected) in [
         ("primary", "#bfff00"),
         ("secondary", "#7fbf3f"),
         ("tertiary", "#d7ff5f"),
-        ("thinking", "#c9d89a"),
-        ("danger", "#ff5c57"),
-        ("foreground", "#eef7d0"),
-        ("muted", "#6f7f3c"),
         ("surface", "#1b1f0a"),
-        ("danger_foreground", "#ff7b74"),
-        ("danger_text", "#140200"),
-        ("muted_text", "#0f1206"),
-        ("primary_foreground", "#d8ff5a"),
-        ("primary_text", "#111400"),
-        ("secondary_foreground", "#a8e85a"),
-        ("secondary_text", "#111400"),
-        ("tertiary_foreground", "#e6ff8a"),
-        ("tertiary_text", "#111400"),
-    ]
-    .into_iter()
-    .map(|(key, value)| (key.to_string(), value.to_string()))
-    .collect::<BTreeMap<_, _>>();
-    let expected_colors = [
-        ("window_frame_fg", "primary_foreground"),
-        ("window_frame_bg", "surface"),
-        ("window_active_fg", "primary_text"),
-        ("window_active_bg", "primary"),
-        ("window_inactive_fg", "secondary_text"),
-        ("window_inactive_bg", "secondary"),
-        ("pane_frame_active_fg", "secondary_text"),
-        ("pane_frame_active_bg", "secondary"),
-        ("pane_frame_inactive_fg", "muted"),
-        ("pane_frame_inactive_bg", "surface"),
-        ("pane_border_active_fg", "primary_foreground"),
-        ("pane_border_active_bg", "surface"),
-        ("pane_border_inactive_fg", "muted"),
-        ("pane_border_inactive_bg", "surface"),
-        ("pane_divider_fg", "tertiary_foreground"),
-        ("pane_divider_bg", "surface"),
-        ("frame_fill_fg", "foreground"),
-        ("frame_fill_bg", "surface"),
-        ("scroll_indicator_fg", "tertiary_text"),
-        ("scroll_indicator_bg", "tertiary"),
-        ("pane_progress_fg", "tertiary_text"),
-        ("pane_progress_bg", "tertiary"),
-        ("pane_pwd_fg", "muted_text"),
-        ("pane_pwd_bg", "muted"),
-        ("window_status_uptime_fg", "secondary_text"),
-        ("window_status_uptime_bg", "secondary"),
-        ("window_status_datetime_fg", "tertiary_text"),
-        ("window_status_datetime_bg", "tertiary"),
-        ("iroh_status_good_fg", "primary_text"),
-        ("iroh_status_good_bg", "primary"),
-        ("iroh_status_degraded_fg", "tertiary_text"),
-        ("iroh_status_degraded_bg", "tertiary"),
-        ("iroh_status_poor_fg", "danger_text"),
-        ("iroh_status_poor_bg", "danger"),
-        ("iroh_status_unknown_fg", "muted_text"),
-        ("iroh_status_unknown_bg", "muted"),
-        ("prompt_fg", "primary_foreground"),
-        ("prompt_bg", "surface"),
-        ("agent_prompt_fg", "#f8ffe0"),
-        ("agent_prompt_bg", "#20250c"),
-        ("agent_transcript_user_fg", "primary_foreground"),
-        ("agent_transcript_user_bg", "surface"),
-        ("agent_transcript_assistant_fg", "secondary_foreground"),
-        ("agent_transcript_assistant_bg", "surface"),
-        ("agent_transcript_status_fg", "thinking"),
-        ("agent_transcript_status_bg", "surface"),
-        ("agent_transcript_error_fg", "danger_foreground"),
-        ("agent_transcript_error_bg", "surface"),
-        ("agent_transcript_command_fg", "tertiary_foreground"),
-        ("agent_transcript_command_bg", "surface"),
-        ("agent_model_fg", "secondary_text"),
-        ("agent_model_bg", "secondary"),
-        ("agent_reasoning_fg", "tertiary_text"),
-        ("agent_reasoning_bg", "tertiary"),
-        ("agent_status_idle_fg", "muted_text"),
-        ("agent_status_idle_bg", "muted"),
-        ("agent_status_running_fg", "primary_text"),
-        ("agent_status_running_bg", "primary"),
-        ("agent_status_blocked_fg", "tertiary_text"),
-        ("agent_status_blocked_bg", "tertiary"),
-        ("agent_approval_attention_fg", "danger_text"),
-        ("agent_approval_attention_bg", "danger"),
-        ("agent_status_failed_fg", "danger_text"),
-        ("agent_status_failed_bg", "danger"),
-        ("display_overlay_fg", "secondary_foreground"),
-        ("display_overlay_bg", "surface"),
-        ("copy_selection_fg", "tertiary_text"),
-        ("copy_selection_bg", "tertiary"),
-        ("syntax_plain_fg", "foreground"),
-        ("syntax_plain_bg", "surface"),
-        ("syntax_keyword_fg", "primary_foreground"),
-        ("syntax_keyword_bg", "surface"),
-        ("syntax_string_fg", "tertiary_foreground"),
-        ("syntax_string_bg", "surface"),
-        ("syntax_comment_fg", "thinking"),
-        ("syntax_comment_bg", "surface"),
-        ("syntax_type_fg", "secondary_foreground"),
-        ("syntax_type_bg", "surface"),
-        ("syntax_function_fg", "primary_foreground"),
-        ("syntax_function_bg", "surface"),
-        ("syntax_number_fg", "tertiary_foreground"),
-        ("syntax_number_bg", "surface"),
-        ("syntax_operator_fg", "muted"),
-        ("syntax_operator_bg", "surface"),
-    ]
-    .into_iter()
-    .map(|(key, value)| (key.to_string(), value.to_string()))
-    .collect::<BTreeMap<_, _>>();
-
-    assert_eq!(definition.aliases, expected_aliases);
-    assert_eq!(definition.colors, expected_colors);
+        ("danger", "#ff5c57"),
+    ] {
+        assert_eq!(
+            definition.aliases.get(alias).map(String::as_str),
+            Some(expected)
+        );
+    }
 }
 
 /// Verifies the built-in acid_grapefruit theme preserves its curated core
@@ -982,9 +856,6 @@ fn builtin_themes_use_binary_agent_prompt_foreground() {
     }
 
     for name in BUILTIN_UI_THEME_NAMES {
-        if builtin_theme_preserves_exact_snapshot(name) {
-            continue;
-        }
         let definition =
             builtin_ui_theme_definition(name).unwrap_or_else(|| panic!("missing theme {name}"));
         let theme = resolve_ui_theme(name, definition).expect("built-in theme must resolve");

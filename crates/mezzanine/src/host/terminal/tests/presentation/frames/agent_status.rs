@@ -264,18 +264,18 @@ fn render_default_pane_frame_agent_status_uses_separate_themed_pills_without_nam
     assert!(view.line_style_spans[0].iter().any(|span| {
         span.start == 0
             && span.length == " 0 shell ".len()
-            && span.rendition.background == Some(TerminalColor::Rgb(0x7f, 0xbf, 0x3f))
+            && span.rendition.background == Some(TerminalColor::Rgb(0xbf, 0xff, 0x00))
     }));
     assert!(view.line_style_spans[0].iter().any(|span| {
-        span.rendition.background == Some(TerminalColor::Rgb(0x7f, 0xbf, 0x3f))
+        span.rendition.background == Some(TerminalColor::Rgb(0x2f, 0x30, 0x2b))
             && span.length == " gpt-5.5 ".len()
     }));
     assert!(view.line_style_spans[0].iter().any(|span| {
-        span.rendition.background == Some(TerminalColor::Rgb(0xd7, 0xff, 0x5f))
+        span.rendition.background == Some(TerminalColor::Rgb(0x2f, 0x30, 0x2b))
             && span.length == " high ".len()
     }));
     assert!(view.line_style_spans[0].iter().any(|span| {
-        span.rendition.background == Some(TerminalColor::Rgb(0xd7, 0xff, 0x5f))
+        span.rendition.background == Some(TerminalColor::Rgb(0xbf, 0xff, 0x00))
             && span.length == " thinking ".len()
     }));
     assert!(!view.lines[0].contains("Nova"));
@@ -796,7 +796,7 @@ fn render_default_pane_frame_scroll_position_has_background_without_box_drawing_
     assert!(view.line_style_spans[0].iter().any(|span| {
         span.start == 25
             && span.length == 6
-            && span.rendition.background == Some(TerminalColor::Rgb(0xd7, 0xff, 0x5f))
+            && span.rendition.background == Some(TerminalColor::Rgb(0xbf, 0xff, 0x00))
     }));
 }
 
@@ -860,7 +860,7 @@ fn render_agent_planning_pill_has_fixed_label_and_state_colors() {
     assert!(!absent.lines[0].contains("plan"), "{}", absent.lines[0]);
     assert_eq!(
         background_at(&enabled, enabled_start),
-        Some(TerminalColor::Rgb(0xd7, 0xff, 0x5f))
+        Some(TerminalColor::Rgb(0xbf, 0xff, 0x00))
     );
     assert_ne!(
         background_at(&disabled, disabled_start),

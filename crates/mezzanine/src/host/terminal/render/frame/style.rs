@@ -247,7 +247,7 @@ pub(in crate::host::terminal::render) fn styled_pane_frame_line(
     let approval_attention = frame_context
         .approval_attention_panes
         .contains(pane.id.as_str());
-    let rendition = pane_frame_rendition(
+    let rendition = pane_status_bar_name_rendition(
         pane,
         completion_attention,
         approval_attention,
@@ -402,7 +402,7 @@ pub(in crate::host::terminal::render) fn pane_frame_agent_thinking_rendition(
     ui_theme: &UiTheme,
 ) -> GraphicRendition {
     match value {
-        "on" => ui_theme.colors.agent_reasoning.rendition(),
+        "on" => ui_theme.colors.agent_status_running.rendition(),
         "off" => ui_theme.colors.agent_status_idle.rendition(),
         _ => ui_theme.colors.scroll_indicator.rendition(),
     }
@@ -414,7 +414,7 @@ pub(in crate::host::terminal::render) fn pane_frame_agent_planning_rendition(
     ui_theme: &UiTheme,
 ) -> GraphicRendition {
     match value {
-        "on" => ui_theme.colors.agent_reasoning.rendition(),
+        "on" => ui_theme.colors.agent_status_running.rendition(),
         "off" => ui_theme.colors.agent_status_idle.rendition(),
         _ => ui_theme.colors.scroll_indicator.rendition(),
     }
@@ -426,7 +426,7 @@ pub(in crate::host::terminal::render) fn pane_frame_agent_routing_rendition(
     ui_theme: &UiTheme,
 ) -> GraphicRendition {
     match value {
-        "auto:on" => ui_theme.colors.agent_reasoning.rendition(),
+        "auto:on" => ui_theme.colors.agent_status_running.rendition(),
         "auto:off" => ui_theme.colors.agent_status_idle.rendition(),
         _ => ui_theme.colors.scroll_indicator.rendition(),
     }
@@ -626,6 +626,37 @@ pub(in crate::host::terminal::render) fn pane_frame_rendition(
     rendition
 }
 
+/// Returns the rendition for a pane name embedded in a pane status bar.
+///
+/// Inactive pane names blend into the frame fill while active or attention-
+/// bearing names retain the ordinary visible pill treatment.
+pub(in crate::host::terminal::render) fn pane_status_bar_name_rendition(
+    pane: &mez_mux::layout::Pane,
+    completion_attention: bool,
+    approval_attention: bool,
+    frame_context: &TerminalFrameContext,
+    frame_style: TerminalFrameStyle,
+    ui_theme: &UiTheme,
+) -> GraphicRendition {
+    let mut rendition = pane_frame_rendition(
+        pane,
+        completion_attention,
+        approval_attention,
+        frame_context,
+        frame_style,
+        ui_theme,
+    );
+    let attention_on = (completion_attention || approval_attention)
+        && (frame_context.reduced_motion
+            || frame_context.completion_attention_static
+            || (frame_context.animation_tick_ms / AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS)
+                .is_multiple_of(2));
+    if !pane.active && !attention_on {
+        rendition.background = Some(ui_theme.colors.frame_fill.background);
+    }
+    rendition
+}
+
 /// Runs the pane border rendition operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -671,6 +702,65 @@ pub(in crate::host::terminal::render) fn themed_frame_rendition(
 #[cfg(test)]
 mod policy_mode_tests {
     use super::*;
+
+    /// Verifies an inactive pane name embedded in a pane status bar retains its
+    /// low-emphasis foreground while blending its background into the adjoining
+    /// bar. Window, group, active pane, and standalone name pills remain visible.
+    #[test]
+    fn inactive_pane_name_in_status_bar_blends_into_frame_fill() {
+        let ui_theme = mez_mux::theme::deepforest_ui_theme();
+        let frame_context = TerminalFrameContext::default();
+        let mut ids = mez_core::ids::IdFactory::default();
+        let mut window = Window::new(
+            &mut ids,
+            0,
+            "work",
+            mez_mux::layout::Size::new(20, 3).expect("valid test size"),
+        );
+        window
+            .split_active(&mut ids, mez_mux::layout::SplitDirection::Vertical)
+            .expect("test window should split");
+        let inactive_pane = window
+            .panes()
+            .iter()
+            .find(|pane| !pane.active)
+            .expect("split window should have an inactive pane");
+
+        let rendition = pane_status_bar_name_rendition(
+            inactive_pane,
+            false,
+            false,
+            &frame_context,
+            TerminalFrameStyle::Default,
+            &ui_theme,
+        );
+        let inactive_window = window_pillbox_rendition(
+            false,
+            false,
+            false,
+            false,
+            &frame_context,
+            TerminalFrameStyle::Default,
+            &ui_theme,
+        );
+
+        assert_eq!(
+            rendition.background,
+            Some(ui_theme.colors.frame_fill.background)
+        );
+        assert_eq!(
+            rendition.foreground,
+            Some(ui_theme.colors.pane_frame_inactive.foreground)
+        );
+        assert_eq!(
+            inactive_window.background,
+            Some(ui_theme.colors.window_inactive.background)
+        );
+        assert_ne!(
+            inactive_window.background,
+            Some(ui_theme.colors.frame_fill.background)
+        );
+    }
 
     /// Verifies persistent host execution uses the failure/warning theme slot
     /// and remains visually distinct from sandboxed full access.

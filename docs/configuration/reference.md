@@ -612,20 +612,23 @@ Default aliases:
 | `primary` | `"#bfff00"` | Primary accent. |
 | `secondary` | `"#7fbf3f"` | Secondary accent. |
 | `tertiary` | `"#d7ff5f"` | Tertiary accent. |
-| `thinking` | `"#c9d89a"` | Muted agent thinking/status accent. |
+| `thinking` | `"#b8bea8"` | Muted agent thinking/status accent. |
 | `danger` | `"#ff5c57"` | Destructive/error accent. |
 | `foreground` | `"#eef7d0"` | General foreground. |
-| `muted` | `"#6f7f3c"` | Muted surface accent. |
+| `muted` | `"#7b8b48"` | Muted surface accent. |
 | `surface` | `"#1b1f0a"` | General background surface. |
-| `danger_foreground` | `"#ff7b74"` | Foreground danger accent. |
-| `danger_text` | `"#140200"` | Text placed on the danger accent. |
-| `muted_text` | `"#0f1206"` | Text placed on the muted accent. |
-| `primary_foreground` | `"#d8ff5a"` | Foreground primary accent. |
-| `primary_text` | `"#111400"` | Text placed on the primary accent. |
-| `secondary_foreground` | `"#a8e85a"` | Foreground secondary accent. |
-| `secondary_text` | `"#111400"` | Text placed on the secondary accent. |
-| `tertiary_foreground` | `"#e6ff8a"` | Foreground tertiary accent. |
-| `tertiary_text` | `"#111400"` | Text placed on the tertiary accent. |
+| `container` | `"#2f302b"` | Quiet surface-relative container fill. |
+| `container_foreground` | `"#eef7d0"` | General foreground on the container fill. |
+| `container_muted_foreground` | `"#8e9e5b"` | Low-emphasis foreground on the container fill. |
+| `danger_foreground` | `"#ff5c57"` | Foreground danger accent. |
+| `danger_text` | `"#000000"` | Text placed on the danger accent. |
+| `muted_text` | `"#000000"` | Text placed on the muted accent. |
+| `primary_foreground` | `"#bfff00"` | Foreground primary accent. |
+| `primary_text` | `"#000000"` | Text placed on the primary accent. |
+| `secondary_foreground` | `"#7fbf3f"` | Foreground secondary accent. |
+| `secondary_text` | `"#000000"` | Text placed on the secondary accent. |
+| `tertiary_foreground` | `"#d7ff5f"` | Foreground tertiary accent. |
+| `tertiary_text` | `"#000000"` | Text placed on the tertiary accent. |
 
 Default color slots:
 
@@ -635,41 +638,41 @@ Default color slots:
 | `window_frame_bg` | `"surface"` | Window frame background. |
 | `window_active_fg` | `"primary_text"` | Active window pill foreground. |
 | `window_active_bg` | `"primary"` | Active window pill background. |
-| `window_inactive_fg` | `"secondary_text"` | Inactive window pill foreground. |
-| `window_inactive_bg` | `"secondary"` | Inactive window pill background. |
-| `pane_frame_active_fg` | `"secondary_text"` | Active pane frame foreground. |
-| `pane_frame_active_bg` | `"secondary"` | Active pane frame background. |
-| `pane_frame_inactive_fg` | `"muted"` | Inactive pane frame foreground. |
-| `pane_frame_inactive_bg` | `"surface"` | Inactive pane frame background. |
+| `window_inactive_fg` | `"container_muted_foreground"` | Inactive window pill foreground. |
+| `window_inactive_bg` | `"container"` | Inactive window pill background. |
+| `pane_frame_active_fg` | `"primary_text"` | Active pane frame foreground. |
+| `pane_frame_active_bg` | `"primary"` | Active pane frame background. |
+| `pane_frame_inactive_fg` | `"container_muted_foreground"` | Inactive pane frame foreground. |
+| `pane_frame_inactive_bg` | `"container"` | Inactive standalone pane-name background; embedded inactive pane names inherit the adjoining pane status-bar fill. |
 | `pane_border_active_fg` | `"primary_foreground"` | Active pane border foreground. |
 | `pane_border_active_bg` | `"surface"` | Active pane border background. |
 | `pane_border_inactive_fg` | `"muted"` | Inactive pane border foreground. |
 | `pane_border_inactive_bg` | `"surface"` | Inactive pane border background. |
-| `pane_divider_fg` | `"tertiary_foreground"` | Pane divider foreground. |
+| `pane_divider_fg` | `"muted"` | Pane divider foreground. |
 | `pane_divider_bg` | `"surface"` | Pane divider background. |
 | `frame_fill_fg` | `"foreground"` | Frame fill foreground. |
 | `frame_fill_bg` | `"surface"` | Frame fill background. |
-| `scroll_indicator_fg` | `"tertiary_text"` | Scroll indicator foreground. |
-| `scroll_indicator_bg` | `"tertiary"` | Scroll indicator background. |
-| `pane_progress_fg` | `"tertiary_text"` | Pane progress foreground. |
-| `pane_progress_bg` | `"tertiary"` | Pane progress background. |
-| `pane_pwd_fg` | `"muted_text"` | Pane working-directory pill foreground. |
-| `pane_pwd_bg` | `"muted"` | Pane working-directory pill background. |
-| `window_status_uptime_fg` | `"secondary_text"` | Uptime status foreground. |
-| `window_status_uptime_bg` | `"secondary"` | Uptime status background. |
-| `window_status_datetime_fg` | `"tertiary_text"` | Date/time status foreground. |
-| `window_status_datetime_bg` | `"tertiary"` | Date/time status background. |
+| `scroll_indicator_fg` | `"primary_text"` | Scroll indicator foreground. |
+| `scroll_indicator_bg` | `"primary"` | Scroll indicator background. |
+| `pane_progress_fg` | `"primary_text"` | Pane progress foreground. |
+| `pane_progress_bg` | `"primary"` | Pane progress background. |
+| `pane_pwd_fg` | `"container_muted_foreground"` | Pane working-directory pill foreground. |
+| `pane_pwd_bg` | `"container"` | Pane working-directory pill background. |
+| `window_status_uptime_fg` | `"container_muted_foreground"` | Uptime status foreground. |
+| `window_status_uptime_bg` | `"container"` | Uptime status background. |
+| `window_status_datetime_fg` | `"container_muted_foreground"` | Date/time status foreground. |
+| `window_status_datetime_bg` | `"container"` | Date/time status background. |
 | `iroh_status_good_fg` | `"primary_text"` | Healthy Iroh-status pill foreground. |
 | `iroh_status_good_bg` | `"primary"` | Healthy Iroh-status pill background. |
 | `iroh_status_degraded_fg` | `"tertiary_text"` | Degraded Iroh-status pill foreground. |
 | `iroh_status_degraded_bg` | `"tertiary"` | Degraded Iroh-status pill background. |
 | `iroh_status_poor_fg` | `"danger_text"` | Poor Iroh-status pill foreground. |
 | `iroh_status_poor_bg` | `"danger"` | Poor Iroh-status pill background. |
-| `iroh_status_unknown_fg` | `"muted_text"` | Unknown or stale Iroh-status pill foreground. |
-| `iroh_status_unknown_bg` | `"muted"` | Unknown or stale Iroh-status pill background. |
+| `iroh_status_unknown_fg` | `"container_muted_foreground"` | Unknown or stale Iroh-status pill foreground. |
+| `iroh_status_unknown_bg` | `"container"` | Unknown or stale Iroh-status pill background. |
 | `prompt_fg` | `"primary_foreground"` | Command prompt foreground. |
 | `prompt_bg` | `"surface"` | Command prompt background. |
-| `agent_prompt_fg` | `"#f8ffe0"` | Agent prompt foreground. |
+| `agent_prompt_fg` | `"#ffffff"` | Agent prompt foreground. |
 | `agent_prompt_bg` | `"#20250c"` | Agent prompt background. |
 | `agent_transcript_user_fg` | `"primary_foreground"` | Agent transcript user foreground. |
 | `agent_transcript_user_bg` | `"surface"` | Agent transcript user background. |
@@ -681,12 +684,12 @@ Default color slots:
 | `agent_transcript_error_bg` | `"surface"` | Agent error background. |
 | `agent_transcript_command_fg` | `"tertiary_foreground"` | Agent command foreground. |
 | `agent_transcript_command_bg` | `"surface"` | Agent command background. |
-| `agent_model_fg` | `"secondary_text"` | Agent model pill foreground. |
-| `agent_model_bg` | `"secondary"` | Agent model pill background. |
-| `agent_reasoning_fg` | `"tertiary_text"` | Agent reasoning pill foreground. |
-| `agent_reasoning_bg` | `"tertiary"` | Agent reasoning pill background. |
-| `agent_status_idle_fg` | `"muted_text"` | Idle agent status foreground. |
-| `agent_status_idle_bg` | `"muted"` | Idle agent status background. |
+| `agent_model_fg` | `"container_muted_foreground"` | Agent model pill foreground. |
+| `agent_model_bg` | `"container"` | Agent model pill background. |
+| `agent_reasoning_fg` | `"container_muted_foreground"` | Agent reasoning pill foreground. |
+| `agent_reasoning_bg` | `"container"` | Agent reasoning pill background. |
+| `agent_status_idle_fg` | `"container_muted_foreground"` | Idle agent status foreground. |
+| `agent_status_idle_bg` | `"container"` | Idle agent status background. |
 | `agent_status_running_fg` | `"primary_text"` | Running agent status foreground. |
 | `agent_status_running_bg` | `"primary"` | Running agent status background. |
 | `agent_status_blocked_fg` | `"tertiary_text"` | Blocked agent status foreground. |
@@ -695,10 +698,10 @@ Default color slots:
 | `agent_approval_attention_bg` | `"danger"` | Approval-attention background for pane, window, and group pills. |
 | `agent_status_failed_fg` | `"danger_text"` | Failed agent status foreground. |
 | `agent_status_failed_bg` | `"danger"` | Failed agent status background. |
-| `display_overlay_fg` | `"secondary_foreground"` | Display overlay foreground. |
-| `display_overlay_bg` | `"surface"` | Display overlay background. |
-| `copy_selection_fg` | `"tertiary_text"` | Copy selection foreground. |
-| `copy_selection_bg` | `"tertiary"` | Copy selection background. |
+| `display_overlay_fg` | `"container_foreground"` | Display overlay foreground. |
+| `display_overlay_bg` | `"container"` | Display overlay background. |
+| `copy_selection_fg` | `"primary_text"` | Copy selection foreground. |
+| `copy_selection_bg` | `"primary"` | Copy selection background. |
 | `syntax_plain_fg` | `"foreground"` | Plain syntax foreground. |
 | `syntax_plain_bg` | `"surface"` | Plain syntax background. |
 | `syntax_keyword_fg` | `"primary_foreground"` | Keyword syntax foreground. |
@@ -735,11 +738,11 @@ Built-in theme names include `deepforest`, `apprentice`, `gruvbox_dark`,
 `ayu_light`, `ayu_mirage`, `acid_lemon`, `acid_tangerine`, `acid_lime`,
 `acid_grapefruit`, `high_contrast_dark`, and `high_contrast_light`.
 
-Except for the intentionally vivid default `acid_lime`, built-ins derive quiet,
-low-chroma container fills from their base surface for persistent chrome and
-metadata. Saturated palette accents are reserved for active selection and
-meaningful success, warning, blocked, or failure states. Text-bearing pairs are
-contrast-managed while each named family retains its defining palette anchors.
+Built-ins derive quiet, low-chroma container fills from their base surface for
+persistent chrome and metadata. Saturated palette accents are reserved for
+active selection and meaningful success, warning, blocked, or failure states.
+Text-bearing pairs are contrast-managed while each named family retains its
+defining palette anchors.
 
 Built-ins fall into three fidelity groups. `apprentice`, `nord`, `tokyo_night`,
 `catppuccin_latte`, `catppuccin_frappe`, `catppuccin_macchiato`,

@@ -903,6 +903,12 @@ be less prominent than active-pane or active-window title highlighting. The
 top-most pane header at the top of the attached terminal MUST remain a filled
 theme surface made from spaces, label text, or status text rather than a row of
 box-drawing divider glyphs.
+An inactive pane title embedded in a filled pane frame/status bar MUST use the
+adjoining bar fill as its background so the title remains readable without
+appearing as a separate pill. Active or attention-bearing pane titles MUST retain
+their themed highlight. This blending rule MUST NOT apply to window or
+window-group title pills, transparent merged-divider rows, or standalone pane
+identity pills outside a pane status bar.
 Horizontal pane dividers and pane frame rows merged into divider rows MUST draw
 their divider cells with Unicode box-drawing characters. Styled
 attached-terminal output MUST NOT apply a background color to horizontal

@@ -723,7 +723,7 @@ fn render_active_pane_border_glyphs_are_foreground_only() {
 
     assert_eq!(
         border_span.rendition.foreground,
-        Some(TerminalColor::Rgb(0xd8, 0xff, 0x5a))
+        Some(TerminalColor::Rgb(0xbf, 0xff, 0x00))
     );
     assert_eq!(border_span.rendition.background, None);
 }
@@ -769,10 +769,11 @@ fn render_merged_pane_frame_fills_status_bar_and_preserves_vertical_separators()
         .iter()
         .find(|span| {
             span.length >= frame_text.len()
-                && span.rendition.background == Some(TerminalColor::Rgb(0x7f, 0xbf, 0x3f))
+                && span.rendition.background
+                    == Some(config.ui_theme.colors.pane_frame_active.background)
         })
         .copied()
-        .expect("merged status title should carry the title-pill background");
+        .expect("active merged pane title should carry the title-pill background");
     let horizontal_column = view.lines[merged_row]
         .chars()
         .position(|ch| ch == '\u{2500}')
@@ -790,8 +791,10 @@ fn render_merged_pane_frame_fills_status_bar_and_preserves_vertical_separators()
         view.line_style_spans[merged_row].iter().any(|span| {
             span.start == title_span.start
                 && span.length >= frame_text.len()
-                && span.rendition.foreground == Some(TerminalColor::Rgb(0x11, 0x14, 0x00))
-                && span.rendition.background == Some(TerminalColor::Rgb(0x7f, 0xbf, 0x3f))
+                && span.rendition.foreground
+                    == Some(config.ui_theme.colors.pane_frame_active.foreground)
+                && span.rendition.background
+                    == Some(config.ui_theme.colors.pane_frame_active.background)
         }),
         "{:?}",
         view.line_style_spans[merged_row]
