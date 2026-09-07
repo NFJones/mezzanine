@@ -62,10 +62,11 @@ use crate::config::{
     ConfigPaths, ConfigScope,
 };
 #[cfg(test)]
-use crate::host::power_inhibition::PowerInhibitionState;
 use crate::host::power_inhibition::{
-    PowerInhibitionController, PowerInhibitionMode, production_power_inhibition_controller,
+    PowerInhibitionBackendKind, PowerInhibitionController, PowerInhibitionState,
+    power_inhibition_service,
 };
+use crate::host::power_inhibition::{PowerInhibitionHandle, PowerInhibitionMode};
 use crate::integrations::agent::provider::{
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
     openai_compatible_provider_from_auth_store_with_provider_options,
@@ -256,10 +257,8 @@ pub(crate) struct RuntimeAgentComponent {
     agent_surface_startups: BTreeMap<String, startup::RuntimeAgentSurfaceStartup>,
     /// User-controlled host power policy for active agent turns.
     active_turn_sleep_inhibition: ActiveTurnSleepInhibition,
-    /// Daemon-wide host power lease retained while canonical turns are running.
-    active_turn_power_inhibition: Option<
-        PowerInhibitionController<Box<dyn crate::host::power_inhibition::PowerInhibitionBackend>>,
-    >,
+    /// Nonblocking publisher for the session-owned host power worker.
+    active_turn_power_inhibition: Option<PowerInhibitionHandle>,
     /// Percent of raw context retained after compaction.
     agent_compaction_raw_retention_percent: usize,
     /// Default model and reasoning auto-sizing policy.
@@ -532,22 +531,32 @@ pub(crate) struct RuntimeAgentComponent {
 /// controller transition semantics for runtime lifecycle regressions.
 #[cfg(test)]
 #[derive(Debug, Default)]
-struct TestPowerInhibitionBackend {
-    next_lease_id: u32,
+struct TestPowerInhibitionBackend;
+
+/// No-op owned lease used by runtime lifecycle tests without host effects.
+#[cfg(test)]
+#[derive(Debug)]
+struct TestPowerInhibitionLease;
+
+#[cfg(test)]
+impl crate::host::power_inhibition::PowerInhibitionLease for TestPowerInhibitionLease {
+    fn release(&mut self) -> std::result::Result<(), String> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 impl crate::host::power_inhibition::PowerInhibitionBackend for TestPowerInhibitionBackend {
+    fn kind(&self) -> PowerInhibitionBackendKind {
+        PowerInhibitionBackendKind::Test
+    }
+
     fn acquire(
         &mut self,
         _: crate::host::power_inhibition::PowerInhibitionResource,
-    ) -> std::result::Result<u32, String> {
-        self.next_lease_id = self.next_lease_id.saturating_add(1);
-        Ok(self.next_lease_id)
-    }
-
-    fn release(&mut self, _: u32) -> std::result::Result<(), String> {
-        Ok(())
+    ) -> std::result::Result<Box<dyn crate::host::power_inhibition::PowerInhibitionLease>, String>
+    {
+        Ok(Box::new(TestPowerInhibitionLease))
     }
 }
 
@@ -2480,7 +2489,7 @@ impl RuntimeSessionService {
         self.reconcile_active_turn_sleep_inhibition();
     }
 
-    /// Reconciles the one daemon-wide host power lease from canonical Running
+    /// Publishes the session's desired host power mode from canonical Running
     /// ledger state rather than pane-local shell-session bookkeeping.
     pub(crate) fn reconcile_active_turn_sleep_inhibition(&mut self) {
         let runtime_is_live = matches!(
@@ -2505,34 +2514,53 @@ impl RuntimeSessionService {
         } else {
             PowerInhibitionMode::Disabled
         };
-        if self.agent.active_turn_power_inhibition.is_none()
-            && mode != PowerInhibitionMode::Disabled
-        {
-            self.agent.active_turn_power_inhibition =
-                Some(production_power_inhibition_controller());
-        }
-        if let Some(controller) = self.agent.active_turn_power_inhibition.as_mut() {
-            controller.reconcile(mode);
+        if let Some(handle) = self.agent.active_turn_power_inhibition.as_ref() {
+            handle.publish(mode);
+            if matches!(
+                self.session.lifecycle_state(),
+                crate::runtime::RuntimeLifecycleState::Stopping
+                    | crate::runtime::RuntimeLifecycleState::Killed
+                    | crate::runtime::RuntimeLifecycleState::Failed
+            ) {
+                handle.close();
+            }
         }
     }
 
-    /// Returns the effective host power-inhibition state for focused tests.
+    /// Installs the session-owned nonblocking host power publisher.
+    pub(crate) fn install_active_turn_power_inhibition(&mut self, handle: PowerInhibitionHandle) {
+        self.agent.active_turn_power_inhibition = Some(handle);
+        self.reconcile_active_turn_sleep_inhibition();
+    }
+
+    /// Returns the confirmed host power-inhibition state for focused tests.
     #[cfg(test)]
     pub(crate) fn active_turn_power_inhibition_state_for_tests(&self) -> PowerInhibitionState {
-        self.agent
-            .active_turn_power_inhibition
-            .as_ref()
-            .map(PowerInhibitionController::state)
-            .unwrap_or(PowerInhibitionState::Inactive)
+        let Some(handle) = self.agent.active_turn_power_inhibition.as_ref() else {
+            return PowerInhibitionState::Inactive;
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let snapshot = handle.snapshot();
+            if snapshot.confirmed_generation >= snapshot.desired_generation {
+                return snapshot.state;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for host power-inhibition confirmation"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
     }
 
     /// Installs a deterministic backend before exercising runtime lifecycle
     /// reconciliation in tests.
     #[cfg(test)]
     pub(crate) fn install_test_active_turn_power_inhibition_backend(&mut self) {
-        self.agent.active_turn_power_inhibition = Some(PowerInhibitionController::new(Box::new(
-            TestPowerInhibitionBackend::default(),
-        )));
+        let controller = PowerInhibitionController::new(Box::new(TestPowerInhibitionBackend));
+        let (handle, worker) = power_inhibition_service(controller);
+        std::thread::spawn(move || worker.run());
+        self.install_active_turn_power_inhibition(handle);
     }
 
     /// Replaces the raw-context percentage retained after compaction.

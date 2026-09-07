@@ -27,6 +27,9 @@ use crate::host::async_runtime::{
     build_async_runtime_daemon_services, build_async_runtime_session_services,
     supervise_async_runtime_services,
 };
+use crate::host::power_inhibition::{
+    PowerInhibitionBackend, PowerInhibitionWorker, production_power_inhibition_service,
+};
 use crate::runtime::x11::RuntimeX11Proxy;
 use crate::runtime::{
     RuntimeEvent, RuntimeEventBatch, RuntimeIrohShutdownHandle, RuntimeLifecycleState,
@@ -209,6 +212,9 @@ impl SessionFactory {
             None
         };
         let iroh_endpoint = service.bind_configured_iroh_endpoint().await?;
+        let (power_inhibition_handle, power_inhibition_worker) =
+            production_power_inhibition_service();
+        service.install_active_turn_power_inhibition(power_inhibition_handle);
         spawn_auth_refresh_if_needed(&service);
         let daemon_config = AsyncRuntimeDaemonConfig {
             control: AsyncRuntimeControlConnectionConfig::new(1024 * 1024, request.owner_uid)?,
@@ -281,6 +287,7 @@ impl SessionFactory {
                 daemon_config.snapshots.clone(),
             ));
         }
+        services.push(build_power_inhibition_service(power_inhibition_worker));
         services.push(build_provider_refresh_service(handle.clone()));
         if !has_unix_listener && !has_iroh_listener {
             services.push(build_actor_lifetime_service(handle.clone()));
@@ -641,6 +648,18 @@ fn build_runtime_x11_proxy_service(proxy: RuntimeX11Proxy) -> AsyncRuntimeServic
     })
 }
 
+fn build_power_inhibition_service(
+    worker: PowerInhibitionWorker<Box<dyn PowerInhibitionBackend>>,
+) -> AsyncRuntimeService {
+    AsyncRuntimeService::new_auxiliary("host-power-inhibition", async move {
+        let work_units = tokio::task::spawn_blocking(move || worker.run())
+            .await
+            .map(|report| report.work_units)
+            .unwrap_or(0);
+        Ok(AsyncRuntimeServiceExit::completed(work_units))
+    })
+}
+
 fn build_actor_lifetime_service(handle: AsyncRuntimeSessionHandle) -> AsyncRuntimeService {
     AsyncRuntimeService::new("session-lifetime", async move {
         let mut lifecycle = handle.lifecycle_state_watcher();
@@ -667,12 +686,55 @@ mod tests {
     use std::time::Duration;
 
     use crate::config::{ConfigFormat, ConfigScope};
+    use crate::host::power_inhibition::{
+        PowerInhibitionBackendKind, PowerInhibitionController, PowerInhibitionLease,
+        PowerInhibitionMode, PowerInhibitionResource, power_inhibition_service,
+    };
     use crate::host::shell::{ResolvedShell, ShellSource};
     use mez_core::ids::SessionId;
 
     use super::*;
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(1);
+
+    #[derive(Debug)]
+    struct PanickingPowerInhibitionBackend;
+
+    impl PowerInhibitionBackend for PanickingPowerInhibitionBackend {
+        fn kind(&self) -> PowerInhibitionBackendKind {
+            PowerInhibitionBackendKind::Test
+        }
+
+        fn acquire(
+            &mut self,
+            _: PowerInhibitionResource,
+        ) -> std::result::Result<Box<dyn PowerInhibitionLease>, String> {
+            panic!("injected power-inhibition worker failure");
+        }
+    }
+
+    /// A failed host-power worker remains auxiliary and cannot request runtime
+    /// supervisor shutdown or propagate its task failure into actor ownership.
+    #[tokio::test(flavor = "current_thread")]
+    async fn power_inhibition_worker_failure_is_nonfatal_to_supervision() {
+        let controller = PowerInhibitionController::new(
+            Box::new(PanickingPowerInhibitionBackend) as Box<dyn PowerInhibitionBackend>
+        );
+        let (handle, worker) = power_inhibition_service(controller);
+        handle.publish(PowerInhibitionMode::System);
+
+        let report = supervise_async_runtime_services(
+            vec![build_power_inhibition_service(worker)],
+            std::future::pending(),
+        )
+        .await
+        .unwrap();
+
+        assert!(!report.shutdown_requested);
+        assert_eq!(report.services.len(), 1);
+        assert_eq!(report.services[0].name, "host-power-inhibition");
+        assert_eq!(report.services[0].exit.work_units, 0);
+    }
 
     /// Two reusable runtimes must retain independent actors and lifecycle state.
     #[tokio::test(flavor = "current_thread")]

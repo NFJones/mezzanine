@@ -1,17 +1,23 @@
 //! Unsupported-platform implementation for host power-inhibition leases.
 
-use super::{PowerInhibitionBackend, PowerInhibitionResource};
+use super::{
+    PowerInhibitionBackend, PowerInhibitionBackendKind, PowerInhibitionLease,
+    PowerInhibitionResource,
+};
 
 /// Backend used on platforms without a native implementation in this release.
 #[derive(Debug, Default)]
 pub(crate) struct UnsupportedPowerInhibitionBackend;
 
 impl PowerInhibitionBackend for UnsupportedPowerInhibitionBackend {
-    fn acquire(&mut self, _: PowerInhibitionResource) -> std::result::Result<u32, String> {
-        Err("host power inhibition is unavailable on this platform".to_string())
+    fn kind(&self) -> PowerInhibitionBackendKind {
+        PowerInhibitionBackendKind::Unsupported
     }
 
-    fn release(&mut self, _: u32) -> std::result::Result<(), String> {
-        Ok(())
+    fn acquire(
+        &mut self,
+        _: PowerInhibitionResource,
+    ) -> std::result::Result<Box<dyn PowerInhibitionLease>, String> {
+        Err("host power inhibition is unavailable on this platform".to_string())
     }
 }

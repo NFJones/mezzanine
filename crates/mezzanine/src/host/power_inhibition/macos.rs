@@ -1,13 +1,17 @@
 //! Native macOS IOKit power-assertion adapter.
 //!
 //! Unsafe FFI remains in this module. Each request creates a short-lived Core
-//! Foundation UTF-8 string for the assertion type and reason, then transfers
-//! only the numeric IOKit assertion id to the platform-neutral controller.
+//! Foundation UTF-8 string for the assertion type and reason, then retains the
+//! numeric IOKit assertion id inside an opaque retryable RAII lease.
 
 use std::ffi::c_void;
 use std::ptr;
+use std::sync::{Arc, Mutex};
 
-use super::{PowerInhibitionBackend, PowerInhibitionResource};
+use super::{
+    PowerInhibitionBackend, PowerInhibitionBackendKind, PowerInhibitionLease,
+    PowerInhibitionResource,
+};
 
 const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
 const K_IOPM_ASSERTION_LEVEL_ON: u32 = 255;
@@ -99,9 +103,17 @@ impl MacOsPowerInhibitionApi for NativeMacOsPowerInhibitionApi {
 ///
 /// The generic API boundary lets deterministic tests verify requested resource
 /// types and cleanup without creating real host power assertions.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct MacOsPowerInhibitionBackend<A = NativeMacOsPowerInhibitionApi> {
-    api: A,
+    api: Arc<Mutex<A>>,
+}
+
+impl<A: Default> Default for MacOsPowerInhibitionBackend<A> {
+    fn default() -> Self {
+        Self {
+            api: Arc::new(Mutex::new(A::default())),
+        }
+    }
 }
 
 impl MacOsPowerInhibitionBackend {
@@ -115,19 +127,64 @@ impl MacOsPowerInhibitionBackend {
 impl<A> MacOsPowerInhibitionBackend<A> {
     /// Creates a macOS backend backed by deterministic native-call test data.
     fn with_api(api: A) -> Self {
-        Self { api }
+        Self {
+            api: Arc::new(Mutex::new(api)),
+        }
+    }
+}
+
+/// Owned IOKit assertion that supports explicit retry and final drop cleanup.
+#[derive(Debug)]
+struct MacOsPowerInhibitionLease<A: MacOsPowerInhibitionApi + std::fmt::Debug + Send> {
+    api: Arc<Mutex<A>>,
+    assertion_id: u32,
+    released: bool,
+}
+
+impl<A: MacOsPowerInhibitionApi + std::fmt::Debug + Send> PowerInhibitionLease
+    for MacOsPowerInhibitionLease<A>
+{
+    fn release(&mut self) -> std::result::Result<(), String> {
+        if self.released {
+            return Ok(());
+        }
+        let mut api = self
+            .api
+            .lock()
+            .map_err(|_| "macOS power-inhibition API lock is poisoned".to_string())?;
+        api.release(self.assertion_id)?;
+        self.released = true;
+        Ok(())
+    }
+}
+
+impl<A: MacOsPowerInhibitionApi + std::fmt::Debug + Send> Drop for MacOsPowerInhibitionLease<A> {
+    fn drop(&mut self) {
+        let _ = self.release();
     }
 }
 
 impl<A: MacOsPowerInhibitionApi + std::fmt::Debug + Send> PowerInhibitionBackend
     for MacOsPowerInhibitionBackend<A>
 {
-    fn acquire(&mut self, resource: PowerInhibitionResource) -> std::result::Result<u32, String> {
-        self.api.acquire(resource)
+    fn kind(&self) -> PowerInhibitionBackendKind {
+        PowerInhibitionBackendKind::MacOsIokit
     }
 
-    fn release(&mut self, lease_id: u32) -> std::result::Result<(), String> {
-        self.api.release(lease_id)
+    fn acquire(
+        &mut self,
+        resource: PowerInhibitionResource,
+    ) -> std::result::Result<Box<dyn PowerInhibitionLease>, String> {
+        let assertion_id = self
+            .api
+            .lock()
+            .map_err(|_| "macOS power-inhibition API lock is poisoned".to_string())?
+            .acquire(resource)?;
+        Ok(Box::new(MacOsPowerInhibitionLease {
+            api: Arc::clone(&self.api),
+            assertion_id,
+            released: false,
+        }))
     }
 }
 
@@ -217,14 +274,15 @@ mod tests {
     #[test]
     fn macos_backend_delegates_assertions_without_host_power_changes() {
         let mut backend = MacOsPowerInhibitionBackend::with_api(FakeMacOsApi::default());
+        let api = Arc::clone(&backend.api);
 
-        let system = backend.acquire(PowerInhibitionResource::System).unwrap();
-        let display = backend.acquire(PowerInhibitionResource::Display).unwrap();
-        backend.release(display).unwrap();
-        backend.release(system).unwrap();
+        let mut system = backend.acquire(PowerInhibitionResource::System).unwrap();
+        let mut display = backend.acquire(PowerInhibitionResource::Display).unwrap();
+        display.release().unwrap();
+        system.release().unwrap();
 
         assert_eq!(
-            backend.api.calls,
+            api.lock().unwrap().calls,
             [
                 "acquire:PreventUserIdleSystemSleep:Mezzanine is running an active agent turn",
                 "acquire:PreventUserIdleDisplaySleep:Mezzanine is running an active agent turn",
