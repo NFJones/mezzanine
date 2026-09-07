@@ -1411,6 +1411,13 @@ impl RuntimeSessionService {
                 .settings
                 .terminal_completion_attention_flashing,
             window_status: self.runtime_window_status_context(),
+            window_status_pill_color_overrides: self
+                .presentation
+                .settings
+                .window_status_pill_definitions
+                .iter()
+                .map(|(name, definition)| (name.clone(), definition.color_overrides.clone()))
+                .collect(),
             pane_status: self.presentation.settings.pane_status.clone(),
             ..TerminalFrameContext::default()
         };

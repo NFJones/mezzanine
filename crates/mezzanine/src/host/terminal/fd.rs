@@ -5,9 +5,10 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    BTreeMap, BorrowedFd, Errno, MezError, MousePaneAgentSelectorCell, MousePaneAgentStatusCell,
-    MouseWindowActionFrameCell, OptionalActions, PaneStatusConfig, RawFd, Result, Termios,
-    WindowFrameAction, borrow_raw_fd, fcntl_getfl, tcgetattr, tcgetwinsize, tcsetattr,
+    BTreeMap, BorrowedFd, Errno, FramePillColorOverrides, MezError, MousePaneAgentSelectorCell,
+    MousePaneAgentStatusCell, MouseWindowActionFrameCell, OptionalActions, PaneStatusConfig, RawFd,
+    Result, Termios, WindowFrameAction, borrow_raw_fd, fcntl_getfl, tcgetattr, tcgetwinsize,
+    tcsetattr,
 };
 use crate::ui::readline::ReadlinePrompt;
 use mez_mux::copy::CopyPosition;
@@ -74,6 +75,8 @@ pub struct TerminalFrameContext {
     pub approval_attention_groups: std::collections::BTreeSet<String>,
     /// Right-side status fields rendered into the active pane frame.
     pub window_status: Option<TerminalWindowStatusContext>,
+    /// Unresolved palette overrides keyed by configured window pill name.
+    pub window_status_pill_color_overrides: BTreeMap<String, FramePillColorOverrides>,
     /// Typed pane-status rails and named built-in definitions.
     pub pane_status: PaneStatusConfig,
     /// Per-pane runtime metadata keyed by stable pane id.

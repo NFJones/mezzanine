@@ -15,7 +15,8 @@ use super::window_frame_pillbox_text_from_entries;
 use super::{
     PaneFrameRightStatusSegment, WindowStatusSegmentKind, group_frame_pillbox_entries,
     pane_frame_row_layout, render_window_frame_text, render_window_status_template,
-    window_frame_pillbox_entries, window_right_status_layout, window_status_style_spans,
+    window_frame_pillbox_entries, window_right_status_layout, window_status_segment_rendition,
+    window_status_style_spans,
 };
 use mez_mux::render::PaneFrameRowLayout;
 
@@ -150,29 +151,11 @@ pub(in crate::host::terminal::render) fn styled_window_pillbox_line(
                 .map(|segment| TerminalStyleSpan {
                     start: segment.start,
                     length: segment.width,
-                    rendition: match &segment.key {
-                        WindowStatusSegmentKind::Action { pressed, .. } => {
-                            window_pillbox_rendition(
-                                *pressed,
-                                false,
-                                false,
-                                false,
-                                frame_context,
-                                TerminalFrameStyle::Default,
-                                ui_theme,
-                            )
-                        }
-                        WindowStatusSegmentKind::Uptime => {
-                            ui_theme.colors.window_status_uptime.rendition()
-                        }
-                        WindowStatusSegmentKind::DateTime => {
-                            ui_theme.colors.window_status_datetime.rendition()
-                        }
-                        WindowStatusSegmentKind::StatusPill => {
-                            ui_theme.colors.window_status_uptime.rendition()
-                        }
-                        WindowStatusSegmentKind::IrohSlot => GraphicRendition::default(),
-                    },
+                    rendition: window_status_segment_rendition(
+                        &segment.key,
+                        frame_context,
+                        ui_theme,
+                    ),
                 }),
         )
         .collect::<Vec<_>>();
@@ -409,7 +392,7 @@ pub(in crate::host::terminal::render) fn pane_frame_right_status_rendition(
 }
 
 /// Replaces configured color channels while preserving semantic attributes.
-fn frame_pill_color_overridden_rendition(
+pub(in crate::host::terminal::render) fn frame_pill_color_overridden_rendition(
     mut rendition: GraphicRendition,
     overrides: &crate::host::terminal::FramePillColorOverrides,
     ui_theme: &UiTheme,

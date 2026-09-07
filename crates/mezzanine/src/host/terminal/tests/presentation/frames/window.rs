@@ -2,9 +2,10 @@
 
 use crate::host::terminal::{
     BTreeMap, DEFAULT_PANE_FRAME_TEMPLATE, DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE,
-    DEFAULT_WINDOW_FRAME_TEMPLATE, PaneRenderInput, TerminalClientLoopConfig, TerminalFrameContext,
-    TerminalFrameRenderOptions, WindowFrameAction, render_attached_client_view,
-    render_window_with_pane_frame_template, window_frame_action_pillbox_cells,
+    DEFAULT_WINDOW_FRAME_TEMPLATE, FramePillColorOverrides, PaneRenderInput,
+    TerminalClientLoopConfig, TerminalFrameContext, TerminalFrameRenderOptions, WindowFrameAction,
+    render_attached_client_view, render_window_with_pane_frame_template,
+    window_frame_action_pillbox_cells,
 };
 use mez_core::ids::IdFactory;
 use mez_mux::layout::{Size, SplitDirection, Window};
@@ -467,6 +468,105 @@ fn render_window_status_uses_cached_command_status_pills() {
             && span.length == " CPU 42% ".len()
             && span.rendition.background == Some(TerminalColor::Rgb(0x2f, 0x30, 0x2b))
     }));
+}
+
+/// Configured window pills resolve independent palette channels in both frame
+/// styling paths, while built-in datetime keeps its dedicated theme rendition.
+#[test]
+fn render_window_status_pills_apply_palette_overrides_in_both_style_paths() {
+    let mut ids = IdFactory::default();
+    let window = Window::new(&mut ids, 1, "work", Size::new(80, 3).unwrap());
+    let foreground = TerminalColor::Rgb(0x12, 0x34, 0x56);
+    let background = TerminalColor::Rgb(0x65, 0x43, 0x21);
+
+    for template in [DEFAULT_WINDOW_FRAME_TEMPLATE, "#{window.name}"] {
+        let frame_context = TerminalFrameContext {
+            windows: vec![TerminalWindowFrameContext {
+                id: "@2".to_string(),
+                index: 1,
+                title: "work".to_string(),
+                active: true,
+                subagent: false,
+                completion_attention: false,
+            }],
+            window_status: Some(TerminalWindowStatusContext {
+                template: "#{pill.cpu} #{pill.mem} #{datetime.local}".to_string(),
+                active_pane_working_directory: None,
+                status_pills: BTreeMap::from([
+                    ("cpu".to_string(), "CPU".to_string()),
+                    ("mem".to_string(), "MEM".to_string()),
+                ]),
+                system_uptime: String::new(),
+                datetime_local: "NOW".to_string(),
+            }),
+            window_status_pill_color_overrides: BTreeMap::from([
+                (
+                    "cpu".to_string(),
+                    FramePillColorOverrides {
+                        foreground: Some("test_foreground".to_string()),
+                        background: Some("test_background".to_string()),
+                    },
+                ),
+                (
+                    "mem".to_string(),
+                    FramePillColorOverrides {
+                        foreground: Some("test_foreground".to_string()),
+                        background: None,
+                    },
+                ),
+            ]),
+            ..TerminalFrameContext::default()
+        };
+        let mut config = TerminalClientLoopConfig {
+            frame_context,
+            window_frame_template: template.to_string(),
+            window_frames_enabled: true,
+            pane_frames_enabled: false,
+            ..TerminalClientLoopConfig::default()
+        };
+        config
+            .ui_theme
+            .aliases
+            .insert("test_foreground".to_string(), foreground);
+        config
+            .ui_theme
+            .aliases
+            .insert("test_background".to_string(), background);
+
+        let view = render_attached_client_view(
+            ClientViewRole::Primary,
+            &window,
+            &BTreeMap::new(),
+            &config,
+            window.size,
+        )
+        .unwrap()
+        .unwrap();
+        let row = &view.lines[2];
+        let spans = &view.line_style_spans[2];
+        let cpu_start = UnicodeWidthStr::width(&row[..row.find(" CPU ").unwrap()]);
+        let mem_start = UnicodeWidthStr::width(&row[..row.find(" MEM ").unwrap()]);
+        let now_start = UnicodeWidthStr::width(&row[..row.find(" NOW ").unwrap()]);
+
+        assert!(spans.iter().any(|span| {
+            span.start == cpu_start
+                && span.length == " CPU ".len()
+                && span.rendition.foreground == Some(foreground)
+                && span.rendition.background == Some(background)
+        }));
+        assert!(spans.iter().any(|span| {
+            span.start == mem_start
+                && span.length == " MEM ".len()
+                && span.rendition.foreground == Some(foreground)
+                && span.rendition.background
+                    == Some(config.ui_theme.colors.window_status_uptime.background)
+        }));
+        assert!(spans.iter().any(|span| {
+            span.start == now_start
+                && span.length == " NOW ".len()
+                && span.rendition == config.ui_theme.colors.window_status_datetime.rendition()
+        }));
+    }
 }
 
 /// Verifies that a framed window never grows beyond the authoritative window

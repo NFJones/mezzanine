@@ -83,7 +83,10 @@ pub(in crate::host::terminal::render) enum WindowStatusSegmentKind {
     /// without relying on stringly typed status values.
     DateTime,
     /// Represents a configured command-backed status pill.
-    StatusPill,
+    StatusPill {
+        /// Unresolved palette names applied when the active theme is rendered.
+        color_overrides: crate::host::terminal::FramePillColorOverrides,
+    },
     /// Reserved semantic slot rendered from attach-client Iroh health.
     IrohSlot,
 }
@@ -93,7 +96,7 @@ impl WindowStatusSegmentKind {
     fn action(&self) -> Option<&WindowFrameAction> {
         match self {
             Self::Action { action, .. } => Some(action),
-            Self::Uptime | Self::DateTime | Self::StatusPill | Self::IrohSlot => None,
+            Self::Uptime | Self::DateTime | Self::StatusPill { .. } | Self::IrohSlot => None,
         }
     }
 }
@@ -168,7 +171,7 @@ pub(in crate::host::terminal::render) fn window_status_field_component(
     if let Some(action) = window_status_template_button_action(field) {
         return window_action_status_component(frame_context, action);
     }
-    let (value, kind) = window_status_field_value(status, field);
+    let (value, kind) = window_status_field_value(frame_context, status, field);
     let text = if kind.is_some() {
         mez_mux::render::render_frame_pill_text(&value)
     } else {
@@ -266,6 +269,7 @@ pub(in crate::host::terminal::render) fn window_status_template_button_action(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(in crate::host::terminal::render) fn window_status_field_value(
+    frame_context: &TerminalFrameContext,
     status: &TerminalWindowStatusContext,
     field: &str,
 ) -> (String, Option<WindowStatusSegmentKind>) {
@@ -276,7 +280,13 @@ pub(in crate::host::terminal::render) fn window_status_field_value(
                 .get(name)
                 .map(|value| sanitize_frame_text(value))
                 .unwrap_or_default(),
-            Some(WindowStatusSegmentKind::StatusPill),
+            Some(WindowStatusSegmentKind::StatusPill {
+                color_overrides: frame_context
+                    .window_status_pill_color_overrides
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_default(),
+            }),
         );
     }
     match field {
@@ -317,27 +327,38 @@ pub(in crate::host::terminal::render) fn window_status_style_spans(
         .map(|segment| TerminalStyleSpan {
             start: segment.start,
             length: segment.width,
-            rendition: match &segment.key {
-                WindowStatusSegmentKind::Action { pressed, .. } => window_pillbox_rendition(
-                    *pressed,
-                    false,
-                    false,
-                    false,
-                    frame_context,
-                    TerminalFrameStyle::Default,
-                    ui_theme,
-                ),
-                WindowStatusSegmentKind::Uptime => ui_theme.colors.window_status_uptime.rendition(),
-                WindowStatusSegmentKind::DateTime => {
-                    ui_theme.colors.window_status_datetime.rendition()
-                }
-                WindowStatusSegmentKind::StatusPill => {
-                    ui_theme.colors.window_status_uptime.rendition()
-                }
-                WindowStatusSegmentKind::IrohSlot => mez_terminal::GraphicRendition::default(),
-            },
+            rendition: window_status_segment_rendition(&segment.key, frame_context, ui_theme),
         })
         .collect()
+}
+
+/// Resolves one semantic window-status segment through the active theme.
+pub(in crate::host::terminal::render) fn window_status_segment_rendition(
+    kind: &WindowStatusSegmentKind,
+    frame_context: &TerminalFrameContext,
+    ui_theme: &UiTheme,
+) -> mez_terminal::GraphicRendition {
+    match kind {
+        WindowStatusSegmentKind::Action { pressed, .. } => window_pillbox_rendition(
+            *pressed,
+            false,
+            false,
+            false,
+            frame_context,
+            TerminalFrameStyle::Default,
+            ui_theme,
+        ),
+        WindowStatusSegmentKind::Uptime => ui_theme.colors.window_status_uptime.rendition(),
+        WindowStatusSegmentKind::DateTime => ui_theme.colors.window_status_datetime.rendition(),
+        WindowStatusSegmentKind::StatusPill { color_overrides } => {
+            super::frame_pill_color_overridden_rendition(
+                ui_theme.colors.window_status_uptime.rendition(),
+                color_overrides,
+                ui_theme,
+            )
+        }
+        WindowStatusSegmentKind::IrohSlot => mez_terminal::GraphicRendition::default(),
+    }
 }
 
 /// Returns the absolute reserved Iroh slot inside the window frame row.
