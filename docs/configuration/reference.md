@@ -735,6 +735,12 @@ Built-in theme names include `deepforest`, `apprentice`, `gruvbox_dark`,
 `ayu_light`, `ayu_mirage`, `acid_lemon`, `acid_tangerine`, `acid_lime`,
 `acid_grapefruit`, `high_contrast_dark`, and `high_contrast_light`.
 
+Except for the intentionally vivid default `acid_lime`, built-ins derive quiet,
+low-chroma container fills from their base surface for persistent chrome and
+metadata. Saturated palette accents are reserved for active selection and
+meaningful success, warning, blocked, or failure states. Text-bearing pairs are
+contrast-managed while each named family retains its defining palette anchors.
+
 Built-ins fall into three fidelity groups. `apprentice`, `nord`, `tokyo_night`,
 `catppuccin_latte`, `catppuccin_frappe`, `catppuccin_macchiato`,
 `catppuccin_mocha`, `rose_pine`, `rose_pine_moon`, `rose_pine_dawn`,
