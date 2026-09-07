@@ -369,4 +369,88 @@ mod tests {
             vec![(0, 0, 2, 6, command), (0, 1, 2, 2, command)]
         );
     }
+
+    /// Verifies wrapped record-browser UUID fragments retain their Markdown
+    /// link rendition and share the active selection background across zebra rows.
+    #[test]
+    fn wrapped_record_browser_links_keep_final_composed_rendition() {
+        let ids = [
+            "11111111-1111-1111-1111-111111111111",
+            "22222222-2222-2222-2222-222222222222",
+        ];
+        let mut browser = mez_mux::record_browser::RecordBrowser::new(
+            "Issues",
+            ids.iter()
+                .enumerate()
+                .map(|(index, id)| mez_mux::record_browser::RecordBrowserRecord {
+                    id: (*id).to_string(),
+                    open_command: Some(format!("/show-issues {id}")),
+                    title: format!("Issue {}", index.saturating_add(1)),
+                    metadata: vec![("title".to_string(), format!("Issue {}", index + 1))],
+                    markdown: String::new(),
+                })
+                .collect(),
+            Vec::new(),
+        )
+        .unwrap();
+        browser.set_table_columns_with_labels(vec![("Title".to_string(), "title".to_string())]);
+        let mut overlay = RuntimeDisplayOverlay {
+            lines: Vec::new(),
+            line_style_spans: Vec::new(),
+            line_copy_texts: Vec::new(),
+            scroll_offset: 0,
+            search_input: None,
+            search_query: None,
+            search_match: None,
+            search_status: None,
+            mouse_selection: None,
+            selections: Vec::new(),
+            active_selection_index: None,
+            dismiss_on_any_input: false,
+            live_source: None,
+            record_browser: Some(
+                crate::runtime::service_state::RuntimeRecordBrowserOverlayState {
+                    pane_id: "%1".to_string(),
+                    command: "show-issues".to_string(),
+                    source: None,
+                    browser,
+                    stack: Vec::new(),
+                },
+            ),
+        };
+        let ui_theme = mez_mux::theme::deepforest_ui_theme();
+
+        assert!(render_record_browser_overlay(
+            &mut overlay,
+            &ui_theme,
+            24,
+            24
+        ));
+        assert!(overlay.selections.len() >= 4, "{overlay:?}");
+        for selection in &overlay.selections {
+            let spans =
+                overlay_rendered_line_style_spans(&overlay, selection.line_index, 24, &ui_theme);
+            let start = overlay_rendered_selection_start(&overlay, selection);
+            for column in start..start.saturating_add(selection.width) {
+                let rendition = rendered_line_rendition_at(&spans, column);
+                assert!(rendition.bold, "column {column} lost bold: {spans:?}");
+                assert!(
+                    rendition.underline,
+                    "column {column} lost underline: {spans:?}"
+                );
+                assert_eq!(
+                    rendition.foreground,
+                    Some(ui_theme.colors.agent_transcript_command.foreground),
+                    "column {column} lost link foreground: {spans:?}"
+                );
+                if selection.logical_id == 0 {
+                    assert_eq!(
+                        rendition.background,
+                        Some(ui_theme.colors.agent_model.background),
+                        "column {column} lost active background: {spans:?}"
+                    );
+                }
+            }
+        }
+    }
 }

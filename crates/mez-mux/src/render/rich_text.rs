@@ -1231,6 +1231,8 @@ impl<'a> MarkdownRenderer<'a> {
     /// Handles parser events while a table is being captured.
     fn handle_table_event(&mut self, event: Event<'_>) {
         let mut render_table = false;
+        let link_foreground = self.link_foreground;
+        let inline_code_foreground = self.inline_code_foreground;
         if let Some(table) = self.table.as_mut() {
             match event {
                 Event::Start(Tag::Table(_)) => {}
@@ -1250,13 +1252,53 @@ impl<'a> MarkdownRenderer<'a> {
                 Event::End(TagEnd::TableRow) => table.finish_row(),
                 Event::Start(Tag::TableCell) => table.start_cell(),
                 Event::End(TagEnd::TableCell) => table.finish_cell(),
+                Event::Start(Tag::Emphasis) => table.push_style(|style| style.italic = true),
+                Event::Start(Tag::Strong) => table.push_style(|style| style.bold = true),
+                Event::Start(Tag::Strikethrough) => {
+                    table.push_style(|style| style.strikethrough = true);
+                }
+                Event::Start(Tag::Superscript) => table.push_style(|style| style.bold = true),
+                Event::Start(Tag::Subscript) => table.push_style(|style| style.dim = true),
+                Event::Start(Tag::Link { .. }) => {
+                    table.link_depth = table.link_depth.saturating_add(1);
+                    table.push_style(|style| {
+                        style.foreground = Some(link_foreground);
+                        style.background = None;
+                        style.inverse = false;
+                        style.bold = true;
+                        style.underline = true;
+                    });
+                }
+                Event::End(
+                    TagEnd::Emphasis
+                    | TagEnd::Strong
+                    | TagEnd::Strikethrough
+                    | TagEnd::Superscript
+                    | TagEnd::Subscript,
+                ) => table.pop_style(),
+                Event::End(TagEnd::Link) => {
+                    table.pop_style();
+                    table.link_depth = table.link_depth.saturating_sub(1);
+                }
+                Event::Code(text) => {
+                    let mut style = table.active;
+                    style.foreground = Some(if table.link_depth == 0 {
+                        inline_code_foreground
+                    } else {
+                        link_foreground
+                    });
+                    style.background = None;
+                    style.inverse = false;
+                    table.append_cell_styled_text(text.as_ref(), style);
+                }
                 Event::Text(text)
-                | Event::Code(text)
                 | Event::InlineMath(text)
                 | Event::DisplayMath(text)
                 | Event::Html(text)
                 | Event::InlineHtml(text)
-                | Event::FootnoteReference(text) => table.append_cell_text(text.as_ref()),
+                | Event::FootnoteReference(text) => {
+                    table.append_cell_styled_text(text.as_ref(), table.active);
+                }
                 Event::SoftBreak | Event::HardBreak => table.append_cell_text(" "),
                 Event::Rule => table.append_cell_text("────────"),
                 Event::TaskListMarker(checked) => {
@@ -1746,16 +1788,50 @@ pub struct MarkdownListState {
 }
 
 /// Captures a CommonMark table before emitting aligned terminal rows.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct MarkdownTableCell {
+    text: String,
+    style_spans: Vec<TerminalStyleSpan>,
+}
+
+impl MarkdownTableCell {
+    /// Reports whether this cell has no visible text.
+    fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+
+    /// Returns a display-trimmed cell with style coordinates shifted to match.
+    fn trimmed(self) -> Self {
+        let trimmed = self.text.trim();
+        let Some(byte_start) = self.text.find(trimmed) else {
+            return Self::default();
+        };
+        let start = terminal_text_width(&self.text[..byte_start]);
+        let end = start.saturating_add(terminal_text_width(trimmed));
+        Self {
+            text: trimmed.to_string(),
+            style_spans: style_spans_for_rich_text_segment(&self.style_spans, start, end, 0),
+        }
+    }
+}
+
+/// Captures a CommonMark table before emitting aligned terminal rows.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MarkdownTableState {
     /// Column alignments reported by the parser.
     alignments: Vec<Alignment>,
     /// Completed rows.
-    rows: Vec<Vec<String>>,
+    rows: Vec<Vec<MarkdownTableCell>>,
     /// Row currently being captured.
-    current_row: Vec<String>,
+    current_row: Vec<MarkdownTableCell>,
     /// Cell currently being captured.
-    current_cell: String,
+    current_cell: MarkdownTableCell,
+    /// Active inline rendition while capturing a cell.
+    active: GraphicRendition,
+    /// Nested inline renditions inside the current cell.
+    style_stack: Vec<GraphicRendition>,
+    /// Number of active Markdown links in the current cell.
+    link_depth: usize,
     /// Number of rows that belong to the table header.
     header_rows: usize,
     /// Whether the parser is currently inside the table head.
@@ -1783,7 +1859,10 @@ impl MarkdownTableState {
             alignments,
             rows: Vec::new(),
             current_row: Vec::new(),
-            current_cell: String::new(),
+            current_cell: MarkdownTableCell::default(),
+            active: GraphicRendition::default(),
+            style_stack: Vec::new(),
+            link_depth: 0,
             header_rows: 0,
             in_head: false,
             display_width,
@@ -1808,22 +1887,61 @@ impl MarkdownTableState {
 
     /// Starts a new table cell.
     fn start_cell(&mut self) {
-        self.current_cell.clear();
+        self.current_cell = MarkdownTableCell::default();
+        self.active = GraphicRendition::default();
+        self.style_stack.clear();
+        self.link_depth = 0;
     }
 
     /// Finishes the current table cell.
     fn finish_cell(&mut self) {
-        self.current_row.push(self.current_cell.trim().to_string());
-        self.current_cell.clear();
+        self.current_row
+            .push(std::mem::take(&mut self.current_cell).trimmed());
+        self.active = GraphicRendition::default();
+        self.style_stack.clear();
+        self.link_depth = 0;
     }
 
     /// Appends text into the current table cell.
     fn append_cell_text(&mut self, text: &str) {
-        if !self.current_cell.is_empty() && text.starts_with(char::is_whitespace) {
-            self.current_cell.push(' ');
+        self.append_cell_styled_text(text, self.active);
+    }
+
+    /// Appends styled text to the current cell using display-cell coordinates.
+    fn append_cell_styled_text(&mut self, text: &str, rendition: GraphicRendition) {
+        let text = if !self.current_cell.text.is_empty() && text.starts_with(char::is_whitespace) {
+            " ".to_string()
+        } else {
+            sanitized_terminal_line(text).replace('\n', " ")
+        };
+        for grapheme in UnicodeSegmentation::graphemes(text.as_str(), true) {
+            let start = terminal_text_width(self.current_cell.text.as_str());
+            let width = terminal_grapheme_width(grapheme);
+            self.current_cell.text.push_str(grapheme);
+            if width > 0 && rendition != GraphicRendition::default() {
+                push_or_extend_style_span(
+                    &mut self.current_cell.style_spans,
+                    TerminalStyleSpan {
+                        start,
+                        length: width,
+                        rendition,
+                    },
+                );
+            }
         }
-        self.current_cell
-            .push_str(&sanitized_terminal_line(text).replace('\n', " "));
+    }
+
+    /// Pushes one nested inline style while capturing a cell.
+    fn push_style(&mut self, apply: impl FnOnce(&mut GraphicRendition)) {
+        self.style_stack.push(self.active);
+        apply(&mut self.active);
+    }
+
+    /// Restores the previous inline style while capturing a cell.
+    fn pop_style(&mut self) {
+        if let Some(style) = self.style_stack.pop() {
+            self.active = style;
+        }
     }
 
     /// Renders the captured table as aligned box-drawing terminal rows.
@@ -1846,10 +1964,10 @@ impl MarkdownTableState {
             for physical_row in 0..row_height {
                 let rendered = self.render_wrapped_row(&wrapped_cells, &widths, physical_row);
                 let mut line = RichTextLine {
-                    display: rendered.clone(),
+                    display: rendered.text.clone(),
                     style_spans: Vec::new(),
                     copy_text: Some(if physical_row == 0 {
-                        rendered
+                        rendered.text.clone()
                     } else {
                         COPY_SKIP_LINE.to_string()
                     }),
@@ -1860,6 +1978,9 @@ impl MarkdownTableState {
                     },
                 };
                 self.apply_row_style(&mut line, row_index);
+                for span in rendered.style_spans {
+                    push_or_extend_style_span(&mut line.style_spans, span);
+                }
                 lines.push(line);
             }
             if row_index + 1 == self.header_rows {
@@ -1902,19 +2023,23 @@ impl MarkdownTableState {
             for column in 0..column_count {
                 let header = headers
                     .get(column)
-                    .filter(|header| !header.is_empty())
+                    .filter(|header| !header.text.is_empty())
                     .cloned()
-                    .unwrap_or_else(|| format!("Column {}", column.saturating_add(1)));
-                let value = row.get(column).map(String::as_str).unwrap_or_default();
-                let fragments = Self::wrap_cell(&format!("{header}: {value}"), width);
-                for (fragment_index, display) in fragments.into_iter().enumerate() {
+                    .unwrap_or_else(|| MarkdownTableCell {
+                        text: format!("Column {}", column.saturating_add(1)),
+                        style_spans: Vec::new(),
+                    });
+                let value = row.get(column).cloned().unwrap_or_default();
+                let combined = Self::stacked_cell(header, value);
+                let fragments = Self::wrap_cell(&combined, width);
+                for (fragment_index, fragment) in fragments.into_iter().enumerate() {
                     let mut line = RichTextLine {
                         copy_text: Some(if fragment_index == 0 {
-                            display.clone()
+                            fragment.text.clone()
                         } else {
                             COPY_SKIP_LINE.to_string()
                         }),
-                        display,
+                        display: fragment.text,
                         style_spans: Vec::new(),
                         kind: if fragment_index == 0 {
                             RichTextLineKind::MarkdownTableRow
@@ -1923,6 +2048,9 @@ impl MarkdownTableState {
                         },
                     };
                     self.apply_row_style(&mut line, body_index.saturating_add(self.header_rows));
+                    for span in fragment.style_spans {
+                        push_or_extend_style_span(&mut line.style_spans, span);
+                    }
                     lines.push(line);
                 }
             }
@@ -1947,7 +2075,7 @@ impl MarkdownTableState {
                 self.rows
                     .iter()
                     .filter_map(|row| row.get(column))
-                    .map(|cell| terminal_text_width(cell.as_str()))
+                    .map(|cell| terminal_text_width(cell.text.as_str()))
                     .max()
                     .unwrap_or(0)
                     .max(3)
@@ -2008,31 +2136,65 @@ impl MarkdownTableState {
     }
 
     /// Wraps every cell in one markdown source row to its allocated content width.
-    fn wrap_row_cells(&self, row: &[String], widths: &[usize]) -> Vec<Vec<String>> {
+    fn wrap_row_cells(
+        &self,
+        row: &[MarkdownTableCell],
+        widths: &[usize],
+    ) -> Vec<Vec<MarkdownTableCell>> {
         widths
             .iter()
             .enumerate()
             .map(|(column, width)| {
-                let cell = row.get(column).map(String::as_str).unwrap_or_default();
-                Self::wrap_cell(cell, *width)
+                let cell = row.get(column).cloned().unwrap_or_default();
+                Self::wrap_cell(&cell, *width)
             })
             .collect()
     }
 
     /// Wraps one cell into physical table-row fragments.
-    fn wrap_cell(cell: &str, width: usize) -> Vec<String> {
+    fn wrap_cell(cell: &MarkdownTableCell, width: usize) -> Vec<MarkdownTableCell> {
         let width = width.max(1);
-        let mut remaining = cell.trim();
+        let mut remaining = cell.text.as_str();
+        let mut source_start = 0usize;
         if remaining.is_empty() {
-            return vec![String::new()];
+            return vec![MarkdownTableCell::default()];
         }
         let mut lines = Vec::new();
         while !remaining.is_empty() {
             let (segment, consumed) = Self::take_cell_segment(remaining, width);
-            lines.push(segment);
-            remaining = remaining[consumed..].trim_start();
+            let segment_width = terminal_text_width(segment.as_str());
+            lines.push(MarkdownTableCell {
+                text: segment,
+                style_spans: style_spans_for_rich_text_segment(
+                    &cell.style_spans,
+                    source_start,
+                    source_start.saturating_add(segment_width),
+                    0,
+                ),
+            });
+            source_start = source_start.saturating_add(terminal_text_width(&remaining[..consumed]));
+            remaining = &remaining[consumed..];
+            let trimmed = remaining.trim_start();
+            let trimmed_bytes = remaining.len().saturating_sub(trimmed.len());
+            source_start =
+                source_start.saturating_add(terminal_text_width(&remaining[..trimmed_bytes]));
+            remaining = trimmed;
         }
         lines
+    }
+
+    /// Joins one header and value while retaining both cells' inline styles.
+    fn stacked_cell(header: MarkdownTableCell, value: MarkdownTableCell) -> MarkdownTableCell {
+        let value_start = terminal_text_width(header.text.as_str()).saturating_add(2);
+        let mut style_spans = header.style_spans;
+        style_spans.extend(value.style_spans.into_iter().map(|mut span| {
+            span.start = span.start.saturating_add(value_start);
+            span
+        }));
+        MarkdownTableCell {
+            text: format!("{}: {}", header.text, value.text),
+            style_spans,
+        }
     }
 
     /// Takes one table-cell segment, hard-splitting only when needed for layout.
@@ -2075,23 +2237,32 @@ impl MarkdownTableState {
     /// Renders one physical table row from already wrapped cells.
     fn render_wrapped_row(
         &self,
-        cells: &[Vec<String>],
+        cells: &[Vec<MarkdownTableCell>],
         widths: &[usize],
         row_index: usize,
-    ) -> String {
-        let row = widths
-            .iter()
-            .enumerate()
-            .map(|(column, width)| {
-                let cell = cells
-                    .get(column)
-                    .and_then(|lines| lines.get(row_index))
-                    .map(String::as_str)
-                    .unwrap_or_default();
-                self.render_cell(cell, *width, self.alignment(column))
-            })
-            .collect::<Vec<_>>();
-        format!("│{}│", row.join("│"))
+    ) -> MarkdownTableCell {
+        let mut rendered = MarkdownTableCell {
+            text: "│".to_string(),
+            style_spans: Vec::new(),
+        };
+        for (column, width) in widths.iter().enumerate() {
+            let cell = cells
+                .get(column)
+                .and_then(|lines| lines.get(row_index))
+                .cloned()
+                .unwrap_or_default();
+            let cell = self.render_cell(cell, *width, self.alignment(column));
+            let offset = terminal_text_width(rendered.text.as_str());
+            rendered
+                .style_spans
+                .extend(cell.style_spans.into_iter().map(|mut span| {
+                    span.start = span.start.saturating_add(offset);
+                    span
+                }));
+            rendered.text.push_str(&cell.text);
+            rendered.text.push('│');
+        }
+        rendered
     }
 
     /// Applies header or alternating-row table styling to one physical row.
@@ -2156,15 +2327,25 @@ impl MarkdownTableState {
     }
 
     /// Renders one padded table cell.
-    fn render_cell(&self, cell: &str, width: usize, alignment: Alignment) -> String {
-        let cell_width = terminal_text_width(cell);
+    fn render_cell(
+        &self,
+        mut cell: MarkdownTableCell,
+        width: usize,
+        alignment: Alignment,
+    ) -> MarkdownTableCell {
+        let cell_width = terminal_text_width(cell.text.as_str());
         let padding = width.saturating_sub(cell_width);
         let (left, right) = match alignment {
             Alignment::Right => (padding, 0),
             Alignment::Center => (padding / 2, padding.saturating_sub(padding / 2)),
             Alignment::None | Alignment::Left => (0, padding),
         };
-        format!(" {}{}{} ", " ".repeat(left), cell, " ".repeat(right))
+        let content_start = left.saturating_add(1);
+        for span in &mut cell.style_spans {
+            span.start = span.start.saturating_add(content_start);
+        }
+        cell.text = format!(" {}{}{} ", " ".repeat(left), cell.text, " ".repeat(right));
+        cell
     }
 
     /// Returns the alignment for a column.
@@ -2215,6 +2396,93 @@ mod tests {
                 .any(|line| line.kind == RichTextLineKind::MarkdownTableSeparator)
         );
         assert!(lines.iter().any(|line| line.copy_text.is_some()));
+    }
+
+    /// Verifies every physical fragment of wrapped table links retains the
+    /// link rendition on both alternating and ordinary body rows.
+    #[test]
+    fn markdown_tables_preserve_link_styles_across_wrapped_body_rows() {
+        let first = "11111111-1111-1111-1111-111111111111";
+        let second = "22222222-2222-2222-2222-222222222222";
+        let markdown = format!(
+            "| ID | Title |\n| --- | --- |\n| [{first}](mez-agent:%2Fshow-issues%20{first}) | First |\n| [{second}](mez-agent:%2Fshow-issues%20{second}) | Second |"
+        );
+        let lines = render_markdown(&markdown, &theme(), Some(24));
+        let body_lines = lines
+            .iter()
+            .filter(|line| {
+                matches!(
+                    line.kind,
+                    RichTextLineKind::MarkdownTableRow
+                        | RichTextLineKind::MarkdownTableContinuation
+                ) && line.display.contains('│')
+                    && !line.display.contains(" ID ")
+            })
+            .collect::<Vec<_>>();
+
+        assert!(body_lines.len() >= 4, "{body_lines:?}");
+        for line in body_lines {
+            let mut dividers = line.display.match_indices('│').map(|(index, _)| index);
+            let first_divider = dividers.next().unwrap();
+            let second_divider = dividers.next().unwrap();
+            let cell = &line.display[first_divider + '│'.len_utf8()..second_divider];
+            let fragment = cell.trim();
+            if fragment.is_empty() {
+                continue;
+            }
+            let fragment_byte_start = line.display.find(fragment).unwrap();
+            let fragment_start = terminal_text_width(&line.display[..fragment_byte_start]);
+            let fragment_end = fragment_start.saturating_add(terminal_text_width(fragment));
+            assert!(
+                line.style_spans.iter().any(|span| {
+                    span.start <= fragment_start
+                        && span.start.saturating_add(span.length) >= fragment_end
+                        && span.rendition.foreground == Some(theme().link)
+                        && span.rendition.bold
+                        && span.rendition.underline
+                }),
+                "wrapped link fragment lacks link style: {line:?}"
+            );
+        }
+    }
+
+    /// Verifies structurally narrow stacked tables retain link styling when a
+    /// linked cell value wraps across multiple physical rows.
+    #[test]
+    fn stacked_markdown_tables_preserve_wrapped_link_styles() {
+        let id = "11111111-1111-1111-1111-111111111111";
+        let markdown = format!(
+            "| ID | Title |\n| --- | --- |\n| [{id}](mez-agent:%2Fshow-issues%20{id}) | First |"
+        );
+        let lines = render_markdown(&markdown, &theme(), Some(8));
+        let linked_fragments = lines
+            .iter()
+            .filter(|line| {
+                line.display
+                    .chars()
+                    .any(|character| character.is_ascii_digit())
+            })
+            .collect::<Vec<_>>();
+
+        assert!(linked_fragments.len() > 1, "{lines:?}");
+        for line in linked_fragments {
+            let start = line
+                .display
+                .find(|character: char| character.is_ascii_digit())
+                .map(|byte| terminal_text_width(&line.display[..byte]))
+                .unwrap();
+            let length = terminal_text_width(line.display[start..].trim_end());
+            assert!(
+                line.style_spans.iter().any(|span| {
+                    span.start <= start
+                        && span.start.saturating_add(span.length) >= start.saturating_add(length)
+                        && span.rendition.foreground == Some(theme().link)
+                        && span.rendition.bold
+                        && span.rendition.underline
+                }),
+                "stacked link fragment lacks link style: {line:?}"
+            );
+        }
     }
 
     /// Verifies tables below their box-drawing structural width fall back to
