@@ -214,6 +214,132 @@ async fn async_actor_expires_zen_focus_label_without_terminal_activity() {
     let ((), _) = tokio::join!(client, actor.run());
 }
 
+/// An already accepted expiry may wake before a replacement's deadline. It
+/// must preserve the replacement, schedule the remaining lifetime, and reject
+/// duplicate old deliveries without repainting or leaving a timer loop.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_zen_focus_replacement_survives_old_timer() {
+    let mut session = crate::test_support::runtime::SessionFixture::new().build();
+    let primary = session.attach_primary("primary", true).unwrap();
+    let observer = session
+        .attach_observer_with_terminal("observer", None, 1)
+        .unwrap();
+    let mut service =
+        crate::test_support::runtime::RuntimeServiceFixture::new().build_with_session(session);
+    service
+        .execute_terminal_command(&primary, "zen on; new-window original")
+        .unwrap();
+    let effects = service
+        .client_status_refresh_timer_transition(
+            primary.as_str(),
+            None,
+            crate::runtime::current_unix_millis(),
+        )
+        .unwrap()
+        .side_effects;
+    let old = effects
+        .iter()
+        .find_map(|effect| match effect {
+            RuntimeSideEffect::ScheduleTimer { key, .. } => Some(key.clone()),
+            _ => None,
+        })
+        .unwrap();
+    service
+        .execute_terminal_command(
+            &primary,
+            "set-option terminal.zen_focus_label_duration_ms 60000; new-window replacement",
+        )
+        .unwrap();
+    service.drain_deferred_effects_transition();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        handle.queue_runtime_side_effects(effects).await.unwrap();
+        handle.drain_timer_side_effects(16).await.unwrap();
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::Timer(TimerEvent {
+            key: old.clone(),
+            now_ms: old.generation,
+        }));
+        assert_eq!(
+            handle.submit_runtime_events(batch).await.unwrap().applied,
+            1
+        );
+        let timers = handle.drain_timer_side_effects(16).await.unwrap();
+        let next = timers
+            .iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, delay_ms }
+                    if key.kind == RuntimeTimerKind::StatusRefresh =>
+                {
+                    assert!(key.generation > old.generation);
+                    assert_eq!(*delay_ms, key.generation - old.generation);
+                    Some(key.clone())
+                }
+                _ => None,
+            })
+            .expect("replacement needs a later expiry");
+        for client_id in [&primary, &observer] {
+            let frame = handle
+                .render_iroh_client_snapshot(client_id.clone(), false)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                frame
+                    .view
+                    .lines
+                    .iter()
+                    .any(|line| line.contains("replacement"))
+            );
+        }
+        handle.drain_render_side_effects(16).await.unwrap();
+        let mut duplicate = RuntimeEventBatch::new();
+        let observer_timers = handle.drain_timer_side_effects(16).await.unwrap();
+        assert!(observer_timers.iter().any(|effect| matches!(
+            effect,
+            RuntimeSideEffect::ScheduleTimer { key, .. }
+                if key.kind == RuntimeTimerKind::StatusRefresh
+                    && key.owner_id == observer.as_str()
+                    && key.generation == next.generation
+        )));
+        duplicate.push(RuntimeEvent::Timer(TimerEvent {
+            key: old,
+            now_ms: u64::MAX,
+        }));
+        let report = handle.submit_runtime_events(duplicate).await.unwrap();
+        assert_eq!(report.applied, 0);
+        assert_eq!(report.side_effects, 0);
+        let mut expiry = RuntimeEventBatch::new();
+        expiry.push(RuntimeEvent::Timer(TimerEvent {
+            now_ms: next.generation,
+            key: next,
+        }));
+        assert_eq!(
+            handle.submit_runtime_events(expiry).await.unwrap().applied,
+            1
+        );
+        for client_id in [&primary, &observer] {
+            let frame = handle
+                .render_iroh_client_snapshot(client_id.clone(), false)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                !frame
+                    .view
+                    .lines
+                    .iter()
+                    .any(|line| line.contains("replacement"))
+            );
+        }
+        assert!(!handle.drain_timer_side_effects(16).await.unwrap().iter().any(|effect| matches!(effect, RuntimeSideEffect::ScheduleTimer { key, .. } if key.kind == RuntimeTimerKind::StatusRefresh)));
+        handle.shutdown().await.unwrap();
+    };
+    tokio::join!(client, actor.run());
+}
+
 /// Verifies every effective alternate-screen switch is promoted to a full
 /// redraw, including multiple switches whose final mode is unchanged.
 #[tokio::test(flavor = "current_thread")]
