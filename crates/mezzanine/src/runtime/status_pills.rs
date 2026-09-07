@@ -1977,6 +1977,77 @@ mod tests {
         );
     }
 
+    /// Real commands with the same provider name must read their own working
+    /// directories and settle into their exact pane cache even in reverse
+    /// completion order. Direct test launches exercise the executor boundary,
+    /// not production permission admission or OS sandbox confinement.
+    #[test]
+    fn pane_status_real_same_name_providers_keep_directory_results_isolated() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-provider-isolation-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let first = root.join("first");
+        let second = root.join("second");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::write(first.join("value"), "first-result\n").unwrap();
+        std::fs::write(second.join("value"), "second-result\n").unwrap();
+        let mut definition = pane_provider_definition(None);
+        definition.command = "cat value".to_string();
+        definition.timeout_ms = 5_000;
+        let mut cache = RuntimePaneStatusProviderCache::default();
+        cache.reconcile(vec![
+            pane_provider_request(
+                pane_provider_key("%1", "same", first.to_str().unwrap()),
+                definition.clone(),
+            ),
+            pane_provider_request(
+                pane_provider_key("%2", "same", second.to_str().unwrap()),
+                definition.clone(),
+            ),
+        ]);
+        let plans = claim_and_admit(&mut cache, 4);
+        assert_eq!(plans.len(), 2);
+        assert!(
+            claim_and_admit(&mut cache, 4).is_empty(),
+            "in-flight keys must not be duplicated"
+        );
+        let workers = plans
+            .into_iter()
+            .map(|mut plan| {
+                plan.launch = super::RuntimePaneStatusProviderRefreshPlan::for_tests(
+                    "same",
+                    &definition.command,
+                    std::path::Path::new(&plan.key.cwd),
+                    5_000,
+                )
+                .launch;
+                std::thread::spawn(move || {
+                    crate::runtime::processes::execute_pane_status_provider_launch(plan).unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+        for worker in workers.into_iter().rev() {
+            let event = worker.join().unwrap();
+            assert!(matches!(
+                event.outcome,
+                RuntimePaneStatusProviderOutcome::Succeeded(_)
+            ));
+            assert_eq!(cache.apply_event(event), Some(true));
+        }
+        assert_eq!(
+            cache.values_for_pane("%1").get("same").map(String::as_str),
+            Some("first-result")
+        );
+        assert_eq!(
+            cache.values_for_pane("%2").get("same").map(String::as_str),
+            Some("second-result")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// Verifies diagnostics expose only finite retained lifecycle metadata and
     /// never reveal provider commands, output, environment, or working paths.
     #[test]
