@@ -3434,6 +3434,63 @@ mod tests {
             assert!(restored.contains(r#""revision":5"#), "{restored}");
             assert!(restored.matches("%1").count() >= 2, "{restored}");
 
+            let timer_handle = shutdown_handle.clone();
+            let timer = tokio::spawn(async move {
+                crate::host::async_runtime::run_async_runtime_timer_side_effect_service(
+                    &timer_handle,
+                    crate::host::async_runtime::AsyncRuntimeSideEffectServiceConfig {
+                        max_polls: u64::MAX,
+                        drain_limit: 64,
+                        idle_interval: std::time::Duration::from_millis(5),
+                    },
+                    crate::runtime::current_unix_millis(),
+                    |_, _| false,
+                )
+                .await
+            });
+            send.write_all(&encode_control_body(
+                r#"{"jsonrpc":"2.0","id":"focus","method":"terminal/command","params":{"input":"zen on; new-window quiet-focus-label","idempotency_key":"zen-focus-idle"}}"#,
+            ))
+            .await
+            .unwrap();
+            send.flush().await.unwrap();
+            let focus_response = read_test_control_body(&mut recv).await;
+            assert!(focus_response.contains(r#""result""#), "{focus_response}");
+            let appearance = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                read_test_control_body(&mut events),
+            )
+            .await
+            .expect("focus change must push the visible identity");
+            assert!(appearance.contains("quiet-focus-label"), "{appearance}");
+            // No further requests or PTY writes: only the production timer
+            // worker may trigger the frame removing this transient identity.
+            let expiry = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                read_test_control_body(&mut events),
+            )
+            .await
+            .expect("quiet focus label must expire through a pushed frame");
+            assert!(expiry.contains(r#""method":"render/delta""#), "{expiry}");
+            assert!(!expiry.contains("quiet-focus-label"), "{expiry}");
+            let decoded: serde_json::Value = serde_json::from_str(&expiry).unwrap();
+            assert!(
+                decoded["params"]["rows"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|row| {
+                        row["index"] == 23
+                            && row["line"]
+                                .as_str()
+                                .is_some_and(|line| line.trim().is_empty())
+                    }),
+                "{expiry}"
+            );
+            assert!(expiry.contains(r#""invalidate_output":false"#), "{expiry}");
+            timer.abort();
+            let _ = timer.await;
+
             assert_eq!(
                 shutdown_handle.shutdown().await.unwrap(),
                 crate::runtime::RuntimeLifecycleState::Running
