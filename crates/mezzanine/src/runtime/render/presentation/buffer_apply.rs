@@ -2674,9 +2674,11 @@ impl RuntimeSessionService {
                 )
             })
             .collect::<std::collections::BTreeMap<_, _>>();
+        let rationale_text = work.rationale.as_ref().map(|source| source.text.as_str());
         let summary_projections = if work.thinking_enabled {
             work.shell_summaries
                 .iter()
+                .filter(|(_action_index, source)| Some(source.text.as_str()) != rationale_text)
                 .map(|(action_index, source)| {
                     let rendition = agent_terminal_label_rendition(
                         AgentTerminalPresentationStyle::Status,
@@ -2920,11 +2922,22 @@ impl RuntimeSessionService {
                 .record_agent_streaming_projection_result(false, !screen_lineage_current);
             return Ok(false);
         }
-        let installed_lineage = self.update_agent_streaming_screen(
-            &result.pane_id,
-            &result.conversation_id,
-            result.screen,
-        )?;
+        let screen_is_unchanged = !self
+            .presentation
+            .agent_shell_output_previews
+            .contains_key(&result.pane_id)
+            && self
+                .agent_pane_screen(&result.pane_id)
+                .is_some_and(|screen| screen == &result.screen);
+        let installed_lineage = if screen_is_unchanged {
+            result.installed_lineage
+        } else {
+            self.update_agent_streaming_screen(
+                &result.pane_id,
+                &result.conversation_id,
+                result.screen,
+            )?
+        };
         let presentation = self
             .presentation
             .agent_streaming_say_presentations
@@ -2943,10 +2956,16 @@ impl RuntimeSessionService {
         presentation.projected_actions = Some(result.projected_actions);
         presentation.projected_rationale = result.projected_rationale;
         presentation.projected_lineage = Some(installed_lineage);
-        self.integration
-            .runtime_metrics_mut()
-            .record_agent_streaming_projection_result(true, false);
-        Ok(true)
+        if screen_is_unchanged {
+            self.integration
+                .runtime_metrics_mut()
+                .record_agent_streaming_projection_noop();
+        } else {
+            self.integration
+                .runtime_metrics_mut()
+                .record_agent_streaming_projection_result(true, false);
+        }
+        Ok(!screen_is_unchanged)
     }
 
     /// Builds one live or persisted projection through the ordinary say renderers.
@@ -3244,6 +3263,22 @@ impl RuntimeSessionService {
                             };
                             streamed.complete && streamed.text == *command
                         })
+                        && presentation
+                            .shell_summaries
+                            .iter()
+                            .all(|(action_index, streamed)| {
+                                let Some(mez_agent::AgentActionPayload::ShellCommand {
+                                    summary,
+                                    ..
+                                }) = batch
+                                    .actions
+                                    .get(*action_index)
+                                    .map(|action| &action.payload)
+                                else {
+                                    return false;
+                                };
+                                streamed.complete && streamed.text == *summary
+                            })
                 });
         if !matches {
             self.presentation
@@ -3268,7 +3303,7 @@ impl RuntimeSessionService {
                 && presentation.projected_lineage == Some(presentation.installed_lineage)
         });
         let command_can_promote = batch.is_some_and(|batch| {
-            presentation.rationale.as_ref().is_some_and(|rationale| {
+            presentation.rationale.as_ref().is_none_or(|rationale| {
                 rationale.complete && rationale.text == batch.rationale
             })
                 && presentation.actions.is_empty()
@@ -3294,6 +3329,19 @@ impl RuntimeSessionService {
                                 && result.status == mez_agent::ActionStatus::Running
                         })
                 })
+                && presentation
+                    .shell_summaries
+                    .iter()
+                    .all(|(action_index, source)| {
+                        source.complete
+                            && batch.actions.get(*action_index).is_some_and(|action| {
+                                matches!(
+                                    &action.payload,
+                                    mez_agent::AgentActionPayload::ShellCommand { summary, .. }
+                                        if summary == &source.text
+                                )
+                            })
+                    })
                 && current_projected_actions.is_some_and(|projected| {
                     projected.len() == 1
                         && projected.first().is_some_and(|projection| {
@@ -3318,7 +3366,6 @@ impl RuntimeSessionService {
             && presentation.actions.is_empty()
             && presentation.shell_commands.is_empty();
         if rationale_requires_static
-            || !presentation.shell_summaries.is_empty()
             || !presentation.action_headers.is_empty()
             || (!presentation.shell_commands.is_empty() && !command_can_promote)
         {
@@ -3360,6 +3407,45 @@ impl RuntimeSessionService {
                     AGENT_PRESENTATION_THINKING_CONTENT_TYPE,
                 )),
             );
+        }
+        if presentation
+            .projected_context
+            .as_ref()
+            .is_some_and(|context| context.thinking_enabled)
+        {
+            let rationale_text = presentation
+                .rationale
+                .as_ref()
+                .map(|source| source.text.as_str());
+            let frame_width = presentation
+                .projected_context
+                .as_ref()
+                .map(|context| context.frame_width)
+                .unwrap_or_default();
+            for source in presentation
+                .shell_summaries
+                .values()
+                .filter(|source| Some(source.text.as_str()) != rationale_text)
+            {
+                let rendered_lines =
+                    agent_thinking_display_lines_for_width(&source.text, frame_width);
+                self.persist_agent_presentation_entry(
+                    pane_id,
+                    vec![
+                        AgentTerminalPresentationStyle::Status
+                            .persistence_name()
+                            .to_string();
+                        rendered_lines.len()
+                    ],
+                    rendered_lines,
+                    Vec::new(),
+                    String::new(),
+                    Some((
+                        source.text.as_str(),
+                        AGENT_PRESENTATION_THINKING_CONTENT_TYPE,
+                    )),
+                );
+            }
         }
         let mut promoted = std::collections::BTreeSet::new();
         for projection in projected_actions {
@@ -3462,10 +3548,23 @@ impl RuntimeSessionService {
                     bytes.push_str("\r\n");
                 }
                 first_line = false;
-                append_styled_agent_terminal_line(
+                let rendition = agent_terminal_label_rendition(
+                    AgentTerminalPresentationStyle::Status,
+                    ui_theme,
+                );
+                append_styled_agent_terminal_rendered_line(
                     &mut bytes,
                     AgentTerminalPresentationStyle::Status,
-                    &line,
+                    &RichTextLine {
+                        display: line,
+                        style_spans: vec![TerminalStyleSpan {
+                            start: 0,
+                            length: content_columns,
+                            rendition,
+                        }],
+                        copy_text: None,
+                        kind: RichTextLineKind::Normal,
+                    },
                     ui_theme,
                 );
                 bytes.push_str("\x1b[0m");

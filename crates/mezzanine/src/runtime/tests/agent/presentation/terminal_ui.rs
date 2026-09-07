@@ -973,6 +973,91 @@ fn runtime_streaming_say_promotes_rich_output_without_replay() {
     );
 }
 
+/// Verifies a newer cumulative source generation that renders identically does
+/// not replace the pane screen or request an attached-client redraw.
+///
+/// A shell summary can repeat the batch rationale exactly. The source revision
+/// still advances for reconciliation, but filtering the duplicate thinking row
+/// leaves the rendered generation unchanged and must preserve screen lineage.
+#[test]
+fn runtime_streaming_identical_projection_is_a_screen_noop() {
+    let mut service = test_runtime_service();
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(48, 12).unwrap(), 120).unwrap(),
+    );
+    let thinking = "Inspect the streaming compositor";
+    for event in [
+        mez_agent::StreamingSayEvent::RationaleStarted,
+        mez_agent::StreamingSayEvent::RationaleTextDelta {
+            text: thinking.to_string(),
+        },
+    ] {
+        service
+            .apply_agent_streaming_say_event_to_terminal_buffer("%1", "turn-1", &event)
+            .unwrap();
+    }
+    let first_projection = RuntimeSessionService::build_agent_streaming_say_projection(
+        service
+            .take_agent_streaming_say_projection_work("%1", "turn-1")
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(first_projection)
+            .unwrap()
+    );
+    let screen = service.agent_pane_screen("%1").unwrap().clone();
+    let lineage = service
+        .agent_pane_screen_lineage("%1", &conversation_id)
+        .unwrap();
+
+    for event in [
+        mez_agent::StreamingSayEvent::ShellCommandSummaryStarted { action_index: 0 },
+        mez_agent::StreamingSayEvent::ShellCommandSummaryTextDelta {
+            action_index: 0,
+            text: thinking.to_string(),
+        },
+    ] {
+        service
+            .apply_agent_streaming_say_event_to_terminal_buffer("%1", "turn-1", &event)
+            .unwrap();
+    }
+    let duplicate_projection = RuntimeSessionService::build_agent_streaming_say_projection(
+        service
+            .take_agent_streaming_say_projection_work("%1", "turn-1")
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+
+    assert!(
+        !service
+            .apply_agent_streaming_say_projection_result(duplicate_projection)
+            .unwrap(),
+        "an identical screen generation must not request physical output"
+    );
+    assert_eq!(service.agent_pane_screen("%1").unwrap(), &screen);
+    assert_eq!(
+        service.agent_pane_screen_lineage("%1", &conversation_id),
+        Some(lineage),
+        "a no-op projection must preserve screen lineage"
+    );
+    let metrics = service.runtime_metrics();
+    assert_eq!(metrics.agent_streaming_projection_results, 2);
+    assert_eq!(metrics.agent_streaming_projection_installs, 1);
+    assert_eq!(metrics.agent_streaming_projection_rejections, 0);
+}
+
 /// Verifies validated provider completion finalizes streamed say rows in place.
 ///
 /// Production MAAP batches carry a non-empty batch rationale and one result per
@@ -1629,6 +1714,7 @@ async fn runtime_streaming_command_completion_promotes_without_full_redraw() {
     service.remove_pending_agent_provider_task(&turn.turn_id);
 
     let rationale = "Run the requested print command";
+    let summary = "Print the requested output";
     let command = "printf 'alpha beta\\n'";
     for event in [
         mez_agent::StreamingSayEvent::RationaleStarted,
@@ -1636,6 +1722,12 @@ async fn runtime_streaming_command_completion_promotes_without_full_redraw() {
             text: rationale.to_string(),
         },
         mez_agent::StreamingSayEvent::RationaleTextComplete,
+        mez_agent::StreamingSayEvent::ShellCommandSummaryStarted { action_index: 0 },
+        mez_agent::StreamingSayEvent::ShellCommandSummaryTextDelta {
+            action_index: 0,
+            text: summary.to_string(),
+        },
+        mez_agent::StreamingSayEvent::ShellCommandSummaryTextComplete { action_index: 0 },
         mez_agent::StreamingSayEvent::ShellCommandStarted { action_index: 0 },
         mez_agent::StreamingSayEvent::ShellCommandTextDelta {
             action_index: 0,
@@ -1668,7 +1760,7 @@ async fn runtime_streaming_command_completion_promotes_without_full_redraw() {
         id: "shell-streamed".to_string(),
         rationale: String::new(),
         payload: mez_agent::AgentActionPayload::ShellCommand {
-            summary: rationale.to_string(),
+            summary: summary.to_string(),
             command: command.to_string(),
             interactive: false,
             stateful: false,
@@ -1763,6 +1855,14 @@ async fn runtime_streaming_command_completion_promotes_without_full_redraw() {
         entries
             .iter()
             .filter(|entry| entry.source_text.as_deref() == Some(rationale))
+            .count(),
+        1,
+        "{entries:?}"
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| entry.source_text.as_deref() == Some(summary))
             .count(),
         1,
         "{entries:?}"

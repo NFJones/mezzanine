@@ -112,10 +112,18 @@ impl RuntimeSessionService {
         if !self.presentation.effective_agent_streaming_output() {
             return crate::runtime::RuntimeTransition::default();
         }
+        let lineage_before = self
+            .agent_shell_store()
+            .get(pane_id)
+            .and_then(|session| self.agent_pane_screen_lineage(pane_id, &session.session_id));
         let applied = self
             .apply_agent_streaming_say_event_to_terminal_buffer(pane_id, turn_id, event)
             .is_ok();
-        let render_reason = (!matches!(event, mez_agent::StreamingSayEvent::TextComplete { .. }))
+        let lineage_after = self
+            .agent_shell_store()
+            .get(pane_id)
+            .and_then(|session| self.agent_pane_screen_lineage(pane_id, &session.session_id));
+        let render_reason = (lineage_after != lineage_before)
             .then_some(crate::runtime::RenderInvalidationReason::PaneOutput);
         self.runtime_pane_transition_with_render(pane_id, applied, render_reason)
     }

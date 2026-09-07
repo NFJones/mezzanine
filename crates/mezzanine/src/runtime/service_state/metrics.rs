@@ -643,6 +643,12 @@ impl RuntimeMetricsSnapshot {
         }
     }
 
+    /// Records one accepted streaming projection whose rendered screen was unchanged.
+    pub(crate) fn record_agent_streaming_projection_noop(&mut self) {
+        self.agent_streaming_projection_results =
+            self.agent_streaming_projection_results.saturating_add(1);
+    }
+
     /// Records one completed background presentation resize cache outcome.
     pub(crate) fn record_agent_presentation_resize_cache(
         &mut self,

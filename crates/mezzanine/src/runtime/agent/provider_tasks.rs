@@ -1677,16 +1677,7 @@ impl RuntimeSessionService {
 
     /// Clears the provider-worker claim lease for a settled turn.
     pub(crate) fn clear_claimed_agent_provider_task(&mut self, turn_id: &str) {
-        let pane_id = self
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .find(|turn| turn.turn_id == turn_id)
-            .map(|turn| turn.pane_id.clone());
         self.agent.claimed_agent_provider_tasks.remove(turn_id);
-        if let Some(pane_id) = pane_id {
-            let _ = self.clear_agent_shell_output_status_line(&pane_id);
-        }
     }
 
     /// Fails a running turn when its claimed provider worker lease expires.

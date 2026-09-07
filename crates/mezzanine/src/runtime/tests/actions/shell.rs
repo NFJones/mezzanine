@@ -325,13 +325,11 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
         .iter()
         .find(|line| line.text.contains("second output"))
         .unwrap();
+    let output_column = output_line.text.find("second output").unwrap();
     assert!(
-        output_line.style_spans.iter().any(|span| {
-            span.start == 0
-                && span.rendition.foreground
-                    == Some(theme.colors.agent_transcript_status.foreground)
-                && span.rendition.dim
-        }),
+        styled_line_rendition_at(output_line, output_column).foreground
+            == Some(theme.colors.agent_transcript_status.foreground)
+            && styled_line_rendition_at(output_line, output_column).dim,
         "transient shell output should use muted status/thinking style: {:?}",
         output_line.style_spans
     );
@@ -571,6 +569,80 @@ fn runtime_shell_previews_preserve_owner_order_and_durable_output() {
     let diff_index = pane_text.find("+++ note.txt").unwrap();
     let preview_index = pane_text.find("owner B revision 2").unwrap();
     assert!(diff_index < preview_index, "{pane_text}");
+}
+
+/// Verifies provider-claim settlement leaves a completed shell tail installed
+/// until the next durable row replaces it at the same pane-log position.
+///
+/// Clearing worker ownership is bookkeeping rather than visible output. If it
+/// restores the preview baseline first, the attached terminal scrolls to erase
+/// the tail and then scrolls again for the following action, producing a jump.
+#[test]
+fn runtime_shell_preview_claim_cleanup_waits_for_next_durable_row() {
+    let mut service = test_runtime_service();
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    service.set_agent_pane_screen(
+        "%1",
+        conversation_id,
+        TerminalScreen::new(Size::new(60, 12).unwrap(), 40).unwrap(),
+    );
+    service
+        .append_agent_status_text_to_terminal_buffer("%1", "durable baseline")
+        .unwrap();
+    let owner = crate::runtime::render::RuntimeAgentShellPreviewOwner {
+        turn_id: "turn-preview-handoff".to_string(),
+        action_id: "shell-preview-handoff".to_string(),
+        marker: "marker-preview-handoff".to_string(),
+    };
+    service
+        .update_agent_shell_output_preview(
+            "%1",
+            owner.clone(),
+            1,
+            &["completed command tail".to_string()],
+        )
+        .unwrap();
+    assert!(service.settle_agent_shell_output_preview("%1", &owner));
+    let retained_screen = service.agent_pane_screen("%1").unwrap().clone();
+    let preview_row = retained_screen
+        .normal_content_lines()
+        .iter()
+        .position(|line| line.contains("completed command tail"))
+        .unwrap();
+
+    service.clear_claimed_agent_provider_task("turn-preview-handoff");
+
+    assert_eq!(
+        service.agent_pane_screen("%1").unwrap(),
+        &retained_screen,
+        "claim cleanup must not erase settled command output"
+    );
+    service
+        .append_agent_status_text_to_terminal_buffer("%1", "next action")
+        .unwrap();
+    let lines = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains("completed command tail")),
+        "the durable append should retire the transient tail: {lines:?}"
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .position(|line| line.contains("next action"))
+            .unwrap(),
+        preview_row,
+        "the next durable item should occupy the preview head row"
+    );
 }
 
 /// Verifies aggregate turn cancellation retires only the matching owners.
