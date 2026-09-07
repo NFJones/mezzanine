@@ -782,6 +782,66 @@ mod tests {
         );
     }
 
+    /// Custom title colors and non-zen frame positions must not move zen
+    /// anchors. Zoom changes geometry without renewing an existing label.
+    #[test]
+    fn zen_focus_composition_custom_theme_and_zoom_preserve_anchors() {
+        use mez_mux::presentation::TerminalFramePosition;
+        use mez_mux::theme::UiColorPair;
+        use mez_terminal::TerminalColor;
+
+        let (mut service, primary) = fixture();
+        service
+            .execute_terminal_command(&primary, "new-window themed-focus")
+            .unwrap();
+        service
+            .session
+            .split_active_pane(&primary, mez_mux::layout::SplitDirection::Vertical)
+            .unwrap();
+        service.presentation.settings.window_frame_position = TerminalFramePosition::Top;
+        service.presentation.settings.pane_frame_position = TerminalFramePosition::Bottom;
+        let colors = UiColorPair {
+            foreground: TerminalColor::Rgb(12, 34, 56),
+            background: TerminalColor::Rgb(65, 43, 21),
+        };
+        service.presentation.settings.ui_theme.colors.window_active = colors;
+        let labels = service
+            .live_zen_focus_labels_for_client(&primary, current_unix_millis())
+            .unwrap();
+        for _ in 0..2 {
+            let shown = view(&mut service, &primary);
+            assert!(shown.lines[9].contains("themed-focus"));
+            assert!(!shown.lines[0].contains("themed-focus"));
+            let span = shown.line_style_spans[9]
+                .iter()
+                .find(|span| span.start == 0)
+                .unwrap();
+            assert_eq!(span.rendition.foreground, Some(colors.foreground));
+            assert_eq!(span.rendition.background, Some(colors.background));
+            let before = service.capture_zen_focus_snapshots();
+            service
+                .session
+                .toggle_active_pane_zoom_transition(&primary)
+                .unwrap();
+            assert!(service.reconcile_zen_focus_snapshots(before).is_empty());
+            let current = service
+                .live_zen_focus_labels_for_client(&primary, current_unix_millis())
+                .unwrap();
+            assert_eq!(
+                (&current.group, &current.window, &current.pane),
+                (&labels.group, &labels.window, &labels.pane)
+            );
+        }
+        assert_eq!(
+            service.presentation.settings.window_frame_position,
+            TerminalFramePosition::Top
+        );
+        assert_eq!(
+            service.presentation.settings.pane_frame_position,
+            TerminalFramePosition::Bottom
+        );
+    }
+
     /// Rectangle boundary contact alone is not intersection.
     #[test]
     fn zen_focus_composition_rectangle_boundaries() {
