@@ -20,6 +20,7 @@ This section owns the following configuration guidance:
 - [Extensions, hooks, and control](extensions-hooks-and-control.md)
 - [Configuration reference](reference.md)
 - [Example configuration](../examples/config.toml)
+- [Power-inhibition operations and qualification](../operations/power-inhibition.md)
 - [Configuration CLI](../reference-manual/cli.md#configuration-identity-and-integrations)
 
 ## Related pages
@@ -32,4 +33,6 @@ This section owns the following configuration guidance:
 
 Start with [Configuration overview](overview.md), then use the focused chapters
 or [Configuration reference](reference.md) for an exact field, including the
-local memory and issue-store settings.
+local memory and issue-store settings. Operators enabling active-turn sleep
+inhibition should also read the [power-inhibition operations
+guide](../operations/power-inhibition.md).

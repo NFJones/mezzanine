@@ -158,6 +158,10 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(self.service.lifecycle_state());
                 false
             }
+            AsyncRuntimeRequest::PowerInhibitionStatus { reply } => {
+                let _ = reply.send(self.service.power_inhibition_status());
+                false
+            }
             AsyncRuntimeRequest::CreateHostCheckpoint {
                 snapshots,
                 snapshot_id,

@@ -66,7 +66,9 @@ use crate::host::power_inhibition::{
     PowerInhibitionBackendKind, PowerInhibitionController, PowerInhibitionState,
     power_inhibition_service,
 };
-use crate::host::power_inhibition::{PowerInhibitionHandle, PowerInhibitionMode};
+use crate::host::power_inhibition::{
+    PowerInhibitionHandle, PowerInhibitionMode, PowerInhibitionSnapshot,
+};
 use crate::integrations::agent::provider::{
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
     openai_compatible_provider_from_auth_store_with_provider_options,
@@ -525,6 +527,21 @@ pub(crate) struct RuntimeAgentComponent {
     agent_persisted_execution_transcripts: BTreeSet<(String, String)>,
     /// Action execution state keyed by turn id.
     agent_turn_executions: BTreeMap<String, AgentTurnExecution>,
+}
+
+/// Immutable, bounded host status for one runtime's power-inhibition policy.
+///
+/// The configured policy remains distinct from the worker's desired and
+/// confirmed snapshot so administration callers can distinguish user intent
+/// from current turn demand and native backend reconciliation. The projection
+/// contains only fixed enums and counters; opaque leases and native errors
+/// remain inside the power-inhibition subsystem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RuntimePowerInhibitionStatus {
+    /// Effective user policy applied by this runtime.
+    pub(crate) configured_policy: ActiveTurnSleepInhibition,
+    /// Latest desired and confirmed state published by the session worker.
+    pub(crate) snapshot: PowerInhibitionSnapshot,
 }
 
 /// Test-only backend that records no host-side power state while preserving
@@ -2487,6 +2504,19 @@ impl RuntimeSessionService {
     pub(crate) fn set_active_turn_sleep_inhibition(&mut self, policy: ActiveTurnSleepInhibition) {
         self.agent.active_turn_sleep_inhibition = policy;
         self.reconcile_active_turn_sleep_inhibition();
+    }
+
+    /// Returns the immutable, secret-free power status owned by this runtime.
+    ///
+    /// `None` is returned only before a session power worker is installed.
+    pub(crate) fn power_inhibition_status(&self) -> Option<RuntimePowerInhibitionStatus> {
+        self.agent
+            .active_turn_power_inhibition
+            .as_ref()
+            .map(|handle| RuntimePowerInhibitionStatus {
+                configured_policy: self.agent.active_turn_sleep_inhibition,
+                snapshot: handle.snapshot(),
+            })
     }
 
     /// Publishes the session's desired host power mode from canonical Running

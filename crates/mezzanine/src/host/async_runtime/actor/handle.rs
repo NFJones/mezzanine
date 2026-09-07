@@ -43,6 +43,14 @@ impl AsyncRuntimeSessionHandle {
             .await
     }
 
+    /// Returns the actor-consistent, bounded power-inhibition status for this session.
+    pub(crate) async fn power_inhibition_status(
+        &self,
+    ) -> Result<Option<crate::runtime::RuntimePowerInhibitionStatus>> {
+        self.request(|reply| AsyncRuntimeRequest::PowerInhibitionStatus { reply })
+            .await
+    }
+
     /// Captures and persists one host-admin checkpoint from serialized actor state.
     pub(crate) async fn create_host_checkpoint(
         &self,

@@ -737,4 +737,50 @@ mod tests {
 
         assert_eq!(result, Ok(41));
     }
+
+    /// Qualifies the production Linux D-Bus backend against the real host
+    /// services after the wrapper script has proved this is native Linux with
+    /// systemd-logind, a session bus, and `org.freedesktop.ScreenSaver`. The
+    /// explicit environment gate prevents an ignored test from touching host
+    /// power APIs by accident. One process-local lock and the runner's single
+    /// libtest thread keep the acquisition sequence serial, while adapter
+    /// deadlines and the outer script timeout bound all native work. The test
+    /// requires both logind and ScreenSaver leases, then releases only those
+    /// leases through the production controller and requires `Inactive`; it
+    /// never changes desktop or system idle settings and has no fallback path.
+    #[test]
+    #[ignore = "requires explicit real-Linux host power-inhibition qualification"]
+    fn production_backend_acquires_system_and_display_then_becomes_inactive() {
+        static REAL_HOST_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+        assert_eq!(
+            std::env::var("MEZ_REAL_LINUX_POWER_INHIBITION").as_deref(),
+            Ok("1"),
+            "real Linux power-inhibition qualification requires MEZ_REAL_LINUX_POWER_INHIBITION=1"
+        );
+        let _serial = REAL_HOST_TEST_LOCK.lock().unwrap();
+        let started = std::time::Instant::now();
+        let mut controller =
+            crate::host::power_inhibition::production_power_inhibition_controller();
+
+        controller.reconcile(PowerInhibitionMode::SystemAndDisplay);
+        assert_eq!(
+            controller.state(),
+            PowerInhibitionState::SystemAndDisplay,
+            "production Linux backend did not acquire both logind and ScreenSaver inhibitors: {:?}",
+            controller.last_error()
+        );
+
+        controller.reconcile(PowerInhibitionMode::Disabled);
+        assert_eq!(
+            controller.state(),
+            PowerInhibitionState::Inactive,
+            "production Linux backend did not release both inhibitors: {:?}",
+            controller.last_error()
+        );
+        assert!(
+            started.elapsed() <= Duration::from_secs(15),
+            "production Linux power-inhibition qualification exceeded its adapter deadline budget"
+        );
+    }
 }

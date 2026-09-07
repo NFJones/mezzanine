@@ -4046,7 +4046,19 @@ state, retain it while detached work remains Running, and release it when no
 such turn remains or the runtime enters stopping, killed, or failed state.
 Platform support and individual host-request failures MUST remain nonfatal and
 MUST NOT interrupt agent execution; unsupported display behavior MAY degrade to
-system-only inhibition.
+system-only inhibition. On native Linux, the production backend MUST request
+only systemd-logind's `idle` inhibitor for system protection and MUST use the
+desktop `org.freedesktop.ScreenSaver` protocol for display protection. It MUST
+reject WSL rather than claim to inhibit the Windows host, MUST NOT invoke helper
+programs or alter idle settings, and MUST retain only backend-owned leases. On
+macOS, the production backend MUST use native IOKit assertions. Generic
+confirmed state MUST distinguish inactive, system-only held, system-and-display
+held, degraded system-only, and unavailable outcomes from the desired policy.
+`host/get` MUST expose one bounded power-inhibition projection per supervised
+session when a live runtime can answer. That projection MUST keep configured
+policy, desired mode and generation, confirmed mode and generation, backend
+kind, confirmed aggregate and per-resource states, and bounded error class
+distinct. It MUST NOT expose raw native errors, opaque leases, or host handles.
 `agents.action_failure_retry_limit` MUST be a positive integer and MUST default
 to `5`. It bounds model self-correction attempts per identical
 model-correctable failed-action signature rather than per action batch, so one

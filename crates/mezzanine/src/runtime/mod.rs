@@ -221,7 +221,7 @@ pub struct RuntimeSessionService {
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod agent;
-pub(crate) use agent::RuntimeAgentComponent;
+pub(crate) use agent::{RuntimeAgentComponent, RuntimePowerInhibitionStatus};
 /// Exposes runtime agent provider dispatch and loop state records.
 ///
 /// The nested module keeps provider-backed agent worker records out of the
@@ -493,9 +493,18 @@ use commands_support::{
     runtime_write_agent_copy_output_for_pane, runtime_write_agent_patches_for_pane,
     runtime_write_agent_trace_log_for_pane,
 };
+pub(crate) use config::ActiveTurnSleepInhibition;
+pub(crate) use config::{
+    EXTERNAL_EDITOR_MAX_CANDIDATES, RuntimeExternalEditorConfig, RuntimeIrohAddressLookupPolicy,
+    RuntimeIrohCompressionCodec, RuntimeIrohIdentityPolicy, RuntimeIrohRelayPolicy,
+    RuntimeIrohTransportPolicy, RuntimeIrohX11Policy,
+    external_editor_argument_contains_ascii_control, runtime_audit_log_from_config,
+    runtime_external_editor_config_from_config, runtime_iroh_transport_policy_from_config,
+    runtime_pane_status_config_from_config, runtime_validate_key_binding_collisions,
+};
 use config::{
-    ActiveTurnSleepInhibition, RUNTIME_LATENCY_PREFERENCES, json_escape, optional_i32_json,
-    runtime_active_key_preset, runtime_active_turn_sleep_inhibition_from_config,
+    RUNTIME_LATENCY_PREFERENCES, json_escape, optional_i32_json, runtime_active_key_preset,
+    runtime_active_turn_sleep_inhibition_from_config,
     runtime_agent_action_failure_retry_limit_from_config, runtime_agent_auto_sizing_from_config,
     runtime_agent_compaction_raw_retention_percent_from_config,
     runtime_agent_custom_system_prompt_from_config, runtime_agent_enabled_actions_from_config,
@@ -548,14 +557,6 @@ use config::{
     runtime_window_frame_right_status_template_from_config, runtime_window_frame_style_from_config,
     runtime_window_frame_template_from_config, runtime_window_frame_visible_fields_from_config,
     runtime_window_frames_enabled_from_config,
-};
-pub(crate) use config::{
-    EXTERNAL_EDITOR_MAX_CANDIDATES, RuntimeExternalEditorConfig, RuntimeIrohAddressLookupPolicy,
-    RuntimeIrohCompressionCodec, RuntimeIrohIdentityPolicy, RuntimeIrohRelayPolicy,
-    RuntimeIrohTransportPolicy, RuntimeIrohX11Policy,
-    external_editor_argument_contains_ascii_control, runtime_audit_log_from_config,
-    runtime_external_editor_config_from_config, runtime_iroh_transport_policy_from_config,
-    runtime_pane_status_config_from_config, runtime_validate_key_binding_collisions,
 };
 pub use config::{runtime_effective_config_value, runtime_ui_theme_from_config};
 

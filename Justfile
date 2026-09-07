@@ -53,6 +53,12 @@ test-real-bubblewrap:
     test "$(uname -s)" = Linux
     timeout 120s cargo test -p mezzanine --lib --all-features --quiet -- --exact host::async_runtime::tests::services::providers::async_routed_subagent_settles_with_real_bubblewrap --ignored --nocapture
 
+# Qualify the production Linux logind and ScreenSaver inhibition backend. The
+# script requires an explicit opt-in and proves every host prerequisite before
+# Cargo starts; it never substitutes a fake service or changes idle settings.
+test-real-linux-power-inhibition:
+    sh scripts/test-real-linux-power-inhibition.sh
+
 # Run the complete macOS Seatbelt compiler, pane/native runtime, cleanup,
 # recovery, and product-binary acceptance surface serially.
 test-real-seatbelt:

@@ -422,9 +422,10 @@ default_provider = "openai"
 default_model_profile = "default"
 # Disabled by default. `system` inhibits automatic idle system sleep only while
 # a canonical agent turn is Running; `system-and-display` also requests display
-# wakefulness where supported. Detached sessions retain the request while work
-# runs. Backends are best-effort and never override explicit sleep, lid-close,
-# thermal, or critical-battery safeguards.
+# wakefulness where supported. Native Linux uses systemd-logind plus the desktop
+# ScreenSaver D-Bus service; macOS uses IOKit. Detached sessions retain the
+# request while work runs. Backends are best-effort and never override explicit
+# sleep, lid-close, thermal, or critical-battery safeguards.
 active_turn_sleep_inhibition = "disabled"
 # Restrict agent terminal work to the shell-mediated action surface.
 shell_only = true

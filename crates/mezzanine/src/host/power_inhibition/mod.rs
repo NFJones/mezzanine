@@ -18,7 +18,9 @@ mod unsupported;
 pub(crate) use linux::LinuxDbusPowerInhibitionBackend;
 #[cfg(target_os = "macos")]
 pub(crate) use macos::MacOsPowerInhibitionBackend;
-pub(crate) use service::{PowerInhibitionHandle, PowerInhibitionWorker, power_inhibition_service};
+pub(crate) use service::{
+    PowerInhibitionHandle, PowerInhibitionSnapshot, PowerInhibitionWorker, power_inhibition_service,
+};
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(crate) use unsupported::UnsupportedPowerInhibitionBackend;
 

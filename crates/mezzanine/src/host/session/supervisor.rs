@@ -16,7 +16,7 @@ use tokio::sync::{Notify, watch};
 
 use super::{SessionFactory, SessionFactoryRequest, SessionRuntimeHandle};
 use crate::error::{MezError, MezErrorKind, Result};
-use crate::runtime::RuntimeLifecycleState;
+use crate::runtime::{RuntimeLifecycleState, RuntimePowerInhibitionStatus};
 
 const DEFAULT_TERMINAL_HISTORY_LIMIT: usize = 64;
 
@@ -46,6 +46,8 @@ pub(crate) struct SessionSupervisorSnapshot {
     pub(crate) state: SessionSupervisorState,
     /// Actor lifecycle when a live handle is available.
     pub(crate) runtime_state: Option<RuntimeLifecycleState>,
+    /// Actor-owned power status while a live runtime handle is available.
+    pub(crate) power_inhibition: Option<RuntimePowerInhibitionStatus>,
     /// Secret-free failure diagnostic for terminal failed entries.
     pub(crate) failure: Option<String>,
 }
@@ -263,6 +265,7 @@ impl SessionSupervisor {
                     generation,
                     state: SessionSupervisorState::Stopped,
                     runtime_state: None,
+                    power_inhibition: None,
                     failure: None,
                 })?;
                 self.inner.changed.notify_waiters();
@@ -457,15 +460,19 @@ impl SessionSupervisor {
         };
         let mut snapshots = Vec::with_capacity(live.len() + self.inner.terminal()?.len());
         for (session_id, generation, state, handle) in live {
-            let runtime_state = match handle {
-                Some(handle) => handle.lifecycle_state().await.ok(),
-                None => None,
+            let (runtime_state, power_inhibition) = match handle {
+                Some(handle) => (
+                    handle.lifecycle_state().await.ok(),
+                    handle.power_inhibition_status().await.ok().flatten(),
+                ),
+                None => (None, None),
             };
             snapshots.push(SessionSupervisorSnapshot {
                 session_id,
                 generation,
                 state,
                 runtime_state,
+                power_inhibition,
                 failure: None,
             });
         }
@@ -524,6 +531,7 @@ impl SessionSupervisorInner {
                 generation,
                 state: SessionSupervisorState::Failed,
                 runtime_state: None,
+                power_inhibition: None,
                 failure: Some(failure),
             })?;
             self.changed.notify_waiters();
@@ -551,6 +559,7 @@ impl SessionSupervisorInner {
             generation,
             state,
             runtime_state,
+            power_inhibition: None,
             failure,
         };
         if let Some(handler) = &self.runtime_completion_handler {

@@ -33,8 +33,9 @@ mod providers;
 mod terminal_options;
 mod theme;
 mod trust;
+pub(crate) use agents::ActiveTurnSleepInhibition;
 pub(super) use agents::{
-    ActiveTurnSleepInhibition, ShellMode, runtime_active_turn_sleep_inhibition_from_config,
+    ShellMode, runtime_active_turn_sleep_inhibition_from_config,
     runtime_agent_action_failure_retry_limit_from_config, runtime_agent_auto_sizing_from_config,
     runtime_agent_compaction_raw_retention_percent_from_config,
     runtime_agent_custom_system_prompt_from_config, runtime_agent_enabled_actions_from_config,

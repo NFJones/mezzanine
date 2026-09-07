@@ -33,7 +33,8 @@ use crate::host::power_inhibition::{
 use crate::runtime::x11::RuntimeX11Proxy;
 use crate::runtime::{
     RuntimeEvent, RuntimeEventBatch, RuntimeIrohShutdownHandle, RuntimeLifecycleState,
-    RuntimeSessionService, ShutdownEvent, bind_control_socket, build_runtime_iroh_control_service,
+    RuntimePowerInhibitionStatus, RuntimeSessionService, ShutdownEvent, bind_control_socket,
+    build_runtime_iroh_control_service,
 };
 use crate::security::auth::{AuthPaths, AuthStore};
 use crate::security::project::{ProjectTrustStore, default_trust_database_path};
@@ -328,6 +329,13 @@ impl SessionRuntimeHandle {
     /// Current actor-owned lifecycle state.
     pub(crate) async fn lifecycle_state(&self) -> Result<RuntimeLifecycleState> {
         self.actor.lifecycle_state().await
+    }
+
+    /// Current actor-owned, secret-free power-inhibition status.
+    pub(crate) async fn power_inhibition_status(
+        &self,
+    ) -> Result<Option<RuntimePowerInhibitionStatus>> {
+        self.actor.power_inhibition_status().await
     }
 
     /// Requests graceful teardown through the typed supervisor event boundary.

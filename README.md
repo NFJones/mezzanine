@@ -148,6 +148,13 @@ multi-session host](docs/operations/persistent-host.md), [Remote pairing and
 recovery](docs/safety-and-trust/remote-pairing-and-recovery.md), and [Operations
 and troubleshooting](docs/operations/README.md).
 
+Agent turns can optionally request best-effort idle sleep and display
+inhibition while work is running, including while detached. The policy is
+disabled by default, cannot override explicit or safety-driven sleep, and uses
+native Linux or macOS APIs. See [Power
+inhibition](docs/operations/power-inhibition.md) before enabling or qualifying
+it on a production host.
+
 Use `mez --help` and the [CLI reference](docs/reference-manual/cli.md) for the
 current command contract. Use [Sessions and panes](docs/using-mezzanine/sessions-and-panes.md)
 and [Terminal input, copy, and history](docs/using-mezzanine/terminal-input-copy-and-history.md)

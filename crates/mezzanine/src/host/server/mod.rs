@@ -28,14 +28,20 @@ use crate::host::administration::{
 };
 use crate::host::iroh::HostIrohInvitationIssuer;
 use crate::host::ownership::HostOwnershipGuard;
+use crate::host::power_inhibition::{
+    PowerInhibitionBackendKind, PowerInhibitionErrorClass, PowerInhibitionMode,
+    PowerInhibitionResourceState, PowerInhibitionState,
+};
 use crate::host::router::{
     HostDefaultSessionPolicy, HostRecoveryPolicy, HostSessionRouter, HostSessionRouterConfig,
     LocalSessionLaunchContext, local_launch_environment_key_allowed,
 };
-use crate::host::session::SessionSupervisorState;
+use crate::host::session::{SessionSupervisorSnapshot, SessionSupervisorState};
 use crate::host::shell::{ResolvedShell, resolve_shell};
 use crate::protocol::framing::ProtocolFrameCodec;
-use crate::runtime::{bind_control_socket, socket_path_for_name};
+use crate::runtime::{
+    ActiveTurnSleepInhibition, RuntimeLifecycleState, bind_control_socket, socket_path_for_name,
+};
 use crate::security::audit::{AuditActor, AuditLog, AuditRecord};
 use crate::storage::registry::records_to_json;
 
@@ -1155,6 +1161,10 @@ impl HostServer {
             .iter()
             .filter(|snapshot| snapshot.state == SessionSupervisorState::Failed)
             .count();
+        let sessions = snapshots
+            .iter()
+            .map(session_supervisor_snapshot_json)
+            .collect::<Vec<_>>();
         let iroh = self.config.iroh_invitation_issuer.as_ref();
         Ok(json!({
             "ready": true,
@@ -1170,6 +1180,7 @@ impl HostServer {
             "starting_sessions": starting,
             "stopping_sessions": stopping,
             "failed_sessions": failed,
+            "sessions": sessions,
             "leases": {
                 "pending": reconciliation.pending,
                 "active": reconciliation.active,
@@ -1499,6 +1510,81 @@ fn session_record_json(record: &crate::storage::registry::SessionRecord) -> Valu
     })
 }
 
+/// Serializes one bounded supervisor entry without exposing runtime failures,
+/// native power errors, or opaque backend handles.
+fn session_supervisor_snapshot_json(snapshot: &SessionSupervisorSnapshot) -> Value {
+    let power_inhibition = snapshot.power_inhibition.map(|status| {
+        let worker = status.snapshot;
+        json!({
+            "configured_policy": match status.configured_policy {
+                ActiveTurnSleepInhibition::Disabled => "disabled",
+                ActiveTurnSleepInhibition::System => "system",
+                ActiveTurnSleepInhibition::SystemAndDisplay => "system-and-display",
+            },
+            "desired_mode": power_inhibition_mode_name(worker.desired_mode),
+            "desired_generation": worker.desired_generation,
+            "confirmed_mode": power_inhibition_mode_name(worker.confirmed_mode),
+            "confirmed_generation": worker.confirmed_generation,
+            "confirmed_aggregate_state": match worker.state {
+                PowerInhibitionState::Inactive => "inactive",
+                PowerInhibitionState::System => "system",
+                PowerInhibitionState::SystemAndDisplay => "system-and-display",
+                PowerInhibitionState::Unavailable => "unavailable",
+                PowerInhibitionState::SystemOnly => "system-only",
+            },
+            "backend_kind": match worker.backend_kind {
+                PowerInhibitionBackendKind::LinuxDbus => "linux-dbus",
+                PowerInhibitionBackendKind::MacOsIokit => "macos-iokit",
+                PowerInhibitionBackendKind::Unsupported => "unsupported",
+                #[cfg(test)]
+                PowerInhibitionBackendKind::Test => "test",
+            },
+            "system_resource_state": power_inhibition_resource_state_name(worker.system_resource),
+            "display_resource_state": power_inhibition_resource_state_name(worker.display_resource),
+            "last_error_class": worker.last_error.map(|error| match error {
+                PowerInhibitionErrorClass::SystemAcquire => "system-acquire",
+                PowerInhibitionErrorClass::DisplayAcquire => "display-acquire",
+                PowerInhibitionErrorClass::DisplayRelease => "display-release",
+                PowerInhibitionErrorClass::SystemRelease => "system-release",
+            }),
+        })
+    });
+    json!({
+        "session_id": snapshot.session_id,
+        "generation": snapshot.generation,
+        "supervisor_state": match snapshot.state {
+            SessionSupervisorState::Starting => "starting",
+            SessionSupervisorState::Running => "running",
+            SessionSupervisorState::Stopping => "stopping",
+            SessionSupervisorState::Stopped => "stopped",
+            SessionSupervisorState::Failed => "failed",
+        },
+        "runtime_state": snapshot.runtime_state.map(|state| match state {
+            RuntimeLifecycleState::Running => "running",
+            RuntimeLifecycleState::Detached => "detached",
+            RuntimeLifecycleState::Stopping => "stopping",
+            RuntimeLifecycleState::Killed => "killed",
+            RuntimeLifecycleState::Failed => "failed",
+        }),
+        "power_inhibition": power_inhibition,
+    })
+}
+
+fn power_inhibition_mode_name(mode: PowerInhibitionMode) -> &'static str {
+    match mode {
+        PowerInhibitionMode::Disabled => "disabled",
+        PowerInhibitionMode::System => "system",
+        PowerInhibitionMode::SystemAndDisplay => "system-and-display",
+    }
+}
+
+fn power_inhibition_resource_state_name(state: PowerInhibitionResourceState) -> &'static str {
+    match state {
+        PowerInhibitionResourceState::NotHeld => "not-held",
+        PowerInhibitionResourceState::Held => "held",
+    }
+}
+
 fn host_error_response(id: Value, error: &MezError) -> Value {
     let code = match error.kind() {
         MezErrorKind::InvalidArgs => -32602,
@@ -1589,6 +1675,131 @@ mod tests {
             max_remote_leases: 8,
             audit_log: None,
         }
+    }
+
+    /// Verifies the pure host projection emits only fixed kebab-case power
+    /// status values while preserving the configured-policy, desired-state,
+    /// and confirmed-state distinction. The exact object contract also proves
+    /// no opaque native lease or raw backend error can enter status output.
+    #[test]
+    fn session_power_inhibition_status_json_is_bounded_and_explicit() {
+        let snapshot = SessionSupervisorSnapshot {
+            session_id: "$7".to_string(),
+            generation: 3,
+            state: SessionSupervisorState::Running,
+            runtime_state: Some(RuntimeLifecycleState::Detached),
+            power_inhibition: Some(crate::runtime::RuntimePowerInhibitionStatus {
+                configured_policy: ActiveTurnSleepInhibition::SystemAndDisplay,
+                snapshot: crate::host::power_inhibition::PowerInhibitionSnapshot {
+                    desired_generation: 9,
+                    desired_mode: PowerInhibitionMode::SystemAndDisplay,
+                    confirmed_generation: 8,
+                    confirmed_mode: PowerInhibitionMode::System,
+                    backend_kind: PowerInhibitionBackendKind::LinuxDbus,
+                    state: PowerInhibitionState::SystemOnly,
+                    system_resource: PowerInhibitionResourceState::Held,
+                    display_resource: PowerInhibitionResourceState::NotHeld,
+                    last_error: Some(PowerInhibitionErrorClass::DisplayAcquire),
+                },
+            }),
+            failure: Some("raw native error and handle must remain private".to_string()),
+        };
+
+        assert_eq!(
+            session_supervisor_snapshot_json(&snapshot),
+            json!({
+                "session_id": "$7",
+                "generation": 3,
+                "supervisor_state": "running",
+                "runtime_state": "detached",
+                "power_inhibition": {
+                    "configured_policy": "system-and-display",
+                    "desired_mode": "system-and-display",
+                    "desired_generation": 9,
+                    "confirmed_mode": "system",
+                    "confirmed_generation": 8,
+                    "confirmed_aggregate_state": "system-only",
+                    "backend_kind": "linux-dbus",
+                    "system_resource_state": "held",
+                    "display_resource_state": "not-held",
+                    "last_error_class": "display-acquire",
+                },
+            })
+        );
+    }
+
+    /// Verifies a starting or retained terminal session without a live actor
+    /// serializes a stable null power projection. Supervisor failure text is
+    /// intentionally absent because the new status surface is bounded and
+    /// must not become a route for arbitrary runtime or native diagnostics.
+    #[test]
+    fn session_status_json_omits_unbounded_failure_details_without_live_power_state() {
+        let snapshot = SessionSupervisorSnapshot {
+            session_id: "$8".to_string(),
+            generation: 4,
+            state: SessionSupervisorState::Failed,
+            runtime_state: None,
+            power_inhibition: None,
+            failure: Some("secret raw diagnostic".to_string()),
+        };
+
+        let value = session_supervisor_snapshot_json(&snapshot);
+        assert_eq!(value["supervisor_state"], "failed");
+        assert_eq!(value["power_inhibition"], Value::Null);
+        assert!(value.get("failure").is_none());
+        assert!(!value.to_string().contains("secret raw diagnostic"));
+    }
+
+    /// Verifies `host/get` obtains each live session's immutable power status
+    /// through the typed runtime actor query and supervisor snapshot rather
+    /// than reading worker internals. A session without a running agent turn
+    /// must still report its configured policy separately from the disabled
+    /// desired mode, and the public object must contain only bounded fields.
+    #[tokio::test(flavor = "current_thread")]
+    async fn host_get_projects_live_session_power_inhibition_status() {
+        let root = test_root("host-get-power-status");
+        let mut host_config = config(root.clone());
+        host_config.config_layers[0].text = concat!(
+            "[agents]\n",
+            "shell_mode = \"pane\"\n",
+            "active_turn_sleep_inhibition = \"system-and-display\"\n",
+            "[permissions]\n",
+            "sandbox = \"policy-only\"\n",
+        )
+        .to_string();
+        let host = HostServer::bind(host_config).unwrap();
+        let created = host
+            .create_session(Some("power-status".to_string()), Size::new(80, 24).unwrap())
+            .await
+            .unwrap();
+
+        let status = host.status_json().await.unwrap();
+        let session = status["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|session| session["session_id"] == created.session_id)
+            .unwrap();
+        assert_eq!(session["supervisor_state"], "running");
+        assert_eq!(
+            session["power_inhibition"]["configured_policy"],
+            "system-and-display"
+        );
+        assert_eq!(session["power_inhibition"]["desired_mode"], "disabled");
+        assert_eq!(
+            session["power_inhibition"]["confirmed_aggregate_state"],
+            "inactive"
+        );
+        assert_eq!(session["power_inhibition"]["last_error_class"], Value::Null);
+        assert!(session["power_inhibition"].get("last_error").is_none());
+        assert!(session["power_inhibition"].get("native_handle").is_none());
+
+        host.router
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
+        drop(host);
+        let _ = fs::remove_dir_all(root);
     }
 
     /// Local host creation must recompute caller-project layers and carry the

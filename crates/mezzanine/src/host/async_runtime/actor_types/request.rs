@@ -69,6 +69,11 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<RuntimeLifecycleState>,
     },
+    /// Returns the bounded power-inhibition projection owned by the runtime.
+    PowerInhibitionStatus {
+        /// Receives configured policy plus the latest desired and confirmed state.
+        reply: oneshot::Sender<Option<crate::runtime::RuntimePowerInhibitionStatus>>,
+    },
     /// Captures and persists one actor-consistent host checkpoint.
     CreateHostCheckpoint {
         /// Repository receiving the immutable checkpoint payload and manifest.
@@ -1131,9 +1136,10 @@ impl AsyncRuntimeRequest {
         use crate::host::async_runtime::AsyncRuntimeRequestFamily as Family;
 
         match self {
-            Self::LifecycleState { .. } | Self::Metrics { .. } | Self::Shutdown { .. } => {
-                Family::Lifecycle
-            }
+            Self::LifecycleState { .. }
+            | Self::PowerInhibitionStatus { .. }
+            | Self::Metrics { .. }
+            | Self::Shutdown { .. } => Family::Lifecycle,
             Self::RecordLatencyPhase { phase, .. } => match phase {
                 crate::host::async_runtime::AsyncRuntimeLatencyPhase::EventBatchApply
                 | crate::host::async_runtime::AsyncRuntimeLatencyPhase::EventReconciliation => {

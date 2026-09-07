@@ -16,6 +16,7 @@ This section owns the following operational guidance:
 - [Persistent multi-session host](persistent-host.md)
 - [Lifecycle, detach, and recovery](lifecycle-detach-and-recovery.md)
 - [Cache status and diagnostics](cache-status-and-diagnostics.md)
+- [Power inhibition](power-inhibition.md)
 - [Troubleshooting](troubleshooting.md)
 - [Remote pairing and recovery](../safety-and-trust/remote-pairing-and-recovery.md)
 - [Iroh production operations and rollout](iroh-production-operations-and-rollout.md)
