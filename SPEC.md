@@ -9320,6 +9320,14 @@ report stale credentials until the user logs in again. On stored-OAuth 401 or
 token and token endpoint are available; stored static bearer credentials MUST
 not trigger OAuth refresh.
 
+A successful streamable HTTP SSE exchange MAY settle before response EOF once
+a complete UTF-8 JSON-RPC event with the exact request id has been received.
+Notifications, progress events, and responses for other ids MUST remain
+non-authoritative. The matching envelope MUST still pass ordinary JSON-RPC and
+operation-specific validation before becoming an action result. Dropping the
+remaining response after that atomic result MUST NOT expose later chunks as MCP
+tool content or alter request timeout, audit, permission, or settlement rules.
+
 Mezzanine MUST support per-server `enabled` state.
 
 Mezzanine MUST support per-server startup and tool timeout settings.

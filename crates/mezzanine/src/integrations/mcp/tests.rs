@@ -717,6 +717,88 @@ async fn streamable_http_extracts_sse_json_rpc_response() {
     assert_eq!(initialize.server_name, "sse");
 }
 
+/// Verifies a complete matching SSE JSON-RPC result settles before HTTP EOF.
+///
+/// Streamable HTTP servers may keep a chunked response open for notifications
+/// after returning the request's authoritative result. The client must release
+/// that complete atomic result immediately instead of waiting for connection
+/// closure, while unrelated events remain non-authoritative.
+#[tokio::test]
+async fn streamable_http_matching_sse_result_settles_before_eof() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        loop {
+            let read = stream.read(&mut buffer).await.unwrap();
+            request.extend_from_slice(&buffer[..read]);
+            if fixture_http_request_complete(&request) {
+                break;
+            }
+        }
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        let event = concat!(
+            "event: message\n",
+            "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{}}\n\n",
+            "event: message\n",
+            "data: {\"jsonrpc\":\"2.0\",\"id\":8,\"result\":{\"content\":[]}}\n\n",
+            "event: message\n",
+            "data: {\"jsonrpc\":\"2.0\",\"id\":9,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"early\"}],\"isError\":false}}\n\n",
+        );
+        stream
+            .write_all(format!("{:x}\r\n{}\r\n", event.len(), event).as_bytes())
+            .await
+            .unwrap();
+        stream.flush().await.unwrap();
+        let _ = release_rx.await;
+        let _ = stream.write_all(b"0\r\n\r\n").await;
+    });
+    let mut registry = McpRegistry::default();
+    registry
+        .add_server(McpServerConfig::streamable_http(
+            "http",
+            "held-open-sse",
+            format!("http://{address}/mcp"),
+        ))
+        .unwrap();
+    let plan = registry.startup_plan("http", &BTreeMap::new(), 1).unwrap();
+    let call = McpToolCallPlan {
+        server_id: "http".to_string(),
+        tool_name: "echo".to_string(),
+        arguments_json: "{}".to_string(),
+        timeout_ms: 1_000,
+        approval_required: false,
+        audit_event_class: "external_integration",
+        effects: McpToolEffects::none(),
+    };
+    let mut client = tokio::spawn(async move {
+        call_streamable_http_mcp_tool(&plan, &BTreeMap::new(), &call, 9, None).await
+    });
+
+    let early = tokio::time::timeout(std::time::Duration::from_millis(250), &mut client).await;
+    let _ = release_tx.send(());
+    if early.is_err() {
+        let _ = client.await;
+        let _ = server.await;
+        panic!("matching SSE result waited for HTTP EOF");
+    }
+    let response = early.unwrap().unwrap().unwrap();
+    server.await.unwrap();
+
+    assert!(!response.is_error);
+    assert!(response.content_json.contains("early"));
+}
+
 /// Runs the stdio fixture script operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

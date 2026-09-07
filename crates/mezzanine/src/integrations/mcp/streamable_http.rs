@@ -16,7 +16,7 @@ use mez_agent::mcp::{
 };
 #[cfg(test)]
 use mez_agent::mcp::{McpRegistry, McpToolCallPlan, McpToolCallResponse, mcp_tools_call_operation};
-use mez_agent::parse_sse_events;
+use mez_agent::{IncrementalSseDecoder, SseParseError};
 
 /// Runs the execute streamable http exchange operation for this subsystem.
 ///
@@ -77,6 +77,7 @@ pub async fn execute_streamable_http_exchange(
         &request_headers,
         request_body,
         Duration::from_millis(timeout_ms),
+        expected_id,
     )
     .await?;
     let content_type = header_value(&response.headers, "content-type").unwrap_or_default();
@@ -96,14 +97,10 @@ pub async fn execute_streamable_http_exchange(
         response.protocol_body.clear();
         return Ok(response);
     }
-    if content_type.contains("text/event-stream") {
-        let expected_id = expected_id.ok_or_else(|| {
-            MezError::invalid_state(
-                "streamable HTTP MCP SSE response requires a JSON-RPC request id",
-            )
-        })?;
-        response.protocol_body =
-            extract_sse_json_rpc_response(&response.protocol_body, expected_id)?;
+    if content_type.contains("text/event-stream") && expected_id.is_none() {
+        return Err(MezError::invalid_state(
+            "streamable HTTP MCP SSE response requires a JSON-RPC request id",
+        ));
     }
     Ok(response)
 }
@@ -337,6 +334,7 @@ async fn execute_streamable_http_post(
     headers: &BTreeMap<String, String>,
     body: &str,
     timeout: Duration,
+    expected_id: Option<u64>,
 ) -> Result<McpStreamableHttpResponse> {
     let url = url
         .parse::<reqwest::Url>()
@@ -371,6 +369,12 @@ async fn execute_streamable_http_post(
 
     let status_code = response.status().as_u16();
     let headers = response_headers(response.headers())?;
+    let content_type = header_value(&headers, "content-type").unwrap_or_default();
+    let mut sse_decoder = ((200..300).contains(&status_code)
+        && content_type.contains("text/event-stream")
+        && expected_id.is_some())
+    .then(IncrementalSseDecoder::default);
+    let expected_id = expected_id.map(|id| id.to_string());
     let mut body_bytes = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|error| {
         MezError::invalid_state(format!("streamable HTTP MCP response read failed: {error}"))
@@ -381,8 +385,70 @@ async fn execute_streamable_http_post(
             ));
         }
         body_bytes.extend_from_slice(&chunk);
+        if let Some(decoder) = sse_decoder.as_mut() {
+            let mut matching = None;
+            decoder
+                .push::<SseParseError, _>(&chunk, |event| {
+                    if expected_id
+                        .as_deref()
+                        .is_some_and(|expected| json_id_matches(&event.data, expected))
+                    {
+                        matching = Some(event.data);
+                    }
+                    Ok(())
+                })
+                .map_err(|error| {
+                    MezError::invalid_state(format!(
+                        "streamable HTTP MCP SSE response was malformed: {error}"
+                    ))
+                })?;
+            if let Some(protocol_body) = matching {
+                let session_id = header_value(&headers, "mcp-session-id");
+                return Ok(McpStreamableHttpResponse {
+                    status_code,
+                    headers,
+                    protocol_body,
+                    body_bytes: body_bytes.len(),
+                    session_id,
+                });
+            }
+        }
     }
     let response_bytes = body_bytes.len();
+    if let Some(mut decoder) = sse_decoder {
+        let mut matching = None;
+        decoder
+            .finish::<SseParseError, _>(
+                "streamable HTTP MCP SSE response did not contain SSE data events",
+                |event| {
+                    if expected_id
+                        .as_deref()
+                        .is_some_and(|expected| json_id_matches(&event.data, expected))
+                    {
+                        matching = Some(event.data);
+                    }
+                    Ok(())
+                },
+            )
+            .map_err(|error| {
+                MezError::invalid_state(format!(
+                    "streamable HTTP MCP SSE response was malformed: {error}"
+                ))
+            })?;
+        let protocol_body = matching.ok_or_else(|| {
+            MezError::invalid_state(
+                "streamable HTTP MCP SSE response did not contain the expected JSON-RPC id",
+            )
+        })?;
+        let session_id = header_value(&headers, "mcp-session-id");
+        return Ok(McpStreamableHttpResponse {
+            status_code,
+            headers,
+            protocol_body,
+            body_bytes: response_bytes,
+            session_id,
+        });
+    }
     let protocol_body = String::from_utf8(body_bytes)
         .map_err(|_| MezError::invalid_state("streamable HTTP MCP response body is not UTF-8"))?;
     let session_id = header_value(&headers, "mcp-session-id");
@@ -433,25 +499,4 @@ fn mcp_standard_headers_from_body(body: &str) -> Result<(String, Option<String>)
 /// on duplicated control-flow logic.
 fn header_value(headers: &BTreeMap<String, String>, name: &str) -> Option<String> {
     headers.get(&name.to_ascii_lowercase()).cloned()
-}
-
-/// Runs the extract sse json rpc response operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn extract_sse_json_rpc_response(body: &str, expected_id: u64) -> Result<String> {
-    let expected = expected_id.to_string();
-    let events = parse_sse_events(
-        body,
-        "streamable HTTP MCP SSE response did not contain SSE data events",
-    )?;
-    for event in events {
-        if json_id_matches(&event.data, expected.as_str()) {
-            return Ok(event.data);
-        }
-    }
-    Err(MezError::invalid_state(
-        "streamable HTTP MCP SSE response did not contain the expected JSON-RPC id",
-    ))
 }
