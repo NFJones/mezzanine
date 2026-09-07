@@ -9,8 +9,8 @@
 
 use super::{BTreeMap, Duration, MezError, Result, Value, current_unix_millis};
 use crate::host::terminal::{
-    PaneStatusCondition, PaneStatusProviderDefinition, PaneStatusProviderEmptyBehavior,
-    PaneStatusProviderErrorBehavior,
+    FramePillColorOverrides, PaneStatusCondition, PaneStatusProviderDefinition,
+    PaneStatusProviderEmptyBehavior, PaneStatusProviderErrorBehavior,
 };
 use crate::runtime::processes::{
     NativeBubblewrapActivityLease, NativeSandboxCapabilityProbe, NativeShellContext,
@@ -84,9 +84,24 @@ pub(super) struct RuntimeStatusPillDefinition {
     pub(super) max_output_chars: usize,
     /// Optional style selector reserved for future theme differentiation.
     pub(super) style: Option<String>,
+    /// Optional unresolved palette names used only by presentation.
+    pub(super) color_overrides: FramePillColorOverrides,
 }
 
 impl RuntimeStatusPillDefinition {
+    /// Compares only fields that can affect command execution or cached text.
+    fn execution_eq(&self, other: &Self) -> bool {
+        self.label == other.label
+            && self.command == other.command
+            && self.interval_ms == other.interval_ms
+            && self.initial == other.initial
+            && self.timeout_ms == other.timeout_ms
+            && self.empty_behavior == other.empty_behavior
+            && self.error_behavior == other.error_behavior
+            && self.max_output_chars == other.max_output_chars
+            && self.style == other.style
+    }
+
     /// Formats the display text for this pill from an optional value.
     fn display_text(&self, value: Option<&str>) -> String {
         let label = self.label.as_deref().unwrap_or_default().trim();
@@ -145,6 +160,7 @@ impl RuntimeStatusPillRefreshPlan {
                 error_behavior: RuntimeStatusPillErrorBehavior::Hide,
                 max_output_chars,
                 style: None,
+                color_overrides: FramePillColorOverrides::default(),
             },
         }
     }
@@ -241,7 +257,7 @@ impl RuntimeStatusPillCache {
             return None;
         }
         state.pending_generation = None;
-        if definition != &event.plan.definition {
+        if !definition.execution_eq(&event.plan.definition) {
             state.next_refresh_at_ms = 0;
             return Some(false);
         }
@@ -314,6 +330,8 @@ pub(super) fn runtime_status_pill_definitions_from_config(
                     | "error_behavior"
                     | "max_output_chars"
                     | "style"
+                    | "foreground"
+                    | "background"
             ) {
                 return Err(MezError::config(format!(
                     "frames.window.pills.{name}.{key} is not a supported status pill setting"
@@ -376,6 +394,18 @@ pub(super) fn runtime_status_pill_definitions_from_config(
                 )?,
                 max_output_chars,
                 style: runtime_status_pill_optional_string(object.get("style"), "style", name)?,
+                color_overrides: FramePillColorOverrides {
+                    foreground: runtime_status_pill_optional_string(
+                        object.get("foreground"),
+                        "foreground",
+                        name,
+                    )?,
+                    background: runtime_status_pill_optional_string(
+                        object.get("background"),
+                        "background",
+                        name,
+                    )?,
+                },
             },
         );
     }
@@ -1762,14 +1792,15 @@ pub(crate) fn runtime_status_pill_normalize_output(output: &str, max_chars: usiz
 mod tests {
     use super::{
         BTreeMap, DEFAULT_STATUS_PILL_MAX_OUTPUT_CHARS, DEFAULT_STATUS_PILL_TIMEOUT_MS,
-        MAX_CACHED_PANE_STATUS_PROVIDER_STATES, MAX_PENDING_PANE_STATUS_PROVIDER_REFRESHES,
-        RuntimePaneStatusProviderCache, RuntimePaneStatusProviderEvent,
-        RuntimePaneStatusProviderKey, RuntimePaneStatusProviderLaunch,
-        RuntimePaneStatusProviderOutcome, RuntimePaneStatusProviderRequest, RuntimeStatusPillCache,
-        RuntimeStatusPillDefinition, RuntimeStatusPillEmptyBehavior,
-        RuntimeStatusPillErrorBehavior, RuntimeStatusPillEvent, RuntimeStatusPillRefreshOutcome,
-        RuntimeStatusPillSurface, execute_runtime_status_pill_refresh_plan_async,
-        pane_provider_is_eligible_in_any_view, presented_pane_focus_states,
+        FramePillColorOverrides, MAX_CACHED_PANE_STATUS_PROVIDER_STATES,
+        MAX_PENDING_PANE_STATUS_PROVIDER_REFRESHES, RuntimePaneStatusProviderCache,
+        RuntimePaneStatusProviderEvent, RuntimePaneStatusProviderKey,
+        RuntimePaneStatusProviderLaunch, RuntimePaneStatusProviderOutcome,
+        RuntimePaneStatusProviderRequest, RuntimeStatusPillCache, RuntimeStatusPillDefinition,
+        RuntimeStatusPillEmptyBehavior, RuntimeStatusPillErrorBehavior, RuntimeStatusPillEvent,
+        RuntimeStatusPillRefreshOutcome, RuntimeStatusPillSurface,
+        execute_runtime_status_pill_refresh_plan_async, pane_provider_is_eligible_in_any_view,
+        presented_pane_focus_states, runtime_status_pill_definitions_from_config,
         runtime_status_pill_names_from_template,
     };
     use crate::host::terminal::{
@@ -2413,6 +2444,7 @@ mod tests {
                 error_behavior: RuntimeStatusPillErrorBehavior::Hide,
                 max_output_chars: DEFAULT_STATUS_PILL_MAX_OUTPUT_CHARS,
                 style: None,
+                color_overrides: FramePillColorOverrides::default(),
             },
         );
         definitions.insert(
@@ -2427,6 +2459,7 @@ mod tests {
                 error_behavior: RuntimeStatusPillErrorBehavior::ShowError,
                 max_output_chars: DEFAULT_STATUS_PILL_MAX_OUTPUT_CHARS,
                 style: None,
+                color_overrides: FramePillColorOverrides::default(),
             },
         );
 
@@ -2442,6 +2475,45 @@ mod tests {
         let repeated = cache.render_active(&definitions, "#{pill.used}");
         assert!(repeated.is_empty());
         assert!(cache.drain_refresh_plans().is_empty());
+    }
+
+    /// Palette-only edits must not invalidate an in-flight command because
+    /// color names affect presentation rather than provider execution or text.
+    #[test]
+    fn status_pill_cache_accepts_completion_after_color_only_edit() {
+        let root = serde_json::json!({
+            "frames": {"window": {"pills": {"used": {
+                "command": "printf ok",
+                "interval_seconds": 1,
+                "foreground": "primary_text"
+            }}}}
+        });
+        let mut definitions = runtime_status_pill_definitions_from_config(&root).unwrap();
+        assert_eq!(
+            definitions["used"].color_overrides.foreground.as_deref(),
+            Some("primary_text")
+        );
+        assert_eq!(definitions["used"].color_overrides.background, None);
+
+        let mut cache = RuntimeStatusPillCache::default();
+        cache.render_active(&definitions, "#{pill.used}");
+        let plan = cache.drain_refresh_plans().remove(0);
+        definitions.get_mut("used").unwrap().color_overrides = FramePillColorOverrides {
+            foreground: None,
+            background: Some("primary".to_string()),
+        };
+
+        assert_eq!(
+            cache.apply_event(
+                &definitions,
+                "#{pill.used}",
+                RuntimeStatusPillEvent {
+                    plan,
+                    outcome: RuntimeStatusPillRefreshOutcome::Succeeded("ready".to_string()),
+                },
+            ),
+            Some(true)
+        );
     }
 
     /// Verifies stale generations are ignored and current completions apply
@@ -2461,6 +2533,7 @@ mod tests {
                 error_behavior: RuntimeStatusPillErrorBehavior::Hide,
                 max_output_chars: DEFAULT_STATUS_PILL_MAX_OUTPUT_CHARS,
                 style: None,
+                color_overrides: FramePillColorOverrides::default(),
             },
         );
         let mut cache = RuntimeStatusPillCache::default();

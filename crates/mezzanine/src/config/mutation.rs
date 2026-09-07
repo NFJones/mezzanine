@@ -29,6 +29,8 @@ const MUTABLE_WINDOW_STATUS_PILL_KEYS: &[&str] = &[
     "error_behavior",
     "max_output_chars",
     "style",
+    "foreground",
+    "background",
 ];
 
 const MUTABLE_PANE_STATUS_PILL_KEYS: &[&str] = &[
@@ -49,6 +51,8 @@ const MUTABLE_PANE_STATUS_PILL_KEYS: &[&str] = &[
     "max_width",
     "priority",
     "style",
+    "foreground",
+    "background",
     "on_click",
 ];
 

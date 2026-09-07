@@ -3369,3 +3369,50 @@ fn migrates_schema_88_without_materializing_pane_status_rails() {
         assert!(root.pointer("/frames/pane/right_status").is_none());
     }
 }
+
+/// Schema v91 admits optional named-pill palette references without creating
+/// them for existing users. Authored references and aliases survive all
+/// supported formats, and a second migration is byte-preserving.
+#[test]
+fn migrates_schema_90_without_materializing_status_pill_colors() {
+    for (format, text, authored_foreground) in [
+        (ConfigFormat::Toml, "version = 90\n", None),
+        (
+            ConfigFormat::Toml,
+            "version = 90\n[theme.aliases]\naccent = \"#123456\"\n[frames.window.pills.build]\ncommand = \"printf ok\"\ninterval_seconds = 10\nforeground = \"accent\"\n",
+            Some("accent"),
+        ),
+        (ConfigFormat::Json, r#"{"version":90}"#, None),
+        (
+            ConfigFormat::Json,
+            r##"{"version":90,"theme":{"aliases":{"accent":"#123456"}},"frames":{"window":{"pills":{"build":{"command":"printf ok","interval_seconds":10,"foreground":"accent"}}}}}"##,
+            Some("accent"),
+        ),
+        (ConfigFormat::Yaml, "version: 90\n", None),
+        (
+            ConfigFormat::Yaml,
+            "version: 90\ntheme:\n  aliases:\n    accent: '#123456'\nframes:\n  window:\n    pills:\n      build:\n        command: printf ok\n        interval_seconds: 10\n        foreground: accent\n",
+            Some("accent"),
+        ),
+    ] {
+        let plan = migrate_config_text(format, text).unwrap();
+        let root = parse_config_json_value(format, &plan.text).unwrap();
+
+        assert_eq!(plan.from_version, 90);
+        assert_eq!(plan.to_version, 91);
+        assert_eq!(root.pointer("/version"), Some(&serde_json::json!(91)));
+        assert_eq!(
+            root.pointer("/frames/window/pills/build/foreground")
+                .and_then(serde_json::Value::as_str),
+            authored_foreground
+        );
+        assert!(
+            root.pointer("/frames/window/pills/build/background")
+                .is_none()
+        );
+
+        let repeated = migrate_config_text(format, &plan.text).unwrap();
+        assert!(!repeated.changed);
+        assert_eq!(repeated.text, plan.text);
+    }
+}

@@ -15,10 +15,11 @@ use std::collections::BTreeMap;
 use crate::config::{ConfigLayer, ConfigScope, EffectiveConfig};
 use crate::error::{MezError, Result};
 use crate::host::terminal::{
-    PaneStatusAction, PaneStatusCondition, PaneStatusConfig, PaneStatusField, PaneStatusFormat,
-    PaneStatusOverflowPolicy, PaneStatusPillDefinition, PaneStatusProviderDefinition,
-    PaneStatusProviderEmptyBehavior, PaneStatusProviderErrorBehavior, PaneStatusProviderOrigin,
-    PaneStatusProviderScope, PaneStatusStyle, PaneStatusTerminalAction, PaneStatusTerminalCommand,
+    FramePillColorOverrides, PaneStatusAction, PaneStatusCondition, PaneStatusConfig,
+    PaneStatusField, PaneStatusFormat, PaneStatusOverflowPolicy, PaneStatusPillDefinition,
+    PaneStatusProviderDefinition, PaneStatusProviderEmptyBehavior, PaneStatusProviderErrorBehavior,
+    PaneStatusProviderOrigin, PaneStatusProviderScope, PaneStatusStyle, PaneStatusTerminalAction,
+    PaneStatusTerminalCommand,
 };
 use crate::runtime::service_state::RuntimeCommandBinding;
 use crate::runtime::status_pills::{
@@ -239,6 +240,8 @@ fn runtime_pane_status_config(
                     | "max_width"
                     | "priority"
                     | "style"
+                    | "foreground"
+                    | "background"
                     | "on_click"
             ) {
                 return Err(MezError::config(format!(
@@ -420,6 +423,10 @@ fn runtime_pane_status_config(
                 ))
             })?;
         }
+        definition.color_overrides = FramePillColorOverrides {
+            foreground: optional_pane_status_string(object.get("foreground"), name, "foreground")?,
+            background: optional_pane_status_string(object.get("background"), name, "background")?,
+        };
         if let Some(value) = optional_pane_status_string(object.get("on_click"), name, "on_click")?
         {
             definition.action = match value.as_str() {
@@ -1179,6 +1186,32 @@ mod pane_status_preset_tests {
         assert_eq!(model.label.as_deref(), Some("Runtime"));
         assert_eq!(model.priority, 99);
         assert!(matches!(model.action, PaneStatusAction::Builtin(_)));
+    }
+
+    /// Named field-backed and command-backed pills retain unresolved palette
+    /// names so rendering can resolve them against the current active theme.
+    #[test]
+    fn pane_status_named_pills_retain_palette_overrides() {
+        let field = parse(
+            "[frames.pane.pills.model]\nfield = \"agent.model\"\nstyle = \"agent-model\"\nforeground = \"primary_text\"\n",
+        );
+        let model = &field.pills["model"];
+        assert_eq!(
+            model.color_overrides.foreground.as_deref(),
+            Some("primary_text")
+        );
+        assert_eq!(model.color_overrides.background, None);
+        assert_eq!(model.style, PaneStatusStyle::AgentModel);
+
+        let command = parse(
+            "[frames.pane.pills.branch]\ncommand = \"pwd\"\ncwd = \"pane\"\nbackground = \"container\"\n",
+        );
+        let branch = &command.pills["branch"];
+        assert_eq!(branch.color_overrides.foreground, None);
+        assert_eq!(
+            branch.color_overrides.background.as_deref(),
+            Some("container")
+        );
     }
 
     /// An explicit source leaf replaces only that leaf while the remaining

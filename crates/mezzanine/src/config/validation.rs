@@ -18,7 +18,9 @@ use super::{
     validate_command_rule_examples, validate_known_schema_path, validate_mcp_server_path,
     validate_permission_value, validate_permissions_path, write_private_config_file,
 };
-use mez_mux::theme::{parse_hex_color, valid_color_alias_name};
+use mez_mux::theme::{
+    DEFAULT_UI_THEME_NAME, builtin_ui_theme_definition, parse_hex_color, valid_color_alias_name,
+};
 
 // Config file and text validation entry points.
 
@@ -1682,6 +1684,23 @@ pub(super) fn validate_terminal_value(path: &str, value: &str) -> Option<String>
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn validate_frame_value(path: &str, value: &str) -> Option<String> {
+    let segments = path.split('.').collect::<Vec<_>>();
+    if matches!(
+        segments.as_slice(),
+        [
+            "frames",
+            "window" | "pane",
+            "pills",
+            _,
+            "foreground" | "background"
+        ]
+    ) {
+        return (!valid_color_alias_name(value)).then(|| {
+            format!(
+                "{path} must be a palette name using ASCII letters, digits, underscores, or hyphens"
+            )
+        });
+    }
     match path {
         "frames.window.enabled" | "frames.pane.enabled" => {
             if matches!(value, "true" | "false") {
@@ -1824,12 +1843,68 @@ pub fn compose_effective_config(layers: &[ConfigLayer]) -> Result<EffectiveConfi
         applied_layers.push(layer.name.clone());
     }
 
+    validate_effective_status_pill_palette_names(&values)?;
+
     Ok(EffectiveConfig {
         values,
         diagnostics,
         applied_layers,
         skipped_layers,
     })
+}
+
+/// Validates named-pill palette references after all trusted layers compose.
+fn validate_effective_status_pill_palette_names(
+    values: &BTreeMap<String, ConfigValue>,
+) -> Result<()> {
+    let active = values
+        .get("theme.active")
+        .map(|value| value.value.as_str())
+        .unwrap_or(DEFAULT_UI_THEME_NAME);
+    let mut aliases = if let Some(definition) = builtin_ui_theme_definition(active) {
+        definition
+            .aliases
+            .into_keys()
+            .collect::<std::collections::BTreeSet<_>>()
+    } else {
+        let mut aliases: std::collections::BTreeSet<String> =
+            builtin_ui_theme_definition(DEFAULT_UI_THEME_NAME)
+                .map(|definition| definition.aliases.into_keys().collect())
+                .unwrap_or_default();
+        let prefix = format!("themes.{active}.aliases.");
+        aliases.extend(
+            values
+                .keys()
+                .filter_map(|path| path.strip_prefix(&prefix).map(ToOwned::to_owned)),
+        );
+        aliases
+    };
+    aliases.extend(
+        values
+            .keys()
+            .filter_map(|path| path.strip_prefix("theme.aliases.").map(ToOwned::to_owned)),
+    );
+
+    for (path, value) in values {
+        let segments = path.split('.').collect::<Vec<_>>();
+        if matches!(
+            segments.as_slice(),
+            [
+                "frames",
+                "window" | "pane",
+                "pills",
+                _,
+                "foreground" | "background"
+            ]
+        ) && !aliases.contains(&value.value)
+        {
+            return Err(MezError::config(format!(
+                "{path} references unknown effective theme palette name `{}`",
+                value.value
+            )));
+        }
+    }
+    Ok(())
 }
 /// Runs the validate config syntax operation for this subsystem.
 ///

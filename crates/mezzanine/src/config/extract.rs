@@ -515,6 +515,8 @@ pub(super) fn validate_frames_path(segments: &[&str]) -> Option<String> {
                         | "error_behavior"
                         | "max_output_chars"
                         | "style"
+                        | "foreground"
+                        | "background"
                 )
             } else {
                 matches!(
@@ -536,6 +538,8 @@ pub(super) fn validate_frames_path(segments: &[&str]) -> Option<String> {
                         | "max_width"
                         | "priority"
                         | "style"
+                        | "foreground"
+                        | "background"
                         | "on_click"
                 )
             };

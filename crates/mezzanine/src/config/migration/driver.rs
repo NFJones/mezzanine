@@ -79,12 +79,13 @@ use super::v86_v87::migrate_v86_to_v87;
 use super::v87_v88::migrate_v87_to_v88;
 use super::v88_v89::migrate_v88_to_v89;
 use super::v89_v90::migrate_v89_to_v90;
+use super::v90_v91::migrate_v90_to_v91;
 use super::{
     ConfigFormat, MezError, Path, Result, extract_config_values, fs, write_private_config_file,
 };
 
 /// The newest configuration schema version understood by this binary.
-pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 90;
+pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 91;
 
 /// Describes the result of migrating one configuration document.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -485,6 +486,10 @@ pub fn migrate_config_text(format: ConfigFormat, text: &str) -> Result<ConfigMig
             89 => {
                 current_text = migrate_v89_to_v90(format, &current_text)?;
                 current_version = 90;
+            }
+            90 => {
+                current_text = migrate_v90_to_v91(format, &current_text)?;
+                current_version = 91;
             }
             unsupported => {
                 return Err(MezError::config(format!(

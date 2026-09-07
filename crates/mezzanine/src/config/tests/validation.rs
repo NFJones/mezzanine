@@ -1549,7 +1549,7 @@ fn validates_typed_pane_status_configuration() {
     let valid = validate_config_text(
         ConfigFormat::Toml,
         &format!(
-            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[frames.pane]\nleft_status = \"#{{pane.progress}}\"\nright_status = \"#{{pill.model}} #{{history.position}}\"\noverflow = \"compact\"\ntitle_min_width = 12\n[frames.pane.pills.model]\nfield = \"agent.model\"\nlabel = \"Model\"\nformat = \"short\"\ncompact_format = \"short\"\nwhen = [\"agent-view\", \"supported\", \"nonempty\"]\nmin_width = 4\nmax_width = 24\npriority = 80\nstyle = \"agent-model\"\non_click = \"builtin\"\n"
+            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[frames.pane]\nleft_status = \"#{{pane.progress}}\"\nright_status = \"#{{pill.model}} #{{history.position}}\"\noverflow = \"compact\"\ntitle_min_width = 12\n[frames.pane.pills.model]\nfield = \"agent.model\"\nlabel = \"Model\"\nformat = \"short\"\ncompact_format = \"short\"\nwhen = [\"agent-view\", \"supported\", \"nonempty\"]\nmin_width = 4\nmax_width = 24\npriority = 80\nstyle = \"agent-model\"\nforeground = \"primary_text\"\nbackground = \"primary\"\non_click = \"builtin\"\n"
         ),
         ConfigScope::Primary,
     );
@@ -1716,6 +1716,48 @@ fn validates_typed_pane_status_configuration() {
                     .iter()
                     .any(|diagnostic| diagnostic.message.contains(expected)),
             "{setting}: {:?}",
+            validation.diagnostics
+        );
+    }
+}
+
+/// Named pane and window pill colors accept palette identifiers but reject
+/// raw colors, malformed names, empty names, and non-string values at the
+/// exact authored leaf.
+#[test]
+fn validates_status_pill_palette_name_leaves() {
+    let valid = validate_config_text(
+        ConfigFormat::Toml,
+        &format!(
+            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[frames.window.pills.build]\ncommand = \"printf ok\"\ninterval_seconds = 10\nforeground = \"primary_text\"\nbackground = \"primary\"\n[frames.pane.pills.branch]\ncommand = \"pwd\"\ncwd = \"pane\"\nforeground = \"container_muted_foreground\"\nbackground = \"container\"\n"
+        ),
+        ConfigScope::Primary,
+    );
+    assert!(valid.valid, "{:?}", valid.diagnostics);
+
+    for (surface, leaf, value) in [
+        ("window", "foreground", "\"#abcdef\""),
+        ("window", "background", "\"bad name\""),
+        ("pane", "foreground", "\"\""),
+        ("pane", "background", "7"),
+    ] {
+        let source = if surface == "window" {
+            format!(
+                "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[frames.window.pills.item]\ncommand = \"printf ok\"\ninterval_seconds = 10\n{leaf} = {value}\n"
+            )
+        } else {
+            format!(
+                "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[frames.pane.pills.item]\nfield = \"agent.model\"\n{leaf} = {value}\n"
+            )
+        };
+        let validation = validate_config_text(ConfigFormat::Toml, &source, ConfigScope::Primary);
+        let path = format!("frames.{surface}.pills.item.{leaf}");
+        assert!(
+            validation
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.path == path),
+            "{path}: {:?}",
             validation.diagnostics
         );
     }

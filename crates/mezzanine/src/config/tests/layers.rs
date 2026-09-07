@@ -150,7 +150,7 @@ fn pane_status_preset_and_overrides_follow_effective_layer_precedence() {
             scope: ConfigScope::Primary,
             trusted: true,
             text: format!(
-                "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[frames.pane]\nstatus_preset = \"minimal\"\n[frames.pane.pills.model]\nfield = \"agent.model\"\nlabel = \"Primary\"\n"
+                "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[frames.pane]\nstatus_preset = \"minimal\"\n[frames.pane.pills.model]\nfield = \"agent.model\"\nlabel = \"Primary\"\nforeground = \"primary_text\"\nbackground = \"primary\"\n"
             ),
         },
         ConfigLayer {
@@ -159,7 +159,7 @@ fn pane_status_preset_and_overrides_follow_effective_layer_precedence() {
             format: ConfigFormat::Toml,
             scope: ConfigScope::LiveOverride,
             trusted: true,
-            text: "[frames.pane]\nstatus_preset = \"full-controls\"\n[frames.pane.pills.model]\nlabel = \"Live\"\n"
+            text: "[frames.pane]\nstatus_preset = \"full-controls\"\n[frames.pane.pills.model]\nlabel = \"Live\"\nforeground = \"secondary_text\"\n"
                 .to_string(),
         },
     ])
@@ -185,5 +185,63 @@ fn pane_status_preset_and_overrides_follow_effective_layer_precedence() {
     assert_eq!(
         effective.source_for("frames.pane.pills.model.label"),
         Some("live")
+    );
+    assert_eq!(
+        effective.get("frames.pane.pills.model.foreground"),
+        Some("secondary_text")
+    );
+    assert_eq!(
+        effective.get("frames.pane.pills.model.background"),
+        Some("primary")
+    );
+}
+
+/// Palette references are checked after trusted layers compose, allowing an
+/// alias from one layer to satisfy a named pill authored in another layer.
+#[test]
+fn status_pill_palette_references_resolve_against_effective_aliases() {
+    let effective = compose_effective_config(&[
+        ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: format!(
+                "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[frames.pane.pills.model]\nfield = \"agent.model\"\nforeground = \"accent\"\n"
+            ),
+        },
+        ConfigLayer {
+            name: "live".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::LiveOverride,
+            trusted: true,
+            text: "[theme.aliases]\naccent = \"#123456\"\n".to_string(),
+        },
+    ])
+    .unwrap();
+
+    assert_eq!(
+        effective.get("frames.pane.pills.model.foreground"),
+        Some("accent")
+    );
+    assert_eq!(effective.source_for("theme.aliases.accent"), Some("live"));
+
+    let error = compose_effective_config(&[ConfigLayer {
+        name: "primary".to_string(),
+        path: None,
+        format: ConfigFormat::Toml,
+        scope: ConfigScope::Primary,
+        trusted: true,
+        text: format!(
+            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[frames.window.pills.build]\ncommand = \"printf ok\"\ninterval_seconds = 10\nbackground = \"missing_palette_name\"\n"
+        ),
+    }])
+    .unwrap_err();
+    assert!(
+        error
+            .message()
+            .contains("frames.window.pills.build.background references unknown effective theme palette name `missing_palette_name`")
     );
 }

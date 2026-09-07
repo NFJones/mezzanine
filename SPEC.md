@@ -3112,10 +3112,18 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 81 is the current implemented configuration schema version for this
+schema version 91 is the current implemented configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
+
+The `90 -> 91` migration MUST advance only the schema version. It MUST preserve
+configured and omitted `frames.window.pills.<name>.foreground`,
+`frames.window.pills.<name>.background`,
+`frames.pane.pills.<name>.foreground`, and
+`frames.pane.pills.<name>.background` values without synthesizing any color
+leaf. Authored theme aliases and named-pill definitions MUST otherwise remain
+unchanged.
 
 The `79 -> 80` migration MUST add the disabled-by-default
 `transport.iroh.x11` forwarding policy without enabling X11 or changing the

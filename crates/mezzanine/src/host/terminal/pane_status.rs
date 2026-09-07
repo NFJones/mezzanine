@@ -21,6 +21,15 @@ pub const DEFAULT_PANE_FRAME_LEFT_STATUS_TEMPLATE: &str = "#{pane.progress}";
 /// Default right-aligned pane status rail for new configurations.
 pub const DEFAULT_PANE_FRAME_RIGHT_STATUS_TEMPLATE: &str = "#{pane.pwd} #{agent.model} #{agent.reasoning} #{agent.thinking} #{agent.planning} #{agent.routing} #{agent.latency} #{policy.mode} #{agent.context_usage} #{agent.status} #{history.position}";
 
+/// Optional unresolved palette names applied to a named frame pill.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct FramePillColorOverrides {
+    /// Palette name used to replace the semantic foreground channel.
+    pub foreground: Option<String>,
+    /// Palette name used to replace the semantic background channel.
+    pub background: Option<String>,
+}
+
 /// Named pane-status compositions expanded before explicit frame overrides.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum PaneStatusPreset {
@@ -576,6 +585,8 @@ pub struct PaneStatusPillDefinition {
     pub priority: u8,
     /// Theme role.
     pub style: PaneStatusStyle,
+    /// Optional palette-name color channel overrides.
+    pub color_overrides: FramePillColorOverrides,
     /// Typed built-in or read-only action.
     pub action: PaneStatusAction,
 }
@@ -621,6 +632,7 @@ impl PaneStatusPillDefinition {
             max_width: None,
             priority: 50,
             style: PaneStatusStyle::Automatic,
+            color_overrides: FramePillColorOverrides::default(),
             action: field
                 .builtin_action()
                 .map(PaneStatusAction::Builtin)

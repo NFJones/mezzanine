@@ -496,6 +496,14 @@ fn config_mutation_allows_only_supported_named_pill_leaves() {
     )
     .unwrap();
     assert!(conditions.changed);
+    let pane_foreground = plan_config_mutation(
+        ConfigFormat::Toml,
+        &conditions.text,
+        ConfigScope::Primary,
+        set_string("frames.pane.pills.model.foreground", "primary_text"),
+    )
+    .unwrap();
+    assert!(pane_foreground.changed);
 
     let command_source = format!(
         "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[frames.pane]\nright_status = \"#{{pill.branch}}\"\n[frames.pane.pills.branch]\ncommand = \"pwd\"\ncwd = \"pane\"\n"
@@ -542,6 +550,14 @@ fn config_mutation_allows_only_supported_named_pill_leaves() {
     )
     .unwrap();
     assert!(window.changed);
+    let window_background = plan_config_mutation(
+        ConfigFormat::Toml,
+        &window.text,
+        ConfigScope::Primary,
+        set_string("frames.window.pills.build.background", "primary"),
+    )
+    .unwrap();
+    assert!(window_background.changed);
 
     for path in [
         "frames.pane.pills.model.unknown",

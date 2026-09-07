@@ -95,11 +95,12 @@ pub use mouse::{
     PaneAgentStatusField, WindowFrameAction, WindowFrameCommandKind,
 };
 pub use pane_status::{
-    PaneStatusAction, PaneStatusCondition, PaneStatusConfig, PaneStatusField, PaneStatusFormat,
-    PaneStatusOccurrenceId, PaneStatusOverflowPolicy, PaneStatusPillDefinition,
-    PaneStatusProviderDefinition, PaneStatusProviderEmptyBehavior, PaneStatusProviderErrorBehavior,
-    PaneStatusProviderOrigin, PaneStatusProviderScope, PaneStatusRail, PaneStatusSegmentIdentity,
-    PaneStatusStyle, PaneStatusTerminalAction, PaneStatusTerminalCommand,
+    FramePillColorOverrides, PaneStatusAction, PaneStatusCondition, PaneStatusConfig,
+    PaneStatusField, PaneStatusFormat, PaneStatusOccurrenceId, PaneStatusOverflowPolicy,
+    PaneStatusPillDefinition, PaneStatusProviderDefinition, PaneStatusProviderEmptyBehavior,
+    PaneStatusProviderErrorBehavior, PaneStatusProviderOrigin, PaneStatusProviderScope,
+    PaneStatusRail, PaneStatusSegmentIdentity, PaneStatusStyle, PaneStatusTerminalAction,
+    PaneStatusTerminalCommand,
 };
 pub use render::{
     DEFAULT_PANE_FRAME_TEMPLATE, DEFAULT_PANE_FRAME_VISIBLE_FIELDS,
