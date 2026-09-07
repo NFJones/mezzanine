@@ -441,6 +441,67 @@ fn foreground_serve_zen_round_trip_resizes_real_pane_pty() {
     assert!(!text.contains("mez: Io"), "{text}");
 }
 
+/// Reconstructs the real foreground terminal to distinguish a focus pill from
+/// command echo. Once the bottom-left label appears, no more input is sent
+/// until its timer-driven repaint removes it from the visible screen.
+#[test]
+fn foreground_zen_focus_label_expires_without_input() {
+    let root = test_root("zen-focus-idle");
+    let home = root.join("home");
+    let runtime = root.join("runtime");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&runtime).unwrap();
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+    let socket = runtime.join("focus.sock");
+    let mut process = spawn_foreground_serve(&root, &home, &runtime, &socket);
+    let mut output = Vec::new();
+    process
+        .read_until(&mut output, Duration::from_secs(10), |text| {
+            text.contains("serving: true") && contains_default_shell_pane_frame(text)
+        })
+        .unwrap();
+    let mut screen =
+        mez_terminal::TerminalScreen::new(mez_terminal::TerminalSize::new(80, 24).unwrap(), 100)
+            .unwrap();
+    screen.feed(&output);
+    process
+        .write_input(b"\x01:zen on; new-window foreground-focus\r")
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut appeared = false;
+    let mut expired = false;
+    while Instant::now() < deadline {
+        match process.output_rx.recv_timeout(Duration::from_millis(20)) {
+            Ok(chunk) => {
+                output.extend_from_slice(&chunk);
+                screen.feed(&chunk);
+                let rows = screen.visible_lines();
+                let visible = rows[23].trim() == "1 foreground-focus";
+                if visible {
+                    appeared = true;
+                }
+                if appeared && !visible {
+                    expired = true;
+                    break;
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    assert!(
+        appeared,
+        "label never appeared: {:?}; output={}",
+        screen.visible_lines(),
+        output_excerpt(&output)
+    );
+    assert!(expired, "label never expired: {:?}", screen.visible_lines());
+    process.write_input(b"\x01:exit\r").unwrap();
+    process
+        .read_until_exit(&mut output, Duration::from_secs(5))
+        .unwrap();
+}
+
 /// Verifies every pane-status preset can be selected through the real command
 /// prompt, is reported by `show-pane-status`, and changes composition without
 /// changing the application PTY geometry reserved by the pane and window bars.
