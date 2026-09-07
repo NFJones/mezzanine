@@ -24,6 +24,9 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use mez_agent::SpawnedShellExecutor as SpawnedShellExecutorPort;
+use mez_agent::semantic_patch_planning::{
+    ApplyPatchProgressDecoder, ApplyPatchTransactionPhase, apply_patch_transaction_phase,
+};
 use mez_agent::{
     DEFAULT_AGENT_TURN_TIMEOUT_MS, ShellChildArgument, ShellExecutionOutput, ShellExecutionRequest,
     ShellTransaction, ShellTransportDiagnostics,
@@ -81,18 +84,22 @@ struct SpawnedChildProgressState {
     preview: Vec<u8>,
     /// Strictly increasing revision assigned under the same output lock.
     revision: u64,
+    /// Decoder retained only for one native semantic-patch write transaction.
+    patch_decoder: Option<ApplyPatchProgressDecoder>,
+    /// Confirmed write sections retained across coalesced watch publications.
+    confirmed_patch_sections: Vec<mez_agent::semantic_patch_planning::ApplyPatchConfirmedSection>,
 }
 
 /// Shared latest-value relay used by stdout and stderr reader threads.
 #[derive(Clone)]
 struct SpawnedChildProgressReporter {
     state: Arc<Mutex<SpawnedChildProgressState>>,
-    sender: tokio::sync::watch::Sender<Option<(u64, String)>>,
+    sender: tokio::sync::watch::Sender<Option<crate::runtime::RuntimeNativeShellWorkerProgress>>,
 }
 
 impl SpawnedChildProgressReporter {
     /// Appends one observed chunk and publishes the newest revisioned preview.
-    fn report(&self, bytes: &[u8]) {
+    fn report(&self, stream: SpawnedChildPipe, bytes: &[u8]) {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
@@ -102,10 +109,21 @@ impl SpawnedChildProgressReporter {
             state.preview.drain(..excess);
         }
         state.revision = state.revision.saturating_add(1);
-        let snapshot = (
-            state.revision,
-            String::from_utf8_lossy(&state.preview).into_owned(),
-        );
+        if stream == SpawnedChildPipe::Stdout
+            && let Some(decoder) = state.patch_decoder.as_mut()
+            && let Ok(progress) = decoder.push(bytes)
+        {
+            state
+                .confirmed_patch_sections
+                .extend(progress.confirmed_sections);
+        }
+        let snapshot = crate::runtime::RuntimeNativeShellWorkerProgress {
+            output: Some((
+                state.revision,
+                String::from_utf8_lossy(&state.preview).into_owned(),
+            )),
+            confirmed_patch_sections: state.confirmed_patch_sections.clone(),
+        };
         self.sender.send_replace(Some(snapshot));
     }
 }
@@ -696,12 +714,18 @@ pub(crate) fn execute_pane_status_provider_launch(
 /// Executes a native shell dispatch while publishing bounded output previews.
 pub(crate) fn execute_native_shell_dispatch_with_progress(
     dispatch: crate::runtime::RuntimeNativeShellDispatch,
-    progress_sender: tokio::sync::watch::Sender<Option<(u64, String)>>,
+    progress_sender: tokio::sync::watch::Sender<
+        Option<crate::runtime::RuntimeNativeShellWorkerProgress>,
+    >,
 ) -> crate::runtime::RuntimeNativeShellOutcome {
+    let patch_write = apply_patch_transaction_phase(&dispatch.request.transaction.command)
+        == Some(ApplyPatchTransactionPhase::Write);
     let progress = SpawnedChildProgressReporter {
         state: Arc::new(Mutex::new(SpawnedChildProgressState {
             preview: Vec::new(),
             revision: 0,
+            patch_decoder: patch_write.then(ApplyPatchProgressDecoder::new),
+            confirmed_patch_sections: Vec::new(),
         })),
         sender: progress_sender,
     };
@@ -869,7 +893,7 @@ where
             Ok(0) => break,
             Ok(count) => {
                 if let Some(progress) = progress.as_ref() {
-                    progress.report(&buffer[..count]);
+                    progress.report(stream, &buffer[..count]);
                 }
                 let remaining = budget.saturating_sub(retained.len());
                 let keep = count.min(remaining);
@@ -1091,17 +1115,21 @@ mod tests {
             state: Arc::new(Mutex::new(SpawnedChildProgressState {
                 preview: Vec::new(),
                 revision: 0,
+                patch_decoder: None,
+                confirmed_patch_sections: Vec::new(),
             })),
             sender,
         };
 
-        reporter.report(b"first");
+        reporter.report(SpawnedChildPipe::Stdout, b"first");
         let first = receiver.borrow_and_update().clone().unwrap();
-        reporter.report(b"-second");
+        reporter.report(SpawnedChildPipe::Stderr, b"-second");
         let second = receiver.borrow_and_update().clone().unwrap();
 
-        assert_eq!(first, (1, "first".to_string()));
-        assert_eq!(second, (2, "first-second".to_string()));
+        assert_eq!(first.output, Some((1, "first".to_string())));
+        assert!(first.confirmed_patch_sections.is_empty());
+        assert_eq!(second.output, Some((2, "first-second".to_string())));
+        assert!(second.confirmed_patch_sections.is_empty());
     }
 
     /// Verifies exit codes and stream separation arrive intact from the

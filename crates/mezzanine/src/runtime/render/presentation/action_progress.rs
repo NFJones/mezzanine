@@ -330,6 +330,39 @@ impl RuntimeSessionService {
             })
     }
 
+    /// Reports whether promoted mutation components exactly match final sections.
+    pub(crate) fn promoted_action_patch_sections_match(
+        &self,
+        turn_id: &str,
+        action_id: &str,
+        execution: &ActionPresentationExecutionIdentity,
+        sections: &[mez_agent::semantic_patch_planning::ApplyPatchConfirmedSection],
+    ) -> bool {
+        let promoted = self
+            .presentation
+            .action_presentation_progress
+            .values()
+            .flat_map(|presentation| presentation.promoted_components.iter())
+            .filter(|(key, _)| {
+                key.turn_id == turn_id
+                    && key.action_id == action_id
+                    && &key.execution == execution
+                    && key.component.is_confirmed()
+            })
+            .collect::<Vec<_>>();
+        promoted.len() == sections.len()
+            && sections.iter().all(|section| {
+                promoted.iter().any(|(key, source)| {
+                    key.component
+                        == ActionPresentationComponentIdentity::confirmed_mutation(
+                            section.ordinal,
+                            section.path.clone(),
+                        )
+                        && source.as_str() == section.diff
+                })
+            })
+    }
+
     /// Composes retained executor progress over a newly rebuilt lower baseline.
     pub(super) fn compose_action_presentation_progress_over(
         &mut self,
@@ -428,12 +461,20 @@ impl RuntimeSessionService {
         };
         let identity_is_current = match &progress.execution {
             ActionPresentationExecutionIdentity::Attempt(marker) => {
-                matches!(progress.component, ActionPresentationComponentIdentity::ShellOutput)
-                    && self.native_shell_action_attempt_is_current(
-                        &progress.turn_id,
-                        &progress.action_id,
-                        marker,
+                matches!(
+                    (&action.payload, &progress.component),
+                    (
+                        AgentActionPayload::ShellCommand { .. },
+                        ActionPresentationComponentIdentity::ShellOutput
+                    ) | (
+                        AgentActionPayload::ApplyPatch { .. },
+                        ActionPresentationComponentIdentity::ConfirmedMutation { .. }
                     )
+                ) && self.native_shell_action_attempt_is_current(
+                    &progress.turn_id,
+                    &progress.action_id,
+                    marker,
+                )
             }
             ActionPresentationExecutionIdentity::Transaction(marker) => self
                 .running_shell_transaction(marker)

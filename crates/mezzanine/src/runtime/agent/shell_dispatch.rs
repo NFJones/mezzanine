@@ -120,7 +120,12 @@ impl RuntimeSessionService {
         &mut self,
         progress: crate::runtime::RuntimeNativeShellProgress,
     ) -> Result<bool> {
-        self.apply_action_presentation_progress(progress.presentation)
+        let presentation = progress.presentation;
+        let applied = self.apply_action_presentation_progress(presentation.clone())?;
+        if applied && presentation.component.is_confirmed() {
+            let _ = self.promote_confirmed_action_presentation_progress(&presentation)?;
+        }
+        Ok(applied)
     }
 
     /// Returns native shell actions ready for external worker dispatch.
@@ -333,6 +338,19 @@ impl RuntimeSessionService {
         let is_apply_patch_write = matches!(action.payload, AgentActionPayload::ApplyPatch { .. })
             && apply_patch_transaction_phase(&outcome.command)
                 == Some(ApplyPatchTransactionPhase::Write);
+        let confirmed_patch_sections = if is_apply_patch_write && !output_truncated {
+            let combined = format!("{}{}", shell_output.stdout, shell_output.stderr);
+            let mut decoder = mez_agent::semantic_patch_planning::ApplyPatchProgressDecoder::new();
+            decoder
+                .push(combined.as_bytes())
+                .and_then(|mut progress| {
+                    progress.extend(decoder.finish()?);
+                    Ok(progress.confirmed_sections)
+                })
+                .ok()
+        } else {
+            None
+        };
         let apply_patch_file_outcomes = if is_apply_patch_write && !output_truncated {
             let combined = format!("{}{}", shell_output.stdout, shell_output.stderr);
             parse_apply_patch_file_outcomes(&combined)
@@ -507,6 +525,17 @@ impl RuntimeSessionService {
         if is_apply_patch_write && (exit_code == Some(0) || confirmed_partial_apply) {
             self.record_agent_modified_files_from_diff(&turn.pane_id, &combined_output);
         }
+        let native_progress_identity =
+            mez_agent::ActionPresentationExecutionIdentity::Attempt(outcome.marker.clone());
+        let matching_promoted_patch = confirmed_patch_sections.as_ref().is_some_and(|sections| {
+            !sections.is_empty()
+                && self.promoted_action_patch_sections_match(
+                    &turn.turn_id,
+                    &action.id,
+                    &native_progress_identity,
+                    sections,
+                )
+        });
         if !is_apply_patch_read {
             if self.agent_shell_view_enabled(&turn.pane_id) && !combined_output.trim().is_empty() {
                 self.append_agent_pty_diagnostic_bytes_to_terminal_buffer(
@@ -519,6 +548,7 @@ impl RuntimeSessionService {
                 && (self.agent_debug_enabled(&turn.pane_id)
                     || self.agent_action_result_renders_in_normal_mode(&action))
                 && !combined_output.trim().is_empty()
+                && !matching_promoted_patch
             {
                 self.append_agent_action_result_text_to_terminal_buffer(
                     &turn.pane_id,
@@ -531,6 +561,10 @@ impl RuntimeSessionService {
                 HookEvent::PostShellCommand,
                 &runtime_post_shell_hook_payload(&turn, &action, &result, exit_code.unwrap_or(0)),
             )?;
+        }
+        if is_apply_patch_write {
+            let _ =
+                self.retire_action_presentation_progress_for_action(&turn.turn_id, &action.id)?;
         }
         self.append_agent_trace_turn_event(
             &turn.pane_id,

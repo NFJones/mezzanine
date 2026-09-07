@@ -515,6 +515,7 @@ async fn execute_native_shell_action(
     let progress_marker = marker.clone();
     let (progress_sender, mut progress_receiver) = tokio::sync::watch::channel(None);
     let mut last_progress_revision = 0_u64;
+    let mut confirmed_patch_sections = 0_usize;
     let mut worker = tokio::task::spawn_blocking(move || {
         crate::runtime::execute_native_shell_dispatch_with_progress(dispatch, progress_sender)
     });
@@ -525,52 +526,111 @@ async fn execute_native_shell_action(
                 if changed.is_err() {
                     break worker.await;
                 }
-                let Some((revision, output_preview)) =
-                    progress_receiver.borrow_and_update().clone()
+                let Some(progress) = progress_receiver.borrow_and_update().clone()
                 else {
                     continue;
                 };
-                if revision <= last_progress_revision {
-                    continue;
-                }
-                last_progress_revision = revision;
                 let mut batch = RuntimeEventBatch::new();
-                batch.push(RuntimeEvent::NativeShellProgress(
-                    crate::runtime::RuntimeNativeShellProgress {
-                        presentation: mez_agent::ActionPresentationProgress::new(
-                            progress_turn_id.clone(),
-                            progress_action_id.clone(),
-                            mez_agent::ActionPresentationExecutionIdentity::Attempt(
-                                progress_marker.clone(),
+                if let Some((revision, output_preview)) = progress.output
+                    && revision > last_progress_revision
+                {
+                    last_progress_revision = revision;
+                    batch.push(RuntimeEvent::NativeShellProgress(
+                        crate::runtime::RuntimeNativeShellProgress {
+                            presentation: mez_agent::ActionPresentationProgress::new(
+                                progress_turn_id.clone(),
+                                progress_action_id.clone(),
+                                mez_agent::ActionPresentationExecutionIdentity::Attempt(
+                                    progress_marker.clone(),
+                                ),
+                                revision,
+                                mez_agent::ActionPresentationComponentIdentity::ShellOutput,
+                                output_preview,
                             ),
-                            revision,
-                            mez_agent::ActionPresentationComponentIdentity::ShellOutput,
-                            output_preview,
-                        ),
-                    },
-                ));
-                let _ = handle.submit_runtime_events(batch).await;
+                        },
+                    ));
+                }
+                for section in progress
+                    .confirmed_patch_sections
+                    .iter()
+                    .skip(confirmed_patch_sections)
+                {
+                    batch.push(RuntimeEvent::NativeShellProgress(
+                        crate::runtime::RuntimeNativeShellProgress {
+                            presentation: mez_agent::ActionPresentationProgress::new(
+                                progress_turn_id.clone(),
+                                progress_action_id.clone(),
+                                mez_agent::ActionPresentationExecutionIdentity::Attempt(
+                                    progress_marker.clone(),
+                                ),
+                                u64::try_from(section.ordinal)
+                                    .unwrap_or(u64::MAX)
+                                    .saturating_add(1),
+                                mez_agent::ActionPresentationComponentIdentity::confirmed_mutation(
+                                    section.ordinal,
+                                    section.path.clone(),
+                                ),
+                                section.diff.clone(),
+                            ),
+                        },
+                    ));
+                }
+                confirmed_patch_sections = progress.confirmed_patch_sections.len();
+                if !batch.events.is_empty() {
+                    let _ = handle.submit_runtime_events(batch).await;
+                }
             }
         }
     };
-    let final_output_preview = { progress_receiver.borrow_and_update().clone() };
-    if let Some((revision, output_preview)) = final_output_preview
-        && revision > last_progress_revision
-    {
+    let final_progress = { progress_receiver.borrow_and_update().clone() };
+    if let Some(progress) = final_progress {
         let mut batch = RuntimeEventBatch::new();
-        batch.push(RuntimeEvent::NativeShellProgress(
-            crate::runtime::RuntimeNativeShellProgress {
-                presentation: mez_agent::ActionPresentationProgress::new(
-                    progress_turn_id,
-                    progress_action_id,
-                    mez_agent::ActionPresentationExecutionIdentity::Attempt(progress_marker),
-                    revision,
-                    mez_agent::ActionPresentationComponentIdentity::ShellOutput,
-                    output_preview,
-                ),
-            },
-        ));
-        let _ = handle.submit_runtime_events(batch).await;
+        if let Some((revision, output_preview)) = progress.output
+            && revision > last_progress_revision
+        {
+            batch.push(RuntimeEvent::NativeShellProgress(
+                crate::runtime::RuntimeNativeShellProgress {
+                    presentation: mez_agent::ActionPresentationProgress::new(
+                        progress_turn_id.clone(),
+                        progress_action_id.clone(),
+                        mez_agent::ActionPresentationExecutionIdentity::Attempt(
+                            progress_marker.clone(),
+                        ),
+                        revision,
+                        mez_agent::ActionPresentationComponentIdentity::ShellOutput,
+                        output_preview,
+                    ),
+                },
+            ));
+        }
+        for section in progress
+            .confirmed_patch_sections
+            .iter()
+            .skip(confirmed_patch_sections)
+        {
+            batch.push(RuntimeEvent::NativeShellProgress(
+                crate::runtime::RuntimeNativeShellProgress {
+                    presentation: mez_agent::ActionPresentationProgress::new(
+                        progress_turn_id.clone(),
+                        progress_action_id.clone(),
+                        mez_agent::ActionPresentationExecutionIdentity::Attempt(
+                            progress_marker.clone(),
+                        ),
+                        u64::try_from(section.ordinal)
+                            .unwrap_or(u64::MAX)
+                            .saturating_add(1),
+                        mez_agent::ActionPresentationComponentIdentity::confirmed_mutation(
+                            section.ordinal,
+                            section.path.clone(),
+                        ),
+                        section.diff.clone(),
+                    ),
+                },
+            ));
+        }
+        if !batch.events.is_empty() {
+            let _ = handle.submit_runtime_events(batch).await;
+        }
     }
     let outcome = match joined {
         Ok(outcome) => outcome,

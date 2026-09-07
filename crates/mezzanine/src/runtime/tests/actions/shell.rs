@@ -868,7 +868,7 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
         crate::runtime::execute_native_shell_dispatch_with_progress(dispatch, progress_sender)
     });
     let progress_deadline = std::time::Instant::now() + Duration::from_secs(2);
-    let (revision, output_preview) = loop {
+    let progress = loop {
         if let Some(progress) = progress_receiver.borrow_and_update().clone() {
             break progress;
         }
@@ -878,6 +878,9 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
         );
         thread::sleep(Duration::from_millis(5));
     };
+    let (revision, output_preview) = progress
+        .output
+        .expect("native shell worker progress must include output");
     assert!(
         !worker.is_finished(),
         "native worker completed before progress was observed"
@@ -1272,6 +1275,189 @@ fn runtime_native_apply_patch_failure_shows_only_recovery_shadow_text() {
         !pane_text.contains("agent: apply patch (apply_patch failed"),
         "{pane_text}"
     );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies native semantic-patch writes publish confirmed diffs before the
+/// worker reaches terminal completion.
+///
+/// The generated write phase performs the real filesystem mutation and emits
+/// its authenticated ordinal/path/length record before a test-only barrier.
+/// Native progress must carry that confirmation through the coalescing relay,
+/// promote it exactly once, and retain the same visible diff after settlement.
+#[test]
+fn runtime_native_apply_patch_shows_confirmed_diff_before_completion() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service.set_agent_native_shell_mode_for_tests("%1");
+    service.permission_policy_mut().set_approval_bypass(true);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let unique = crate::runtime::current_unix_millis();
+    let target_rel = format!(
+        "target/mez-native-patch-progress-{}-{unique}/note.txt",
+        std::process::id()
+    );
+    let target = PathBuf::from(&target_rel);
+    fs::create_dir_all(target.parent().unwrap()).unwrap();
+    let release_path = std::env::temp_dir().join(format!(
+        "mez-native-patch-progress-release-{}-{unique}",
+        std::process::id()
+    ));
+    let _ = fs::remove_file(&release_path);
+
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-native-patch-progress","input":"create a note"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.remove_pending_agent_provider_task("turn-1");
+    let provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "native patch progress".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test native patch progress".to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![mez_agent::AgentAction {
+                    id: "patch-1".to_string(),
+                    rationale: "create a file".to_string(),
+                    payload: mez_agent::AgentActionPayload::ApplyPatch {
+                        patch: format!(
+                            "*** Begin Patch\n*** Add File: {target_rel}\n+native-confirmed-progress\n*** End Patch"
+                        ),
+                        strip: None,
+                    },
+                }],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    let execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+
+    let read_dispatch = service
+        .claim_native_shell_action("turn-1", "patch-1")
+        .unwrap()
+        .expect("native apply-patch read should be queued");
+    assert!(
+        service
+            .complete_native_shell_action(crate::runtime::execute_native_shell_dispatch(
+                read_dispatch
+            ))
+            .unwrap()
+    );
+    let mut write_dispatch = service
+        .claim_native_shell_action("turn-1", "patch-1")
+        .unwrap()
+        .expect("native apply-patch write should be queued");
+    write_dispatch
+        .request
+        .transaction
+        .command
+        .push_str(&format!(
+            "while [ ! -e '{}' ]; do sleep 0.01; done\n",
+            release_path.display()
+        ));
+    let marker = write_dispatch.marker.clone();
+    let (progress_sender, mut progress_receiver) = tokio::sync::watch::channel(None);
+    let worker = thread::spawn(move || {
+        crate::runtime::execute_native_shell_dispatch_with_progress(write_dispatch, progress_sender)
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let section = loop {
+        if let Some(progress) = progress_receiver.borrow_and_update().clone()
+            && let Some(section) = progress.confirmed_patch_sections.first().cloned()
+        {
+            break section;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "native patch confirmation timed out"
+        );
+        thread::sleep(Duration::from_millis(5));
+    };
+    assert!(
+        !worker.is_finished(),
+        "native patch worker settled before progress"
+    );
+    assert_eq!(section.path, target_rel);
+    assert!(
+        service
+            .apply_native_shell_progress(crate::runtime::RuntimeNativeShellProgress {
+                presentation: mez_agent::ActionPresentationProgress::new(
+                    "turn-1",
+                    "patch-1",
+                    mez_agent::ActionPresentationExecutionIdentity::Attempt(marker),
+                    u64::try_from(section.ordinal)
+                        .unwrap_or(u64::MAX)
+                        .saturating_add(1),
+                    mez_agent::ActionPresentationComponentIdentity::confirmed_mutation(
+                        section.ordinal,
+                        section.path,
+                    ),
+                    section.diff,
+                ),
+            })
+            .unwrap()
+    );
+    let early_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        early_text.contains("native-confirmed-progress"),
+        "{early_text}"
+    );
+    assert_eq!(
+        service.action_presentation_progress_counts_for_tests("%1"),
+        (0, 1)
+    );
+
+    fs::write(&release_path, b"release").unwrap();
+    assert!(
+        service
+            .complete_native_shell_action(worker.join().unwrap())
+            .unwrap()
+    );
+    let settled_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(
+        settled_text.matches("native-confirmed-progress").count(),
+        1,
+        "{settled_text}"
+    );
+    assert_eq!(
+        fs::read_to_string(&target).unwrap(),
+        "native-confirmed-progress\n"
+    );
+
+    let _ = fs::remove_file(release_path);
+    let _ = fs::remove_dir_all(target.parent().unwrap());
     service.terminate_all_pane_processes().unwrap();
 }
 

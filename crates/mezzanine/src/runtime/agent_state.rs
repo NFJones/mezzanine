@@ -127,7 +127,20 @@ pub(crate) struct RuntimeNativeShellFailure {
     pub(crate) message: String,
 }
 
-/// Bounded cumulative output observed while a native shell worker is running.
+/// Bounded cumulative progress observed while a native shell worker is running.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeNativeShellWorkerProgress {
+    /// Monotonically newer bounded shell-output snapshot.
+    pub(crate) output: Option<(u64, String)>,
+    /// Confirmed semantic-patch sections retained in write order.
+    ///
+    /// The worker publishes this cumulative sequence because a watch receiver
+    /// may coalesce intermediate snapshots without losing a confirmed write.
+    pub(crate) confirmed_patch_sections:
+        Vec<mez_agent::semantic_patch_planning::ApplyPatchConfirmedSection>,
+}
+
+/// One executor presentation update carried from the native worker to the actor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeNativeShellProgress {
     /// Typed presentation-only progress fenced by the claimed native attempt.

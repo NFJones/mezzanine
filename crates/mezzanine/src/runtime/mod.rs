@@ -394,7 +394,7 @@ pub(crate) use agent_state::{
     RuntimeAgentProviderPersistenceOutcome, RuntimeAgentProviderPersistenceWork,
     RuntimeApprovedExternalActionDispatch, RuntimeApprovedExternalActionOutcome,
     RuntimeApprovedMcpActionDispatch, RuntimeNativeShellDispatch, RuntimeNativeShellFailure,
-    RuntimeNativeShellOutcome, RuntimeNativeShellProgress,
+    RuntimeNativeShellOutcome, RuntimeNativeShellProgress, RuntimeNativeShellWorkerProgress,
 };
 pub(crate) use commands::{
     RuntimeAgentPromptProviderInfoRefresh, RuntimeProviderInfoRefreshOutcome,
