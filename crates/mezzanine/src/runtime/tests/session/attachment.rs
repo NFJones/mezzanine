@@ -373,6 +373,52 @@ fn runtime_control_initialize_persists_attached_registry_state() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies actor-owned control ingress persists registry-visible lifecycle
+/// changes without turning read-only terminal views into persistence events.
+/// A registry completion is published as a diagnostic event, so persisting
+/// every view creates a render-wakeup feedback loop between client and daemon.
+#[test]
+fn runtime_control_transition_skips_registry_persistence_for_terminal_view() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-runtime-registry-view-{}-{:?}",
+        std::process::id(),
+        thread::current().id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let registry = SessionRegistry::new(root.clone(), effective_uid());
+    let mut service = test_runtime_service();
+    service.set_session_registry(registry);
+    service.use_registry_effect_adapter();
+    let mut connection = ControlConnectionState::new(true, true);
+    let initialize = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"requested_role":"primary","requested_version":2,"client_name":"mez-cli","client":{"name":"mez-cli","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color"}}}}"#,
+    );
+
+    let (_, _, initialize_transition) = service
+        .handle_control_input_for_connection_transition(&initialize, 4096, &mut connection)
+        .unwrap();
+    assert!(
+        initialize_transition
+            .side_effects
+            .iter()
+            .any(|effect| matches!(effect, RuntimeSideEffect::PersistRegistry { .. }))
+    );
+
+    let view = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":"view","method":"terminal/view","params":{"client_size":{"columns":100,"rows":40}}}"#,
+    );
+    let (output, consumed, view_transition) = service
+        .handle_control_input_for_connection_transition(&view, 4096, &mut connection)
+        .unwrap();
+    let (body, _) = decode_control_frame(&output, 1024 * 1024).unwrap();
+
+    assert_eq!(consumed, view.len());
+    assert!(body.contains(r#""view""#), "{body}");
+    assert!(view_transition.side_effects.is_empty());
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies that primary detach actions issued by the attached terminal loop
 /// update the registry immediately. This covers the default prefix escape path,
 /// which mutates runtime state outside the framed control request loop and

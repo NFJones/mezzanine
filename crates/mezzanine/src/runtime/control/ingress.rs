@@ -95,9 +95,15 @@ impl RuntimeSessionService {
         max_content_length: usize,
         connection: &mut ControlConnectionState,
     ) -> Result<(Vec<u8>, usize, RuntimeTransition)> {
+        let registry_before = self.registry_update_plan();
         let (output, consumed) =
             self.handle_control_input_for_connection(input, max_content_length, connection)?;
-        Ok((output, consumed, self.registry_persistence_transition()))
+        let transition = if self.registry_update_plan() == registry_before {
+            RuntimeTransition::default()
+        } else {
+            self.registry_persistence_transition()
+        };
+        Ok((output, consumed, transition))
     }
 
     /// Runs the handle control input for connection with snapshots operation for this subsystem.
@@ -180,6 +186,7 @@ impl RuntimeSessionService {
         connection: &mut ControlConnectionState,
         snapshots: &SnapshotRepository,
     ) -> Result<(Vec<u8>, usize, RuntimeTransition)> {
+        let registry_before = self.registry_update_plan();
         let (output, consumed) = self
             .handle_control_input_for_connection_with_snapshots_async(
                 input,
@@ -188,7 +195,12 @@ impl RuntimeSessionService {
                 snapshots,
             )
             .await?;
-        Ok((output, consumed, self.registry_persistence_transition()))
+        let transition = if self.registry_update_plan() == registry_before {
+            RuntimeTransition::default()
+        } else {
+            self.registry_persistence_transition()
+        };
+        Ok((output, consumed, transition))
     }
 
     /// Prepares one control request for blocking work outside the actor turn.
