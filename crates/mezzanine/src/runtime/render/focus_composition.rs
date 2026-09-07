@@ -715,6 +715,73 @@ mod tests {
         );
     }
 
+    /// Agent input wins over a bottom label, while ordinary copy content may
+    /// be overlaid without changing the durable screen or adding frame controls
+    /// and provider work. Expiry restores the same copied content.
+    #[test]
+    fn zen_focus_composition_preserves_agent_input_copy_and_passive_suppression() {
+        let (mut service, primary) = fixture();
+        service
+            .execute_terminal_command(&primary, "new-window input-focus")
+            .unwrap();
+        let pane = service.session.active_pane_for(&primary).unwrap().clone();
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume(pane.id.as_str())
+            .unwrap();
+        service
+            .apply_attached_agent_prompt_input_for_pane(
+                &primary,
+                pane.id.as_str(),
+                b"required input",
+            )
+            .unwrap();
+        let shown = view(&mut service, &primary);
+        assert!(
+            shown
+                .lines
+                .iter()
+                .any(|line| line.contains("required input"))
+        );
+        assert!(!shown.lines[9].contains("input-focus"));
+        service
+            .agent_shell_store_mut()
+            .request_exit(pane.id.as_str())
+            .unwrap();
+        let mut screen = mez_terminal::TerminalScreen::new(pane.size, 100).unwrap();
+        screen.feed(b"copy source\x1b[10;1Hunder label");
+        let original = screen.visible_styled_lines();
+        service.set_process_pane_screen(pane.id.to_string(), screen);
+        service.ensure_active_copy_mode(pane.id.as_str()).unwrap();
+        let pending = service.pending_pane_status_provider_refresh_count_for_tests();
+        let shown = view(&mut service, &primary);
+        assert!(shown.lines[0].contains("copy source"));
+        assert!(shown.lines[9].contains("input-focus"));
+        assert_eq!(
+            service
+                .presented_pane_screen(pane.id.as_str())
+                .unwrap()
+                .visible_styled_lines(),
+            original
+        );
+        let config = service
+            .terminal_client_loop_config(TerminalClientLoopConfig::default())
+            .unwrap();
+        assert!(config.mouse_window_frame_cells.is_empty());
+        assert!(config.mouse_window_action_frame_cells.is_empty());
+        assert_eq!(
+            service.pending_pane_status_provider_refresh_count_for_tests(),
+            pending
+        );
+        service.expire_zen_focus_labels_for_client(&primary, u64::MAX);
+        let expired = view(&mut service, &primary);
+        assert!(expired.lines[9].contains("under label"));
+        assert_eq!(
+            service.session.active_pane_for(&primary).unwrap().size,
+            pane.size
+        );
+    }
+
     /// Rectangle boundary contact alone is not intersection.
     #[test]
     fn zen_focus_composition_rectangle_boundaries() {
