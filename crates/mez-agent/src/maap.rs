@@ -538,12 +538,6 @@ pub struct MaapBatch {
     /// The field summarizes why the listed actions are being pursued and is
     /// rendered once as user-visible thinking text before action execution.
     pub rationale: String,
-    /// Optional durable model-authored work note for the action batch.
-    ///
-    /// The field carries longer reasoning summaries, learned facts, or
-    /// decisions that should persist into future model context without being
-    /// rendered in normal-mode pane logs.
-    pub thought: Option<String>,
     /// Stores the turn id value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -1191,6 +1185,11 @@ fn parse_maap_action_batch_value(
     let object = value.as_object().ok_or_else(|| {
         MaapContractError::invalid_args("maap action batch must be a JSON object")
     })?;
+    if object.contains_key("thought") {
+        return Err(MaapContractError::invalid_args(
+            "maap action batch contains unsupported field thought",
+        ));
+    }
     let mut actions = required_array(object, "actions")?
         .iter()
         .enumerate()
@@ -1223,7 +1222,6 @@ fn parse_maap_action_batch_value(
             "maap field rationale must not be empty",
         ));
     }
-    let thought = optional_string(object, "thought")?.and_then(crate::sanitize_hidden_model_note);
     let turn_id = optional_string(object, "turn_id")?
         .map(str::to_string)
         .or_else(|| identity.map(|(turn_id, _)| turn_id.to_string()))
@@ -1236,7 +1234,6 @@ fn parse_maap_action_batch_value(
     Ok(MaapBatch {
         protocol,
         rationale,
-        thought,
         turn_id,
         agent_id,
         actions,

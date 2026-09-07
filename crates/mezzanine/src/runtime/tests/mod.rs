@@ -522,7 +522,6 @@ fn runtime_complete_batch_for(
     mez_agent::MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
-        thought: None,
         turn_id: turn_id.into(),
         agent_id: agent_id.into(),
         actions: vec![mez_agent::AgentAction {
@@ -737,7 +736,6 @@ fn runtime_capability_response(
         action_batch: Some(mez_agent::MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            thought: None,
             turn_id: request.turn_id.clone(),
             agent_id: request.agent_id.clone(),
             actions: vec![mez_agent::AgentAction {
@@ -853,7 +851,6 @@ fn runtime_say_response_for_agent(
         action_batch: Some(mez_agent::MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            thought: None,
             turn_id: turn_id.to_string(),
             agent_id: agent_id.to_string(),
             actions: vec![mez_agent::AgentAction {
@@ -1446,7 +1443,6 @@ fn execute_runtime_send_message_to(
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![mez_agent::AgentAction {
@@ -1518,7 +1514,6 @@ fn dispatch_protocol_test_shell_action(
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![mez_agent::AgentAction {

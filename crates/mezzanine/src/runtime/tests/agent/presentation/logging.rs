@@ -38,7 +38,6 @@ fn runtime_progress_say_chronology_reaches_provider_continuation_without_ledger(
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "record the first sequence point".to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![mez_agent::AgentAction {
@@ -158,7 +157,6 @@ fn runtime_agent_keeps_redundant_progress_say_updates_visible() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "record the owner".to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![mez_agent::AgentAction {
@@ -197,7 +195,6 @@ fn runtime_agent_keeps_redundant_progress_say_updates_visible() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: duplicate_progress.to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![

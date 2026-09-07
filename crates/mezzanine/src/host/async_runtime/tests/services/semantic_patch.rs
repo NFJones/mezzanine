@@ -145,7 +145,6 @@ async fn async_zsh_large_semantic_patch_completes_and_releases_input() {
         let batch = mez_agent::MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "exercise large acknowledged semantic patch delivery".to_string(),
-            thought: None,
             turn_id: task.turn_id.clone(),
             agent_id: task.agent_id.clone(),
             actions: vec![action.clone()],

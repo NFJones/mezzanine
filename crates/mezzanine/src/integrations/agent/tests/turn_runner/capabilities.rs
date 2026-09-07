@@ -25,7 +25,6 @@ fn turn_runner_denies_issues_capability_when_issue_tracking_disabled() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![capability_action("capability-1", AgentCapability::Issues)],
@@ -43,7 +42,6 @@ fn turn_runner_denies_issues_capability_when_issue_tracking_disabled() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "finish after denied capability".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-1", "issue tracking is disabled")],
@@ -135,7 +133,6 @@ fn turn_runner_exposes_mcp_actions_on_initial_surface_when_available() {
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "finish after checking MCP tools".to_string(),
-            thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             actions: vec![say_action("say-1", "done")],
@@ -224,7 +221,6 @@ fn turn_runner_exposes_memory_actions_on_initial_surface_when_enabled() {
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "finish after inspecting memory".to_string(),
-            thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             actions: vec![say_action("say-1", "done")],
@@ -311,7 +307,6 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![capability_action("capability-1", AgentCapability::Shell)],
@@ -329,7 +324,6 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![shell_action("shell-1")],
@@ -441,7 +435,6 @@ fn turn_runner_grants_fetch_capability_without_context_url() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![capability_action(
@@ -462,7 +455,6 @@ fn turn_runner_grants_fetch_capability_without_context_url() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-1", "hello")],

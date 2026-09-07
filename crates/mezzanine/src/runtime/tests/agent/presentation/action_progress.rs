@@ -49,7 +49,6 @@ fn running_action_progress_fixture(
                 action_batch: Some(mez_agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "exercise executor progress".to_string(),
-                    thought: None,
                     turn_id: turn.turn_id.clone(),
                     agent_id: turn.agent_id.clone(),
                     actions: vec![action.clone()],

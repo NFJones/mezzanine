@@ -84,7 +84,6 @@ fn turn_runner_recovers_mixed_capability_and_execution_batch_without_effects() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![
@@ -105,7 +104,6 @@ fn turn_runner_recovers_mixed_capability_and_execution_batch_without_effects() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-1", "Ready.")],
@@ -207,7 +205,6 @@ fn turn_runner_recovers_mixed_capability_batch_before_heredoc_validation() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![
@@ -228,7 +225,6 @@ fn turn_runner_recovers_mixed_capability_batch_before_heredoc_validation() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-1", "Ready.")],
@@ -333,7 +329,6 @@ fn turn_runner_repairs_legacy_complete_during_capability_decision() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -355,7 +350,6 @@ fn turn_runner_repairs_legacy_complete_during_capability_decision() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![capability_action("capability-1", AgentCapability::Shell)],
@@ -373,7 +367,6 @@ fn turn_runner_repairs_legacy_complete_during_capability_decision() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-1", "Ready.")],

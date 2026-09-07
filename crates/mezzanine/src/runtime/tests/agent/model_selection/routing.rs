@@ -354,7 +354,6 @@ fn routed_patch_execution(turn: &mez_agent::AgentTurnRecord) -> mez_agent::Agent
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test routed patch iteration".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![patch_action.clone()],
@@ -1077,7 +1076,6 @@ fn runtime_routed_loop_continues_in_one_worker_before_terminal_handoff() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test routed patch iteration".to_string(),
-                thought: None,
                 turn_id: first_worker_turn_id.clone(),
                 agent_id: first_worker_turn.agent_id.clone(),
                 actions: vec![patch_action.clone()],
@@ -1649,7 +1647,6 @@ fn runtime_routed_worker_joined_child_failure_recovers_parent() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "delegate joined work".to_string(),
-                thought: None,
                 turn_id: worker_turn.turn_id.clone(),
                 agent_id: worker_turn.agent_id.clone(),
                 actions: vec![spawn.clone()],
@@ -1783,7 +1780,6 @@ fn runtime_routed_worker_native_shell_survives_joined_child_wait() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "collect parallel evidence".to_string(),
-                thought: None,
                 turn_id: worker_turn.turn_id.clone(),
                 agent_id: worker_turn.agent_id.clone(),
                 actions: vec![
@@ -2151,7 +2147,6 @@ fn runtime_routed_worker_stored_dispatch_failure_presents_before_pane_close() {
                 action_batch: Some(mez_agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "exercise stored shell dispatch settlement".to_string(),
-                    thought: None,
                     turn_id: worker_turn.turn_id.clone(),
                     agent_id: worker_turn.agent_id.clone(),
                     actions: vec![action],
@@ -2242,7 +2237,6 @@ fn runtime_routed_worker_foreground_dispatch_block_recovers_parent() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "inspect with shell".to_string(),
-                thought: None,
                 turn_id: worker_turn.turn_id.clone(),
                 agent_id: worker_turn.agent_id.clone(),
                 actions: vec![action],

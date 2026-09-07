@@ -23,7 +23,6 @@ fn turn_runner_retries_malformed_provider_maap_output() {
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             actions: vec![say_action("say-1", "Corrected.")],
@@ -124,7 +123,6 @@ fn turn_runner_retries_deepseek_missing_tool_result_continuity_error() {
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             actions: vec![say_action("say-1", "Corrected DeepSeek continuity.")],
@@ -221,7 +219,6 @@ fn turn_runner_retries_missing_provider_action_batch() {
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             actions: vec![say_action("say-1", "Corrected missing batch.")],
@@ -315,7 +312,6 @@ fn turn_runner_retries_retryable_failure_summary_provider_call() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action(
@@ -407,7 +403,6 @@ fn turn_runner_routes_repair_disallowed_shell_action_through_capability_recovery
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![shell_action("shell-repair")],
@@ -425,7 +420,6 @@ fn turn_runner_routes_repair_disallowed_shell_action_through_capability_recovery
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-1", "Ready.")],
@@ -517,7 +511,6 @@ fn turn_runner_summarizes_terminal_provider_failure_with_say_only_request() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {

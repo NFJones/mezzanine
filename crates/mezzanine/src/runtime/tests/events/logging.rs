@@ -38,7 +38,6 @@ fn runtime_agent_suppresses_batch_rationale_that_duplicates_say_text() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: format!("thinking: {visible}"),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![mez_agent::AgentAction {
@@ -124,7 +123,6 @@ fn runtime_agent_verbose_mode_injects_low_level_status_lines() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![mez_agent::AgentAction {
@@ -214,7 +212,6 @@ fn runtime_agent_thinking_mode_injects_action_rationales() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![mez_agent::AgentAction {
@@ -300,7 +297,6 @@ fn runtime_agent_trace_mode_prints_maap_request_response_and_results() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![mez_agent::AgentAction {
@@ -399,7 +395,6 @@ fn runtime_agent_debug_mode_prints_maap_without_shell_view() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![mez_agent::AgentAction {
@@ -497,7 +492,6 @@ fn runtime_agent_continues_from_assistant_chronology_without_rationale_ledger() 
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "Check exact selector owner".to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![mez_agent::AgentAction {
@@ -535,7 +529,6 @@ fn runtime_agent_continues_from_assistant_chronology_without_rationale_ledger() 
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "Check exact selector owner".to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![mez_agent::AgentAction {
@@ -598,113 +591,4 @@ fn runtime_agent_continues_from_assistant_chronology_without_rationale_ledger() 
         "{pane_text}"
     );
     service.terminate_all_pane_processes().unwrap();
-}
-
-/// Verifies batch thoughts are durable context notes, not normal-mode pane
-/// chatter.
-///
-/// A model can emit a longer `thought` when that note should help future turns,
-/// but normal users should not see that long-form internal context in routine
-/// logs. Verbose-or-higher logs still render it as `thinking:` text for
-/// diagnostics.
-#[test]
-fn runtime_batch_thought_is_hidden_until_verbose_logging() {
-    fn pane_text_after_thought_response(level: AgentLogLevel, thought: &str) -> String {
-        let mut service = test_runtime_service();
-        let primary = service
-            .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-            .unwrap();
-        let mut screen = TerminalScreen::new(Size::new(80, 10).unwrap(), 30).unwrap();
-        screen.feed(b"ready\n");
-        service.set_pane_screen("%1".to_string(), screen);
-        service
-            .agent_shell_store_mut()
-            .enter_or_resume("%1")
-            .unwrap();
-        service
-            .agent_shell_store_mut()
-            .set_log_level("%1", level)
-            .unwrap();
-        let start = service.dispatch_runtime_control_body(
-            r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-thought-display","input":"respond with durable context"}}"#,
-            &primary,
-        );
-        assert!(start.contains(r#""state":"running""#), "{start}");
-        let provider = RuntimeBatchProvider {
-            response: mez_agent::ModelResponse {
-                provider: "runtime-batch".to_string(),
-                model: "test".to_string(),
-                raw_text: "done".to_string(),
-                usage: Default::default(),
-                latest_request_usage: None,
-                quota_usage: Default::default(),
-                action_batch: Some(mez_agent::MaapBatch {
-                    protocol: "maap/1".to_string(),
-                    rationale: "respond with the final message".to_string(),
-                    thought: Some(thought.to_string()),
-                    turn_id: "turn-1".to_string(),
-                    agent_id: "agent-%1".to_string(),
-                    actions: vec![mez_agent::AgentAction {
-                        id: "say-final".to_string(),
-                        rationale: String::new(),
-                        payload: mez_agent::AgentActionPayload::Say {
-                            status: mez_agent::SayStatus::Final,
-                            text: "Done.".to_string(),
-                            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
-                                .to_string(),
-                        },
-                    }],
-                    final_turn: true,
-                }),
-                provider_transcript_events: Vec::new(),
-            },
-        };
-        service
-            .execute_agent_turn_with_provider(
-                "turn-1",
-                &provider,
-                runtime_model_profile("runtime-batch", "test"),
-            )
-            .unwrap();
-        let pane_text = service
-            .pane_screen("%1")
-            .unwrap()
-            .normal_content_lines()
-            .join("\n");
-        service.terminate_all_pane_processes().unwrap();
-        pane_text
-    }
-
-    let normal_text = pane_text_after_thought_response(
-        AgentLogLevel::Normal,
-        "The durable note should only be visible in verbose logs.",
-    );
-    assert!(
-        normal_text.contains("thinking: respond with the final message"),
-        "{normal_text}"
-    );
-    assert!(!normal_text.contains("durable note"), "{normal_text}");
-    assert!(normal_text.contains("Done."), "{normal_text}");
-
-    let verbose_text = pane_text_after_thought_response(
-        AgentLogLevel::Verbose,
-        "The durable note should only be visible in verbose logs.",
-    );
-    assert!(
-        verbose_text.contains("thinking: respond with the final message"),
-        "{verbose_text}"
-    );
-    assert!(
-        verbose_text.contains("thinking: The durable note should only be visible"),
-        "{verbose_text}"
-    );
-    assert!(verbose_text.contains("Done."), "{verbose_text}");
-
-    let secret_text = pane_text_after_thought_response(
-        AgentLogLevel::Verbose,
-        "access_token = sk-hidden-presentation-secret",
-    );
-    assert!(!secret_text.contains("sk-hidden-presentation-secret"));
-    assert!(!secret_text.contains("thinking: access_token"));
-    assert!(secret_text.contains("Done."), "{secret_text}");
 }

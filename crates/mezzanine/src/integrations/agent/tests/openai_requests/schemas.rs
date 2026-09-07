@@ -641,7 +641,7 @@ fn openai_responses_request_body_exposes_static_execution_action_catalog() {
     assert_eq!(value["tool_choice"]["name"], "submit_maap_action_batch");
     assert_eq!(
         shell_tool["parameters"]["required"],
-        serde_json::json!(["rationale", "thought", "actions"])
+        serde_json::json!(["rationale", "actions"])
     );
     let shell_description = shell_tool["description"].as_str().unwrap();
     assert!(shell_description.contains("Return a function call, not prose"));

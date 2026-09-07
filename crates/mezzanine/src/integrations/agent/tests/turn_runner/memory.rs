@@ -24,7 +24,6 @@ fn turn_runner_accepts_memory_search_with_matched_mcp_available() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "search durable prior context about required function call compliance regressions".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![memory_search_action("memory-search-1")],
@@ -125,7 +124,6 @@ fn turn_runner_accepts_memory_store_after_prior_store_context() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "try one more memory store".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![memory_store_action("memory-store-2")],
@@ -218,7 +216,6 @@ fn turn_runner_accepts_memory_store_for_runtime_execution() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "store the requested memory".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -313,7 +310,6 @@ fn turn_runner_counts_prior_memory_search_results_from_context() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "try one more memory search".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![memory_search_action("memory-search-3")],
@@ -421,7 +417,6 @@ fn turn_runner_skips_memory_search_used_as_action_wrapper_placeholder() {
                 rationale:
                     "Complying with a required immediate current-actions call before proceeding"
                         .to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![
@@ -525,7 +520,6 @@ fn turn_runner_skips_memory_searches_after_per_turn_limit() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "try repeated memory searches".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![

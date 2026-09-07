@@ -928,7 +928,6 @@ fn runtime_streaming_say_promotes_rich_output_without_replay() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: String::new(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![action],
@@ -1155,7 +1154,6 @@ async fn runtime_streaming_say_completion_does_not_append_final_duplicate() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: rationale.to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![action.clone()],
@@ -1510,7 +1508,6 @@ fn runtime_streaming_rationale_and_command_match_static_projection_and_restore()
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: rationale.to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![mez_agent::AgentAction {
@@ -1654,7 +1651,6 @@ fn runtime_streaming_summary_and_web_header_match_static_projection_and_restore(
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: String::new(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![action],
@@ -1782,7 +1778,6 @@ async fn runtime_streaming_command_completion_promotes_without_full_redraw() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: rationale.to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![action.clone()],
@@ -2539,7 +2534,6 @@ fn runtime_streaming_say_is_untruncated_and_mismatch_restores_baseline() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: String::new(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![action],
@@ -4547,7 +4541,6 @@ fn runtime_provider_markdown_table_persists_and_reprojects_after_resize() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "render the requested table".to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![mez_agent::AgentAction {

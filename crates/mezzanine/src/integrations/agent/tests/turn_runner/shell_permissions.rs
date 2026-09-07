@@ -24,7 +24,6 @@ fn turn_runner_accepts_allowed_shell_actions() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![shell_action("a1")],
@@ -102,7 +101,6 @@ fn turn_runner_accepts_ls_declared_as_current_directory_read() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -191,7 +189,6 @@ fn turn_runner_auto_allows_prompted_shell_actions_from_rationale() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -281,7 +278,6 @@ fn turn_runner_blocks_shell_actions_requiring_approval() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -369,7 +365,6 @@ fn turn_runner_allows_shell_actions_with_canonical_scope_escape() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -470,7 +465,6 @@ fn turn_runner_blocks_unknown_classified_shell_actions_without_declared_effect_f
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -561,7 +555,6 @@ fn turn_runner_executes_allowed_shell_actions_and_records_output() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![shell_action("a1")],
@@ -654,7 +647,6 @@ fn turn_runner_full_access_allows_out_of_scope_subagent_apply_patch() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -745,7 +737,6 @@ fn turn_runner_full_access_allows_out_of_scope_subagent_shell_command() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -836,7 +827,6 @@ fn turn_runner_keeps_final_shell_action_running_until_observed() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![shell_action("a1")],
@@ -909,7 +899,6 @@ fn turn_runner_routes_shell_actions_through_approval_policy_without_model_effect
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -992,7 +981,6 @@ fn turn_runner_routes_subagent_unknown_shell_actions_through_approval_policy() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -1083,7 +1071,6 @@ fn turn_runner_runs_prompted_shell_actions_with_auto_allow_assertion() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {

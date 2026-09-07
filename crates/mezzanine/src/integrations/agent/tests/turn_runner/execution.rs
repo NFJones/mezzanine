@@ -25,7 +25,6 @@ fn turn_runner_accepts_config_change_with_full_access_and_bypass() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "change the requested live setting".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![config_change_action("config-1")],
@@ -111,7 +110,6 @@ fn turn_runner_accepts_multiple_capability_requests_in_one_batch() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![
@@ -133,7 +131,6 @@ fn turn_runner_accepts_multiple_capability_requests_in_one_batch() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-2", "Ready to proceed.")],
@@ -224,7 +221,6 @@ fn turn_runner_accepts_say_with_capability_request() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![
@@ -245,7 +241,6 @@ fn turn_runner_accepts_say_with_capability_request() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![shell_action("shell-1")],
@@ -334,7 +329,6 @@ fn turn_runner_keeps_skill_actions_suppressed_after_capability_request() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![capability_action("capability-1", AgentCapability::Shell)],
@@ -352,7 +346,6 @@ fn turn_runner_keeps_skill_actions_suppressed_after_capability_request() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "finish after capability grant".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-1", "done")],
@@ -452,7 +445,6 @@ fn turn_runner_plans_codex_style_apply_patch_after_capability_request() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![capability_action("capability-1", AgentCapability::Shell)],
@@ -471,7 +463,6 @@ fn turn_runner_plans_codex_style_apply_patch_after_capability_request() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {

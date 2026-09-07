@@ -1447,7 +1447,6 @@ mod tests {
         validation_failure.response.action_batch = Some(MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "invalid call".to_string(),
-            thought: None,
             turn_id: "turn-1".to_string(),
             agent_id: "agent-1".to_string(),
             actions: vec![shell_action()],
@@ -1579,7 +1578,6 @@ mod tests {
         execution.response.action_batch = Some(MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "Update the file".to_string(),
-            thought: None,
             turn_id: "turn-1".to_string(),
             agent_id: "agent-1".to_string(),
             actions: vec![AgentAction {
@@ -1625,7 +1623,6 @@ mod tests {
         let batch = MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "thinking:  Ready   to continue".to_string(),
-            thought: None,
             turn_id: "turn-1".to_string(),
             agent_id: "agent-1".to_string(),
             actions: vec![AgentAction {

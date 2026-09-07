@@ -828,7 +828,6 @@ mod tests {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "request capability".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -857,7 +856,6 @@ mod tests {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "finish the task".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -1112,7 +1110,6 @@ mod tests {
                 action_batch: Some(MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "finish the task".to_string(),
-                    thought: None,
                     turn_id: turn.turn_id.clone(),
                     agent_id: turn.agent_id.clone(),
                     actions: vec![action],

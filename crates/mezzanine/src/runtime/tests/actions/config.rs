@@ -790,7 +790,6 @@ fn runtime_config_change_duplicate_success_terminates_continuation() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "apply the requested configuration".to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![mez_agent::AgentAction {
@@ -1031,7 +1030,6 @@ fn runtime_config_change_duplicate_waits_for_sibling_shell_action() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "set the requested history limit".to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![mez_agent::AgentAction {
@@ -1071,7 +1069,6 @@ fn runtime_config_change_duplicate_waits_for_sibling_shell_action() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "repeat config and run the requested command".to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![
@@ -1173,7 +1170,6 @@ fn runtime_batched_config_change_duplicates_terminate_without_reload() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "set theme aliases in one batch".to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: [("primary", "#112233"), ("secondary", "#445566")]
@@ -1387,7 +1383,6 @@ fn runtime_agent_config_change_batches_broad_theme_palette() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "set every terminal theme color".to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions,
@@ -1523,7 +1518,6 @@ fn runtime_config_change_resumes_after_full_access_change() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "change the requested live configuration".to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![mez_agent::AgentAction {

@@ -46,7 +46,7 @@ impl OpenAiMaapToolSurface {
     const FUNCTION_CALL_DISCIPLINE: &str = "Return a function call, not prose.";
     /// Shared provider-local instruction that treats the function call as the
     /// current action envelope rather than a separate setup step.
-    const ACTION_BATCH_ENVELOPE_RULE: &str = "The function call is only the transport envelope for the action batch, not a prerequisite task step; do not emit a say-only or progress batch claiming that an initial or schema-valid batch is needed before the executable action, and do not put required-function-call compliance language in rationale or thought fields. If an executable action is available and useful, put that action in this function call now.";
+    const ACTION_BATCH_ENVELOPE_RULE: &str = "The function call is only the transport envelope for the action batch, not a prerequisite task step; do not emit a say-only or progress batch claiming that an initial or schema-valid batch is needed before the executable action, and do not put required-function-call compliance language in the batch rationale. If an executable action is available and useful, put that action in this function call now.";
     /// Shared anti-pattern corrections for provider-local MAAP tool descriptions.
     const ANTI_EXAMPLES: &str = "Wrong: *** Replace File. Right: *** Update File with anchored hunks. Wrong: inferred apply_patch old context. Right: copy old/context lines verbatim from read file evidence.";
 
@@ -102,7 +102,7 @@ pub fn maap_cache_stable_action_batch_description() -> String {
 /// Builds shared MAAP tool guidance with the selected MCP routing contract.
 fn maap_action_batch_description_with_mcp_manifest(mcp_manifest: &str) -> String {
     format!(
-        "Submit one validated Mezzanine MAAP action batch. {} {} The schema is a static catalog of every valid action; runtime configuration determines which catalog actions are enabled and runtime validation rejects disabled actions, unavailable integrations, or invalid arguments. Use only action objects in this function schema and use enabled actions directly without capability negotiation. The function call is only the transport envelope for the chosen action batch, not a prerequisite task step; do not put required-function-call or schema-wrapper compliance language in rationale or thought fields. Choose the smallest action that makes concrete progress: direct inspection or execution beats placeholder setup. If an executable action is useful, put that action in this function call now. Safely gather task-local facts from current context, action results, local artifacts, web results, MCP results, or another enabled action instead of asking the user. Do not ask for identifiers, URLs, versions, paths, command forms, config names, repository metadata, or CI targets when they can be safely discovered. Do not use memory actions to rehydrate facts already present in current action results. Model-selected skill lookup/loading and capability negotiation are not valid actions. {} {}",
+        "Submit one validated Mezzanine MAAP action batch. {} {} The schema is a static catalog of every valid action; runtime configuration determines which catalog actions are enabled and runtime validation rejects disabled actions, unavailable integrations, or invalid arguments. Use only action objects in this function schema and use enabled actions directly without capability negotiation. The function call is only the transport envelope for the chosen action batch, not a prerequisite task step; do not put required-function-call or schema-wrapper compliance language in the batch rationale. Choose the smallest action that makes concrete progress: direct inspection or execution beats placeholder setup. If an executable action is useful, put that action in this function call now. Safely gather task-local facts from current context, action results, local artifacts, web results, MCP results, or another enabled action instead of asking the user. Do not ask for identifiers, URLs, versions, paths, command forms, config names, repository metadata, or CI targets when they can be safely discovered. Do not use memory actions to rehydrate facts already present in current action results. Model-selected skill lookup/loading and capability negotiation are not valid actions. {} {}",
         OpenAiMaapToolSurface::FUNCTION_CALL_DISCIPLINE,
         OpenAiMaapToolSurface::ACTION_BATCH_ENVELOPE_RULE,
         mcp_manifest,
@@ -127,10 +127,6 @@ pub fn maap_action_batch_schema(
                 "minLength": 1,
                 "description": "Terse additive reason these actions are next. Name why the selected action directly advances the user task. Do not say you are complying with a required function call, tool call, current-actions call, schema wrapper, or action wrapper. Do not restate the user request, prior rationale, progress say, or action summaries."
             },
-            "thought": {
-                "type": ["string", "null"],
-                "description": "Optional longer durable work note for future context. Use only for substantive learning, decisions, invariants, or recovery details; otherwise null. Do not include secrets or private chain-of-thought."
-            },
             "actions": {
                 "type": "array",
                 "minItems": 1,
@@ -138,7 +134,7 @@ pub fn maap_action_batch_schema(
                 "items": maap_action_schema()
             }
         },
-        "required": ["rationale", "thought", "actions"],
+        "required": ["rationale", "actions"],
         "additionalProperties": false
     })
 }

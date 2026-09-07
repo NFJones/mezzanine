@@ -328,7 +328,6 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
     let response_batch = mez_agent::MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
-        thought: None,
         turn_id: task.turn_id.clone(),
         agent_id: task.agent_id.clone(),
         actions: vec![action.clone()],

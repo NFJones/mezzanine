@@ -184,7 +184,6 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![success_action.clone(), failed_action.clone()],

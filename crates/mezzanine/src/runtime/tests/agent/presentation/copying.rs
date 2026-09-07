@@ -169,7 +169,6 @@ fn runtime_agent_shell_copy_writes_latest_say_text_to_destinations() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![
@@ -349,7 +348,6 @@ fn runtime_agent_copy_trace_log_retains_hidden_trace_and_writes_destinations() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![mez_agent::AgentAction {
@@ -586,7 +584,6 @@ fn runtime_agent_copy_patches_writes_retained_patches_to_destinations() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![action],
@@ -710,7 +707,6 @@ fn runtime_agent_copy_patches_retains_reused_action_id_attempts() {
                 action_batch: Some(mez_agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "test action batch rationale".to_string(),
-                    thought: None,
                     turn_id: turn.turn_id.clone(),
                     agent_id: turn.agent_id.clone(),
                     actions: vec![mez_agent::AgentAction {

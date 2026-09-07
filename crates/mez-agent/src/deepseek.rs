@@ -450,32 +450,11 @@ fn deepseek_reasoning_effort(effort: &str) -> &'static str {
 }
 
 /// Builds the DeepSeek MAAP argument schema.
-///
-/// DeepSeek strict tool schema enforcement is beta-only, and the default
-/// endpoint treats function parameters as guidance that the model may still
-/// violate. The shared OpenAI schema advertises the optional `thought` field
-/// as required for strict-schema compliance, but that extra nullable field
-/// makes DeepSeek more likely to spend output budget on non-action prose or
-/// emit a partially cut JSON object. DeepSeek still accepts `thought` if it is
-/// returned, but the provider-specific schema keeps the advertised surface to
-/// the fields needed to execute the next action batch.
 fn deepseek_maap_action_batch_schema(
     allowed_actions: &AllowedActionSet,
     available_mcp_tools: &[McpPromptTool],
 ) -> serde_json::Value {
     let mut schema = maap_action_batch_schema(allowed_actions, available_mcp_tools);
-    if let Some(properties) = schema
-        .get_mut("properties")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        properties.remove("thought");
-    }
-    if let Some(required) = schema
-        .get_mut("required")
-        .and_then(serde_json::Value::as_array_mut)
-    {
-        required.retain(|field| field.as_str() != Some("thought"));
-    }
     deepseek_prune_unsupported_schema_keywords(&mut schema);
     deepseek_replace_apply_patch_description(&mut schema);
     schema

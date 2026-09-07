@@ -222,7 +222,6 @@ fn maap_batch_accepts_nonfinal_say_only_actions() {
     let batch = MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
-        thought: None,
         turn_id: "turn-1".to_string(),
         agent_id: "agent-1".to_string(),
         actions: vec![AgentAction {
@@ -291,7 +290,6 @@ fn maap_batch_rejects_duplicate_action_ids() {
     let batch = MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
-        thought: None,
         turn_id: "turn-1".to_string(),
         agent_id: "agent-1".to_string(),
         actions: vec![shell_action("a1"), shell_action("a1")],
@@ -312,7 +310,6 @@ fn maap_batch_rejects_empty_batch_rationale() {
     let batch = MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "   ".to_string(),
-        thought: None,
         turn_id: "turn-1".to_string(),
         agent_id: "agent-1".to_string(),
         actions: vec![shell_action("a1")],
@@ -336,7 +333,6 @@ fn maap_batch_rejects_empty_shell_command_summary() {
     let batch = MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
-        thought: None,
         turn_id: "turn-1".to_string(),
         agent_id: "agent-1".to_string(),
         actions: vec![action],
@@ -402,7 +398,6 @@ fn maap_batch_rejects_unavailable_mcp_server() {
     let batch = MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
-        thought: None,
         turn_id: "turn-1".to_string(),
         agent_id: "agent-1".to_string(),
         actions: vec![AgentAction {
@@ -431,7 +426,6 @@ fn maap_batch_rejects_unavailable_mcp_tool() {
     let batch = MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
-        thought: None,
         turn_id: "turn-1".to_string(),
         agent_id: "agent-1".to_string(),
         actions: vec![AgentAction {
@@ -478,7 +472,6 @@ fn maap_batch_rejects_zero_shell_command_timeout() {
     let batch = MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
-        thought: None,
         turn_id: "turn-1".to_string(),
         agent_id: "agent-1".to_string(),
         actions: vec![action],
@@ -539,9 +532,9 @@ fn maap_batch_validates_issue_query_limit_bounds() {
 }
 
 #[test]
-/// Verifies compact provider-native MAAP output can carry an optional durable
-/// thought field without making it part of the required compact envelope.
-fn maap_parser_accepts_optional_batch_thought() {
+/// Verifies compact provider-native MAAP output rejects the removed batch
+/// thought field instead of retaining non-action model notes.
+fn maap_parser_rejects_removed_batch_thought() {
     let raw_text = serde_json::json!({
         "rationale": "test action batch rationale",
         "thought": "  The display path is separate from durable context.  \nUse verbose logs only.",
@@ -555,13 +548,12 @@ fn maap_parser_accepts_optional_batch_thought() {
     })
     .to_string();
 
-    let batch = parse_maap_action_batch_json_for_turn(&raw_text, "turn-1", "agent-1").unwrap();
+    let error = parse_maap_action_batch_json_for_turn(&raw_text, "turn-1", "agent-1").unwrap_err();
 
     assert_eq!(
-        batch.thought.as_deref(),
-        Some("The display path is separate from durable context.  \nUse verbose logs only.")
+        error.message(),
+        "maap action batch contains unsupported field thought"
     );
-    batch.validate(&turn(), &[], &[]).unwrap();
 }
 
 #[test]
@@ -585,7 +577,6 @@ fn maap_parser_fills_compact_provider_defaults() {
 
     assert_eq!(batch.protocol, "maap/1");
     assert_eq!(batch.rationale, "test action batch rationale");
-    assert_eq!(batch.thought, None);
     assert_eq!(batch.turn_id, "turn-1");
     assert_eq!(batch.agent_id, "agent-1");
     assert!(!batch.final_turn);

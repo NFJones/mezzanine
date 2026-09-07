@@ -444,7 +444,6 @@ fn runtime_explicit_skill_prompt_rejects_redundant_call_skill_loop() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "load skill authoring context".to_string(),
-                thought: None,
                 turn_id: started.turn_id.clone(),
                 agent_id: started.agent_id.clone(),
                 actions: vec![mez_agent::AgentAction {
@@ -541,7 +540,6 @@ fn runtime_explicit_skill_prompt_rejects_redundant_skill_catalog_lookup() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "check available skill workflows".to_string(),
-                thought: None,
                 turn_id: started.turn_id.clone(),
                 agent_id: started.agent_id.clone(),
                 actions: vec![mez_agent::AgentAction {

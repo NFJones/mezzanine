@@ -215,7 +215,6 @@ fn native_shell_provider_execution(
     let response_batch = mez_agent::MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test native worker liveness".to_string(),
-        thought: None,
         turn_id: task.turn_id.clone(),
         agent_id: task.agent_id.clone(),
         actions: vec![action.clone()],
@@ -500,7 +499,6 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
     let response_batch = mez_agent::MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
-        thought: None,
         turn_id: task.turn_id.clone(),
         agent_id: task.agent_id.clone(),
         actions: vec![action.clone()],
@@ -684,7 +682,6 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
     let response_batch = mez_agent::MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
-        thought: None,
         turn_id: task.turn_id.clone(),
         agent_id: task.agent_id.clone(),
         actions: vec![batch_action],
@@ -1378,7 +1375,6 @@ async fn assert_routed_subagent_settles_after_in_place_selection(
             } else if request_index == 1 {
                 let content = serde_json::json!({
                     "rationale": "request the sandbox action surface",
-                    "thought": null,
                     "actions": [{
                         "type": "request_capability",
                         "capability": "shell",
@@ -1395,7 +1391,6 @@ async fn assert_routed_subagent_settles_after_in_place_selection(
             } else if request_index == 2 {
                 let content = serde_json::json!({
                     "rationale": "exercise the routed subagent sandbox",
-                    "thought": null,
                     "actions": [{
                         "type": "shell_command",
                         "summary": "Print the routed sandbox marker.",
@@ -1412,7 +1407,6 @@ async fn assert_routed_subagent_settles_after_in_place_selection(
             } else {
                 let content = serde_json::json!({
                     "rationale": "complete the routed subagent turn",
-                    "thought": null,
                     "actions": [{
                         "type": "say",
                         "status": "final",

@@ -55,9 +55,8 @@ impl MemoryActionBudget {
         turn: &(impl AgentTurnResultIdentity + ?Sized),
         action: &AgentAction,
         batch_rationale: &str,
-        batch_thought: Option<&str>,
     ) -> Option<ActionResult> {
-        if memory_action_is_wrapper_placeholder(action, batch_rationale, batch_thought) {
+        if memory_action_is_wrapper_placeholder(action, batch_rationale) {
             return Some(memory_budget_skip_result(
                 turn,
                 action,
@@ -125,11 +124,7 @@ fn memory_budget_skip_result(
 /// memory lookup or store. The match requires both wrapper terminology and
 /// compliance/setup language so ordinary memory searches about prompt behavior
 /// are not rejected merely for mentioning a function call.
-fn memory_action_is_wrapper_placeholder(
-    action: &AgentAction,
-    batch_rationale: &str,
-    batch_thought: Option<&str>,
-) -> bool {
+fn memory_action_is_wrapper_placeholder(action: &AgentAction, batch_rationale: &str) -> bool {
     if !matches!(
         action.payload,
         AgentActionPayload::MemorySearch { .. } | AgentActionPayload::MemoryStore { .. }
@@ -139,10 +134,6 @@ fn memory_action_is_wrapper_placeholder(
     let mut text = String::new();
     text.push_str(batch_rationale);
     text.push('\n');
-    if let Some(batch_thought) = batch_thought {
-        text.push_str(batch_thought);
-        text.push('\n');
-    }
     text.push_str(&action.rationale);
     memory_placeholder_text_mentions_wrapper_compliance(&text)
 }
@@ -273,7 +264,6 @@ mod tests {
                 &TestTurn,
                 &memory_search("memory-3", "search prior context"),
                 "",
-                None,
             )
             .expect("third memory search should be skipped");
 
@@ -299,7 +289,7 @@ mod tests {
         );
 
         let skipped = budget
-            .accept_or_skip(&TestTurn, &placeholder, "schema wrapper prerequisite", None)
+            .accept_or_skip(&TestTurn, &placeholder, "schema wrapper prerequisite")
             .expect("wrapper placeholder should be skipped");
         assert!(
             skipped
@@ -309,32 +299,17 @@ mod tests {
         );
         assert!(
             budget
-                .accept_or_skip(
-                    &TestTurn,
-                    &memory_search("one", "find prior decision"),
-                    "",
-                    None
-                )
+                .accept_or_skip(&TestTurn, &memory_search("one", "find prior decision"), "")
                 .is_none()
         );
         assert!(
             budget
-                .accept_or_skip(
-                    &TestTurn,
-                    &memory_search("two", "find prior invariant"),
-                    "",
-                    None
-                )
+                .accept_or_skip(&TestTurn, &memory_search("two", "find prior invariant"), "")
                 .is_none()
         );
         assert!(
             budget
-                .accept_or_skip(
-                    &TestTurn,
-                    &memory_search("three", "find prior detail"),
-                    "",
-                    None
-                )
+                .accept_or_skip(&TestTurn, &memory_search("three", "find prior detail"), "")
                 .is_some()
         );
     }
@@ -358,27 +333,17 @@ mod tests {
 
         assert!(
             budget
-                .accept_or_skip(&TestTurn, &action, "action wrapper placeholder", None)
+                .accept_or_skip(&TestTurn, &action, "action wrapper placeholder")
                 .is_none()
         );
         assert!(
             budget
-                .accept_or_skip(
-                    &TestTurn,
-                    &memory_search("one", "find prior decision"),
-                    "",
-                    None
-                )
+                .accept_or_skip(&TestTurn, &memory_search("one", "find prior decision"), "")
                 .is_none()
         );
         assert!(
             budget
-                .accept_or_skip(
-                    &TestTurn,
-                    &memory_search("two", "find prior invariant"),
-                    "",
-                    None
-                )
+                .accept_or_skip(&TestTurn, &memory_search("two", "find prior invariant"), "")
                 .is_none()
         );
     }

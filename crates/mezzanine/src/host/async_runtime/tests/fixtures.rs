@@ -940,7 +940,6 @@ pub(super) async fn async_provider_concurrency_write_chat_response(
 ) {
     let content = serde_json::json!({
         "rationale": "provider concurrency fixture completed the turn",
-        "thought": null,
         "actions": [
             {
                 "type": "say",

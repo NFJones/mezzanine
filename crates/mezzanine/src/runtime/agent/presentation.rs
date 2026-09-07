@@ -171,14 +171,6 @@ impl RuntimeSessionService {
         if batch_rationale_was_presented {
             self.append_agent_thinking_text_to_terminal_buffer(pane_id, batch.rationale.trim())?;
         }
-        if self.agent_verbose_enabled(pane_id)
-            && let Some(thought) = batch
-                .thought
-                .as_deref()
-                .and_then(mez_agent::sanitize_hidden_model_note)
-        {
-            self.append_agent_thinking_text_to_terminal_buffer(pane_id, &thought)?;
-        }
         let mut emitted_user_visible_action = false;
         let mut pending_runtime_visible_action = false;
         let mut emitted_action_rationale_keys = BTreeSet::new();
@@ -546,7 +538,6 @@ mod tests {
                 action_batch: Some(MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "inspect the target files".to_string(),
-                    thought: None,
                     turn_id: "turn-2".to_string(),
                     agent_id: "agent-1".to_string(),
                     actions: Vec::new(),

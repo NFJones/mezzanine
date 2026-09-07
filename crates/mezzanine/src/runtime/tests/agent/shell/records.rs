@@ -2542,7 +2542,6 @@ fn runtime_agent_shell_show_approvals_closes_while_external_action_is_queued() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "fetch the requested release notes".to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![mez_agent::AgentAction {

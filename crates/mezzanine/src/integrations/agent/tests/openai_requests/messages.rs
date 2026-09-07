@@ -68,7 +68,7 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         .unwrap();
     assert_eq!(
         capability_tool["parameters"]["required"],
-        serde_json::json!(["rationale", "thought", "actions"])
+        serde_json::json!(["rationale", "actions"])
     );
     let capability_description = capability_tool["description"].as_str().unwrap();
     assert!(capability_description.contains("Return a function call, not prose"));
@@ -83,7 +83,7 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert!(capability_description.contains("without capability negotiation"));
     assert!(!capability_description.contains("request_capability(capability=\"shell\""));
     assert!(schema_properties.contains_key("rationale"));
-    assert!(schema_properties.contains_key("thought"));
+    assert!(!schema_properties.contains_key("thought"));
     assert!(!schema_properties.contains_key("protocol"));
     assert!(!schema_properties.contains_key("turn_id"));
     assert!(!schema_properties.contains_key("agent_id"));
@@ -91,10 +91,6 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert_eq!(
         capability_tool["parameters"]["properties"]["rationale"]["minLength"],
         1
-    );
-    assert_eq!(
-        capability_tool["parameters"]["properties"]["thought"]["type"],
-        serde_json::json!(["string", "null"])
     );
     let rationale_description =
         capability_tool["parameters"]["properties"]["rationale"]["description"]
@@ -109,36 +105,9 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert!(rationale_description.contains("Do not restate the user request"));
     assert!(rationale_description.contains("prior rationale"));
     assert!(rationale_description.contains("progress say"));
-    let thought_description = capability_tool["parameters"]["properties"]["thought"]["description"]
-        .as_str()
-        .unwrap();
-    assert!(
-        thought_description.contains("Optional longer durable work note"),
-        "{thought_description}"
-    );
-    assert!(
-        thought_description.contains("Use only for substantive learning"),
-        "{thought_description}"
-    );
-    assert!(
-        thought_description.contains("future context"),
-        "{thought_description}"
-    );
-    assert!(
-        thought_description.contains("Do not include secrets"),
-        "{thought_description}"
-    );
-    assert!(
-        thought_description.contains("private chain-of-thought"),
-        "{thought_description}"
-    );
     assert!(
         rationale_description.len() < 420,
         "batch rationale schema should stay compact: {rationale_description}"
-    );
-    assert!(
-        thought_description.len() < 320,
-        "thought schema should stay compact: {thought_description}"
     );
     assert_eq!(
         openai_tool_action_schemas(capability_tool).len(),

@@ -1349,7 +1349,6 @@ fn sandbox_fallback_execution_service() -> (RuntimeSessionService, String, Strin
                 action_batch: Some(mez_agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "exercise sandbox fallback".to_string(),
-                    thought: None,
                     turn_id: turn.turn_id.clone(),
                     agent_id: turn.agent_id.clone(),
                     actions: vec![action],

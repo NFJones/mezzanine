@@ -274,7 +274,6 @@ impl RuntimeSessionService {
         let batch = MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "send first macro step".to_string(),
-            thought: None,
             turn_id: parent_turn.turn_id.clone(),
             agent_id: parent_turn.agent_id.clone(),
             actions: vec![action],

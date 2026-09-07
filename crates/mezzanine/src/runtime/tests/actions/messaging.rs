@@ -725,7 +725,6 @@ fn runtime_spawned_child_corrects_parent_recipient_without_replaying_sibling() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "delegate the messaging task".to_string(),
-                thought: None,
                 turn_id: parent.turn_id.clone(),
                 agent_id: parent.agent_id.clone(),
                 actions: vec![runtime_spawn_agent_action(
@@ -773,7 +772,6 @@ fn runtime_spawned_child_corrects_parent_recipient_without_replaying_sibling() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "send the completed sibling before the parent handoff".to_string(),
-                thought: None,
                 turn_id: child.turn_id.clone(),
                 agent_id: child.agent_id.clone(),
                 actions: vec![
@@ -850,7 +848,6 @@ fn runtime_spawned_child_corrects_parent_recipient_without_replaying_sibling() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "deliver the corrected parent handoff".to_string(),
-                thought: None,
                 turn_id: child.turn_id.clone(),
                 agent_id: child.agent_id.clone(),
                 actions: vec![send_action(

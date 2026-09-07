@@ -317,7 +317,6 @@ fn runtime_agent_macro_routed_loop_resolves_after_in_place_execution() {
                 action_batch: Some(mez_agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "return the routed result".to_string(),
-                    thought: None,
                     turn_id: turn.turn_id.clone(),
                     agent_id: turn.agent_id.clone(),
                     actions: vec![action.clone()],
@@ -1051,7 +1050,6 @@ fn runtime_joined_child_failure_without_shell_session_settles_parent() {
                 action_batch: Some(mez_agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "test macro action batch".to_string(),
-                    thought: None,
                     turn_id: parent.turn_id.clone(),
                     agent_id: parent.agent_id.clone(),
                     actions: vec![action.clone()],

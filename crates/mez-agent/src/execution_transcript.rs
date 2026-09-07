@@ -165,9 +165,9 @@ fn provider_tool_result_content_for_execution(execution: &AgentTurnExecution) ->
 ///
 /// The returned text is the same assistant content durable transcript storage
 /// persists for the execution. It preserves the complete model-authored causal
-/// response: batch rationale, durable thought, action-local rationale, visible
-/// conversational text, and bounded action summaries. Raw protocol JSON and
-/// inline action payloads remain excluded.
+/// response: batch rationale, action-local rationale, visible conversational
+/// text, and bounded action summaries. Raw protocol JSON and inline action
+/// payloads remain excluded.
 pub fn assistant_context_content_for_execution(execution: &AgentTurnExecution) -> String {
     assistant_transcript_content(execution)
 }
@@ -238,7 +238,6 @@ fn assistant_transcript_content(execution: &AgentTurnExecution) -> String {
         };
     };
     let mut lines = assistant_transcript_rationale_lines("rationale", &batch.rationale);
-    lines.extend(assistant_transcript_durable_thinking_lines(batch));
     if !execution.response.raw_text.trim().is_empty()
         && !assistant_raw_text_looks_like_maap_payload(&execution.response.raw_text)
     {
@@ -258,33 +257,6 @@ fn assistant_transcript_rationale_lines(label: &str, text: &str) -> Vec<String> 
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .map(|line| format!("{label}: {line}"))
-        .collect()
-}
-
-/// Returns durable model-authored thinking notes as transcript-visible lines.
-///
-/// `thought` remains the explicit durable work-note channel. Rationale is also
-/// retained as causal execution context, but it is labeled separately so later
-/// providers can distinguish immediate intent from longer-lived learning.
-fn assistant_transcript_durable_thinking_lines(batch: &MaapBatch) -> Vec<String> {
-    let mut lines = Vec::new();
-    if let Some(thought) = batch
-        .thought
-        .as_deref()
-        .and_then(crate::sanitize_hidden_model_note)
-    {
-        lines.extend(assistant_transcript_thinking_lines(&thought));
-    }
-    lines
-}
-
-/// Prefixes each non-empty line of model-authored thinking text for durable
-/// assistant transcript storage.
-fn assistant_transcript_thinking_lines(text: &str) -> Vec<String> {
-    text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(|line| format!("thinking: {line}"))
         .collect()
 }
 
@@ -758,7 +730,6 @@ mod tests {
         let batch = MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "reply".to_string(),
-            thought: None,
             turn_id: "turn-1".to_string(),
             agent_id: "agent-1".to_string(),
             actions: vec![say_action(visible_text)],
@@ -939,8 +910,8 @@ mod tests {
     /// Verifies assistant transcript entries summarize MAAP action batches
     /// without retaining inline patch payloads from raw provider JSON.
     ///
-    /// Durable history preserves rationale, explicit thought notes, and bounded
-    /// action shape while omitting generated file bytes.
+    /// Durable history preserves rationale and bounded action shape while
+    /// omitting generated file bytes.
     fn turn_execution_transcript_summarizes_maap_action_batches() {
         let patch =
             "*** Begin Patch\n*** Add File: note.txt\n+large-inline-file-content\n*** End Patch";
@@ -955,7 +926,6 @@ mod tests {
         let batch = MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "transient batch rationale".to_string(),
-            thought: Some("The patch summary belongs in future model context.".to_string()),
             turn_id: "turn-1".to_string(),
             agent_id: "agent-1".to_string(),
             actions: vec![action],
@@ -983,7 +953,6 @@ mod tests {
             .find(|entry| entry.role == TranscriptRole::Assistant)
             .unwrap();
 
-        assert!(assistant.content.contains("thinking: The patch summary"));
         assert!(
             assistant
                 .content
@@ -1009,7 +978,6 @@ mod tests {
         let batch = MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "Select issue iss-42 before inspecting its owner".to_string(),
-            thought: Some("Active issue: iss-42".to_string()),
             turn_id: "turn-1".to_string(),
             agent_id: "agent-1".to_string(),
             actions: vec![shell_action()],
@@ -1030,52 +998,10 @@ mod tests {
         let content = assistant_context_content_for_execution(&execution);
 
         assert!(content.contains("rationale: Select issue iss-42"));
-        assert!(content.contains("thinking: Active issue: iss-42"));
         assert!(content.contains("I selected the highest-priority issue."));
         assert!(content.contains("action rationale a1 (shell_command): inspect"));
         assert!(content.contains("action a1: shell_command"));
         assert!(!content.contains("\"actions\""));
-    }
-
-    #[test]
-    /// Verifies secret-bearing hidden thought is omitted from both durable
-    /// transcript projection and future provider context.
-    fn assistant_context_drops_secret_bearing_hidden_thought() {
-        let batch = MaapBatch {
-            protocol: "maap/1".to_string(),
-            rationale: "Continue the issue workflow".to_string(),
-            thought: Some("api_key = sk-hidden-thought-secret".to_string()),
-            turn_id: "turn-1".to_string(),
-            agent_id: "agent-1".to_string(),
-            actions: vec![shell_action()],
-            final_turn: false,
-        };
-        let execution = execution(
-            vec![message(
-                ContextSourceKind::UserInstruction,
-                "user",
-                "continue",
-            )],
-            String::new(),
-            Some(batch),
-            Vec::new(),
-            Vec::new(),
-        );
-
-        let content = assistant_context_content_for_execution(&execution);
-        let entries =
-            transcript_entries_for_execution("conv1", 1, 200, &turn(), &execution).unwrap();
-        let persisted = entries
-            .iter()
-            .map(|entry| entry.content.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        assert!(!content.contains("sk-hidden-thought-secret"));
-        assert!(!content.contains("thinking: api_key"));
-        assert!(!persisted.contains("sk-hidden-thought-secret"));
-        assert!(!persisted.contains("thinking: api_key"));
-        assert!(content.contains("rationale: Continue the issue workflow"));
     }
 
     #[test]

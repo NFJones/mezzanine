@@ -680,7 +680,6 @@ mod tests {
         MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "exercise recovery policy".to_string(),
-            thought: None,
             turn_id: "turn-1".to_string(),
             agent_id: "agent-1".to_string(),
             actions,

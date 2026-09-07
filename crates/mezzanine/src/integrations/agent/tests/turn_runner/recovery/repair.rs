@@ -35,7 +35,6 @@ async fn turn_runner_repairs_malformed_failure_summary_response() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action(
@@ -129,7 +128,6 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![abort_action("abort-1", "need more repository context")],
@@ -147,7 +145,6 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![capability_action("capability-1", AgentCapability::Shell)],
@@ -165,7 +162,6 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-1", "Ready.")],
@@ -270,7 +266,6 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             actions: vec![heredoc],
@@ -288,7 +283,6 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             actions: vec![say_action(
@@ -392,7 +386,6 @@ fn turn_runner_retries_maap_validation_error_with_safe_durable_repair_evidence()
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             actions: vec![AgentAction {
@@ -418,7 +411,6 @@ fn turn_runner_retries_maap_validation_error_with_safe_durable_repair_evidence()
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             actions: vec![say_action("say-1", "I cannot access that MCP server.")],

@@ -218,7 +218,6 @@ fn runtime_stale_joined_spawn_result_is_unreachable_progress() {
                 action_batch: Some(mez_agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "test action batch rationale".to_string(),
-                    thought: None,
                     turn_id: parent.turn_id.clone(),
                     agent_id: parent.agent_id.clone(),
                     actions: vec![spawn.clone()],
@@ -479,7 +478,6 @@ fn runtime_unrecovered_failure_with_pending_sibling_explains_blocker() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![patch_action, read_action],
@@ -577,7 +575,6 @@ fn runtime_unrecovered_non_correctable_failure_explains_boundary() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![action],
@@ -720,7 +717,6 @@ fn runtime_spawn_limit_denial_queues_model_recovery() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![action],

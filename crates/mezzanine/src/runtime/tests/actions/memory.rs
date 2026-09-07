@@ -734,7 +734,6 @@ fn runtime_executes_memory_actions_and_audits_action_arguments() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![search.clone(), store_action.clone()],
@@ -877,7 +876,6 @@ fn runtime_memory_store_rejects_episode_and_scratch_kinds() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: actions.clone(),
@@ -1002,7 +1000,6 @@ fn runtime_memory_disabled_failure_tells_model_to_continue_without_retrying_memo
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![action.clone()],

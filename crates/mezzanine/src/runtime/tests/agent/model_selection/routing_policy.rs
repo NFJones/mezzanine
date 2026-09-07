@@ -803,7 +803,6 @@ reasoning_profile = "high"
                     action_batch: Some(mez_agent::MaapBatch {
                         protocol: "maap/1".to_string(),
                         rationale: "report progress and the final routed result".to_string(),
-                        thought: None,
                         turn_id: turn.turn_id.clone(),
                         agent_id: turn.agent_id.clone(),
                         actions: vec![progress_action.clone(), final_action.clone()],
@@ -1324,7 +1323,6 @@ fn runtime_shell_pane_not_ready_queues_model_self_correction() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![action],

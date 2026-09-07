@@ -1249,7 +1249,6 @@ mod tests {
         let request = test_request();
         let arguments = serde_json::json!({
             "rationale": "streamed generic action",
-            "thought": null,
             "actions": [{
                 "type": "say",
                 "status": "final",

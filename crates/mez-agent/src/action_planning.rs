@@ -97,9 +97,7 @@ pub fn plan_batch_action_results<Error>(
     let mut action_results = Vec::with_capacity(batch.actions.len());
     let mut memory_budget = MemoryActionBudget::from_context(context);
     for action in &batch.actions {
-        if let Some(result) =
-            memory_budget.accept_or_skip(turn, action, &batch.rationale, batch.thought.as_deref())
-        {
+        if let Some(result) = memory_budget.accept_or_skip(turn, action, &batch.rationale) {
             action_results.push(result);
             continue;
         }
@@ -1064,7 +1062,6 @@ mod tests {
         let batch = MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "finish the requested work".to_string(),
-            thought: None,
             turn_id: "turn-1".to_string(),
             agent_id: "agent-1".to_string(),
             actions: vec![action],
@@ -1097,7 +1094,6 @@ mod tests {
         let batch = MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "finish".to_string(),
-            thought: None,
             turn_id: "turn-1".to_string(),
             agent_id: "agent-1".to_string(),
             actions: vec![action],
@@ -1154,7 +1150,6 @@ mod tests {
         let batch = MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "comply with the required function call".to_string(),
-            thought: None,
             turn_id: "turn-1".to_string(),
             agent_id: "agent-1".to_string(),
             actions: vec![action],

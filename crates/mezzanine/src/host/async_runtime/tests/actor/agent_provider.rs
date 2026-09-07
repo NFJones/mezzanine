@@ -236,7 +236,6 @@ async fn async_actor_applies_agent_provider_completion_events() {
     let response_batch = mez_agent::MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
-        thought: None,
         turn_id: task.turn_id.clone(),
         agent_id: task.agent_id.clone(),
         actions: vec![action.clone()],
@@ -448,7 +447,6 @@ async fn async_actor_defers_provider_issue_actions_to_persistence_worker() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "persist one issue".to_string(),
-                thought: None,
                 turn_id: task.turn_id.clone(),
                 agent_id: task.agent_id.clone(),
                 actions: vec![action.clone()],
@@ -582,7 +580,6 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
     let response_batch = mez_agent::MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
-        thought: None,
         turn_id: task.turn_id.clone(),
         agent_id: task.agent_id.clone(),
         actions: vec![action.clone()],

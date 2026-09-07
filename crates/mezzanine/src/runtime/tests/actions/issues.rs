@@ -7,7 +7,6 @@ fn runtime_issue_query_batch(action_id: &str, refresh: bool) -> mez_agent::MaapB
     mez_agent::MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "Inspect the current open issue snapshot".to_string(),
-        thought: None,
         turn_id: "turn-1".to_string(),
         agent_id: "agent-%1".to_string(),
         actions: vec![mez_agent::AgentAction {
@@ -43,7 +42,6 @@ fn runtime_issue_add_batch_with_dependencies(
     mez_agent::MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "Record a newly discovered issue before refreshing the backlog".to_string(),
-        thought: None,
         turn_id: "turn-1".to_string(),
         agent_id: "agent-%1".to_string(),
         actions: vec![mez_agent::AgentAction {
@@ -117,7 +115,6 @@ fn runtime_issue_query_continuation_preserves_capability_state_and_chronology() 
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "inspect the issue backlog before making changes".to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![mez_agent::AgentAction {
@@ -170,9 +167,6 @@ fn runtime_issue_query_continuation_preserves_capability_state_and_chronology() 
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "Continue active issue iss-42 before inspecting its owner".to_string(),
-                thought: Some(
-                    "Active issue: iss-42; inspect its cited implementation and tests".to_string(),
-                ),
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![mez_agent::AgentAction {
@@ -280,7 +274,9 @@ fn runtime_issue_query_continuation_preserves_capability_state_and_chronology() 
         .iter()
         .find(|message| {
             message.source == ContextSourceKind::TranscriptAssistant
-                && message.content.contains("Active issue: iss-42")
+                && message
+                    .content
+                    .contains("Continue active issue iss-42 before inspecting its owner")
         })
         .expect("the selected issue decision should survive the action boundary");
     assert!(

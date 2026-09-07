@@ -702,7 +702,7 @@ mod tests {
         assert_eq!(value["tools"][0]["name"], OPENAI_MAAP_FUNCTION_TOOL_NAME);
         assert_eq!(
             value["tools"][0]["input_schema"]["required"],
-            serde_json::json!(["rationale", "thought", "actions"])
+            serde_json::json!(["rationale", "actions"])
         );
         let description = value["tools"][0]["description"].as_str().unwrap();
         assert!(description.contains("Return a function call, not prose"));

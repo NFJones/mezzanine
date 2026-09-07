@@ -837,7 +837,6 @@ fn runtime_pane_not_ready_stops_shell_batch_after_first_failure() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "inspect with shell".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![first.clone(), second.clone()],

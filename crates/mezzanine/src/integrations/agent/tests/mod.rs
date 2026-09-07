@@ -687,7 +687,6 @@ impl ModelProvider for CapabilityBatchProvider {
                 action_batch: Some(MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "test action batch rationale".to_string(),
-                    thought: None,
                     turn_id: request.turn_id.clone(),
                     agent_id: request.agent_id.clone(),
                     actions: vec![capability_action("capability-1", self.capability)],

@@ -107,7 +107,6 @@ fn openai_compatible_chat_completions_duplicate_maap_tool_calls_are_malformed_ou
         mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly);
     let arguments = serde_json::json!({
         "rationale": "duplicate tool call payload",
-        "thought": null,
         "actions": [
             {
                 "type": "say",
@@ -331,7 +330,6 @@ fn openai_compatible_chat_completions_provider_describes_callable_mcp_tools() {
     }];
     let arguments = serde_json::json!({
         "rationale": "generic compatible provider called MCP",
-        "thought": null,
         "actions": [
             {
                 "type": "mcp_call",
@@ -453,7 +451,6 @@ fn openai_compatible_chat_completions_provider_honors_generic_maap_options() {
         mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly);
     let arguments = serde_json::json!({
         "rationale": "generic options returned structured output",
-        "thought": null,
         "actions": [
             {
                 "type": "say",
@@ -574,7 +571,6 @@ fn openai_compatible_chat_completions_provider_recovers_structured_maap_from_rea
         mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly);
     let reasoning_content = serde_json::json!({
         "rationale": "generic compatible provider returned structured JSON in reasoning_content",
-        "thought": null,
         "actions": [
             {
                 "type": "say",
@@ -669,7 +665,6 @@ fn openai_compatible_chat_completions_provider_supports_structured_maap_output()
         mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly);
     let content = serde_json::json!({
         "rationale": "generic compatible provider returned structured JSON",
-        "thought": null,
         "actions": [
             {
                 "type": "say",
@@ -786,7 +781,6 @@ fn openai_compatible_chat_completions_provider_uses_generic_tool_surface() {
         mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly);
     let arguments = serde_json::json!({
         "rationale": "generic compatible provider returned structured output",
-        "thought": null,
         "actions": [
             {
                 "type": "say",
@@ -916,7 +910,6 @@ fn openai_compatible_chat_completions_provider_supports_opt_in_streaming() {
         mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly);
     let arguments = serde_json::json!({
         "rationale": "generic compatible streaming completed",
-        "thought": null,
         "actions": [{
             "type": "say",
             "status": "final",

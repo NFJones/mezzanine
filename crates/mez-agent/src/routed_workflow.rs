@@ -1233,7 +1233,6 @@ mod tests {
                 action_batch: (!actions.is_empty()).then(|| MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "test routed transition".to_string(),
-                    thought: None,
                     turn_id: "turn-7".to_string(),
                     agent_id: "agent-worker".to_string(),
                     actions,

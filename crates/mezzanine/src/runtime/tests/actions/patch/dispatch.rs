@@ -52,7 +52,6 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_readiness() {
                 action_batch: Some(mez_agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "inspect with shell".to_string(),
-                    thought: None,
                     turn_id: turn.turn_id.clone(),
                     agent_id: turn.agent_id.clone(),
                     actions: vec![action.clone()],
@@ -150,7 +149,6 @@ fn runtime_shell_dispatch_completes_pending_action_after_stale_interactive_block
                 action_batch: Some(mez_agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "inspect with shell".to_string(),
-                    thought: None,
                     turn_id: turn.turn_id.clone(),
                     agent_id: turn.agent_id.clone(),
                     actions: vec![action.clone()],
@@ -325,7 +323,6 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_shell_process_
                 action_batch: Some(mez_agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "inspect with shell".to_string(),
-                    thought: None,
                     turn_id: turn.turn_id.clone(),
                     agent_id: turn.agent_id.clone(),
                     actions: vec![action.clone()],
@@ -417,7 +414,6 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_cached_foregro
                 action_batch: Some(mez_agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "inspect with shell".to_string(),
-                    thought: None,
                     turn_id: turn.turn_id.clone(),
                     agent_id: turn.agent_id.clone(),
                     actions: vec![action.clone()],
@@ -737,7 +733,6 @@ fn runtime_shell_recovery_waits_for_pane_subshell_certification() {
                 action_batch: Some(mez_agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "inspect with the certified shell".to_string(),
-                    thought: None,
                     turn_id: turn.turn_id.clone(),
                     agent_id: turn.agent_id.clone(),
                     actions: vec![action.clone()],
@@ -1083,7 +1078,6 @@ fn runtime_shell_dispatch_recovers_for_certified_agent_subshell_group() {
                 action_batch: Some(mez_agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "inspect with the certified shell".to_string(),
-                    thought: None,
                     turn_id: turn.turn_id.clone(),
                     agent_id: turn.agent_id.clone(),
                     actions: vec![action.clone()],
@@ -1315,7 +1309,6 @@ fn runtime_shell_dispatch_fails_closed_after_persistent_foreground_block() {
                 action_batch: Some(mez_agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "inspect with shell".to_string(),
-                    thought: None,
                     turn_id: turn.turn_id.clone(),
                     agent_id: turn.agent_id.clone(),
                     actions: vec![action.clone()],
@@ -1511,7 +1504,6 @@ fn runtime_shell_command_dispatch_uses_action_timeout() {
             action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![mez_agent::AgentAction {

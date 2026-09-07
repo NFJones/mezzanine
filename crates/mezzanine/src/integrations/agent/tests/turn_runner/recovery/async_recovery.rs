@@ -19,7 +19,6 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             actions: vec![capability_action("capability-1", AgentCapability::Shell)],
@@ -37,7 +36,6 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             actions: vec![AgentAction {
@@ -65,7 +63,6 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             actions: vec![say_action(
@@ -160,7 +157,6 @@ async fn async_turn_runner_retries_missing_provider_action_batch() {
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             actions: vec![say_action("say-1", "Corrected async missing batch.")],
@@ -255,7 +251,6 @@ async fn turn_runner_bubbles_context_limit_failure_to_runtime_recovery() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-1", "retry later")],
@@ -341,7 +336,6 @@ async fn turn_runner_bubbles_provider_controller_retry_hint_to_runtime_retry() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-1", "retry later")],
@@ -419,7 +413,6 @@ async fn turn_runner_bubbles_retryable_provider_failure_to_runtime_retry() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-1", "retry later")],
