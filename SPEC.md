@@ -2467,6 +2467,29 @@ terminal screen, or rows from mixed generations. Results captured before a
 source, conversation, geometry, theme, thinking-visibility, presentation-width,
 or shell-classification change MUST be rejected.
 
+Executor-produced presentation progress is distinct from provider streaming and
+MUST carry the active turn and action identity, the exact worker attempt or
+transaction identity, a monotonic component revision, and bounded canonical
+display source. It MUST remain presentation-only: it MUST NOT settle an action,
+authorize execution, alter audit records, or enter model context. A provisional
+read-body component MAY render only through the ordinary result visibility gate
+and MUST be removed when its terminal result fails or differs. An executor
+confirmed mutation component MAY render before the transaction completes only
+after runtime-owned framing authenticates its ordinal, path, and exact section
+length; proposed diffs, wrapper traffic, and malformed or incomplete framing
+MUST remain hidden. Confirmed mutation sections MUST preserve source order and
+may survive a later partial action failure, but MUST NOT be duplicated by final
+result presentation.
+
+Executor-progress projection MUST share the composite screen lineage with
+provider and shell-preview projection. It MUST reject stale attempt,
+transaction, revision, conversation, pane, geometry, theme, visibility, or
+screen-lineage state without restoring unrelated newer rows. Exact successful
+terminal source MAY promote a matching provisional component and suppress only
+that matching final replay; a mismatch or failure MUST restore ordinary terminal
+presentation. Terminal action cleanup, cancellation, retry, conversation
+replacement, and pane teardown MUST retire transient executor-progress state.
+
 After provider completion, an exactly matching validated `say` action index,
 status, content type, and raw text MAY promote the matching atomically published
 generation in place, persist its semantic source once, and suppress ordinary

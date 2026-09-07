@@ -537,11 +537,16 @@ async fn execute_native_shell_action(
                 let mut batch = RuntimeEventBatch::new();
                 batch.push(RuntimeEvent::NativeShellProgress(
                     crate::runtime::RuntimeNativeShellProgress {
-                        turn_id: progress_turn_id.clone(),
-                        action_id: progress_action_id.clone(),
-                        marker: progress_marker.clone(),
-                        revision,
-                        output_preview,
+                        presentation: mez_agent::ActionPresentationProgress::new(
+                            progress_turn_id.clone(),
+                            progress_action_id.clone(),
+                            mez_agent::ActionPresentationExecutionIdentity::Attempt(
+                                progress_marker.clone(),
+                            ),
+                            revision,
+                            mez_agent::ActionPresentationComponentIdentity::ShellOutput,
+                            output_preview,
+                        ),
                     },
                 ));
                 let _ = handle.submit_runtime_events(batch).await;
@@ -555,11 +560,14 @@ async fn execute_native_shell_action(
         let mut batch = RuntimeEventBatch::new();
         batch.push(RuntimeEvent::NativeShellProgress(
             crate::runtime::RuntimeNativeShellProgress {
-                turn_id: progress_turn_id,
-                action_id: progress_action_id,
-                marker: progress_marker,
-                revision,
-                output_preview,
+                presentation: mez_agent::ActionPresentationProgress::new(
+                    progress_turn_id,
+                    progress_action_id,
+                    mez_agent::ActionPresentationExecutionIdentity::Attempt(progress_marker),
+                    revision,
+                    mez_agent::ActionPresentationComponentIdentity::ShellOutput,
+                    output_preview,
+                ),
             },
         ));
         let _ = handle.submit_runtime_events(batch).await;

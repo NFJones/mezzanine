@@ -8,6 +8,10 @@ use super::{
 };
 use crate::host::terminal::parse_mez_shell_transaction_osc;
 use crate::runtime::render::RuntimeAgentShellPreviewOwner;
+use mez_agent::{
+    ActionPresentationComponentIdentity, ActionPresentationExecutionIdentity,
+    ActionPresentationProgress,
+};
 use mez_terminal::TerminalOscEvent;
 
 /// Maximum bytes retained while waiting for one mandatory OSC start boundary.
@@ -265,6 +269,7 @@ impl RuntimeSessionService {
     pub(crate) fn record_running_shell_transaction_output(&mut self, pane_id: &str, bytes: &[u8]) {
         let output_preview_lines = self.process.settings.terminal_shell_output_preview_lines;
         let mut apply_patch_transport_updates = Vec::new();
+        let mut confirmed_patch_sections = Vec::new();
         let mut status_line_updates = Vec::new();
         for (marker, transaction) in self.process.running_shell_transactions.iter_mut() {
             if transaction.pane_id == pane_id {
@@ -367,6 +372,29 @@ impl RuntimeSessionService {
                         observed_bytes.clone(),
                     ));
                 }
+                if let RunningShellTransactionKind::AgentAction { action_id } = &transaction.kind
+                    && apply_patch_transaction_phase(&transaction.command)
+                        == Some(ApplyPatchTransactionPhase::Write)
+                    && !observed_bytes.is_empty()
+                {
+                    let decoder = self
+                        .process
+                        .apply_patch_progress_decoders
+                        .entry(marker.clone())
+                        .or_default();
+                    if let Ok(progress) = decoder.push(&observed_bytes) {
+                        confirmed_patch_sections.extend(
+                            progress.confirmed_sections.into_iter().map(|section| {
+                                (
+                                    transaction.turn_id.clone(),
+                                    action_id.clone(),
+                                    marker.clone(),
+                                    section,
+                                )
+                            }),
+                        );
+                    }
+                }
                 transaction.observed_output_bytes = transaction
                     .observed_output_bytes
                     .saturating_add(observed_bytes.len());
@@ -421,6 +449,27 @@ impl RuntimeSessionService {
         }
         for (state_key, transport_chunk) in apply_patch_transport_updates {
             self.append_apply_patch_batch_transport(&state_key, &transport_chunk);
+        }
+        for (turn_id, action_id, marker, section) in confirmed_patch_sections {
+            let progress = ActionPresentationProgress::new(
+                turn_id,
+                action_id,
+                ActionPresentationExecutionIdentity::Transaction(marker),
+                u64::try_from(section.ordinal)
+                    .unwrap_or(u64::MAX)
+                    .saturating_add(1),
+                ActionPresentationComponentIdentity::confirmed_mutation(
+                    section.ordinal,
+                    section.path,
+                ),
+                section.diff,
+            );
+            if self
+                .apply_action_presentation_progress(progress.clone())
+                .unwrap_or(false)
+            {
+                let _ = self.promote_confirmed_action_presentation_progress(&progress);
+            }
         }
         for (turn_id, action_id, marker, pane_id, revision, lines) in status_line_updates {
             if self.agent_shell_transaction_action_shows_live_output(&turn_id, &action_id) {

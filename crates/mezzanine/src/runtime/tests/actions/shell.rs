@@ -886,11 +886,14 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
     assert!(
         service
             .apply_native_shell_progress(crate::runtime::RuntimeNativeShellProgress {
-                turn_id: "turn-1".to_string(),
-                action_id: "shell-1".to_string(),
-                marker: marker.clone(),
-                revision,
-                output_preview,
+                presentation: mez_agent::ActionPresentationProgress::new(
+                    "turn-1",
+                    "shell-1",
+                    mez_agent::ActionPresentationExecutionIdentity::Attempt(marker.clone()),
+                    revision,
+                    mez_agent::ActionPresentationComponentIdentity::ShellOutput,
+                    output_preview,
+                ),
             })
             .unwrap()
     );
@@ -900,17 +903,21 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
         .normal_content_lines()
         .join("\n");
     assert!(pane_text.contains("native-live-first"), "{pane_text}");
-    let accepted = service.agent_shell_output_previews_for_tests("%1");
-    assert_eq!(accepted.len(), 1, "{accepted:?}");
-    assert_eq!(accepted[0].2, revision);
+    assert_eq!(
+        service.action_presentation_progress_counts_for_tests("%1"),
+        (1, 0)
+    );
 
     service
         .apply_native_shell_progress(crate::runtime::RuntimeNativeShellProgress {
-            turn_id: "turn-1".to_string(),
-            action_id: "shell-1".to_string(),
-            marker: marker.clone(),
-            revision: revision.saturating_sub(1),
-            output_preview: "older-native-tail".to_string(),
+            presentation: mez_agent::ActionPresentationProgress::new(
+                "turn-1",
+                "shell-1",
+                mez_agent::ActionPresentationExecutionIdentity::Attempt(marker.clone()),
+                revision.saturating_sub(1),
+                mez_agent::ActionPresentationComponentIdentity::ShellOutput,
+                "older-native-tail",
+            ),
         })
         .unwrap();
     let stale_revision_text = service
@@ -923,18 +930,23 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
         "{stale_revision_text}"
     );
     assert_eq!(
-        service.agent_shell_output_previews_for_tests("%1")[0].2,
-        revision
+        service.action_presentation_progress_counts_for_tests("%1"),
+        (1, 0)
     );
 
     assert!(
         !service
             .apply_native_shell_progress(crate::runtime::RuntimeNativeShellProgress {
-                turn_id: "turn-1".to_string(),
-                action_id: "shell-1".to_string(),
-                marker: format!("{marker}-stale"),
-                revision: revision.saturating_add(1),
-                output_preview: "stale-native-tail".to_string(),
+                presentation: mez_agent::ActionPresentationProgress::new(
+                    "turn-1",
+                    "shell-1",
+                    mez_agent::ActionPresentationExecutionIdentity::Attempt(format!(
+                        "{marker}-stale"
+                    )),
+                    revision.saturating_add(1),
+                    mez_agent::ActionPresentationComponentIdentity::ShellOutput,
+                    "stale-native-tail",
+                ),
             })
             .unwrap()
     );
@@ -948,6 +960,11 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
     fs::write(&release_path, b"release").unwrap();
     let outcome = worker.join().unwrap();
     assert!(service.complete_native_shell_action(outcome).unwrap());
+    assert_eq!(
+        service.action_presentation_progress_counts_for_tests("%1"),
+        (0, 0),
+        "native completion must retire transient executor progress"
+    );
     let pane_text = service
         .pane_screen("%1")
         .unwrap()
@@ -958,11 +975,14 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
     assert!(
         !service
             .apply_native_shell_progress(crate::runtime::RuntimeNativeShellProgress {
-                turn_id: "turn-1".to_string(),
-                action_id: "shell-1".to_string(),
-                marker,
-                revision: revision.saturating_add(1),
-                output_preview: "post-completion-native-tail".to_string(),
+                presentation: mez_agent::ActionPresentationProgress::new(
+                    "turn-1",
+                    "shell-1",
+                    mez_agent::ActionPresentationExecutionIdentity::Attempt(marker),
+                    revision.saturating_add(1),
+                    mez_agent::ActionPresentationComponentIdentity::ShellOutput,
+                    "post-completion-native-tail",
+                ),
             })
             .unwrap()
     );

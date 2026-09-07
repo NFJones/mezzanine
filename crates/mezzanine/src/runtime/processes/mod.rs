@@ -857,6 +857,15 @@ pub(crate) struct RuntimeProcessComponent {
     shell_transaction_control_osc_pending: std::collections::BTreeMap<String, Vec<u8>>,
     /// Incomplete UTF-8 suffixes retained per shell transaction across PTY reads.
     shell_transaction_output_utf8_pending: std::collections::BTreeMap<String, Vec<u8>>,
+    /// Incremental confirmed-section decoders for live semantic patch writes.
+    ///
+    /// Each decoder retains only its current unconfirmed frame and fails closed
+    /// on malformed ownership records. It is removed with its transaction so
+    /// stale or cancelled work cannot later project mutation evidence.
+    apply_patch_progress_decoders: std::collections::BTreeMap<
+        String,
+        mez_agent::semantic_patch_planning::ApplyPatchProgressDecoder,
+    >,
     /// Remaining receiver acknowledgements owned by each active transaction.
     ///
     /// Counts are installed only when a negotiated deferred payload is
@@ -1653,6 +1662,14 @@ impl RuntimeSessionService {
                         } if running_action_id == action_id
                     )
             })
+    }
+
+    /// Returns the live transaction owned by one exact runtime marker.
+    pub(crate) fn running_shell_transaction(
+        &self,
+        marker: &str,
+    ) -> Option<&RunningShellTransactionRef> {
+        self.process.running_shell_transactions.get(marker)
     }
 
     /// Reports whether a turn has any live agent-action shell transaction.

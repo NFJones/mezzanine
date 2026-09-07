@@ -292,9 +292,11 @@ pub use deepseek_response::{
     parse_deepseek_chat_completions_provider_body,
 };
 pub use execution::{
-    AsyncMcpActionExecutor, DEFAULT_AGENT_TURN_TIMEOUT_MS, DEFAULT_NATIVE_SHELL_TIMEOUT_MS,
-    LocalActionExecutor, LocalExecutionOutput, LocalExecutionProjectionError,
-    LocalExecutionRequest, LocalExecutionTransport, MAX_NATIVE_SHELL_TIMEOUT_MS, McpActionExecutor,
+    ACTION_PRESENTATION_PROGRESS_MAX_SOURCE_BYTES, ActionPresentationComponentIdentity,
+    ActionPresentationExecutionIdentity, ActionPresentationProgress, AsyncMcpActionExecutor,
+    DEFAULT_AGENT_TURN_TIMEOUT_MS, DEFAULT_NATIVE_SHELL_TIMEOUT_MS, LocalActionExecutor,
+    LocalExecutionOutput, LocalExecutionProjectionError, LocalExecutionRequest,
+    LocalExecutionTransport, MAX_NATIVE_SHELL_TIMEOUT_MS, McpActionExecutor,
     McpExecutionValidationError, PaneShellExecutor, ShellExecutionOutput, ShellExecutionRequest,
     SpawnedShellExecutor, action_content_blocks_from_json_or_text, agent_native_shell_timeout_ms,
     agent_shell_timeout_ms, agent_turn_remaining_timeout_ms,

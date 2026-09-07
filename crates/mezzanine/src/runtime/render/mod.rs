@@ -374,6 +374,54 @@ struct RuntimeAgentShellPreviewPresentation {
     settled_owners: std::collections::BTreeSet<RuntimeAgentShellPreviewOwner>,
 }
 
+/// Exact executor-owned progress component projected into one agent pane.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct RuntimeActionPresentationProgressKey {
+    turn_id: String,
+    action_id: String,
+    execution: mez_agent::ActionPresentationExecutionIdentity,
+    component: mez_agent::ActionPresentationComponentIdentity,
+}
+
+/// Latest bounded source retained for one exact executor progress component.
+#[derive(Debug, Clone)]
+struct RuntimeActionPresentationProgressComponent {
+    first_seen_order: u64,
+    revision: u64,
+    source: String,
+    source_truncated: bool,
+}
+
+/// Render-affecting context captured by an executor-progress projection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeActionPresentationProjectionContext {
+    size: Size,
+    settings: RuntimePresentationSettings,
+    visibility: mez_agent::AgentShellVisibility,
+    debug: bool,
+    trace: bool,
+    shell_view: bool,
+}
+
+/// Pane-local executor progress composed over provider and shell-preview output.
+///
+/// The baseline excludes every executor component. Exact conversation and
+/// screen lineage prevent stale attempts, cancellation, or conversation
+/// replacement from rolling back unrelated pane content.
+#[derive(Debug, Clone)]
+struct RuntimeActionPresentationProgressPresentation {
+    conversation_id: String,
+    installed_lineage: u64,
+    baseline_screen: std::sync::Arc<TerminalScreen>,
+    projected_context: RuntimeActionPresentationProjectionContext,
+    next_order: u64,
+    components: std::collections::BTreeMap<
+        RuntimeActionPresentationProgressKey,
+        RuntimeActionPresentationProgressComponent,
+    >,
+    promoted_components: std::collections::BTreeMap<RuntimeActionPresentationProgressKey, String>,
+}
+
 /// Released divider-layout outcome awaiting debounce consumption.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RuntimePendingDividerLayoutCommit {
@@ -450,6 +498,9 @@ pub(crate) struct RuntimePresentationComponent {
     /// Pane-local owner-aware transient shell-output projections.
     agent_shell_output_previews:
         std::collections::BTreeMap<String, RuntimeAgentShellPreviewPresentation>,
+    /// Executor-owned action progress, separate from provider and shell-preview state.
+    action_presentation_progress:
+        std::collections::BTreeMap<String, RuntimeActionPresentationProgressPresentation>,
     /// Source-backed provider `say` output awaiting validated completion.
     agent_streaming_say_presentations:
         std::collections::BTreeMap<String, RuntimeStreamingSayPresentation>,
@@ -1051,6 +1102,8 @@ pub(crate) struct RuntimeAgentPresentationResizeWork {
     screen: TerminalScreen,
     /// Current transient shell previews to composite over durable replay.
     shell_output_previews: Option<RuntimeAgentShellPreviewPresentation>,
+    /// Current executor-owned progress to composite over durable replay.
+    action_presentation_progress: Option<RuntimeActionPresentationProgressPresentation>,
     /// Current streamed provider presentation to composite over durable replay.
     streaming_say_presentation: Option<RuntimeStreamingSayPresentation>,
 }
@@ -1090,6 +1143,8 @@ pub(crate) struct RuntimeAgentPresentationResizeResult {
     cacheable_snapshot: bool,
     /// Worker-reconciled shell preview state accompanying the candidate.
     shell_output_previews: Option<RuntimeAgentShellPreviewPresentation>,
+    /// Worker-reconciled executor progress accompanying the candidate.
+    action_presentation_progress: Option<RuntimeActionPresentationProgressPresentation>,
     /// Worker-reconciled streaming state accompanying the candidate.
     streaming_say_presentation: Option<RuntimeStreamingSayPresentation>,
 }
@@ -1099,6 +1154,7 @@ pub(crate) struct RuntimeAgentPresentationResizeResult {
 pub(crate) struct RuntimeAgentResumePresentationSnapshot {
     prompt_input: Option<RuntimeAgentPromptInput>,
     shell_output_previews: Option<RuntimeAgentShellPreviewPresentation>,
+    action_presentation_progress: Option<RuntimeActionPresentationProgressPresentation>,
     streaming_say_presentation: Option<RuntimeStreamingSayPresentation>,
     promoted_streaming_say_actions:
         std::collections::BTreeMap<(String, String), std::collections::BTreeSet<usize>>,
@@ -1444,6 +1500,7 @@ impl RuntimePresentationComponent {
         self.agent_prompt_selector_refreshes
             .retain(|(_, candidate), _| candidate != pane_id);
         self.agent_shell_output_previews.remove(pane_id);
+        self.action_presentation_progress.remove(pane_id);
         self.agent_streaming_say_presentations.remove(pane_id);
         self.agent_promoted_streaming_say_actions
             .retain(|(candidate_pane_id, _turn_id), _indices| candidate_pane_id != pane_id);
@@ -1491,6 +1548,7 @@ impl RuntimePresentationComponent {
     pub(crate) fn has_agent_presentation_state_for_tests(&self, pane_id: &str) -> bool {
         self.agent_prompt_inputs.contains_key(pane_id)
             || self.agent_shell_output_previews.contains_key(pane_id)
+            || self.action_presentation_progress.contains_key(pane_id)
             || self.agent_streaming_say_presentations.contains_key(pane_id)
             || self
                 .agent_promoted_streaming_say_actions
@@ -1794,6 +1852,15 @@ impl RuntimePresentationComponent {
             preview.baseline_screen = std::sync::Arc::new(baseline);
             preview.installed_lineage = resized_lineage;
         }
+        if let Some(progress) = self.action_presentation_progress.get_mut(pane_id)
+            && progress.installed_lineage == previous_lineage
+        {
+            let mut baseline = progress.baseline_screen.as_ref().clone();
+            baseline.resize(size);
+            progress.baseline_screen = std::sync::Arc::new(baseline);
+            progress.installed_lineage = resized_lineage;
+            progress.projected_context.size = size;
+        }
         if let Some(streaming) = self.agent_streaming_say_presentations.get_mut(pane_id)
             && streaming.installed_lineage == previous_lineage
         {
@@ -1872,6 +1939,11 @@ impl RuntimeSessionService {
             shell_output_previews: self
                 .presentation
                 .agent_shell_output_previews
+                .get(pane_id)
+                .cloned(),
+            action_presentation_progress: self
+                .presentation
+                .action_presentation_progress
                 .get(pane_id)
                 .cloned(),
             streaming_say_presentation: self
@@ -1954,6 +2026,13 @@ impl RuntimeSessionService {
             current_conversation.as_deref() == Some(preview.conversation_id.as_str())
                 && current_lineage == Some(preview.installed_lineage)
         });
+        snapshot.action_presentation_progress = snapshot
+            .action_presentation_progress
+            .take()
+            .filter(|progress| {
+                current_conversation.as_deref() == Some(progress.conversation_id.as_str())
+                    && current_lineage == Some(progress.installed_lineage)
+            });
         snapshot.streaming_say_presentation =
             snapshot
                 .streaming_say_presentation
@@ -1980,6 +2059,14 @@ impl RuntimeSessionService {
         if let Some(value) = snapshot.shell_output_previews {
             self.presentation
                 .agent_shell_output_previews
+                .insert(pane_id.to_string(), value);
+        }
+        self.presentation
+            .action_presentation_progress
+            .remove(pane_id);
+        if let Some(value) = snapshot.action_presentation_progress {
+            self.presentation
+                .action_presentation_progress
                 .insert(pane_id.to_string(), value);
         }
         self.presentation

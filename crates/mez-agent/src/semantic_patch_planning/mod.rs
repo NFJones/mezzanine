@@ -27,7 +27,10 @@ use snapshot::{
     ensure_missing_state, ensure_regular_state, parse_apply_patch_snapshot_output,
     snapshot_text_state,
 };
-pub use transaction::ApplyPatchTransactionPhase;
+pub use transaction::{
+    ApplyPatchConfirmedSection, ApplyPatchProgress, ApplyPatchProgressDecoder,
+    ApplyPatchTransactionPhase,
+};
 use transaction::{
     apply_patch_write_change_command, apply_patch_write_command_prelude, apply_patch_write_sidecar,
     mez_apply_patch_read_command,
@@ -67,6 +70,14 @@ const APPLY_PATCH_CONTENT_BEGIN_MARKER: &str = "__MEZ_APPLY_PATCH_CONTENT_BEGIN_
 const APPLY_PATCH_CONTENT_END_MARKER: &str = "__MEZ_APPLY_PATCH_CONTENT_END__";
 /// Prefix for one machine-readable per-file write outcome.
 pub const APPLY_PATCH_RESULT_MARKER: &str = "__MEZ_APPLY_PATCH_RESULT__";
+/// Prefix for one length-delimited, still-unconfirmed per-file diff section.
+pub const APPLY_PATCH_DIFF_MARKER: &str = "__MEZ_APPLY_PATCH_DIFF__";
+/// Maximum bytes retained for either one proposed diff or one framing line.
+///
+/// This matches the crate's model-facing action-result content ceiling. The
+/// decoder retains at most one of each component, keeping total private state
+/// below twice this cap without retaining previously consumed source.
+pub const APPLY_PATCH_PROGRESS_MAX_RETAINED_BYTES: usize = 256 * 1024;
 
 /// One confirmed per-file outcome emitted by an `apply_patch` write phase.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,8 +93,24 @@ pub enum ApplyPatchFileOutcome {
 /// Lines without the runtime-owned marker are ignored. A malformed marked line
 /// fails closed so callers can retain their generic completion behavior.
 pub fn parse_apply_patch_file_outcomes(output: &str) -> Result<Vec<ApplyPatchFileOutcome>> {
+    let uses_confirmed_framing = output.lines().any(|line| {
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        fields.first().is_some_and(|field| {
+            *field == APPLY_PATCH_DIFF_MARKER
+                || (*field == APPLY_PATCH_RESULT_MARKER && fields.len() == 5)
+        })
+    });
+    if uses_confirmed_framing {
+        let mut decoder = ApplyPatchProgressDecoder::new();
+        let mut progress = decoder.push(output.as_bytes())?;
+        progress.extend(decoder.finish()?);
+        return Ok(progress.outcomes);
+    }
+
+    let normalized = output.replace("\r\n", "\n").replace('\r', "\n");
     let mut outcomes = Vec::new();
-    for line in output.replace("\r\n", "\n").replace('\r', "\n").lines() {
+    let mut seen_paths = BTreeSet::new();
+    for line in normalized.lines() {
         let Some(record) = line.strip_prefix(APPLY_PATCH_RESULT_MARKER) else {
             continue;
         };
@@ -104,13 +131,23 @@ pub fn parse_apply_patch_file_outcomes(output: &str) -> Result<Vec<ApplyPatchFil
         };
         match fields.as_slice() {
             ["APPLIED", path] => {
-                outcomes.push(ApplyPatchFileOutcome::Applied {
-                    path: decode(path, "path")?,
-                });
+                let path = decode(path, "path")?;
+                if !seen_paths.insert(path.clone()) {
+                    return Err(SemanticPatchPlanningError::invalid_args(
+                        "apply_patch: duplicate per-file result record",
+                    ));
+                }
+                outcomes.push(ApplyPatchFileOutcome::Applied { path });
             }
             ["FAILED", path, diagnostic] => {
+                let path = decode(path, "path")?;
+                if !seen_paths.insert(path.clone()) {
+                    return Err(SemanticPatchPlanningError::invalid_args(
+                        "apply_patch: duplicate per-file result record",
+                    ));
+                }
                 outcomes.push(ApplyPatchFileOutcome::Failed {
-                    path: decode(path, "path")?,
+                    path,
                     diagnostic: decode(diagnostic, "diagnostic")?,
                 });
             }
@@ -211,15 +248,20 @@ fn apply_patch_planned_failure(plan: &ApplyPatchPlan) -> SemanticPatchPlanningEr
     SemanticPatchPlanningError::invalid_args(lines.join("\n"))
 }
 
-fn apply_patch_planned_failure_shell_lines(plan: &ApplyPatchPlan) -> String {
+fn apply_patch_planned_failure_shell_lines(
+    plan: &ApplyPatchPlan,
+    starting_ordinal: usize,
+) -> String {
     let mut command = String::new();
-    for (path, line) in &plan.errors {
+    for (offset, (path, line)) in plan.errors.iter().enumerate() {
         command.push_str("printf '%s\\n' ");
         command.push_str(&shell_quote(line));
         command.push_str(" >&2\n");
-        command.push_str("printf '%s %s %s %s\\n' ");
+        command.push_str("printf '%s %s %s %s %s\\n' ");
         command.push_str(&shell_quote(APPLY_PATCH_RESULT_MARKER));
         command.push_str(" FAILED ");
+        command.push_str(&(starting_ordinal + offset).to_string());
+        command.push(' ');
         command.push_str(&shell_quote(
             &base64::engine::general_purpose::STANDARD.encode(path.as_bytes()),
         ));
@@ -333,7 +375,10 @@ fn mez_apply_patch_write_plan(
         command.push_str(&apply_patch_write_change_command(index, change));
     }
     if !plan.errors.is_empty() {
-        command.push_str(&apply_patch_planned_failure_shell_lines(&plan));
+        command.push_str(&apply_patch_planned_failure_shell_lines(
+            &plan,
+            plan.changes.len(),
+        ));
     }
     command.push_str("if [ \"${MEZ_APPLY_FAILED:-0}\" = 1 ]; then exit 1; fi\n");
     let input_sidecar = apply_patch_write_sidecar(&plan.changes);

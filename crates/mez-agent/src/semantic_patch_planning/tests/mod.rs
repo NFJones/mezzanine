@@ -15,6 +15,7 @@ mod execution;
 mod matching;
 mod parsing;
 mod planning;
+mod progress;
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 

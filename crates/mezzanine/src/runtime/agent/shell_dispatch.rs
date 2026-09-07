@@ -93,57 +93,34 @@ impl RuntimeSessionService {
                 })
     }
 
+    /// Reports whether one native progress attempt still owns the exact action.
+    pub(crate) fn native_shell_action_attempt_is_current(
+        &self,
+        turn_id: &str,
+        action_id: &str,
+        marker: &str,
+    ) -> bool {
+        let identity = (turn_id.to_string(), action_id.to_string());
+        self.agent
+            .claimed_native_shell_dispatches
+            .get(&identity)
+            .map(String::as_str)
+            == Some(marker)
+            && self
+                .agent
+                .pending_native_shell_dispatches
+                .get(&identity)
+                .map(|dispatch| dispatch.marker.as_str())
+                == Some(marker)
+            && self.native_shell_action_turn_is_current(turn_id, action_id)
+    }
+
     /// Applies one fenced native-shell output preview to the transient pane tail.
     pub(crate) fn apply_native_shell_progress(
         &mut self,
         progress: crate::runtime::RuntimeNativeShellProgress,
     ) -> Result<bool> {
-        let identity = (progress.turn_id.clone(), progress.action_id.clone());
-        let claimed = self.agent.claimed_native_shell_dispatches.get(&identity);
-        let pending = self
-            .agent
-            .pending_native_shell_dispatches
-            .get(&identity)
-            .map(|dispatch| &dispatch.marker);
-        if claimed != Some(&progress.marker) || pending != Some(&progress.marker) {
-            return Ok(false);
-        }
-        if !self.native_shell_action_turn_is_current(&progress.turn_id, &progress.action_id) {
-            return Ok(false);
-        }
-        let Some(turn) = self
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .find(|turn| turn.turn_id == progress.turn_id)
-            .cloned()
-        else {
-            return Ok(false);
-        };
-        if !self.agent_shell_transaction_action_shows_live_output(
-            &progress.turn_id,
-            &progress.action_id,
-        ) {
-            return Ok(false);
-        }
-        let lines = latest_agent_shell_transaction_output_lines(
-            &progress.output_preview,
-            self.terminal_shell_output_preview_lines(),
-        );
-        if lines.is_empty() {
-            return Ok(false);
-        }
-        self.update_agent_shell_output_preview(
-            &turn.pane_id,
-            RuntimeAgentShellPreviewOwner {
-                turn_id: progress.turn_id,
-                action_id: progress.action_id,
-                marker: progress.marker,
-            },
-            progress.revision,
-            &lines,
-        )?;
-        Ok(true)
+        self.apply_action_presentation_progress(progress.presentation)
     }
 
     /// Returns native shell actions ready for external worker dispatch.
@@ -325,6 +302,14 @@ impl RuntimeSessionService {
                             "error": failure.message
                         }),
                     ));
+                let _ = self.reconcile_action_presentation_progress_for_execution(
+                    &turn.turn_id,
+                    &action.id,
+                    &mez_agent::ActionPresentationExecutionIdentity::Attempt(
+                        outcome.marker.clone(),
+                    ),
+                    &result,
+                )?;
                 execution.action_results[result_index] = result.clone();
                 execution.terminal_state = runtime_agent_turn_state_from_action_results(
                     &execution.action_results,
@@ -383,6 +368,8 @@ impl RuntimeSessionService {
                 )?;
             }
             self.settle_agent_shell_output_preview(&turn.pane_id, &preview_owner);
+            let _ =
+                self.retire_action_presentation_progress_for_action(&turn.turn_id, &action.id)?;
         }
 
         self.integration

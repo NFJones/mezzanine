@@ -212,6 +212,9 @@ fn semantic_apply_patch_command_reports_partial_late_failure_per_file() {
         String::from_utf8_lossy(&output.stderr)
     );
     let outcomes = parse_apply_patch_file_outcomes(&combined).unwrap();
+    let mut progress_decoder = ApplyPatchProgressDecoder::new();
+    let mut progress = progress_decoder.push(&output.stdout).unwrap();
+    progress.extend(progress_decoder.finish().unwrap());
 
     assert!(!output.status.success(), "{combined}");
     assert_eq!(
@@ -223,6 +226,15 @@ fn semantic_apply_patch_command_reports_partial_late_failure_per_file() {
         "changed concurrently\n"
     );
     assert!(combined.contains("diff -- apply patch"), "{combined}");
+    assert_eq!(progress.confirmed_sections.len(), 1);
+    assert_eq!(progress.confirmed_sections[0].ordinal, 0);
+    assert_eq!(progress.confirmed_sections[0].path, "one.txt");
+    assert!(
+        progress.confirmed_sections[0].diff.contains("+new one"),
+        "{combined}"
+    );
+    assert!(!progress.confirmed_sections[0].diff.contains("new two"));
+    assert_eq!(progress.outcomes, outcomes);
     assert_eq!(
         outcomes,
         vec![

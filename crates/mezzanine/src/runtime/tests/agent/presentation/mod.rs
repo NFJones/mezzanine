@@ -46,6 +46,7 @@ fn ensure_agent_copy_mode_for_test<'a>(
         .expect("retained agent presentation copy mode")
 }
 
+mod action_progress;
 mod copying;
 mod logging;
 mod markdown;

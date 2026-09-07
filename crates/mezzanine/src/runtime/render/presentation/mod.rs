@@ -33,6 +33,7 @@ use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan, TerminalS
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+mod action_progress;
 mod actions;
 mod buffer_apply;
 mod diff;

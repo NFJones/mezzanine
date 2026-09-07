@@ -130,16 +130,8 @@ pub(crate) struct RuntimeNativeShellFailure {
 /// Bounded cumulative output observed while a native shell worker is running.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeNativeShellProgress {
-    /// Turn that owns the native shell action.
-    pub(crate) turn_id: String,
-    /// Stable action identity within the turn.
-    pub(crate) action_id: String,
-    /// Exact marker copied from the claimed dispatch.
-    pub(crate) marker: String,
-    /// Strictly increasing worker publication revision.
-    pub(crate) revision: u64,
-    /// Bounded cumulative stdout/stderr preview observed by pipe readers.
-    pub(crate) output_preview: String,
+    /// Typed presentation-only progress fenced by the claimed native attempt.
+    pub(crate) presentation: mez_agent::ActionPresentationProgress,
 }
 
 /// Result returned by a native shell worker for actor-owned settlement.

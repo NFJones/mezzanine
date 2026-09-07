@@ -24,6 +24,115 @@ pub const DEFAULT_AGENT_TURN_TIMEOUT_MS: u64 = 30 * 60 * 1000;
 pub const DEFAULT_NATIVE_SHELL_TIMEOUT_MS: u64 = 10 * 60 * 1000;
 /// Largest supported configured native shell action timeout in milliseconds.
 pub const MAX_NATIVE_SHELL_TIMEOUT_MS: u64 = 24 * 60 * 60 * 1000;
+/// Maximum cumulative canonical source retained by one executor presentation component.
+///
+/// This limit bounds transient presentation state only. It does not change the
+/// canonical action-result capture limits or authorize dropping executor bytes
+/// needed for execution, audit, or model context.
+pub const ACTION_PRESENTATION_PROGRESS_MAX_SOURCE_BYTES: usize = 256 * 1024;
+
+/// Exact worker generation that produced executor-owned presentation progress.
+///
+/// Attempts identify read-like operations whose visible body remains
+/// provisional until settlement. Transactions identify mutation work whose
+/// confirmed sections can survive a later partial failure.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ActionPresentationExecutionIdentity {
+    /// One executor attempt, such as an HTTP request or shell process.
+    Attempt(String),
+    /// One mutation transaction, such as a semantic patch write phase.
+    Transaction(String),
+}
+
+/// Stable identity and settlement semantics for one visible progress component.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ActionPresentationComponentIdentity {
+    /// Bounded cumulative shell output shown only while execution remains live.
+    ShellOutput,
+    /// Read result source that must be rolled back when final execution fails.
+    ProvisionalReadBody,
+    /// One mutation section released only after the executor confirms the write.
+    ConfirmedMutation {
+        /// Stable zero-based section position within the transaction.
+        section_index: usize,
+        /// Canonical user-visible path associated with the confirmed section.
+        path: String,
+    },
+}
+
+impl ActionPresentationComponentIdentity {
+    /// Builds one confirmed mutation component with stable section identity.
+    pub fn confirmed_mutation(section_index: usize, path: impl Into<String>) -> Self {
+        Self::ConfirmedMutation {
+            section_index,
+            path: path.into(),
+        }
+    }
+
+    /// Reports whether final failure must remove this component from presentation.
+    pub const fn is_provisional(&self) -> bool {
+        matches!(self, Self::ShellOutput | Self::ProvisionalReadBody)
+    }
+
+    /// Reports whether this component records already-authoritative mutation evidence.
+    pub const fn is_confirmed(&self) -> bool {
+        matches!(self, Self::ConfirmedMutation { .. })
+    }
+}
+
+/// Bounded executor-owned source snapshot for transient action presentation.
+///
+/// Progress has no execution, policy, settlement, transcript, audit, or model
+/// context authority. Product runtimes must independently fence this identity
+/// against their current authorized execution before projecting the source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActionPresentationProgress {
+    /// Exact active turn that owns the executing action.
+    pub turn_id: String,
+    /// Exact action identity within the active turn.
+    pub action_id: String,
+    /// Worker attempt or transaction generation fencing stale producers.
+    pub execution: ActionPresentationExecutionIdentity,
+    /// Strictly increasing cumulative-source revision for this component.
+    pub revision: u64,
+    /// Stable visible component identity and settlement semantics.
+    pub component: ActionPresentationComponentIdentity,
+    /// Canonical cumulative display source, bounded independently of execution output.
+    pub source: String,
+    /// Whether source bytes were omitted by the presentation-only bound.
+    pub source_truncated: bool,
+}
+
+impl ActionPresentationProgress {
+    /// Builds one bounded cumulative progress snapshot.
+    pub fn new(
+        turn_id: impl Into<String>,
+        action_id: impl Into<String>,
+        execution: ActionPresentationExecutionIdentity,
+        revision: u64,
+        component: ActionPresentationComponentIdentity,
+        source: impl Into<String>,
+    ) -> Self {
+        let mut source = source.into();
+        let source_truncated = source.len() > ACTION_PRESENTATION_PROGRESS_MAX_SOURCE_BYTES;
+        if source_truncated {
+            let mut boundary = ACTION_PRESENTATION_PROGRESS_MAX_SOURCE_BYTES;
+            while !source.is_char_boundary(boundary) {
+                boundary = boundary.saturating_sub(1);
+            }
+            source.truncate(boundary);
+        }
+        Self {
+            turn_id: turn_id.into(),
+            action_id: action_id.into(),
+            execution,
+            revision,
+            component,
+            source,
+            source_truncated,
+        }
+    }
+}
 
 /// Error returned while projecting local execution output into a MAAP result.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -733,6 +842,61 @@ mod tests {
         assert_eq!(output.transport.as_str(), "spawned_shell");
         assert!(!output.sent_to_pane);
         assert_eq!(output.shell_output.exit_code, Some(0));
+    }
+
+    /// Executor presentation progress retains exact execution and component
+    /// identity without acquiring any action-result settlement semantics.
+    #[test]
+    fn action_presentation_progress_preserves_typed_identity() {
+        let progress = ActionPresentationProgress::new(
+            "turn-1",
+            "patch-1",
+            ActionPresentationExecutionIdentity::Transaction("transaction-1".to_string()),
+            7,
+            ActionPresentationComponentIdentity::confirmed_mutation(2, "src/lib.rs"),
+            "diff -- apply patch\n--- a/src/lib.rs\n+++ b/src/lib.rs\n",
+        );
+
+        assert_eq!(progress.turn_id, "turn-1");
+        assert_eq!(progress.action_id, "patch-1");
+        assert_eq!(progress.revision, 7);
+        assert_eq!(
+            progress.execution,
+            ActionPresentationExecutionIdentity::Transaction("transaction-1".to_string())
+        );
+        assert_eq!(
+            progress.component,
+            ActionPresentationComponentIdentity::ConfirmedMutation {
+                section_index: 2,
+                path: "src/lib.rs".to_string(),
+            }
+        );
+        assert!(progress.component.is_confirmed());
+        assert!(!progress.component.is_provisional());
+    }
+
+    /// Canonical cumulative progress source is bounded on a UTF-8 boundary so
+    /// slow presentation consumers cannot cause unbounded executor retention.
+    #[test]
+    fn action_presentation_progress_bounds_cumulative_source() {
+        let oversized = format!(
+            "{}é-tail",
+            "x".repeat(ACTION_PRESENTATION_PROGRESS_MAX_SOURCE_BYTES)
+        );
+        let progress = ActionPresentationProgress::new(
+            "turn-1",
+            "fetch-1",
+            ActionPresentationExecutionIdentity::Attempt("attempt-1".to_string()),
+            1,
+            ActionPresentationComponentIdentity::ProvisionalReadBody,
+            oversized,
+        );
+
+        assert!(progress.source.len() <= ACTION_PRESENTATION_PROGRESS_MAX_SOURCE_BYTES);
+        assert!(std::str::from_utf8(progress.source.as_bytes()).is_ok());
+        assert!(progress.source_truncated);
+        assert!(progress.component.is_provisional());
+        assert!(!progress.component.is_confirmed());
     }
 
     /// Verifies shell timeouts use one lower-owned turn budget for synthetic,

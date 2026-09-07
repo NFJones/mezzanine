@@ -439,6 +439,7 @@ impl RuntimeSessionService {
         self.process
             .shell_transaction_output_utf8_pending
             .remove(marker);
+        self.process.apply_patch_progress_decoders.remove(marker);
         self.process
             .shell_transaction_receiver_acknowledgements
             .remove(marker);

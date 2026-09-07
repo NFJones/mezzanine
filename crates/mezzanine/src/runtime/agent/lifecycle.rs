@@ -201,6 +201,7 @@ impl RuntimeSessionService {
     /// share this operation so provider claims, approvals, action bookkeeping,
     /// and retained execution context cannot outlive any terminal ledger path.
     fn clear_terminal_agent_turn_runtime_state(&mut self, turn_id: &str) {
+        let _ = self.retire_action_presentation_progress_for_turn(turn_id);
         self.agent_turn_contexts_mut().remove(turn_id);
         self.agent
             .agent_turn_native_shell_timeout_ms

@@ -41,7 +41,7 @@ use mez_mux::render::{
 };
 
 /// Content type for width-independent styled agent presentation records.
-const AGENT_PRESENTATION_STYLED_LINES_CONTENT_TYPE: &str =
+pub(super) const AGENT_PRESENTATION_STYLED_LINES_CONTENT_TYPE: &str =
     "application/vnd.mezzanine.agent-presentation.styled-lines+json; charset=utf-8";
 /// Content type for a raw user prompt that must be wrapped at replay geometry.
 const AGENT_PRESENTATION_USER_PROMPT_CONTENT_TYPE: &str =
@@ -110,7 +110,7 @@ fn catch_agent_terminal_presentation_panic(context: &str, operation: impl FnOnce
 
 impl RuntimeSessionService {
     /// Returns the active conversation and layout size for one presentation target.
-    fn agent_presentation_target(&self, pane_id: &str) -> Result<(String, Size)> {
+    pub(super) fn agent_presentation_target(&self, pane_id: &str) -> Result<(String, Size)> {
         let descriptor = self.find_pane_descriptor(pane_id).ok_or_else(|| {
             MezError::new(
                 crate::error::MezErrorKind::NotFound,
@@ -128,7 +128,7 @@ impl RuntimeSessionService {
     }
 
     /// Ensures the agent destination is bound to the pane's active conversation.
-    fn ensure_current_agent_presentation_screen(&mut self, pane_id: &str) -> Result<()> {
+    pub(super) fn ensure_current_agent_presentation_screen(&mut self, pane_id: &str) -> Result<()> {
         if self.agent_shell_store().get(pane_id).is_none() {
             self.agent_shell_store_mut().ensure_session(pane_id)?;
         }
@@ -271,7 +271,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns the display cells available after the agent transcript gutter.
-    fn agent_terminal_markdown_frame_width(&self, pane_id: &str) -> Result<usize> {
+    pub(super) fn agent_terminal_markdown_frame_width(&self, pane_id: &str) -> Result<usize> {
         let columns = self.agent_terminal_presentation_columns(pane_id)?;
         Ok(bounded_agent_terminal_presentation_columns(
             columns,
@@ -343,7 +343,7 @@ impl RuntimeSessionService {
     }
 
     /// Persists one durable user-visible agent presentation entry.
-    fn persist_agent_presentation_entry(
+    pub(super) fn persist_agent_presentation_entry(
         &mut self,
         pane_id: &str,
         style_names: Vec<String>,
@@ -835,6 +835,10 @@ impl RuntimeSessionService {
             .contains_key(pane_id)
             || self
                 .presentation
+                .action_presentation_progress
+                .contains_key(pane_id)
+            || self
+                .presentation
                 .agent_streaming_say_presentations
                 .contains_key(pane_id);
         let (cached_entries, cached_latest_sequence) = self
@@ -886,6 +890,11 @@ impl RuntimeSessionService {
                 .agent_shell_output_previews
                 .get(pane_id)
                 .cloned(),
+            action_presentation_progress: self
+                .presentation
+                .action_presentation_progress
+                .get(pane_id)
+                .cloned(),
             streaming_say_presentation: self
                 .presentation
                 .agent_streaming_say_presentations
@@ -911,6 +920,7 @@ impl RuntimeSessionService {
         }
         if let Some(snapshot) = work.cached_snapshot.as_ref()
             && work.shell_output_previews.is_none()
+            && work.action_presentation_progress.is_none()
             && work.streaming_say_presentation.is_none()
         {
             return Ok(Some(crate::runtime::RuntimeAgentPresentationResizeResult {
@@ -930,6 +940,7 @@ impl RuntimeSessionService {
                 replayed_entries: 0,
                 cacheable_snapshot: true,
                 shell_output_previews: None,
+                action_presentation_progress: None,
                 streaming_say_presentation: None,
             }));
         }
@@ -947,8 +958,9 @@ impl RuntimeSessionService {
             .max()
             .unwrap_or_default();
         let decoded_entries = (!decoded_cache_hit).then(|| entries.clone());
-        let cacheable_snapshot =
-            work.shell_output_previews.is_none() && work.streaming_say_presentation.is_none();
+        let cacheable_snapshot = work.shell_output_previews.is_none()
+            && work.action_presentation_progress.is_none()
+            && work.streaming_say_presentation.is_none();
         let mut projection = RuntimeSessionService::for_agent_presentation_projection(
             work.session,
             work.socket_path,
@@ -977,6 +989,13 @@ impl RuntimeSessionService {
                 .presentation
                 .agent_shell_output_previews
                 .insert(work.pane_id.clone(), preview);
+        }
+        if let Some(mut progress) = work.action_presentation_progress {
+            progress.installed_lineage = projection_lineage;
+            projection
+                .presentation
+                .action_presentation_progress
+                .insert(work.pane_id.clone(), progress);
         }
         if let Some(mut streaming) = work.streaming_say_presentation {
             streaming.installed_lineage = projection_lineage;
@@ -1015,6 +1034,10 @@ impl RuntimeSessionService {
             shell_output_previews: projection
                 .presentation
                 .agent_shell_output_previews
+                .remove(&work.pane_id),
+            action_presentation_progress: projection
+                .presentation
+                .action_presentation_progress
                 .remove(&work.pane_id),
             streaming_say_presentation: projection
                 .presentation
@@ -1083,6 +1106,9 @@ impl RuntimeSessionService {
             .agent_shell_output_previews
             .remove(&result.pane_id);
         self.presentation
+            .action_presentation_progress
+            .remove(&result.pane_id);
+        self.presentation
             .agent_streaming_say_presentations
             .remove(&result.pane_id);
         if let Some(mut preview) = result.shell_output_previews.take() {
@@ -1090,6 +1116,12 @@ impl RuntimeSessionService {
             self.presentation
                 .agent_shell_output_previews
                 .insert(result.pane_id.clone(), preview);
+        }
+        if let Some(mut progress) = result.action_presentation_progress.take() {
+            progress.installed_lineage = installed_lineage;
+            self.presentation
+                .action_presentation_progress
+                .insert(result.pane_id.clone(), progress);
         }
         if let Some(mut streaming) = result.streaming_say_presentation.take() {
             streaming.installed_lineage = installed_lineage;
@@ -1597,7 +1629,7 @@ impl RuntimeSessionService {
     /// - `screen`: The pane screen receiving rendered bytes.
     /// - `bytes`: The already-sanitized terminal bytes to feed.
     /// - `context`: A short description of the presentation operation.
-    fn feed_agent_terminal_screen(
+    pub(super) fn feed_agent_terminal_screen(
         screen: &mut TerminalScreen,
         bytes: &[u8],
         context: &str,
@@ -3238,7 +3270,7 @@ impl RuntimeSessionService {
     }
 
     /// Projects all active shell previews onto one preview-free pane screen.
-    fn append_agent_shell_previews_to_screen(
+    pub(super) fn append_agent_shell_previews_to_screen(
         screen: &mut TerminalScreen,
         previews: &std::collections::BTreeMap<
             RuntimeAgentShellPreviewOwner,
@@ -3345,6 +3377,11 @@ impl RuntimeSessionService {
         baseline_screen: TerminalScreen,
         presentation: Option<super::super::RuntimeAgentShellPreviewPresentation>,
     ) -> Result<()> {
+        let current_lineage = self
+            .agent_pane_screen_lineage(pane_id, conversation_id)
+            .ok_or_else(|| {
+                MezError::invalid_state("agent durable presentation lineage was not initialized")
+            })?;
         let mut composite_screen = baseline_screen.clone();
         let mut presentation = presentation;
         if let Some(presentation) = presentation.as_ref() {
@@ -3357,6 +3394,13 @@ impl RuntimeSessionService {
                 max_preview_rows,
             )?;
         }
+        let (composite_screen, progress_presentation) = self
+            .compose_action_presentation_progress_over(
+                pane_id,
+                conversation_id,
+                current_lineage,
+                composite_screen,
+            )?;
         let installed_lineage = self
             .update_agent_pane_screen_preserving_interaction(
                 pane_id,
@@ -3376,6 +3420,11 @@ impl RuntimeSessionService {
                 .agent_shell_output_previews
                 .insert(pane_id.to_string(), presentation);
         }
+        self.restore_composed_action_presentation_progress(
+            pane_id,
+            installed_lineage,
+            progress_presentation,
+        );
         Ok(())
     }
 
@@ -3434,6 +3483,16 @@ impl RuntimeSessionService {
                     && streaming.installed_lineage == current_lineage
             })
             .map(|streaming| streaming.provider_screen.as_ref().clone())
+            .or_else(|| {
+                self.presentation
+                    .action_presentation_progress
+                    .get(pane_id)
+                    .filter(|progress| {
+                        progress.conversation_id == conversation_id
+                            && progress.installed_lineage == current_lineage
+                    })
+                    .map(|progress| progress.baseline_screen.as_ref().clone())
+            })
             .unwrap_or_else(|| current_screen.clone());
         let mut presentation = self
             .presentation
@@ -3486,6 +3545,12 @@ impl RuntimeSessionService {
             &ui_theme,
             max_preview_rows,
         )?;
+        let (candidate, progress_presentation) = self.compose_action_presentation_progress_over(
+            pane_id,
+            &conversation_id,
+            current_lineage,
+            candidate,
+        )?;
         let installed_lineage = self
             .update_agent_pane_screen_preserving_interaction(pane_id, &conversation_id, candidate)
             .ok_or_else(|| {
@@ -3509,6 +3574,11 @@ impl RuntimeSessionService {
         self.presentation
             .agent_shell_output_previews
             .insert(pane_id.to_string(), presentation);
+        self.restore_composed_action_presentation_progress(
+            pane_id,
+            installed_lineage,
+            progress_presentation,
+        );
         Ok(())
     }
 

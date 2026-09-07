@@ -129,13 +129,33 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
         .get_mut(&marker)
         .unwrap();
     transaction.command = "# __MEZ_APPLY_PATCH_WRITE_PHASE__".to_string();
-    transaction.observed_output_preview = format!(
+    let diff = format!(
         "diff -- apply patch\n--- /dev/null\n+++ b/{target_rel}\n@@ -0,0 +1,2 @@\n+alpha\n+beta\n"
     );
-    transaction.observed_output_bytes = transaction.observed_output_preview.len();
+    let encoded_path = base64::engine::general_purpose::STANDARD.encode(target_rel.as_bytes());
+    let framed_output = format!(
+        "{} 0 {encoded_path} {}\n{}{} APPLIED 0 {encoded_path} {}\n",
+        mez_agent::semantic_patch_planning::APPLY_PATCH_DIFF_MARKER,
+        diff.len(),
+        diff,
+        mez_agent::semantic_patch_planning::APPLY_PATCH_RESULT_MARKER,
+        diff.len(),
+    );
     service
         .observe_agent_shell_transaction_start("%1", &marker, "turn-1", "agent-%1", "%1")
         .unwrap();
+    service.record_running_shell_transaction_output("%1", framed_output.as_bytes());
+    let early_progress = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(early_progress.contains("+alpha"), "{early_progress}");
+    assert_eq!(
+        service.action_presentation_progress_counts_for_tests("%1"),
+        (0, 1),
+        "confirmed patch output must promote before transaction completion"
+    );
     service
         .observe_agent_shell_transaction_end("%1", &marker, "turn-1", "agent-%1", "%1", 0)
         .unwrap();
