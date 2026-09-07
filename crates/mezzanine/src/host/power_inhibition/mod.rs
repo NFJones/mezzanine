@@ -6,16 +6,20 @@
 //! transition is idempotent, display acquisition never discards a successful
 //! system lease, and drop releases every retained lease in display-first order.
 
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 mod service;
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 mod unsupported;
 
+#[cfg(target_os = "linux")]
+pub(crate) use linux::LinuxDbusPowerInhibitionBackend;
 #[cfg(target_os = "macos")]
 pub(crate) use macos::MacOsPowerInhibitionBackend;
 pub(crate) use service::{PowerInhibitionHandle, PowerInhibitionWorker, power_inhibition_service};
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(crate) use unsupported::UnsupportedPowerInhibitionBackend;
 
 /// The power resources Mez may acquire for currently active agent work.
@@ -49,6 +53,8 @@ pub(crate) enum PowerInhibitionState {
 /// Native adapter family used by one session power worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PowerInhibitionBackendKind {
+    /// Native Linux logind and ScreenSaver D-Bus inhibitors.
+    LinuxDbus,
     /// Native macOS IOKit assertions.
     MacOsIokit,
     /// No native adapter is available for this host platform.
@@ -93,11 +99,24 @@ pub(crate) enum PowerInhibitionResource {
 /// One opaque platform-owned power-inhibition lease.
 ///
 /// Implementations retain every native value needed for cleanup. A failed
-/// explicit release must preserve ownership so the controller can retry; drop
-/// performs one final best-effort release without exposing platform handles.
+/// explicit release normally preserves ownership so the controller can retry;
+/// an adapter that falls back to connection teardown must instead report that
+/// it is no longer held. Drop performs one final best-effort release without
+/// exposing platform handles.
 pub(crate) trait PowerInhibitionLease: std::fmt::Debug + Send {
-    /// Releases this lease. Failure must leave it owned and retryable.
+    /// Releases this lease. Failure must leave it retryable unless cleanup
+    /// fallback made `is_held` false.
     fn release(&mut self) -> std::result::Result<(), String>;
+
+    /// Returns whether the native resource is still believed to be owned.
+    fn is_held(&self) -> bool {
+        true
+    }
+
+    /// Performs one adapter-bounded liveness check for retained ownership.
+    fn health_check(&mut self) -> std::result::Result<(), String> {
+        Ok(())
+    }
 }
 
 /// Native host interface used by the transition controller.
@@ -176,7 +195,11 @@ impl<B: PowerInhibitionBackend> PowerInhibitionController<B> {
 
     /// Returns confirmed ownership of the system-sleep resource.
     pub(crate) fn system_resource_state(&self) -> PowerInhibitionResourceState {
-        if self.system_lease.is_some() {
+        if self
+            .system_lease
+            .as_ref()
+            .is_some_and(|lease| lease.is_held())
+        {
             PowerInhibitionResourceState::Held
         } else {
             PowerInhibitionResourceState::NotHeld
@@ -185,7 +208,11 @@ impl<B: PowerInhibitionBackend> PowerInhibitionController<B> {
 
     /// Returns confirmed ownership of the display-sleep resource.
     pub(crate) fn display_resource_state(&self) -> PowerInhibitionResourceState {
-        if self.display_lease.is_some() {
+        if self
+            .display_lease
+            .as_ref()
+            .is_some_and(|lease| lease.is_held())
+        {
             PowerInhibitionResourceState::Held
         } else {
             PowerInhibitionResourceState::NotHeld
@@ -194,16 +221,18 @@ impl<B: PowerInhibitionBackend> PowerInhibitionController<B> {
 
     /// Returns whether owned leases exactly satisfy one desired mode.
     pub(crate) fn satisfies(&self, mode: PowerInhibitionMode) -> bool {
+        let system_held = self
+            .system_lease
+            .as_ref()
+            .is_some_and(|lease| lease.is_held());
+        let display_held = self
+            .display_lease
+            .as_ref()
+            .is_some_and(|lease| lease.is_held());
         match mode {
-            PowerInhibitionMode::Disabled => {
-                self.system_lease.is_none() && self.display_lease.is_none()
-            }
-            PowerInhibitionMode::System => {
-                self.system_lease.is_some() && self.display_lease.is_none()
-            }
-            PowerInhibitionMode::SystemAndDisplay => {
-                self.system_lease.is_some() && self.display_lease.is_some()
-            }
+            PowerInhibitionMode::Disabled => !system_held && !display_held,
+            PowerInhibitionMode::System => system_held && !display_held,
+            PowerInhibitionMode::SystemAndDisplay => system_held && display_held,
         }
     }
 
@@ -230,11 +259,22 @@ impl<B: PowerInhibitionBackend> PowerInhibitionController<B> {
     }
 
     fn acquire_system(&mut self) {
-        if self.system_lease.is_some() {
-            return;
+        if let Some(lease) = self.system_lease.as_mut() {
+            if let Err(error) = lease.health_check() {
+                self.last_error = Some(error);
+                self.last_error_class = Some(PowerInhibitionErrorClass::SystemAcquire);
+            }
+            if lease.is_held() {
+                return;
+            }
+            self.system_lease = None;
         }
         match self.backend.acquire(PowerInhibitionResource::System) {
-            Ok(lease) => self.system_lease = Some(lease),
+            Ok(lease) => {
+                self.system_lease = Some(lease);
+                self.last_error = None;
+                self.last_error_class = None;
+            }
             Err(error) => {
                 self.last_error = Some(error);
                 self.last_error_class = Some(PowerInhibitionErrorClass::SystemAcquire);
@@ -244,11 +284,22 @@ impl<B: PowerInhibitionBackend> PowerInhibitionController<B> {
     }
 
     fn acquire_display(&mut self) {
-        if self.display_lease.is_some() {
-            return;
+        if let Some(lease) = self.display_lease.as_mut() {
+            if let Err(error) = lease.health_check() {
+                self.last_error = Some(error);
+                self.last_error_class = Some(PowerInhibitionErrorClass::DisplayAcquire);
+            }
+            if lease.is_held() {
+                return;
+            }
+            self.display_lease = None;
         }
         match self.backend.acquire(PowerInhibitionResource::Display) {
-            Ok(lease) => self.display_lease = Some(lease),
+            Ok(lease) => {
+                self.display_lease = Some(lease);
+                self.last_error = None;
+                self.last_error_class = None;
+            }
             Err(error) => {
                 self.last_error = Some(error);
                 self.last_error_class = Some(PowerInhibitionErrorClass::DisplayAcquire);
@@ -265,6 +316,9 @@ impl<B: PowerInhibitionBackend> PowerInhibitionController<B> {
             Err(error) => {
                 self.last_error = Some(error);
                 self.last_error_class = Some(PowerInhibitionErrorClass::DisplayRelease);
+                if !lease.is_held() {
+                    self.display_lease = None;
+                }
             }
         }
     }
@@ -279,6 +333,9 @@ impl<B: PowerInhibitionBackend> PowerInhibitionController<B> {
                 Err(error) => {
                     self.last_error = Some(error);
                     self.last_error_class = Some(PowerInhibitionErrorClass::SystemRelease);
+                    if !lease.is_held() {
+                        self.system_lease = None;
+                    }
                 }
             }
         }
@@ -286,7 +343,15 @@ impl<B: PowerInhibitionBackend> PowerInhibitionController<B> {
     }
 
     fn refresh_state(&mut self) {
-        self.state = match (self.system_lease.is_some(), self.display_lease.is_some()) {
+        let system_held = self
+            .system_lease
+            .as_ref()
+            .is_some_and(|lease| lease.is_held());
+        let display_held = self
+            .display_lease
+            .as_ref()
+            .is_some_and(|lease| lease.is_held());
+        self.state = match (system_held, display_held) {
             (true, true) => PowerInhibitionState::SystemAndDisplay,
             (true, false) if self.last_error.is_some() => PowerInhibitionState::SystemOnly,
             (true, false) => PowerInhibitionState::System,
@@ -316,9 +381,16 @@ pub(crate) fn production_power_inhibition_controller()
     PowerInhibitionController::new(Box::new(MacOsPowerInhibitionBackend::new()))
 }
 
+/// Creates the native Linux D-Bus controller.
+#[cfg(target_os = "linux")]
+pub(crate) fn production_power_inhibition_controller()
+-> PowerInhibitionController<Box<dyn PowerInhibitionBackend>> {
+    PowerInhibitionController::new(Box::new(LinuxDbusPowerInhibitionBackend::new()))
+}
+
 /// Creates the unavailable production controller on platforms without a
 /// backend in this milestone.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(crate) fn production_power_inhibition_controller()
 -> PowerInhibitionController<Box<dyn PowerInhibitionBackend>> {
     PowerInhibitionController::new(Box::new(UnsupportedPowerInhibitionBackend))

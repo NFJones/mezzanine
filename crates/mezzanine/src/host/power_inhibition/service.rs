@@ -21,11 +21,13 @@ use super::{
 
 const PRODUCTION_INITIAL_RETRY_DELAY: Duration = Duration::from_secs(1);
 const PRODUCTION_MAX_RETRY_DELAY: Duration = Duration::from_secs(60);
+const PRODUCTION_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy)]
 struct PowerInhibitionRetryPolicy {
     initial_delay: Duration,
     max_delay: Duration,
+    health_check_interval: Duration,
 }
 
 impl Default for PowerInhibitionRetryPolicy {
@@ -33,6 +35,7 @@ impl Default for PowerInhibitionRetryPolicy {
         Self {
             initial_delay: PRODUCTION_INITIAL_RETRY_DELAY,
             max_delay: PRODUCTION_MAX_RETRY_DELAY,
+            health_check_interval: PRODUCTION_HEALTH_CHECK_INTERVAL,
         }
     }
 }
@@ -186,7 +189,7 @@ impl Drop for PowerInhibitionHandle {
 /// Final outcome of a power worker after terminal cleanup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PowerInhibitionWorkerReport {
-    /// Number of distinct desired generations reconciled by the worker.
+    /// Number of reconciliation attempts, including periodic health checks.
     pub(crate) work_units: u64,
     /// Final snapshot after the last publisher requested terminal cleanup.
     pub(crate) final_snapshot: PowerInhibitionSnapshot,
@@ -211,11 +214,15 @@ impl<B: PowerInhibitionBackend> PowerInhibitionWorker<B> {
             let desired = {
                 let mut state = lock_shared(&self.shared);
                 while state.snapshot.desired_generation <= settled_generation && !state.closed {
-                    state = self
+                    let (next_state, wait) = self
                         .shared
                         .changed
-                        .wait(state)
+                        .wait_timeout(state, self.retry_policy.health_check_interval)
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    state = next_state;
+                    if wait.timed_out() {
+                        break;
+                    }
                 }
                 if state.closed
                     && state.snapshot.desired_generation <= settled_generation
@@ -337,6 +344,7 @@ mod tests {
         entered_acquire: AtomicBool,
         system_acquire_failures: AtomicUsize,
         display_acquire_failures: AtomicUsize,
+        display_health_failures: AtomicUsize,
         release_failures: AtomicUsize,
         gate: Condvar,
         gate_lock: Mutex<()>,
@@ -375,6 +383,20 @@ mod tests {
                     return Err("release unavailable".to_string());
                 }
                 self.released = true;
+            }
+            Ok(())
+        }
+
+        fn is_held(&self) -> bool {
+            !self.released
+        }
+
+        fn health_check(&mut self) -> std::result::Result<(), String> {
+            if self.resource == PowerInhibitionResource::Display
+                && FakeState::fail_next(&self.state.display_health_failures)
+            {
+                self.released = true;
+                return Err("display owner changed".to_string());
             }
             Ok(())
         }
@@ -440,6 +462,7 @@ mod tests {
             PowerInhibitionRetryPolicy {
                 initial_delay: Duration::from_millis(5),
                 max_delay: Duration::from_millis(20),
+                health_check_interval: Duration::from_secs(5),
             },
         );
         (state, handle, worker)
@@ -461,6 +484,29 @@ mod tests {
             PowerInhibitionRetryPolicy {
                 initial_delay: retry_delay,
                 max_delay: retry_delay,
+                health_check_interval: Duration::from_secs(5),
+            },
+        );
+        (state, handle, worker)
+    }
+
+    fn fake_service_with_health_check_interval(
+        health_check_interval: Duration,
+    ) -> (
+        Arc<FakeState>,
+        PowerInhibitionHandle,
+        PowerInhibitionWorker<FakeBackend>,
+    ) {
+        let state = Arc::new(FakeState::default());
+        let controller = PowerInhibitionController::new(FakeBackend {
+            state: Arc::clone(&state),
+        });
+        let (handle, worker) = power_inhibition_service_with_retry_policy(
+            controller,
+            PowerInhibitionRetryPolicy {
+                initial_delay: Duration::from_millis(5),
+                max_delay: Duration::from_millis(20),
+                health_check_interval,
             },
         );
         (state, handle, worker)
@@ -696,6 +742,38 @@ mod tests {
             PowerInhibitionMode::System
         );
 
+        drop(handle);
+        let _ = worker.join().unwrap();
+    }
+
+    /// Verifies periodic worker reconciliation notices a display lease whose
+    /// service owner vanished and reacquires it without a new desired generation.
+    #[test]
+    fn health_check_reacquires_lost_display_lease() {
+        let (state, handle, worker) =
+            fake_service_with_health_check_interval(Duration::from_millis(5));
+        let worker = std::thread::spawn(move || worker.run());
+        handle.publish(PowerInhibitionMode::SystemAndDisplay);
+        wait_until(|| handle.snapshot().confirmed_generation == 1);
+
+        state.display_health_failures.store(1, Ordering::Release);
+        wait_until(|| {
+            state
+                .calls()
+                .iter()
+                .filter(|call| *call == "acquire:Display")
+                .count()
+                == 2
+        });
+
+        let snapshot = handle.snapshot();
+        assert_eq!(snapshot.desired_generation, 1);
+        assert_eq!(snapshot.confirmed_generation, 1);
+        assert_eq!(snapshot.state, PowerInhibitionState::SystemAndDisplay);
+        assert_eq!(
+            snapshot.display_resource,
+            PowerInhibitionResourceState::Held
+        );
         drop(handle);
         let _ = worker.join().unwrap();
     }

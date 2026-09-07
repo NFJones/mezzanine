@@ -2620,6 +2620,7 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width",
  "urlencoding",
+ "zbus",
  "zbus-secret-service-keyring-store",
  "zeroize",
  "zstd",

@@ -58,6 +58,12 @@ zstd = "0.13"
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 zbus-secret-service-keyring-store = { version = "1.0", features = ["rt-tokio-crypto-rust"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "=5.19.0", default-features = false, features = ["tokio"] }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+zbus = { version = "=5.19.0", default-features = false, features = ["bus-impl", "tokio"] }
+
 [dev-dependencies]
 portable-pty = "0.9"
 tokio = { version = "1", features = ["test-util"] }
