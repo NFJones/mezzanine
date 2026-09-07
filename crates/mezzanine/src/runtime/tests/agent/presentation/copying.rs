@@ -167,14 +167,12 @@ fn runtime_agent_shell_copy_writes_latest_say_text_to_destinations() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![
                     mez_agent::AgentAction {
                         id: "say-1".to_string(),
-                        rationale: "give an earlier answer".to_string(),
+
                         payload: mez_agent::AgentActionPayload::Say {
                             status: mez_agent::SayStatus::Final,
                             text: "Earlier say text.".to_string(),
@@ -184,7 +182,7 @@ fn runtime_agent_shell_copy_writes_latest_say_text_to_destinations() {
                     },
                     mez_agent::AgentAction {
                         id: "say-2".to_string(),
-                        rationale: "give the answer that should be copied".to_string(),
+
                         payload: mez_agent::AgentActionPayload::Say {
                             status: mez_agent::SayStatus::Final,
                             text: "Latest say text.".to_string(),
@@ -193,7 +191,6 @@ fn runtime_agent_shell_copy_writes_latest_say_text_to_destinations() {
                         },
                     },
                 ],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -346,20 +343,17 @@ fn runtime_agent_copy_trace_log_retains_hidden_trace_and_writes_destinations() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "say-1".to_string(),
-                    rationale: "retain trace details".to_string(),
+
                     payload: mez_agent::AgentActionPayload::Say {
                         status: mez_agent::SayStatus::Final,
                         text: "Trace retained.".to_string(),
                         content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                     },
                 }],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -564,7 +558,7 @@ fn runtime_agent_copy_patches_writes_retained_patches_to_destinations() {
     let patch = format!("*** Begin Patch\n*** Add File: {target_rel}\n+alpha\n*** End Patch");
     let action = mez_agent::AgentAction {
         id: "patch-1".to_string(),
-        rationale: "write a note".to_string(),
+
         payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: patch.clone(),
             strip: None,
@@ -582,12 +576,9 @@ fn runtime_agent_copy_patches_writes_retained_patches_to_destinations() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![action],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -705,19 +696,16 @@ fn runtime_agent_copy_patches_retains_reused_action_id_attempts() {
                 latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: Some(mez_agent::MaapBatch {
-                    protocol: "maap/1".to_string(),
                     rationale: "test action batch rationale".to_string(),
-                    turn_id: turn.turn_id.clone(),
-                    agent_id: turn.agent_id.clone(),
+
                     actions: vec![mez_agent::AgentAction {
                         id: result.action_id.clone(),
-                        rationale: "apply a source patch".to_string(),
+
                         payload: mez_agent::AgentActionPayload::ApplyPatch {
                             patch: patch.to_string(),
                             strip: None,
                         },
                     }],
-                    final_turn: false,
                 }),
                 provider_transcript_events: Vec::new(),
             },
@@ -729,7 +717,7 @@ fn runtime_agent_copy_patches_retains_reused_action_id_attempts() {
         };
     let action_for_result = |patch: &str| mez_agent::AgentAction {
         id: "patch-retry".to_string(),
-        rationale: "apply a source patch".to_string(),
+
         payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: patch.to_string(),
             strip: None,

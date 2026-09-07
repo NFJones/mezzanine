@@ -813,7 +813,7 @@ mod tests {
 
     /// Builds one provider response containing a single capability request.
     fn capability_response(
-        turn: &AgentTurnRecord,
+        _turn: &AgentTurnRecord,
         action_id: &str,
         capability: AgentCapability,
         reason: &str,
@@ -826,26 +826,21 @@ mod tests {
             latest_request_usage: None,
             quota_usage: Vec::new(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "request capability".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
                     id: action_id.to_string(),
-                    rationale: "request capability".to_string(),
                     payload: AgentActionPayload::RequestCapability {
                         capability,
                         reason: reason.to_string(),
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         }
     }
 
     /// Builds one final response-only action for a successfully bounded turn.
-    fn final_response(turn: &AgentTurnRecord) -> ModelResponse {
+    fn final_response(_turn: &AgentTurnRecord) -> ModelResponse {
         ModelResponse {
             provider: "test".to_string(),
             model: "test-model".to_string(),
@@ -854,20 +849,15 @@ mod tests {
             latest_request_usage: None,
             quota_usage: Vec::new(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "finish the task".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
                     id: "say-final".to_string(),
-                    rationale: "finish the turn".to_string(),
                     payload: AgentActionPayload::Say {
                         status: SayStatus::Final,
                         text: "Done.".to_string(),
                         content_type: "text/plain".to_string(),
                     },
                 }],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         }
@@ -1092,7 +1082,6 @@ mod tests {
         };
         let action = AgentAction {
             id: "say-1".to_string(),
-            rationale: "finish the turn".to_string(),
             payload: AgentActionPayload::Say {
                 status: SayStatus::Final,
                 text: "Done.".to_string(),
@@ -1108,12 +1097,8 @@ mod tests {
                 latest_request_usage: None,
                 quota_usage: Vec::new(),
                 action_batch: Some(MaapBatch {
-                    protocol: "maap/1".to_string(),
                     rationale: "finish the task".to_string(),
-                    turn_id: turn.turn_id.clone(),
-                    agent_id: turn.agent_id.clone(),
                     actions: vec![action],
-                    final_turn: true,
                 }),
                 provider_transcript_events: Vec::new(),
             }])),

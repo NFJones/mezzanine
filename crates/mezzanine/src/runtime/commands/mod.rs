@@ -1536,20 +1536,15 @@ mod tests {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "compact-as1".to_string(),
-                agent_id: "agent-%1".to_string(),
                 actions: vec![AgentAction {
                     id: "summary".to_string(),
-                    rationale: String::new(),
                     payload: mez_agent::AgentActionPayload::Say {
                         status: mez_agent::SayStatus::Final,
                         text: "## Summary\n\nKeep this.".to_string(),
                         content_type: "text/markdown; charset=utf-8".to_string(),
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         };

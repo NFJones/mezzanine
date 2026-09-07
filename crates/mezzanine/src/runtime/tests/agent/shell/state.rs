@@ -133,7 +133,7 @@ fn path_resolution_effects() -> mez_agent::permissions::EffectiveCommandEffects 
 fn sandbox_audit_action() -> mez_agent::AgentAction {
     mez_agent::AgentAction {
         id: "sandbox-audit-action".to_string(),
-        rationale: "exercise sandbox audit metadata".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Inspect a protected fixture".to_string(),
             command: "cat /private/workspace/secret.txt".to_string(),
@@ -1059,7 +1059,7 @@ fn runtime_semantic_patch_with_env_whitelist_uses_no_forwarding_profile() {
 
     let action = mez_agent::AgentAction {
         id: action_id.to_string(),
-        rationale: "exercise semantic patch sandbox dispatch".to_string(),
+
         payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: "*** Begin Patch\n*** Add File: note.txt\n+hello\n*** End Patch".to_string(),
             strip: None,
@@ -1319,7 +1319,7 @@ fn sandbox_fallback_execution_service() -> (RuntimeSessionService, String, Strin
     let action_id = "sandbox-fallback-shell".to_string();
     let action = mez_agent::AgentAction {
         id: action_id.clone(),
-        rationale: "inspect the environment".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Inspect the environment".to_string(),
             command: "env".to_string(),
@@ -1347,12 +1347,9 @@ fn sandbox_fallback_execution_service() -> (RuntimeSessionService, String, Strin
                 latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: Some(mez_agent::MaapBatch {
-                    protocol: "maap/1".to_string(),
                     rationale: "exercise sandbox fallback".to_string(),
-                    turn_id: turn.turn_id.clone(),
-                    agent_id: turn.agent_id.clone(),
+
                     actions: vec![action],
-                    final_turn: false,
                 }),
                 provider_transcript_events: Vec::new(),
             },
@@ -2502,7 +2499,7 @@ fn runtime_seatbelt_pane_dispatch_retains_backend_and_cleans_workload_lease() {
 
     let action = mez_agent::AgentAction {
         id: "workload".to_string(),
-        rationale: "exercise Seatbelt workload ownership".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Print working directory".to_string(),
             command: "pwd".to_string(),

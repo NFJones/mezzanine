@@ -3317,12 +3317,11 @@ impl RuntimeSessionService {
                         && source.complete
                         && !bounded_command_preview_source(&source.text).truncated
                         && batch.actions.get(*action_index).is_some_and(|action| {
-                            action.rationale.trim().is_empty()
-                                && matches!(
-                                    &action.payload,
-                                    mez_agent::AgentActionPayload::ShellCommand { command, .. }
-                                        if command == &source.text
-                                )
+                            matches!(
+                                &action.payload,
+                                mez_agent::AgentActionPayload::ShellCommand { command, .. }
+                                    if command == &source.text
+                            )
                         })
                         && execution.action_results.first().is_some_and(|result| {
                             result.action_id == batch.actions[*action_index].id

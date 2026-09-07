@@ -704,7 +704,7 @@ fn runtime_executes_memory_actions_and_audits_action_arguments() {
         .unwrap();
     let search = mez_agent::AgentAction {
         id: "mem-search".to_string(),
-        rationale: "search memory".to_string(),
+
         payload: mez_agent::AgentActionPayload::MemorySearch {
             query: "prompt cache".to_string(),
             limit: Some(3),
@@ -712,7 +712,7 @@ fn runtime_executes_memory_actions_and_audits_action_arguments() {
     };
     let store_action = mez_agent::AgentAction {
         id: "mem-store".to_string(),
-        rationale: "store memory".to_string(),
+
         payload: mez_agent::AgentActionPayload::MemoryStore {
             kind: "research".to_string(),
             priority: Some(80),
@@ -732,12 +732,9 @@ fn runtime_executes_memory_actions_and_audits_action_arguments() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![search.clone(), store_action.clone()],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -853,7 +850,7 @@ fn runtime_memory_store_rejects_episode_and_scratch_kinds() {
         .into_iter()
         .map(|kind| mez_agent::AgentAction {
             id: format!("mem-{kind}"),
-            rationale: "store transient memory".to_string(),
+
             payload: mez_agent::AgentActionPayload::MemoryStore {
                 kind: kind.to_string(),
                 priority: Some(50),
@@ -874,12 +871,9 @@ fn runtime_memory_store_rejects_episode_and_scratch_kinds() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: actions.clone(),
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -982,7 +976,7 @@ fn runtime_memory_disabled_failure_tells_model_to_continue_without_retrying_memo
         .unwrap();
     let action = mez_agent::AgentAction {
         id: "mem-search".to_string(),
-        rationale: "search memory".to_string(),
+
         payload: mez_agent::AgentActionPayload::MemorySearch {
             query: "prompt cache".to_string(),
             limit: Some(3),
@@ -998,12 +992,9 @@ fn runtime_memory_disabled_failure_tells_model_to_continue_without_retrying_memo
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![action.clone()],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },

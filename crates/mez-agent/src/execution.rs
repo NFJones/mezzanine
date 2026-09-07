@@ -784,7 +784,7 @@ mod tests {
     fn action() -> AgentAction {
         AgentAction {
             id: "mcp-1".to_string(),
-            rationale: "inspect remote state".to_string(),
+
             payload: AgentActionPayload::McpCall {
                 server: "issues".to_string(),
                 tool: "query".to_string(),
@@ -797,7 +797,7 @@ mod tests {
     fn shell_action() -> AgentAction {
         AgentAction {
             id: "shell-1".to_string(),
-            rationale: "inspect state".to_string(),
+
             payload: AgentActionPayload::ShellCommand {
                 summary: "inspect state".to_string(),
                 command: "false".to_string(),
@@ -979,7 +979,7 @@ mod tests {
     fn failed_apply_patch_projection_preserves_patch_diagnostic() {
         let action = AgentAction {
             id: "patch-1".to_string(),
-            rationale: "update note".to_string(),
+
             payload: AgentActionPayload::ApplyPatch {
                 patch: "*** Begin Patch\n*** Update File: note.txt\n@@\n-old\n+new\n*** End Patch"
                     .to_string(),

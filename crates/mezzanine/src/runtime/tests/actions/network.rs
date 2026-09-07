@@ -20,7 +20,7 @@ fn runtime_url_action_logs_single_action_line_in_normal_mode() {
         .unwrap();
     let action = mez_agent::AgentAction {
         id: "fetch-1".to_string(),
-        rationale: String::new(),
+
         payload: mez_agent::AgentActionPayload::FetchUrl {
             url: "https://example.test/file.txt".to_string(),
             format: None,
@@ -110,7 +110,7 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
         .unwrap();
     let success_action = mez_agent::AgentAction {
         id: "fetch-good".to_string(),
-        rationale: "capture one usable source".to_string(),
+
         payload: mez_agent::AgentActionPayload::FetchUrl {
             url: "https://example.test/ok".to_string(),
             format: None,
@@ -119,7 +119,7 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
     };
     let failed_action = mez_agent::AgentAction {
         id: "fetch-missing".to_string(),
-        rationale: "try a moved source".to_string(),
+
         payload: mez_agent::AgentActionPayload::FetchUrl {
             url: "https://example.test/missing".to_string(),
             format: None,
@@ -182,12 +182,9 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![success_action.clone(), failed_action.clone()],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },

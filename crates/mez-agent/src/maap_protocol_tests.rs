@@ -32,8 +32,6 @@ impl MaapBatchProductValidation for MaapBatch {
         available_mcp_tools: &[McpPromptTool],
     ) -> MaapContractResult<()> {
         self.validate_contract(&MaapValidationContext {
-            turn_id: "turn-1",
-            agent_id: "agent-1",
             available_mcp_servers,
             available_mcp_tools,
             validate_shell_command: &|_| Ok(()),
@@ -45,7 +43,7 @@ impl MaapBatchProductValidation for MaapBatch {
 fn shell_action(id: &str) -> AgentAction {
     AgentAction {
         id: id.to_string(),
-        rationale: "inspect current directory".to_string(),
+
         payload: AgentActionPayload::ShellCommand {
             summary: "Inspect the current directory".to_string(),
             command: "pwd".to_string(),
@@ -63,32 +61,23 @@ fn fenced_maap_parser_extracts_shell_action_batch() {
     let raw_text = r#"I will inspect the workspace.
 ```mezzanine-action-json
 {
-  "protocol": "maap/1",
-  "turn_id": "turn-1",
-  "agent_id": "agent-1",
   "rationale": "test action batch rationale",
   "actions": [
     {
-      "id": "a1",
       "type": "shell_command",
-      "rationale": "List files",
       "summary": "List files in the current directory",
       "command": "ls",
       "interactive": false,
       "stateful": false,
       "timeout_ms": null
     }
-  ],
-  "final": false
+  ]
 }
 ```
 "#;
 
     let batch = parse_fenced_maap_action_batch(raw_text).unwrap().unwrap();
 
-    assert_eq!(batch.protocol, "maap/1");
-    assert_eq!(batch.turn_id, "turn-1");
-    assert!(!batch.final_turn);
     assert_eq!(batch.actions.len(), 1);
     match &batch.actions[0].payload {
         AgentActionPayload::ShellCommand {
@@ -109,17 +98,12 @@ fn fenced_maap_parser_extracts_shell_action_batch() {
 fn fenced_maap_parser_rejects_missing_required_action_fields() {
     let raw_text = r#"```mezzanine-action-json
 {
-  "protocol": "maap/1",
-  "turn_id": "turn-1",
-  "agent_id": "agent-1",
   "rationale": "test action batch rationale",
   "actions": [
     {
-      "id": "say-1",
       "text": "hello"
     }
-  ],
-  "final": true
+  ]
 }
 ```"#;
 
@@ -220,20 +204,17 @@ fn maap_batch_accepts_issue_update_actions() {
 /// of treating a minor `final` flag mismatch as a protocol error.
 fn maap_batch_accepts_nonfinal_say_only_actions() {
     let batch = MaapBatch {
-        protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
-        turn_id: "turn-1".to_string(),
-        agent_id: "agent-1".to_string(),
+
         actions: vec![AgentAction {
             id: "say-1".to_string(),
-            rationale: "reply to user".to_string(),
+
             payload: AgentActionPayload::Say {
                 status: crate::SayStatus::Progress,
                 text: "I will search now".to_string(),
                 content_type: crate::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
             },
         }],
-        final_turn: false,
     };
 
     batch.validate(&turn(), &[], &[]).unwrap();
@@ -288,12 +269,9 @@ fn maap_batch_accepts_skill_actions() {
 /// implementation detail.
 fn maap_batch_rejects_duplicate_action_ids() {
     let batch = MaapBatch {
-        protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
-        turn_id: "turn-1".to_string(),
-        agent_id: "agent-1".to_string(),
+
         actions: vec![shell_action("a1"), shell_action("a1")],
-        final_turn: false,
     };
 
     let error = batch.validate(&turn(), &[], &[]).unwrap_err();
@@ -308,12 +286,9 @@ fn maap_batch_rejects_duplicate_action_ids() {
 /// empty values are rejected before execution can otherwise appear silent.
 fn maap_batch_rejects_empty_batch_rationale() {
     let batch = MaapBatch {
-        protocol: "maap/1".to_string(),
         rationale: "   ".to_string(),
-        turn_id: "turn-1".to_string(),
-        agent_id: "agent-1".to_string(),
+
         actions: vec![shell_action("a1")],
-        final_turn: false,
     };
 
     let error = batch.validate(&turn(), &[], &[]).unwrap_err();
@@ -331,12 +306,9 @@ fn maap_batch_rejects_empty_shell_command_summary() {
         summary.clear();
     }
     let batch = MaapBatch {
-        protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
-        turn_id: "turn-1".to_string(),
-        agent_id: "agent-1".to_string(),
+
         actions: vec![action],
-        final_turn: false,
     };
 
     let error = batch.validate(&turn(), &[], &[]).unwrap_err();
@@ -396,20 +368,17 @@ fn maap_batch_rejects_non_http_fetch_url_scheme() {
 /// implementation detail.
 fn maap_batch_rejects_unavailable_mcp_server() {
     let batch = MaapBatch {
-        protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
-        turn_id: "turn-1".to_string(),
-        agent_id: "agent-1".to_string(),
+
         actions: vec![AgentAction {
             id: "mcp-1".to_string(),
-            rationale: "call tool".to_string(),
+
             payload: AgentActionPayload::McpCall {
                 server: "fs".to_string(),
                 tool: "read".to_string(),
                 arguments_json: "{}".to_string(),
             },
         }],
-        final_turn: false,
     };
 
     let error = batch
@@ -424,20 +393,17 @@ fn maap_batch_rejects_unavailable_mcp_server() {
 /// advertised as currently available, even when the server itself is available.
 fn maap_batch_rejects_unavailable_mcp_tool() {
     let batch = MaapBatch {
-        protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
-        turn_id: "turn-1".to_string(),
-        agent_id: "agent-1".to_string(),
+
         actions: vec![AgentAction {
             id: "mcp-1".to_string(),
-            rationale: "call disabled tool".to_string(),
+
             payload: AgentActionPayload::McpCall {
                 server: "fs".to_string(),
                 tool: "write_file".to_string(),
                 arguments_json: "{}".to_string(),
             },
         }],
-        final_turn: false,
     };
     let available_tools = vec![McpPromptTool {
         server_id: "fs".to_string(),
@@ -470,12 +436,9 @@ fn maap_batch_rejects_zero_shell_command_timeout() {
         *timeout_ms = Some(0);
     }
     let batch = MaapBatch {
-        protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
-        turn_id: "turn-1".to_string(),
-        agent_id: "agent-1".to_string(),
+
         actions: vec![action],
-        final_turn: false,
     };
 
     let error = batch.validate(&turn(), &[], &[]).unwrap_err();
@@ -557,6 +520,51 @@ fn maap_parser_rejects_removed_batch_thought() {
 }
 
 #[test]
+/// Verifies provider output cannot supply runtime-owned batch metadata that is
+/// absent from the compact MAAP envelope.
+fn maap_parser_rejects_removed_batch_metadata() {
+    for field in ["protocol", "turn_id", "agent_id", "final"] {
+        let mut value = serde_json::json!({
+            "rationale": "test action batch rationale",
+            "actions": [{"type": "say", "status": "final", "text": "done"}]
+        });
+        value[field] = match field {
+            "final" => serde_json::json!(true),
+            _ => serde_json::json!("model-controlled"),
+        };
+
+        let error = parse_maap_action_batch_json_for_turn(&value.to_string(), "turn-1", "agent-1")
+            .unwrap_err();
+
+        assert_eq!(
+            error.message(),
+            format!("maap action batch contains unsupported field {field}")
+        );
+    }
+}
+
+#[test]
+/// Verifies provider output cannot supply action identity or action-local
+/// rationale, both of which are absent from the current action schemas.
+fn maap_parser_rejects_removed_action_metadata() {
+    for field in ["id", "rationale"] {
+        let mut value = serde_json::json!({
+            "rationale": "test action batch rationale",
+            "actions": [{"type": "say", "status": "final", "text": "done"}]
+        });
+        value["actions"][0][field] = serde_json::json!("model-controlled");
+
+        let error = parse_maap_action_batch_json_for_turn(&value.to_string(), "turn-1", "agent-1")
+            .unwrap_err();
+
+        assert_eq!(
+            error.message(),
+            format!("maap action contains unsupported field {field}")
+        );
+    }
+}
+
+#[test]
 /// Verifies compact provider-native MAAP output can omit runtime-owned batch
 /// fields and default shell fields. Mezzanine stamps identity locally and
 /// infers that executable actions require a follow-up provider continuation.
@@ -575,13 +583,8 @@ fn maap_parser_fills_compact_provider_defaults() {
 
     let batch = parse_maap_action_batch_json_for_turn(&raw_text, "turn-1", "agent-1").unwrap();
 
-    assert_eq!(batch.protocol, "maap/1");
     assert_eq!(batch.rationale, "test action batch rationale");
-    assert_eq!(batch.turn_id, "turn-1");
-    assert_eq!(batch.agent_id, "agent-1");
-    assert!(!batch.final_turn);
     assert_eq!(batch.actions[0].id, "action-1");
-    assert_eq!(batch.actions[0].rationale, "");
     match &batch.actions[0].payload {
         AgentActionPayload::ShellCommand {
             interactive,
@@ -725,30 +728,22 @@ fn maap_parser_normalizes_say_content_type() {
 /// visible action was malformed.
 fn maap_parser_rejects_empty_say_actions_before_validation() {
     let raw_text = serde_json::json!({
-        "protocol": "maap/1",
-        "turn_id": "turn-1",
-        "agent_id": "agent-1",
         "rationale": "test action batch rationale",
         "actions": [
             {
-                "id": "blank-say",
                 "type": "say",
                 "status": "progress",
-                "rationale": "empty placeholder",
                 "text": ""
             },
             {
-                "id": "list-files",
                 "type": "shell_command",
-                "rationale": "list files",
                 "summary": "List files in the current directory",
                 "command": "ls",
                 "interactive": false,
                 "stateful": false,
                 "timeout_ms": null
             }
-        ],
-        "final": false
+        ]
     })
     .to_string();
 
@@ -835,7 +830,9 @@ fn maap_parser_requires_valid_say_status() {
         "agent-1",
     )
     .unwrap();
-    assert!(!progress.final_turn);
+    assert!(!crate::maap::batch_requests_terminal_completion(
+        &progress.actions
+    ));
 
     let blocked = parse_maap_action_batch_json_for_turn(
         r#"{"rationale":"test action batch rationale","actions":[{"type":"say","status":"blocked","text":"I need the missing path."}]}"#,
@@ -843,64 +840,47 @@ fn maap_parser_requires_valid_say_status() {
         "agent-1",
     )
     .unwrap();
-    assert!(blocked.final_turn);
+    assert!(crate::maap::batch_requests_terminal_completion(
+        &blocked.actions
+    ));
 }
 
 #[test]
-/// Verifies that parser compatibility keeps older provider responses usable when
-/// they omit the newly required shell summary field. The provider schema and
-/// prompt still require `summary`, but a missing summary can be recovered from
-/// the required rationale so the user sees a useful progress line instead of a
-/// MAAP invalid-args failure.
-fn maap_parser_uses_rationale_when_shell_summary_is_missing() {
+/// Verifies shell actions must carry their visible summary directly instead of
+/// relying on removed action-local rationale compatibility metadata.
+fn maap_parser_rejects_shell_command_without_summary() {
     let raw_text = serde_json::json!({
-        "protocol": "maap/1",
-        "turn_id": "turn-1",
-        "agent_id": "agent-1",
         "rationale": "test action batch rationale",
         "actions": [
             {
-                "id": "list-files",
                 "type": "shell_command",
-                "rationale": "List files in the current directory",
                 "command": "ls",
                 "interactive": false,
                 "stateful": false,
                 "timeout_ms": null
             }
-        ],
-        "final": false
+        ]
     })
     .to_string();
 
-    let batch = parse_maap_action_batch_json(&raw_text).unwrap();
-
-    match &batch.actions[0].payload {
-        AgentActionPayload::ShellCommand { summary, .. } => {
-            assert_eq!(summary, "List files in the current directory");
-        }
-        payload => panic!("unexpected payload: {payload:?}"),
-    }
-    batch.validate(&turn(), &[], &[]).unwrap();
+    let error = parse_maap_action_batch_json_for_turn(&raw_text, "turn-1", "agent-1").unwrap_err();
+    assert!(error.message().contains("summary"), "{error}");
 }
 
 #[test]
-/// Verifies that model-supplied action ids are ignored at the MAAP boundary.
-/// Mezzanine assigns stable local ids so downstream action results still have
-/// bookkeeping keys without trusting provider-generated identifiers.
-fn parser_synthesizes_action_ids_and_ignores_model_ids() {
-    let batch = parse_maap_action_batch_json(
+/// Verifies Mezzanine assigns stable local action ids by provider order without
+/// requiring or accepting provider-generated identifiers.
+fn parser_synthesizes_runtime_action_ids() {
+    let batch = parse_maap_action_batch_json_for_turn(
         r#"{
-          "protocol": "maap/1",
-          "turn_id": "turn-1",
-          "agent_id": "agent-1",
           "rationale": "test action batch rationale",
           "actions": [
-            {"id":"model-picked","type":"say","status":"final","rationale":"Reply","text":"hello"},
-            {"type":"say","status":"final","rationale":"Reply again","text":"again"}
-          ],
-          "final": true
+            {"type":"say","status":"final","text":"hello"},
+            {"type":"say","status":"final","text":"again"}
+          ]
         }"#,
+        "turn-1",
+        "agent-1",
     )
     .unwrap();
 

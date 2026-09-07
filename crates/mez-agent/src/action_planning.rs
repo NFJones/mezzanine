@@ -103,7 +103,7 @@ pub fn plan_batch_action_results<Error>(
         }
         action_results.push(plan_action(action)?);
     }
-    let final_turn = batch.final_turn;
+    let final_turn = crate::maap::batch_requests_terminal_completion(&batch.actions);
     let terminal_state = turn_state_from_action_results(&action_results, final_turn);
     Ok(PlannedBatchActionResults {
         action_results,
@@ -479,11 +479,8 @@ pub fn action_supports_auto_allow(action: &AgentAction, input: ActionPlanningInp
     !action_auto_allow_reason(action, input).trim().is_empty()
 }
 
-/// Returns the most concise available model-authored action explanation.
+/// Returns the most concise available action explanation.
 pub fn action_auto_allow_reason(action: &AgentAction, input: ActionPlanningInput<'_>) -> String {
-    if !action.rationale.trim().is_empty() {
-        return action.rationale.clone();
-    }
     if let Some(plan) = input.local_plan
         && !plan.summary.trim().is_empty()
     {
@@ -499,6 +496,12 @@ pub fn action_auto_allow_reason(action: &AgentAction, input: ActionPlanningInput
         AgentActionPayload::Abort { reason } => reason.clone(),
         AgentActionPayload::CallSkill { name, .. } => format!("load skill {name}"),
         AgentActionPayload::RequestSkills => "request available skills".to_string(),
+        AgentActionPayload::ConfigChange { setting_path, .. } => {
+            format!("change setting {setting_path}")
+        }
+        AgentActionPayload::McpCall { server, tool, .. } => {
+            format!("call {server} tool {tool}")
+        }
         _ => String::new(),
     }
 }
@@ -616,10 +619,10 @@ mod tests {
         }
     }
 
-    fn shell_action(rationale: &str) -> AgentAction {
+    fn shell_action(_rationale: &str) -> AgentAction {
         AgentAction {
             id: "shell-1".to_string(),
-            rationale: rationale.to_string(),
+
             payload: AgentActionPayload::ShellCommand {
                 summary: "Inspect files".to_string(),
                 command: "rg --files".to_string(),
@@ -774,7 +777,7 @@ mod tests {
 
     #[test]
     /// Verifies auto-allow converts a prompting local action into running work
-    /// and records the model-authored rationale in canonical approval metadata.
+    /// and records the validated local-plan summary in approval metadata.
     fn action_planning_auto_allows_prompted_local_action_with_reason() {
         let action = shell_action("inspect repository files");
         let plan = local_plan();
@@ -796,10 +799,7 @@ mod tests {
             structured.contains(r#""state":"auto_allowed""#),
             "{structured}"
         );
-        assert!(
-            structured.contains("inspect repository files"),
-            "{structured}"
-        );
+        assert!(structured.contains("Inspect files"), "{structured}");
         assert!(
             result
                 .content
@@ -816,7 +816,7 @@ mod tests {
     fn action_planning_limits_approval_browser_guidance_to_auto_allow() {
         let network = AgentAction {
             id: "search-1".to_string(),
-            rationale: "inspect current documentation".to_string(),
+
             payload: AgentActionPayload::WebSearch {
                 query: "mezzanine documentation".to_string(),
                 domains: Vec::new(),
@@ -830,7 +830,7 @@ mod tests {
         };
         let config = AgentAction {
             id: "config-1".to_string(),
-            rationale: "set theme".to_string(),
+
             payload: AgentActionPayload::ConfigChange {
                 setting_path: "ui.theme".to_string(),
                 operation: "set".to_string(),
@@ -839,7 +839,7 @@ mod tests {
         };
         let mcp = AgentAction {
             id: "mcp-1".to_string(),
-            rationale: "inspect issue".to_string(),
+
             payload: AgentActionPayload::McpCall {
                 server: "gitlab".to_string(),
                 tool: "get_issue".to_string(),
@@ -976,7 +976,7 @@ mod tests {
     fn action_planning_applies_config_and_mcp_prompt_policy() {
         let config = AgentAction {
             id: "config-1".to_string(),
-            rationale: "set theme".to_string(),
+
             payload: AgentActionPayload::ConfigChange {
                 setting_path: "ui.theme".to_string(),
                 operation: "set".to_string(),
@@ -985,7 +985,7 @@ mod tests {
         };
         let mcp = AgentAction {
             id: "mcp-1".to_string(),
-            rationale: "inspect issue".to_string(),
+
             payload: AgentActionPayload::McpCall {
                 server: "gitlab".to_string(),
                 tool: "get_issue".to_string(),
@@ -1052,7 +1052,7 @@ mod tests {
     fn batch_action_planning_derives_terminal_state() {
         let action = AgentAction {
             id: "say-1".to_string(),
-            rationale: "finish the turn".to_string(),
+
             payload: AgentActionPayload::Say {
                 status: SayStatus::Final,
                 text: "Done.".to_string(),
@@ -1060,12 +1060,9 @@ mod tests {
             },
         };
         let batch = MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "finish the requested work".to_string(),
-            turn_id: "turn-1".to_string(),
-            agent_id: "agent-1".to_string(),
+
             actions: vec![action],
-            final_turn: true,
         };
 
         let planned = plan_batch_action_results(&TestTurn, &context(), &batch, |action| {
@@ -1084,7 +1081,7 @@ mod tests {
     fn batch_execution_projection_owns_canonical_turn_state() {
         let action = AgentAction {
             id: "say-1".to_string(),
-            rationale: "finish the turn".to_string(),
+
             payload: AgentActionPayload::Say {
                 status: SayStatus::Final,
                 text: "Done.".to_string(),
@@ -1092,12 +1089,9 @@ mod tests {
             },
         };
         let batch = MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "finish".to_string(),
-            turn_id: "turn-1".to_string(),
-            agent_id: "agent-1".to_string(),
+
             actions: vec![action],
-            final_turn: true,
         };
 
         let execution = plan_turn_execution_from_batch(
@@ -1141,19 +1135,16 @@ mod tests {
     fn batch_action_planning_skips_memory_placeholders_before_product_planning() {
         let action = AgentAction {
             id: "memory-1".to_string(),
-            rationale: "satisfy the required function call before proceeding".to_string(),
+
             payload: AgentActionPayload::MemorySearch {
                 query: "placeholder".to_string(),
                 limit: Some(1),
             },
         };
         let batch = MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "comply with the required function call".to_string(),
-            turn_id: "turn-1".to_string(),
-            agent_id: "agent-1".to_string(),
+
             actions: vec![action],
-            final_turn: false,
         };
 
         let planned = plan_batch_action_results(

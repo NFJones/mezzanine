@@ -259,7 +259,7 @@ mod tests {
     fn action() -> AgentAction {
         AgentAction {
             id: "search/1".to_string(),
-            rationale: "Recall project facts".to_string(),
+
             payload: AgentActionPayload::MemorySearch {
                 query: "decomposition".to_string(),
                 limit: None,

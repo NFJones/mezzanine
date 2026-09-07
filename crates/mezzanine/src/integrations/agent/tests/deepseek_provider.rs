@@ -595,7 +595,6 @@ fn deepseek_provider_accepts_openai_compatible_provider_identity() {
         batch.rationale,
         "compatible provider returned structured output"
     );
-    assert!(batch.final_turn);
 }
 
 #[test]
@@ -865,5 +864,4 @@ async fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_p
     assert!(receiver.try_recv().is_err());
     let batch = response.action_batch.unwrap();
     assert_eq!(batch.rationale, "fallback produced structured output");
-    assert!(batch.final_turn);
 }

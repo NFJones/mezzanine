@@ -554,7 +554,7 @@ mod tests {
     fn action(payload: AgentActionPayload) -> AgentAction {
         AgentAction {
             id: "skill-1".to_string(),
-            rationale: "load guidance".to_string(),
+
             payload,
         }
     }

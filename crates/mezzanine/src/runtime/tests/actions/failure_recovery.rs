@@ -216,12 +216,9 @@ fn runtime_stale_joined_spawn_result_is_unreachable_progress() {
                 latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: Some(mez_agent::MaapBatch {
-                    protocol: "maap/1".to_string(),
                     rationale: "test action batch rationale".to_string(),
-                    turn_id: parent.turn_id.clone(),
-                    agent_id: parent.agent_id.clone(),
+
                     actions: vec![spawn.clone()],
-                    final_turn: false,
                 }),
                 provider_transcript_events: Vec::new(),
             },
@@ -423,7 +420,7 @@ fn runtime_unrecovered_failure_with_pending_sibling_explains_blocker() {
 
     let patch_action = mez_agent::AgentAction {
         id: "patch-fail".to_string(),
-        rationale: "apply a source patch".to_string(),
+
         payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-old\n+new\n*** End Patch"
                 .to_string(),
@@ -432,7 +429,7 @@ fn runtime_unrecovered_failure_with_pending_sibling_explains_blocker() {
     };
     let read_action = mez_agent::AgentAction {
         id: "read-pending".to_string(),
-        rationale: "read the target file".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Read the target file".to_string(),
             command: "sed -n '1,120p' src/lib.rs".to_string(),
@@ -476,12 +473,9 @@ fn runtime_unrecovered_failure_with_pending_sibling_explains_blocker() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![patch_action, read_action],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -548,7 +542,7 @@ fn runtime_unrecovered_non_correctable_failure_explains_boundary() {
 
     let action = mez_agent::AgentAction {
         id: "patch-denied".to_string(),
-        rationale: "write a source file".to_string(),
+
         payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-old\n+new\n*** End Patch"
                 .to_string(),
@@ -573,12 +567,9 @@ fn runtime_unrecovered_non_correctable_failure_explains_boundary() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![action],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -715,12 +706,9 @@ fn runtime_spawn_limit_denial_queues_model_recovery() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![action],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },

@@ -305,7 +305,6 @@ fn runtime_provider_execution_completes_running_prompt_turn() {
         concat!(
             "rationale: test action batch rationale\n",
             "done\n",
-            "action rationale say-1 (say): report completion\n",
             "Done."
         )
     );

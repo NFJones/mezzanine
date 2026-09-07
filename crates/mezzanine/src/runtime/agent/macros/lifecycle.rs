@@ -256,7 +256,7 @@ impl RuntimeSessionService {
         let payload = macro_initial_step_prompt(first_step.prompt.as_str(), additional_context);
         let action = AgentAction {
             id: "macro-step-1".to_string(),
-            rationale: "send first macro step".to_string(),
+
             payload: AgentActionPayload::SendMessage {
                 recipient: format!("agent:{child_agent_id}"),
                 content_type: "text/plain; charset=utf-8".to_string(),
@@ -272,12 +272,9 @@ impl RuntimeSessionService {
             )?
             .ok_or_else(|| MezError::invalid_state("runtime-owned macro step was not accepted"))?;
         let batch = MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "send first macro step".to_string(),
-            turn_id: parent_turn.turn_id.clone(),
-            agent_id: parent_turn.agent_id.clone(),
+
             actions: vec![action],
-            final_turn: false,
         };
         let execution = AgentTurnExecution {
             request: macro_step_model_request(&parent_turn),

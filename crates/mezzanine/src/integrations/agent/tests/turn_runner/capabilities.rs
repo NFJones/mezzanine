@@ -23,12 +23,9 @@ fn turn_runner_denies_issues_capability_when_issue_tracking_disabled() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![capability_action("capability-1", AgentCapability::Issues)],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         }),
@@ -40,12 +37,9 @@ fn turn_runner_denies_issues_capability_when_issue_tracking_disabled() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "finish after denied capability".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![say_action("say-1", "issue tracking is disabled")],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         }),
@@ -131,12 +125,9 @@ fn turn_runner_exposes_mcp_actions_on_initial_surface_when_available() {
         latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "finish after checking MCP tools".to_string(),
-            turn_id: turn.turn_id.clone(),
-            agent_id: turn.agent_id.clone(),
+
             actions: vec![say_action("say-1", "done")],
-            final_turn: true,
         }),
         provider_transcript_events: Vec::new(),
     })]);
@@ -219,12 +210,9 @@ fn turn_runner_exposes_memory_actions_on_initial_surface_when_enabled() {
         latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "finish after inspecting memory".to_string(),
-            turn_id: turn.turn_id.clone(),
-            agent_id: turn.agent_id.clone(),
+
             actions: vec![say_action("say-1", "done")],
-            final_turn: true,
         }),
         provider_transcript_events: Vec::new(),
     })]);
@@ -305,12 +293,9 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![capability_action("capability-1", AgentCapability::Shell)],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         }),
@@ -322,12 +307,9 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![shell_action("shell-1")],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         }),
@@ -433,15 +415,12 @@ fn turn_runner_grants_fetch_capability_without_context_url() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![capability_action(
                     "capability-1",
                     AgentCapability::NetworkFetch,
                 )],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         }),
@@ -453,12 +432,9 @@ fn turn_runner_grants_fetch_capability_without_context_url() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![say_action("say-1", "hello")],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         }),

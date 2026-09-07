@@ -68,12 +68,7 @@ pub fn failure_summary_execution_from_response(
     validate_batch_allowed_actions(batch, &request)
         .map_err(|error| FailureSummaryExecutionError::new(error.message()))?;
     batch
-        .validate_harness_contract(
-            &turn.turn_id,
-            &turn.agent_id,
-            available_mcp_servers,
-            available_mcp_tools,
-        )
+        .validate_harness_contract(available_mcp_servers, available_mcp_tools)
         .map_err(|error| FailureSummaryExecutionError::new(error.message()))?;
     if batch.actions.is_empty()
         || batch
@@ -86,7 +81,6 @@ pub fn failure_summary_execution_from_response(
         ));
     }
     let mut terminal_batch = batch.clone();
-    terminal_batch.final_turn = true;
     for action in &mut terminal_batch.actions {
         if let AgentActionPayload::Say { status, .. } = &mut action.payload {
             *status = SayStatus::Final;
@@ -362,20 +356,17 @@ mod tests {
             latest_request_usage: None,
             quota_usage: Vec::new(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "Explain the failure".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-1".to_string(),
+
                 actions: vec![AgentAction {
                     id: "say-1".to_string(),
-                    rationale: "Explain the failure".to_string(),
+
                     payload: AgentActionPayload::Say {
                         status: SayStatus::Progress,
                         text: "The provider is unavailable.".to_string(),
                         content_type: "text/plain".to_string(),
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         };

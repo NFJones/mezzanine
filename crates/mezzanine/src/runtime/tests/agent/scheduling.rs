@@ -1522,12 +1522,9 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
                 latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: Some(mez_agent::MaapBatch {
-                    protocol: "maap/1".to_string(),
                     rationale: "test action batch rationale".to_string(),
-                    turn_id: parent.turn_id.clone(),
-                    agent_id: parent.agent_id.clone(),
+
                     actions: vec![spawn_one.clone(), spawn_two.clone()],
-                    final_turn: false,
                 }),
                 provider_transcript_events: Vec::new(),
             },
@@ -1797,12 +1794,9 @@ async fn runtime_three_nonrouted_subagents_release_waiting_parent() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "delegate three joined tasks".to_string(),
-                turn_id: parent.turn_id.clone(),
-                agent_id: parent.agent_id.clone(),
+
                 actions: vec![spawn_one, spawn_two, spawn_three],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1940,12 +1934,9 @@ async fn runtime_four_terminal_subagents_recover_missed_final_handoff() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "delegate four joined tasks at capacity".to_string(),
-                turn_id: parent.turn_id.clone(),
-                agent_id: parent.agent_id.clone(),
+
                 actions,
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2104,12 +2095,9 @@ fn runtime_terminal_join_recovery_fixture() -> (
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "exercise terminal join reconciliation".to_string(),
-                turn_id: parent.turn_id.clone(),
-                agent_id: parent.agent_id.clone(),
+
                 actions: vec![runtime_spawn_agent_action("spawn-one", "child one")],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2340,7 +2328,7 @@ async fn runtime_late_shell_result_resumes_parent_after_three_joined_children() 
     let parent = service.start_agent_prompt_turn("%1", "parent").unwrap();
     let shell = mez_agent::AgentAction {
         id: "shell-late".to_string(),
-        rationale: "settle after all joined children".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Run a late sibling command".to_string(),
             command: "printf late-shell-result".to_string(),
@@ -2358,17 +2346,14 @@ async fn runtime_late_shell_result_resumes_parent_after_three_joined_children() 
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "exercise mixed joined and shell settlement".to_string(),
-                turn_id: parent.turn_id.clone(),
-                agent_id: parent.agent_id.clone(),
+
                 actions: vec![
                     runtime_spawn_agent_action("spawn-one", "child one"),
                     runtime_spawn_agent_action("spawn-two", "child two"),
                     runtime_spawn_agent_action("spawn-three", "child three"),
                     shell,
                 ],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2561,12 +2546,9 @@ async fn runtime_terminal_child_reconstructs_missing_join_dependency() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "exercise recoverable joined correlation".to_string(),
-                turn_id: parent.turn_id.clone(),
-                agent_id: parent.agent_id.clone(),
+
                 actions: vec![runtime_spawn_agent_action("spawn-one", "child one")],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2675,12 +2657,9 @@ fn runtime_reconciliation_resumes_ready_dependency_wait() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "exercise dependency wait recovery".to_string(),
-                turn_id: parent.turn_id.clone(),
-                agent_id: parent.agent_id.clone(),
+
                 actions: vec![runtime_spawn_agent_action("spawn-one", "child one")],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2791,12 +2770,9 @@ async fn runtime_failed_nonrouted_subagent_preserves_siblings_and_resumes_parent
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "delegate four joined tasks".to_string(),
-                turn_id: parent.turn_id.clone(),
-                agent_id: parent.agent_id.clone(),
+
                 actions,
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2950,12 +2926,9 @@ fn block_turn_on_joined_child(
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "delegate joined work".to_string(),
-                turn_id: parent.turn_id.clone(),
-                agent_id: parent.agent_id.clone(),
+
                 actions: vec![spawn.clone()],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },

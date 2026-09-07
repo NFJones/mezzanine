@@ -316,7 +316,7 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
     };
     let action = mez_agent::AgentAction {
         id: "shell-1".to_string(),
-        rationale: "run a short shell command for the user".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Print a shell marker.".to_string(),
             command: "printf 'async timer shell\\n'".to_string(),
@@ -326,12 +326,9 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
         },
     };
     let response_batch = mez_agent::MaapBatch {
-        protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
-        turn_id: task.turn_id.clone(),
-        agent_id: task.agent_id.clone(),
+
         actions: vec![action.clone()],
-        final_turn: false,
     };
     let execution = mez_agent::AgentTurnExecution {
         request: mez_agent::ModelRequest {

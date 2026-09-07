@@ -992,7 +992,6 @@ pub(super) fn runtime_maap_action_trace_json(
     let mut data = runtime_maap_action_payload_trace_json(&action.payload, preserve_command_fields);
     data.insert("id".to_string(), serde_json::json!(action.id));
     data.insert("type".to_string(), serde_json::json!(action.action_type()));
-    data.insert("rationale".to_string(), serde_json::json!(action.rationale));
     serde_json::Value::Object(data)
 }
 
@@ -1006,11 +1005,7 @@ pub(super) fn runtime_maap_batch_trace_json(
     preserve_command_fields: bool,
 ) -> serde_json::Value {
     serde_json::json!({
-        "protocol": batch.protocol,
         "rationale": batch.rationale,
-        "turn_id": batch.turn_id,
-        "agent_id": batch.agent_id,
-        "final": batch.final_turn,
         "actions": batch
             .actions
             .iter()

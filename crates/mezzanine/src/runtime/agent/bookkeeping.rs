@@ -456,7 +456,7 @@ impl RuntimeSessionService {
                 continue;
             }
             let record = RuntimeAgentPatchRecord {
-                turn_id: batch.turn_id.clone(),
+                turn_id: execution.request.turn_id.clone(),
                 action_id: action.id.clone(),
                 status: runtime_action_status_name(result.status).to_string(),
                 patch: patch.clone(),

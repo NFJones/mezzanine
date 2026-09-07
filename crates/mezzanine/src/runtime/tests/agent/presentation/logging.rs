@@ -36,13 +36,11 @@ fn runtime_progress_say_chronology_reaches_provider_continuation_without_ledger(
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "record the first sequence point".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "say-progress".to_string(),
-                    rationale: "tell the user the owner changed".to_string(),
+
                     payload: mez_agent::AgentActionPayload::Say {
                         status: mez_agent::SayStatus::Progress,
                         text: "The redundant updates are coming from repeated progress says."
@@ -50,7 +48,6 @@ fn runtime_progress_say_chronology_reaches_provider_continuation_without_ledger(
                         content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -155,20 +152,17 @@ fn runtime_agent_keeps_redundant_progress_say_updates_visible() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "record the owner".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "say-progress-1".to_string(),
-                    rationale: "tell the user the selector owner".to_string(),
+
                     payload: mez_agent::AgentActionPayload::Say {
                         status: mez_agent::SayStatus::Progress,
                         text: first_progress.to_string(),
                         content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -193,14 +187,12 @@ fn runtime_agent_keeps_redundant_progress_say_updates_visible() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: duplicate_progress.to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![
                     mez_agent::AgentAction {
                         id: "say-progress-2".to_string(),
-                        rationale: "repeat the selector owner".to_string(),
+
                         payload: mez_agent::AgentActionPayload::Say {
                             status: mez_agent::SayStatus::Progress,
                             text: duplicate_progress.to_string(),
@@ -210,7 +202,7 @@ fn runtime_agent_keeps_redundant_progress_say_updates_visible() {
                     },
                     mez_agent::AgentAction {
                         id: "say-final".to_string(),
-                        rationale: "finish the reply".to_string(),
+
                         payload: mez_agent::AgentActionPayload::Say {
                             status: mez_agent::SayStatus::Final,
                             text: final_text.to_string(),
@@ -219,7 +211,6 @@ fn runtime_agent_keeps_redundant_progress_say_updates_visible() {
                         },
                     },
                 ],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -228,7 +219,7 @@ fn runtime_agent_keeps_redundant_progress_say_updates_visible() {
         .poll_agent_provider_tasks_with_provider(&second_provider, 1)
         .unwrap();
     assert_eq!(executions.len(), 1);
-    assert_eq!(executions[0].terminal_state, AgentTurnState::Completed);
+    assert_eq!(executions[0].terminal_state, AgentTurnState::Running);
 
     let pane_text = service
         .agent_pane_screen("%1")

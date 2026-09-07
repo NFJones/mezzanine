@@ -35,20 +35,17 @@ fn runtime_agent_plain_say_does_not_render_markdown_divider() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "say-1".to_string(),
-                    rationale: String::new(),
+
                     payload: mez_agent::AgentActionPayload::Say {
                         status: mez_agent::SayStatus::Final,
                         text: plain.to_string(),
                         content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                     },
                 }],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -116,13 +113,11 @@ fn runtime_agent_markdown_say_renders_styled_presentation_and_copies_raw_markdow
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "say-1".to_string(),
-                    rationale: String::new(),
+
                     payload: mez_agent::AgentActionPayload::Say {
                         status: mez_agent::SayStatus::Final,
                         text: markdown.to_string(),
@@ -130,7 +125,6 @@ fn runtime_agent_markdown_say_renders_styled_presentation_and_copies_raw_markdow
                             .to_string(),
                     },
                 }],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },

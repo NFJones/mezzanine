@@ -2154,13 +2154,11 @@ fn runtime_bash_agent_shell_transaction_keeps_parent_shell_alive() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "shell-1".to_string(),
-                    rationale: "exercise bash shell survival".to_string(),
+
                     payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Run a failing bash command and keep the parent shell available"
                             .to_string(),
@@ -2170,7 +2168,6 @@ fn runtime_bash_agent_shell_transaction_keeps_parent_shell_alive() {
                         timeout_ms: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2300,13 +2297,11 @@ fn runtime_bash_agent_shell_transaction_preserves_strict_parent_shell_options() 
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "shell-1".to_string(),
-                    rationale: "exercise bash strict shell survival".to_string(),
+
                     payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Run a failing bash command and keep strict shell options intact"
                             .to_string(),
@@ -2316,7 +2311,6 @@ fn runtime_bash_agent_shell_transaction_preserves_strict_parent_shell_options() 
                         timeout_ms: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2440,13 +2434,11 @@ fn runtime_shell_transaction_metadata_mismatch_fails_live_action() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "shell-1".to_string(),
-                    rationale: "run a shell command".to_string(),
+
                     payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Run a command".to_string(),
                         command: "true".to_string(),
@@ -2455,7 +2447,6 @@ fn runtime_shell_transaction_metadata_mismatch_fails_live_action() {
                         timeout_ms: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2909,13 +2900,11 @@ fn runtime_shell_transaction_start_streams_deferred_payload() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "shell-stream".to_string(),
-                    rationale: "run payload command".to_string(),
+
                     payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Run payload command".to_string(),
                         command: "printf '%s\\n' payload-marker".to_string(),
@@ -2924,7 +2913,6 @@ fn runtime_shell_transaction_start_streams_deferred_payload() {
                         timeout_ms: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },

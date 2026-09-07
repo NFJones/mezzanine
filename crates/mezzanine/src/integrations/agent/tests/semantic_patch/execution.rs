@@ -18,7 +18,7 @@ fn semantic_apply_patch_result_elides_generated_command_content() {
     let patch = add_file_patch("note.txt", &secret_content);
     let action = AgentAction {
         id: "patch-1".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::ApplyPatch { patch, strip: None },
     };
     let mut executor = FakePaneShellExecutor {

@@ -195,7 +195,7 @@ mod tests {
     fn action() -> AgentAction {
         AgentAction {
             id: "query-1".to_string(),
-            rationale: "Inspect open issues".to_string(),
+
             payload: AgentActionPayload::IssueQuery {
                 kind: None,
                 state: None,

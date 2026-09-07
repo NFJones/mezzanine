@@ -68,7 +68,7 @@ fn runtime_structured_pane_log_rows_honor_configured_column_cap() {
         .unwrap();
     let action = mez_agent::AgentAction {
         id: "mcp-long-header".to_string(),
-        rationale: String::new(),
+
         payload: mez_agent::AgentActionPayload::McpCall {
             server: "github".to_string(),
             tool: "search_issues_with_a_long_name".to_string(),
@@ -909,7 +909,7 @@ fn runtime_streaming_say_promotes_rich_output_without_replay() {
 
     let action = mez_agent::AgentAction {
         id: "say-streamed".to_string(),
-        rationale: String::new(),
+
         payload: mez_agent::AgentActionPayload::Say {
             status: mez_agent::SayStatus::Final,
             text: source.to_string(),
@@ -926,12 +926,9 @@ fn runtime_streaming_say_promotes_rich_output_without_replay() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: String::new(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![action],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1135,7 +1132,7 @@ async fn runtime_streaming_say_completion_does_not_append_final_duplicate() {
 
     let action = mez_agent::AgentAction {
         id: "say-streamed".to_string(),
-        rationale: String::new(),
+
         payload: mez_agent::AgentActionPayload::Say {
             status: mez_agent::SayStatus::Final,
             text: source.to_string(),
@@ -1152,12 +1149,9 @@ async fn runtime_streaming_say_completion_does_not_append_final_duplicate() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: rationale.to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![action.clone()],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1506,13 +1500,11 @@ fn runtime_streaming_rationale_and_command_match_static_projection_and_restore()
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: rationale.to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "shell-streamed".to_string(),
-                    rationale: String::new(),
+
                     payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: rationale.to_string(),
                         command: command.to_string(),
@@ -1521,7 +1513,6 @@ fn runtime_streaming_rationale_and_command_match_static_projection_and_restore()
                         timeout_ms: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1571,7 +1562,7 @@ fn runtime_streaming_summary_and_web_header_match_static_projection_and_restore(
     let query = "streaming previews";
     let action = mez_agent::AgentAction {
         id: "search-streamed".to_string(),
-        rationale: String::new(),
+
         payload: mez_agent::AgentActionPayload::WebSearch {
             query: query.to_string(),
             domains: Vec::new(),
@@ -1649,12 +1640,9 @@ fn runtime_streaming_summary_and_web_header_match_static_projection_and_restore(
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: String::new(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![action],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1754,7 +1742,7 @@ async fn runtime_streaming_command_completion_promotes_without_full_redraw() {
 
     let action = mez_agent::AgentAction {
         id: "shell-streamed".to_string(),
-        rationale: String::new(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: summary.to_string(),
             command: command.to_string(),
@@ -1776,12 +1764,9 @@ async fn runtime_streaming_command_completion_promotes_without_full_redraw() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: rationale.to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![action.clone()],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2515,7 +2500,7 @@ fn runtime_streaming_say_is_untruncated_and_mismatch_restores_baseline() {
     let replacement = "validated replacement";
     let action = mez_agent::AgentAction {
         id: "say-replacement".to_string(),
-        rationale: String::new(),
+
         payload: mez_agent::AgentActionPayload::Say {
             status: mez_agent::SayStatus::Final,
             text: replacement.to_string(),
@@ -2532,12 +2517,9 @@ fn runtime_streaming_say_is_untruncated_and_mismatch_restores_baseline() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: String::new(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![action],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -3148,7 +3130,7 @@ fn runtime_agent_action_header_persists_source_for_replay() {
         .unwrap();
     let action = mez_agent::AgentAction {
         id: "mcp-1".to_string(),
-        rationale: String::new(),
+
         payload: mez_agent::AgentActionPayload::McpCall {
             server: "github".to_string(),
             tool: "search_issues".to_string(),
@@ -4539,13 +4521,11 @@ fn runtime_provider_markdown_table_persists_and_reprojects_after_resize() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "render the requested table".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "say-table".to_string(),
-                    rationale: String::new(),
+
                     payload: mez_agent::AgentActionPayload::Say {
                         status: mez_agent::SayStatus::Final,
                         text: table.to_string(),
@@ -4553,7 +4533,6 @@ fn runtime_provider_markdown_table_persists_and_reprojects_after_resize() {
                             .to_string(),
                     },
                 }],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },

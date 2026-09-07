@@ -926,7 +926,6 @@ mod tests {
             batch.rationale,
             "content fallback still produced structured output"
         );
-        assert!(batch.final_turn);
     }
 
     /// Verifies DeepSeek auto-sizing responses preserve raw JSON instead of
@@ -1148,13 +1147,10 @@ mod tests {
                             "arguments": serde_json::json!({
                                 "rationale": "inspect before editing",
                                 "actions": [{
-                                    "id": "a1",
                                     "type": "shell_command",
                                     "summary": "list files",
-                                    "command": "ls",
-                                    "rationale": "find project files"
-                                }],
-                                "final_turn": false
+                                    "command": "ls"
+                                }]
                             }).to_string()
                         }
                     }]

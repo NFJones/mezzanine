@@ -19,7 +19,7 @@ fn posix_wrapper_can_encode_child_output_for_model_transport() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let action = AgentAction {
         id: "shell-transport".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::ShellCommand {
             summary: "capture child output".to_string(),
             command: command.to_string(),

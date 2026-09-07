@@ -80,7 +80,7 @@ fn semantic_apply_patch_hunk_mismatch_reports_failed_context() {
         "*** Begin Patch\n*** Update File: note.txt\n@@\n-missing\n+new\n context\n*** End Patch";
     let action = AgentAction {
         id: "patch-mismatch".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::ApplyPatch {
             patch: patch.to_string(),
             strip: None,
@@ -452,7 +452,7 @@ fn semantic_apply_patch_omitted_blank_separator_context_rejects_nonblank_gap() {
     let patch = "*** Begin Patch\n*** Update File: note.rs\n@@ fn test\n     old();\n+    inserted();\n    next();\n*** End Patch";
     let action = AgentAction {
         id: "patch-nonblank-gap".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::ApplyPatch {
             patch: patch.to_string(),
             strip: None,
@@ -497,7 +497,7 @@ fn semantic_apply_patch_omitted_blank_separator_context_reports_ambiguity() {
     let patch = "*** Begin Patch\n*** Update File: note.rs\n@@ fn\n }\n+// inserted\n /// next\n*** End Patch";
     let action = AgentAction {
         id: "patch-ambiguous-blank".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::ApplyPatch {
             patch: patch.to_string(),
             strip: None,
@@ -865,7 +865,7 @@ fn semantic_apply_patch_trim_end_match_reports_ambiguity() {
         "*** Begin Patch\n*** Update File: note.txt\n@@\n-old\n+new\n context\n*** End Patch";
     let action = AgentAction {
         id: "patch-trim-end-ambiguous".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::ApplyPatch {
             patch: patch.to_string(),
             strip: None,

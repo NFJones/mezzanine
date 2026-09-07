@@ -100,55 +100,6 @@ pub fn normalize_user_visible_text(value: &str) -> String {
         .to_ascii_lowercase()
 }
 
-/// Returns whether an action rationale repeats text the same action already
-/// exposes through its normal presentation.
-pub fn action_rationale_repeats_visible_summary(
-    action: &AgentAction,
-    input: ActionPresentationInput<'_>,
-) -> bool {
-    let rationale = normalize_user_visible_text(&action.rationale);
-    if rationale.is_empty() {
-        return false;
-    }
-    if matches!(action.payload, AgentActionPayload::Say { .. }) {
-        return true;
-    }
-    if !matches!(action.payload, AgentActionPayload::ShellCommand { .. })
-        && let Some(summary) = action_summary(action, input)
-        && rationale == normalize_user_visible_text(&summary)
-    {
-        return true;
-    }
-    match &action.payload {
-        AgentActionPayload::ShellCommand { command, .. } => {
-            rationale == normalize_user_visible_text(command)
-        }
-        AgentActionPayload::Say { text, .. }
-        | AgentActionPayload::RequestCapability { reason: text, .. } => {
-            rationale == normalize_user_visible_text(text)
-        }
-        AgentActionPayload::Abort { reason } => rationale == normalize_user_visible_text(reason),
-        AgentActionPayload::McpServerSearch { .. }
-        | AgentActionPayload::McpServerGet { .. }
-        | AgentActionPayload::McpCall { .. }
-        | AgentActionPayload::SendMessage { .. }
-        | AgentActionPayload::SpawnAgent { .. }
-        | AgentActionPayload::ConfigChange { .. }
-        | AgentActionPayload::MemorySearch { .. }
-        | AgentActionPayload::MemoryStore { .. }
-        | AgentActionPayload::IssueAdd { .. }
-        | AgentActionPayload::IssueUpdate { .. }
-        | AgentActionPayload::IssueQuery { .. }
-        | AgentActionPayload::IssueDelete { .. }
-        | AgentActionPayload::RequestSkills
-        | AgentActionPayload::CallSkill { .. }
-        | AgentActionPayload::ApplyPatch { .. }
-        | AgentActionPayload::WebSearch { .. }
-        | AgentActionPayload::FetchUrl { .. }
-        | AgentActionPayload::Complete => false,
-    }
-}
-
 /// Returns normalized conversational action text already visible for a batch.
 pub fn batch_visible_action_texts(batch: &MaapBatch) -> Vec<String> {
     batch
@@ -168,15 +119,6 @@ pub fn batch_visible_action_texts(batch: &MaapBatch) -> Vec<String> {
 /// provider response.
 pub fn batch_rationale_repeats_visible_text(batch: &MaapBatch, visible_texts: &[String]) -> bool {
     let rationale = normalize_user_visible_text(&batch.rationale);
-    !rationale.is_empty() && visible_texts.iter().any(|text| text == &rationale)
-}
-
-/// Returns whether an action rationale repeats nearby conversational text.
-pub fn action_rationale_repeats_visible_batch_text(
-    action: &AgentAction,
-    visible_texts: &[String],
-) -> bool {
-    let rationale = normalize_user_visible_text(&action.rationale);
     !rationale.is_empty() && visible_texts.iter().any(|text| text == &rationale)
 }
 

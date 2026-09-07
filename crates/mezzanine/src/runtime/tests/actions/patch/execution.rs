@@ -48,13 +48,11 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "patch-1".to_string(),
-                    rationale: "create a file".to_string(),
+
                     payload: mez_agent::AgentActionPayload::ApplyPatch {
                         patch: format!(
                             "*** Begin Patch\n*** Add File: {target_rel}\n+alpha\n+beta\n*** End Patch"
@@ -62,7 +60,6 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
                         strip: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -282,20 +279,20 @@ fn runtime_apply_patch_read_phase_truncation_retries_with_fresh_snapshot() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
+
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
+
                 actions: vec![mez_agent::AgentAction {
                     id: "patch-1".to_string(),
-                    rationale: "create a file".to_string(),
+
                     payload: mez_agent::AgentActionPayload::ApplyPatch {
                         patch: "*** Begin Patch\n*** Add File: target/truncated-read-note.txt\n+alpha\n*** End Patch"
                             .to_string(),
                         strip: None,
                     },
                 }],
-                final_turn: false,
+
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -448,20 +445,20 @@ fn runtime_apply_patch_generated_write_rechecks_narrowed_policy() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
+
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
+
                 actions: vec![mez_agent::AgentAction {
                     id: "patch-1".to_string(),
-                    rationale: "create a file".to_string(),
+
                     payload: mez_agent::AgentActionPayload::ApplyPatch {
                         patch: "*** Begin Patch\n*** Add File: target/policy-narrowed-note.txt\n+alpha\n*** End Patch"
                             .to_string(),
                         strip: None,
                     },
                 }],
-                final_turn: false,
+
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -559,20 +556,20 @@ fn runtime_apply_patch_uses_full_read_transport_when_preview_truncates() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
+
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
+
                 actions: vec![mez_agent::AgentAction {
                     id: "patch-1".to_string(),
-                    rationale: "create a file".to_string(),
+
                     payload: mez_agent::AgentActionPayload::ApplyPatch {
                         patch: "*** Begin Patch\n*** Add File: target/truncated-read-note.txt\n+alpha\n*** End Patch"
                             .to_string(),
                         strip: None,
                     },
                 }],
-                final_turn: false,
+
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -736,13 +733,11 @@ fn runtime_agent_loop_continues_after_apply_patch_iteration() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "patch-1".to_string(),
-                    rationale: "create a file".to_string(),
+
                     payload: mez_agent::AgentActionPayload::ApplyPatch {
                         patch: format!(
                             "*** Begin Patch\n*** Add File: {target_rel}\n+alpha\n*** End Patch"
@@ -750,7 +745,6 @@ fn runtime_agent_loop_continues_after_apply_patch_iteration() {
                         strip: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -842,20 +836,20 @@ fn runtime_stale_apply_patch_read_completion_is_inert() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
+
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
+
                 actions: vec![mez_agent::AgentAction {
                     id: "patch-stale".to_string(),
-                    rationale: "patch a file".to_string(),
+
                     payload: mez_agent::AgentActionPayload::ApplyPatch {
                         patch: "*** Begin Patch\n*** Add File: target/stale-patch-note.txt\n+note\n*** End Patch"
                             .to_string(),
                         strip: None,
                     },
                 }],
-                final_turn: false,
+
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -976,7 +970,7 @@ fn runtime_apply_patch_pane_input_failure_queues_model_self_correction() {
 
     let action = mez_agent::AgentAction {
         id: "patch-transport".to_string(),
-        rationale: "write a source file".to_string(),
+
         payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: "*** Begin Patch\n*** Add File: src/generated.rs\n+content\n*** End Patch"
                 .to_string(),
@@ -1001,12 +995,9 @@ fn runtime_apply_patch_pane_input_failure_queues_model_self_correction() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![action],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1085,7 +1076,7 @@ fn runtime_successful_apply_patch_read_is_not_suppressed_as_duplicate_mutation()
     assert!(start.contains(r#""state":"running""#), "{start}");
     let action = mez_agent::AgentAction {
         id: "patch-duplicate".to_string(),
-        rationale: "create a note".to_string(),
+
         payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: "*** Begin Patch\n*** Add File: target/duplicate-patch-status.txt\n+visible\n*** End Patch"
                 .to_string(),
@@ -1101,12 +1092,9 @@ fn runtime_successful_apply_patch_read_is_not_suppressed_as_duplicate_mutation()
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "exercise duplicate patch suppression".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![action],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },

@@ -136,7 +136,7 @@ fn run_local_action_plan_with_shell_path(
 fn run_apply_patch_action(cwd: &Path, patch: &str) -> Output {
     let action = AgentAction {
         id: "patch".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::ApplyPatch {
             patch: patch.to_string(),
             strip: None,
@@ -167,7 +167,7 @@ fn run_apply_patch_action(cwd: &Path, patch: &str) -> Output {
 fn apply_patch_write_error(cwd: &Path, patch: &str) -> String {
     let action = AgentAction {
         id: "patch-error".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::ApplyPatch {
             patch: patch.to_string(),
             strip: None,

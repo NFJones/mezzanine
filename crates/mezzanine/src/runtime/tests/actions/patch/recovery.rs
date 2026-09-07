@@ -41,7 +41,7 @@ fn runtime_apply_patch_invalid_params_queues_model_self_correction() {
 
     let action = mez_agent::AgentAction {
         id: "patch-invalid".to_string(),
-        rationale: "apply an invalid patch".to_string(),
+
         payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: "*** Update File: src/lib.rs\n@@\n-old\n+new\n*** End Patch".to_string(),
             strip: None,
@@ -77,12 +77,9 @@ fn runtime_apply_patch_invalid_params_queues_model_self_correction() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![action],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -173,7 +170,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_preserves_failure_evidence() {
 
     let action = mez_agent::AgentAction {
         id: "patch-hunk".to_string(),
-        rationale: "apply a source patch".to_string(),
+
         payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch:
                 "*** Begin Patch\n*** Update File: src/driver/mod.rs\n@@\n-old\n+new\n*** End Patch"
@@ -211,12 +208,9 @@ fn runtime_apply_patch_hunk_mismatch_recovery_preserves_failure_evidence() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![action],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -291,7 +285,7 @@ fn runtime_apply_patch_replacement_hint_recovery_preserves_diagnostic() {
 
     let action = mez_agent::AgentAction {
         id: "patch-replacement".to_string(),
-        rationale: "apply a source patch".to_string(),
+
         payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch:
                 "*** Begin Patch\n*** Update File: src/driver/mod.rs\n@@\n-old\n+new\n*** End Patch"
@@ -329,12 +323,9 @@ fn runtime_apply_patch_replacement_hint_recovery_preserves_diagnostic() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![action],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -392,7 +383,7 @@ fn runtime_apply_patch_missing_anchor_recovery_preserves_diagnostic() {
 
     let action = mez_agent::AgentAction {
         id: "patch-anchor".to_string(),
-        rationale: "apply a source patch".to_string(),
+
         payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch:
                 "*** Begin Patch\n*** Update File: src/driver/mod.rs\n@@ fn owner()\n-old\n+new\n*** End Patch"
@@ -430,12 +421,9 @@ fn runtime_apply_patch_missing_anchor_recovery_preserves_diagnostic() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![action],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -493,7 +481,7 @@ fn runtime_apply_patch_candidate_region_recovery_preserves_diagnostic() {
 
     let action = mez_agent::AgentAction {
         id: "patch-candidates".to_string(),
-        rationale: "apply a source patch".to_string(),
+
         payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: "*** Begin Patch\n*** Update File: note.rs\n@@\n-old();\n+new();\n*** End Patch"
                 .to_string(),
@@ -530,12 +518,9 @@ fn runtime_apply_patch_candidate_region_recovery_preserves_diagnostic() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![action],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -595,20 +580,20 @@ fn runtime_apply_patch_write_phase_hunk_mismatch_queues_model_recovery() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
+
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
+
                 actions: vec![mez_agent::AgentAction {
                     id: "patch-write".to_string(),
-                    rationale: "apply a source patch".to_string(),
+
                     payload: mez_agent::AgentActionPayload::ApplyPatch {
                         patch: "*** Begin Patch\n*** Update File: tests/standard_config_consumer_test.rs\n@@\n-old\n+new\n*** End Patch"
                             .to_string(),
                         strip: None,
                     },
                 }],
-                final_turn: false,
+
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -735,7 +720,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_is_unbounded_and_hides_retry_budge
     let build_execution = |raw_text: &str, action_id: &str| {
         let action = mez_agent::AgentAction {
             id: action_id.to_string(),
-            rationale: "apply a source patch".to_string(),
+
             payload: mez_agent::AgentActionPayload::ApplyPatch {
                 patch:
                     "*** Begin Patch\n*** Update File: src/main.rs\n@@\n-old\n+new\n*** End Patch"
@@ -773,12 +758,9 @@ fn runtime_apply_patch_hunk_mismatch_recovery_is_unbounded_and_hides_retry_budge
                 latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: Some(mez_agent::MaapBatch {
-                    protocol: "maap/1".to_string(),
                     rationale: "test action batch rationale".to_string(),
-                    turn_id: turn.turn_id.clone(),
-                    agent_id: turn.agent_id.clone(),
+
                     actions: vec![action],
-                    final_turn: false,
                 }),
                 provider_transcript_events: Vec::new(),
             },
@@ -870,7 +852,7 @@ fn runtime_apply_patch_unsafe_path_recovery_preserves_diagnostic() {
     let unsafe_path = "/home/neil/Documents/repos/chimera/src/conf/document.rs";
     let action = mez_agent::AgentAction {
         id: "patch-absolute".to_string(),
-        rationale: "apply a source patch".to_string(),
+
         payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: format!(
                 "*** Begin Patch\n*** Update File: {unsafe_path}\n@@\n-old\n+new\n*** End Patch"
@@ -908,12 +890,9 @@ fn runtime_apply_patch_unsafe_path_recovery_preserves_diagnostic() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![action],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -986,7 +965,7 @@ fn runtime_unrecovered_apply_patch_failure_respects_log_level() {
         .expect("started turn should be recorded");
     let action = mez_agent::AgentAction {
         id: "patch-fail".to_string(),
-        rationale: "apply a source patch".to_string(),
+
         payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-old\n+new\n*** End Patch"
                 .to_string(),
@@ -1022,12 +1001,9 @@ fn runtime_unrecovered_apply_patch_failure_respects_log_level() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![action],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1107,7 +1083,7 @@ fn runtime_unrecovered_apply_patch_failure_respects_log_level() {
 fn runtime_unrecovered_apply_patch_failure_uses_generic_line_for_fragments() {
     let action = mez_agent::AgentAction {
         id: "patch-fragment".to_string(),
-        rationale: "apply a source patch".to_string(),
+
         payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-old\n+new\n*** End Patch"
                 .to_string(),

@@ -120,7 +120,7 @@ mod tests {
     fn network_action_plan_encodes_web_search_query_and_domains() {
         let action = AgentAction {
             id: "search-1".to_string(),
-            rationale: String::new(),
+
             payload: AgentActionPayload::WebSearch {
                 query: "mez terminal".to_string(),
                 domains: vec!["example.com".to_string()],
@@ -144,7 +144,7 @@ mod tests {
     fn network_action_plan_preserves_fetch_url_and_format_hint() {
         let action = AgentAction {
             id: "fetch-1".to_string(),
-            rationale: String::new(),
+
             payload: AgentActionPayload::FetchUrl {
                 url: "https://example.test/data.json?x=one&y=two".to_string(),
                 format: Some("json".to_string()),
@@ -171,7 +171,7 @@ mod tests {
     fn network_action_planning_rejects_non_network_actions() {
         let action = AgentAction {
             id: "say-1".to_string(),
-            rationale: String::new(),
+
             payload: AgentActionPayload::Say {
                 status: SayStatus::Progress,
                 text: "working".to_string(),

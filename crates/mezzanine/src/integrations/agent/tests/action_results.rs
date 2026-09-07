@@ -15,7 +15,7 @@ use super::*;
 fn semantic_file_actions_keep_displayable_completion_output_available() {
     let patch = AgentAction {
         id: "patch-1".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::ApplyPatch {
             patch: add_file_patch("note.txt", "one\ntwo\n"),
             strip: None,

@@ -5,13 +5,11 @@ use super::*;
 /// Builds one non-final issue-query batch for freshness tests.
 fn runtime_issue_query_batch(action_id: &str, refresh: bool) -> mez_agent::MaapBatch {
     mez_agent::MaapBatch {
-        protocol: "maap/1".to_string(),
         rationale: "Inspect the current open issue snapshot".to_string(),
-        turn_id: "turn-1".to_string(),
-        agent_id: "agent-%1".to_string(),
+
         actions: vec![mez_agent::AgentAction {
             id: action_id.to_string(),
-            rationale: "Load open issues once for the current mutation state".to_string(),
+
             payload: mez_agent::AgentActionPayload::IssueQuery {
                 kind: None,
                 state: Some("open".to_string()),
@@ -20,7 +18,6 @@ fn runtime_issue_query_batch(action_id: &str, refresh: bool) -> mez_agent::MaapB
                 refresh,
             },
         }],
-        final_turn: false,
     }
 }
 
@@ -40,13 +37,11 @@ fn runtime_issue_add_batch_with_dependencies(
     depends_on: Vec<String>,
 ) -> mez_agent::MaapBatch {
     mez_agent::MaapBatch {
-        protocol: "maap/1".to_string(),
         rationale: "Record a newly discovered issue before refreshing the backlog".to_string(),
-        turn_id: "turn-1".to_string(),
-        agent_id: "agent-%1".to_string(),
+
         actions: vec![mez_agent::AgentAction {
             id: action_id.to_string(),
-            rationale: "Mutate the issue store".to_string(),
+
             payload: mez_agent::AgentActionPayload::IssueAdd {
                 kind: "task".to_string(),
                 state: None,
@@ -57,7 +52,6 @@ fn runtime_issue_add_batch_with_dependencies(
                 depends_on,
             },
         }],
-        final_turn: false,
     }
 }
 
@@ -113,13 +107,11 @@ fn runtime_issue_query_continuation_preserves_capability_state_and_chronology() 
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "inspect the issue backlog before making changes".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "issues-1".to_string(),
-                    rationale: "load the open issues".to_string(),
+
                     payload: mez_agent::AgentActionPayload::IssueQuery {
                         kind: None,
                         state: Some("open".to_string()),
@@ -128,7 +120,6 @@ fn runtime_issue_query_continuation_preserves_capability_state_and_chronology() 
                         refresh: false,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -165,13 +156,11 @@ fn runtime_issue_query_continuation_preserves_capability_state_and_chronology() 
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "Continue active issue iss-42 before inspecting its owner".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "issues-selected".to_string(),
-                    rationale: "Load only dependency evidence for active issue iss-42".to_string(),
+
                     payload: mez_agent::AgentActionPayload::IssueQuery {
                         kind: None,
                         state: Some("open".to_string()),
@@ -180,7 +169,6 @@ fn runtime_issue_query_continuation_preserves_capability_state_and_chronology() 
                         refresh: false,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -224,11 +212,6 @@ fn runtime_issue_query_continuation_preserves_capability_state_and_chronology() 
         request.messages[assistant_index]
             .content
             .contains("rationale: inspect the issue backlog before making changes")
-    );
-    assert!(
-        request.messages[assistant_index]
-            .content
-            .contains("action rationale issues-1 (issue_query): load the open issues")
     );
     let result_index = request
         .messages
@@ -284,9 +267,6 @@ fn runtime_issue_query_continuation_preserves_capability_state_and_chronology() 
             .content
             .contains("rationale: Continue active issue iss-42 before inspecting its owner")
     );
-    assert!(selected_assistant.content.contains(
-        "action rationale issues-selected (issue_query): Load only dependency evidence for active issue iss-42"
-    ));
     assert!(selected_request.messages.iter().any(|message| {
         message.source == ContextSourceKind::ActionResult
             && message

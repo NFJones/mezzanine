@@ -1205,7 +1205,7 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
     };
     let write_action = mez_agent::AgentAction {
         id: "patch-fail".to_string(),
-        rationale: "write a source file".to_string(),
+
         payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: "*** Begin Patch\n*** Add File: src/generated.rs\n+content\n*** End Patch"
                 .to_string(),
@@ -1214,7 +1214,7 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
     };
     let read_action = mez_agent::AgentAction {
         id: "read-unsent".to_string(),
-        rationale: "read the source file".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Read the source file".to_string(),
             command: "sed -n '1,120p' src/generated.rs".to_string(),
@@ -1247,12 +1247,9 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
         Some(r#"{"state":"pending_dispatch"}"#.to_string()),
     );
     let batch = mez_agent::MaapBatch {
-        protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
-        turn_id: task.turn_id.clone(),
-        agent_id: task.agent_id.clone(),
+
         actions: vec![write_action, read_action],
-        final_turn: false,
     };
     let execution = mez_agent::AgentTurnExecution {
         request: mez_agent::ModelRequest {

@@ -246,13 +246,6 @@ pub fn runtime_validate_provider_completion_identity(
             "agent provider completion agent id does not match active turn",
         ));
     }
-    if let Some(batch) = execution.response.action_batch.as_ref()
-        && (batch.turn_id != turn_id || batch.agent_id != agent_id)
-    {
-        return Err(OutcomeError::invalid_state(
-            "agent provider completion action batch identity does not match active turn",
-        ));
-    }
     Ok(())
 }
 
@@ -298,24 +291,14 @@ pub fn runtime_validate_provider_completion_execution(
     let controller_validation_failure =
         runtime_execution_is_controller_validation_failure(execution);
     let controller_terminal_failure = controller_failure_summary || controller_validation_failure;
-    if batch.protocol != "maap/1" {
-        return Err(OutcomeError::invalid_state(
-            "agent provider completion action batch protocol is unsupported",
-        ));
-    }
     if batch.rationale.trim().is_empty() {
         return Err(OutcomeError::invalid_state(
             "agent provider completion action batch rationale is empty",
         ));
     }
-    if batch.actions.is_empty() && !batch.final_turn {
+    if batch.actions.is_empty() {
         return Err(OutcomeError::invalid_state(
-            "agent provider completion action batch has no actions but is not final",
-        ));
-    }
-    if batch.final_turn != execution.final_turn && !controller_terminal_failure {
-        return Err(OutcomeError::invalid_state(
-            "agent provider completion final flag does not match action batch",
+            "agent provider completion action batch has no actions",
         ));
     }
     let mut action_types = BTreeMap::new();
@@ -1383,7 +1366,7 @@ mod tests {
     fn shell_action() -> AgentAction {
         AgentAction {
             id: "shell-1".to_string(),
-            rationale: "Inspect repository".to_string(),
+
             payload: AgentActionPayload::ShellCommand {
                 summary: "Inspect repository".to_string(),
                 command: "git status --short".to_string(),
@@ -1445,12 +1428,9 @@ mod tests {
 
         let mut validation_failure = execution();
         validation_failure.response.action_batch = Some(MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "invalid call".to_string(),
-            turn_id: "turn-1".to_string(),
-            agent_id: "agent-1".to_string(),
+
             actions: vec![shell_action()],
-            final_turn: true,
         });
         validation_failure.response.raw_text =
             "bad action\nmaap_validation_error: invalid target".to_string();
@@ -1484,7 +1464,7 @@ mod tests {
             &turn(),
             &AgentAction {
                 id: "fetch".to_string(),
-                rationale: "fetch required source".to_string(),
+
                 payload: AgentActionPayload::FetchUrl {
                     url: "https://example.test".to_string(),
                     format: None,
@@ -1525,7 +1505,7 @@ mod tests {
     fn issue_dependency_failures_are_model_correctable() {
         let action = AgentAction {
             id: "issue-add".to_string(),
-            rationale: "record dependent work".to_string(),
+
             payload: AgentActionPayload::IssueAdd {
                 kind: "task".to_string(),
                 state: None,
@@ -1576,26 +1556,23 @@ mod tests {
     fn execution_classifies_apply_patch_actions_from_canonical_batch() {
         let mut execution = execution();
         execution.response.action_batch = Some(MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "Update the file".to_string(),
-            turn_id: "turn-1".to_string(),
-            agent_id: "agent-1".to_string(),
+
             actions: vec![AgentAction {
                 id: "patch-1".to_string(),
-                rationale: "Update the file".to_string(),
+
                 payload: AgentActionPayload::ApplyPatch {
                     patch: "*** Begin Patch\n*** End Patch".to_string(),
                     strip: None,
                 },
             }],
-            final_turn: false,
         });
 
         assert!(runtime_execution_has_apply_patch_action(&execution));
     }
 
-    /// Verifies neutral summary and rationale suppression consume the explicit
-    /// validated plan supplied by the product rather than re-lowering actions.
+    /// Verifies neutral summary presentation consumes the explicit validated
+    /// plan supplied by the product rather than re-lowering actions.
     #[test]
     fn action_presentation_uses_explicit_local_plan() {
         let action = shell_action();
@@ -1609,11 +1586,6 @@ mod tests {
             action_summary(&action, input).as_deref(),
             Some("Inspect repository")
         );
-        assert!(!action_rationale_repeats_visible_summary(&action, input));
-
-        let mut repeated = action;
-        repeated.rationale = "git status --short".to_string();
-        assert!(action_rationale_repeats_visible_summary(&repeated, input));
     }
 
     /// Verifies conversational text is normalized once and suppresses a batch
@@ -1621,20 +1593,17 @@ mod tests {
     #[test]
     fn batch_presentation_suppresses_repeated_conversational_text() {
         let batch = MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "thinking:  Ready   to continue".to_string(),
-            turn_id: "turn-1".to_string(),
-            agent_id: "agent-1".to_string(),
+
             actions: vec![AgentAction {
                 id: "say-1".to_string(),
-                rationale: String::new(),
+
                 payload: AgentActionPayload::Say {
                     status: SayStatus::Progress,
                     text: "ready to continue".to_string(),
                     content_type: "text/plain".to_string(),
                 },
             }],
-            final_turn: false,
         };
 
         let visible = batch_visible_action_texts(&batch);
@@ -1648,7 +1617,7 @@ mod tests {
     fn action_presentation_classifies_file_mutation_duplicates() {
         let action = AgentAction {
             id: "patch-1".to_string(),
-            rationale: "Update the file".to_string(),
+
             payload: AgentActionPayload::ApplyPatch {
                 patch: "*** Begin Patch\n*** End Patch".to_string(),
                 strip: None,

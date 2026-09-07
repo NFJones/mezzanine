@@ -336,7 +336,7 @@ fn runtime_routed_worker_checkpoint_restores_only_parent() {
 fn routed_patch_execution(turn: &mez_agent::AgentTurnRecord) -> mez_agent::AgentTurnExecution {
     let patch_action = mez_agent::AgentAction {
         id: format!("patch-{}", turn.turn_id),
-        rationale: "make the requested change".to_string(),
+
         payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: "*** Begin Patch\n*** End Patch".to_string(),
             strip: None,
@@ -352,12 +352,9 @@ fn routed_patch_execution(turn: &mez_agent::AgentTurnRecord) -> mez_agent::Agent
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test routed patch iteration".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![patch_action.clone()],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -932,12 +929,6 @@ fn runtime_routed_loop_retains_patch_work_across_provider_continuations() {
         .clone();
 
     let mut patch_execution = routed_patch_execution(&worker_turn);
-    patch_execution
-        .response
-        .action_batch
-        .as_mut()
-        .unwrap()
-        .final_turn = false;
     patch_execution.final_turn = false;
     patch_execution.terminal_state = AgentTurnState::Running;
     service
@@ -1058,7 +1049,7 @@ fn runtime_routed_loop_continues_in_one_worker_before_terminal_handoff() {
         .expect("selected worker turn should exist");
     let patch_action = mez_agent::AgentAction {
         id: "patch-1".to_string(),
-        rationale: "make the requested change".to_string(),
+
         payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: "*** Begin Patch\n*** End Patch".to_string(),
             strip: None,
@@ -1074,12 +1065,9 @@ fn runtime_routed_loop_continues_in_one_worker_before_terminal_handoff() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test routed patch iteration".to_string(),
-                turn_id: first_worker_turn_id.clone(),
-                agent_id: first_worker_turn.agent_id.clone(),
+
                 actions: vec![patch_action.clone()],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1645,12 +1633,9 @@ fn runtime_routed_worker_joined_child_failure_recovers_parent() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "delegate joined work".to_string(),
-                turn_id: worker_turn.turn_id.clone(),
-                agent_id: worker_turn.agent_id.clone(),
+
                 actions: vec![spawn.clone()],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1760,7 +1745,7 @@ fn runtime_routed_worker_native_shell_survives_joined_child_wait() {
         .unwrap();
     let shell = mez_agent::AgentAction {
         id: "shell-with-descendants".to_string(),
-        rationale: "inspect while descendants run".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Inspect alongside descendants.".to_string(),
             command: "printf routed-shell-result".to_string(),
@@ -1778,17 +1763,14 @@ fn runtime_routed_worker_native_shell_survives_joined_child_wait() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "collect parallel evidence".to_string(),
-                turn_id: worker_turn.turn_id.clone(),
-                agent_id: worker_turn.agent_id.clone(),
+
                 actions: vec![
                     runtime_spawn_agent_action("spawn-one", "descendant one"),
                     runtime_spawn_agent_action("spawn-two", "descendant two"),
                     runtime_spawn_agent_action("spawn-three", "descendant three"),
                     shell,
                 ],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2107,7 +2089,7 @@ fn runtime_routed_worker_stored_dispatch_failure_presents_before_pane_close() {
 
     let action = mez_agent::AgentAction {
         id: "resumed-shell-dispatch".to_string(),
-        rationale: "inspect the worker directory".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Inspect the worker directory.".to_string(),
             command: "pwd".to_string(),
@@ -2145,12 +2127,9 @@ fn runtime_routed_worker_stored_dispatch_failure_presents_before_pane_close() {
                 latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: Some(mez_agent::MaapBatch {
-                    protocol: "maap/1".to_string(),
                     rationale: "exercise stored shell dispatch settlement".to_string(),
-                    turn_id: worker_turn.turn_id.clone(),
-                    agent_id: worker_turn.agent_id.clone(),
+
                     actions: vec![action],
-                    final_turn: false,
                 }),
                 provider_transcript_events: Vec::new(),
             },
@@ -2205,7 +2184,7 @@ fn runtime_routed_worker_foreground_dispatch_block_recovers_parent() {
         selected_routed_loop("/loop --limit 3 inspect foreground dispatch recovery");
     let action = mez_agent::AgentAction {
         id: "shell-blocked".to_string(),
-        rationale: "inspect without disturbing the foreground program".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Inspect the working directory.".to_string(),
             command: "pwd".to_string(),
@@ -2235,12 +2214,9 @@ fn runtime_routed_worker_foreground_dispatch_block_recovers_parent() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "inspect with shell".to_string(),
-                turn_id: worker_turn.turn_id.clone(),
-                agent_id: worker_turn.agent_id.clone(),
+
                 actions: vec![action],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2497,7 +2473,7 @@ reasoning_profile = "high"
     let completed_execution = |turn: &mez_agent::AgentTurnRecord, text: &str| {
         let action = mez_agent::AgentAction {
             id: format!("say-{}", turn.turn_id),
-            rationale: "return the routed result".to_string(),
+
             payload: mez_agent::AgentActionPayload::Say {
                 status: mez_agent::SayStatus::Final,
                 text: text.to_string(),

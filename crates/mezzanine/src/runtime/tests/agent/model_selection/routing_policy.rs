@@ -740,7 +740,7 @@ reasoning_profile = "high"
     let completed_say_execution = |turn: &mez_agent::AgentTurnRecord, text: &str| {
         let action = mez_agent::AgentAction {
             id: format!("say-{}", turn.turn_id),
-            rationale: "return the routed result".to_string(),
+
             payload: mez_agent::AgentActionPayload::Say {
                 status: mez_agent::SayStatus::Final,
                 text: text.to_string(),
@@ -775,7 +775,7 @@ reasoning_profile = "high"
         |turn: &mez_agent::AgentTurnRecord, progress: &str, final_text: &str| {
             let progress_action = mez_agent::AgentAction {
                 id: format!("progress-{}", turn.turn_id),
-                rationale: "report routed progress".to_string(),
+
                 payload: mez_agent::AgentActionPayload::Say {
                     status: mez_agent::SayStatus::Progress,
                     text: progress.to_string(),
@@ -784,7 +784,7 @@ reasoning_profile = "high"
             };
             let final_action = mez_agent::AgentAction {
                 id: format!("final-{}", turn.turn_id),
-                rationale: "return the routed result".to_string(),
+
                 payload: mez_agent::AgentActionPayload::Say {
                     status: mez_agent::SayStatus::Final,
                     text: final_text.to_string(),
@@ -801,12 +801,9 @@ reasoning_profile = "high"
                     latest_request_usage: None,
                     quota_usage: Default::default(),
                     action_batch: Some(mez_agent::MaapBatch {
-                        protocol: "maap/1".to_string(),
                         rationale: "report progress and the final routed result".to_string(),
-                        turn_id: turn.turn_id.clone(),
-                        agent_id: turn.agent_id.clone(),
+
                         actions: vec![progress_action.clone(), final_action.clone()],
-                        final_turn: true,
                     }),
                     provider_transcript_events: Vec::new(),
                 },
@@ -1286,7 +1283,7 @@ fn runtime_shell_pane_not_ready_queues_model_self_correction() {
 
     let action = mez_agent::AgentAction {
         id: "shell-not-ready".to_string(),
-        rationale: "inspect the render owner".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Inspect the render owner.".to_string(),
             command: "rg -n \"status pager\" src".to_string(),
@@ -1321,12 +1318,9 @@ fn runtime_shell_pane_not_ready_queues_model_self_correction() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![action],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },

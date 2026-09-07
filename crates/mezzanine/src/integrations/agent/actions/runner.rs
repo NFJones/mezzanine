@@ -115,12 +115,10 @@ impl<P: ModelProvider> AgentTurnEnvironment for SyncProductAgentTurnEnvironment<
 
     fn validate_batch(
         &self,
-        turn: &AgentTurnRecord,
+        _turn: &AgentTurnRecord,
         batch: &super::super::MaapBatch,
     ) -> Result<()> {
         Ok(batch.validate_harness_contract(
-            &turn.turn_id,
-            &turn.agent_id,
             &self.runner.available_mcp_servers,
             self.runner.available_mcp_tools,
         )?)
@@ -445,12 +443,10 @@ impl<P: AsyncModelProvider> AgentTurnEnvironment for ProductAgentTurnEnvironment
 
     fn validate_batch(
         &self,
-        turn: &AgentTurnRecord,
+        _turn: &AgentTurnRecord,
         batch: &super::super::MaapBatch,
     ) -> Result<()> {
         Ok(batch.validate_harness_contract(
-            &turn.turn_id,
-            &turn.agent_id,
             &self.runner.available_mcp_servers,
             self.runner.available_mcp_tools,
         )?)

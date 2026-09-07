@@ -13,7 +13,7 @@ use super::*;
 fn agent_action_result_diff_preview_includes_apply_patch_only() {
     let patch = AgentAction {
         id: "patch".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::ApplyPatch {
             patch: "*** Begin Patch\n*** Update File: note.txt\n@@\n-old\n+new\n*** End Patch"
                 .to_string(),
@@ -33,7 +33,7 @@ fn agent_action_result_diff_preview_includes_apply_patch_only() {
 fn agent_action_execution_header_summarizes_memory_actions() {
     let search = AgentAction {
         id: "memory-search".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::MemorySearch {
             query: "prompt cache details".to_string(),
             limit: Some(3),
@@ -41,7 +41,7 @@ fn agent_action_execution_header_summarizes_memory_actions() {
     };
     let store = AgentAction {
         id: "memory-store".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::MemoryStore {
             kind: "preference".to_string(),
             priority: Some(80),
@@ -73,7 +73,7 @@ fn agent_action_execution_header_summarizes_memory_actions() {
 fn agent_action_execution_header_summarizes_issue_actions() {
     let add = AgentAction {
         id: "issue-add".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::IssueAdd {
             kind: "defect".to_string(),
             state: None,
@@ -86,7 +86,7 @@ fn agent_action_execution_header_summarizes_issue_actions() {
     };
     let update = AgentAction {
         id: "issue-update".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::IssueUpdate {
             id: "issue-123".to_string(),
             kind: Some("task".to_string()),
@@ -103,7 +103,7 @@ fn agent_action_execution_header_summarizes_issue_actions() {
     };
     let query = AgentAction {
         id: "issue-query".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::IssueQuery {
             kind: Some("task".to_string()),
             state: Some("open".to_string()),
@@ -114,7 +114,7 @@ fn agent_action_execution_header_summarizes_issue_actions() {
     };
     let delete = AgentAction {
         id: "issue-delete".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::IssueDelete {
             id: "issue-123".to_string(),
         },
@@ -152,7 +152,7 @@ fn agent_action_execution_header_summarizes_issue_actions() {
 fn streaming_action_header_matches_settled_action_header() {
     let action = AgentAction {
         id: String::new(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::McpCall {
             server: "github".to_string(),
             tool: "search".to_string(),

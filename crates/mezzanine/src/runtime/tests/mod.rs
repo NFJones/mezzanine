@@ -516,24 +516,21 @@ fn runtime_complete_batch(turn_id: impl Into<String>) -> mez_agent::MaapBatch {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn runtime_complete_batch_for(
-    turn_id: impl Into<String>,
-    agent_id: impl Into<String>,
+    _turn_id: impl Into<String>,
+    _agent_id: impl Into<String>,
 ) -> mez_agent::MaapBatch {
     mez_agent::MaapBatch {
-        protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
-        turn_id: turn_id.into(),
-        agent_id: agent_id.into(),
+
         actions: vec![mez_agent::AgentAction {
             id: "say-1".to_string(),
-            rationale: "report completion".to_string(),
+
             payload: mez_agent::AgentActionPayload::Say {
                 status: mez_agent::SayStatus::Final,
                 text: "Done.".to_string(),
                 content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
             },
         }],
-        final_turn: true,
     }
 }
 
@@ -734,19 +731,16 @@ fn runtime_capability_response(
         latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(mez_agent::MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            turn_id: request.turn_id.clone(),
-            agent_id: request.agent_id.clone(),
+
             actions: vec![mez_agent::AgentAction {
                 id: "capability-1".to_string(),
-                rationale: "request the action surface needed for the runtime test".to_string(),
+
                 payload: mez_agent::AgentActionPayload::RequestCapability {
                     capability,
                     reason: format!("need {} actions for this runtime test", capability.as_str()),
                 },
             }],
-            final_turn: false,
         }),
         provider_transcript_events: Vec::new(),
     }
@@ -836,8 +830,8 @@ fn runtime_say_response(turn_id: &str, text: &str, final_turn: bool) -> mez_agen
 
 /// Builds a simple `say` response for a selected runtime agent.
 fn runtime_say_response_for_agent(
-    turn_id: &str,
-    agent_id: &str,
+    _turn_id: &str,
+    _agent_id: &str,
     text: &str,
     final_turn: bool,
 ) -> mez_agent::ModelResponse {
@@ -849,20 +843,21 @@ fn runtime_say_response_for_agent(
         latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(mez_agent::MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            turn_id: turn_id.to_string(),
-            agent_id: agent_id.to_string(),
+
             actions: vec![mez_agent::AgentAction {
                 id: "say-1".to_string(),
-                rationale: "respond to the pane".to_string(),
+
                 payload: mez_agent::AgentActionPayload::Say {
-                    status: mez_agent::SayStatus::Final,
+                    status: if final_turn {
+                        mez_agent::SayStatus::Final
+                    } else {
+                        mez_agent::SayStatus::Progress
+                    },
                     text: text.to_string(),
                     content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                 },
             }],
-            final_turn,
         }),
         provider_transcript_events: Vec::new(),
     }
@@ -872,7 +867,7 @@ fn runtime_say_response_for_agent(
 fn runtime_spawn_agent_action(id: &str, task_prompt: &str) -> mez_agent::AgentAction {
     mez_agent::AgentAction {
         id: id.to_string(),
-        rationale: "delegate a bounded child task".to_string(),
+
         payload: mez_agent::AgentActionPayload::SpawnAgent {
             role: "default".to_string(),
             placement: "new-window".to_string(),
@@ -1441,20 +1436,17 @@ fn execute_runtime_send_message_to(
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "msg-1".to_string(),
-                    rationale: "coordinate with another local agent".to_string(),
+
                     payload: mez_agent::AgentActionPayload::SendMessage {
                         recipient: recipient.to_string(),
                         content_type: content_type.to_string(),
                         payload: payload.to_string(),
                     },
                 }],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1512,13 +1504,11 @@ fn dispatch_protocol_test_shell_action(
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: action_id.to_string(),
-                    rationale: "run a shell command".to_string(),
+
                     payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Run a command".to_string(),
                         command: "true".to_string(),
@@ -1527,7 +1517,6 @@ fn dispatch_protocol_test_shell_action(
                         timeout_ms: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },

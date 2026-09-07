@@ -161,20 +161,14 @@ fn openai_provider_parses_fenced_maap_action_batch_from_text() {
     .unwrap();
     let raw_text = r#"```mezzanine-action-json
 {
-  "protocol": "maap/1",
-  "turn_id": "turn-1",
-  "agent_id": "agent-1",
   "rationale": "test action batch rationale",
   "actions": [
     {
-      "id": "say-1",
       "type": "say",
       "status": "final",
-      "rationale": "Reply",
       "text": "hello"
     }
-  ],
-  "final": true
+  ]
 }
 ```"#;
     let transport = FakeProviderHttpTransport {
@@ -201,7 +195,6 @@ fn openai_provider_parses_fenced_maap_action_batch_from_text() {
 
     assert_eq!(response.raw_text, raw_text);
     let batch = response.action_batch.unwrap();
-    assert!(batch.final_turn);
     assert_eq!(batch.actions[0].id, "action-1");
     assert!(matches!(
         batch.actions[0].payload,
@@ -277,10 +270,6 @@ fn openai_provider_parses_maap_function_call_arguments() {
     let response = provider.send_request(&request).unwrap();
 
     let batch = response.action_batch.unwrap();
-    assert_eq!(batch.protocol, "maap/1");
-    assert_eq!(batch.turn_id, "turn-1");
-    assert_eq!(batch.agent_id, "agent-1");
-    assert!(!batch.final_turn);
     assert_eq!(batch.actions.len(), 1);
     match &batch.actions[0].payload {
         AgentActionPayload::ShellCommand {
@@ -357,10 +346,6 @@ fn openai_provider_parses_native_structured_maap_action_batch() {
     let response = provider.send_request(&request).unwrap();
 
     let batch = response.action_batch.unwrap();
-    assert_eq!(batch.protocol, "maap/1");
-    assert_eq!(batch.turn_id, "turn-1");
-    assert_eq!(batch.agent_id, "agent-1");
-    assert!(batch.final_turn);
     assert_eq!(batch.actions[0].id, "action-1");
     assert!(matches!(
         batch.actions[0].payload,
@@ -399,7 +384,7 @@ fn openai_provider_rejects_malformed_native_structured_maap_action_batch() {
             headers: Default::default(),
             body: serde_json::json!({
                 "model": "gpt-test",
-                "output_text": "{\"protocol\":\"maap/1\",\"actions\":[]}"
+                "output_text": "{\"rationale\":\"test empty batch\",\"actions\":[]}"
             })
             .to_string(),
         },
@@ -417,7 +402,7 @@ fn openai_provider_rejects_malformed_native_structured_maap_action_batch() {
     assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
     assert_eq!(
         error.provider_raw_text(),
-        Some("{\"protocol\":\"maap/1\",\"actions\":[]}")
+        Some("{\"rationale\":\"test empty batch\",\"actions\":[]}")
     );
     let failure_json: serde_json::Value =
         serde_json::from_str(error.provider_failure_json().unwrap()).unwrap();
@@ -425,7 +410,7 @@ fn openai_provider_rejects_malformed_native_structured_maap_action_batch() {
     assert_eq!(failure_json["output"]["format"], "json");
     let keys = failure_json["output"]["top_level_keys"].as_array().unwrap();
     assert!(keys.contains(&serde_json::json!("actions")));
-    assert!(keys.contains(&serde_json::json!("protocol")));
+    assert!(keys.contains(&serde_json::json!("rationale")));
     assert!(
         error
             .message()
@@ -539,7 +524,6 @@ fn openai_provider_stream_parses_maap_function_call_arguments() {
     let response = provider.send_request(&request).unwrap();
 
     let batch = response.action_batch.unwrap();
-    assert!(!batch.final_turn);
     match &batch.actions[0].payload {
         AgentActionPayload::ShellCommand { command, .. } => assert_eq!(command, "ls"),
         payload => panic!("unexpected payload: {payload:?}"),

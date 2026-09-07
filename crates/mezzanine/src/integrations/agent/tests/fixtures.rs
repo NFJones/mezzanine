@@ -18,7 +18,7 @@ impl ActionBuilder {
     pub(super) fn shell(id: &str) -> AgentAction {
         AgentAction {
             id: id.to_string(),
-            rationale: "inspect current directory".to_string(),
+
             payload: AgentActionPayload::ShellCommand {
                 summary: "Inspect the current directory".to_string(),
                 command: "pwd".to_string(),
@@ -33,7 +33,7 @@ impl ActionBuilder {
     pub(super) fn say(id: &str, text: &str) -> AgentAction {
         AgentAction {
             id: id.to_string(),
-            rationale: "reply to user".to_string(),
+
             payload: AgentActionPayload::Say {
                 status: SayStatus::Final,
                 text: text.to_string(),
@@ -46,7 +46,7 @@ impl ActionBuilder {
     pub(super) fn abort(id: &str, reason: &str) -> AgentAction {
         AgentAction {
             id: id.to_string(),
-            rationale: "stop the turn".to_string(),
+
             payload: AgentActionPayload::Abort {
                 reason: reason.to_string(),
             },
@@ -57,7 +57,7 @@ impl ActionBuilder {
     pub(super) fn mcp(id: &str) -> AgentAction {
         AgentAction {
             id: id.to_string(),
-            rationale: "inspect external integration state".to_string(),
+
             payload: AgentActionPayload::McpCall {
                 server: "state".to_string(),
                 tool: "list".to_string(),
@@ -70,7 +70,7 @@ impl ActionBuilder {
     pub(super) fn config_change(id: &str) -> AgentAction {
         AgentAction {
             id: id.to_string(),
-            rationale: "change the active theme".to_string(),
+
             payload: AgentActionPayload::ConfigChange {
                 setting_path: "theme.active".to_string(),
                 operation: "set".to_string(),
@@ -83,7 +83,7 @@ impl ActionBuilder {
     pub(super) fn capability(id: &str, capability: AgentCapability) -> AgentAction {
         AgentAction {
             id: id.to_string(),
-            rationale: "request the action surface needed for the task".to_string(),
+
             payload: AgentActionPayload::RequestCapability {
                 capability,
                 reason: format!("need {} actions for this test", capability.as_str()),

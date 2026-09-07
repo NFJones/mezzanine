@@ -203,7 +203,7 @@ fn native_shell_provider_execution(
     };
     let action = mez_agent::AgentAction {
         id: "shell-1".to_string(),
-        rationale: "exercise native worker liveness".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Run a bounded native command".to_string(),
             command,
@@ -213,12 +213,9 @@ fn native_shell_provider_execution(
         },
     };
     let response_batch = mez_agent::MaapBatch {
-        protocol: "maap/1".to_string(),
         rationale: "test native worker liveness".to_string(),
-        turn_id: task.turn_id.clone(),
-        agent_id: task.agent_id.clone(),
+
         actions: vec![action.clone()],
-        final_turn: true,
     };
     mez_agent::AgentTurnExecution {
         request: mez_agent::ModelRequest {
@@ -487,7 +484,7 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
     };
     let action = mez_agent::AgentAction {
         id: "shell-1".to_string(),
-        rationale: "list files".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "List files in the current directory".to_string(),
             command: "ls".to_string(),
@@ -497,12 +494,9 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
         },
     };
     let response_batch = mez_agent::MaapBatch {
-        protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
-        turn_id: task.turn_id.clone(),
-        agent_id: task.agent_id.clone(),
+
         actions: vec![action.clone()],
-        final_turn: false,
     };
     let execution = mez_agent::AgentTurnExecution {
         request: mez_agent::ModelRequest {
@@ -663,7 +657,7 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
     };
     let batch_action = mez_agent::AgentAction {
         id: "fetch-listed".to_string(),
-        rationale: "fetch the listed source".to_string(),
+
         payload: mez_agent::AgentActionPayload::FetchUrl {
             url: "https://example.com/listed".to_string(),
             format: None,
@@ -672,7 +666,7 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
     };
     let missing_action = mez_agent::AgentAction {
         id: "fetch-missing-result".to_string(),
-        rationale: "this result no longer has a matching batch action".to_string(),
+
         payload: mez_agent::AgentActionPayload::FetchUrl {
             url: "https://example.com/missing".to_string(),
             format: None,
@@ -680,12 +674,9 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
         },
     };
     let response_batch = mez_agent::MaapBatch {
-        protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
-        turn_id: task.turn_id.clone(),
-        agent_id: task.agent_id.clone(),
+
         actions: vec![batch_action],
-        final_turn: false,
     };
     let execution = mez_agent::AgentTurnExecution {
         request: mez_agent::ModelRequest {

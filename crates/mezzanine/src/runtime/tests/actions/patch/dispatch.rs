@@ -29,7 +29,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_readiness() {
         .unwrap();
     let action = mez_agent::AgentAction {
         id: "shell-1".to_string(),
-        rationale: "inspect the working directory".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Inspect the working directory.".to_string(),
             command: "pwd".to_string(),
@@ -50,12 +50,9 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_readiness() {
                 latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: Some(mez_agent::MaapBatch {
-                    protocol: "maap/1".to_string(),
                     rationale: "inspect with shell".to_string(),
-                    turn_id: turn.turn_id.clone(),
-                    agent_id: turn.agent_id.clone(),
+
                     actions: vec![action.clone()],
-                    final_turn: false,
                 }),
                 provider_transcript_events: Vec::new(),
             },
@@ -126,7 +123,7 @@ fn runtime_shell_dispatch_completes_pending_action_after_stale_interactive_block
         .unwrap();
     let action = mez_agent::AgentAction {
         id: "shell-1".to_string(),
-        rationale: "confirm the pending shell action resumes".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Print a recovery marker.".to_string(),
             command: "printf 'STALE_INTERACTIVE_BLOCKED_RECOVERED\\n'".to_string(),
@@ -147,12 +144,9 @@ fn runtime_shell_dispatch_completes_pending_action_after_stale_interactive_block
                 latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: Some(mez_agent::MaapBatch {
-                    protocol: "maap/1".to_string(),
                     rationale: "inspect with shell".to_string(),
-                    turn_id: turn.turn_id.clone(),
-                    agent_id: turn.agent_id.clone(),
+
                     actions: vec![action.clone()],
-                    final_turn: false,
                 }),
                 provider_transcript_events: Vec::new(),
             },
@@ -300,7 +294,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_shell_process_
         .unwrap();
     let action = mez_agent::AgentAction {
         id: "shell-1".to_string(),
-        rationale: "inspect the working directory".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Inspect the working directory.".to_string(),
             command: "pwd".to_string(),
@@ -321,12 +315,9 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_shell_process_
                 latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: Some(mez_agent::MaapBatch {
-                    protocol: "maap/1".to_string(),
                     rationale: "inspect with shell".to_string(),
-                    turn_id: turn.turn_id.clone(),
-                    agent_id: turn.agent_id.clone(),
+
                     actions: vec![action.clone()],
-                    final_turn: false,
                 }),
                 provider_transcript_events: Vec::new(),
             },
@@ -391,7 +382,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_cached_foregro
         .unwrap();
     let action = mez_agent::AgentAction {
         id: "shell-1".to_string(),
-        rationale: "inspect the working directory".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Inspect the working directory.".to_string(),
             command: "pwd".to_string(),
@@ -412,12 +403,9 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_cached_foregro
                 latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: Some(mez_agent::MaapBatch {
-                    protocol: "maap/1".to_string(),
                     rationale: "inspect with shell".to_string(),
-                    turn_id: turn.turn_id.clone(),
-                    agent_id: turn.agent_id.clone(),
+
                     actions: vec![action.clone()],
-                    final_turn: false,
                 }),
                 provider_transcript_events: Vec::new(),
             },
@@ -710,7 +698,7 @@ fn runtime_shell_recovery_waits_for_pane_subshell_certification() {
         .unwrap();
     let action = mez_agent::AgentAction {
         id: "shell-awaiting-certification".to_string(),
-        rationale: "inspect through the pending agent subshell".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Inspect the working directory.".to_string(),
             command: "pwd".to_string(),
@@ -731,12 +719,9 @@ fn runtime_shell_recovery_waits_for_pane_subshell_certification() {
                 latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: Some(mez_agent::MaapBatch {
-                    protocol: "maap/1".to_string(),
                     rationale: "inspect with the certified shell".to_string(),
-                    turn_id: turn.turn_id.clone(),
-                    agent_id: turn.agent_id.clone(),
+
                     actions: vec![action.clone()],
-                    final_turn: false,
                 }),
                 provider_transcript_events: Vec::new(),
             },
@@ -1055,7 +1040,7 @@ fn runtime_shell_dispatch_recovers_for_certified_agent_subshell_group() {
         .unwrap();
     let action = mez_agent::AgentAction {
         id: "shell-certified".to_string(),
-        rationale: "inspect through the certified agent subshell".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Inspect the working directory.".to_string(),
             command: "pwd".to_string(),
@@ -1076,12 +1061,9 @@ fn runtime_shell_dispatch_recovers_for_certified_agent_subshell_group() {
                 latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: Some(mez_agent::MaapBatch {
-                    protocol: "maap/1".to_string(),
                     rationale: "inspect with the certified shell".to_string(),
-                    turn_id: turn.turn_id.clone(),
-                    agent_id: turn.agent_id.clone(),
+
                     actions: vec![action.clone()],
-                    final_turn: false,
                 }),
                 provider_transcript_events: Vec::new(),
             },
@@ -1286,7 +1268,7 @@ fn runtime_shell_dispatch_fails_closed_after_persistent_foreground_block() {
         .unwrap();
     let action = mez_agent::AgentAction {
         id: "shell-blocked".to_string(),
-        rationale: "inspect without disturbing the foreground program".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Inspect the working directory.".to_string(),
             command: "pwd".to_string(),
@@ -1307,12 +1289,9 @@ fn runtime_shell_dispatch_fails_closed_after_persistent_foreground_block() {
                 latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: Some(mez_agent::MaapBatch {
-                    protocol: "maap/1".to_string(),
                     rationale: "inspect with shell".to_string(),
-                    turn_id: turn.turn_id.clone(),
-                    agent_id: turn.agent_id.clone(),
+
                     actions: vec![action.clone()],
-                    final_turn: false,
                 }),
                 provider_transcript_events: Vec::new(),
             },
@@ -1502,13 +1481,11 @@ fn runtime_shell_command_dispatch_uses_action_timeout() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "shell-timeout".to_string(),
-                    rationale: "run a bounded command".to_string(),
+
                     payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Run bounded grep".to_string(),
                         command: "grep -n needle file.txt".to_string(),
@@ -1517,7 +1494,6 @@ fn runtime_shell_command_dispatch_uses_action_timeout() {
                         timeout_ms: Some(1500),
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },

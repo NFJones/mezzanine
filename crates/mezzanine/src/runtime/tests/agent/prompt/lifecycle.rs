@@ -1327,20 +1327,17 @@ fn runtime_agent_prompt_and_say_response_are_interleaved_in_pane_buffer() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "say-1".to_string(),
-                    rationale: "answer in the pane".to_string(),
+
                     payload: mez_agent::AgentActionPayload::Say {
                         status: mez_agent::SayStatus::Final,
                         text: "The pane is ready.".to_string(),
                         content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                     },
                 }],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },

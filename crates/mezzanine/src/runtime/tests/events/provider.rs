@@ -33,7 +33,7 @@ async fn runtime_provider_completion_queues_network_action_for_worker() {
         .unwrap();
     let action = mez_agent::AgentAction {
         id: "fetch-worker".to_string(),
-        rationale: "fetch outside the runtime actor".to_string(),
+
         payload: mez_agent::AgentActionPayload::FetchUrl {
             url: "https://example.test/pending".to_string(),
             format: None,
@@ -54,12 +54,9 @@ async fn runtime_provider_completion_queues_network_action_for_worker() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "fetch one source".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![action.clone()],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -146,7 +143,7 @@ async fn runtime_routed_presentation_retries_correctable_patch_failure() {
 
     let malformed_action = mez_agent::AgentAction {
         id: "malformed-routed-patch".to_string(),
-        rationale: "write the routed plan".to_string(),
+
         payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: "*** Begin Patch\n*** Add File: routed-plan.md\nmissing-prefix\n*** End Patch"
                 .to_string(),
@@ -172,12 +169,9 @@ async fn runtime_routed_presentation_retries_correctable_patch_failure() {
             latest_request_usage: None,
             quota_usage: Vec::new(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "write the routed plan".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![malformed_action],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -247,7 +241,7 @@ async fn runtime_routed_presentation_retries_correctable_patch_failure() {
     service.remove_pending_agent_provider_task(&turn.turn_id);
     let corrected_action = mez_agent::AgentAction {
         id: "corrected-routed-patch".to_string(),
-        rationale: "write the corrected routed plan".to_string(),
+
         payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: "*** Begin Patch\n*** Add File: routed-plan.md\n+corrected\n*** End Patch"
                 .to_string(),
@@ -264,12 +258,9 @@ async fn runtime_routed_presentation_retries_correctable_patch_failure() {
             latest_request_usage: None,
             quota_usage: Vec::new(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "write the corrected routed plan".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![corrected_action.clone()],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -491,7 +482,7 @@ fn runtime_provider_action_ids_are_scoped_to_each_execution() {
         let actions = (1..=action_count)
             .map(|ordinal| mez_agent::AgentAction {
                 id: format!("action-{ordinal}"),
-                rationale: format!("execution {sequence} action {ordinal}"),
+
                 payload: mez_agent::AgentActionPayload::IssueQuery {
                     kind: None,
                     state: Some("open".to_string()),
@@ -535,12 +526,9 @@ fn runtime_provider_action_ids_are_scoped_to_each_execution() {
                 latest_request_usage: None,
                 quota_usage: Vec::new(),
                 action_batch: Some(mez_agent::MaapBatch {
-                    protocol: "maap/1".to_string(),
                     rationale: format!("provider execution {sequence}"),
-                    turn_id: turn.turn_id.clone(),
-                    agent_id: turn.agent_id.clone(),
+
                     actions,
-                    final_turn: false,
                 }),
                 provider_transcript_events: Vec::new(),
             },
@@ -679,7 +667,7 @@ async fn runtime_provider_application_accepts_reused_local_action_id_on_continua
     let build_execution = |sequence: usize| {
         let action = mez_agent::AgentAction {
             id: "action-1".to_string(),
-            rationale: format!("report provider progress {sequence}"),
+
             payload: mez_agent::AgentActionPayload::Say {
                 status: mez_agent::SayStatus::Progress,
                 text: format!("provider progress {sequence}"),
@@ -703,12 +691,9 @@ async fn runtime_provider_application_accepts_reused_local_action_id_on_continua
                 latest_request_usage: None,
                 quota_usage: Vec::new(),
                 action_batch: Some(mez_agent::MaapBatch {
-                    protocol: "maap/1".to_string(),
                     rationale: format!("provider progress execution {sequence}"),
-                    turn_id: turn.turn_id.clone(),
-                    agent_id: turn.agent_id.clone(),
+
                     actions: vec![action.clone()],
-                    final_turn: false,
                 }),
                 provider_transcript_events: Vec::new(),
             },
@@ -800,7 +785,7 @@ fn runtime_late_result_retains_original_provider_execution_group() {
         .unwrap();
     let first_action = mez_agent::AgentAction {
         id: "query-original".to_string(),
-        rationale: "Load the selected issue evidence".to_string(),
+
         payload: mez_agent::AgentActionPayload::IssueQuery {
             kind: None,
             state: Some("open".to_string()),
@@ -819,12 +804,9 @@ fn runtime_late_result_retains_original_provider_execution_group() {
             latest_request_usage: None,
             quota_usage: Vec::new(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "Continue active issue iss-42".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![first_action.clone()],
-                final_turn: false,
             }),
             provider_transcript_events: vec![
                 mez_agent::ProviderTranscriptEvent::DeepSeekAssistantToolCall {
@@ -860,7 +842,7 @@ fn runtime_late_result_retains_original_provider_execution_group() {
 
     let second_action = mez_agent::AgentAction {
         id: "query-later".to_string(),
-        rationale: "Record a later assistant execution".to_string(),
+
         payload: mez_agent::AgentActionPayload::IssueQuery {
             kind: None,
             state: Some("open".to_string()),
@@ -886,12 +868,9 @@ fn runtime_late_result_retains_original_provider_execution_group() {
             latest_request_usage: None,
             quota_usage: Vec::new(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "Handle later evidence".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![second_action],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1279,7 +1258,7 @@ fn runtime_steering_during_executed_action_preserves_later_evidence_in_place() {
     );
     let action = mez_agent::AgentAction {
         id: "executed-action".to_string(),
-        rationale: "finish work already dispatched".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "finish dispatched action".to_string(),
             command: "printf completed".to_string(),
@@ -1371,7 +1350,7 @@ fn runtime_multiple_steering_events_preserve_failure_and_cancellation_order() {
 
     let failed_action = mez_agent::AgentAction {
         id: "failed-after-first-steering".to_string(),
-        rationale: "observe an already-started failure".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "fail after first steering".to_string(),
             command: "exit 1".to_string(),
@@ -1382,7 +1361,7 @@ fn runtime_multiple_steering_events_preserve_failure_and_cancellation_order() {
     };
     let cancelled_action = mez_agent::AgentAction {
         id: "cancelled-after-second-steering".to_string(),
-        rationale: "observe an explicitly cancelled sibling".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "cancel after second steering".to_string(),
             command: "sleep 10".to_string(),
@@ -1517,7 +1496,7 @@ fn runtime_terminal_execution_transcript_persistence_is_idempotent() {
         .unwrap();
     let action = mez_agent::AgentAction {
         id: "say-once".to_string(),
-        rationale: "present the result once".to_string(),
+
         payload: mez_agent::AgentActionPayload::Say {
             status: mez_agent::SayStatus::Final,
             text: "done".to_string(),
@@ -1534,12 +1513,9 @@ fn runtime_terminal_execution_transcript_persistence_is_idempotent() {
             latest_request_usage: None,
             quota_usage: Vec::new(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "present the result once".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![action.clone()],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1699,7 +1675,7 @@ fn runtime_blocked_execution_transcript_persists_later_group_delta() {
         .unwrap();
     let first_action = mez_agent::AgentAction {
         id: "first-action".to_string(),
-        rationale: "complete the first action".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Produce exact output".to_string(),
             command: "printf exact-cross-turn-output".to_string(),
@@ -1769,7 +1745,7 @@ fn runtime_blocked_execution_transcript_persists_later_group_delta() {
         .unwrap();
     let second_action = mez_agent::AgentAction {
         id: "second-action".to_string(),
-        rationale: "complete the second action".to_string(),
+
         payload: mez_agent::AgentActionPayload::Say {
             status: mez_agent::SayStatus::Final,
             text: "done".to_string(),
@@ -1923,7 +1899,7 @@ fn runtime_routed_handoff_summary_persists_once_and_rehydrates_with_parent_answe
     }
     let action = mez_agent::AgentAction {
         id: "present-routed-result".to_string(),
-        rationale: "present the routed result".to_string(),
+
         payload: mez_agent::AgentActionPayload::Say {
             status: mez_agent::SayStatus::Final,
             text: "The routed implementation is complete.".to_string(),
@@ -1940,12 +1916,9 @@ fn runtime_routed_handoff_summary_persists_once_and_rehydrates_with_parent_answe
             latest_request_usage: None,
             quota_usage: Vec::new(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "present the routed result".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![action.clone()],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2030,9 +2003,6 @@ fn runtime_routed_handoff_summary_persists_once_and_rehydrates_with_parent_answe
                 .contains("rationale: present the routed result")
             && block
                 .content
-                .contains("action rationale present-routed-result (say): present the routed result")
-            && block
-                .content
                 .contains("The routed implementation is complete.")
     }));
     let ordinary_provider = RuntimeBatchProvider {
@@ -2095,7 +2065,7 @@ fn runtime_provider_completion_accepts_controller_failure_summary_state() {
         .expect("started turn should be recorded");
     let action = mez_agent::AgentAction {
         id: "say-1".to_string(),
-        rationale: "summarize the provider failure".to_string(),
+
         payload: mez_agent::AgentActionPayload::Say {
             status: mez_agent::SayStatus::Progress,
             text: "The provider request failed before any action could run.".to_string(),
@@ -2120,12 +2090,12 @@ fn runtime_provider_completion_accepts_controller_failure_summary_state() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
+
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
+
                 actions: vec![action],
-                final_turn: false,
+
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2170,7 +2140,7 @@ fn runtime_provider_completion_accepts_terminal_maap_validation_failure_state() 
         .expect("started turn should be recorded");
     let action = mez_agent::AgentAction {
         id: "mcp-1".to_string(),
-        rationale: "call missing tool".to_string(),
+
         payload: mez_agent::AgentActionPayload::McpCall {
             server: "missing".to_string(),
             tool: "read".to_string(),
@@ -2187,12 +2157,9 @@ fn runtime_provider_completion_accepts_terminal_maap_validation_failure_state() 
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![action],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2296,12 +2263,9 @@ fn runtime_provider_completion_rejects_empty_nonfinal_batch_state() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: Vec::new(),
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2317,9 +2281,7 @@ fn runtime_provider_completion_rejects_empty_nonfinal_batch_state() {
             .unwrap_err();
 
     assert!(
-        error
-            .message()
-            .contains("action batch has no actions but is not final"),
+        error.message().contains("action batch has no actions"),
         "{error}"
     );
     service.terminate_all_pane_processes().unwrap();
@@ -2606,20 +2568,17 @@ fn runtime_maap_validation_failure_persists_provider_response_detail() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "mcp-1".to_string(),
-                    rationale: "call missing tool".to_string(),
+
                     payload: mez_agent::AgentActionPayload::McpCall {
                         server: "missing".to_string(),
                         tool: "read".to_string(),
                         arguments_json: "{}".to_string(),
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2713,13 +2672,11 @@ fn runtime_provider_failure_after_nonzero_shell_result_does_not_report_running_r
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "shell-fail".to_string(),
-                    rationale: "exercise failure feedback".to_string(),
+
                     payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Run a command that will need correction".to_string(),
                         command: "false".to_string(),
@@ -2728,7 +2685,6 @@ fn runtime_provider_failure_after_nonzero_shell_result_does_not_report_running_r
                         timeout_ms: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2828,7 +2784,7 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
         .unwrap();
     let success_action = mez_agent::AgentAction {
         id: "fetch-ok".to_string(),
-        rationale: "fetch an available provider document".to_string(),
+
         payload: mez_agent::AgentActionPayload::FetchUrl {
             url: "https://example.test/ok".to_string(),
             format: None,
@@ -2837,7 +2793,7 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
     };
     let failed_action = mez_agent::AgentAction {
         id: "fetch-404".to_string(),
-        rationale: "fetch a provider document that moved".to_string(),
+
         payload: mez_agent::AgentActionPayload::FetchUrl {
             url: "https://example.test/missing".to_string(),
             format: None,
@@ -2909,12 +2865,9 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "fetch provider documentation sources".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![success_action, failed_action],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },

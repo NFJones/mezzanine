@@ -22,12 +22,9 @@ fn turn_runner_accepts_allowed_shell_actions() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![shell_action("a1")],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -99,13 +96,11 @@ fn turn_runner_accepts_ls_declared_as_current_directory_read() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![AgentAction {
                     id: "list-current-directory".to_string(),
-                    rationale: "list files in the current directory".to_string(),
+
                     payload: AgentActionPayload::ShellCommand {
                         summary: "List files in the current directory".to_string(),
                         command: "ls".to_string(),
@@ -114,7 +109,6 @@ fn turn_runner_accepts_ls_declared_as_current_directory_read() {
                         timeout_ms: Some(1000),
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -187,13 +181,11 @@ fn turn_runner_auto_allows_prompted_shell_actions_from_rationale() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![AgentAction {
                     id: "a1".to_string(),
-                    rationale: "run command".to_string(),
+
                     payload: AgentActionPayload::ShellCommand {
                         summary: "Run the requested command".to_string(),
                         command: "env".to_string(),
@@ -202,7 +194,6 @@ fn turn_runner_auto_allows_prompted_shell_actions_from_rationale() {
                         timeout_ms: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -276,13 +267,11 @@ fn turn_runner_blocks_shell_actions_requiring_approval() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![AgentAction {
                     id: "a1".to_string(),
-                    rationale: "run command".to_string(),
+
                     payload: AgentActionPayload::ShellCommand {
                         summary: "Run the requested command".to_string(),
                         command: "env".to_string(),
@@ -291,7 +280,6 @@ fn turn_runner_blocks_shell_actions_requiring_approval() {
                         timeout_ms: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -363,13 +351,11 @@ fn turn_runner_allows_shell_actions_with_canonical_scope_escape() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![AgentAction {
                     id: "a1".to_string(),
-                    rationale: "read file".to_string(),
+
                     payload: AgentActionPayload::ShellCommand {
                         summary: "Read the requested file".to_string(),
                         command: "cat link/secret.txt".to_string(),
@@ -378,7 +364,6 @@ fn turn_runner_allows_shell_actions_with_canonical_scope_escape() {
                         timeout_ms: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -463,13 +448,11 @@ fn turn_runner_blocks_unknown_classified_shell_actions_without_declared_effect_f
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![AgentAction {
                     id: "a1".to_string(),
-                    rationale: "inspect with a short interpreter command".to_string(),
+
                     payload: AgentActionPayload::ShellCommand {
                         summary: "Inspect with a short interpreter command".to_string(),
                         command: "python3 -c 'print(1)'".to_string(),
@@ -478,7 +461,6 @@ fn turn_runner_blocks_unknown_classified_shell_actions_without_declared_effect_f
                         timeout_ms: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -553,12 +535,9 @@ fn turn_runner_executes_allowed_shell_actions_and_records_output() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![shell_action("a1")],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -617,8 +596,8 @@ fn turn_runner_executes_allowed_shell_actions_and_records_output() {
         )
         .unwrap();
 
-    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
-    assert_eq!(ledger.turns()[0].state, AgentTurnState::Completed);
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    assert_eq!(ledger.turns()[0].state, AgentTurnState::Running);
     assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
     assert_eq!(execution.action_results[0].content_texts(), vec!["/repo\n"]);
     assert_eq!(executor.requests.len(), 1);
@@ -645,20 +624,20 @@ fn turn_runner_full_access_allows_out_of_scope_subagent_apply_patch() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
+
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
+
                 actions: vec![AgentAction {
                     id: "a1".to_string(),
-                    rationale: "patch out-of-scope file".to_string(),
+
                     payload: AgentActionPayload::ApplyPatch {
                         patch: "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-old\n+new\n*** End Patch"
                             .to_string(),
                         strip: None,
                     },
                 }],
-                final_turn: false,
+
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -735,13 +714,11 @@ fn turn_runner_full_access_allows_out_of_scope_subagent_shell_command() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![AgentAction {
                     id: "a1".to_string(),
-                    rationale: "inspect local instructions".to_string(),
+
                     payload: AgentActionPayload::ShellCommand {
                         summary: "Inspect local instructions".to_string(),
                         command: "cat AGENTS.md".to_string(),
@@ -750,7 +727,6 @@ fn turn_runner_full_access_allows_out_of_scope_subagent_shell_command() {
                         timeout_ms: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -825,12 +801,9 @@ fn turn_runner_keeps_final_shell_action_running_until_observed() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![shell_action("a1")],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -897,13 +870,11 @@ fn turn_runner_routes_shell_actions_through_approval_policy_without_model_effect
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![AgentAction {
                     id: "a1".to_string(),
-                    rationale: "inspect environment variables".to_string(),
+
                     payload: AgentActionPayload::ShellCommand {
                         summary: "Inspect environment variables".to_string(),
                         command: "env".to_string(),
@@ -912,7 +883,6 @@ fn turn_runner_routes_shell_actions_through_approval_policy_without_model_effect
                         timeout_ms: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -979,13 +949,11 @@ fn turn_runner_routes_subagent_unknown_shell_actions_through_approval_policy() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![AgentAction {
                     id: "a1".to_string(),
-                    rationale: "inspect repository metadata with a read-only script".to_string(),
+
                     payload: AgentActionPayload::ShellCommand {
                         summary: "Inspect repository metadata with a read-only script".to_string(),
                         command: "python3 -c 'print(\"metadata\")'".to_string(),
@@ -994,7 +962,6 @@ fn turn_runner_routes_subagent_unknown_shell_actions_through_approval_policy() {
                         timeout_ms: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1069,13 +1036,11 @@ fn turn_runner_runs_prompted_shell_actions_with_auto_allow_assertion() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![AgentAction {
                     id: "a1".to_string(),
-                    rationale: "run command".to_string(),
+
                     payload: AgentActionPayload::ShellCommand {
                         summary: "Run the requested command".to_string(),
                         command: "env".to_string(),
@@ -1084,7 +1049,6 @@ fn turn_runner_runs_prompted_shell_actions_with_auto_allow_assertion() {
                         timeout_ms: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },

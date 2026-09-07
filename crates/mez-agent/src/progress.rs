@@ -764,19 +764,17 @@ fn complete_json_string_end(input: &str) -> Option<usize> {
     None
 }
 
-/// Rationale entries removed from one provider action batch.
+/// Batch rationale suppression recorded for one provider action batch.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RationaleSuppression {
     /// Whether the batch-level rationale was cleared.
     pub batch_suppressed: bool,
-    /// Action identifiers whose rationale was cleared.
-    pub action_ids: Vec<String>,
 }
 
 impl RationaleSuppression {
     /// Returns the total number of rationale fields cleared.
     pub fn count(&self) -> usize {
-        usize::from(self.batch_suppressed).saturating_add(self.action_ids.len())
+        usize::from(self.batch_suppressed)
     }
 }
 
@@ -809,29 +807,16 @@ pub fn progress_say_entries_for_execution(execution: &AgentTurnExecution) -> Vec
 
 /// Extracts normalized rationale text from one provider execution.
 ///
-/// Batch rationale and action rationale are current-turn guidance only. The
-/// runtime uses this ledger to avoid rendering or replaying the same
-/// investigative intent repeatedly within one active turn.
+/// Batch rationale is current-turn guidance only. The runtime uses this ledger
+/// to avoid rendering or replaying the same investigative intent repeatedly
+/// within one active turn.
 pub fn rationale_entries_for_execution(execution: &AgentTurnExecution) -> Vec<String> {
     let Some(batch) = execution.response.action_batch.as_ref() else {
         return Vec::new();
     };
-    let mut entries = Vec::new();
-    if let Some(entry) = normalize_rationale_entry(&batch.rationale) {
-        entries.push(entry);
-    }
-    for action in &batch.actions {
-        let Some(entry) = normalize_rationale_entry(action.rationale.as_str()) else {
-            continue;
-        };
-        if !entries
-            .iter()
-            .any(|existing| rationale_entries_are_redundant(existing, &entry))
-        {
-            entries.push(entry);
-        }
-    }
-    entries
+    normalize_rationale_entry(&batch.rationale)
+        .into_iter()
+        .collect()
 }
 
 /// Normalizes one progress `say` text for compact context reuse.
@@ -875,36 +860,19 @@ pub fn truncate_context_entry(text: &str, limit: usize) -> String {
     output
 }
 
-/// Clears batch and action rationale that repeats earlier intent in the same
-/// response or an explicitly supplied controller-side comparison set.
-///
-/// New rationale in the same batch becomes visible to later action rationale,
-/// preserving the original deterministic suppression order. The returned
-/// record lets product runtimes trace each mutation without owning the policy.
+/// Clears batch rationale that repeats an explicitly supplied controller-side
+/// comparison set. The returned record lets product runtimes trace the
+/// mutation without owning the policy.
 pub fn suppress_redundant_batch_rationale(
     batch: &mut MaapBatch,
     visible_entries: &[String],
 ) -> RationaleSuppression {
-    let mut visible_entries = visible_entries.to_vec();
     let mut suppression = RationaleSuppression::default();
     if let Some(entry) = normalize_rationale_entry(&batch.rationale)
-        && rationale_entry_repeats_existing(&entry, &visible_entries)
+        && rationale_entry_repeats_existing(&entry, visible_entries)
     {
         batch.rationale.clear();
         suppression.batch_suppressed = true;
-    } else if let Some(entry) = normalize_rationale_entry(&batch.rationale) {
-        visible_entries.push(entry);
-    }
-    for action in &mut batch.actions {
-        let Some(entry) = normalize_rationale_entry(&action.rationale) else {
-            continue;
-        };
-        if rationale_entry_repeats_existing(&entry, &visible_entries) {
-            action.rationale.clear();
-            suppression.action_ids.push(action.id.clone());
-            continue;
-        }
-        visible_entries.push(entry);
     }
     suppression
 }
@@ -1255,7 +1223,7 @@ mod tests {
                     header: Box::new(StreamingActionHeader::Action {
                         action: Box::new(crate::AgentAction {
                             id: String::new(),
-                            rationale: String::new(),
+
                             payload: AgentActionPayload::McpCall {
                                 server: "github".to_string(),
                                 tool: "search".to_string(),
@@ -1269,7 +1237,7 @@ mod tests {
                     header: Box::new(StreamingActionHeader::Action {
                         action: Box::new(crate::AgentAction {
                             id: String::new(),
-                            rationale: String::new(),
+
                             payload: AgentActionPayload::ConfigChange {
                                 setting_path: "theme.active".to_string(),
                                 operation: "set".to_string(),
@@ -1413,31 +1381,24 @@ mod tests {
         assert_eq!(normalized.chars().count(), PROGRESS_ENTRY_CHAR_LIMIT + 3);
     }
 
-    /// Verifies canonical suppression clears rationale repeated from prior
-    /// context and from earlier fields in the same action batch.
+    /// Verifies canonical suppression clears a batch rationale repeated from
+    /// prior context and reports that single mutation.
     #[test]
     fn rationale_suppression_mutates_batch_and_reports_trace_facts() {
         let mut batch = crate::parse_fenced_maap_action_batch(
             r#"```mezzanine-action-json
-{"protocol":"maap/1","turn_id":"turn-1","agent_id":"agent-1","rationale":"Inspect the provider retry owner","actions":[{"id":"a1","type":"say","rationale":"Inspect the provider retry owner","status":"progress","content_type":"text/plain","text":"Checking ownership"},{"id":"a2","type":"say","rationale":"Validate the moved retry policy","status":"final","content_type":"text/plain","text":"Done"}],"final":true}
+{"rationale":"Inspect the provider retry owner","actions":[{"type":"say","status":"progress","content_type":"text/plain","text":"Checking ownership"},{"type":"say","status":"final","content_type":"text/plain","text":"Done"}]}
 ```"#,
         )
         .unwrap()
         .unwrap();
-        let first_action_id = batch.actions[0].id.clone();
         let suppression = suppress_redundant_batch_rationale(
             &mut batch,
             &["Inspect the provider retry owner".to_string()],
         );
 
         assert!(batch.rationale.is_empty());
-        assert!(batch.actions[0].rationale.is_empty());
-        assert_eq!(
-            batch.actions[1].rationale,
-            "Validate the moved retry policy"
-        );
         assert!(suppression.batch_suppressed);
-        assert_eq!(suppression.action_ids, [first_action_id]);
-        assert_eq!(suppression.count(), 2);
+        assert_eq!(suppression.count(), 1);
     }
 }

@@ -165,9 +165,8 @@ fn provider_tool_result_content_for_execution(execution: &AgentTurnExecution) ->
 ///
 /// The returned text is the same assistant content durable transcript storage
 /// persists for the execution. It preserves the complete model-authored causal
-/// response: batch rationale, action-local rationale, visible conversational
-/// text, and bounded action summaries. Raw protocol JSON and inline action
-/// payloads remain excluded.
+/// response: batch rationale, visible conversational text, and bounded action
+/// summaries. Raw protocol JSON and inline action payloads remain excluded.
 pub fn assistant_context_content_for_execution(execution: &AgentTurnExecution) -> String {
     assistant_transcript_content(execution)
 }
@@ -260,8 +259,7 @@ fn assistant_transcript_rationale_lines(label: &str, text: &str) -> Vec<String> 
         .collect()
 }
 
-/// Returns action-local rationale and bounded action summaries in provider
-/// order.
+/// Returns bounded action summaries in provider order.
 ///
 /// `say` actions retain exact conversational text so later references such as
 /// "do item 2" remain meaningful. Other action payloads are summarized to
@@ -270,11 +268,6 @@ fn assistant_transcript_rationale_lines(label: &str, text: &str) -> Vec<String> 
 fn assistant_action_transcript_lines(batch: &MaapBatch) -> Vec<String> {
     let mut lines = Vec::new();
     for action in &batch.actions {
-        let rationale_label = format!("action rationale {} ({})", action.id, action.action_type());
-        lines.extend(assistant_transcript_rationale_lines(
-            &rationale_label,
-            &action.rationale,
-        ));
         match &action.payload {
             AgentActionPayload::Say { text, .. } => {
                 let text = text.trim();
@@ -603,7 +596,7 @@ mod tests {
     fn say_action(text: &str) -> AgentAction {
         AgentAction {
             id: "say-1".to_string(),
-            rationale: "reply".to_string(),
+
             payload: AgentActionPayload::Say {
                 status: SayStatus::Final,
                 text: text.to_string(),
@@ -616,7 +609,7 @@ mod tests {
     fn shell_action() -> AgentAction {
         AgentAction {
             id: "a1".to_string(),
-            rationale: "inspect".to_string(),
+
             payload: AgentActionPayload::ShellCommand {
                 summary: "Inspect the directory".to_string(),
                 command: "pwd".to_string(),
@@ -728,12 +721,9 @@ mod tests {
     fn turn_execution_transcript_preserves_visible_say_text() {
         let visible_text = "Suggested changes:\n1. Keep history role-aware.\n2. Preserve lists.";
         let batch = MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "reply".to_string(),
-            turn_id: "turn-1".to_string(),
-            agent_id: "agent-1".to_string(),
+
             actions: vec![say_action(visible_text)],
-            final_turn: true,
         };
         let execution = execution(
             vec![message(
@@ -755,11 +745,6 @@ mod tests {
             .unwrap();
 
         assert!(assistant.content.contains("rationale: reply"));
-        assert!(
-            assistant
-                .content
-                .contains("action rationale say-1 (say): reply")
-        );
         assert!(assistant.content.ends_with(visible_text));
         assert!(!assistant.content.contains("say text="));
     }
@@ -917,19 +902,16 @@ mod tests {
             "*** Begin Patch\n*** Add File: note.txt\n+large-inline-file-content\n*** End Patch";
         let action = AgentAction {
             id: "patch-1".to_string(),
-            rationale: "write note file".to_string(),
+
             payload: AgentActionPayload::ApplyPatch {
                 patch: patch.to_string(),
                 strip: None,
             },
         };
         let batch = MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "transient batch rationale".to_string(),
-            turn_id: "turn-1".to_string(),
-            agent_id: "agent-1".to_string(),
+
             actions: vec![action],
-            final_turn: false,
         };
         let execution = execution(
             vec![message(
@@ -958,11 +940,6 @@ mod tests {
                 .content
                 .contains("rationale: transient batch rationale")
         );
-        assert!(
-            assistant
-                .content
-                .contains("action rationale patch-1 (apply_patch): write note file")
-        );
         assert!(assistant.content.contains("apply_patch patch_bytes="));
         assert!(!assistant.content.contains("large-inline-file-content"));
     }
@@ -976,12 +953,9 @@ mod tests {
     /// later continuation without retaining the raw action envelope.
     fn assistant_context_preserves_raw_text_and_structured_rationale_together() {
         let batch = MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "Select issue iss-42 before inspecting its owner".to_string(),
-            turn_id: "turn-1".to_string(),
-            agent_id: "agent-1".to_string(),
+
             actions: vec![shell_action()],
-            final_turn: false,
         };
         let execution = execution(
             vec![message(
@@ -999,7 +973,6 @@ mod tests {
 
         assert!(content.contains("rationale: Select issue iss-42"));
         assert!(content.contains("I selected the highest-priority issue."));
-        assert!(content.contains("action rationale a1 (shell_command): inspect"));
         assert!(content.contains("action a1: shell_command"));
         assert!(!content.contains("\"actions\""));
     }

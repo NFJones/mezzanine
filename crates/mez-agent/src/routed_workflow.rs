@@ -1171,7 +1171,7 @@ mod tests {
     fn say_action(id: &str, status: SayStatus, text: &str) -> AgentAction {
         AgentAction {
             id: id.to_string(),
-            rationale: "test routed output".to_string(),
+
             payload: AgentActionPayload::Say {
                 status,
                 text: text.to_string(),
@@ -1231,12 +1231,9 @@ mod tests {
                 latest_request_usage: None,
                 quota_usage: Vec::new(),
                 action_batch: (!actions.is_empty()).then(|| MaapBatch {
-                    protocol: "maap/1".to_string(),
                     rationale: "test routed transition".to_string(),
-                    turn_id: "turn-7".to_string(),
-                    agent_id: "agent-worker".to_string(),
+
                     actions,
-                    final_turn: true,
                 }),
                 provider_transcript_events: Vec::new(),
             },

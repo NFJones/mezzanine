@@ -685,12 +685,9 @@ impl ModelProvider for CapabilityBatchProvider {
                 latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: Some(MaapBatch {
-                    protocol: "maap/1".to_string(),
                     rationale: "test action batch rationale".to_string(),
-                    turn_id: request.turn_id.clone(),
-                    agent_id: request.agent_id.clone(),
+
                     actions: vec![capability_action("capability-1", self.capability)],
-                    final_turn: false,
                 }),
                 provider_transcript_events: Vec::new(),
             });
@@ -954,7 +951,7 @@ fn openai_prompt_cache_retention_test_request(model: &str) -> ModelRequest {
 fn memory_search_action(id: &str) -> AgentAction {
     AgentAction {
         id: id.to_string(),
-        rationale: "retrieve a bounded durable memory hint".to_string(),
+
         payload: AgentActionPayload::MemorySearch {
             query: format!("durable context {id}"),
             limit: Some(1),
@@ -970,7 +967,7 @@ fn memory_search_action(id: &str) -> AgentAction {
 fn memory_store_action(id: &str) -> AgentAction {
     AgentAction {
         id: id.to_string(),
-        rationale: "store durable project context".to_string(),
+
         payload: AgentActionPayload::MemoryStore {
             kind: "fact".to_string(),
             priority: Some(80),

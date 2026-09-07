@@ -17,12 +17,9 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
         latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            turn_id: turn.turn_id.clone(),
-            agent_id: turn.agent_id.clone(),
+
             actions: vec![capability_action("capability-1", AgentCapability::Shell)],
-            final_turn: false,
         }),
         provider_transcript_events: Vec::new(),
     };
@@ -34,13 +31,11 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
         latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            turn_id: turn.turn_id.clone(),
-            agent_id: turn.agent_id.clone(),
+
             actions: vec![AgentAction {
                 id: "shell-heredoc".to_string(),
-                rationale: "write the prepared file".to_string(),
+
                 payload: AgentActionPayload::ShellCommand {
                     summary: "Write the prepared file".to_string(),
                     command: "cat <<'EOF' > README.md\nupdated\nEOF".to_string(),
@@ -49,7 +44,6 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
                     timeout_ms: None,
                 },
             }],
-            final_turn: false,
         }),
         provider_transcript_events: Vec::new(),
     };
@@ -61,15 +55,12 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
         latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            turn_id: turn.turn_id.clone(),
-            agent_id: turn.agent_id.clone(),
+
             actions: vec![say_action(
                 "say-1",
                 "I will use a supported command instead.",
             )],
-            final_turn: true,
         }),
         provider_transcript_events: Vec::new(),
     };
@@ -155,12 +146,9 @@ async fn async_turn_runner_retries_missing_provider_action_batch() {
         latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            turn_id: turn.turn_id.clone(),
-            agent_id: turn.agent_id.clone(),
+
             actions: vec![say_action("say-1", "Corrected async missing batch.")],
-            final_turn: true,
         }),
         provider_transcript_events: Vec::new(),
     };
@@ -249,12 +237,12 @@ async fn turn_runner_bubbles_context_limit_failure_to_runtime_recovery() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
+
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
+
                 actions: vec![say_action("say-1", "retry later")],
-                final_turn: true,
+
             }),
             provider_transcript_events: Vec::new(),
 }),
@@ -334,12 +322,9 @@ async fn turn_runner_bubbles_provider_controller_retry_hint_to_runtime_retry() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![say_action("say-1", "retry later")],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         }),
@@ -411,12 +396,9 @@ async fn turn_runner_bubbles_retryable_provider_failure_to_runtime_retry() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![say_action("say-1", "retry later")],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         }),

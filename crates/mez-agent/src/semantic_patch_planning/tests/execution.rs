@@ -44,7 +44,7 @@ fn semantic_apply_patch_command_encodes_shell_sensitive_content() {
     let patch = add_file_patch("quoted.txt", &content);
     let action = AgentAction {
         id: "patch-quoted".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::ApplyPatch {
             patch: patch.clone(),
             strip: None,
@@ -74,7 +74,7 @@ fn semantic_apply_patch_command_keeps_encoded_lines_short() {
     let patch = add_file_patch("large.txt", &content);
     let action = AgentAction {
         id: "patch-large".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::ApplyPatch { patch, strip: None },
     };
     let read_plan = local_action_plan(&action).unwrap().unwrap();
@@ -147,7 +147,7 @@ fn semantic_apply_patch_sidecar_survives_zsh_function_zero() {
     let patch = add_file_patch("zsh-sidecar.txt", "written through sidecar\n");
     let action = AgentAction {
         id: "patch-zsh-sidecar".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::ApplyPatch { patch, strip: None },
     };
     let read_plan = local_action_plan(&action).unwrap().unwrap();

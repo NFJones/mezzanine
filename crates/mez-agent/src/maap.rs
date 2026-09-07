@@ -500,11 +500,6 @@ pub struct AgentAction {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub id: String,
-    /// Stores the rationale value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub rationale: String,
     /// Stores the payload value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -528,36 +523,16 @@ impl AgentActionResultIdentity for AgentAction {
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MaapBatch {
-    /// Stores the protocol value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub protocol: String,
     /// Model-authored rationale for the action batch.
     ///
     /// The field summarizes why the listed actions are being pursued and is
     /// rendered once as user-visible thinking text before action execution.
     pub rationale: String,
-    /// Stores the turn id value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub turn_id: String,
-    /// Stores the agent id value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub agent_id: String,
     /// Stores the actions value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub actions: Vec<AgentAction>,
-    /// Stores the final turn value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub final_turn: bool,
 }
 
 /// Borrowed product context required to validate one MAAP action batch.
@@ -565,10 +540,6 @@ pub struct MaapBatch {
 /// The lower crate owns contract validation while the product supplies the
 /// active identity, currently exposed MCP manifest, and its shell-input policy.
 pub struct MaapValidationContext<'a> {
-    /// Active turn identifier that the provider response must preserve.
-    pub turn_id: &'a str,
-    /// Active agent identifier that the provider response must preserve.
-    pub agent_id: &'a str,
     /// MCP servers currently available to the turn.
     pub available_mcp_servers: &'a [String],
     /// MCP tools currently exposed to the turn.
@@ -580,12 +551,10 @@ pub struct MaapValidationContext<'a> {
 impl MaapBatch {
     /// Validates this batch with the canonical harness shell-source policy.
     ///
-    /// Callers supply only active identity and the MCP manifest visible to the
-    /// request. Shell-command validation remains intrinsic to `mez-agent`.
+    /// Callers supply the MCP manifest visible to the request. Shell-command
+    /// validation remains intrinsic to `mez-agent`.
     pub fn validate_harness_contract(
         &self,
-        turn_id: &str,
-        agent_id: &str,
         available_mcp_servers: &[String],
         available_mcp_tools: &[McpPromptTool],
     ) -> MaapContractResult<()> {
@@ -594,8 +563,6 @@ impl MaapBatch {
                 .map_err(|error| MaapContractError::invalid_args(error.message()))
         };
         self.validate_contract(&MaapValidationContext {
-            turn_id,
-            agent_id,
             available_mcp_servers,
             available_mcp_tools,
             validate_shell_command: &validate_shell_command,
@@ -607,24 +574,14 @@ impl MaapBatch {
     /// Contract failures are deterministic and contain a model-facing repair
     /// diagnostic. The callback is invoked only for `shell_command` actions.
     pub fn validate_contract(&self, context: &MaapValidationContext<'_>) -> MaapContractResult<()> {
-        if self.protocol != "maap/1" {
-            return Err(MaapContractError::invalid_args(
-                "agent action batch protocol must be maap/1",
-            ));
-        }
         if self.rationale.trim().is_empty() {
             return Err(MaapContractError::invalid_args(
                 "agent action batch rationale must not be empty",
             ));
         }
-        if self.turn_id != context.turn_id || self.agent_id != context.agent_id {
+        if self.actions.is_empty() {
             return Err(MaapContractError::invalid_args(
-                "agent action batch identity does not match active turn",
-            ));
-        }
-        if self.actions.is_empty() && !self.final_turn {
-            return Err(MaapContractError::invalid_args(
-                "agent action batch must include actions unless it is final",
+                "agent action batch must include actions",
             ));
         }
         let non_say_count = self
@@ -637,9 +594,9 @@ impl MaapBatch {
             .iter()
             .filter(|a| matches!(&a.payload, AgentActionPayload::Say { text, .. } if !text.trim().is_empty()))
             .count();
-        if non_say_count == 0 && say_count == 0 && !self.final_turn {
+        if non_say_count == 0 && say_count == 0 {
             return Err(MaapContractError::invalid_args(
-                "agent action batch must include at least one non-empty action unless it is final",
+                "agent action batch must include at least one non-empty action",
             ));
         }
 
@@ -1180,15 +1137,17 @@ fn parse_maap_action_batch_json_inner(
 /// on duplicated control-flow logic.
 fn parse_maap_action_batch_value(
     value: &serde_json::Value,
-    identity: Option<(&str, &str)>,
+    _identity: Option<(&str, &str)>,
 ) -> MaapContractResult<MaapBatch> {
     let object = value.as_object().ok_or_else(|| {
         MaapContractError::invalid_args("maap action batch must be a JSON object")
     })?;
-    if object.contains_key("thought") {
-        return Err(MaapContractError::invalid_args(
-            "maap action batch contains unsupported field thought",
-        ));
+    for field in ["thought", "protocol", "turn_id", "agent_id", "final"] {
+        if object.contains_key(field) {
+            return Err(MaapContractError::invalid_args(format!(
+                "maap action batch contains unsupported field {field}"
+            )));
+        }
     }
     let mut actions = required_array(object, "actions")?
         .iter()
@@ -1213,32 +1172,13 @@ fn parse_maap_action_batch_value(
             "maap action batch must include at least one action",
         ));
     }
-    let protocol = optional_string(object, "protocol")?
-        .unwrap_or("maap/1")
-        .to_string();
     let rationale = required_string(object, "rationale")?.trim().to_string();
     if rationale.is_empty() {
         return Err(MaapContractError::invalid_args(
             "maap field rationale must not be empty",
         ));
     }
-    let turn_id = optional_string(object, "turn_id")?
-        .map(str::to_string)
-        .or_else(|| identity.map(|(turn_id, _)| turn_id.to_string()))
-        .ok_or_else(|| MaapContractError::invalid_args("maap field turn_id is required"))?;
-    let agent_id = optional_string(object, "agent_id")?
-        .map(str::to_string)
-        .or_else(|| identity.map(|(_, agent_id)| agent_id.to_string()))
-        .ok_or_else(|| MaapContractError::invalid_args("maap field agent_id is required"))?;
-    let final_turn = optional_bool(object, "final")?.unwrap_or_else(|| infer_final_turn(&actions));
-    Ok(MaapBatch {
-        protocol,
-        rationale,
-        turn_id,
-        agent_id,
-        actions,
-        final_turn,
-    })
+    Ok(MaapBatch { rationale, actions })
 }
 
 /// Runs the parse maap action value operation for this subsystem.
@@ -1254,10 +1194,17 @@ fn parse_maap_action_value(
         .as_object()
         .ok_or_else(|| MaapContractError::invalid_args("maap action must be a JSON object"))?;
     let action_type = required_string(object, "type")?;
+    if object.contains_key("rationale") {
+        return Err(MaapContractError::invalid_args(
+            "maap action contains unsupported field rationale",
+        ));
+    }
+    if object.contains_key("id") && !matches!(action_type, "issue_update" | "issue_delete") {
+        return Err(MaapContractError::invalid_args(
+            "maap action contains unsupported field id",
+        ));
+    }
     let id = String::new();
-    let rationale = optional_string(object, "rationale")?
-        .unwrap_or("")
-        .to_string();
     let payload = match action_type {
         "say" => AgentActionPayload::Say {
             status: parse_say_status(required_string(object, "status")?)?,
@@ -1285,7 +1232,7 @@ fn parse_maap_action_value(
             additional_context: optional_string(object, "additional_context")?.map(str::to_string),
         },
         "shell_command" => AgentActionPayload::ShellCommand {
-            summary: shell_command_summary(object, &rationale)?,
+            summary: required_string(object, "summary")?.to_string(),
             command: required_string(object, "command")?.to_string(),
             interactive: optional_bool(object, "interactive")?.unwrap_or(false),
             stateful: optional_bool(object, "stateful")?.unwrap_or(false),
@@ -1439,16 +1386,12 @@ fn parse_maap_action_value(
             )));
         }
     };
-    Ok(AgentAction {
-        id,
-        rationale,
-        payload,
-    })
+    Ok(AgentAction { id, payload })
 }
 
 /// Infers whether a compact action batch should complete after its visible
 /// actions without requiring the model to emit a redundant final flag.
-fn infer_final_turn(actions: &[AgentAction]) -> bool {
+pub fn batch_requests_terminal_completion(actions: &[AgentAction]) -> bool {
     actions.iter().all(|action| {
         matches!(
             action.payload,
@@ -1496,20 +1439,6 @@ fn maap_default_cooperation_mode(object: &serde_json::Map<String, serde_json::Va
 /// on duplicated control-flow logic.
 fn synthesized_action_id(index: usize) -> String {
     format!("action-{}", index.saturating_add(1))
-}
-
-/// Runs the shell command summary operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn shell_command_summary(
-    object: &serde_json::Map<String, serde_json::Value>,
-    action_rationale: &str,
-) -> MaapContractResult<String> {
-    Ok(optional_string(object, "summary")?
-        .map(str::to_string)
-        .unwrap_or_else(|| action_rationale.to_string()))
 }
 
 /// Runs the required value operation for this subsystem.
@@ -1866,8 +1795,6 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(batch.turn_id, "turn-1");
-        assert_eq!(batch.agent_id, "agent-1");
         assert_eq!(batch.actions[0].id, "action-1");
         assert!(matches!(
             &batch.actions[0].payload,
@@ -2024,8 +1951,6 @@ mod tests {
 
         batch
             .validate_contract(&MaapValidationContext {
-                turn_id: "turn-1",
-                agent_id: "agent-1",
                 available_mcp_servers: &[],
                 available_mcp_tools: &[],
                 validate_shell_command: &validate_shell_command,
@@ -2054,9 +1979,7 @@ mod tests {
         )
         .unwrap();
 
-        let error = batch
-            .validate_harness_contract("turn-1", "agent-1", &[], &[])
-            .unwrap_err();
+        let error = batch.validate_harness_contract(&[], &[]).unwrap_err();
 
         assert!(error.message().contains("heredoc"));
         assert!(!error.message().contains("apply_patch"));
@@ -2093,8 +2016,6 @@ mod tests {
 
         let error = batch
             .validate_contract(&MaapValidationContext {
-                turn_id: "turn-1",
-                agent_id: "agent-1",
                 available_mcp_servers: &servers,
                 available_mcp_tools: &tools,
                 validate_shell_command: &accepting_shell_policy,

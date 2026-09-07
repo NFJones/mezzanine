@@ -1500,8 +1500,7 @@ mod tests {
                 pane_id: "%1".to_string(),
                 content: concat!(
                     "rationale: selected iss-42 because it is the oldest unblocked issue\n",
-                    "thinking: Active issue: iss-42\n",
-                    "action rationale query-1 (issue_query): inspect the selected issue"
+                    "action query-1: issue_query"
                 )
                 .to_string(),
             },
@@ -1546,8 +1545,7 @@ mod tests {
             blocks[2].content,
             concat!(
                 "rationale: selected iss-42 because it is the oldest unblocked issue\n",
-                "thinking: Active issue: iss-42\n",
-                "action rationale query-1 (issue_query): inspect the selected issue"
+                "action query-1: issue_query"
             )
         );
         assert_eq!(blocks[3].source, mez_agent::ContextSourceKind::ActionResult);

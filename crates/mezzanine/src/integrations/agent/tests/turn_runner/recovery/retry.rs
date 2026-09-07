@@ -21,12 +21,9 @@ fn turn_runner_retries_malformed_provider_maap_output() {
         latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            turn_id: turn.turn_id.clone(),
-            agent_id: turn.agent_id.clone(),
+
             actions: vec![say_action("say-1", "Corrected.")],
-            final_turn: true,
         }),
         provider_transcript_events: Vec::new(),
     };
@@ -121,12 +118,9 @@ fn turn_runner_retries_deepseek_missing_tool_result_continuity_error() {
         latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            turn_id: turn.turn_id.clone(),
-            agent_id: turn.agent_id.clone(),
+
             actions: vec![say_action("say-1", "Corrected DeepSeek continuity.")],
-            final_turn: true,
         }),
         provider_transcript_events: Vec::new(),
     };
@@ -217,12 +211,9 @@ fn turn_runner_retries_missing_provider_action_batch() {
         latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            turn_id: turn.turn_id.clone(),
-            agent_id: turn.agent_id.clone(),
+
             actions: vec![say_action("say-1", "Corrected missing batch.")],
-            final_turn: true,
         }),
         provider_transcript_events: Vec::new(),
     };
@@ -310,15 +301,12 @@ fn turn_runner_retries_retryable_failure_summary_provider_call() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![say_action(
                     "say-1",
                     "The provider failed before any action ran.",
                 )],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         }),
@@ -401,12 +389,9 @@ fn turn_runner_routes_repair_disallowed_shell_action_through_capability_recovery
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![shell_action("shell-repair")],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         }),
@@ -418,12 +403,9 @@ fn turn_runner_routes_repair_disallowed_shell_action_through_capability_recovery
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![say_action("say-1", "Ready.")],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         }),
@@ -509,20 +491,17 @@ fn turn_runner_summarizes_terminal_provider_failure_with_say_only_request() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![AgentAction {
                     id: "say-1".to_string(),
-                    rationale: "summarize the controller failure".to_string(),
+
                     payload: AgentActionPayload::Say {
                         status: mez_agent::SayStatus::Progress,
                         text: "The provider request failed before an action could run.".to_string(),
                         content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         }),
@@ -570,7 +549,6 @@ fn turn_runner_summarizes_terminal_provider_failure_with_say_only_request() {
     assert_eq!(execution.action_results.len(), 1);
     assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
     let summary_batch = execution.response.action_batch.as_ref().unwrap();
-    assert!(summary_batch.final_turn);
     match &summary_batch.actions[0].payload {
         AgentActionPayload::Say { status, .. } => {
             assert_eq!(*status, mez_agent::SayStatus::Final)

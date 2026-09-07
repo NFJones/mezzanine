@@ -47,12 +47,9 @@ fn running_action_progress_fixture(
                 latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: Some(mez_agent::MaapBatch {
-                    protocol: "maap/1".to_string(),
                     rationale: "exercise executor progress".to_string(),
-                    turn_id: turn.turn_id.clone(),
-                    agent_id: turn.agent_id.clone(),
+
                     actions: vec![action.clone()],
-                    final_turn: false,
                 }),
                 provider_transcript_events: Vec::new(),
             },
@@ -92,7 +89,7 @@ fn running_action_progress_fixture(
 fn shell_action() -> mez_agent::AgentAction {
     mez_agent::AgentAction {
         id: "shell-1".to_string(),
-        rationale: "observe a running shell command".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Observe a running shell command".to_string(),
             command: "sleep 1".to_string(),
@@ -106,7 +103,7 @@ fn shell_action() -> mez_agent::AgentAction {
 fn patch_action() -> mez_agent::AgentAction {
     mez_agent::AgentAction {
         id: "patch-1".to_string(),
-        rationale: "update one file".to_string(),
+
         payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: "*** Begin Patch\n*** Add File: note.txt\n+new\n*** End Patch".to_string(),
             strip: None,

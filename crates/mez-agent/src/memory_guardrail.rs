@@ -133,8 +133,6 @@ fn memory_action_is_wrapper_placeholder(action: &AgentAction, batch_rationale: &
     }
     let mut text = String::new();
     text.push_str(batch_rationale);
-    text.push('\n');
-    text.push_str(&action.rationale);
     memory_placeholder_text_mentions_wrapper_compliance(&text)
 }
 
@@ -210,11 +208,11 @@ mod tests {
         }
     }
 
-    /// Builds one memory search with a configurable rationale.
-    fn memory_search(id: &str, rationale: &str) -> AgentAction {
+    /// Builds one memory search fixture.
+    fn memory_search(id: &str, _rationale: &str) -> AgentAction {
         AgentAction {
             id: id.to_string(),
-            rationale: rationale.to_string(),
+
             payload: AgentActionPayload::MemorySearch {
                 query: "durable context".to_string(),
                 limit: Some(1),
@@ -323,7 +321,7 @@ mod tests {
         let mut budget = MemoryActionBudget::from_context(&context);
         let action = AgentAction {
             id: "say-1".to_string(),
-            rationale: "comply with required tool call".to_string(),
+
             payload: AgentActionPayload::Say {
                 status: crate::SayStatus::Progress,
                 text: "working".to_string(),

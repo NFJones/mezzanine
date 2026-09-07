@@ -23,12 +23,9 @@ fn turn_runner_accepts_config_change_with_full_access_and_bypass() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "change the requested live setting".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![config_change_action("config-1")],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -108,16 +105,13 @@ fn turn_runner_accepts_multiple_capability_requests_in_one_batch() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![
                     say_action("say-1", "I will inspect and subdivide the work."),
                     capability_action("capability-1", AgentCapability::Shell),
                     capability_action("capability-2", AgentCapability::Subagent),
                 ],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         }),
@@ -129,12 +123,9 @@ fn turn_runner_accepts_multiple_capability_requests_in_one_batch() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![say_action("say-2", "Ready to proceed.")],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         }),
@@ -219,15 +210,12 @@ fn turn_runner_accepts_say_with_capability_request() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![
                     say_action("say-1", "I will inspect the shell state."),
                     capability_action("capability-1", AgentCapability::Shell),
                 ],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         }),
@@ -239,12 +227,9 @@ fn turn_runner_accepts_say_with_capability_request() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![shell_action("shell-1")],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         }),
@@ -327,12 +312,9 @@ fn turn_runner_keeps_skill_actions_suppressed_after_capability_request() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![capability_action("capability-1", AgentCapability::Shell)],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         }),
@@ -344,12 +326,9 @@ fn turn_runner_keeps_skill_actions_suppressed_after_capability_request() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "finish after capability grant".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![say_action("say-1", "done")],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         }),
@@ -443,12 +422,12 @@ fn turn_runner_plans_codex_style_apply_patch_after_capability_request() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
+
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
+
                 actions: vec![capability_action("capability-1", AgentCapability::Shell)],
-                final_turn: false,
+
             }),
             provider_transcript_events: Vec::new(),
 }),
@@ -461,13 +440,13 @@ fn turn_runner_plans_codex_style_apply_patch_after_capability_request() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
+
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
+
                 actions: vec![AgentAction {
                     id: "patch-1".to_string(),
-                    rationale: String::new(),
+
                     payload: AgentActionPayload::ApplyPatch {
                         patch:
                             "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-old\n+new\n*** End Patch"
@@ -475,7 +454,7 @@ fn turn_runner_plans_codex_style_apply_patch_after_capability_request() {
                         strip: None,
                     },
                 }],
-                final_turn: false,
+
             }),
             provider_transcript_events: Vec::new(),
 }),

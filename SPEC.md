@@ -2308,11 +2308,9 @@ already the user-visible assistant output for that action. Model-facing action
 guidance SHOULD direct action-batch intent and justification into the
 model-authored batch rationale rather than a redundant progress `say` action
 when executable actions in the same batch already make the progress visible.
-Rendered thinking/rationale lines and non-empty model-authored batch thoughts
-MUST also be retained as assistant transcript content and future model-facing
-assistant context so continuation requests can preserve the model's working
-thread. Batch thoughts MUST NOT be rendered in normal mode, but MUST be
-eligible for `verbose`, `debug`, and `trace` logging as `thinking: ` text.
+Rendered batch-rationale lines MUST also be retained as assistant transcript
+content and future model-facing assistant context so continuation requests can
+preserve the model's working thread.
 While a pane has an active agent turn, the visible pane log tail MUST include a
 live foreground-only grayscale footer in the form `<state> (<duration> • esc
 to interrupt)`, where `<state>` is a lowercase human-readable active turn
@@ -2449,10 +2447,9 @@ the existing `thinking: ` renderer, shell command source only through the
 existing `$ ` renderer, and provisional headers only through the ordinary
 action-header renderer; their prefixes and styles MUST match complete
 presentation. Complete action previews MUST remain presentation-only and MUST
-NOT authorize, admit, or dispatch an action. `thought`, action-local rationale,
-nested lookalikes, capability/skill controls, private message payloads, and
-every other raw provider field or action payload MUST NOT enter this streaming
-path.
+NOT authorize, admit, or dispatch an action. Removed metadata fields, nested
+lookalikes, capability/skill controls, private message payloads, and every
+other raw provider field or action payload MUST NOT enter this streaming path.
 
 For every allowlisted source, Mezzanine MUST decode and apply every source
 character exactly once and in order without dropping or truncating deltas.
@@ -4892,14 +4889,13 @@ identify the material as non-user-authored and MUST NOT move it across canonical
 events.
 
 An accepted assistant action response MUST enter chronology through a canonical
-provider-neutral projection that retains the batch rationale, optional durable
-thought, action-local rationale, conversational response text, and bounded
-action summaries in provider order. Presentation-only rationale suppression
-MUST NOT mutate that canonical projection. The projection MUST omit raw MAAP
-envelopes and unbounded action payloads. These rationale lines are causal
-assistant context: they MUST remain available to continuation, transcript
-restoration, and provider switching until their complete execution group is
-atomically compacted.
+provider-neutral projection that retains the batch rationale, conversational
+response text, and bounded action summaries in provider order.
+Presentation-only rationale suppression MUST NOT mutate that canonical
+projection. The projection MUST omit raw MAAP envelopes and unbounded action
+payloads. The batch rationale is causal assistant context: it MUST remain
+available to continuation, transcript restoration, and provider switching
+until its complete execution group is atomically compacted.
 
 Durable `AgentContext` MUST contain only `StablePrefix` and
 `ConversationAppend`. Provider preparation MUST render that exact material
@@ -6320,13 +6316,12 @@ accept the legacy DeepSeek `submit_maap_action_batch` call shape during rollout,
 but legacy calls MUST still lower into the same internal `maap/1` validation
 path.
 
-Provider-native structured action schemas MUST NOT require the model to emit
+Provider-native structured action schemas MUST NOT allow the model to emit
 runtime-owned identity or bookkeeping fields such as `protocol`, `turn_id`,
-`agent_id`, `final`, or action identifiers. Mezzanine MUST stamp those fields
-locally before validation, audit, transcript persistence, and action-result
-generation. Compatibility parsers MAY accept those fields when they appear in
-older provider output, but they MUST ignore model-provided action identifiers
-and prefer locally synthesized identities.
+`agent_id`, `final`, or action identifiers. Parsers MUST reject those fields.
+Mezzanine MUST keep protocol, request identity, and terminal bookkeeping on
+runtime execution, audit, and result records and MUST synthesize action
+identities locally from provider order.
 
 Provider-native structured action schemas SHOULD require at least one action in
 each model response and SHOULD avoid advertising no-op completion-only actions.
@@ -6334,11 +6329,10 @@ A provider-native final response that has user-facing text MUST use `say`; a
 response that needs local filesystem inspection, discovery, process execution,
 validation, or non-content path operations MUST use `shell_command`, while
 file-content mutations SHOULD use `apply_patch` when the Mezzanine patch
-format can represent the change. When compact provider output omits a
-final-turn marker, Mezzanine MUST infer completion from the emitted actions:
-visible-only actions such as `say` MAY complete the turn, while executable,
-blocking, or runtime-mutating actions require continuation unless compatibility
-output explicitly says otherwise.
+format can represent the change. Mezzanine MUST infer terminal intent from the
+emitted actions: terminal `say`, controller-owned completion, and abort actions
+MAY complete the turn, while progress, executable, capability, blocking, or
+runtime-mutating actions require continuation.
 
 Provider-native structured action schemas MUST distinguish MAAP action names
 from pane shell commands. They MUST state that `apply_patch` is a MAAP action,
@@ -6367,10 +6361,9 @@ allowed action set before execution and MUST reject disallowed action types.
 
 Provider-native structured action schemas SHOULD reject empty user-facing text
 fields and SHOULD describe `say` as conversational text only, not a substitute
-for terminal execution. A non-final action batch containing only `say` and
-`complete` actions MUST NOT be rejected solely because the `final` flag is
-false; Mezzanine MUST display the visible text and MAY treat the turn as
-complete when no executable, blocking, or runtime-mutating action remains.
+for terminal execution. Mezzanine MUST display visible text and MAY treat the
+turn as complete when all actions carry terminal semantics and no executable,
+blocking, or runtime-mutating action remains.
 Provider-facing prompt and tool descriptions MUST describe the action batch as
 the current response envelope, not as a prerequisite setup step; when an
 executable action is available and useful, the model should put that action in
@@ -6382,9 +6375,8 @@ harness MUST require action proposals to appear as a single fenced JSON block
 with an info string of `mezzanine-action-json`. The fenced JSON block MUST
 contain exactly one `maap/1` action batch.
 
-The internal/audit action batch MUST be a JSON object with:
+The model-authored action batch MUST be a JSON object with:
 
-- `protocol`: The string `maap/1`.
 - `rationale`: A non-empty concise model-authored summary of why the complete
   listed action batch is being pursued. It MUST summarize the immediate action
   strategy, not disclose hidden chain-of-thought. It SHOULD be additive to
@@ -6393,35 +6385,18 @@ The internal/audit action batch MUST be a JSON object with:
   summaries. When no substantive state has changed since the previous
   rationale, the rationale SHOULD be the smallest non-duplicative execution
   delta that explains why the listed actions are next.
-- `thought`: An optional longer durable model-authored work note. When present
-  and non-empty, it MUST be stored in the durable assistant transcript and
-  future model-facing assistant context as `thinking: ` content. It MUST NOT be
-  rendered in normal-mode pane logs. It MAY be rendered in `verbose`, `debug`,
-  or `trace` logs as `thinking: ` text. It SHOULD be used only for substantive
-  learnings, decisions, invariants, or recovery details that would materially
-  help continuation, and it MUST NOT duplicate the batch rationale, visible
-  progress `say`, action summaries, recent thinking lines, secrets, hidden
-  policy, or private chain-of-thought.
-- `turn_id`: The active turn identity.
-- `agent_id`: The proposing agent identity.
-- `actions`: An array of action objects.
-- `final`: A Boolean indicating whether the agent believes the turn is
-  complete after the listed actions.
+- `actions`: A non-empty array of action objects.
 
-Provider-native compact output MUST include `rationale` and `actions`, and MUST
-omit runtime-owned fields unless the provider is using a compatibility fallback
-that cannot enforce the compact schema.
+Provider output MUST include `rationale` and `actions` and MUST omit removed or
+runtime-owned batch metadata.
 
 Each action object MUST include:
 
 - `type`: The action type.
 
-Each action object MAY include `rationale` when it adds action-local progress
-context and does not duplicate the batch rationale, a separately visible action
-summary, or response. Compact provider-native schemas MUST require the batch
-`rationale` field and SHOULD omit per-action rationale fields; for auto-allow
-approval, the shell `summary` MAY serve as the model-authored action-local
-reason when a separate per-action rationale is absent.
+Each action object MUST omit runtime-owned identity and action-local rationale.
+For auto-allow approval, the action's ordinary summary or payload supplies the
+action-local reason.
 
 Mezzanine MUST synthesize a stable turn-local action identity for every action
 before producing action results or audit records. A response-local ordinal such
@@ -6958,8 +6933,8 @@ prevent identifying an action ID MUST be recorded as malformed response errors
 in the agent transcript. Action results MUST be appended to the agent
 transcript. Before the model is asked to continue from an action, Mezzanine
 MUST supply assistant context for the provider response being continued from,
-including the batch `rationale`, optional `thinking` lines, and every
-action-local rationale in original action order, plus a compact model-facing
+including the batch `rationale`, conversational response text, and bounded
+action summaries in original action order, plus a compact model-facing
 projection of the result that preserves the action identity, action type,
 status, error code/message, approval prompt when blocked, command line,
 exit/timeout/signal state, truncation state, and bounded cleaned output needed
@@ -9847,7 +9822,7 @@ local inspection, and bounded generation of large, random, or test content.
 The prompt MUST explain that shell command stdout and stderr are model-facing
 evidence for the next decision rather than the place to narrate progress to the
 user. It MUST instruct the model to put progress or explanation in the
-`shell_command.summary`, action rationale, or `say` output instead of emitting
+`shell_command.summary`, batch rationale, or `say` output instead of emitting
 `printf` or `echo` explanation lines, unless the user requested that terminal
 output or the text is required by the command pipeline.
 
@@ -9972,7 +9947,7 @@ advances the task without first reasoning about a wrapper function family such
 as shell, MCP, memory, or current-actions. Provider descriptions for the
 canonical function MUST explain that the function call is only the transport
 envelope for the chosen MAAP action batch, not a prerequisite task step, and
-MUST prohibit rationale or thought text that says the model is complying with a
+MUST prohibit batch-rationale text that says the model is complying with a
 required function call, tool call, current-actions call, schema wrapper, or
 action wrapper.
 
@@ -9994,11 +9969,10 @@ remotes, branches, commits, paths, CI state, MCP results, plans, progress, or
 other transient task state unless the user explicitly requested storing that
 exact content. They MUST state that `memory_store` is reserved for information
 almost certain to be useful in future sessions. When a
-memory action's model-authored rationale or thought frames it as compliance with
-a required function call, tool call, current-actions call, schema wrapper,
-action wrapper, or action envelope instead of a concrete durable-context need,
-the runtime MUST skip that memory action without blocking unrelated useful
-actions in the same batch.
+batch rationale frames a memory action as compliance with a required function
+call, tool call, current-actions call, schema wrapper, action wrapper, or action
+envelope instead of a concrete durable-context need, the runtime MUST skip that
+memory action without blocking unrelated useful actions in the same batch.
 The prompt MUST treat repository exploration as a bounded means to choose the
 next concrete action rather than as an open-ended phase. It SHOULD guide
 ordinary implementation, debugging, design, and report tasks toward one focused
@@ -10090,7 +10064,7 @@ not to ask the user to grant workspace write access, shell access, network
 access, or other action capability. Runtime-disabled actions and unavailable
 integrations MUST be reported through explicit action results.
 
-The prompt MUST instruct the agent to keep `say` actions and action rationales
+The prompt MUST instruct the agent to keep `say` actions and the batch rationale
 terse but informative. It SHOULD guide ordinary progress updates toward one or
 two short sentences by default and reserve bullets for cases where they improve
 scan value. It MUST prefer concrete progress, changed behavior, validation
@@ -10105,21 +10079,14 @@ goal, loaded context, or visible action summaries. `Transient` in this rule
 MUST NOT mean discard at an action or provider boundary: accepted rationale is
 retained in its assistant execution group for continuation and durable
 transcript replay, then may leave exact raw context only through complete-group
-compaction. The prompt MUST also
-instruct the model to compare a planned rationale, optional batch `thought`, or
-progress `say` against recent thinking lines, visible text, action results, and
-other text in the same response; if the text would only repeat existing
-context, optional action-level rationales, batch `thought`, and progress `say`
-output MUST be omitted. The prompt MUST
-describe batch `thought` as a durable work note for longer future-useful
-learnings or decisions that is persisted to future context, hidden from
-normal-mode logs, and visible only in verbose-or-higher thinking logs. The
-prompt MUST require one channel per idea: when progress
-`say` records durable learning, batch rationale MUST be limited to the next
-executable reason; when batch `thought` records durable learning, progress
-`say` SHOULD NOT repeat it unless the user needs to see that sequence point;
-when batch rationale or action summaries already explain intent, progress `say`
-MUST NOT restate that intent. The prompt MUST state that
+compaction. The prompt MUST also instruct the model to compare a planned batch
+rationale or progress `say` against recent thinking lines, visible text, action
+results, and other text in the same response; if the text would only repeat
+existing context, progress `say` output MUST be omitted. The prompt MUST require
+one channel per idea: when progress `say` records durable learning, batch
+rationale MUST be limited to the next executable reason; when batch rationale
+or action summaries already explain intent, progress `say` MUST NOT restate
+that intent. The prompt MUST state that
 progress `say` output is for sequence-point updates during non-trivial
 multi-step work. Valid progress `say` reasons are cases where the first
 evidence pass identifies the real owner or diagnosis, the agent chooses an
@@ -10137,10 +10104,9 @@ symptom after it was already stated MUST NOT be treated as a new progress `say`
 sequence point. The prompt MUST state that a sequence point is consumed once it
 has been stated, and MUST prohibit later progress `say` output from paraphrasing
 the same owner, diagnosis, direction, phase transition, blocker, or validation
-result unless that fact materially changed. When an action rationale is
-present, the prompt SHOULD ask for a concise reason that justifies the
-immediate action and does not duplicate the batch rationale, progress `say`, or
-action summary.
+result unless that fact materially changed. The batch rationale SHOULD give a
+concise reason for the immediate actions without duplicating progress `say` or
+action summaries.
 On repeated followups about the same likely bug or missing behavior, the prompt
 SHOULD tell the agent not to keep restating uncertainty in user-facing prose
 once the next concrete inspection, test, or implementation step is available,

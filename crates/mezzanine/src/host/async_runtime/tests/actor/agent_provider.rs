@@ -226,7 +226,7 @@ async fn async_actor_applies_agent_provider_completion_events() {
     };
     let action = mez_agent::AgentAction {
         id: "say-1".to_string(),
-        rationale: "complete with a visible summary".to_string(),
+
         payload: mez_agent::AgentActionPayload::Say {
             status: mez_agent::SayStatus::Final,
             text: "Typed completion applied.".to_string(),
@@ -234,12 +234,9 @@ async fn async_actor_applies_agent_provider_completion_events() {
         },
     };
     let response_batch = mez_agent::MaapBatch {
-        protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
-        turn_id: task.turn_id.clone(),
-        agent_id: task.agent_id.clone(),
+
         actions: vec![action.clone()],
-        final_turn: true,
     };
     let execution = mez_agent::AgentTurnExecution {
         request: mez_agent::ModelRequest {
@@ -387,7 +384,7 @@ async fn async_actor_defers_provider_issue_actions_to_persistence_worker() {
         .unwrap();
     let action = mez_agent::AgentAction {
         id: "issue-add-1".to_string(),
-        rationale: "persist one issue".to_string(),
+
         payload: mez_agent::AgentActionPayload::IssueAdd {
             kind: "task".to_string(),
             state: None,
@@ -445,12 +442,9 @@ async fn async_actor_defers_provider_issue_actions_to_persistence_worker() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "persist one issue".to_string(),
-                turn_id: task.turn_id.clone(),
-                agent_id: task.agent_id.clone(),
+
                 actions: vec![action.clone()],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -570,7 +564,7 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
     };
     let action = mez_agent::AgentAction {
         id: "say-1".to_string(),
-        rationale: "complete with a visible summary".to_string(),
+
         payload: mez_agent::AgentActionPayload::Say {
             status: mez_agent::SayStatus::Final,
             text: "Typed transcript completion.".to_string(),
@@ -578,12 +572,9 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
         },
     };
     let response_batch = mez_agent::MaapBatch {
-        protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
-        turn_id: task.turn_id.clone(),
-        agent_id: task.agent_id.clone(),
+
         actions: vec![action.clone()],
-        final_turn: true,
     };
     let execution = mez_agent::AgentTurnExecution {
         request: mez_agent::ModelRequest {

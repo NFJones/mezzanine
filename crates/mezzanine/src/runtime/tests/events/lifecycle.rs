@@ -48,14 +48,12 @@ fn runtime_mixed_say_and_file_mutation_defers_say_until_after_diff() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![
                     mez_agent::AgentAction {
                         id: "say-1".to_string(),
-                        rationale: String::new(),
+
                         payload: mez_agent::AgentActionPayload::Say {
                             status: mez_agent::SayStatus::Final,
                             text: "Created `note.txt`.".to_string(),
@@ -65,7 +63,7 @@ fn runtime_mixed_say_and_file_mutation_defers_say_until_after_diff() {
                     },
                     mez_agent::AgentAction {
                         id: "patch-1".to_string(),
-                        rationale: "write a file".to_string(),
+
                         payload: mez_agent::AgentActionPayload::ApplyPatch {
                             patch: format!(
                                 "*** Begin Patch\n*** Add File: {target_rel}\n+alpha\n+beta\n*** End Patch"
@@ -74,7 +72,6 @@ fn runtime_mixed_say_and_file_mutation_defers_say_until_after_diff() {
                         },
                     },
                 ],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -123,7 +120,7 @@ fn runtime_mixed_say_and_file_mutation_defers_say_until_after_diff() {
     service
         .observe_agent_shell_transaction_end("%1", &marker, "turn-1", "agent-%1", "%1", 0)
         .unwrap();
-    poll_until_turn_state(&mut service, "turn-1", AgentTurnState::Completed);
+    poll_until_turn_state(&mut service, "turn-1", AgentTurnState::Running);
 
     let pane_text = service
         .pane_screen("%1")
@@ -133,7 +130,7 @@ fn runtime_mixed_say_and_file_mutation_defers_say_until_after_diff() {
     let diff_index = pane_text.find("@@ -0,0 +1,2 @@").unwrap_or(usize::MAX);
     let say_index = pane_text.find("Created note.txt.").unwrap_or(usize::MAX);
     assert!(diff_index < say_index, "{pane_text}");
-    assert!(pane_text.contains("Worked for"), "{pane_text}");
+    assert!(!pane_text.contains("Worked for"), "{pane_text}");
     service.terminate_all_pane_processes().unwrap();
     let _ = fs::remove_dir_all(target.parent().unwrap());
 }
@@ -202,20 +199,17 @@ fn runtime_agent_diff_say_renders_file_aware_syntax_spans() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "say-diff".to_string(),
-                    rationale: String::new(),
+
                     payload: mez_agent::AgentActionPayload::Say {
                         status: mez_agent::SayStatus::Final,
                         text: diff.to_string(),
                         content_type: mez_agent::AGENT_OUTPUT_TEXT_DIFF_CONTENT_TYPE.to_string(),
                     },
                 }],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -293,20 +287,17 @@ fn runtime_agent_complete_without_say_reports_visible_completion_status() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "the task is complete".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "say-1".to_string(),
-                    rationale: String::new(),
+
                     payload: mez_agent::AgentActionPayload::Say {
                         status: mez_agent::SayStatus::Final,
                         text: "Done.".to_string(),
                         content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                     },
                 }],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },

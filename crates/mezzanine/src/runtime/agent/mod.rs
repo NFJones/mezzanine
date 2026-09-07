@@ -3071,14 +3071,11 @@ use mez_agent::outcome::{
     ActionPresentationInput, action_error_suffix as runtime_agent_action_error_suffix,
     action_has_runtime_visible_effect as runtime_agent_action_has_runtime_visible_effect,
     action_outcome_line,
-    action_rationale_repeats_visible_batch_text as runtime_agent_action_rationale_repeats_visible_batch_text,
-    action_rationale_repeats_visible_summary,
     action_rejects_duplicate_success as runtime_agent_action_rejects_duplicate_success,
     action_result_is_suppressed_duplicate_file_mutation as runtime_action_result_is_suppressed_duplicate_file_mutation,
     action_summary, action_terminal_preview as runtime_agent_terminal_preview,
     batch_rationale_repeats_visible_text as runtime_agent_batch_rationale_repeats_visible_batch_text,
     batch_visible_action_texts as runtime_agent_batch_visible_action_texts,
-    normalize_user_visible_text as normalize_agent_user_visible_text,
     runtime_action_result_has_error_code, runtime_action_result_is_feedback_candidate,
     runtime_action_result_is_terminal_failure, runtime_action_status_name,
     runtime_action_type_is_shell_backed, runtime_execution_can_feed_failure_to_model,
@@ -3091,8 +3088,7 @@ use mez_agent::outcome::{
 };
 use mez_agent::subagent_task_output_for_execution;
 use outcome::{
-    runtime_agent_action_outcome_line, runtime_agent_action_rationale_repeats_visible_summary,
-    runtime_agent_action_summary, runtime_agent_context_command,
+    runtime_agent_action_outcome_line, runtime_agent_action_summary, runtime_agent_context_command,
     runtime_agent_execution_failure_error, runtime_agent_finished_footer_line,
     runtime_agent_pending_approval_log_line, runtime_agent_shell_status,
 };

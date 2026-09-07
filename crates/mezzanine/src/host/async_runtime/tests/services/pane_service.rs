@@ -1847,7 +1847,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
         };
         let action = mez_agent::AgentAction {
             id: "shell-1".to_string(),
-            rationale: "print a marker".to_string(),
+
             payload: mez_agent::AgentActionPayload::ShellCommand {
                 summary: "Print a marker".to_string(),
                 command: "printf 'AGENT_ASYNC_FIRST_COMMAND\\n'".to_string(),
@@ -1857,12 +1857,9 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
             },
         };
         let batch = mez_agent::MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            turn_id: task.turn_id.clone(),
-            agent_id: task.agent_id.clone(),
+
             actions: vec![action.clone()],
-            final_turn: false,
         };
         let execution = mez_agent::AgentTurnExecution {
             request: mez_agent::ModelRequest {

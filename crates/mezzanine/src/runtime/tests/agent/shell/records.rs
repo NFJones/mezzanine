@@ -2540,20 +2540,17 @@ fn runtime_agent_shell_show_approvals_closes_while_external_action_is_queued() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "fetch the requested release notes".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "fetch-approval".to_string(),
-                    rationale: "read the release notes".to_string(),
+
                     payload: mez_agent::AgentActionPayload::FetchUrl {
                         url: "https://example.test/releases".to_string(),
                         format: None,
                         max_bytes: None,
                     },
                 }],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },

@@ -82,15 +82,12 @@ fn turn_runner_recovers_mixed_capability_and_execution_batch_without_effects() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![
                     capability_action("capability-1", AgentCapability::Shell),
                     shell_action("shell-1"),
                 ],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         }),
@@ -102,12 +99,9 @@ fn turn_runner_recovers_mixed_capability_and_execution_batch_without_effects() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![say_action("say-1", "Ready.")],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         }),
@@ -203,15 +197,12 @@ fn turn_runner_recovers_mixed_capability_batch_before_heredoc_validation() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![
                     capability_action("capability-1", AgentCapability::Shell),
                     deferred_heredoc,
                 ],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         }),
@@ -223,12 +214,9 @@ fn turn_runner_recovers_mixed_capability_batch_before_heredoc_validation() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![say_action("say-1", "Ready.")],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         }),
@@ -327,16 +315,13 @@ fn turn_runner_repairs_legacy_complete_during_capability_decision() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![AgentAction {
                     id: "complete-1".to_string(),
-                    rationale: "legacy completion".to_string(),
+
                     payload: AgentActionPayload::Complete,
                 }],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         }),
@@ -348,12 +333,9 @@ fn turn_runner_repairs_legacy_complete_during_capability_decision() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![capability_action("capability-1", AgentCapability::Shell)],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         }),
@@ -365,12 +347,9 @@ fn turn_runner_repairs_legacy_complete_during_capability_decision() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![say_action("say-1", "Ready.")],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         }),

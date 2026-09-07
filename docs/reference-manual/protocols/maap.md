@@ -10,21 +10,19 @@ is normative.
 
 ## Batch envelope and ownership
 
-The internal and audit batch is a JSON object with `protocol: "maap/1"`, a
-non-empty `rationale`, optional durable `thought`, `turn_id`, `agent_id`,
-`actions`, and `final`. A canonical explicitly final internal batch may contain
-zero actions; other internal batches contain one or more. Provider-native compact schemas require only
-the model-authored `rationale` and `actions`; Mezzanine stamps protocol,
-turn/agent identities, final-state bookkeeping, and stable action identities.
+The model-authored batch is a JSON object containing a non-empty `rationale`
+and one or more `actions`. Runtime protocol identity, turn and agent identity,
+and terminal-state bookkeeping live on request, execution, audit, and result
+records rather than on the model batch. Mezzanine synthesizes stable action
+identities from provider order before planning and execution.
 
 `rationale` is a concise immediate-action summary, not private chain of
-thought. `thought`, when present, is a durable continuation note and is not
-normally rendered. Every action has a `type` and may have an additive
-action-local rationale. Models must not supply authoritative effect claims or
-rely on self-chosen IDs.
+thought. Every action has a `type` and its payload fields. Models must not
+supply runtime identity, terminal flags, action-local rationale, authoritative
+effect claims, or self-chosen action IDs.
 
 ```json
-{"protocol":"maap/1","rationale":"Inspect the owner before making a focused change.","thought":null,"turn_id":"runtime-owned","agent_id":"runtime-owned","actions":[{"type":"shell_command","summary":"Locating the owner module","command":"rg -n 'target_symbol' crates"}],"final":false}
+{"rationale":"Inspect the owner before making a focused change.","actions":[{"type":"shell_command","summary":"Locating the owner module","command":"rg -n 'target_symbol' crates"}]}
 ```
 
 Structured providers carry one complete batch through their native tool or

@@ -36,20 +36,17 @@ fn runtime_agent_suppresses_batch_rationale_that_duplicates_say_text() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: format!("thinking: {visible}"),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "say-1".to_string(),
-                    rationale: String::new(),
+
                     payload: mez_agent::AgentActionPayload::Say {
                         status: mez_agent::SayStatus::Final,
                         text: visible.to_string(),
                         content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                     },
                 }],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -121,20 +118,17 @@ fn runtime_agent_verbose_mode_injects_low_level_status_lines() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "say-1".to_string(),
-                    rationale: "answer in the pane".to_string(),
+
                     payload: mez_agent::AgentActionPayload::Say {
                         status: mez_agent::SayStatus::Final,
                         text: "The pane is ready.".to_string(),
                         content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                     },
                 }],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -169,10 +163,10 @@ fn runtime_agent_verbose_mode_injects_low_level_status_lines() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies that `/log-level debug` exposes model introspection and action
-/// rationales while still hiding the full shell view that verbose and trace show.
+/// Verifies that `/log-level debug` exposes model introspection while still
+/// hiding the full shell view that verbose and trace show.
 #[test]
-fn runtime_agent_thinking_mode_injects_action_rationales() {
+fn runtime_agent_thinking_mode_injects_batch_rationale() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -210,20 +204,17 @@ fn runtime_agent_thinking_mode_injects_action_rationales() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "say-1".to_string(),
-                    rationale: "answer in the pane".to_string(),
+
                     payload: mez_agent::AgentActionPayload::Say {
                         status: mez_agent::SayStatus::Final,
                         text: "The pane is ready.".to_string(),
                         content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                     },
                 }],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -295,20 +286,17 @@ fn runtime_agent_trace_mode_prints_maap_request_response_and_results() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "say-1".to_string(),
-                    rationale: "show trace details".to_string(),
+
                     payload: mez_agent::AgentActionPayload::Say {
                         status: mez_agent::SayStatus::Final,
                         text: "Trace visible.".to_string(),
                         content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                     },
                 }],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -393,13 +381,11 @@ fn runtime_agent_debug_mode_prints_maap_without_shell_view() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "shell-1".to_string(),
-                    rationale: "run a command for debug redaction".to_string(),
+
                     payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Run a debug redaction command".to_string(),
                         command: "printf 'debug-secret-command\\n'".to_string(),
@@ -408,7 +394,6 @@ fn runtime_agent_debug_mode_prints_maap_without_shell_view() {
                         timeout_ms: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -490,20 +475,17 @@ fn runtime_agent_continues_from_assistant_chronology_without_rationale_ledger() 
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "Check exact selector owner".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "say-progress".to_string(),
-                    rationale: "tell the user the owner is narrowed".to_string(),
+
                     payload: mez_agent::AgentActionPayload::Say {
                         status: mez_agent::SayStatus::Progress,
                         text: "The selector owner is narrowed to the resume path.".to_string(),
                         content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -527,20 +509,17 @@ fn runtime_agent_continues_from_assistant_chronology_without_rationale_ledger() 
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "Check exact selector owner".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "say-final".to_string(),
-                    rationale: "finish the user reply".to_string(),
+
                     payload: mez_agent::AgentActionPayload::Say {
                         status: mez_agent::SayStatus::Final,
                         text: "The selector fix is complete.".to_string(),
                         content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                     },
                 }],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -572,7 +551,7 @@ fn runtime_agent_continues_from_assistant_chronology_without_rationale_ledger() 
     assert!(
         assistant
             .content
-            .contains("action rationale say-progress (say): tell the user the owner is narrowed")
+            .contains("rationale: Check exact selector owner")
     );
     assert!(
         !request

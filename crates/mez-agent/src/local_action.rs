@@ -180,7 +180,7 @@ mod tests {
     fn local_action_lowering_applies_shell_source_policy() {
         let shell = AgentAction {
             id: "shell".to_string(),
-            rationale: "Inspect files".to_string(),
+
             payload: AgentActionPayload::ShellCommand {
                 summary: "Inspect files".to_string(),
                 command: "rg --files".to_string(),
@@ -207,7 +207,7 @@ mod tests {
 
         let say = AgentAction {
             id: "say".to_string(),
-            rationale: "Report".to_string(),
+
             payload: AgentActionPayload::Say {
                 text: "done".to_string(),
                 content_type: "text/plain".to_string(),

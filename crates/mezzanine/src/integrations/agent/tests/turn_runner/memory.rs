@@ -22,12 +22,12 @@ fn turn_runner_accepts_memory_search_with_matched_mcp_available() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
+
                 rationale: "search durable prior context about required function call compliance regressions".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
+
                 actions: vec![memory_search_action("memory-search-1")],
-                final_turn: false,
+
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -122,12 +122,9 @@ fn turn_runner_accepts_memory_store_after_prior_store_context() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "try one more memory store".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![memory_store_action("memory-store-2")],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -214,13 +211,11 @@ fn turn_runner_accepts_memory_store_for_runtime_execution() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "store the requested memory".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![AgentAction {
                     id: "memory-1".to_string(),
-                    rationale: "store durable project context".to_string(),
+
                     payload: AgentActionPayload::MemoryStore {
                         kind: "fact".to_string(),
                         priority: Some(60),
@@ -230,7 +225,6 @@ fn turn_runner_accepts_memory_store_for_runtime_execution() {
                         expires_in_days: Some(7),
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -308,12 +302,9 @@ fn turn_runner_counts_prior_memory_search_results_from_context() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "try one more memory search".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![memory_search_action("memory-search-3")],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -413,17 +404,14 @@ fn turn_runner_skips_memory_search_used_as_action_wrapper_placeholder() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale:
                     "Complying with a required immediate current-actions call before proceeding"
                         .to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![
                     memory_search_action("memory-search-placeholder"),
                     memory_search_action("memory-search-legitimate"),
                 ],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -518,16 +506,13 @@ fn turn_runner_skips_memory_searches_after_per_turn_limit() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "try repeated memory searches".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![
                     memory_search_action("memory-search-1"),
                     memory_search_action("memory-search-2"),
                     memory_search_action("memory-search-3"),
                 ],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },

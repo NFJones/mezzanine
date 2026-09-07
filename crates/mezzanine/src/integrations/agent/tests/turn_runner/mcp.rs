@@ -22,20 +22,17 @@ fn turn_runner_accepts_mcp_actions_matching_input_schema_arguments() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![AgentAction {
                     id: "mcp-1".to_string(),
-                    rationale: "read requested file through external integration".to_string(),
+
                     payload: AgentActionPayload::McpCall {
                         server: "fs".to_string(),
                         tool: "read_file".to_string(),
                         arguments_json: r#"{"path":"README.md"}"#.to_string(),
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -121,20 +118,17 @@ fn turn_runner_accepts_mcp_actions_without_required_approval() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![AgentAction {
                     id: "mcp-1".to_string(),
-                    rationale: "inspect external state".to_string(),
+
                     payload: AgentActionPayload::McpCall {
                         server: "state".to_string(),
                         tool: "list".to_string(),
                         arguments_json: "{}".to_string(),
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -212,21 +206,17 @@ fn turn_runner_auto_allows_mcp_actions_with_model_assertion() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![AgentAction {
                     id: "mcp-1".to_string(),
-                    rationale: "read requested project file through external integration"
-                        .to_string(),
+
                     payload: AgentActionPayload::McpCall {
                         server: "fs".to_string(),
                         tool: "read_file".to_string(),
                         arguments_json: "{}".to_string(),
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -308,20 +298,17 @@ fn turn_runner_blocks_mcp_actions_requiring_approval() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![AgentAction {
                     id: "mcp-1".to_string(),
-                    rationale: "read through external integration".to_string(),
+
                     payload: AgentActionPayload::McpCall {
                         server: "fs".to_string(),
                         tool: "read_file".to_string(),
                         arguments_json: "{}".to_string(),
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -402,12 +389,9 @@ fn turn_runner_executes_accepted_mcp_actions() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![mcp_action("mcp-1")],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -468,8 +452,8 @@ fn turn_runner_executes_accepted_mcp_actions() {
         )
         .unwrap();
 
-    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
-    assert_eq!(ledger.turns()[0].state, AgentTurnState::Completed);
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    assert_eq!(ledger.turns()[0].state, AgentTurnState::Running);
     assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
     assert_eq!(executor.plans.len(), 1);
 }
@@ -492,20 +476,17 @@ fn turn_runner_full_access_accepts_mcp_actions_requiring_approval() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![AgentAction {
                     id: "mcp-1".to_string(),
-                    rationale: "read through external integration".to_string(),
+
                     payload: AgentActionPayload::McpCall {
                         server: "fs".to_string(),
                         tool: "read_file".to_string(),
                         arguments_json: "{}".to_string(),
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -585,16 +566,13 @@ fn turn_runner_passes_mcp_tool_schemas_to_provider_request() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![AgentAction {
                     id: "complete".to_string(),
-                    rationale: "done".to_string(),
+
                     payload: AgentActionPayload::Complete,
                 }],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -670,20 +648,17 @@ fn turn_runner_rejects_mcp_actions_for_unavailable_tools_before_planning() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![AgentAction {
                     id: "mcp-1".to_string(),
-                    rationale: "inspect disabled external state".to_string(),
+
                     payload: AgentActionPayload::McpCall {
                         server: "state".to_string(),
                         tool: "write".to_string(),
                         arguments_json: "{}".to_string(),
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -773,20 +748,17 @@ fn turn_runner_rejects_mcp_actions_missing_required_schema_arguments_before_plan
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![AgentAction {
                     id: "mcp-1".to_string(),
-                    rationale: "read requested file through external integration".to_string(),
+
                     payload: AgentActionPayload::McpCall {
                         server: "fs".to_string(),
                         tool: "read_file".to_string(),
                         arguments_json: "{}".to_string(),
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },

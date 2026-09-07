@@ -88,7 +88,7 @@ fn runtime_mcp_call_logs_styled_action_line_in_normal_mode() {
         .unwrap();
     let action = mez_agent::AgentAction {
         id: "mcp-1".to_string(),
-        rationale: String::new(),
+
         payload: mez_agent::AgentActionPayload::McpCall {
             server: "github".to_string(),
             tool: "search_issues".to_string(),
@@ -261,14 +261,14 @@ fn runtime_mcp_server_discovery_actions_return_safe_registry_metadata() {
     let actions = vec![
         mez_agent::AgentAction {
             id: "get-before-search-1".to_string(),
-            rationale: "verify retrieval requires discovery evidence".to_string(),
+
             payload: mez_agent::AgentActionPayload::McpServerGet {
                 server: "fs".to_string(),
             },
         },
         mez_agent::AgentAction {
             id: "search-1".to_string(),
-            rationale: "find filesystem MCP server".to_string(),
+
             payload: mez_agent::AgentActionPayload::McpServerSearch {
                 query: "filesystem".to_string(),
                 limit: Some(5),
@@ -276,7 +276,7 @@ fn runtime_mcp_server_discovery_actions_return_safe_registry_metadata() {
         },
         mez_agent::AgentAction {
             id: "get-1".to_string(),
-            rationale: "inspect filesystem MCP server".to_string(),
+
             payload: mez_agent::AgentActionPayload::McpServerGet {
                 server: "fs".to_string(),
             },
@@ -292,12 +292,9 @@ fn runtime_mcp_server_discovery_actions_return_safe_registry_metadata() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "discover the configured MCP server".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: actions.clone(),
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -785,20 +782,17 @@ async fn runtime_executes_accepted_stdio_mcp_action_and_audits_call() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "m1".to_string(),
-                    rationale: "call mcp".to_string(),
+
                     payload: mez_agent::AgentActionPayload::McpCall {
                         server: "fixture".to_string(),
                         tool: "echo".to_string(),
                         arguments_json: r#"{"message":"hello"}"#.to_string(),
                     },
                 }],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -821,7 +815,7 @@ async fn runtime_executes_accepted_stdio_mcp_action_and_audits_call() {
         .await
         .unwrap();
 
-    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
     assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
     assert!(
         execution.action_results[0]
@@ -894,20 +888,17 @@ async fn runtime_mcp_tool_error_queues_continuation_without_disabling_server() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "m1".to_string(),
-                    rationale: "call mcp".to_string(),
+
                     payload: mez_agent::AgentActionPayload::McpCall {
                         server: "fixture".to_string(),
                         tool: "echo".to_string(),
                         arguments_json: r#"{"message":"hello"}"#.to_string(),
                     },
                 }],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1001,7 +992,7 @@ async fn runtime_mcp_tool_error_waits_for_sibling_actions_before_continuation() 
         .unwrap();
     let actions = ["mcp-first", "mcp-second"].map(|id| mez_agent::AgentAction {
         id: id.to_string(),
-        rationale: "call fixture".to_string(),
+
         payload: mez_agent::AgentActionPayload::McpCall {
             server: "fixture".to_string(),
             tool: "echo".to_string(),
@@ -1018,12 +1009,9 @@ async fn runtime_mcp_tool_error_waits_for_sibling_actions_before_continuation() 
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "call both tools".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: actions.to_vec(),
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1182,20 +1170,17 @@ async fn runtime_full_access_executes_prompt_stdio_mcp_action() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "m1".to_string(),
-                    rationale: "call mcp".to_string(),
+
                     payload: mez_agent::AgentActionPayload::McpCall {
                         server: "fixture".to_string(),
                         tool: "echo".to_string(),
                         arguments_json: r#"{"message":"hello"}"#.to_string(),
                     },
                 }],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1218,7 +1203,7 @@ async fn runtime_full_access_executes_prompt_stdio_mcp_action() {
         .await
         .unwrap();
 
-    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
     assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
     assert!(service.blocked_approvals().pending().is_empty());
     assert!(
@@ -1276,20 +1261,17 @@ async fn runtime_nonfinal_mcp_action_queues_provider_continuation() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "m1".to_string(),
-                    rationale: "call mcp".to_string(),
+
                     payload: mez_agent::AgentActionPayload::McpCall {
                         server: "fixture".to_string(),
                         tool: "echo".to_string(),
                         arguments_json: r#"{"message":"hello"}"#.to_string(),
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },

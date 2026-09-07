@@ -1540,13 +1540,11 @@ fn runtime_agent_shell_planning_failure_hides_command_by_default() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "shell-1".to_string(),
-                    rationale: "list files".to_string(),
+
                     payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "List files".to_string(),
                         command: "ls".to_string(),
@@ -1555,7 +1553,6 @@ fn runtime_agent_shell_planning_failure_hides_command_by_default() {
                         timeout_ms: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },

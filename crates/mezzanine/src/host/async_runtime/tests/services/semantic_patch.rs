@@ -134,7 +134,7 @@ async fn async_zsh_large_semantic_patch_completes_and_releases_input() {
         };
         let action = mez_agent::AgentAction {
             id: "patch-large".to_string(),
-            rationale: "replace the unique trailing marker".to_string(),
+
             payload: mez_agent::AgentActionPayload::ApplyPatch {
                 patch: format!(
                     "*** Begin Patch\n*** Update File: {target_rel}\n@@ MEZ_LARGE_PATCH_OLD\n-MEZ_LARGE_PATCH_OLD\n+MEZ_LARGE_PATCH_NEW\n*** End Patch"
@@ -143,12 +143,9 @@ async fn async_zsh_large_semantic_patch_completes_and_releases_input() {
             },
         };
         let batch = mez_agent::MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "exercise large acknowledged semantic patch delivery".to_string(),
-            turn_id: task.turn_id.clone(),
-            agent_id: task.agent_id.clone(),
+
             actions: vec![action.clone()],
-            final_turn: false,
         };
         let execution = mez_agent::AgentTurnExecution {
             request: mez_agent::ModelRequest {

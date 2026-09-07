@@ -298,7 +298,7 @@ fn runtime_agent_macro_routed_loop_resolves_after_in_place_execution() {
     let completed_say_execution = |turn: &mez_agent::AgentTurnRecord, text: &str| {
         let action = mez_agent::AgentAction {
             id: format!("say-{}", turn.turn_id),
-            rationale: "return the routed result".to_string(),
+
             payload: mez_agent::AgentActionPayload::Say {
                 status: mez_agent::SayStatus::Final,
                 text: text.to_string(),
@@ -315,12 +315,9 @@ fn runtime_agent_macro_routed_loop_resolves_after_in_place_execution() {
                 latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: Some(mez_agent::MaapBatch {
-                    protocol: "maap/1".to_string(),
                     rationale: "return the routed result".to_string(),
-                    turn_id: turn.turn_id.clone(),
-                    agent_id: turn.agent_id.clone(),
+
                     actions: vec![action.clone()],
-                    final_turn: true,
                 }),
                 provider_transcript_events: Vec::new(),
             },
@@ -1029,7 +1026,7 @@ fn runtime_joined_child_failure_without_shell_session_settles_parent() {
         .unwrap();
     let action = mez_agent::AgentAction {
         id: "macro-step-1".to_string(),
-        rationale: "send macro step".to_string(),
+
         payload: mez_agent::AgentActionPayload::SendMessage {
             recipient: format!("agent:{}", child.agent_id),
             content_type: "text/plain; charset=utf-8".to_string(),
@@ -1048,12 +1045,9 @@ fn runtime_joined_child_failure_without_shell_session_settles_parent() {
                 latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: Some(mez_agent::MaapBatch {
-                    protocol: "maap/1".to_string(),
                     rationale: "test macro action batch".to_string(),
-                    turn_id: parent.turn_id.clone(),
-                    agent_id: parent.agent_id.clone(),
+
                     actions: vec![action.clone()],
-                    final_turn: false,
                 }),
                 provider_transcript_events: Vec::new(),
             },

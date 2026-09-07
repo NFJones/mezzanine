@@ -678,12 +678,9 @@ mod tests {
     /// Builds one MAAP batch with stable identity for recovery policy tests.
     fn batch(actions: Vec<AgentAction>) -> MaapBatch {
         MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "exercise recovery policy".to_string(),
-            turn_id: "turn-1".to_string(),
-            agent_id: "agent-1".to_string(),
+
             actions,
-            final_turn: false,
         }
     }
 
@@ -692,7 +689,7 @@ mod tests {
     fn shell_action() -> AgentAction {
         AgentAction {
             id: "action-shell".to_string(),
-            rationale: "inspect repository state".to_string(),
+
             payload: AgentActionPayload::ShellCommand {
                 summary: "Inspect repository".to_string(),
                 command: "git status --short".to_string(),
@@ -707,7 +704,7 @@ mod tests {
     fn shell_capability_action() -> AgentAction {
         AgentAction {
             id: "action-capability".to_string(),
-            rationale: "request shell access".to_string(),
+
             payload: AgentActionPayload::RequestCapability {
                 capability: AgentCapability::Shell,
                 reason: "inspect repository state".to_string(),
@@ -927,7 +924,7 @@ mod tests {
     fn capability_extraction_allows_say_actions() {
         let say = AgentAction {
             id: "action-say".to_string(),
-            rationale: "report routing progress".to_string(),
+
             payload: AgentActionPayload::Say {
                 status: SayStatus::Progress,
                 text: "Requesting shell access.".to_string(),

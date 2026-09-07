@@ -48,7 +48,6 @@ fn semantic_apply_patch_plan_accepts_multi_file_payloads() {
 fn semantic_apply_patch_plan_accepts_unified_diff_payloads() {
     let action = AgentAction {
         id: "patch-unified".to_string(),
-        rationale: String::new(),
         payload: AgentActionPayload::ApplyPatch {
             patch: "diff --git a/note.txt b/note.txt\n--- a/note.txt\n+++ b/note.txt\n@@ -1,2 +1,2 @@\n-old\n+new\n context\n"
                 .to_string(),
@@ -76,7 +75,7 @@ fn semantic_apply_patch_plan_applies_codex_style_blocks() {
         "*** Begin Patch\n*** Update File: note.txt\n@@\n-old\n+new\n context\n*** End Patch";
     let action = AgentAction {
         id: "patch-1".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::ApplyPatch {
             patch: patch.to_string(),
             strip: None,
@@ -156,7 +155,7 @@ fn semantic_apply_patch_plan_rejects_fifo_targets_without_blocking() {
     );
     let action = AgentAction {
         id: "patch-fifo".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::ApplyPatch {
             patch: "*** Begin Patch\n*** Update File: note.txt\n@@\n-old\n+new\n*** End Patch"
                 .to_string(),
@@ -225,7 +224,7 @@ fn semantic_apply_patch_rejects_ambiguous_unanchored_hunk() {
     let patch = "*** Begin Patch\n*** Update File: note.rs\n@@\n-    println!(\"old\");\n+    println!(\"new\");\n*** End Patch";
     let action = AgentAction {
         id: "patch-ambiguous".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::ApplyPatch {
             patch: patch.to_string(),
             strip: None,
@@ -283,7 +282,7 @@ fn semantic_apply_patch_rejects_ambiguous_unanchored_hunk() {
 fn semantic_apply_patch_rejects_empty_patch_blocks() {
     let action = AgentAction {
         id: "patch-empty".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::ApplyPatch {
             patch: "*** Begin Patch\n*** End Patch\n".to_string(),
             strip: None,
@@ -362,7 +361,7 @@ fn semantic_apply_patch_resolves_symlink_targets_before_writing() {
     let patch = "*** Begin Patch\n*** Update File: link.txt\n@@\n-old\n+new\n*** End Patch";
     let action = AgentAction {
         id: "patch-symlink".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::ApplyPatch {
             patch: patch.to_string(),
             strip: None,

@@ -584,7 +584,7 @@ fn runtime_executes_send_message_action_through_message_service() {
     let (service, execution, target_agent) =
         execute_runtime_send_message_action("text/plain; charset=utf-8", "hello worker");
 
-    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
     assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
     assert!(
         execution.action_results[0]
@@ -723,15 +723,12 @@ fn runtime_spawned_child_corrects_parent_recipient_without_replaying_sibling() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "delegate the messaging task".to_string(),
-                turn_id: parent.turn_id.clone(),
-                agent_id: parent.agent_id.clone(),
+
                 actions: vec![runtime_spawn_agent_action(
                     "spawn-messaging-child",
                     "send both handoff messages",
                 )],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -754,7 +751,7 @@ fn runtime_spawned_child_corrects_parent_recipient_without_replaying_sibling() {
 
     let send_action = |id: &str, recipient: String, payload: &str| mez_agent::AgentAction {
         id: id.to_string(),
-        rationale: "send a local coordination message".to_string(),
+
         payload: mez_agent::AgentActionPayload::SendMessage {
             recipient,
             content_type: "text/plain".to_string(),
@@ -770,10 +767,8 @@ fn runtime_spawned_child_corrects_parent_recipient_without_replaying_sibling() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "send the completed sibling before the parent handoff".to_string(),
-                turn_id: child.turn_id.clone(),
-                agent_id: child.agent_id.clone(),
+
                 actions: vec![
                     send_action(
                         "message-sibling-once",
@@ -786,7 +781,6 @@ fn runtime_spawned_child_corrects_parent_recipient_without_replaying_sibling() {
                         "child handoff",
                     ),
                 ],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -846,16 +840,13 @@ fn runtime_spawned_child_corrects_parent_recipient_without_replaying_sibling() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "deliver the corrected parent handoff".to_string(),
-                turn_id: child.turn_id.clone(),
-                agent_id: child.agent_id.clone(),
+
                 actions: vec![send_action(
                     "message-parent-corrected",
                     format!("agent:{}", parent.agent_id),
                     "child handoff",
                 )],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -864,7 +855,7 @@ fn runtime_spawned_child_corrects_parent_recipient_without_replaying_sibling() {
         .poll_agent_provider_tasks_with_provider(&corrected_provider, 1)
         .unwrap();
     assert_eq!(corrected.len(), 1);
-    assert_eq!(corrected[0].terminal_state, AgentTurnState::Completed);
+    assert_eq!(corrected[0].terminal_state, AgentTurnState::Running);
     assert_eq!(
         service
             .message_service()
@@ -881,6 +872,20 @@ fn runtime_spawned_child_corrects_parent_recipient_without_replaying_sibling() {
             .count(),
         1
     );
+    assert!(service.has_joined_subagent_dependency(&child.turn_id));
+    let terminal_provider = RuntimeBatchProvider {
+        response: runtime_say_response_for_agent(
+            &child.turn_id,
+            &child.agent_id,
+            "Child work is complete.",
+            true,
+        ),
+    };
+    let terminal = service
+        .poll_agent_provider_tasks_with_provider(&terminal_provider, 1)
+        .unwrap();
+    assert_eq!(terminal.len(), 1);
+    assert_eq!(terminal[0].terminal_state, AgentTurnState::Completed);
     assert!(!service.has_joined_subagent_dependency(&child.turn_id));
     let parent_context = service.agent_turn_contexts().get(&parent.turn_id).unwrap();
     assert_eq!(
@@ -918,7 +923,7 @@ fn runtime_canonicalizes_send_message_text_plain_alias() {
     let (service, execution, target_agent) =
         execute_runtime_send_message_action("text/plain", "hello worker");
 
-    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
     assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
     let messages = service
         .message_service()
@@ -1009,7 +1014,7 @@ fn runtime_accepts_send_message_action_with_valid_json_payload() {
     let (service, execution, target_agent) =
         execute_runtime_send_message_action("application/json", r#"{"status":"ok"}"#);
 
-    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
     assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
     let messages = service
         .message_service()

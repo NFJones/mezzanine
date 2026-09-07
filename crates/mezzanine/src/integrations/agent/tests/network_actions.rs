@@ -61,7 +61,7 @@ async fn network_fetch_url_action_executor_returns_output_context_for_provider()
     let turn = turn();
     let action = AgentAction {
         id: "fetch-1".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::FetchUrl {
             url: "https://example.test/data.txt".to_string(),
             format: None,
@@ -105,7 +105,7 @@ async fn network_fetch_progress_handles_split_utf8_without_raw_html() {
     let turn = turn();
     let action = AgentAction {
         id: "fetch-progress".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::FetchUrl {
             url: "https://example.test/data.txt".to_string(),
             format: None,
@@ -145,7 +145,7 @@ async fn network_fetch_url_executor_default_bounds_response_body() {
     let turn = turn();
     let action = AgentAction {
         id: "fetch-large-default".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::FetchUrl {
             url: "https://example.test/large.html".to_string(),
             format: None,
@@ -186,7 +186,7 @@ async fn network_fetch_url_executor_rejects_file_scheme_without_transport() {
     let turn = turn();
     let action = AgentAction {
         id: "fetch-file".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::FetchUrl {
             url: "file:///home/neil/Downloads/test.txt".to_string(),
             format: None,
@@ -232,7 +232,7 @@ async fn network_web_search_action_executor_formats_search_results() {
     let turn = turn();
     let action = AgentAction {
         id: "search-1".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::WebSearch {
             query: "mez terminal".to_string(),
             domains: vec!["example.com".to_string()],
@@ -283,7 +283,7 @@ async fn network_search_progress_emits_complete_entries_only() {
     let turn = turn();
     let action = AgentAction {
         id: "search-progress".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::WebSearch {
             query: "mez terminal".to_string(),
             domains: Vec::new(),

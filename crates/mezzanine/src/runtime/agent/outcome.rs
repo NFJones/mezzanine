@@ -8,12 +8,11 @@
 use super::{
     ActionPresentationInput, ActionResult, ActionStatus, AgentAction, AgentActionPayload,
     AgentTurnExecution, AgentTurnRecord, AgentTurnState, BlockedApprovalRequest, ContextSourceKind,
-    MezError, Result, RuntimeSessionService, action_outcome_line,
-    action_rationale_repeats_visible_summary, action_summary, current_unix_seconds,
-    local_action_plan, network_action_plan, runtime_action_result_is_feedback_candidate,
-    runtime_action_type_is_shell_backed, runtime_agent_terminal_preview,
-    runtime_agent_turn_duration_display, runtime_agent_turn_state_name,
-    runtime_execution_can_feed_failure_to_model,
+    MezError, Result, RuntimeSessionService, action_outcome_line, action_summary,
+    current_unix_seconds, local_action_plan, network_action_plan,
+    runtime_action_result_is_feedback_candidate, runtime_action_type_is_shell_backed,
+    runtime_agent_terminal_preview, runtime_agent_turn_duration_display,
+    runtime_agent_turn_state_name, runtime_execution_can_feed_failure_to_model,
     runtime_execution_uses_unbounded_apply_patch_recovery, runtime_failure_feedback_attempt_keys,
     runtime_failure_feedback_status_line, runtime_mezzanine_error_code,
     runtime_provider_audit_error_message,
@@ -563,23 +562,6 @@ pub(super) fn runtime_agent_finished_footer_line(
         AgentTurnState::Interrupted => Some(format!("Stopped after {elapsed}")),
         AgentTurnState::Queued | AgentTurnState::Running | AgentTurnState::Blocked => None,
     }
-}
-
-/// Runs the runtime agent action rationale repeats visible summary operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn runtime_agent_action_rationale_repeats_visible_summary(action: &AgentAction) -> bool {
-    let (local_plan, network_plan) = runtime_agent_action_plans(action);
-    action_rationale_repeats_visible_summary(
-        action,
-        ActionPresentationInput {
-            local_plan: local_plan.as_ref(),
-            network_plan: network_plan.as_ref(),
-            show_runtime_target: false,
-        },
-    )
 }
 
 /// Builds a concise default-visible line for a runtime action that could not

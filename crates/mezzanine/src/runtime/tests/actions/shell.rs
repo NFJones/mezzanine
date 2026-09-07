@@ -85,13 +85,11 @@ fn runtime_agent_shell_command_is_presented_before_pty_dispatch() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "check shell access".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "shell-1".to_string(),
-                    rationale: String::new(),
+
                     payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Check shell access".to_string(),
                         command: "if true; then echo \"ok\"; fi".to_string(),
@@ -100,7 +98,6 @@ fn runtime_agent_shell_command_is_presented_before_pty_dispatch() {
                         timeout_ms: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -185,7 +182,7 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
         .unwrap();
     let action = mez_agent::AgentAction {
         id: "shell-1".to_string(),
-        rationale: "run a command".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Run a command".to_string(),
             command: "sleep 1".to_string(),
@@ -234,12 +231,9 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
                 latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: Some(mez_agent::MaapBatch {
-                    protocol: "maap/1".to_string(),
                     rationale: "test action batch rationale".to_string(),
-                    turn_id: "turn-1".to_string(),
-                    agent_id: "agent-%1".to_string(),
+
                     actions: vec![action.clone()],
-                    final_turn: false,
                 }),
                 provider_transcript_events: Vec::new(),
             },
@@ -782,13 +776,11 @@ fn runtime_agent_shell_command_output_is_visible_in_verbose_mode() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "shell-1".to_string(),
-                    rationale: "print a marker".to_string(),
+
                     payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Print a marker".to_string(),
                         command: "printf 'agent-visible-%s\\n' output".to_string(),
@@ -797,7 +789,6 @@ fn runtime_agent_shell_command_output_is_visible_in_verbose_mode() {
                         timeout_ms: None,
                     },
                 }],
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -888,13 +879,11 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test native progress".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "shell-1".to_string(),
-                    rationale: "print native progress".to_string(),
+
                     payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Print native progress".to_string(),
                         command: format!(
@@ -906,7 +895,6 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
                         timeout_ms: Some(5_000),
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1113,13 +1101,11 @@ fn runtime_native_agent_shell_command_output_is_visible_in_shell_view() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "shell-1".to_string(),
-                    rationale: "print native markers".to_string(),
+
                     payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Print native markers".to_string(),
                         command: "printf 'native-stdout\\n'; printf 'native-stderr\\n' >&2"
@@ -1129,7 +1115,6 @@ fn runtime_native_agent_shell_command_output_is_visible_in_shell_view() {
                         timeout_ms: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1201,13 +1186,11 @@ fn runtime_native_shell_command_uses_snapshotted_configured_timeout() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test native timeout snapshot".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "shell-1".to_string(),
-                    rationale: "run a bounded native command".to_string(),
+
                     payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Run a bounded native command".to_string(),
                         command: "true".to_string(),
@@ -1216,7 +1199,6 @@ fn runtime_native_shell_command_uses_snapshotted_configured_timeout() {
                         timeout_ms: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1278,19 +1260,19 @@ fn runtime_native_apply_patch_failure_shows_only_recovery_shadow_text() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
+
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
+
                 actions: vec![mez_agent::AgentAction {
                     id: "patch-1".to_string(),
-                    rationale: "apply a deliberately stale patch".to_string(),
+
                     payload: mez_agent::AgentActionPayload::ApplyPatch {
                         patch: "*** Begin Patch\n*** Update File: Cargo.toml\n@@\n-__MEZ_NATIVE_PATCH_MISSING_CONTEXT__\n+updated\n*** End Patch".to_string(),
                         strip: None,
                     },
                 }],
-                final_turn: false,
+
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1392,13 +1374,11 @@ fn runtime_native_apply_patch_shows_confirmed_diff_before_completion() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test native patch progress".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "patch-1".to_string(),
-                    rationale: "create a file".to_string(),
+
                     payload: mez_agent::AgentActionPayload::ApplyPatch {
                         patch: format!(
                             "*** Begin Patch\n*** Add File: {target_rel}\n+native-confirmed-progress\n*** End Patch"
@@ -1406,7 +1386,6 @@ fn runtime_native_apply_patch_shows_confirmed_diff_before_completion() {
                         strip: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1558,13 +1537,11 @@ fn runtime_agent_shell_command_output_keeps_decoded_context() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "shell-1".to_string(),
-                    rationale: "print a hidden marker".to_string(),
+
                     payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Print a hidden marker".to_string(),
                         command: "printf 'agent-hidden-%s\\n' output".to_string(),
@@ -1573,7 +1550,6 @@ fn runtime_agent_shell_command_output_keeps_decoded_context() {
                         timeout_ms: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1690,13 +1666,11 @@ fn runtime_agent_shell_command_without_output_keeps_mez_framing_out_of_logs() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "shell-1".to_string(),
-                    rationale: "print nothing".to_string(),
+
                     payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Print nothing".to_string(),
                         command: ":".to_string(),
@@ -1705,7 +1679,6 @@ fn runtime_agent_shell_command_without_output_keeps_mez_framing_out_of_logs() {
                         timeout_ms: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1806,13 +1779,11 @@ fn runtime_agent_shell_command_preview_is_wrapped_and_capped() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "shell-1".to_string(),
-                    rationale: "run a long command".to_string(),
+
                     payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Run a long command".to_string(),
                         command: command.to_string(),
@@ -1821,7 +1792,6 @@ fn runtime_agent_shell_command_preview_is_wrapped_and_capped() {
                         timeout_ms: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2009,7 +1979,7 @@ fn runtime_failed_action_retains_live_shell_sibling_execution_until_settlement()
 
     let failed_action = mez_agent::AgentAction {
         id: "patch-invalid".to_string(),
-        rationale: "exercise synchronous action failure".to_string(),
+
         payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: "invalid patch".to_string(),
             strip: None,
@@ -2017,7 +1987,7 @@ fn runtime_failed_action_retains_live_shell_sibling_execution_until_settlement()
     };
     let shell_action = mez_agent::AgentAction {
         id: "shell-live".to_string(),
-        rationale: "exercise live sibling ownership".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Run the live sibling".to_string(),
             command: "printf 'live sibling settled\\n'".to_string(),
@@ -2044,12 +2014,9 @@ fn runtime_failed_action_retains_live_shell_sibling_execution_until_settlement()
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "exercise mixed action ownership".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![failed_action, shell_action.clone()],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2156,14 +2123,12 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![
                     mez_agent::AgentAction {
                         id: "shell-fail".to_string(),
-                        rationale: "exercise failure feedback".to_string(),
+
                         payload: mez_agent::AgentActionPayload::ShellCommand {
                             summary: "Run a command that will need correction".to_string(),
                             command: "false".to_string(),
@@ -2174,7 +2139,7 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
                     },
                     mez_agent::AgentAction {
                         id: "shell-next".to_string(),
-                        rationale: "should wait for model after nonzero shell exit".to_string(),
+
                         payload: mez_agent::AgentActionPayload::ShellCommand {
                             summary: "Run a command after the failing command".to_string(),
                             command: "echo should wait".to_string(),
@@ -2184,7 +2149,6 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
                         },
                     },
                 ],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2258,9 +2222,6 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
             && block
                 .content
                 .contains("rationale: test action batch rationale")
-            && block
-                .content
-                .contains("action rationale shell-fail (shell_command): exercise failure feedback")
     }));
     let context = runtime_prepared_context_for_turn(&service, "turn-1");
     assert!(context.blocks().iter().any(|block| {
@@ -2364,7 +2325,7 @@ fn assert_shell_timeout_queues_model_self_correction(native: bool) {
 
     let action = mez_agent::AgentAction {
         id: "patch-timeout".to_string(),
-        rationale: "write a file through the pane shell".to_string(),
+
         payload: if native {
             mez_agent::AgentActionPayload::ShellCommand {
                 summary: "Run bounded inspection".to_string(),
@@ -2398,12 +2359,9 @@ fn assert_shell_timeout_queues_model_self_correction(native: bool) {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![action],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2480,13 +2438,11 @@ fn runtime_shell_command_heredoc_is_rejected_before_pane_dispatch() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "shell-heredoc".to_string(),
-                    rationale: "write a file with a heredoc".to_string(),
+
                     payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Write a file with a heredoc".to_string(),
                         command: "cat > /tmp/mez-heredoc.rs <<'EOF'\nfn main() {}\nEOF".to_string(),
@@ -2495,7 +2451,6 @@ fn runtime_shell_command_heredoc_is_rejected_before_pane_dispatch() {
                         timeout_ms: None,
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },

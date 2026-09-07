@@ -21,7 +21,7 @@ fn runtime_config_change_action_logs_styled_action_line_in_normal_mode() {
         .unwrap();
     let action = mez_agent::AgentAction {
         id: "config-1".to_string(),
-        rationale: String::new(),
+
         payload: mez_agent::AgentActionPayload::ConfigChange {
             setting_path: "theme.active".to_string(),
             operation: "set".to_string(),
@@ -107,7 +107,7 @@ fn runtime_config_change_persists_generic_setting_and_applies_live() {
     };
     let action = mez_agent::AgentAction {
         id: "config-generic".to_string(),
-        rationale: String::new(),
+
         payload: mez_agent::AgentActionPayload::ConfigChange {
             setting_path: "history.lines".to_string(),
             operation: "set".to_string(),
@@ -164,7 +164,7 @@ fn runtime_config_change_theme_queues_full_redraw() {
     };
     let action = mez_agent::AgentAction {
         id: "config-theme-redraw".to_string(),
-        rationale: String::new(),
+
         payload: mez_agent::AgentActionPayload::ConfigChange {
             setting_path: "theme.active".to_string(),
             operation: "set".to_string(),
@@ -226,7 +226,7 @@ fn runtime_config_change_applies_enhanced_keyboard_reporting_to_active_prompt() 
     };
     let action = mez_agent::AgentAction {
         id: "config-enhanced-keyboard".to_string(),
-        rationale: String::new(),
+
         payload: mez_agent::AgentActionPayload::ConfigChange {
             setting_path: "terminal.enhanced_keyboard_reporting".to_string(),
             operation: "set".to_string(),
@@ -308,7 +308,7 @@ fn runtime_config_change_rejects_user_only_sandbox_policy() {
     {
         let action = mez_agent::AgentAction {
             id: format!("config-sandbox-policy-{index}"),
-            rationale: String::new(),
+
             payload: mez_agent::AgentActionPayload::ConfigChange {
                 setting_path: setting_path.to_string(),
                 operation: "set".to_string(),
@@ -359,7 +359,7 @@ fn runtime_config_change_rejects_user_only_host_power_policy() {
     };
     let action = mez_agent::AgentAction {
         id: "config-host-power-policy".to_string(),
-        rationale: String::new(),
+
         payload: mez_agent::AgentActionPayload::ConfigChange {
             setting_path: "agents.active_turn_sleep_inhibition".to_string(),
             operation: "set".to_string(),
@@ -416,7 +416,7 @@ fn runtime_config_change_rejects_user_only_transport_policy() {
     {
         let action = mez_agent::AgentAction {
             id: format!("config-transport-policy-{index}"),
-            rationale: String::new(),
+
             payload: mez_agent::AgentActionPayload::ConfigChange {
                 setting_path: setting_path.to_string(),
                 operation: "set".to_string(),
@@ -573,7 +573,7 @@ fn runtime_config_change_rejects_user_only_host_access() {
     {
         let action = mez_agent::AgentAction {
             id: format!("config-host-access-{index}"),
-            rationale: String::new(),
+
             payload: mez_agent::AgentActionPayload::ConfigChange {
                 setting_path: setting_path.to_string(),
                 operation: "set".to_string(),
@@ -625,7 +625,7 @@ fn runtime_config_change_reset_removes_override_and_restores_default() {
     };
     let set_action = mez_agent::AgentAction {
         id: "config-reset-set".to_string(),
-        rationale: String::new(),
+
         payload: mez_agent::AgentActionPayload::ConfigChange {
             setting_path: "history.lines".to_string(),
             operation: "set".to_string(),
@@ -634,7 +634,7 @@ fn runtime_config_change_reset_removes_override_and_restores_default() {
     };
     let reset_action = mez_agent::AgentAction {
         id: "config-reset".to_string(),
-        rationale: String::new(),
+
         payload: mez_agent::AgentActionPayload::ConfigChange {
             setting_path: "history.lines".to_string(),
             operation: "reset".to_string(),
@@ -704,7 +704,7 @@ fn runtime_config_change_idempotency_uses_setting_payload() {
     };
     let first = mez_agent::AgentAction {
         id: "config-reused".to_string(),
-        rationale: String::new(),
+
         payload: mez_agent::AgentActionPayload::ConfigChange {
             setting_path: "history.lines".to_string(),
             operation: "set".to_string(),
@@ -713,7 +713,7 @@ fn runtime_config_change_idempotency_uses_setting_payload() {
     };
     let second = mez_agent::AgentAction {
         id: "config-reused".to_string(),
-        rationale: String::new(),
+
         payload: mez_agent::AgentActionPayload::ConfigChange {
             setting_path: "history.rotate_lines".to_string(),
             operation: "set".to_string(),
@@ -788,20 +788,17 @@ fn runtime_config_change_duplicate_success_terminates_continuation() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "apply the requested configuration".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: action_id.to_string(),
-                    rationale: String::new(),
+
                     payload: mez_agent::AgentActionPayload::ConfigChange {
                         setting_path: "terminal.agent_wrap_column_cap".to_string(),
                         operation: "set".to_string(),
                         value: Some(value.to_string()),
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -894,11 +891,7 @@ fn runtime_config_change_duplicate_success_terminates_continuation() {
         response: mez_agent::ModelResponse {
             action_batch: config_provider("config-new-turn-same", "200")
                 .response
-                .action_batch
-                .map(|mut batch| {
-                    batch.turn_id = "turn-2".to_string();
-                    batch
-                }),
+                .action_batch,
             ..config_provider("unused", "200").response
         },
     };
@@ -941,11 +934,7 @@ fn runtime_config_change_duplicate_success_terminates_continuation() {
         response: mez_agent::ModelResponse {
             action_batch: config_provider("config-new-turn-distinct", "201")
                 .response
-                .action_batch
-                .map(|mut batch| {
-                    batch.turn_id = "turn-2".to_string();
-                    batch
-                }),
+                .action_batch,
             ..config_provider("unused", "201").response
         },
     };
@@ -962,11 +951,7 @@ fn runtime_config_change_duplicate_success_terminates_continuation() {
         response: mez_agent::ModelResponse {
             action_batch: config_provider("config-new-turn-duplicate", "201")
                 .response
-                .action_batch
-                .map(|mut batch| {
-                    batch.turn_id = "turn-2".to_string();
-                    batch
-                }),
+                .action_batch,
             ..config_provider("unused", "201").response
         },
     };
@@ -1028,20 +1013,17 @@ fn runtime_config_change_duplicate_waits_for_sibling_shell_action() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "set the requested history limit".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "config-mixed-first".to_string(),
-                    rationale: String::new(),
+
                     payload: mez_agent::AgentActionPayload::ConfigChange {
                         setting_path: "history.lines".to_string(),
                         operation: "set".to_string(),
                         value: Some("7".to_string()),
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1067,14 +1049,12 @@ fn runtime_config_change_duplicate_waits_for_sibling_shell_action() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "repeat config and run the requested command".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![
                     mez_agent::AgentAction {
                         id: "config-mixed-duplicate".to_string(),
-                        rationale: String::new(),
+
                         payload: mez_agent::AgentActionPayload::ConfigChange {
                             setting_path: "history.lines".to_string(),
                             operation: "replace".to_string(),
@@ -1083,7 +1063,7 @@ fn runtime_config_change_duplicate_waits_for_sibling_shell_action() {
                     },
                     mez_agent::AgentAction {
                         id: "shell-after-config-duplicate".to_string(),
-                        rationale: "print the requested completion marker".to_string(),
+
                         payload: mez_agent::AgentActionPayload::ShellCommand {
                             summary: "Print the mixed-action marker.".to_string(),
                             command: "printf 'mixed-config-shell\\n'".to_string(),
@@ -1093,7 +1073,6 @@ fn runtime_config_change_duplicate_waits_for_sibling_shell_action() {
                         },
                     },
                 ],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1168,15 +1147,13 @@ fn runtime_batched_config_change_duplicates_terminate_without_reload() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "set theme aliases in one batch".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: [("primary", "#112233"), ("secondary", "#445566")]
                     .into_iter()
                     .map(|(alias, value)| mez_agent::AgentAction {
                         id: format!("{alias}-{id_suffix}"),
-                        rationale: String::new(),
+
                         payload: mez_agent::AgentActionPayload::ConfigChange {
                             setting_path: format!("theme.aliases.{alias}"),
                             operation: "set".to_string(),
@@ -1184,7 +1161,6 @@ fn runtime_batched_config_change_duplicates_terminate_without_reload() {
                         },
                     })
                     .collect(),
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1265,7 +1241,7 @@ fn runtime_config_change_failure_is_redacted_and_not_recorded_as_success() {
     };
     let action = mez_agent::AgentAction {
         id: "config-secret".to_string(),
-        rationale: String::new(),
+
         payload: mez_agent::AgentActionPayload::ConfigChange {
             setting_path: "auth.access_token".to_string(),
             operation: "set".to_string(),
@@ -1363,7 +1339,7 @@ fn runtime_agent_config_change_batches_broad_theme_palette() {
     .into_iter()
     .map(|(id, setting_path, value)| mez_agent::AgentAction {
         id: id.to_string(),
-        rationale: String::new(),
+
         payload: mez_agent::AgentActionPayload::ConfigChange {
             setting_path: setting_path.to_string(),
             operation: "set".to_string(),
@@ -1381,12 +1357,9 @@ fn runtime_agent_config_change_batches_broad_theme_palette() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "set every terminal theme color".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions,
-                final_turn: true,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1401,7 +1374,7 @@ fn runtime_agent_config_change_batches_broad_theme_palette() {
         )
         .unwrap();
 
-    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
     assert_eq!(execution.action_results.len(), action_count);
     assert!(
         execution
@@ -1516,20 +1489,17 @@ fn runtime_config_change_resumes_after_full_access_change() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "change the requested live configuration".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-%1".to_string(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "config-1".to_string(),
-                    rationale: String::new(),
+
                     payload: mez_agent::AgentActionPayload::ConfigChange {
                         setting_path: "theme.active".to_string(),
                         operation: "set".to_string(),
                         value: Some("catppuccin_latte".to_string()),
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },

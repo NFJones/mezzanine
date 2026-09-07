@@ -204,7 +204,7 @@ impl RuntimeSessionService {
                 };
                 let action = AgentAction {
                     id: format!("macro-step-{}", next_step_index.saturating_add(1)),
-                    rationale: "send next macro step".to_string(),
+
                     payload: AgentActionPayload::SendMessage {
                         recipient: format!("agent:{child_agent_id}"),
                         content_type: "text/plain; charset=utf-8".to_string(),
@@ -284,7 +284,7 @@ impl RuntimeSessionService {
                 };
                 let action = AgentAction {
                     id: retry_action_id,
-                    rationale: "retry current macro step".to_string(),
+
                     payload: AgentActionPayload::SendMessage {
                         recipient: format!("agent:{child_agent_id}"),
                         content_type: "text/plain; charset=utf-8".to_string(),

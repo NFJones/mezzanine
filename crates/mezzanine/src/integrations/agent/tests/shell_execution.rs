@@ -14,7 +14,7 @@ use super::*;
 fn semantic_shell_command_plan_leaves_omitted_timeout_unset() {
     let action = AgentAction {
         id: "shell-default-timeout".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::ShellCommand {
             summary: "List files".to_string(),
             command: "ls".to_string(),
@@ -38,7 +38,7 @@ fn semantic_shell_command_plan_leaves_omitted_timeout_unset() {
 fn semantic_shell_command_plan_preserves_explicit_timeout() {
     let action = AgentAction {
         id: "shell-timeout".to_string(),
-        rationale: String::new(),
+
         payload: AgentActionPayload::ShellCommand {
             summary: "Run bounded grep".to_string(),
             command: "grep -n needle file.txt".to_string(),
@@ -288,7 +288,7 @@ fn semantic_patch_transaction_uses_posix_child_interpreter_in_fish_pane() {
     let turn = turn();
     let action = AgentAction {
         id: "patch-fish".to_string(),
-        rationale: "Create a file".to_string(),
+
         payload: AgentActionPayload::ApplyPatch {
             patch: "*** Begin Patch\n*** Add File: note.txt\n+hello\n*** End Patch".to_string(),
             strip: None,

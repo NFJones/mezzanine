@@ -19,7 +19,7 @@ fn runtime_skill_lookup_logs_styled_action_line_in_normal_mode() {
         .unwrap();
     let action = mez_agent::AgentAction {
         id: "skill-catalog-1".to_string(),
-        rationale: String::new(),
+
         payload: mez_agent::AgentActionPayload::RequestSkills,
     };
 
@@ -80,7 +80,7 @@ fn runtime_skill_load_logs_styled_action_line_in_normal_mode() {
         .unwrap();
     let action = mez_agent::AgentAction {
         id: "skill-load-1".to_string(),
-        rationale: String::new(),
+
         payload: mez_agent::AgentActionPayload::CallSkill {
             name: "review".to_string(),
             additional_context: Some("focus on context replay churn".to_string()),
@@ -442,19 +442,16 @@ fn runtime_explicit_skill_prompt_rejects_redundant_call_skill_loop() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "load skill authoring context".to_string(),
-                turn_id: started.turn_id.clone(),
-                agent_id: started.agent_id.clone(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "skill-loop".to_string(),
-                    rationale: "load the create-skill workflow".to_string(),
+
                     payload: mez_agent::AgentActionPayload::CallSkill {
                         name: "create-skill".to_string(),
                         additional_context: Some("create a review skill".to_string()),
                     },
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -538,16 +535,13 @@ fn runtime_explicit_skill_prompt_rejects_redundant_skill_catalog_lookup() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "check available skill workflows".to_string(),
-                turn_id: started.turn_id.clone(),
-                agent_id: started.agent_id.clone(),
+
                 actions: vec![mez_agent::AgentAction {
                     id: "skill-catalog-loop".to_string(),
-                    rationale: "check available skill workflows".to_string(),
+
                     payload: mez_agent::AgentActionPayload::RequestSkills,
                 }],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         },

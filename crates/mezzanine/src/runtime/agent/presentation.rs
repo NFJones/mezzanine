@@ -7,12 +7,10 @@
 
 use super::{
     AgentActionPayload, AgentTurnExecution, AgentTurnState, BTreeSet, Result,
-    RuntimeSessionService, SayStatus, normalize_agent_user_visible_text,
-    runtime_action_result_has_error_code, runtime_action_result_is_terminal_failure,
-    runtime_agent_action_error_suffix, runtime_agent_action_has_runtime_visible_effect,
-    runtime_agent_action_outcome_line, runtime_agent_action_rationale_repeats_visible_batch_text,
-    runtime_agent_action_rationale_repeats_visible_summary, runtime_agent_action_summary,
-    runtime_agent_batch_rationale_repeats_visible_batch_text,
+    RuntimeSessionService, SayStatus, runtime_action_result_has_error_code,
+    runtime_action_result_is_terminal_failure, runtime_agent_action_error_suffix,
+    runtime_agent_action_has_runtime_visible_effect, runtime_agent_action_outcome_line,
+    runtime_agent_action_summary, runtime_agent_batch_rationale_repeats_visible_batch_text,
     runtime_agent_batch_visible_action_texts, runtime_agent_execution_failure_error,
     runtime_agent_turn_state_name, runtime_loop_guard_failure_label,
     runtime_loop_guard_failure_summary_line, runtime_unrecovered_action_failure_output,
@@ -173,30 +171,11 @@ impl RuntimeSessionService {
         }
         let mut emitted_user_visible_action = false;
         let mut pending_runtime_visible_action = false;
-        let mut emitted_action_rationale_keys = BTreeSet::new();
-        if batch_rationale_was_presented {
-            emitted_action_rationale_keys
-                .insert(normalize_agent_user_visible_text(&batch.rationale));
-        }
         let has_runtime_visible_action = batch
             .actions
             .iter()
             .any(runtime_agent_action_has_runtime_visible_effect);
         for (action_index, action) in batch.actions.iter().enumerate() {
-            let rationale_key = normalize_agent_user_visible_text(&action.rationale);
-            if !action.rationale.trim().is_empty()
-                && !runtime_agent_action_rationale_repeats_visible_summary(action)
-                && !runtime_agent_action_rationale_repeats_visible_batch_text(
-                    action,
-                    &visible_action_texts,
-                )
-                && emitted_action_rationale_keys.insert(rationale_key)
-            {
-                self.append_agent_thinking_text_to_terminal_buffer(
-                    pane_id,
-                    action.rationale.trim(),
-                )?;
-            }
             match &action.payload {
                 AgentActionPayload::Say {
                     status,
@@ -536,12 +515,9 @@ mod tests {
                 latest_request_usage: None,
                 quota_usage: Vec::new(),
                 action_batch: Some(MaapBatch {
-                    protocol: "maap/1".to_string(),
                     rationale: "inspect the target files".to_string(),
-                    turn_id: "turn-2".to_string(),
-                    agent_id: "agent-1".to_string(),
+
                     actions: Vec::new(),
-                    final_turn: false,
                 }),
                 provider_transcript_events: Vec::new(),
             },

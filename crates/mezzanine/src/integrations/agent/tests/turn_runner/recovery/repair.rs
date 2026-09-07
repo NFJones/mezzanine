@@ -33,15 +33,12 @@ async fn turn_runner_repairs_malformed_failure_summary_response() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
                 actions: vec![say_action(
                     "say-1",
                     "The provider failed before any action ran.",
                 )],
-                final_turn: false,
             }),
             provider_transcript_events: Vec::new(),
         }),
@@ -126,12 +123,12 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
+
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
+
                 actions: vec![abort_action("abort-1", "need more repository context")],
-                final_turn: true,
+
             }),
             provider_transcript_events: Vec::new(),
 }),
@@ -143,12 +140,12 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
+
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
+
                 actions: vec![capability_action("capability-1", AgentCapability::Shell)],
-                final_turn: false,
+
             }),
             provider_transcript_events: Vec::new(),
 }),
@@ -160,12 +157,12 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
-                protocol: "maap/1".to_string(),
+
                 rationale: "test action batch rationale".to_string(),
-                turn_id: turn.turn_id.clone(),
-                agent_id: turn.agent_id.clone(),
+
+
                 actions: vec![say_action("say-1", "Ready.")],
-                final_turn: true,
+
             }),
             provider_transcript_events: Vec::new(),
 }),
@@ -264,12 +261,9 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
         latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            turn_id: turn.turn_id.clone(),
-            agent_id: turn.agent_id.clone(),
+
             actions: vec![heredoc],
-            final_turn: false,
         }),
         provider_transcript_events: Vec::new(),
     };
@@ -281,15 +275,12 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
         latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            turn_id: turn.turn_id.clone(),
-            agent_id: turn.agent_id.clone(),
+
             actions: vec![say_action(
                 "say-1",
                 "I will use a supported command instead.",
             )],
-            final_turn: true,
         }),
         provider_transcript_events: Vec::new(),
     };
@@ -384,20 +375,17 @@ fn turn_runner_retries_maap_validation_error_with_safe_durable_repair_evidence()
         latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            turn_id: turn.turn_id.clone(),
-            agent_id: turn.agent_id.clone(),
+
             actions: vec![AgentAction {
                 id: "mcp-1".to_string(),
-                rationale: "inspect unavailable state".to_string(),
+
                 payload: AgentActionPayload::McpCall {
                     server: "missing".to_string(),
                     tool: "read".to_string(),
                     arguments_json: "{}".to_string(),
                 },
             }],
-            final_turn: false,
         }),
         provider_transcript_events: Vec::new(),
     };
@@ -409,12 +397,9 @@ fn turn_runner_retries_maap_validation_error_with_safe_durable_repair_evidence()
         latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(MaapBatch {
-            protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
-            turn_id: turn.turn_id.clone(),
-            agent_id: turn.agent_id.clone(),
+
             actions: vec![say_action("say-1", "I cannot access that MCP server.")],
-            final_turn: true,
         }),
         provider_transcript_events: Vec::new(),
     };

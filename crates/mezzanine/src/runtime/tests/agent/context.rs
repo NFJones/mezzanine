@@ -899,7 +899,7 @@ fn runtime_action_results_split_canonical_history_from_same_turn_detail() {
         .unwrap();
     let action = mez_agent::AgentAction {
         id: "shell-private".to_string(),
-        rationale: "inspect exact content".to_string(),
+
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Inspect the file".to_string(),
             command: "cat private.txt".to_string(),
