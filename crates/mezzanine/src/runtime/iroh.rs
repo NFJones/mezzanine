@@ -3744,7 +3744,7 @@ mod tests {
             assert!(resized.matches("%1").count() >= 2, "{resized}");
 
             shutdown_handle
-                .execute_terminal_command(local_primary, "zen on".to_string())
+                .execute_terminal_command(local_primary.clone(), "zen on".to_string())
                 .await
                 .unwrap();
             let zen = tokio::time::timeout(
@@ -3772,6 +3772,61 @@ mod tests {
                 "{zen}"
             );
             assert!(zen.matches("%1").count() < 2, "{zen}");
+
+            let timer_handle = shutdown_handle.clone();
+            let timer = tokio::spawn(async move {
+                crate::host::async_runtime::run_async_runtime_timer_side_effect_service(
+                    &timer_handle,
+                    crate::host::async_runtime::AsyncRuntimeSideEffectServiceConfig {
+                        max_polls: u64::MAX,
+                        drain_limit: 64,
+                        idle_interval: std::time::Duration::from_millis(5),
+                    },
+                    crate::runtime::current_unix_millis(),
+                    |_, _| false,
+                )
+                .await
+            });
+            shutdown_handle
+                .execute_terminal_command(
+                    local_primary,
+                    "new-window observer-focus-label".to_string(),
+                )
+                .await
+                .unwrap();
+            let appearance = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                read_test_control_body(&mut events),
+            )
+            .await
+            .expect("source focus must push an observer label");
+            assert!(appearance.contains("observer-focus-label"), "{appearance}");
+            // No further source input: the shared deadline must erase the
+            // observer projection through the actual timer and transport.
+            let expiry = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                read_test_control_body(&mut events),
+            )
+            .await
+            .expect("source expiry must push an observer update");
+            assert!(expiry.contains(r#""method":"render/delta""#), "{expiry}");
+            let decoded: serde_json::Value = serde_json::from_str(&expiry).unwrap();
+            assert!(
+                decoded["params"]["rows"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|row| {
+                        row["index"] == 23
+                            && row["line"]
+                                .as_str()
+                                .is_some_and(|line| line.trim().is_empty())
+                    }),
+                "{expiry}"
+            );
+            assert!(!expiry.contains("observer-focus-label"), "{expiry}");
+            timer.abort();
+            let _ = timer.await;
 
             assert_eq!(
                 shutdown_handle.shutdown().await.unwrap(),
