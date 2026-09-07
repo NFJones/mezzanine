@@ -589,6 +589,72 @@ mod tests {
         }
     }
 
+    /// A resize baseline captured with a live label must blank that label
+    /// during the gesture. Expiry while hidden must survive release without
+    /// replaying the baseline's stale identity into the current content.
+    #[test]
+    fn zen_focus_composition_resize_drag_expires_without_replay() {
+        use crate::runtime::{
+            AttachedTerminalClientStepPlan, MouseAction, TerminalClientLoopAction,
+        };
+        let (mut service, primary) = fixture();
+        service
+            .execute_terminal_command(&primary, "new-window drag-focus")
+            .unwrap();
+        service
+            .session
+            .split_active_pane(&primary, mez_mux::layout::SplitDirection::Horizontal)
+            .unwrap();
+        assert!(view(&mut service, &primary).lines[9].contains("drag-focus"));
+        let config = service
+            .terminal_client_loop_config(TerminalClientLoopConfig::default())
+            .unwrap();
+        let border = config.mouse_border_cells.first().unwrap();
+        let step = |action| AttachedTerminalClientStepPlan {
+            actions: vec![TerminalClientLoopAction::HandleMouse(action)],
+            output_lines: Vec::new(),
+            output_line_style_spans: Vec::new(),
+            input_hangup: false,
+            output_hangup: false,
+            error_roles: Vec::new(),
+        };
+        service
+            .apply_attached_terminal_step_transition(
+                &primary,
+                &step(MouseAction::ResizePane {
+                    column: border.column,
+                    row: border.row,
+                }),
+            )
+            .unwrap();
+        assert!(
+            service
+                .presentation
+                .mouse_resize_drag_baseline_view
+                .is_some()
+        );
+        let hidden = view(&mut service, &primary);
+        assert!(!hidden.lines.iter().any(|line| line.contains("drag-focus")));
+        assert!(service.expire_zen_focus_labels_for_client(&primary, u64::MAX));
+        service
+            .apply_attached_terminal_step_transition(&primary, &step(MouseAction::FinishResizePane))
+            .unwrap();
+        assert!(
+            service
+                .presentation
+                .take_pending_divider_layout_commit()
+                .is_some()
+        );
+        let restored = view(&mut service, &primary);
+        assert!(
+            !restored
+                .lines
+                .iter()
+                .any(|line| line.contains("drag-focus"))
+        );
+        assert_eq!(restored.authoritative_size, hidden.authoritative_size);
+    }
+
     /// Rectangle boundary contact alone is not intersection.
     #[test]
     fn zen_focus_composition_rectangle_boundaries() {
