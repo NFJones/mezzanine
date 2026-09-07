@@ -247,7 +247,7 @@ impl RuntimeSessionService {
         action_id: &str,
         execution: &ActionPresentationExecutionIdentity,
         result: &ActionResult,
-    ) -> Result<usize> {
+    ) -> Result<bool> {
         let retained = self
             .presentation
             .action_presentation_progress
@@ -266,12 +266,12 @@ impl RuntimeSessionService {
                 source_truncated: component.source_truncated,
             })
             .collect::<Vec<_>>();
-        let mut reconciled = 0usize;
+        let mut suppress_final_replay = false;
         for progress in retained {
-            let _ = self.reconcile_action_presentation_progress(&progress, result)?;
-            reconciled = reconciled.saturating_add(1);
+            suppress_final_replay |=
+                self.reconcile_action_presentation_progress(&progress, result)?;
         }
-        Ok(reconciled)
+        Ok(suppress_final_replay)
     }
 
     /// Promotes one exact executor-confirmed mutation into durable presentation.
@@ -469,12 +469,19 @@ impl RuntimeSessionService {
                     ) | (
                         AgentActionPayload::ApplyPatch { .. },
                         ActionPresentationComponentIdentity::ConfirmedMutation { .. }
+                    ) | (
+                        AgentActionPayload::FetchUrl { .. } | AgentActionPayload::WebSearch { .. },
+                        ActionPresentationComponentIdentity::ProvisionalReadBody
                     )
-                ) && self.native_shell_action_attempt_is_current(
+                ) && (self.native_shell_action_attempt_is_current(
                     &progress.turn_id,
                     &progress.action_id,
                     marker,
-                )
+                ) || self.approved_external_action_attempt_is_current(
+                    &progress.turn_id,
+                    &progress.action_id,
+                    marker,
+                ))
             }
             ActionPresentationExecutionIdentity::Transaction(marker) => self
                 .running_shell_transaction(marker)

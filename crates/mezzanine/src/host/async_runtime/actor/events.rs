@@ -311,6 +311,15 @@ impl AsyncRuntimeSessionActor {
                     applied.then_some(RenderInvalidationReason::PaneOutput),
                 ))
             }
+            RuntimeEvent::ApprovedExternalActionProgress(progress) => {
+                let applied = self
+                    .service
+                    .apply_approved_external_action_progress(progress)?;
+                Ok(self.service.runtime_transition_with_render(
+                    applied,
+                    applied.then_some(RenderInvalidationReason::PaneOutput),
+                ))
+            }
             RuntimeEvent::AgentCompaction(compaction_event) => {
                 let mut transition = self
                     .service

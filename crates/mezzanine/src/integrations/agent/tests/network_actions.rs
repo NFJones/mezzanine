@@ -4,6 +4,53 @@
 //! fixtures remain in the parent module.
 
 use super::*;
+use crate::integrations::agent::network::execute_network_action_with_transport_async_with_progress;
+
+/// Streams a configured sequence of retained body chunks for network progress tests.
+struct ChunkedAsyncProviderHttpTransport {
+    chunks: Vec<Vec<u8>>,
+    response: ProviderHttpResponse,
+}
+
+impl AsyncProviderHttpTransport for ChunkedAsyncProviderHttpTransport {
+    fn send_async<'a>(
+        &'a self,
+        _request: &'a ProviderHttpRequest,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = mez_agent::ProviderHttpResult<ProviderHttpResponse>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move { Ok(self.response.clone()) })
+    }
+
+    fn send_async_with_body_chunks<'a>(
+        &'a self,
+        request: &'a ProviderHttpRequest,
+        on_chunk: &'a mut (
+                    dyn FnMut(
+            Vec<u8>,
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+                        + Send
+                ),
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = mez_agent::ProviderHttpResult<ProviderHttpResponse>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            for chunk in &self.chunks {
+                on_chunk(chunk.clone()).await;
+            }
+            self.send_async(request).await
+        })
+    }
+}
 
 #[tokio::test]
 /// Verifies semantic URL fetch actions execute through the runtime HTTP
@@ -49,6 +96,44 @@ async fn network_fetch_url_action_executor_returns_output_context_for_provider()
     let context = action_result_context_content(&result);
     assert!(context.contains("[action_result fetch-1 fetch_url succeeded]"));
     assert!(context.contains("content:\nalpha\nbravo\n"), "{context}");
+}
+
+#[tokio::test]
+/// Verifies fetch progress withholds an incomplete UTF-8 scalar and never
+/// emits replacement text while retaining the final canonical action result.
+async fn network_fetch_progress_handles_split_utf8_without_raw_html() {
+    let turn = turn();
+    let action = AgentAction {
+        id: "fetch-progress".to_string(),
+        rationale: String::new(),
+        payload: AgentActionPayload::FetchUrl {
+            url: "https://example.test/data.txt".to_string(),
+            format: None,
+            max_bytes: None,
+        },
+    };
+    let transport = ChunkedAsyncProviderHttpTransport {
+        chunks: vec![b"h\xC3".to_vec(), b"\xA9llo".to_vec()],
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: "héllo".to_string(),
+        },
+    };
+    let mut progress = Vec::new();
+
+    let result = execute_network_action_with_transport_async_with_progress(
+        &turn,
+        &action,
+        &transport,
+        &mut |source| progress.push(source),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(progress, vec!["h", "héllo"]);
+    assert!(progress.iter().all(|source| !source.contains('�')));
+    assert_eq!(result.content_text(), "héllo");
 }
 
 #[tokio::test]
@@ -189,4 +274,51 @@ async fn network_web_search_action_executor_formats_search_results() {
         context.contains("recency filtering is best-effort"),
         "{context}"
     );
+}
+
+#[tokio::test]
+/// Verifies search progress publishes only a complete cleaned result anchor,
+/// never the partial HTML source observed before its closing tag arrives.
+async fn network_search_progress_emits_complete_entries_only() {
+    let turn = turn();
+    let action = AgentAction {
+        id: "search-progress".to_string(),
+        rationale: String::new(),
+        payload: AgentActionPayload::WebSearch {
+            query: "mez terminal".to_string(),
+            domains: Vec::new(),
+            recency_days: None,
+            max_results: Some(1),
+        },
+    };
+    let html = r#"<a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2Fmez">Mez &amp; Terminal</a>"#;
+    let split = html.find("</a>").unwrap();
+    let transport = ChunkedAsyncProviderHttpTransport {
+        chunks: vec![
+            html.as_bytes()[..split].to_vec(),
+            html.as_bytes()[split..].to_vec(),
+        ],
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: html.to_string(),
+        },
+    };
+    let mut progress = Vec::new();
+
+    let result = execute_network_action_with_transport_async_with_progress(
+        &turn,
+        &action,
+        &transport,
+        &mut |source| progress.push(source),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        progress,
+        vec!["1. Mez & Terminal\n   https://example.com/mez"]
+    );
+    assert!(progress.iter().all(|source| !source.contains("<a")));
+    assert!(result.content_text().contains("1. Mez & Terminal"));
 }

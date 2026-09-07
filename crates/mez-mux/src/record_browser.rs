@@ -96,6 +96,8 @@ pub enum RecordBrowserAction {
     BackToList,
     /// Open the active list record as an in-browser detail view.
     OpenActive,
+    /// Request a copy of the active record's canonical detail Markdown.
+    CopyActive,
     /// Submit the active list record id without opening its detail view.
     SubmitActive,
     /// Begin editing one filter field.
@@ -134,6 +136,11 @@ pub struct RecordBrowserPromptSelection {
 pub enum RecordBrowserOutcome {
     /// Browser state changed without requiring an external side effect.
     Updated,
+    /// The caller should copy the active record's canonical detail Markdown.
+    CopyRequested {
+        /// Markdown content rendered for the focused record detail.
+        markdown: String,
+    },
     /// The caller should apply the selected stable record id.
     SelectionSubmitted {
         /// Stable backend record id selected by the user.
@@ -473,6 +480,20 @@ impl RecordBrowser {
                 self.detail_index =
                     Some(self.active_index.min(self.records.len().saturating_sub(1)));
                 Ok(RecordBrowserOutcome::Updated)
+            }
+            RecordBrowserAction::CopyActive => {
+                let Some(record) = self.records.get(self.active_index) else {
+                    return Ok(RecordBrowserOutcome::Ignored);
+                };
+                Ok(RecordBrowserOutcome::CopyRequested {
+                    markdown: detail_markdown(
+                        record,
+                        self.scope_indicator.as_deref(),
+                        self.detail_help.as_deref(),
+                        self.deletion_enabled,
+                        !self.kind_filter_choices.is_empty(),
+                    ),
+                })
             }
             RecordBrowserAction::SubmitActive => {
                 let Some(record) = self.records.get(self.active_index) else {
@@ -1077,6 +1098,39 @@ mod tests {
             );
             assert_eq!(empty.prompt(), None);
         }
+    }
+
+    /// Verifies copying returns the focused record's canonical detail source
+    /// without changing list or detail navigation state.
+    #[test]
+    fn record_browser_copy_active_returns_focused_detail_markdown() {
+        let mut browser = RecordBrowser::new(
+            "Issues",
+            vec![
+                browser_record("issue-1", "First"),
+                browser_record("issue-2", "Second"),
+            ],
+            Vec::new(),
+        )
+        .unwrap();
+        browser.set_active_index(1);
+
+        let RecordBrowserOutcome::CopyRequested { markdown } = browser
+            .apply_action(RecordBrowserAction::CopyActive)
+            .unwrap()
+        else {
+            panic!("focused record should request a copy");
+        };
+        assert!(markdown.contains("# Second"), "{markdown}");
+        assert!(markdown.contains("Body for Second"), "{markdown}");
+        assert_eq!(browser.active_record_id(), Some("issue-2"));
+        assert!(!browser.is_detail_view());
+
+        let mut empty = RecordBrowser::new("Issues", Vec::new(), Vec::new()).unwrap();
+        assert_eq!(
+            empty.apply_action(RecordBrowserAction::CopyActive).unwrap(),
+            RecordBrowserOutcome::Ignored
+        );
     }
 
     /// Verifies filter and save prompts produce typed outcomes while empty and

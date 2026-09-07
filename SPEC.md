@@ -2439,14 +2439,20 @@ without mutating intervening pane content. Conversation rebind and pane teardown
 MUST remove all transient provider and shell-preview ownership.
 While a provider response streams, Mezzanine MUST accept provisional visible
 source only from a structurally established supported `say.text`, the direct
-batch-level `rationale` string, or a direct `shell_command.command` string. A
-supported `say` action remains canonical assistant presentation and MUST display
-`mez> ` before its first source character. Direct rationale source MUST append
-only after the existing `thinking: ` prefix and shell command source MUST append
-only after the existing `$ ` prefix; those prefixes and their styles MUST be the
-same as ordinary complete presentation. `thought`, action-local rationale,
-shell summaries, and every other raw provider field or action payload MUST NOT
-enter this streaming path.
+batch-level `rationale` string, direct `shell_command.summary` and
+`shell_command.command` strings, or a closed direct `web_search.query` or
+`fetch_url.url` string, or a complete parser-validated action whose payload has
+an ordinary static execution header. A supported `say` action remains canonical
+assistant presentation and MUST display `mez> ` before its first source
+character. Direct rationale and shell-summary source MUST append only through
+the existing `thinking: ` renderer, shell command source only through the
+existing `$ ` renderer, and provisional headers only through the ordinary
+action-header renderer; their prefixes and styles MUST match complete
+presentation. Complete action previews MUST remain presentation-only and MUST
+NOT authorize, admit, or dispatch an action. `thought`, action-local rationale,
+nested lookalikes, capability/skill controls, private message payloads, and
+every other raw provider field or action payload MUST NOT enter this streaming
+path.
 
 For every allowlisted source, Mezzanine MUST decode and apply every source
 character exactly once and in order without dropping or truncating deltas.
@@ -2489,6 +2495,16 @@ terminal source MAY promote a matching provisional component and suppress only
 that matching final replay; a mismatch or failure MUST restore ordinary terminal
 presentation. Terminal action cleanup, cancellation, retry, conversation
 replacement, and pane teardown MUST retire transient executor-progress state.
+
+For runtime-network `fetch_url` and `web_search`, ordinary HTTP body chunks MAY
+produce provisional read-body progress only after actor ingress has claimed the
+approved external action and issued its exact attempt identity. Fetch progress
+MUST preserve complete UTF-8 scalars and MUST NOT expose raw HTML. Search
+progress MUST expose only complete cleaned result entries, never partial anchors
+or raw response HTML. Progress delivery MAY coalesce bounded cumulative
+snapshots, but slow rendering MUST NOT block response draining or transport
+deadlines. An external worker outcome or progress update whose attempt no
+longer exactly matches the live actor claim MUST be ignored.
 
 After provider completion, an exactly matching validated `say` action index,
 status, content type, and raw text MAY promote the matching atomically published

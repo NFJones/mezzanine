@@ -7,7 +7,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::{AgentActionPayload, AgentTurnExecution, MaapBatch, SayStatus};
+use crate::{AgentAction, AgentActionPayload, AgentTurnExecution, MaapBatch, SayStatus};
 
 /// Maximum characters retained while comparing one progress `say` entry.
 const PROGRESS_ENTRY_CHAR_LIMIT: usize = 512;
@@ -75,6 +75,47 @@ pub enum StreamingPresentationEvent {
         /// Zero-based position in the MAAP `actions` array.
         action_index: usize,
     },
+    /// A direct `shell_command.summary` string is ready for thinking display.
+    ShellCommandSummaryStarted {
+        /// Zero-based position in the MAAP `actions` array.
+        action_index: usize,
+    },
+    /// Newly decoded shell summary source.
+    ShellCommandSummaryTextDelta {
+        /// Zero-based position in the MAAP `actions` array.
+        action_index: usize,
+        /// Ordered source suffix that has not been emitted previously.
+        text: String,
+    },
+    /// The shell action's JSON `summary` string has closed.
+    ShellCommandSummaryTextComplete {
+        /// Zero-based position in the MAAP `actions` array.
+        action_index: usize,
+    },
+    /// A safe, cumulative execution header established from direct action fields.
+    ///
+    /// This is presentation-only and never implies that the action was admitted
+    /// or dispatched. Consumers must reconcile it with the validated batch.
+    ActionHeader {
+        /// Zero-based position in the MAAP `actions` array.
+        action_index: usize,
+        /// Typed source used by the product's shared static formatter.
+        header: Box<StreamingActionHeader>,
+    },
+}
+
+/// One fail-closed action-header source that is safe to project provisionally.
+///
+/// This enum contains only closed direct fields and deliberately does not
+/// represent an executable action or apply runtime defaults.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StreamingActionHeader {
+    /// A web-search header with a closed query string.
+    WebSearch { query: String },
+    /// A URL-fetch header with a closed URL string.
+    FetchUrl { url: String },
+    /// A complete, presentation-safe action using settled parser defaults.
+    Action { action: Box<AgentAction> },
 }
 
 /// Compatibility name for callers that consume only streamed `say` events.
@@ -86,6 +127,8 @@ enum StreamingSourceId {
     Rationale,
     Say(usize),
     ShellCommand(usize),
+    ShellCommandSummary(usize),
+    ActionHeader(usize),
 }
 
 /// Source state already exposed by [`StreamingPresentationExtractor`].
@@ -105,10 +148,10 @@ struct ActiveStreamingSource {
 
 /// Fail-closed extractor for ordered source events from direct or fenced MAAP.
 ///
-/// Only direct batch rationale, supported `say.text`, and
-/// `shell_command.command` fields are eligible. The provider HTTP response
-/// limit remains the resource bound; this extractor deliberately has no
-/// presentation-specific input or visible-text limit.
+/// Only direct batch rationale, supported `say.text`, shell-command text and
+/// summaries, and closed web/fetch header fields are eligible. The provider
+/// HTTP response limit remains the resource bound; this extractor deliberately
+/// has no presentation-specific input or visible-text limit.
 #[derive(Debug, Default)]
 pub struct StreamingPresentationExtractor {
     input: String,
@@ -180,12 +223,18 @@ impl StreamingPresentationExtractor {
                 return Vec::new();
             };
             if !delta.is_empty() {
-                events.push(source.delta_event(delta.to_string()));
+                let Some(event) = source.delta_event(delta.to_string()) else {
+                    self.disable();
+                    return Vec::new();
+                };
+                events.push(event);
                 state.text = source.text.clone();
             }
             if source.complete && !state.complete {
                 state.complete = true;
-                events.push(source.complete_event());
+                if let Some(event) = source.complete_event() {
+                    events.push(event);
+                }
             }
             if !source.complete {
                 next_active = Some(ActiveStreamingSource {
@@ -213,7 +262,10 @@ impl StreamingPresentationExtractor {
         }
         if !text.is_empty() {
             state.text.push_str(&text);
-            events.push(StreamingPresentationSource::delta_event_for(source, text));
+            let Some(event) = StreamingPresentationSource::delta_event_for(source, text) else {
+                return false;
+            };
+            events.push(event);
         }
         true
     }
@@ -231,7 +283,9 @@ impl StreamingPresentationExtractor {
             return false;
         }
         state.complete = true;
-        events.push(StreamingPresentationSource::complete_event_for(source));
+        if let Some(event) = StreamingPresentationSource::complete_event_for(source) {
+            events.push(event);
+        }
         true
     }
 
@@ -252,6 +306,7 @@ struct StreamingPresentationSource {
     text: String,
     complete: bool,
     raw_cursor: usize,
+    header: Option<StreamingActionHeader>,
 }
 
 impl StreamingPresentationSource {
@@ -267,17 +322,26 @@ impl StreamingPresentationSource {
             StreamingSourceId::ShellCommand(action_index) => {
                 Some(StreamingPresentationEvent::ShellCommandStarted { action_index })
             }
+            StreamingSourceId::ShellCommandSummary(action_index) => {
+                Some(StreamingPresentationEvent::ShellCommandSummaryStarted { action_index })
+            }
+            StreamingSourceId::ActionHeader(action_index) => {
+                Some(StreamingPresentationEvent::ActionHeader {
+                    action_index,
+                    header: Box::new(self.header.clone()?),
+                })
+            }
         }
     }
 
     /// Builds the source-specific text event.
-    fn delta_event(&self, text: String) -> StreamingPresentationEvent {
+    fn delta_event(&self, text: String) -> Option<StreamingPresentationEvent> {
         Self::delta_event_for(self.id, text)
     }
 
     /// Builds a source-specific text event without a full extracted source.
-    fn delta_event_for(id: StreamingSourceId, text: String) -> StreamingPresentationEvent {
-        match id {
+    fn delta_event_for(id: StreamingSourceId, text: String) -> Option<StreamingPresentationEvent> {
+        Some(match id {
             StreamingSourceId::Rationale => StreamingPresentationEvent::RationaleTextDelta { text },
             StreamingSourceId::Say(action_index) => {
                 StreamingPresentationEvent::TextDelta { action_index, text }
@@ -285,17 +349,21 @@ impl StreamingPresentationSource {
             StreamingSourceId::ShellCommand(action_index) => {
                 StreamingPresentationEvent::ShellCommandTextDelta { action_index, text }
             }
-        }
+            StreamingSourceId::ShellCommandSummary(action_index) => {
+                StreamingPresentationEvent::ShellCommandSummaryTextDelta { action_index, text }
+            }
+            StreamingSourceId::ActionHeader(_) => return None,
+        })
     }
 
     /// Builds the source-specific completion event.
-    fn complete_event(&self) -> StreamingPresentationEvent {
+    fn complete_event(&self) -> Option<StreamingPresentationEvent> {
         Self::complete_event_for(self.id)
     }
 
     /// Builds a source-specific completion event without a full extracted source.
-    fn complete_event_for(id: StreamingSourceId) -> StreamingPresentationEvent {
-        match id {
+    fn complete_event_for(id: StreamingSourceId) -> Option<StreamingPresentationEvent> {
+        Some(match id {
             StreamingSourceId::Rationale => StreamingPresentationEvent::RationaleTextComplete,
             StreamingSourceId::Say(action_index) => {
                 StreamingPresentationEvent::TextComplete { action_index }
@@ -303,7 +371,11 @@ impl StreamingPresentationSource {
             StreamingSourceId::ShellCommand(action_index) => {
                 StreamingPresentationEvent::ShellCommandTextComplete { action_index }
             }
-        }
+            StreamingSourceId::ShellCommandSummary(action_index) => {
+                StreamingPresentationEvent::ShellCommandSummaryTextComplete { action_index }
+            }
+            StreamingSourceId::ActionHeader(_) => return None,
+        })
     }
 }
 
@@ -321,6 +393,7 @@ fn streaming_presentation_sources(input: &str) -> Option<Vec<StreamingPresentati
             text,
             complete,
             raw_cursor: rationale_start.as_ptr() as usize - input.as_ptr() as usize + raw_cursor,
+            header: None,
         });
     }
     let Some(actions) = direct_json_field_value_start(object, "actions")
@@ -349,25 +422,102 @@ fn streaming_presentation_sources(input: &str) -> Option<Vec<StreamingPresentati
                     text,
                     complete,
                     raw_cursor: text_start.as_ptr() as usize - input.as_ptr() as usize + raw_cursor,
+                    header: None,
                 });
             }
             "shell_command" => {
-                let command_start = direct_json_field_value_start(action, "command")?.trim_start();
-                let (text, complete, raw_cursor) = decode_incomplete_json_string(command_start)?;
+                let summary_start = direct_json_field_value_start(action, "summary")?.trim_start();
+                let (summary, complete, raw_cursor) = decode_incomplete_json_string(summary_start)?;
                 extracted.push(StreamingPresentationSource {
-                    id: StreamingSourceId::ShellCommand(action_index),
+                    id: StreamingSourceId::ShellCommandSummary(action_index),
                     status: None,
                     content_type: None,
-                    text,
+                    text: summary,
                     complete,
-                    raw_cursor: command_start.as_ptr() as usize - input.as_ptr() as usize
+                    raw_cursor: summary_start.as_ptr() as usize - input.as_ptr() as usize
                         + raw_cursor,
+                    header: None,
                 });
+                if let Some(command_start) =
+                    direct_json_field_value_start(action, "command").map(str::trim_start)
+                {
+                    let (text, complete, raw_cursor) =
+                        decode_incomplete_json_string(command_start)?;
+                    extracted.push(StreamingPresentationSource {
+                        id: StreamingSourceId::ShellCommand(action_index),
+                        status: None,
+                        content_type: None,
+                        text,
+                        complete,
+                        raw_cursor: command_start.as_ptr() as usize - input.as_ptr() as usize
+                            + raw_cursor,
+                        header: None,
+                    });
+                }
+            }
+            "web_search" | "fetch_url" => {
+                let header = match json_string_field(action, "type")?.as_str() {
+                    "web_search" => json_string_field(action, "query")
+                        .map(|query| StreamingActionHeader::WebSearch { query }),
+                    "fetch_url" => json_string_field(action, "url")
+                        .map(|url| StreamingActionHeader::FetchUrl { url }),
+                    _ => None,
+                };
+                if let Some(header) = header {
+                    extracted.push(StreamingPresentationSource {
+                        id: StreamingSourceId::ActionHeader(action_index),
+                        status: None,
+                        content_type: None,
+                        text: String::new(),
+                        complete: true,
+                        raw_cursor: 0,
+                        header: Some(header),
+                    });
+                }
+            }
+            _ if action.ends_with('}') => {
+                let Ok(action) = crate::parse_maap_action_json(action) else {
+                    continue;
+                };
+                if streaming_action_has_safe_header(&action.payload) {
+                    extracted.push(StreamingPresentationSource {
+                        id: StreamingSourceId::ActionHeader(action_index),
+                        status: None,
+                        content_type: None,
+                        text: String::new(),
+                        complete: true,
+                        raw_cursor: 0,
+                        header: Some(StreamingActionHeader::Action {
+                            action: Box::new(action),
+                        }),
+                    });
+                }
             }
             _ => {}
         }
     }
     Some(extracted)
+}
+
+/// Reports whether a complete parsed action has a static header that is safe
+/// to preview before authoritative admission. Payloads without a static header,
+/// capability/skill controls, and private message payloads remain excluded.
+fn streaming_action_has_safe_header(payload: &AgentActionPayload) -> bool {
+    matches!(
+        payload,
+        AgentActionPayload::ApplyPatch { .. }
+            | AgentActionPayload::ConfigChange { .. }
+            | AgentActionPayload::MemorySearch { .. }
+            | AgentActionPayload::MemoryStore { .. }
+            | AgentActionPayload::IssueAdd { .. }
+            | AgentActionPayload::IssueUpdate { .. }
+            | AgentActionPayload::IssueQuery { .. }
+            | AgentActionPayload::IssueDelete { .. }
+            | AgentActionPayload::McpServerSearch { .. }
+            | AgentActionPayload::McpServerGet { .. }
+            | AgentActionPayload::McpCall { .. }
+            | AgentActionPayload::SpawnAgent { .. }
+    )
 }
 
 /// Returns the direct JSON object or the body of one recognized MAAP fence.
@@ -1011,6 +1161,12 @@ mod tests {
                     text: "😀".to_string(),
                 },
                 StreamingPresentationEvent::RationaleTextComplete,
+                StreamingPresentationEvent::ShellCommandSummaryStarted { action_index: 0 },
+                StreamingPresentationEvent::ShellCommandSummaryTextDelta {
+                    action_index: 0,
+                    text: "Inspect".to_string(),
+                },
+                StreamingPresentationEvent::ShellCommandSummaryTextComplete { action_index: 0 },
                 StreamingPresentationEvent::ShellCommandStarted { action_index: 0 },
                 StreamingPresentationEvent::ShellCommandTextDelta {
                     action_index: 0,
@@ -1026,6 +1182,102 @@ mod tests {
                     text: "b'".to_string(),
                 },
                 StreamingPresentationEvent::ShellCommandTextComplete { action_index: 0 },
+            ]
+        );
+    }
+
+    /// Verifies shell summaries stream before their action closes while web
+    /// and fetch headers appear only after their direct safe field is closed.
+    #[test]
+    fn streaming_presentation_extractor_emits_safe_summary_and_header_previews_early() {
+        let mut extractor = StreamingPresentationExtractor::default();
+        assert_eq!(
+            extractor
+                .push_delta(r#"{"actions":[{"type":"shell_command","summary":"Inspect current"#,),
+            vec![
+                StreamingPresentationEvent::ShellCommandSummaryStarted { action_index: 0 },
+                StreamingPresentationEvent::ShellCommandSummaryTextDelta {
+                    action_index: 0,
+                    text: "Inspect current".to_string(),
+                },
+            ]
+        );
+        assert_eq!(
+            extractor.push_delta(
+                r#" files","command":"pwd"},{"type":"web_search","query":"streaming previews"#
+            ),
+            vec![
+                StreamingPresentationEvent::ShellCommandSummaryTextDelta {
+                    action_index: 0,
+                    text: " files".to_string(),
+                },
+                StreamingPresentationEvent::ShellCommandSummaryTextComplete { action_index: 0 },
+                StreamingPresentationEvent::ShellCommandStarted { action_index: 0 },
+                StreamingPresentationEvent::ShellCommandTextDelta {
+                    action_index: 0,
+                    text: "pwd".to_string(),
+                },
+                StreamingPresentationEvent::ShellCommandTextComplete { action_index: 0 },
+            ]
+        );
+        assert_eq!(
+            extractor.push_delta(r#""},{"type":"fetch_url","url":"https://example.test"#),
+            vec![StreamingPresentationEvent::ActionHeader {
+                action_index: 1,
+                header: Box::new(StreamingActionHeader::WebSearch {
+                    query: "streaming previews".to_string(),
+                }),
+            }]
+        );
+        assert_eq!(
+            extractor.push_delta(r#"/guide"}] }"#),
+            vec![StreamingPresentationEvent::ActionHeader {
+                action_index: 2,
+                header: Box::new(StreamingActionHeader::FetchUrl {
+                    url: "https://example.test/guide".to_string(),
+                }),
+            }]
+        );
+    }
+
+    /// Verifies a complete safe action uses the settled parser and formatter
+    /// contract, while private message payloads never enter the preview path.
+    #[test]
+    fn streaming_presentation_extractor_emits_complete_safe_headers_only() {
+        let events = StreamingPresentationExtractor::default().push_delta(
+            r#"{"actions":[{"type":"mcp_call","server":"github","tool":"search","arguments":{"query":"stream previews"}},{"type":"config_change","setting_path":"theme.active","operation":"set","value":"night"},{"type":"send_message","recipient":"agent-2","content_type":"text/plain","payload":"private"}]}"#,
+        );
+        assert_eq!(
+            events,
+            vec![
+                StreamingPresentationEvent::ActionHeader {
+                    action_index: 0,
+                    header: Box::new(StreamingActionHeader::Action {
+                        action: Box::new(crate::AgentAction {
+                            id: String::new(),
+                            rationale: String::new(),
+                            payload: AgentActionPayload::McpCall {
+                                server: "github".to_string(),
+                                tool: "search".to_string(),
+                                arguments_json: r#"{"query":"stream previews"}"#.to_string(),
+                            },
+                        }),
+                    }),
+                },
+                StreamingPresentationEvent::ActionHeader {
+                    action_index: 1,
+                    header: Box::new(StreamingActionHeader::Action {
+                        action: Box::new(crate::AgentAction {
+                            id: String::new(),
+                            rationale: String::new(),
+                            payload: AgentActionPayload::ConfigChange {
+                                setting_path: "theme.active".to_string(),
+                                operation: "set".to_string(),
+                                value: Some("night".to_string()),
+                            },
+                        }),
+                    }),
+                },
             ]
         );
     }

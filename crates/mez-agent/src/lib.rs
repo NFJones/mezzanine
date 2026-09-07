@@ -336,7 +336,7 @@ pub use maap::{
     agent_output_content_type_is_diff, agent_output_content_type_is_markdown, is_valid_skill_name,
     normalize_agent_output_content_type, parse_fenced_maap_action_batch,
     parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json,
-    parse_maap_action_batch_json_for_turn,
+    parse_maap_action_batch_json_for_turn, parse_maap_action_json,
 };
 pub use macro_workflow::{
     MACRO_FILE_NAME, MACRO_STEPS_HEADING, MAX_MACRO_FILE_BYTES, MAX_MACRO_STEPS, MacroCatalog,
@@ -401,9 +401,9 @@ pub use permissions::{
     PermissionPreset, RuleDecision,
 };
 pub use progress::{
-    RationaleSuppression, StreamingPresentationEvent, StreamingPresentationExtractor,
-    StreamingSayEvent, StreamingSayExtractor, normalize_progress_say_entry,
-    normalize_rationale_entry, progress_say_entries_are_redundant,
+    RationaleSuppression, StreamingActionHeader, StreamingPresentationEvent,
+    StreamingPresentationExtractor, StreamingSayEvent, StreamingSayExtractor,
+    normalize_progress_say_entry, normalize_rationale_entry, progress_say_entries_are_redundant,
     progress_say_entries_for_execution, progress_say_significant_tokens, progress_say_stem_token,
     progress_say_token_is_stopword, push_progress_say_token, rationale_entries_are_redundant,
     rationale_entries_for_execution, rationale_entry_repeats_existing,

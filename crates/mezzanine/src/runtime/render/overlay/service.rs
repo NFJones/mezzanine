@@ -1152,6 +1152,48 @@ impl RuntimeSessionService {
             return Ok(None);
         };
         record_browser.browser.set_active_index(active_index);
+        if input == b"y" {
+            let outcome = record_browser
+                .browser
+                .apply_action(mez_mux::record_browser::RecordBrowserAction::CopyActive)?;
+            let mez_mux::record_browser::RecordBrowserOutcome::CopyRequested { markdown } = outcome
+            else {
+                record_browser
+                    .browser
+                    .set_error(Some("No focused record is available to copy.".to_string()));
+                return Ok(Some(render_record_browser_overlay(
+                    overlay,
+                    &self.presentation.settings.ui_theme,
+                    terminal_width,
+                    prose_width,
+                )));
+            };
+            self.presentation.copy.paste_buffers.set_with_origin(
+                "record-browser",
+                &markdown,
+                Some("display-overlay:record-browser".to_string()),
+            )?;
+            if !self.presentation.copy.host_clipboard.copy(&markdown) {
+                record_browser.browser.set_error(Some(
+                    "Could not copy the focused record to the host clipboard.".to_string(),
+                ));
+                return Ok(Some(render_record_browser_overlay(
+                    overlay,
+                    &self.presentation.settings.ui_theme,
+                    terminal_width,
+                    prose_width,
+                )));
+            }
+            record_browser
+                .browser
+                .set_error(Some("Focused record copied to clipboard.".to_string()));
+            return Ok(Some(render_record_browser_overlay(
+                overlay,
+                &self.presentation.settings.ui_theme,
+                terminal_width,
+                prose_width,
+            )));
+        }
         let action = match input {
             b"i" if matches!(
                 record_browser.source,

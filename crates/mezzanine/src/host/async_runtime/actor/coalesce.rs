@@ -262,7 +262,8 @@ pub(super) fn runtime_event_requires_registry_persistence(event: &RuntimeEvent) 
         | RuntimeEvent::StatusPill(_)
         | RuntimeEvent::PaneStatusProvider(_)
         | RuntimeEvent::Timer(_)
-        | RuntimeEvent::NativeShellProgress(_) => false,
+        | RuntimeEvent::NativeShellProgress(_)
+        | RuntimeEvent::ApprovedExternalActionProgress(_) => false,
         RuntimeEvent::Client(_)
         | RuntimeEvent::Process(_)
         | RuntimeEvent::AgentProvider(_)

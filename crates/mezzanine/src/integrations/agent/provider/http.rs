@@ -12,6 +12,11 @@ use std::pin::Pin;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
+type AsyncProviderBodyChunkObserver<'a> =
+    dyn FnMut(Vec<u8>) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'a;
+type AsyncProviderSseEventObserver<'a> =
+    dyn FnMut(SseEvent) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'a;
+
 use mez_agent::{
     DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, IncrementalSseDecoder, ProviderHttpError,
     ProviderHttpRequest, ProviderHttpResponse, ProviderHttpResult, ProviderHttpTimeoutPhase,
@@ -47,6 +52,25 @@ pub trait AsyncProviderHttpTransport: Send + Sync {
         &'a self,
         request: &'a ProviderHttpRequest,
     ) -> Pin<Box<dyn Future<Output = ProviderHttpResult<ProviderHttpResponse>> + Send + 'a>>;
+
+    /// Sends one request and reports retained ordinary response-body chunks.
+    ///
+    /// Compatibility transports may retain a complete body and use this
+    /// default implementation. Streaming transports override it so semantic
+    /// network actions can publish safe cumulative projections before EOF.
+    fn send_async_with_body_chunks<'a>(
+        &'a self,
+        request: &'a ProviderHttpRequest,
+        on_chunk: &'a mut (dyn FnMut(Vec<u8>) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send),
+    ) -> Pin<Box<dyn Future<Output = ProviderHttpResult<ProviderHttpResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            let response = self.send_async(request).await?;
+            if (200..300).contains(&response.status_code) && !response.body.is_empty() {
+                on_chunk(response.body.as_bytes().to_vec()).await;
+            }
+            Ok(response)
+        })
+    }
 
     /// Sends one request and reports parsed SSE events as they become available.
     ///
@@ -321,11 +345,32 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
         })
     }
 
+    /// Streams retained ordinary response bytes during the shared body read.
+    fn send_async_with_body_chunks<'a>(
+        &'a self,
+        request: &'a ProviderHttpRequest,
+        on_chunk: &'a mut (dyn FnMut(Vec<u8>) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send),
+    ) -> Pin<Box<dyn Future<Output = ProviderHttpResult<ProviderHttpResponse>> + Send + 'a>> {
+        self.send_async_with_observers(request, None, Some(on_chunk))
+    }
+
     /// Streams complete SSE events to the provider decoder during body reads.
     fn send_async_with_sse_events<'a>(
         &'a self,
         request: &'a ProviderHttpRequest,
         on_event: &'a mut (dyn FnMut(SseEvent) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send),
+    ) -> Pin<Box<dyn Future<Output = ProviderHttpResult<ProviderHttpResponse>> + Send + 'a>> {
+        self.send_async_with_observers(request, Some(on_event), None)
+    }
+}
+
+impl ReqwestProviderHttpTransport {
+    /// Runs the shared bounded response loop with optional typed observers.
+    fn send_async_with_observers<'a>(
+        &'a self,
+        request: &'a ProviderHttpRequest,
+        mut on_event: Option<&'a mut AsyncProviderSseEventObserver<'a>>,
+        mut on_body_chunk: Option<&'a mut AsyncProviderBodyChunkObserver<'a>>,
     ) -> Pin<Box<dyn Future<Output = ProviderHttpResult<ProviderHttpResponse>> + Send + 'a>> {
         Box::pin(async move {
             request.timeouts.validate()?;
@@ -460,6 +505,12 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
                     let remaining = response_limit.saturating_sub(response_bytes);
                     if retain_body && remaining > 0 {
                         body.extend_from_slice(&chunk[..remaining]);
+                        if (200..300).contains(&status_code)
+                            && !expects_event_stream
+                            && let Some(observer) = on_body_chunk.as_mut()
+                        {
+                            observer(chunk[..remaining].to_vec()).await;
+                        }
                     }
                     body_truncated = true;
                     break;
@@ -467,6 +518,12 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
                 response_bytes = response_bytes.saturating_add(chunk.len());
                 if retain_body {
                     body.extend_from_slice(&chunk);
+                    if (200..300).contains(&status_code)
+                        && !expects_event_stream
+                        && let Some(observer) = on_body_chunk.as_mut()
+                    {
+                        observer(chunk.to_vec()).await;
+                    }
                 }
                 if let Some(decoder) = event_decoder.as_mut() {
                     let mut decoded_events = Vec::new();
@@ -479,7 +536,9 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
                         })
                         .map_err(|error| ProviderHttpError::invalid_state(error.message()))?;
                     for event in decoded_events {
-                        on_event(event).await;
+                        if let Some(observer) = on_event.as_mut() {
+                            observer(event).await;
+                        }
                     }
                 }
                 if expects_event_stream
@@ -507,7 +566,9 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
                     )
                     .map_err(|error| ProviderHttpError::invalid_state(error.message()))?;
                 for event in decoded_events {
-                    on_event(event).await;
+                    if let Some(observer) = on_event.as_mut() {
+                        observer(event).await;
+                    }
                 }
             }
             if expects_event_stream
@@ -929,6 +990,76 @@ mod provider_transport_tests {
                 .map(String::as_str),
             Some("incremental")
         );
+    }
+
+    /// Verifies ordinary retained body bytes reach semantic consumers before EOF.
+    ///
+    /// The server withholds its final chunk until the first callback is observed.
+    /// This proves the ordinary-body path uses the shared incremental response
+    /// reader rather than replaying one buffered body after completion.
+    #[tokio::test]
+    async fn provider_transport_streams_ordinary_body_chunks_before_eof() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            loop {
+                let read = stream.read(&mut buffer).await.unwrap();
+                request.extend_from_slice(&buffer[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            stream.write_all(b"5\r\nearly\r\n").await.unwrap();
+            stream.flush().await.unwrap();
+            release_rx.await.unwrap();
+            stream.write_all(b"4\r\nlate\r\n0\r\n\r\n").await.unwrap();
+            stream.flush().await.unwrap();
+        });
+        let request = ProviderHttpRequest {
+            method: "GET".to_string(),
+            url: format!("http://{address}/body"),
+            headers: BTreeMap::new(),
+            body: String::new(),
+            timeouts: ProviderHttpTimeouts::from_total(1_000),
+            max_response_bytes: Some(64),
+        };
+        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel(4);
+        let client = tokio::spawn(async move {
+            let mut on_chunk = move |chunk| {
+                let _ = progress_tx.try_send(chunk);
+                Box::pin(async {}) as std::pin::Pin<Box<dyn Future<Output = ()> + Send>>
+            };
+            ReqwestProviderHttpTransport
+                .send_async_with_body_chunks(&request, &mut on_chunk)
+                .await
+        });
+
+        let first = tokio::time::timeout(Duration::from_millis(250), progress_rx.recv())
+            .await
+            .expect("first ordinary body chunk should arrive before EOF")
+            .expect("ordinary body progress channel should remain open");
+        assert_eq!(first, b"early");
+        assert!(!client.is_finished());
+        release_tx.send(()).unwrap();
+
+        let second = progress_rx.recv().await.unwrap();
+        assert_eq!(second, b"late");
+        let response = client.await.unwrap().unwrap();
+        server.await.unwrap();
+        assert_eq!(response.body, "earlylate");
+        assert!(!response.headers.contains_key("x-mez-stream-decoded"));
     }
 
     /// Verifies callers can request a lower retained response-body cap than

@@ -1043,12 +1043,18 @@ mod tests {
             })
             .expect("spawn_agent schema variant");
 
-        assert!(spawn["properties"]["size"]["description"]
-            .as_str()
-            .is_some_and(|description| description.contains("smallest size adequate")));
-        assert!(spawn["properties"]["reasoning_effort"]["description"]
-            .as_str()
-            .is_some_and(|description| description.contains("Use validation to detect and correct")));
+        assert!(
+            spawn["properties"]["size"]["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("smallest size adequate"))
+        );
+        assert!(
+            spawn["properties"]["reasoning_effort"]["description"]
+                .as_str()
+                .is_some_and(
+                    |description| description.contains("Use validation to detect and correct")
+                )
+        );
     }
 
     /// Verifies third-party MCP input schemas are normalized into the OpenAI

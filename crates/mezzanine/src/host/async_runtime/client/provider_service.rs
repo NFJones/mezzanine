@@ -1,25 +1,25 @@
 //! Agent-provider worker scheduling, dispatch execution, recovery, and accounting.
 
 use super::{
-    ActionStatus, AgentActionPayload, AgentCompactionEvent, AgentId, AgentProviderEvent,
-    AgentRememberEvent, AgentTurnExecution, AgentTurnLedger, AgentTurnRecord, AgentTurnRunner,
-    AgentTurnState, AsyncAgentProviderPollReport, AsyncAgentProviderServiceConfig,
-    AsyncModelProvider, AsyncRuntimeSessionHandle, ContextSourceKind, JoinSet, MezError,
-    MezErrorKind, ModelMessage, ModelMessageRole, ModelProfile, ModelRequest, ModelResponse,
-    ProviderErrorRetryClass, ReqwestProviderHttpTransport, Result, RuntimeAgentCompactionDispatch,
+    AgentCompactionEvent, AgentId, AgentProviderEvent, AgentRememberEvent, AgentTurnLedger,
+    AgentTurnRecord, AgentTurnRunner, AgentTurnState, AsyncAgentProviderPollReport,
+    AsyncAgentProviderServiceConfig, AsyncModelProvider, AsyncRuntimeSessionHandle,
+    ContextSourceKind, JoinSet, MezError, MezErrorKind, ModelMessage, ModelMessageRole,
+    ModelProfile, ModelRequest, ModelResponse, ProviderErrorRetryClass,
+    ReqwestProviderHttpTransport, Result, RuntimeAgentCompactionDispatch,
     RuntimeAgentProviderDispatch, RuntimeAgentProviderDispatchProvider,
     RuntimeAgentRememberDispatch, RuntimeApprovedExternalActionDispatch,
     RuntimeApprovedExternalActionOutcome, RuntimeEvent, RuntimeEventBatch, RuntimeLifecycleState,
     RuntimeNativeShellDispatch, RuntimeNativeShellFailure, RuntimeNativeShellOutcome,
-    RuntimeSideEffect, execute_network_action_with_transport_async,
-    is_terminal_runtime_lifecycle_state, provider_error_retry_class,
+    RuntimeSideEffect, is_terminal_runtime_lifecycle_state, provider_error_retry_class,
     runtime_execute_auto_sizing_with_async_provider, sleep, watch,
 };
+use crate::integrations::agent::network::execute_network_action_with_transport_async_with_progress;
 use crate::integrations::agent::provider::{
     ObservedAsyncModelProvider, ProviderRequestPurpose, ProviderWireRequestObservation,
     ProviderWireRequestObserver, STREAMING_SAY_TEXT_CHUNK_LIMIT_BYTES,
 };
-use crate::runtime::RuntimeAgentProviderWorkerOutcome;
+use crate::runtime::{RuntimeAgentProviderWorkerOutcome, RuntimeApprovedExternalActionProgress};
 use std::time::{Duration, Instant};
 
 /// Maximum ordered streaming events buffered between a provider and the actor.
@@ -36,14 +36,20 @@ fn streaming_say_event_changes_projection(event: &mez_agent::StreamingSayEvent) 
     match event {
         mez_agent::StreamingSayEvent::RationaleTextDelta { text }
         | mez_agent::StreamingSayEvent::TextDelta { text, .. }
-        | mez_agent::StreamingSayEvent::ShellCommandTextDelta { text, .. } => !text.is_empty(),
+        | mez_agent::StreamingSayEvent::ShellCommandTextDelta { text, .. }
+        | mez_agent::StreamingSayEvent::ShellCommandSummaryTextDelta { text, .. } => {
+            !text.is_empty()
+        }
         mez_agent::StreamingSayEvent::ResponseStarted { .. }
         | mez_agent::StreamingSayEvent::Started { .. }
         | mez_agent::StreamingSayEvent::RationaleStarted
         | mez_agent::StreamingSayEvent::ShellCommandStarted { .. }
+        | mez_agent::StreamingSayEvent::ShellCommandSummaryStarted { .. }
         | mez_agent::StreamingSayEvent::TextComplete { .. }
         | mez_agent::StreamingSayEvent::RationaleTextComplete
-        | mez_agent::StreamingSayEvent::ShellCommandTextComplete { .. } => false,
+        | mez_agent::StreamingSayEvent::ShellCommandTextComplete { .. }
+        | mez_agent::StreamingSayEvent::ShellCommandSummaryTextComplete { .. }
+        | mez_agent::StreamingSayEvent::ActionHeader { .. } => false,
     }
 }
 
@@ -95,6 +101,23 @@ fn push_coalesced_streaming_say_event(
                 return;
             }
             events.push(mez_agent::StreamingSayEvent::ShellCommandTextDelta { action_index, text });
+        }
+        mez_agent::StreamingSayEvent::ShellCommandSummaryTextDelta { action_index, text } => {
+            if let Some(mez_agent::StreamingSayEvent::ShellCommandSummaryTextDelta {
+                action_index: previous_action_index,
+                text: previous_text,
+            }) = events.last_mut()
+                && *previous_action_index == action_index
+                && previous_text.len().saturating_add(text.len())
+                    <= STREAMING_SAY_TEXT_CHUNK_LIMIT_BYTES
+            {
+                previous_text.push_str(&text);
+                return;
+            }
+            events.push(mez_agent::StreamingSayEvent::ShellCommandSummaryTextDelta {
+                action_index,
+                text,
+            });
         }
         event => events.push(event),
     }
@@ -656,7 +679,12 @@ async fn execute_approved_external_action(
     handle: AsyncRuntimeSessionHandle,
     dispatch: RuntimeApprovedExternalActionDispatch,
 ) -> Result<AsyncAgentProviderWorkerResult> {
-    let RuntimeApprovedExternalActionDispatch { turn, action, mcp } = dispatch;
+    let RuntimeApprovedExternalActionDispatch {
+        turn,
+        action,
+        attempt,
+        mcp,
+    } = dispatch;
     let turn_id = turn.turn_id.clone();
     let action_id = action.id.clone();
     let (result, mcp_transport) = if let Some(mcp) = mcp {
@@ -681,15 +709,71 @@ async fn execute_approved_external_action(
         (result, Some((server_id, transport)))
     } else {
         let transport = ReqwestProviderHttpTransport;
-        (
-            execute_network_action_with_transport_async(&turn, &action, &transport).await,
-            None,
-        )
+        let (progress_sender, mut progress_receiver) = tokio::sync::watch::channel(None);
+        let mut on_progress = move |source| {
+            let _ = progress_sender.send(Some(source));
+        };
+        let network_execution = execute_network_action_with_transport_async_with_progress(
+            &turn,
+            &action,
+            &transport,
+            &mut on_progress,
+        );
+        tokio::pin!(network_execution);
+        let mut revision = 0_u64;
+        let result = loop {
+            tokio::select! {
+                result = &mut network_execution => break result,
+                changed = progress_receiver.changed() => {
+                    if changed.is_err() {
+                        continue;
+                    }
+                    let Some(source) = progress_receiver.borrow_and_update().clone() else {
+                        continue;
+                    };
+                    revision = revision.saturating_add(1);
+                    let mut batch = RuntimeEventBatch::new();
+                    batch.push(RuntimeEvent::ApprovedExternalActionProgress(
+                        RuntimeApprovedExternalActionProgress {
+                            presentation: mez_agent::ActionPresentationProgress::new(
+                                turn_id.clone(),
+                                action_id.clone(),
+                                mez_agent::ActionPresentationExecutionIdentity::Attempt(attempt.clone()),
+                                revision,
+                                mez_agent::ActionPresentationComponentIdentity::ProvisionalReadBody,
+                                source,
+                            ),
+                        },
+                    ));
+                    let _ = handle.submit_runtime_events(batch).await;
+                }
+            }
+        };
+        let final_source = { progress_receiver.borrow_and_update().clone() };
+        if let Some(source) = final_source {
+            revision = revision.saturating_add(1);
+            let mut batch = RuntimeEventBatch::new();
+            batch.push(RuntimeEvent::ApprovedExternalActionProgress(
+                RuntimeApprovedExternalActionProgress {
+                    presentation: mez_agent::ActionPresentationProgress::new(
+                        turn_id.clone(),
+                        action_id.clone(),
+                        mez_agent::ActionPresentationExecutionIdentity::Attempt(attempt.clone()),
+                        revision,
+                        mez_agent::ActionPresentationComponentIdentity::ProvisionalReadBody,
+                        source,
+                    ),
+                },
+            ));
+            let _ = handle.submit_runtime_events(batch).await;
+        }
+        (result, None)
     };
     handle
         .complete_approved_external_action(RuntimeApprovedExternalActionOutcome {
             turn_id,
             action_id,
+            attempt,
             result,
             mcp_transport,
         })
@@ -1253,7 +1337,7 @@ async fn execute_runtime_agent_provider_dispatch(
                     output_progress_sender.clone(),
                 )
                 .await?;
-            let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
+            let mut execution = execution;
             execution.routing_token_usage_by_model = routing_token_usage_by_model;
             Ok(RuntimeAgentProviderWorkerOutcome::Execution(Box::new(
                 execution,
@@ -1293,7 +1377,7 @@ async fn execute_runtime_agent_provider_dispatch(
                     output_progress_sender.clone(),
                 )
                 .await?;
-            let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
+            let mut execution = execution;
             execution.routing_token_usage_by_model = routing_token_usage_by_model;
             Ok(RuntimeAgentProviderWorkerOutcome::Execution(Box::new(
                 execution,
@@ -1333,7 +1417,7 @@ async fn execute_runtime_agent_provider_dispatch(
                     output_progress_sender.clone(),
                 )
                 .await?;
-            let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
+            let mut execution = execution;
             execution.routing_token_usage_by_model = routing_token_usage_by_model;
             Ok(RuntimeAgentProviderWorkerOutcome::Execution(Box::new(
                 execution,
@@ -1373,63 +1457,13 @@ async fn execute_runtime_agent_provider_dispatch(
                     output_progress_sender.clone(),
                 )
                 .await?;
-            let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
+            let mut execution = execution;
             execution.routing_token_usage_by_model = routing_token_usage_by_model;
             Ok(RuntimeAgentProviderWorkerOutcome::Execution(Box::new(
                 execution,
             )))
         }
     }
-}
-
-/// Executes runtime-owned network actions before returning provider work to the
-/// actor.
-///
-/// Provider workers already run outside the single-owner session actor. Keeping
-/// `fetch_url` and `web_search` HTTP there prevents a large research batch from
-/// monopolizing the actor while still returning ordinary action results for the
-/// actor to present, audit, persist, and feed into any continuation request.
-pub(in crate::host::async_runtime) async fn execute_provider_worker_network_actions(
-    turn: &AgentTurnRecord,
-    mut execution: AgentTurnExecution,
-) -> Result<AgentTurnExecution> {
-    if execution.terminal_state != AgentTurnState::Running {
-        return Ok(execution);
-    }
-    let Some(batch) = execution.response.action_batch.clone() else {
-        return Ok(execution);
-    };
-    let transport = ReqwestProviderHttpTransport;
-    for index in 0..execution.action_results.len() {
-        if execution.action_results[index].status != ActionStatus::Running
-            || !matches!(
-                execution.action_results[index].action_type,
-                "web_search" | "fetch_url"
-            )
-        {
-            continue;
-        }
-        let action_id = execution.action_results[index].action_id.clone();
-        let action = batch
-            .actions
-            .iter()
-            .find(|action| action.id == action_id)
-            .cloned()
-            .ok_or_else(|| {
-                MezError::invalid_state("running network result does not match an action")
-            })?;
-        if !matches!(
-            action.payload,
-            AgentActionPayload::WebSearch { .. } | AgentActionPayload::FetchUrl { .. }
-        ) {
-            continue;
-        }
-        execution.action_results[index] =
-            execute_network_action_with_transport_async(turn, &action, &transport).await?;
-    }
-    execution.terminal_state =
-        mez_agent::turn_state_from_action_results(&execution.action_results, execution.final_turn);
-    Ok(execution)
 }
 
 /// Executes one model-backed conversation compaction request.

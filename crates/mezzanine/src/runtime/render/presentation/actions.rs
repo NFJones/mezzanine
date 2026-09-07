@@ -248,6 +248,24 @@ pub(crate) fn agent_action_execution_display_header(action: &AgentAction) -> Opt
     Some(header)
 }
 
+/// Formats one safe provisional action-header source with the same compact
+/// preview rules used by authoritative action execution headers.
+pub(crate) fn streaming_action_execution_display_header(
+    header: &mez_agent::StreamingActionHeader,
+) -> String {
+    match header {
+        mez_agent::StreamingActionHeader::WebSearch { query } => {
+            format!("web search: {}", agent_action_display_preview(query))
+        }
+        mez_agent::StreamingActionHeader::FetchUrl { url } => {
+            format!("fetch url: {}", agent_action_display_preview(url))
+        }
+        mez_agent::StreamingActionHeader::Action { action } => {
+            agent_action_execution_display_header(action).unwrap_or_default()
+        }
+    }
+}
+
 /// Returns model-authored action summary lines for normal thinking logs.
 pub(crate) fn agent_action_model_thinking_lines(action: &AgentAction) -> Vec<String> {
     match &action.payload {

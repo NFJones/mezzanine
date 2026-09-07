@@ -249,7 +249,7 @@ impl RuntimeSessionService {
             .retain(|(pending_turn_id, _)| pending_turn_id != turn_id);
         self.agent
             .claimed_approved_external_actions
-            .retain(|(claimed_turn_id, _)| claimed_turn_id != turn_id);
+            .retain(|(claimed_turn_id, _), _| claimed_turn_id != turn_id);
         self.agent
             .pending_native_shell_dispatches
             .retain(|(pending_turn_id, _), _| pending_turn_id != turn_id);

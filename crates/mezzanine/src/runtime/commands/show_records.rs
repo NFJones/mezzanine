@@ -83,10 +83,10 @@ impl RuntimeSessionService {
         ]);
         browser.set_help(
             Some(
-                "**Keys:** `↑`/`↓` focus approval ID · `Enter` open · `a` approve once · `d` deny · `/` search"
+                "**Keys:** `↑`/`↓` focus approval ID · `Enter` open · `y` copy · `a` approve once · `d` deny · `/` search"
                     .to_string(),
             ),
-            Some("**Keys:** `Esc` back · `a` approve once · `d` deny · `/` search".to_string()),
+            Some("**Keys:** `Esc` back · `y` copy · `a` approve once · `d` deny · `/` search".to_string()),
         );
         browser.set_empty_message(Some("No pending approvals.".to_string()));
         Ok(browser)
@@ -1038,10 +1038,10 @@ fn configure_context_record_browser(browser: &mut RecordBrowser) {
     ]);
     browser.set_help(
         Some(
-            "**Keys:** `↑`/`↓` focus sequence ID · `Enter` open · `e` edit · `d` delete · `/` search"
+            "**Keys:** `↑`/`↓` focus sequence ID · `Enter` open · `y` copy · `e` edit · `d` delete · `/` search"
                 .to_string(),
         ),
-        Some("**Keys:** `Esc` back · `e` edit · `d` delete · `/` search".to_string()),
+        Some("**Keys:** `Esc` back · `y` copy · `e` edit · `d` delete · `/` search".to_string()),
     );
     browser.set_empty_message(Some(
         "No transcript entries found for the active pane.".to_string(),
@@ -1065,8 +1065,8 @@ fn configure_issue_record_browser(browser: &mut RecordBrowser) {
         ("Updated".to_string(), "updated_at_unix_seconds".to_string()),
     ]);
     browser.set_help(
-        Some("**Keys:** `↑`/`↓` focus issue ID · `Enter` open · `e` body · `E` notes · `f` fix issue · `a` all/default scope · `r` closed/active · `k` kind · `p` project · `x` text · `d` delete · `s` save".to_string()),
-        Some("**Keys:** `Esc` back · `e` body · `E` notes · `f` fix issue · `a` all/default scope · `r` closed/active · `k` kind · `p` project · `x` text · `d` delete · `s` save".to_string()),
+        Some("**Keys:** `↑`/`↓` focus issue ID · `Enter` open · `y` copy · `e` body · `E` notes · `f` fix issue · `a` all/default scope · `r` closed/active · `k` kind · `p` project · `x` text · `d` delete · `s` save".to_string()),
+        Some("**Keys:** `Esc` back · `y` copy · `e` body · `E` notes · `f` fix issue · `a` all/default scope · `r` closed/active · `k` kind · `p` project · `x` text · `d` delete · `s` save".to_string()),
     );
     browser.set_empty_message(Some("No issues found.".to_string()));
 }
@@ -1087,8 +1087,8 @@ fn configure_memory_record_browser(browser: &mut RecordBrowser) {
         ("Updated".to_string(), "updated_at_unix_seconds".to_string()),
     ]);
     browser.set_help(
-        Some("**Keys:** `↑`/`↓` focus memory UUID · `Enter` open · `e` edit · `a` all/default scope · `k` kind · `p` project · `x` text · `d` delete · `s` save".to_string()),
-        Some("**Keys:** `Esc` back · `e` edit · `a` all/default scope · `k` kind · `p` project · `x` text · `d` delete · `s` save".to_string()),
+        Some("**Keys:** `↑`/`↓` focus memory UUID · `Enter` open · `y` copy · `e` edit · `a` all/default scope · `k` kind · `p` project · `x` text · `d` delete · `s` save".to_string()),
+        Some("**Keys:** `Esc` back · `y` copy · `e` edit · `a` all/default scope · `k` kind · `p` project · `x` text · `d` delete · `s` save".to_string()),
     );
     browser.set_empty_message(Some("No memories found.".to_string()));
 }

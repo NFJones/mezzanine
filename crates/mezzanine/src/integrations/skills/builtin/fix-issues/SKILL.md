@@ -18,7 +18,7 @@ For each issue, inspect enough code, tests, docs, and specifications to make a c
 - implementation checklist/status;
 - validation steps and results.
 
-Use subagents as the normal workflow for nontrivial issues: have a **large** model plan the work, then spawn a **medium** model to implement it; use a **small** model only for tightly scoped, low-risk implementation. Keep the issue plan, implementation, and validation aligned with the selected issue.
+Use subagents as the normal workflow for nontrivial issues: have a **large** model plan the work, then spawn a **medium** model to implement it; use a **small** model only for tightly scoped, low-risk implementation. Keep the issue plan, implementation, and validation aligned with the selected issue. Once an issue plan is complete, use a **large** model to review the implementation for defects and then plan fixes for identified defects as a part of the issue. Ensure that subagents are explicitly told the scope and bounds of their respective tasks and when they should return.
 
 Implement the complete fix and add or update focused regression coverage when feasible. Every issue plan must include validation steps; run them before resolution and record the outcome.
 

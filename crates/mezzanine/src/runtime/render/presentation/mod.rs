@@ -44,6 +44,7 @@ mod text;
 #[cfg(test)]
 pub(crate) use actions::{
     agent_action_execution_display_header, agent_thinking_display_lines_for_width,
+    streaming_action_execution_display_header,
 };
 #[cfg(test)]
 pub(crate) use diff::{

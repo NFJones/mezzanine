@@ -1140,6 +1140,18 @@ pub fn parse_maap_action_batch_json(batch_json: &str) -> MaapContractResult<Maap
     parse_maap_action_batch_json_inner(batch_json, None)
 }
 
+/// Parses one complete MAAP action object without assigning a runtime action
+/// identifier or authorizing execution.
+///
+/// This is used by presentation-only consumers that need the same field
+/// defaults and canonical argument decoding as a settled MAAP action.
+pub fn parse_maap_action_json(action_json: &str) -> MaapContractResult<AgentAction> {
+    let value = serde_json::from_str::<serde_json::Value>(action_json).map_err(|error| {
+        MaapContractError::invalid_args(format!("maap action is invalid JSON: {error}"))
+    })?;
+    parse_maap_action_value(0, &value)
+}
+
 /// Parses one compact provider-native MAAP batch JSON object and fills
 /// runtime-owned identity fields from the active turn.
 pub fn parse_maap_action_batch_json_for_turn(

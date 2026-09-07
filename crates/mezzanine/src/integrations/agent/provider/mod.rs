@@ -482,6 +482,18 @@ fn bounded_streaming_say_events(
                         },
                     ),
                 ),
+                mez_agent::StreamingSayEvent::ShellCommandSummaryTextDelta {
+                    action_index,
+                    text,
+                } => (
+                    text,
+                    Box::new(move |text| {
+                        mez_agent::StreamingSayEvent::ShellCommandSummaryTextDelta {
+                            action_index,
+                            text,
+                        }
+                    }),
+                ),
                 event => {
                     bounded.push(event);
                     continue;

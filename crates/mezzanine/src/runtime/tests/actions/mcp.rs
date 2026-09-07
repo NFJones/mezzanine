@@ -1055,6 +1055,12 @@ async fn runtime_mcp_tool_error_waits_for_sibling_actions_before_continuation() 
         )
         .await
         .unwrap();
+    let first_dispatch = service
+        .claim_approved_external_action(&turn.turn_id, &actions[0].id)
+        .unwrap()
+        .unwrap();
+    let first_attempt = first_dispatch.attempt;
+    let first_transport = first_dispatch.mcp.unwrap().transport;
 
     let tool_error = mez_agent::ActionResult::succeeded(
         &turn,
@@ -1063,13 +1069,31 @@ async fn runtime_mcp_tool_error_waits_for_sibling_actions_before_continuation() 
         Some(r#"{"is_error":true,"status":"denied"}"#.to_string()),
     );
     assert!(
+        !service
+            .complete_approved_external_action(
+                crate::runtime::RuntimeApprovedExternalActionOutcome {
+                    turn_id: turn.turn_id.clone(),
+                    action_id: actions[0].id.clone(),
+                    attempt: "external-stale".to_string(),
+                    result: Ok(tool_error.clone()),
+                    mcp_transport: None,
+                },
+            )
+            .unwrap()
+    );
+    assert_eq!(
+        service.agent_turn_executions()[&turn.turn_id].action_results[0].status,
+        ActionStatus::Running
+    );
+    assert!(
         service
             .complete_approved_external_action(
                 crate::runtime::RuntimeApprovedExternalActionOutcome {
                     turn_id: turn.turn_id.clone(),
                     action_id: actions[0].id.clone(),
+                    attempt: first_attempt,
                     result: Ok(tool_error),
-                    mcp_transport: None,
+                    mcp_transport: Some(("fixture".to_string(), first_transport)),
                 },
             )
             .unwrap()
@@ -1079,6 +1103,12 @@ async fn runtime_mcp_tool_error_waits_for_sibling_actions_before_continuation() 
         service.agent_turn_executions()[&turn.turn_id].action_results[1].status,
         ActionStatus::Running
     );
+    let second_dispatch = service
+        .claim_approved_external_action(&turn.turn_id, &actions[1].id)
+        .unwrap()
+        .unwrap();
+    let second_attempt = second_dispatch.attempt;
+    let second_transport = second_dispatch.mcp.unwrap().transport;
 
     let success = mez_agent::ActionResult::succeeded(
         &turn,
@@ -1092,8 +1122,9 @@ async fn runtime_mcp_tool_error_waits_for_sibling_actions_before_continuation() 
                 crate::runtime::RuntimeApprovedExternalActionOutcome {
                     turn_id: turn.turn_id.clone(),
                     action_id: actions[1].id.clone(),
+                    attempt: second_attempt,
                     result: Ok(success),
-                    mcp_transport: None,
+                    mcp_transport: Some(("fixture".to_string(), second_transport)),
                 },
             )
             .unwrap()

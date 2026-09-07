@@ -58,6 +58,8 @@ pub(crate) struct RuntimeApprovedExternalActionDispatch {
     pub turn: AgentTurnRecord,
     /// Approved action to execute.
     pub action: mez_agent::AgentAction,
+    /// Actor-issued generation that fences this worker's presentation updates.
+    pub attempt: String,
     /// MCP-specific transport state when the action is an MCP call.
     pub mcp: Option<RuntimeApprovedMcpActionDispatch>,
 }
@@ -80,10 +82,19 @@ pub(crate) struct RuntimeApprovedExternalActionOutcome {
     pub turn_id: String,
     /// Stable action identity within the turn.
     pub action_id: String,
+    /// Exact actor-issued generation that produced this outcome.
+    pub attempt: String,
     /// Settled result or typed execution failure.
     pub result: crate::error::Result<mez_agent::ActionResult>,
     /// MCP transport returned to actor ownership after the call.
     pub mcp_transport: Option<(String, super::RuntimeMcpTransport)>,
+}
+
+/// One bounded presentation update observed by an approved external worker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeApprovedExternalActionProgress {
+    /// Typed progress fenced by the claimed approved-external attempt.
+    pub(crate) presentation: mez_agent::ActionPresentationProgress,
 }
 
 /// Immutable spawned-shell work transferred from the runtime actor to a worker.

@@ -179,7 +179,7 @@ impl RuntimeSessionService {
                 !self
                     .agent
                     .claimed_approved_external_actions
-                    .contains(*identity)
+                    .contains_key(*identity)
             })
             .cloned()
             .collect()
@@ -190,9 +190,39 @@ impl RuntimeSessionService {
         self.agent
             .pending_approved_external_actions
             .iter()
-            .chain(self.agent.claimed_approved_external_actions.iter())
+            .chain(self.agent.claimed_approved_external_actions.keys())
             .map(|(turn_id, _)| turn_id.clone())
             .collect()
+    }
+
+    /// Reports whether one approved external-worker attempt still owns an action.
+    pub(crate) fn approved_external_action_attempt_is_current(
+        &self,
+        turn_id: &str,
+        action_id: &str,
+        attempt: &str,
+    ) -> bool {
+        self.agent
+            .claimed_approved_external_actions
+            .get(&(turn_id.to_string(), action_id.to_string()))
+            .map(String::as_str)
+            == Some(attempt)
+            && self
+                .agent_turn_executions()
+                .get(turn_id)
+                .is_some_and(|execution| {
+                    execution.action_results.iter().any(|result| {
+                        result.action_id == action_id && result.status == ActionStatus::Running
+                    })
+                })
+    }
+
+    /// Applies a safe provisional projection from a currently claimed network attempt.
+    pub(crate) fn apply_approved_external_action_progress(
+        &mut self,
+        progress: crate::runtime::RuntimeApprovedExternalActionProgress,
+    ) -> Result<bool> {
+        self.apply_action_presentation_progress(progress.presentation)
     }
 
     /// Claims one approved network or MCP action for async worker execution.
@@ -206,7 +236,7 @@ impl RuntimeSessionService {
             .agent
             .claimed_approved_external_actions
             .iter()
-            .any(|(claimed_turn_id, _)| claimed_turn_id == turn_id)
+            .any(|((claimed_turn_id, _), _)| claimed_turn_id == turn_id)
         {
             return Ok(None);
         }
@@ -214,14 +244,26 @@ impl RuntimeSessionService {
             .agent
             .pending_approved_external_actions
             .contains(&identity)
-            || !self
-                .agent
-                .claimed_approved_external_actions
-                .insert(identity.clone())
         {
             return Ok(None);
         }
-        match self.prepare_approved_external_action_dispatch(turn_id, action_id) {
+        let attempt = format!(
+            "external-{}",
+            self.agent.next_approved_external_action_attempt
+        );
+        self.agent.next_approved_external_action_attempt = self
+            .agent
+            .next_approved_external_action_attempt
+            .saturating_add(1);
+        if self
+            .agent
+            .claimed_approved_external_actions
+            .insert(identity.clone(), attempt.clone())
+            .is_some()
+        {
+            return Ok(None);
+        }
+        match self.prepare_approved_external_action_dispatch(turn_id, action_id, &attempt) {
             Ok(Some(dispatch)) => Ok(Some(dispatch)),
             Ok(None) => {
                 self.agent
@@ -236,6 +278,7 @@ impl RuntimeSessionService {
                 self.complete_approved_external_action(RuntimeApprovedExternalActionOutcome {
                     turn_id: turn_id.to_string(),
                     action_id: action_id.to_string(),
+                    attempt,
                     result: Err(error),
                     mcp_transport: None,
                 })?;
@@ -249,6 +292,7 @@ impl RuntimeSessionService {
         &mut self,
         turn_id: &str,
         action_id: &str,
+        attempt: &str,
     ) -> Result<Option<RuntimeApprovedExternalActionDispatch>> {
         let turn = self
             .agent_turn_ledger()
@@ -333,6 +377,7 @@ impl RuntimeSessionService {
                     self.complete_approved_external_action(RuntimeApprovedExternalActionOutcome {
                         turn_id: turn_id.to_string(),
                         action_id: action_id.to_string(),
+                        attempt: attempt.to_string(),
                         result: Ok(result),
                         mcp_transport: None,
                     })?;
@@ -360,6 +405,7 @@ impl RuntimeSessionService {
                             RuntimeApprovedExternalActionOutcome {
                                 turn_id: turn_id.to_string(),
                                 action_id: action_id.to_string(),
+                                attempt: attempt.to_string(),
                                 result: Ok(result),
                                 mcp_transport: None,
                             },
@@ -396,6 +442,7 @@ impl RuntimeSessionService {
                     self.complete_approved_external_action(RuntimeApprovedExternalActionOutcome {
                         turn_id: turn_id.to_string(),
                         action_id: action_id.to_string(),
+                        attempt: attempt.to_string(),
                         result: Ok(result),
                         mcp_transport: None,
                     })?;
@@ -413,6 +460,7 @@ impl RuntimeSessionService {
         Ok(Some(RuntimeApprovedExternalActionDispatch {
             turn,
             action,
+            attempt: attempt.to_string(),
             mcp,
         }))
     }
@@ -422,12 +470,21 @@ impl RuntimeSessionService {
         &mut self,
         outcome: RuntimeApprovedExternalActionOutcome,
     ) -> Result<bool> {
+        let identity = (outcome.turn_id.clone(), outcome.action_id.clone());
+        if self
+            .agent
+            .claimed_approved_external_actions
+            .get(&identity)
+            .map(String::as_str)
+            != Some(outcome.attempt.as_str())
+        {
+            return Ok(false);
+        }
         if let Some((server_id, transport)) = outcome.mcp_transport {
             self.integration
                 .mcp_transports_mut()
                 .insert(server_id, transport);
         }
-        let identity = (outcome.turn_id.clone(), outcome.action_id.clone());
         self.agent
             .pending_approved_external_actions
             .remove(&identity);
@@ -500,7 +557,13 @@ impl RuntimeSessionService {
                 &runtime_post_mcp_hook_payload(&turn, &action, &result),
             )?;
         } else {
-            if !result.is_error && self.agent_verbose_enabled(&turn.pane_id) {
+            let replay_suppressed = self.reconcile_action_presentation_progress_for_execution(
+                &turn.turn_id,
+                &action.id,
+                &mez_agent::ActionPresentationExecutionIdentity::Attempt(outcome.attempt.clone()),
+                &result,
+            )?;
+            if !result.is_error && !replay_suppressed && self.agent_verbose_enabled(&turn.pane_id) {
                 self.append_agent_action_result_text_to_terminal_buffer(
                     &turn.pane_id,
                     &action,

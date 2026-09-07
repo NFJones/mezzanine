@@ -6,6 +6,8 @@
 //! external content requests without emitting generated shell commands.
 
 use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
 
 use mez_agent::{ProviderHttpResult, network_action_structured_content_json};
 
@@ -25,15 +27,47 @@ const DEFAULT_WEB_SEARCH_MAX_BYTES: usize = 1024 * 1024;
 /// Timeout applied to runtime-owned network actions.
 const NETWORK_ACTION_TIMEOUT_MS: u64 = 30_000;
 
+/// Immutable web-search inputs retained while one request streams safely.
+struct WebSearchRequest<'a> {
+    query: &'a str,
+    domains: &'a [String],
+    recency_days: Option<u64>,
+    max_results: Option<u64>,
+}
+
 /// Executes a network-backed semantic action through a runtime HTTP transport.
 pub async fn execute_network_action_with_transport_async<T: AsyncProviderHttpTransport>(
     turn: &AgentTurnRecord,
     action: &AgentAction,
     transport: &T,
 ) -> Result<ActionResult> {
+    let mut ignore_progress = |_| {};
+    execute_network_action_with_transport_async_with_progress(
+        turn,
+        action,
+        transport,
+        &mut ignore_progress,
+    )
+    .await
+}
+
+/// Executes a network-backed semantic action while publishing safe cumulative
+/// presentation source snapshots.
+///
+/// Progress remains presentation-only: callers retain sole authority over its
+/// attempt fencing and final action-result settlement.
+pub async fn execute_network_action_with_transport_async_with_progress<
+    T: AsyncProviderHttpTransport,
+    F: FnMut(String) + Send,
+>(
+    turn: &AgentTurnRecord,
+    action: &AgentAction,
+    transport: &T,
+    on_progress: &mut F,
+) -> Result<ActionResult> {
     match &action.payload {
         AgentActionPayload::FetchUrl { url, max_bytes, .. } => {
-            execute_fetch_url_action(turn, action, transport, url, *max_bytes).await
+            execute_fetch_url_action(turn, action, transport, url, *max_bytes, on_progress).await
         }
         AgentActionPayload::WebSearch {
             query,
@@ -45,10 +79,13 @@ pub async fn execute_network_action_with_transport_async<T: AsyncProviderHttpTra
                 turn,
                 action,
                 transport,
-                query,
-                domains,
-                *recency_days,
-                *max_results,
+                WebSearchRequest {
+                    query,
+                    domains,
+                    recency_days: *recency_days,
+                    max_results: *max_results,
+                },
+                on_progress,
             )
             .await
         }
@@ -64,6 +101,7 @@ async fn execute_fetch_url_action<T: AsyncProviderHttpTransport>(
     transport: &T,
     url: &str,
     max_bytes: Option<u64>,
+    on_progress: &mut (impl FnMut(String) + Send),
 ) -> Result<ActionResult> {
     if let Err(message) = runtime_http_url_support_error(url) {
         return network_action_failure(
@@ -81,21 +119,33 @@ async fn execute_fetch_url_action<T: AsyncProviderHttpTransport>(
     let limit = requested_limit
         .unwrap_or(DEFAULT_FETCH_URL_MAX_BYTES)
         .min(MAX_FETCH_URL_MAX_BYTES);
-    let response = match send_network_get(transport, url, limit).await {
-        Ok(response) => response,
-        Err(error) => {
-            return network_action_failure(
-                turn,
-                action,
-                "network_request_failed",
-                error.message().to_string(),
-                serde_json::json!({
-                    "url": url,
-                    "error_kind": format!("{:?}", error.kind())
-                }),
-            );
+    let mut observed = Vec::new();
+    let mut published = String::new();
+    let mut on_chunk = |chunk: Vec<u8>| {
+        observed.extend_from_slice(&chunk);
+        let source = safe_fetch_progress_source(&observed);
+        if !source.is_empty() && source != published {
+            published.clone_from(&source);
+            on_progress(source);
         }
+        Box::pin(async {}) as Pin<Box<dyn Future<Output = ()> + Send>>
     };
+    let response =
+        match send_network_get_with_body_chunks(transport, url, limit, &mut on_chunk).await {
+            Ok(response) => response,
+            Err(error) => {
+                return network_action_failure(
+                    turn,
+                    action,
+                    "network_request_failed",
+                    error.message().to_string(),
+                    serde_json::json!({
+                        "url": url,
+                        "error_kind": format!("{:?}", error.kind())
+                    }),
+                );
+            }
+        };
     if !(200..=299).contains(&response.status_code) {
         return network_action_failure(
             turn,
@@ -138,13 +188,11 @@ async fn execute_web_search_action<T: AsyncProviderHttpTransport>(
     turn: &AgentTurnRecord,
     action: &AgentAction,
     transport: &T,
-    query: &str,
-    domains: &[String],
-    recency_days: Option<u64>,
-    max_results: Option<u64>,
+    request: WebSearchRequest<'_>,
+    on_progress: &mut (impl FnMut(String) + Send),
 ) -> Result<ActionResult> {
-    let mut full_query = query.to_string();
-    for domain in domains {
+    let mut full_query = request.query.to_string();
+    for domain in request.domains {
         full_query.push_str(" site:");
         full_query.push_str(domain);
     }
@@ -152,7 +200,30 @@ async fn execute_web_search_action<T: AsyncProviderHttpTransport>(
         "https://duckduckgo.com/html/?q={}",
         urlencoding::encode(&full_query)
     );
-    let response = match send_network_get(transport, &url, DEFAULT_WEB_SEARCH_MAX_BYTES).await {
+    let limit = request
+        .max_results
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(10)
+        .min(50);
+    let mut observed = Vec::new();
+    let mut published = String::new();
+    let mut on_chunk = |chunk: Vec<u8>| {
+        observed.extend_from_slice(&chunk);
+        let source = safe_search_progress_source(&observed, limit);
+        if !source.is_empty() && source != published {
+            published.clone_from(&source);
+            on_progress(source);
+        }
+        Box::pin(async {}) as Pin<Box<dyn Future<Output = ()> + Send>>
+    };
+    let response = match send_network_get_with_body_chunks(
+        transport,
+        &url,
+        DEFAULT_WEB_SEARCH_MAX_BYTES,
+        &mut on_chunk,
+    )
+    .await
+    {
         Ok(response) => response,
         Err(error) => {
             return network_action_failure(
@@ -183,31 +254,27 @@ async fn execute_web_search_action<T: AsyncProviderHttpTransport>(
     let transport_truncated = network_response_was_truncated(&response);
     let (body, truncated) = truncate_text_to_bytes(&response.body, DEFAULT_WEB_SEARCH_MAX_BYTES);
     let truncated = truncated || transport_truncated;
-    let limit = max_results
-        .and_then(|value| usize::try_from(value).ok())
-        .unwrap_or(10)
-        .min(50);
     let results = parse_duckduckgo_html_results(&body, limit);
     let mut content = if results.trim().is_empty() {
         "No web results were found.".to_string()
     } else {
         results
     };
-    if recency_days.is_some() {
+    if request.recency_days.is_some() {
         content.push_str("\n[mez: recency filtering is best-effort for this backend]");
     }
     let structured = network_action_structured_content_json(
         action,
         serde_json::Value::Null,
         serde_json::json!({
-            "query": query,
+            "query": request.query,
             "full_query": full_query,
             "status_code": response.status_code,
             "body_bytes": response.body.len(),
             "returned_bytes": body.len(),
             "html_truncated": truncated,
             "max_results": limit,
-            "recency_days": recency_days
+            "recency_days": request.recency_days
         }),
     )?;
     Ok(ActionResult::succeeded(
@@ -227,10 +294,12 @@ fn runtime_http_url_support_error(url: &str) -> std::result::Result<(), String> 
     }
 }
 
-async fn send_network_get<T: AsyncProviderHttpTransport>(
+/// Sends one bounded network request while forwarding retained body chunks.
+async fn send_network_get_with_body_chunks<T: AsyncProviderHttpTransport>(
     transport: &T,
     url: &str,
     max_response_bytes: usize,
+    on_chunk: &mut (dyn FnMut(Vec<u8>) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send),
 ) -> ProviderHttpResult<ProviderHttpResponse> {
     let mut headers = BTreeMap::new();
     headers.insert("user-agent".to_string(), "mez".to_string());
@@ -242,7 +311,37 @@ async fn send_network_get<T: AsyncProviderHttpTransport>(
         timeouts: mez_agent::ProviderHttpTimeouts::from_total(NETWORK_ACTION_TIMEOUT_MS),
         max_response_bytes: Some(max_response_bytes),
     };
-    transport.send_async(&request).await
+    transport
+        .send_async_with_body_chunks(&request, on_chunk)
+        .await
+}
+
+/// Returns valid text from a cumulative byte prefix without exposing HTML.
+fn safe_fetch_progress_source(bytes: &[u8]) -> String {
+    let valid = match std::str::from_utf8(bytes) {
+        Ok(value) => value,
+        Err(error) if error.error_len().is_none() => {
+            std::str::from_utf8(&bytes[..error.valid_up_to()]).unwrap_or("")
+        }
+        Err(_) => return String::new(),
+    };
+    let trimmed = valid.trim_start();
+    if trimmed.starts_with('<') || trimmed.contains("<html") || trimmed.contains("<HTML") {
+        return String::new();
+    }
+    valid.to_string()
+}
+
+/// Returns only complete parsed search entries from a cumulative HTML prefix.
+fn safe_search_progress_source(bytes: &[u8], max_results: usize) -> String {
+    let valid = match std::str::from_utf8(bytes) {
+        Ok(value) => value,
+        Err(error) if error.error_len().is_none() => {
+            std::str::from_utf8(&bytes[..error.valid_up_to()]).unwrap_or("")
+        }
+        Err(_) => return String::new(),
+    };
+    parse_duckduckgo_html_results(valid, max_results)
 }
 
 fn network_response_was_truncated(response: &ProviderHttpResponse) -> bool {

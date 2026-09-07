@@ -55,6 +55,124 @@ fn runtime_agent_shell_record_browser_display_retains_overlay_state() {
     assert!(service.pending_record_browser_overlays_is_empty());
 }
 
+/// Verifies `y` copies the focused record's canonical detail source through
+/// the shared paste buffer and host clipboard adapter without closing the pager.
+#[test]
+fn runtime_record_browser_copy_key_copies_focused_record_to_clipboard() {
+    let _clipboard_guard = TEST_HOST_CLIPBOARD_TEST_LOCK.lock().unwrap();
+    TEST_HOST_CLIPBOARD_WRITES.lock().unwrap().clear();
+    let mut service = test_runtime_service();
+    *service.host_clipboard_mut_for_tests() =
+        HostClipboard::new(record_host_clipboard_copy, empty_host_clipboard_read);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 12).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let browser = mez_mux::record_browser::RecordBrowser::new(
+        "Issues",
+        vec![mez_mux::record_browser::RecordBrowserRecord {
+            id: "issue-copy".to_string(),
+            open_command: Some("/show-issues issue-copy".to_string()),
+            title: "Copy me".to_string(),
+            metadata: vec![("kind".to_string(), "task".to_string())],
+            markdown: "Copy body".to_string(),
+        }],
+        Vec::new(),
+    )
+    .unwrap();
+    let page = browser.render_page();
+    service.register_pending_record_browser_overlay(&pane_id, "show-issues", browser, None);
+    let response = crate::runtime::runtime_agent_shell_command_response_json(
+        &pane_id,
+        "/show-issues",
+        Some(&crate::runtime::AgentShellCommandOutcome::Display {
+            command: "show-issues".to_string(),
+            body: page.raw_markdown,
+        }),
+    );
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+
+    apply_record_browser_input(&mut service, &primary, b"y");
+
+    let copied = service.paste_buffers().get("record-browser").unwrap();
+    assert!(copied.contains("# Copy me"), "{copied}");
+    assert!(copied.contains("Copy body"), "{copied}");
+    assert_eq!(
+        TEST_HOST_CLIPBOARD_WRITES.lock().unwrap().as_slice(),
+        [copied]
+    );
+    let overlay = service.primary_display_overlay().unwrap();
+    assert!(overlay.record_browser.is_some());
+    assert!(
+        overlay
+            .lines
+            .iter()
+            .any(|line| line.contains("copied to clipboard"))
+    );
+}
+
+/// Verifies a failed host clipboard write keeps the focused record available in
+/// the internal copy buffer and reports the failure without dismissing the pager.
+#[test]
+fn runtime_record_browser_copy_key_reports_host_clipboard_failure() {
+    let _clipboard_guard = TEST_HOST_CLIPBOARD_TEST_LOCK.lock().unwrap();
+    TEST_HOST_CLIPBOARD_WRITES.lock().unwrap().clear();
+    let mut service = test_runtime_service();
+    *service.host_clipboard_mut_for_tests() =
+        HostClipboard::new(record_failed_host_clipboard_copy, empty_host_clipboard_read);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 12).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let browser = mez_mux::record_browser::RecordBrowser::new(
+        "Issues",
+        vec![mez_mux::record_browser::RecordBrowserRecord {
+            id: "issue-copy-failure".to_string(),
+            open_command: Some("/show-issues issue-copy-failure".to_string()),
+            title: "Copy failure".to_string(),
+            metadata: Vec::new(),
+            markdown: "Retained body".to_string(),
+        }],
+        Vec::new(),
+    )
+    .unwrap();
+    let page = browser.render_page();
+    service.register_pending_record_browser_overlay(&pane_id, "show-issues", browser, None);
+    let response = crate::runtime::runtime_agent_shell_command_response_json(
+        &pane_id,
+        "/show-issues",
+        Some(&crate::runtime::AgentShellCommandOutcome::Display {
+            command: "show-issues".to_string(),
+            body: page.raw_markdown,
+        }),
+    );
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+
+    apply_record_browser_input(&mut service, &primary, b"y");
+
+    assert!(
+        service
+            .paste_buffers()
+            .get("record-browser")
+            .is_some_and(|copied| copied.contains("Retained body"))
+    );
+    assert!(service.primary_display_overlay().is_some());
+    assert!(
+        service
+            .primary_display_overlay()
+            .unwrap()
+            .lines
+            .iter()
+            .any(|line| {
+                line.contains("Could not copy the focused record to the host clipboard")
+            })
+    );
+}
+
 /// Verifies record-browser arrows cycle across rows and Ctrl+Up/Ctrl+Down move
 /// the retained cursor by five records.
 ///

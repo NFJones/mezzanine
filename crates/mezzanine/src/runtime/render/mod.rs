@@ -632,6 +632,10 @@ pub(crate) struct RuntimeStreamingSayPresentation {
     actions: std::collections::BTreeMap<usize, RuntimeStreamingSayAction>,
     /// Established shell-command source keyed by MAAP action index.
     shell_commands: std::collections::BTreeMap<usize, RuntimeStreamingTextSource>,
+    /// Established shell-summary source keyed by MAAP action index.
+    shell_summaries: std::collections::BTreeMap<usize, RuntimeStreamingTextSource>,
+    /// Closed typed execution headers keyed by MAAP action index.
+    action_headers: std::collections::BTreeMap<usize, mez_agent::StreamingActionHeader>,
     /// Monotonic render-input generation used to fence worker projections.
     revision: u64,
     /// Newest cumulative-source projection atomically installed in the pane.
@@ -755,6 +759,10 @@ pub(crate) struct RuntimeStreamingSayProjectionWork {
     pub(crate) actions: std::collections::BTreeMap<usize, RuntimeStreamingSayAction>,
     /// Cumulative shell-command state captured for this generation.
     pub(crate) shell_commands: std::collections::BTreeMap<usize, RuntimeStreamingTextSource>,
+    /// Cumulative shell-summary state captured for this generation.
+    pub(crate) shell_summaries: std::collections::BTreeMap<usize, RuntimeStreamingTextSource>,
+    /// Closed typed execution headers captured for this generation.
+    pub(crate) action_headers: std::collections::BTreeMap<usize, mez_agent::StreamingActionHeader>,
     /// Whether thinking text is visible for this pane.
     pub(crate) thinking_enabled: bool,
     /// Shell dialect used by the existing command-preview highlighter.

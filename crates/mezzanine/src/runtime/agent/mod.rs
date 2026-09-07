@@ -368,7 +368,9 @@ pub(crate) struct RuntimeAgentComponent {
     /// Approved network and MCP actions waiting for external worker dispatch.
     pending_approved_external_actions: BTreeSet<(String, String)>,
     /// Approved external actions currently owned by async workers.
-    claimed_approved_external_actions: BTreeSet<(String, String)>,
+    claimed_approved_external_actions: BTreeMap<(String, String), String>,
+    /// Monotonic source for approved external-worker attempt identities.
+    next_approved_external_action_attempt: u64,
     /// Authorized native shell actions waiting for external worker dispatch.
     pending_native_shell_dispatches: BTreeMap<(String, String), RuntimeNativeShellDispatch>,
     /// Exact native shell marker owned by an external worker per turn/action.

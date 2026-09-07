@@ -1,5 +1,6 @@
 //! Runtime render action presentation tests.
 
+use super::super::presentation::streaming_action_execution_display_header;
 use super::*;
 
 /// Verifies normal-mode mutation result rendering treats patches as the
@@ -138,6 +139,32 @@ fn agent_action_execution_header_summarizes_issue_actions() {
     assert_eq!(
         agent_action_execution_display_header(&delete).as_deref(),
         Some("issue delete: id=issue-123")
+    );
+}
+
+/// Verifies parser-validated provisional headers use the exact compact
+/// formatter used by the same settled action.
+///
+/// The preview source carries a complete action only for presentation. This
+/// parity check prevents future formatter changes from making streamed MCP
+/// headers differ from their authoritative completion rows.
+#[test]
+fn streaming_action_header_matches_settled_action_header() {
+    let action = AgentAction {
+        id: String::new(),
+        rationale: String::new(),
+        payload: AgentActionPayload::McpCall {
+            server: "github".to_string(),
+            tool: "search".to_string(),
+            arguments_json: r#"{"query":"stream previews"}"#.to_string(),
+        },
+    };
+
+    assert_eq!(
+        streaming_action_execution_display_header(&mez_agent::StreamingActionHeader::Action {
+            action: Box::new(action.clone()),
+        }),
+        agent_action_execution_display_header(&action).unwrap(),
     );
 }
 

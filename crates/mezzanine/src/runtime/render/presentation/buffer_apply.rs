@@ -4,7 +4,7 @@ use super::actions::{
     agent_action_execution_display_header, agent_action_execution_rendered_line,
     agent_action_model_thinking_lines, agent_action_result_display_header,
     agent_macro_lifecycle_display_lines_for_width, agent_thinking_display_lines_for_width,
-    bounded_agent_action_result_display_lines,
+    bounded_agent_action_result_display_lines, streaming_action_execution_display_header,
 };
 use super::diff::{
     agent_action_result_uses_diff_preview, cleaned_agent_diff_source_lines,
@@ -1912,6 +1912,8 @@ impl RuntimeSessionService {
                         rationale: None,
                         actions: std::collections::BTreeMap::new(),
                         shell_commands: std::collections::BTreeMap::new(),
+                        shell_summaries: std::collections::BTreeMap::new(),
+                        action_headers: std::collections::BTreeMap::new(),
                         revision: 1,
                         projected_revision: None,
                         projected_context: None,
@@ -1975,6 +1977,8 @@ impl RuntimeSessionService {
                             rationale: None,
                             actions: std::collections::BTreeMap::new(),
                             shell_commands: std::collections::BTreeMap::new(),
+                            shell_summaries: std::collections::BTreeMap::new(),
+                            action_headers: std::collections::BTreeMap::new(),
                             revision: 1,
                             projected_revision: None,
                             projected_context: None,
@@ -2179,6 +2183,93 @@ impl RuntimeSessionService {
                     })?;
                 command.complete = true;
             }
+            mez_agent::StreamingSayEvent::ShellCommandSummaryStarted { action_index } => {
+                self.ensure_agent_streaming_presentation(pane_id, turn_id)?;
+                let presentation = self
+                    .presentation
+                    .agent_streaming_say_presentations
+                    .get_mut(pane_id)
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "streaming shell summary presentation is unavailable",
+                        )
+                    })?;
+                presentation
+                    .shell_summaries
+                    .entry(*action_index)
+                    .or_insert_with(Default::default);
+                presentation.revision = presentation.revision.wrapping_add(1);
+                presentation.projected_revision = None;
+            }
+            mez_agent::StreamingSayEvent::ShellCommandSummaryTextDelta { action_index, text } => {
+                let presentation = self
+                    .presentation
+                    .agent_streaming_say_presentations
+                    .get_mut(pane_id)
+                    .filter(|presentation| presentation.turn_id == turn_id)
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "streaming shell summary arrived before its start event",
+                        )
+                    })?;
+                let summary = presentation
+                    .shell_summaries
+                    .get_mut(action_index)
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "streaming shell summary arrived before its start event",
+                        )
+                    })?;
+                summary.text.push_str(text);
+                if !text.is_empty() {
+                    presentation.revision = presentation.revision.wrapping_add(1);
+                    presentation.projected_revision = None;
+                }
+            }
+            mez_agent::StreamingSayEvent::ShellCommandSummaryTextComplete { action_index } => {
+                let presentation = self
+                    .presentation
+                    .agent_streaming_say_presentations
+                    .get_mut(pane_id)
+                    .filter(|presentation| presentation.turn_id == turn_id)
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "streaming shell summary completion arrived before its start event",
+                        )
+                    })?;
+                let summary = presentation
+                    .shell_summaries
+                    .get_mut(action_index)
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "streaming shell summary completion arrived before its start event",
+                        )
+                    })?;
+                summary.complete = true;
+            }
+            mez_agent::StreamingSayEvent::ActionHeader {
+                action_index,
+                header,
+            } => {
+                self.ensure_agent_streaming_presentation(pane_id, turn_id)?;
+                let presentation = self
+                    .presentation
+                    .agent_streaming_say_presentations
+                    .get_mut(pane_id)
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "streaming action header presentation is unavailable",
+                        )
+                    })?;
+                if presentation
+                    .action_headers
+                    .insert(*action_index, *header.clone())
+                    != Some(*header.clone())
+                {
+                    presentation.revision = presentation.revision.wrapping_add(1);
+                    presentation.projected_revision = None;
+                }
+            }
         }
         Ok(())
     }
@@ -2230,6 +2321,8 @@ impl RuntimeSessionService {
                     rationale: None,
                     actions: std::collections::BTreeMap::new(),
                     shell_commands: std::collections::BTreeMap::new(),
+                    shell_summaries: std::collections::BTreeMap::new(),
+                    action_headers: std::collections::BTreeMap::new(),
                     revision: 1,
                     projected_revision: None,
                     projected_context: None,
@@ -2439,7 +2532,9 @@ impl RuntimeSessionService {
         };
         let has_source = presentation.rationale.is_some()
             || !presentation.actions.is_empty()
-            || !presentation.shell_commands.is_empty();
+            || !presentation.shell_commands.is_empty()
+            || !presentation.shell_summaries.is_empty()
+            || !presentation.action_headers.is_empty();
         if !has_source {
             return Ok(None);
         }
@@ -2465,6 +2560,8 @@ impl RuntimeSessionService {
             rationale: presentation.rationale.clone(),
             actions: presentation.actions.clone(),
             shell_commands: presentation.shell_commands.clone(),
+            shell_summaries: presentation.shell_summaries.clone(),
+            action_headers: presentation.action_headers.clone(),
             thinking_enabled: projected_context.thinking_enabled,
             shell_classification: projected_context.shell_classification,
             presentation_columns: projected_context.presentation_columns,
@@ -2577,6 +2674,62 @@ impl RuntimeSessionService {
                 )
             })
             .collect::<std::collections::BTreeMap<_, _>>();
+        let summary_projections = if work.thinking_enabled {
+            work.shell_summaries
+                .iter()
+                .map(|(action_index, source)| {
+                    let rendition = agent_terminal_label_rendition(
+                        AgentTerminalPresentationStyle::Status,
+                        &work.ui_theme,
+                    );
+                    let rendered_lines =
+                        agent_thinking_display_lines_for_width(&source.text, work.frame_width)
+                            .into_iter()
+                            .map(|display| {
+                                let length = UnicodeWidthStr::width(display.as_str());
+                                RichTextLine {
+                                    display,
+                                    style_spans: vec![TerminalStyleSpan {
+                                        start: 0,
+                                        length,
+                                        rendition,
+                                    }],
+                                    copy_text: None,
+                                    kind: mez_mux::render::RichTextLineKind::Normal,
+                                }
+                            })
+                            .collect();
+                    (
+                        *action_index,
+                        StreamingSayProjection {
+                            style: AgentTerminalPresentationStyle::Status,
+                            rendered_lines,
+                            copy_lines: Vec::new(),
+                        },
+                    )
+                })
+                .collect::<std::collections::BTreeMap<_, _>>()
+        } else {
+            std::collections::BTreeMap::new()
+        };
+        let header_projections = work
+            .action_headers
+            .iter()
+            .map(|(action_index, header)| {
+                let header = streaming_action_execution_display_header(header);
+                (
+                    *action_index,
+                    StreamingSayProjection {
+                        style: AgentTerminalPresentationStyle::Status,
+                        rendered_lines: vec![agent_action_execution_rendered_line(
+                            &header,
+                            &work.ui_theme,
+                        )],
+                        copy_lines: Vec::new(),
+                    },
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
         let mut candidate = work.baseline_screen.as_ref().clone();
         let mut bytes = String::new();
         let cursor = candidate.cursor_state();
@@ -2610,40 +2763,43 @@ impl RuntimeSessionService {
         let action_indices = work
             .actions
             .keys()
+            .chain(work.shell_summaries.keys())
+            .chain(work.action_headers.keys())
             .chain(work.shell_commands.keys())
             .copied()
             .collect::<std::collections::BTreeSet<_>>();
         for action_index in action_indices {
-            let projection = say_projections
-                .iter()
-                .find_map(|(candidate, projection)| {
-                    (*candidate == action_index).then_some(projection)
-                })
-                .or_else(|| command_projections.get(&action_index));
-            let Some(projection) = projection else {
-                continue;
-            };
-            for line in &projection.rendered_lines {
-                if !first_line {
-                    bytes.push_str("\r\n");
+            let say = say_projections.iter().find_map(|(candidate, projection)| {
+                (*candidate == action_index).then_some(projection)
+            });
+            for projection in say
+                .into_iter()
+                .chain(summary_projections.get(&action_index))
+                .chain(header_projections.get(&action_index))
+                .chain(command_projections.get(&action_index))
+            {
+                for line in &projection.rendered_lines {
+                    if !first_line {
+                        bytes.push_str("\r\n");
+                    }
+                    append_styled_agent_terminal_rendered_line(
+                        &mut bytes,
+                        projection.style,
+                        line,
+                        &work.ui_theme,
+                    );
+                    bytes.push_str("\x1b[0m");
+                    first_line = false;
                 }
-                append_styled_agent_terminal_rendered_line(
-                    &mut bytes,
-                    projection.style,
-                    line,
-                    &work.ui_theme,
-                );
-                bytes.push_str("\x1b[0m");
-                first_line = false;
-            }
-            if projection.copy_lines.is_empty() {
-                projection_copy_lines.extend(std::iter::repeat_n(
-                    AGENT_COPY_SKIP_LINE.to_string(),
-                    projection.rendered_lines.len(),
-                ));
-            } else {
-                has_projection_copy_lines = true;
-                projection_copy_lines.extend(projection.copy_lines.iter().cloned());
+                if projection.copy_lines.is_empty() {
+                    projection_copy_lines.extend(std::iter::repeat_n(
+                        AGENT_COPY_SKIP_LINE.to_string(),
+                        projection.rendered_lines.len(),
+                    ));
+                } else {
+                    has_projection_copy_lines = true;
+                    projection_copy_lines.extend(projection.copy_lines.iter().cloned());
+                }
             }
         }
         Self::feed_agent_terminal_screen(
@@ -3162,6 +3318,8 @@ impl RuntimeSessionService {
             && presentation.actions.is_empty()
             && presentation.shell_commands.is_empty();
         if rationale_requires_static
+            || !presentation.shell_summaries.is_empty()
+            || !presentation.action_headers.is_empty()
             || (!presentation.shell_commands.is_empty() && !command_can_promote)
         {
             self.presentation
