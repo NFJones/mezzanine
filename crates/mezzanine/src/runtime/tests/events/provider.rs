@@ -3,9 +3,8 @@
 use super::*;
 
 /// Verifies unresolved network actions are queued for an external worker when
-/// provider completion enters the actor. The completion transition must return
-/// with the action still running rather than issuing HTTP while serialized
-/// lifecycle requests wait behind it.
+/// provider completion enters the actor, while an ordinary blocked turn cannot
+/// retain that authority without a scheduler-owned dependency wait.
 #[tokio::test]
 async fn runtime_provider_completion_queues_network_action_for_worker() {
     let mut service = test_runtime_service();
@@ -91,15 +90,15 @@ async fn runtime_provider_completion_queues_network_action_for_worker() {
         ActionStatus::Running
     );
     service
-        .agent_turn_executions_mut()
-        .get_mut(&turn.turn_id)
-        .unwrap()
-        .response
-        .action_batch
-        .as_mut()
-        .unwrap()
-        .actions
-        .clear();
+        .agent_turn_ledger_mut()
+        .finish_turn(&turn.turn_id, AgentTurnState::Blocked)
+        .unwrap();
+    assert!(
+        !service
+            .agent_scheduler()
+            .waiting_turns()
+            .any(|work| work.turn_id == turn.turn_id)
+    );
     let stale_dispatch = service
         .claim_approved_external_action(&turn.turn_id, &action.id)
         .unwrap();

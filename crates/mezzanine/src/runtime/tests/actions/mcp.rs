@@ -1046,6 +1046,21 @@ async fn runtime_mcp_tool_error_waits_for_sibling_actions_before_continuation() 
     let first_attempt = first_dispatch.attempt;
     let first_transport = first_dispatch.mcp.unwrap().transport;
 
+    service
+        .agent_scheduler_mut()
+        .wait_running(&turn.turn_id)
+        .unwrap();
+    service
+        .agent_turn_ledger_mut()
+        .finish_turn(&turn.turn_id, AgentTurnState::Blocked)
+        .unwrap();
+    assert!(
+        service
+            .agent_scheduler()
+            .waiting_turns()
+            .any(|work| work.turn_id == turn.turn_id)
+    );
+
     let tool_error = mez_agent::ActionResult::succeeded(
         &turn,
         &actions[0],
@@ -1117,6 +1132,21 @@ async fn runtime_mcp_tool_error_waits_for_sibling_actions_before_continuation() 
     assert_eq!(
         service.agent_turn_executions()[&turn.turn_id].terminal_state,
         AgentTurnState::Running
+    );
+    assert!(
+        !service
+            .agent_scheduler()
+            .waiting_turns()
+            .any(|work| work.turn_id == turn.turn_id)
+    );
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|candidate| candidate.turn_id == turn.turn_id)
+            .map(|candidate| candidate.state),
+        Some(AgentTurnState::Running)
     );
     service.terminate_all_pane_processes().unwrap();
 }

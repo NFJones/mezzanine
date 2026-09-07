@@ -225,6 +225,34 @@ impl RuntimeSessionService {
         self.apply_action_presentation_progress(progress.presentation)
     }
 
+    /// Reports whether an external action still belongs to a live turn execution.
+    ///
+    /// Joined parents release provider capacity by moving to ledger `Blocked`
+    /// and scheduler `Waiting`, but queued and in-flight external actions from
+    /// the same batch remain authorized until their retained running result
+    /// settles. Other blocked and terminal turns do not retain that authority.
+    fn approved_external_action_turn_is_current(&self, turn_id: &str, action_id: &str) -> bool {
+        let turn_is_live = self.agent_turn_ledger().turns().iter().any(|turn| {
+            turn.turn_id == turn_id
+                && (turn.state == AgentTurnState::Running
+                    || (turn.state == AgentTurnState::Blocked
+                        && self
+                            .agent
+                            .agent_scheduler
+                            .waiting_turns()
+                            .any(|work| work.turn_id == turn_id)))
+        });
+        turn_is_live
+            && self
+                .agent_turn_executions()
+                .get(turn_id)
+                .is_some_and(|execution| {
+                    execution.action_results.iter().any(|result| {
+                        result.action_id == action_id && result.status == ActionStatus::Running
+                    })
+                })
+    }
+
     /// Claims one approved network or MCP action for async worker execution.
     pub(crate) fn claim_approved_external_action(
         &mut self,
@@ -294,11 +322,17 @@ impl RuntimeSessionService {
         action_id: &str,
         attempt: &str,
     ) -> Result<Option<RuntimeApprovedExternalActionDispatch>> {
+        if !self.approved_external_action_turn_is_current(turn_id, action_id) {
+            self.agent
+                .pending_approved_external_actions
+                .remove(&(turn_id.to_string(), action_id.to_string()));
+            return Ok(None);
+        }
         let turn = self
             .agent_turn_ledger()
             .turns()
             .iter()
-            .find(|turn| turn.turn_id == turn_id && turn.state == AgentTurnState::Running)
+            .find(|turn| turn.turn_id == turn_id)
             .cloned();
         let Some(turn) = turn else {
             self.agent
@@ -485,6 +519,15 @@ impl RuntimeSessionService {
                 .mcp_transports_mut()
                 .insert(server_id, transport);
         }
+        if !self.approved_external_action_turn_is_current(&outcome.turn_id, &outcome.action_id) {
+            self.agent
+                .pending_approved_external_actions
+                .remove(&identity);
+            self.agent
+                .claimed_approved_external_actions
+                .remove(&identity);
+            return Ok(false);
+        }
         self.agent
             .pending_approved_external_actions
             .remove(&identity);
@@ -495,7 +538,7 @@ impl RuntimeSessionService {
             .agent_turn_ledger()
             .turns()
             .iter()
-            .find(|turn| turn.turn_id == outcome.turn_id && turn.state == AgentTurnState::Running)
+            .find(|turn| turn.turn_id == outcome.turn_id)
             .cloned()
         else {
             return Ok(false);
@@ -629,7 +672,9 @@ impl RuntimeSessionService {
             let observed_result = execution.action_results[result_index].clone();
             self.append_action_result_context_if_absent(&turn.turn_id, &observed_result)?;
         }
-        if runtime_execution_ready_for_provider_continuation(&execution) {
+        let ready_for_provider_continuation =
+            runtime_execution_ready_for_provider_continuation(&execution);
+        if ready_for_provider_continuation && turn.state == AgentTurnState::Running {
             self.agent
                 .pending_agent_provider_tasks
                 .insert(turn.turn_id.clone());
@@ -650,6 +695,12 @@ impl RuntimeSessionService {
         }
         self.agent_turn_executions_mut()
             .insert(turn.turn_id.clone(), execution);
+        if ready_for_provider_continuation {
+            self.resume_dependency_wait_if_ready(
+                &turn.turn_id,
+                "approved_external_action_result_ready",
+            )?;
+        }
         Ok(true)
     }
 
