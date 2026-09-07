@@ -63,7 +63,7 @@ copy/replace examples such as command-rule arrays, or provider catalog fields
 that are materialized only after authentication; they are not activation
 markers.
 
-The current config schema version is `81`. On launch, Mezzanine migrates an
+The current config schema version is `91`. On launch, Mezzanine migrates an
 older supported primary user config to the current schema before validation,
 backfilling missing defaults, rewriting renamed settings, and removing settings
 that no longer exist. Config files declaring a schema version newer than the
@@ -122,7 +122,7 @@ shown.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `version` | integer | `81` | Config schema version. Do not change this. |
+| `version` | integer | `91` | Config schema version. Do not change this. |
 | `host` | table | see below | Disabled-by-default persistent host, recovery, and durable-lease policy. |
 | `runtime` | table | see below | Process runtime settings. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |
@@ -442,12 +442,19 @@ Command-backed status pills are configured under `frames.window.pills.<name>`
 and render only when the active right-status template references
 `#{pill.<name>}`. A pill definition requires `command` and `interval_seconds`;
 it may also set `label`, `initial`, `timeout_ms`, `empty_behavior`,
-`error_behavior`, `max_output_chars`, and `style`. Command output uses stdout,
-is trimmed to the first line, is bounded by `max_output_chars`, and is cached
-between refresh intervals. Empty output behavior is `hide`, `show_empty`, or
-`keep_previous`; error behavior is `hide`, `show_error`, or `keep_previous`.
-Configured pills whose names are not present in `frames.window.right_status` are
-not executed.
+`error_behavior`, `max_output_chars`, `style`, `foreground`, and `background`.
+Color values are names in the resolved active theme palette, including
+`theme.aliases`; raw hex colors are rejected at pill paths, so define an alias
+for a fixed color. Each channel is independent and an omitted channel retains
+the existing window-pill rendition. The separate `style` setting is not a
+palette reference. Command output uses stdout, is trimmed to the first line, is
+bounded by `max_output_chars`, and is cached between refresh intervals. Empty
+output behavior is `hide`, `show_empty`, or `keep_previous`; error behavior is
+`hide`, `show_error`, or `keep_previous`. Configured pills whose names are not
+present in `frames.window.right_status` are not executed. Color and active-theme
+changes repaint cached text without refreshing the command. Built-in
+`system.uptime`, `datetime.local`, `pane.pwd`, and `iroh.status` fields retain
+their dedicated theme behavior.
 
 ```toml
 [frames.window.pills.cpu]
@@ -458,6 +465,8 @@ timeout_ms = 750
 empty_behavior = "hide"
 error_behavior = "keep_previous"
 max_output_chars = 32
+foreground = "container_foreground"
+background = "container"
 ```
 
 ### `frames.pane`
@@ -488,11 +497,18 @@ shows the stable pane identity and is available in both shell and agent views.
 A named definition
 requires exactly one source: `field` or `command`. Both forms may set `label`,
 `format`, `compact_format`, `when`, `min_width`, `max_width`, `priority`,
-`style`, and `on_click`. Command providers additionally require `cwd = "pane"`
-and support bounded `interval_seconds`, `timeout_ms`, `initial`,
-`max_output_chars`, `empty_behavior`, and `error_behavior`. Supported
-formats are `full`, `short`, and `percent` where the field is numeric. `when`
-is an AND-combined array drawn from `agent-view`, `shell-view`, `focused`,
+`style`, `foreground`, `background`, and `on_click`. Palette names resolve
+against the effective active theme, including `theme.aliases`; raw hex and
+unknown names are rejected at the exact pill leaf. Semantic or automatic
+`style` supplies both base channels before configured channels replace them
+independently. A foreground-only active status pill keeps its animated
+background, while an explicit background makes that occurrence static. Bare
+pane fields retain standard colors; wrap a field in a named definition to
+configure per-pill colors. Command providers additionally require `cwd =
+"pane"` and support bounded `interval_seconds`, `timeout_ms`, `initial`,
+`max_output_chars`, `empty_behavior`, and `error_behavior`. Supported formats
+are `full`, `short`, and `percent` where the field is numeric. `when` is an
+AND-combined array drawn from `agent-view`, `shell-view`, `focused`,
 `unfocused`, `busy`, `idle`, `supported`, `nonempty`, and `scrollback`;
 contradictory pairs are rejected. `on_click` accepts `builtin`, `none`,
 `terminal:rename-pane`, `terminal:copy-mode`, or `terminal:copy-selection`
@@ -524,6 +540,8 @@ when = ["agent-view", "supported", "nonempty"]
 max_width = 24
 priority = 80
 style = "agent-model"
+foreground = "container_secondary_foreground"
+background = "container"
 on_click = "builtin"
 ```
 
@@ -539,6 +557,8 @@ max_output_chars = 80
 empty_behavior = "hide"
 error_behavior = "show_error"
 style = "pane-pwd"
+foreground = "container_muted_foreground"
+background = "container"
 on_click = "terminal:copy-mode -t {pane}"
 ```
 
@@ -547,9 +567,11 @@ them only while referenced and condition-eligible on presented panes with frames
 visible and zen mode off; overflow alone does not stop them. Work is deduplicated
 across clients, limited to one in-flight refresh per exact pane context, 128
 pending refreshes, 256 retained states, and four concurrent processes. Pane
-close, CWD/config/permission changes, hiding, zen mode, and shutdown cancel work;
-stale completions are rejected. Dropping the refresh worker also cancels its
-queued and running pane work. Visibility and focus eligibility are unioned over
+close, CWD, provider-definition or permission changes, hiding, zen mode, and
+shutdown cancel work; visual-only pill color and active-theme changes preserve
+cached output and refresh scheduling. Stale completions are rejected. Dropping
+the refresh worker also cancels its queued and running pane work. Visibility and
+focus eligibility are unioned over
 attached primary views (and observers' source views), honoring each view's zoom:
 a provider runs when at least one presented view satisfies its conditions.
 

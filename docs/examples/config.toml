@@ -213,6 +213,8 @@ visible_fields = ["window.list", "window.index", "window.name", "window.id", "pa
 #? error_behavior = "show_error"
 #? max_output_chars = 80
 #? style = "default"
+#? foreground = "container_foreground"
+#? background = "container"
 
 # Pane title frame rendered on each pane border.
 [frames.pane]
@@ -242,6 +244,8 @@ visible_fields = ["pane.index", "pane.title", "pane.id", "pane.status", "history
 #? max_width = 24
 #? priority = 80
 #? style = "agent-model"
+#? foreground = "container_secondary_foreground"
+#? background = "container"
 #? on_click = "builtin"
 
 # Pane command providers require trusted config, cwd = "pane", an explicit
@@ -258,6 +262,8 @@ visible_fields = ["pane.index", "pane.title", "pane.id", "pane.status", "history
 #? empty_behavior = "hide"
 #? error_behavior = "show_error"
 #? style = "pane-pwd"
+#? foreground = "container_muted_foreground"
+#? background = "container"
 #? on_click = "terminal:copy-mode -t {pane}"
 # Custom actions require trusted exact-source provenance. Supported terminal
 # actions are rename-pane, copy-mode, and copy-selection with one -t {pane};

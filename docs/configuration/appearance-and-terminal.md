@@ -61,8 +61,14 @@ in `frames.pane.template`, place title-adjacent items in
 `frames.pane.left_status`, and order right-aligned items with
 `frames.pane.right_status`. Bare built-in markers use their standard behavior;
 named definitions under `frames.pane.pills.<name>` can change labels, finite
-visibility conditions, supported formatting, width metadata, theme roles, and
-actions. A named definition selects exactly one source: a built-in `field` or a
+visibility conditions, supported formatting, width metadata, theme roles,
+palette-name `foreground` and `background` channels, and actions. Palette names
+resolve through the active theme, including `theme.aliases`; define an alias
+instead of placing raw hex at a pill path. Omitted channels retain the semantic
+style, a foreground-only running pill remains animated, and an explicit
+background suppresses that occurrence's scan. Bare fields retain their standard
+colors, so wrap one in a named definition for per-pill colors. A named
+definition selects exactly one source: a built-in `field` or a
 pane-scoped `command` with `cwd = "pane"`. Command values are cached outside the
 renderer and normalized to bounded, inert single-line text. Empty rail strings
 remain empty. `frames.pane.visible_fields` remains only the fallback used when

@@ -3878,7 +3878,13 @@ configurable right-aligned window status template and `pills` for named
 command-backed right-status pill definitions. `frames.window.pills` MUST be a
 map keyed by pill name. Each pill definition MUST support `command` and
 `interval_seconds`, and MAY support `label`, `initial`, `timeout_ms`,
-`empty_behavior`, `error_behavior`, `max_output_chars`, and `style`. The
+`empty_behavior`, `error_behavior`, `max_output_chars`, `style`, `foreground`,
+and `background`. `foreground` and `background` MUST be palette identifiers in
+the resolved active theme, including effective `theme.aliases`; pill paths MUST
+reject raw hex colors and unknown palette names with the exact authored leaf.
+The channels MUST override the existing window-pill rendition independently,
+MUST preserve omitted channels and non-color attributes, and MUST NOT reinterpret
+the separate `style` value as a palette name. The
 right-status template field `#{pill.<name>}` MUST render the cached output for
 that configured pill as a status pill. Implementations MUST execute a configured
 pill command only while `#{pill.<name>}` appears in the effective
@@ -3892,7 +3898,9 @@ return generation-stamped completions so stale results cannot replace newer
 state. Command stdout MUST be trimmed to the first line before display and
 bounded by the configured maximum output length. Empty output behavior MUST be
 one of `hide`, `show_empty`, or `keep_previous`; error behavior MUST be one of
-`hide`, `show_error`, or `keep_previous`.
+`hide`, `show_error`, or `keep_previous`. Palette or active-theme changes MUST
+repaint cached window-pill text without refreshing its command. Built-in window
+status fields MUST retain their dedicated theme slots.
 
 `frames.pane` MUST additionally support `status_preset`, `left_status`, `right_status`,
 `overflow`, `title_min_width`, and `pills`. `status_preset` MUST be one of
@@ -3907,7 +3915,14 @@ Command providers MUST set `cwd = "pane"` and MAY set bounded
 `interval_seconds`, `timeout_ms`, `initial`, `max_output_chars`,
 `empty_behavior`, and `error_behavior`. Every definition MAY set `label`,
 `format`, `compact_format`, `when`, `min_width`, `max_width`, `priority`,
-`style`, and `on_click`. Supported conditions MUST be the finite AND-combined vocabulary
+`style`, `foreground`, `background`, and `on_click`. The color leaves MUST be
+palette identifiers in the resolved active theme, including effective
+`theme.aliases`; raw hex colors and unknown names MUST be rejected at the exact
+authored leaf. Renderers MUST apply the semantic or automatic style first and
+then replace only configured color channels while preserving non-color
+attributes. A foreground-only active status override MUST retain its animated
+background; an explicit background MUST suppress animation for that occurrence.
+Bare pane fields MUST retain their standard colors. Supported conditions MUST be the finite AND-combined vocabulary
 `agent-view`, `shell-view`, `focused`, `unfocused`, `busy`, `idle`,
 `supported`, `nonempty`, and `scrollback`; contradictory conditions MUST be
 rejected. `on_click` MUST be `builtin`, `none`, `terminal:rename-pane`,
