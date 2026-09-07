@@ -620,6 +620,8 @@ Default aliases:
 | `container` | `"#2f302b"` | Quiet surface-relative container fill. |
 | `container_foreground` | `"#eef7d0"` | General foreground on the container fill. |
 | `container_muted_foreground` | `"#8e9e5b"` | Low-emphasis foreground on the container fill. |
+| `container_secondary_foreground` | `"#7fbf3f"` | Restrained secondary accent on the container fill. |
+| `container_tertiary_foreground` | `"#d7ff5f"` | Restrained tertiary accent on the container fill. |
 | `danger_foreground` | `"#ff5c57"` | Foreground danger accent. |
 | `danger_text` | `"#000000"` | Text placed on the danger accent. |
 | `muted_text` | `"#000000"` | Text placed on the muted accent. |
@@ -658,9 +660,9 @@ Default color slots:
 | `pane_progress_bg` | `"primary"` | Pane progress background. |
 | `pane_pwd_fg` | `"container_muted_foreground"` | Pane working-directory pill foreground. |
 | `pane_pwd_bg` | `"container"` | Pane working-directory pill background. |
-| `window_status_uptime_fg` | `"container_muted_foreground"` | Uptime status foreground. |
+| `window_status_uptime_fg` | `"container_secondary_foreground"` | Uptime and custom status foreground with a restrained secondary accent. |
 | `window_status_uptime_bg` | `"container"` | Uptime status background. |
-| `window_status_datetime_fg` | `"container_muted_foreground"` | Date/time status foreground. |
+| `window_status_datetime_fg` | `"container_tertiary_foreground"` | Date/time status foreground with a restrained tertiary accent. |
 | `window_status_datetime_bg` | `"container"` | Date/time status background. |
 | `iroh_status_good_fg` | `"primary_text"` | Healthy Iroh-status pill foreground. |
 | `iroh_status_good_bg` | `"primary"` | Healthy Iroh-status pill background. |

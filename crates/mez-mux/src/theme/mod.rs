@@ -992,6 +992,9 @@ fn definition_from_palette(palette: UiThemePalette<'_>) -> UiThemeDefinition {
     let container = low_chroma_container_palette_hex(palette.surface);
     let container_foreground = contrast_managed_palette_hex(palette.foreground, &container);
     let container_muted_foreground = contrast_managed_palette_hex(palette.muted, &container);
+    let container_secondary_foreground =
+        contrast_managed_palette_hex(palette.secondary, &container);
+    let container_tertiary_foreground = contrast_managed_palette_hex(palette.tertiary, &container);
     let primary_text = contrasting_binary_hex_for_background(palette.primary);
     let secondary_text = contrasting_binary_hex_for_background(palette.secondary);
     let tertiary_text = contrasting_binary_hex_for_background(palette.tertiary);
@@ -1011,6 +1014,14 @@ fn definition_from_palette(palette: UiThemePalette<'_>) -> UiThemeDefinition {
         ("container", container),
         ("container_foreground", container_foreground),
         ("container_muted_foreground", container_muted_foreground),
+        (
+            "container_secondary_foreground",
+            container_secondary_foreground,
+        ),
+        (
+            "container_tertiary_foreground",
+            container_tertiary_foreground,
+        ),
         ("foreground", palette.foreground.to_string()),
         ("muted_text", muted_text.to_string()),
         ("muted", muted),
@@ -1049,9 +1060,9 @@ fn definition_from_palette(palette: UiThemePalette<'_>) -> UiThemeDefinition {
         ("pane_progress_bg", "primary"),
         ("pane_pwd_fg", "container_muted_foreground"),
         ("pane_pwd_bg", "container"),
-        ("window_status_uptime_fg", "container_muted_foreground"),
+        ("window_status_uptime_fg", "container_secondary_foreground"),
         ("window_status_uptime_bg", "container"),
-        ("window_status_datetime_fg", "container_muted_foreground"),
+        ("window_status_datetime_fg", "container_tertiary_foreground"),
         ("window_status_datetime_bg", "container"),
         ("iroh_status_good_fg", "primary_text"),
         ("iroh_status_good_bg", "primary"),

@@ -586,6 +586,50 @@ fn builtin_themes_use_low_chroma_containers_for_persistent_chrome() {
     }
 }
 
+/// Verifies persistent window metadata keeps its quiet shared container while
+/// using restrained palette-colored text to make adjacent status values easier
+/// to scan. Foreground-only secondary and tertiary cues add family color without
+/// restoring the competing saturated fills removed from persistent chrome.
+#[test]
+fn builtin_themes_use_readable_accent_text_for_window_status_metadata() {
+    for name in BUILTIN_UI_THEME_NAMES {
+        let definition =
+            builtin_ui_theme_definition(name).unwrap_or_else(|| panic!("missing theme {name}"));
+        let theme = resolve_ui_theme(name, definition).expect("built-in theme must resolve");
+        let container = theme.aliases["container"];
+        let muted = theme.aliases["container_muted_foreground"];
+        let uptime = theme.colors.window_status_uptime;
+        let datetime = theme.colors.window_status_datetime;
+
+        assert_eq!(
+            uptime.background, container,
+            "{name} uptime should keep the quiet container"
+        );
+        assert_eq!(
+            datetime.background, container,
+            "{name} date/time should keep the quiet container"
+        );
+        assert_eq!(
+            uptime.foreground,
+            theme.aliases["container_secondary_foreground"]
+        );
+        assert_eq!(
+            datetime.foreground,
+            theme.aliases["container_tertiary_foreground"]
+        );
+        assert_ne!(
+            uptime.foreground, muted,
+            "{name} uptime should regain a restrained accent"
+        );
+        assert_ne!(
+            datetime.foreground, muted,
+            "{name} date/time should regain a restrained accent"
+        );
+        assert!(test_contrast_ratio(uptime.foreground, container) >= 4.5);
+        assert!(test_contrast_ratio(datetime.foreground, container) >= 4.5);
+    }
+}
+
 /// Verifies saturated fills communicate selection or semantic state rather
 /// than decorating persistent chrome. This keeps a predictable hierarchy:
 /// primary for active/success, tertiary for caution, and danger for failure.
