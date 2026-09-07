@@ -82,6 +82,8 @@ fn start_prompt_editor(
 /// Verifies an active prompt editor replaces the complete attached terminal,
 /// uses the initiating client's full geometry, and excludes every Mez-owned
 /// frame and prompt surface until the lease settles.
+///
+/// Separate zen coverage below verifies hidden focus-label expiry.
 #[test]
 fn runtime_prompt_editor_takes_over_complete_terminal_projection() {
     let (mut service, primary, root) = prompt_editor_fixture("prompt-editor-terminal-takeover");
@@ -170,6 +172,92 @@ fn runtime_prompt_editor_takes_over_complete_terminal_projection() {
     );
     assert!(service.primary_error_status_overlay().is_some());
 
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Editor takeover must suppress live zen identities without suspending their
+/// deadlines. Expiring a hidden record and ending takeover must not replay it
+/// over the restored prompt or pane content.
+#[test]
+fn runtime_zen_focus_editor_takeover_expires_without_replay() {
+    let (mut service, primary, root) = prompt_editor_fixture("zen-focus-editor");
+    let original = service
+        .session
+        .active_window_for(&primary)
+        .unwrap()
+        .id
+        .clone();
+    service
+        .execute_terminal_command(
+            &primary,
+            "zen on; set-option terminal.zen_focus_label_duration_ms 60000",
+        )
+        .unwrap();
+    service
+        .session
+        .rename_window(&primary, Some(original.as_str()), "hidden-focus-identity")
+        .unwrap();
+    service.session.new_window(&primary, "other", true).unwrap();
+    service
+        .execute_terminal_command(&primary, &format!("select-window -t {}", original.as_str()))
+        .unwrap();
+    assert!(
+        service
+            .live_zen_focus_labels_for_client(&primary, crate::runtime::current_unix_millis())
+            .is_some()
+    );
+
+    let _identities = start_prompt_editor(&mut service, &primary);
+    service
+        .external_editor_screen_mut_for_tests("%1")
+        .unwrap()
+        .feed(b"\x1b[2J\x1b[HEDITOR OWNS TERMINAL");
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let shown = service
+        .render_client_view_for_client_with_resolved_config(
+            &primary,
+            ClientViewRole::Primary,
+            Size::new(40, 16).unwrap(),
+            &config,
+        )
+        .unwrap()
+        .unwrap();
+    assert!(shown.lines[0].contains("EDITOR OWNS TERMINAL"));
+    assert!(
+        !shown
+            .lines
+            .iter()
+            .any(|line| line.contains("hidden-focus-identity"))
+    );
+    assert!(service.expire_zen_focus_labels_for_client(&primary, u64::MAX));
+    assert!(service.abort_external_editor_session("%1").unwrap());
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    assert!(!config.external_editor_takeover_active);
+    let restored = service
+        .render_client_view_for_client_with_resolved_config(
+            &primary,
+            ClientViewRole::Primary,
+            Size::new(40, 16).unwrap(),
+            &config,
+        )
+        .unwrap()
+        .unwrap();
+    assert!(
+        !restored
+            .lines
+            .iter()
+            .any(|line| line.contains("hidden-focus-identity"))
+    );
+    assert!(
+        service
+            .live_zen_focus_labels_for_client(&primary, crate::runtime::current_unix_millis())
+            .is_none()
+    );
     service.terminate_all_pane_processes().unwrap();
     let _ = fs::remove_dir_all(root);
 }
