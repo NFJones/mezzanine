@@ -52,6 +52,7 @@ mod pane_status;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod render;
+pub(crate) use render::render_focus_label;
 /// Exposes the screen module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

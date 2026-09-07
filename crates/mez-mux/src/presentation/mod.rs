@@ -738,6 +738,9 @@ pub enum TerminalFramePosition {
 mod window_plan;
 pub use window_plan::*;
 
+mod focus_label;
+pub use focus_label::{FocusLabelScope, focus_label_region};
+
 /// Style applied to a rendered frame row when styled terminal output is used.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum TerminalFrameStyle {

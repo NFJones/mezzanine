@@ -4,10 +4,13 @@
 //! style policy, pane composition, window status, pillbox entries, and layout writes.
 
 mod entries;
+mod focus_label;
 mod layout;
 mod pane;
 mod style;
 mod window;
+
+pub(crate) use focus_label::render_focus_label;
 
 pub use entries::window_group_frame_pillbox_cells;
 pub(in crate::host::terminal::render) use entries::{

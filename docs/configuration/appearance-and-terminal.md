@@ -26,14 +26,21 @@ restores the currently configured chrome. Application-drawn status bars remain
 pane content, and command prompts, explicit overlays, copy/search controls, and
 approval or trust interactions remain available.
 
-The staged focus-label configuration is `terminal.zen_focus_label_duration_ms`
-(default `1000`, integer `0`–`60000`; `0` disables labels). Configuration,
-migration, client-local focus tracking, and idle expiry are implemented;
-transient label rendering is not yet wired. Observers share their source
-primary's original deadline, and disabling labels clears all pending scopes.
-The intended display uses pane top-left, window bottom-left, and group top-left
-overlays without reserving rows or running status providers. Only the highest
-changed scope flashes; positive duration changes affect future labels only.
+`terminal.zen_focus_label_duration_ms` controls transient focus identity labels
+(default `1000`, integer `0`–`60000`; `0` disables labels). Observers share their
+source primary's original deadline; disabling labels or leaving zen clears all
+pending scopes. Positive duration changes affect future labels only.
+
+Labels use pane top-left (an eligible shared top divider when available),
+window bottom-left, and group top-left anchors without reserving rows, resizing
+PTYs, adding mouse targets, or running status providers. Custom non-zen frame
+positions do not move these anchors. Only the highest changed scope receives a
+new label; independent live labels can coexist, with group over window over
+pane on intersection. Required input, selectors and modal UI take precedence;
+editor and resize-drag takeovers suppress labels while deadlines continue.
+Labels temporarily cover application cells, then repaint current content on
+expiry rather than restoring saved rows. Rename updates the displayed identity
+without extending its deadline. Viewport clipping never relocates an anchor.
 
 `terminal.agent_wrap_column_cap` limits structured Mezzanine-owned agent rows,
 including transcript text, statuses, errors, diagnostics, action headers,

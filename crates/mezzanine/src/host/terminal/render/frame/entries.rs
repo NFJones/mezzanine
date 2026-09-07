@@ -73,7 +73,7 @@ pub(in crate::host::terminal::render) fn window_frame_action_entry(
     }
 }
 
-fn window_frame_entry(window: &TerminalWindowFrameContext) -> WindowFramePillboxEntry {
+pub(super) fn window_frame_entry(window: &TerminalWindowFrameContext) -> WindowFramePillboxEntry {
     WindowFramePillboxEntry {
         target: WindowFramePillboxTarget::Window(window.index),
         text: format!("{} {}", window.index, sanitize_frame_text(&window.title)),
@@ -84,7 +84,9 @@ fn window_frame_entry(window: &TerminalWindowFrameContext) -> WindowFramePillbox
     }
 }
 
-fn window_group_frame_entry(group: &TerminalWindowGroupFrameContext) -> WindowFramePillboxEntry {
+pub(super) fn window_group_frame_entry(
+    group: &TerminalWindowGroupFrameContext,
+) -> WindowFramePillboxEntry {
     WindowFramePillboxEntry {
         target: WindowFramePillboxTarget::Group(group.index),
         text: format!("{} {}", group.index, sanitize_frame_text(&group.title)),

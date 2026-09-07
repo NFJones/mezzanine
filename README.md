@@ -113,8 +113,8 @@ Mezzanine command prompt, `Ctrl+A ?` shows effective key bindings, and
 `Ctrl+A a` toggles the agent shell. From the command prompt, `zen on`, `zen off`,
 and `zen toggle` hide or restore passive Mezzanine chrome for the live session;
 set `terminal.zen_mode` in configuration for persistent startup behavior.
-The focus-label duration setting is available as staged configuration; transient
-zen focus-label rendering is not yet implemented.
+Zen focus changes briefly show an identity label without restoring chrome or
+resizing panes; `terminal.zen_focus_label_duration_ms` controls its lifetime.
 Pane-status presets provide standard, minimal, agent-focused, and full-controls
 layouts that can still be refined with explicit overrides. Use
 `show-pane-status [-t pane]` for a bounded, secret-safe explanation of the

@@ -2996,5 +2996,6 @@ impl MouseSelectionEdge {
     }
 }
 
+mod focus_composition;
 #[cfg(test)]
 mod tests;

@@ -323,6 +323,9 @@ impl RuntimeSessionService {
         {
             self.overlay_copy_modes_on_view(window, view)?;
         }
+        if let Some(view) = view.as_mut() {
+            self.overlay_zen_focus_labels(window, presentation_plan.as_ref(), config, view);
+        }
         if role == ClientViewRole::Primary
             && let Some(view) = view.as_mut()
             && let Some(selector) = self.presentation.pane_agent_status_selector.as_ref()

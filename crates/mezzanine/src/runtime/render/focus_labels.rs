@@ -232,10 +232,6 @@ impl RuntimePresentationComponent {
     }
 
     /// Returns cloned live labels for a source primary without renewing them.
-    #[allow(
-        dead_code,
-        reason = "the title-only renderer consumes this lifecycle query in the dependent issue"
-    )]
     pub(crate) fn live_zen_focus_labels(
         &self,
         client_id: &ClientId,
@@ -376,11 +372,7 @@ impl RuntimeSessionService {
         self.presentation.expire_zen_focus_labels(&source, now_ms)
     }
 
-    /// Returns cloned source-primary labels for later title-only rendering.
-    #[allow(
-        dead_code,
-        reason = "the title-only renderer consumes this lifecycle query in the dependent issue"
-    )]
+    /// Returns cloned source-primary labels for title-only rendering.
     pub(crate) fn live_zen_focus_labels_for_client(
         &self,
         client_id: &ClientId,
