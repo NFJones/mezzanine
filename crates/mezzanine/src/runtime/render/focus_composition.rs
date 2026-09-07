@@ -505,6 +505,90 @@ mod tests {
         assert_eq!(pill.text, " identity ");
     }
 
+    /// All three live scopes compete at fixed anchors on a one-row canvas.
+    /// On a taller canvas the window can coexist with the group, but the pane
+    /// cannot relocate away from the group's occupied top-left cells.
+    #[test]
+    fn zen_focus_composition_scope_collisions_never_relocate() {
+        use super::super::focus_labels::{RuntimeZenFocusLabel, RuntimeZenFocusLabelTarget};
+        use mez_mux::presentation::{WindowPresentationOptions, plan_window_presentation};
+
+        for rows in [1, 10] {
+            let (mut service, primary) = fixture();
+            let mut baseline = view(&mut service, &primary);
+            let mut window = service.session.active_window().unwrap().clone();
+            window.size = Size::new(40, rows).unwrap();
+            let plan =
+                plan_window_presentation(&window, WindowPresentationOptions::default()).unwrap();
+            let original_plan = plan.clone();
+            let group = service.session.active_group().unwrap().id.clone();
+            let label = |target| RuntimeZenFocusLabel {
+                target,
+                group_id: Some(group.clone()),
+                window_id: Some(window.id.clone()),
+                expires_at_unix_ms: u64::MAX,
+            };
+            let state = &mut service
+                .presentation
+                .client_states
+                .entry(primary.clone())
+                .or_default()
+                .zen_focus_labels;
+            state.group = Some(label(RuntimeZenFocusLabelTarget::Group(group.clone())));
+            state.window = Some(label(RuntimeZenFocusLabelTarget::Window(window.id.clone())));
+            state.pane = Some(label(RuntimeZenFocusLabelTarget::Pane(
+                window.active_pane().id.clone(),
+            )));
+            let mut config = service
+                .terminal_client_loop_config(TerminalClientLoopConfig::default())
+                .unwrap();
+            config
+                .frame_context
+                .groups
+                .iter_mut()
+                .find(|item| item.active)
+                .unwrap()
+                .title = "GROUP".to_string();
+            config
+                .frame_context
+                .windows
+                .iter_mut()
+                .find(|item| item.id == window.id.as_str())
+                .unwrap()
+                .title = "WINDOW".to_string();
+            config.pane_frame_template = "PANE".to_string();
+            baseline.authoritative_size = window.size;
+            baseline.client_size = window.size;
+            baseline.lines = vec![".".repeat(40); usize::from(rows)];
+            baseline.line_style_spans = vec![Vec::new(); usize::from(rows)];
+            baseline.agent_prompt_region = None;
+            let mut shown = baseline.clone();
+            service.overlay_zen_focus_labels(&window, &plan, &config, &mut shown);
+            assert!(shown.lines[0].contains("GROUP"));
+            assert_eq!(
+                shown.lines.iter().any(|line| line.contains("WINDOW")),
+                rows > 1
+            );
+            assert!(!shown.lines.iter().any(|line| line.contains("PANE")));
+            service
+                .presentation
+                .client_states
+                .get_mut(&primary)
+                .unwrap()
+                .zen_focus_labels
+                .group = None;
+            let mut shown = baseline;
+            service.overlay_zen_focus_labels(&window, &plan, &config, &mut shown);
+            assert!(shown.lines[usize::from(rows - 1)].contains("WINDOW"));
+            assert_eq!(
+                shown.lines.iter().any(|line| line.contains("PANE")),
+                rows > 1
+            );
+            assert_eq!(plan, original_plan);
+            assert_eq!(shown.authoritative_size, window.size);
+        }
+    }
+
     /// Rectangle boundary contact alone is not intersection.
     #[test]
     fn zen_focus_composition_rectangle_boundaries() {
