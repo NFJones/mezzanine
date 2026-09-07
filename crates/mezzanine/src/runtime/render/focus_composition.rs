@@ -842,6 +842,52 @@ mod tests {
         );
     }
 
+    /// A configured provider must be eligible before zen so the suppression
+    /// assertion cannot pass merely because the fixture lacks authority. This
+    /// Linux test compiles sandbox launch plans but does not execute them or
+    /// claim successful OS confinement; zen must cancel and suppress admission.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn zen_focus_composition_does_not_readmit_configured_provider() {
+        use crate::config::{ConfigFormat, ConfigLayer, ConfigScope};
+        let (mut service, primary) = fixture();
+        let cwd = std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
+        let quoted_cwd = serde_json::to_string(&cwd.to_string_lossy()).unwrap();
+        service.replace_config_layers(vec![ConfigLayer {
+            name: "zen-provider-control".to_string(), path: None,
+            format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
+            text: format!("[permissions]\napproval_policy = \"full-access\"\nsandbox = \"bubblewrap\"\nread_scopes = [{quoted_cwd}]\nwrite_scopes = [{quoted_cwd}]\n[frames.pane]\nright_status = \"#{{pill.control}}\"\n[frames.pane.pills.control]\ncommand = \"printf provider-control\"\ncwd = \"pane\"\nwhen = []\n"),
+        }]).unwrap();
+        service
+            .start_initial_pane_process(Some("cat >/dev/null"))
+            .unwrap();
+        service.reconcile_pane_status_providers();
+        let plans = service.prepare_pane_status_provider_refreshes(4);
+        assert_eq!(
+            plans.len(),
+            1,
+            "positive control needs one admitted provider plan"
+        );
+        service
+            .execute_terminal_command(&primary, "zen on; new-window provider-focus")
+            .unwrap();
+        for _ in 0..2 {
+            let shown = view(&mut service, &primary);
+            assert!(shown.lines[9].contains("provider-focus"));
+            service.reconcile_pane_status_providers();
+            assert!(service.prepare_pane_status_provider_refreshes(4).is_empty());
+            assert_eq!(
+                service.pending_pane_status_provider_refresh_count_for_tests(),
+                0
+            );
+        }
+        assert!(plans[0].cancellation.is_cancelled());
+        service.expire_zen_focus_labels_for_client(&primary, u64::MAX);
+        let _ = view(&mut service, &primary);
+        assert!(service.prepare_pane_status_provider_refreshes(4).is_empty());
+        service.terminate_all_pane_processes().unwrap();
+    }
+
     /// Rectangle boundary contact alone is not intersection.
     #[test]
     fn zen_focus_composition_rectangle_boundaries() {
