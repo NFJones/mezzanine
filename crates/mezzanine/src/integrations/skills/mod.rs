@@ -57,7 +57,7 @@ const BUILTIN_ADD_ISSUES_SKILL_DESCRIPTION: &str =
     "Use when recent findings should be turned into Mezzanine project issue tracker entries.";
 const BUILTIN_ADD_RESEARCH_SKILL_DESCRIPTION: &str =
     "Use when the user asks to save durable research findings into memory.";
-const BUILTIN_FIX_ISSUES_SKILL_DESCRIPTION: &str = "Use when you need to query the current project's Mez issue tracker, mark selected work in-progress, fix open issues, keep progress notes current, and mark verified fixes resolved.";
+const BUILTIN_FIX_ISSUES_SKILL_DESCRIPTION: &str = "Work the current project's mez issues to verified resolution, keeping concise issue plans and progress notes.";
 const BUILTIN_MEZ_REFERENCE_SKILL_DESCRIPTION: &str = "Use Mezzanine terminal commands, agent slash commands, skill invocation, common workflows, and live config_change schema guidance without rediscovering the command or config surface.";
 
 #[derive(Debug, Deserialize)]
@@ -910,39 +910,37 @@ mod tests {
         assert!(
             fix_issues_document
                 .text
-                .contains("Store the plan in the issue notes field")
-        );
-        assert!(fix_issues_document.text.contains(
-            "mark the issue `resolved` with `issue_update` so history remains queryable"
-        ));
-        assert!(
-            fix_issues_document
-                .text
-                .contains("use `issue_update` to mark it `in-progress`")
-        );
-        assert!(fix_issues_document.text.contains(
-            "Query in-progress issues in the mez issue tracker for the current project first, then query open issues"
-        ));
-        assert!(
-            fix_issues_document
-                .text
-                .contains("Prioritize dependency-free in-progress issues over open issues")
-        );
-        assert!(fix_issues_document.text.contains(
-            "prioritize open issues related to current uncommitted changes over unrelated open issues"
-        ));
-        assert!(fix_issues_document.text.contains(
-            "do not repeat either query merely because another capability, inspection, edit, test, or provider call occurred"
-        ));
-        assert!(
-            fix_issues_document
-                .text
-                .contains("record `Active issue: <id>`")
+                .contains("Query `in-progress` issues first, then `open` issues")
         );
         assert!(
             fix_issues_document
                 .text
-                .contains("within one `/loop` iteration, reuse current query evidence")
+                .contains("in-progress issues related to uncommitted changes")
+        );
+        assert!(
+            fix_issues_document
+                .text
+                .contains("validation steps and results")
+        );
+        assert!(
+            fix_issues_document
+                .text
+                .contains("large** model plan the work, then spawn a **medium** model")
+        );
+        assert!(
+            fix_issues_document
+                .text
+                .contains("use a **small** model only for tightly scoped, low-risk implementation")
+        );
+        assert!(
+            fix_issues_document
+                .text
+                .contains("fix it within the active issue plan if it is related to that issue")
+        );
+        assert!(
+            fix_issues_document
+                .text
+                .contains("If it is unrelated, create a new defect issue with the observed error")
         );
 
         let reference_document =

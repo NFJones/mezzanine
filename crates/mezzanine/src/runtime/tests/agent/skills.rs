@@ -629,7 +629,7 @@ fn runtime_agent_shell_list_skills_displays_effective_catalog() {
     );
     assert!(
         response.contains(
-            "| `$fix-issues` | user | Use when you need to query the current project's mez issue tracker, mark selected work in-progress, fix open issues, keep per-issue plans and progress notes updated, and mark verified fixes resolved. |"
+            "| `$fix-issues` | user | Work the current project's mez issues to verified resolution, keeping concise issue plans and progress notes. |"
         ),
         "{response}"
     );
@@ -670,7 +670,7 @@ fn runtime_agent_shell_list_skills_reports_builtin_catalog_without_external_skil
     );
     assert!(
         response.contains(
-            "| `$fix-issues` | user | Use when you need to query the current project's mez issue tracker, mark selected work in-progress, fix open issues, keep per-issue plans and progress notes updated, and mark verified fixes resolved. |"
+            "| `$fix-issues` | user | Work the current project's mez issues to verified resolution, keeping concise issue plans and progress notes. |"
         ),
         "{response}"
     );

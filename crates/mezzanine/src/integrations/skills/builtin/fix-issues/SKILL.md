@@ -1,20 +1,29 @@
 ---
 name: fix-issues
-description: Use when you need to query the current project's mez issue tracker, mark selected work in-progress, fix open issues, keep per-issue plans and progress notes updated, and mark verified fixes resolved.
+description: Work the current project's mez issues to verified resolution, keeping concise issue plans and progress notes.
 ---
 
-Query in-progress issues in the mez issue tracker for the current project first, then query open issues, unless current action-result context already contains successful queries for both states for the current issue-store mutation state. Use local issue actions when they are exposed; otherwise request the issues capability. Treat the latest successful query results as current evidence across provider continuations: do not repeat either query merely because another capability, inspection, edit, test, or provider call occurred. Use `refresh: true` only after concrete evidence that the issue store changed externally. If both queries return no issues, stop and take no further action. Inspect returned `state` and `depends_on` metadata, and work dependency-free prerequisite issues before issues that depend on them.
+Query `in-progress` issues first, then `open` issues. Reuse successful results until the issue store changes. If neither query returns issues, stop.
 
-Work one returned issue at a time, choosing an issue whose `depends_on` list is empty or already resolved. Before choosing among eligible issues, inspect the current repository status when available and identify issues with an evidence-backed relationship to uncommitted files; do not treat every dirty-tree artifact as related. Prioritize dependency-free in-progress issues over open issues. When no eligible in-progress issue remains, prioritize open issues related to current uncommitted changes over unrelated open issues. In the first action batch after choosing, name the selected issue id in the batch rationale and record `Active issue: <id>` plus the durable implementation direction in `thought`. Keep using that selected id until the issue is resolved or explicitly blocked. Before implementing, inspect the cited code, tests, docs, and spec enough to form a concrete execution plan for that issue (including testing and validation against any concrete specifications). Do not issue another backlog query while the selected issue is being inspected, implemented, documented, or validated. If all remaining issues are blocked by dependencies that are absent from the query results, use a narrowly filtered query or inspect the missing issue ids before proceeding; report a blocker if the dependency graph cannot be resolved.
+Work one dependency-ready issue at a time. Prioritize, in order:
+1. in-progress issues related to uncommitted changes;
+2. other in-progress issues;
+3. open issues related to uncommitted changes;
+4. other open issues.
 
-After selecting an issue and before implementation, use `issue_update` to mark it `in-progress`. If it is already `in-progress`, retain that state. Reopening work that should return to the backlog uses `open`; normal completion follows open -> in-progress -> resolved.
+Establish whether dirty files relate to an issue with repository evidence; do not assume every uncommitted change is related. Work prerequisites before dependent issues. Mark a selected open issue `in-progress` before implementation.
 
-Store the plan in the issue notes field with a progress-tracker section. Keep the notes concise and structured for multi-turn updates. At minimum include the problem summary, intended fix surface, validation steps, and a checklist or status list that can be revised as work advances.
+For each issue, inspect enough code, tests, docs, and specifications to make a concrete plan. Record and maintain concise issue notes containing:
+- problem and intended fix surface;
+- implementation checklist/status;
+- validation steps and results.
 
-Use issue_update to refresh the notes whenever the plan changes, a step completes, validation fails, or the next action changes. Keep the issue notes current instead of creating separate scratch tracking when the issue record can hold the progress state.
+Use subagents as the normal workflow for nontrivial issues: have a **large** model plan the work, then spawn a **medium** model to implement it; use a **small** model only for tightly scoped, low-risk implementation. Keep the issue plan, implementation, and validation aligned with the selected issue.
 
-Implement the fix completely. Add or update focused regression coverage first when feasible, then broaden validation proportionally. If defects unrelated to the currently worked issue are detected, then file a new issue to cover the identified defect and include human validation as an acceptance gate if a clear decision needs to be made which has no obvious answer.
+Implement the complete fix and add or update focused regression coverage when feasible. Every issue plan must include validation steps; run them before resolution and record the outcome.
 
-After the fix is verified, update the issue notes with the completed validation outcome, then mark the issue `resolved` with `issue_update` so history remains queryable. Do not delete an issue merely because it has been fixed.
+When an error is discovered, fix it within the active issue plan if it is related to that issue. If it is unrelated, create a new defect issue with the observed error and continue the active issue.
 
-After resolving or blocking the active issue, query the in-progress backlog and open backlog again because the successful issue mutation invalidated the earlier snapshots, then select the next dependency-free issue with in-progress work prioritized. Repeat until both project queries return no remaining issues. This skill must be loop-friendly: within one `/loop` iteration, reuse current query evidence and do not restart discovery after each provider continuation; a later iteration may begin with fresh queries. When there are no in-progress or open issues left, take no action. Do not mark an issue resolved until its own implementation and verification are complete.
+Update issue notes when the plan, progress, validation result, or next action changes. After successful verification, record the validation outcome and mark the issue `resolved`; do not delete it. If blocked, record the blocker.
+
+After resolving or blocking an issue, query both states again and continue until no eligible issues remain. Do not resolve an issue until its own implementation and validation are complete.
