@@ -546,6 +546,8 @@ pub struct PaneStatusSegmentIdentity {
     pub field: PaneStatusField,
     /// Resolved theme role.
     pub style: PaneStatusStyle,
+    /// Optional palette-name color channel overrides.
+    pub color_overrides: FramePillColorOverrides,
     /// Resolved typed interaction.
     pub action: PaneStatusAction,
     /// Compact display alternative retained for later whole-pill layout.
@@ -674,6 +676,24 @@ impl PaneStatusConfig {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.hash(&mut hasher);
         hasher.finish()
+    }
+
+    /// Reports whether named command-provider execution definitions are unchanged.
+    pub fn providers_eq(&self, other: &Self) -> bool {
+        self.pills
+            .iter()
+            .filter_map(|(name, definition)| {
+                definition
+                    .provider
+                    .as_ref()
+                    .map(|provider| (name, provider))
+            })
+            .eq(other.pills.iter().filter_map(|(name, definition)| {
+                definition
+                    .provider
+                    .as_ref()
+                    .map(|provider| (name, provider))
+            }))
     }
 }
 

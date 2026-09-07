@@ -3,10 +3,11 @@
 use crate::host::terminal::render::pane_frame_status_diagnostic_projection;
 use crate::host::terminal::tests::fixtures::display_column_for_fragment;
 use crate::host::terminal::{
-    BTreeMap, DEFAULT_PANE_FRAME_TEMPLATE, PaneAgentStatusField, PaneRenderInput, PaneStatusAction,
-    PaneStatusField, PaneStatusOverflowPolicy, PaneStatusPillDefinition, PaneStatusRail,
-    PaneStatusStyle, TerminalClientLoopConfig, TerminalFrameContext, TerminalFrameRenderOptions,
-    TerminalPaneFrameContext, pane_frame_agent_status_pillbox_cells, render_attached_client_view,
+    BTreeMap, DEFAULT_PANE_FRAME_TEMPLATE, FramePillColorOverrides, PaneAgentStatusField,
+    PaneRenderInput, PaneStatusAction, PaneStatusField, PaneStatusOverflowPolicy,
+    PaneStatusPillDefinition, PaneStatusRail, PaneStatusStyle, TerminalClientLoopConfig,
+    TerminalFrameContext, TerminalFrameRenderOptions, TerminalPaneFrameContext,
+    pane_frame_agent_status_pillbox_cells, render_attached_client_view,
     render_window_with_pane_frame_template,
 };
 use mez_core::ids::IdFactory;
@@ -479,6 +480,10 @@ fn render_configured_pane_status_occurrences_keep_semantic_identity() {
     let mut model = PaneStatusPillDefinition::builtin(PaneStatusField::AgentModel);
     model.label = Some("Model".to_string());
     model.style = PaneStatusStyle::AgentStatusFailed;
+    model.color_overrides = FramePillColorOverrides {
+        foreground: Some("primary_text".to_string()),
+        background: Some("primary".to_string()),
+    };
     model.priority = 80;
     let mut readonly = model.clone();
     readonly.label = Some("Read".to_string());
@@ -523,8 +528,202 @@ fn render_configured_pane_status_occurrences_keep_semantic_identity() {
         cell.identity.owner_pane_id == pane_id
             && cell.identity.occurrence.rail == PaneStatusRail::Right
             && cell.identity.style == PaneStatusStyle::AgentStatusFailed
+            && cell.identity.color_overrides
+                == FramePillColorOverrides {
+                    foreground: Some("primary_text".to_string()),
+                    background: Some("primary".to_string()),
+                }
             && cell.identity.priority == 80
             && cell.identity.action == PaneStatusAction::Builtin(PaneAgentStatusField::Model)
+    }));
+}
+
+/// Named pane pills apply independent palette channels after semantic style
+/// selection, while bare fields retain their established theme rendition.
+#[test]
+fn render_named_pane_status_pills_apply_palette_channel_overrides() {
+    let mut ids = IdFactory::default();
+    let window = Window::new(&mut ids, 0, "main", Size::new(72, 3).unwrap());
+    let pane_id = window.panes()[0].id.to_string();
+    let mut frame_context = TerminalFrameContext::default();
+    frame_context.pane_status.left_status.clear();
+    frame_context.pane_status.right_status =
+        "#{pill.model} #{pill.reasoning} #{agent.reasoning}".to_string();
+    let mut model = PaneStatusPillDefinition::builtin(PaneStatusField::AgentModel);
+    model.color_overrides = FramePillColorOverrides {
+        foreground: Some("test_foreground".to_string()),
+        background: Some("test_background".to_string()),
+    };
+    let mut reasoning = PaneStatusPillDefinition::builtin(PaneStatusField::AgentReasoning);
+    reasoning.style = PaneStatusStyle::AgentStatusFailed;
+    reasoning.color_overrides.foreground = Some("test_foreground".to_string());
+    frame_context.pane_status.pills.extend([
+        ("model".to_string(), model),
+        ("reasoning".to_string(), reasoning),
+    ]);
+    frame_context.panes.insert(
+        pane_id,
+        TerminalPaneFrameContext {
+            mode: Some("agent".to_string()),
+            agent_model: Some("model-value".to_string()),
+            agent_reasoning: Some("reason-value".to_string()),
+            ..TerminalPaneFrameContext::default()
+        },
+    );
+    let foreground = TerminalColor::Rgb(0x12, 0x34, 0x56);
+    let background = TerminalColor::Rgb(0x65, 0x43, 0x21);
+    let mut config = TerminalClientLoopConfig {
+        frame_context,
+        window_frames_enabled: false,
+        pane_frame_template: DEFAULT_PANE_FRAME_TEMPLATE.to_string(),
+        ..TerminalClientLoopConfig::default()
+    };
+    config
+        .ui_theme
+        .aliases
+        .insert("test_foreground".to_string(), foreground);
+    config
+        .ui_theme
+        .aliases
+        .insert("test_background".to_string(), background);
+
+    let view = render_attached_client_view(
+        ClientViewRole::Primary,
+        &window,
+        &BTreeMap::new(),
+        &config,
+        window.size,
+    )
+    .unwrap()
+    .unwrap();
+    let row = &view.lines[0];
+    let spans = &view.line_style_spans[0];
+    let model_column = display_column_for_fragment(row, "model-value");
+    let named_reasoning_column = display_column_for_fragment(row, "reason-value");
+    let bare_reasoning_column = row
+        .rfind("reason-value")
+        .expect("bare reasoning occurrence should render");
+
+    assert!(spans.iter().any(|span| {
+        model_column >= span.start
+            && model_column < span.start.saturating_add(span.length)
+            && span.rendition.foreground == Some(foreground)
+            && span.rendition.background == Some(background)
+    }));
+    assert!(spans.iter().any(|span| {
+        named_reasoning_column >= span.start
+            && named_reasoning_column < span.start.saturating_add(span.length)
+            && span.rendition.foreground == Some(foreground)
+            && span.rendition.background
+                == Some(config.ui_theme.colors.agent_status_failed.background)
+    }));
+    assert!(spans.iter().any(|span| {
+        bare_reasoning_column >= span.start
+            && bare_reasoning_column < span.start.saturating_add(span.length)
+            && span.rendition == config.ui_theme.colors.agent_reasoning.rendition()
+    }));
+}
+
+/// A foreground-only override preserves each animated running background, but
+/// an explicit background makes the named occurrence static at that color.
+#[test]
+fn render_named_running_pane_status_override_controls_scan_precedence() {
+    let mut ids = IdFactory::default();
+    let window = Window::new(&mut ids, 0, "main", Size::new(48, 3).unwrap());
+    let pane_id = window.panes()[0].id.to_string();
+    let foreground = TerminalColor::Rgb(0x12, 0x34, 0x56);
+    let background = TerminalColor::Rgb(0x65, 0x43, 0x21);
+    let render = |background_name: Option<&str>| {
+        let mut frame_context = TerminalFrameContext::default();
+        frame_context.pane_status.left_status.clear();
+        frame_context.pane_status.right_status = "#{pill.status}".to_string();
+        let mut status = PaneStatusPillDefinition::builtin(PaneStatusField::AgentStatus);
+        status.color_overrides = FramePillColorOverrides {
+            foreground: Some("test_foreground".to_string()),
+            background: background_name.map(ToOwned::to_owned),
+        };
+        frame_context
+            .pane_status
+            .pills
+            .insert("status".to_string(), status);
+        frame_context.panes.insert(
+            pane_id.clone(),
+            TerminalPaneFrameContext {
+                mode: Some("agent".to_string()),
+                agent_status: Some("running".to_string()),
+                ..TerminalPaneFrameContext::default()
+            },
+        );
+        frame_context.animation_tick_ms = 720;
+        let mut config = TerminalClientLoopConfig {
+            frame_context,
+            window_frames_enabled: false,
+            pane_frame_template: DEFAULT_PANE_FRAME_TEMPLATE.to_string(),
+            ..TerminalClientLoopConfig::default()
+        };
+        config
+            .ui_theme
+            .aliases
+            .insert("test_foreground".to_string(), foreground);
+        config
+            .ui_theme
+            .aliases
+            .insert("test_background".to_string(), background);
+        render_attached_client_view(
+            ClientViewRole::Primary,
+            &window,
+            &BTreeMap::new(),
+            &config,
+            window.size,
+        )
+        .unwrap()
+        .unwrap()
+    };
+
+    let animated = render(None);
+    let start = display_column_for_fragment(&animated.lines[0], "running");
+    let end = start + "running".len();
+    let animated_renditions = (start..end)
+        .map(|column| {
+            animated.line_style_spans[0]
+                .iter()
+                .rev()
+                .find(|span| {
+                    column >= span.start && column < span.start.saturating_add(span.length)
+                })
+                .expect("running status column should be styled")
+                .rendition
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        animated_renditions
+            .iter()
+            .all(|rendition| rendition.foreground == Some(foreground))
+    );
+    assert!(
+        animated_renditions
+            .windows(2)
+            .any(|pair| pair[0].background != pair[1].background),
+        "{animated_renditions:?}"
+    );
+
+    let static_view = render(Some("test_background"));
+    let start = display_column_for_fragment(&static_view.lines[0], "running");
+    let end = start + "running".len();
+    let static_renditions = (start..end)
+        .map(|column| {
+            static_view.line_style_spans[0]
+                .iter()
+                .rev()
+                .find(|span| {
+                    column >= span.start && column < span.start.saturating_add(span.length)
+                })
+                .expect("static running status column should be styled")
+                .rendition
+        })
+        .collect::<Vec<_>>();
+    assert!(static_renditions.iter().all(|rendition| {
+        rendition.foreground == Some(foreground) && rendition.background == Some(background)
     }));
 }
 

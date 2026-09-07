@@ -323,13 +323,24 @@ pub(in crate::host::terminal::render) fn pane_frame_right_status_segment_style_s
         )
         && pane_frame_agent_status_is_active(&segment.value)
         && !frame_context.reduced_motion
+        && segment.key.color_overrides.background.is_none()
     {
         return pane_frame_agent_status_scan_spans(
             column_offset.saturating_add(segment.start),
             segment.width,
             frame_context.animation_tick_ms,
             ui_theme,
-        );
+        )
+        .into_iter()
+        .map(|mut span| {
+            span.rendition = frame_pill_color_overridden_rendition(
+                span.rendition,
+                &segment.key.color_overrides,
+                ui_theme,
+            );
+            span
+        })
+        .collect();
     }
     vec![TerminalStyleSpan {
         start: column_offset.saturating_add(segment.start),
@@ -349,7 +360,7 @@ pub(in crate::host::terminal::render) fn pane_frame_right_status_rendition(
 ) -> GraphicRendition {
     use crate::host::terminal::{PaneStatusField, PaneStatusStyle};
 
-    match segment.key.style {
+    let rendition = match segment.key.style {
         PaneStatusStyle::ScrollIndicator => ui_theme.colors.scroll_indicator.rendition(),
         PaneStatusStyle::PaneProgress => ui_theme.colors.pane_progress.rendition(),
         PaneStatusStyle::PaneWorkingDirectory => ui_theme.colors.pane_pwd.rendition(),
@@ -393,7 +404,31 @@ pub(in crate::host::terminal::render) fn pane_frame_right_status_rendition(
             }
             PaneStatusField::Provider => ui_theme.colors.pane_pwd.rendition(),
         },
+    };
+    frame_pill_color_overridden_rendition(rendition, &segment.key.color_overrides, ui_theme)
+}
+
+/// Replaces configured color channels while preserving semantic attributes.
+fn frame_pill_color_overridden_rendition(
+    mut rendition: GraphicRendition,
+    overrides: &crate::host::terminal::FramePillColorOverrides,
+    ui_theme: &UiTheme,
+) -> GraphicRendition {
+    if let Some(foreground) = overrides
+        .foreground
+        .as_ref()
+        .and_then(|name| ui_theme.aliases.get(name))
+    {
+        rendition.foreground = Some(*foreground);
     }
+    if let Some(background) = overrides
+        .background
+        .as_ref()
+        .and_then(|name| ui_theme.aliases.get(name))
+    {
+        rendition.background = Some(*background);
+    }
+    rendition
 }
 
 /// Returns the thinking-mode pill rendition for a pane-local value.

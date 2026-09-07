@@ -1206,7 +1206,15 @@ impl crate::runtime::RuntimeSessionService {
             pane_id: pane_id.to_string(),
             name: name.to_string(),
             cwd,
-            config_generation: self.session.config_generation,
+            config_generation: pane_provider_definition_generation(
+                self.presentation
+                    .settings
+                    .pane_status
+                    .pills
+                    .get(name)?
+                    .provider
+                    .as_ref()?,
+            ),
             context_generation,
         })
     }
@@ -1358,7 +1366,7 @@ impl crate::runtime::RuntimeSessionService {
                     pane_id: pane_id.clone(),
                     name: name.clone(),
                     cwd,
-                    config_generation: self.session.config_generation,
+                    config_generation: pane_provider_definition_generation(&provider),
                     context_generation,
                 };
                 requests.push(RuntimePaneStatusProviderRequest {
@@ -1409,9 +1417,6 @@ impl crate::runtime::RuntimeSessionService {
     ) -> std::result::Result<RuntimePaneStatusProviderLaunch, String> {
         let pane_id = preparation.key.pane_id.as_str();
         let provider = &preparation.definition;
-        if self.session.config_generation != preparation.key.config_generation {
-            return Err("provider configuration changed before admission".to_string());
-        }
         let configured = self
             .presentation
             .settings
@@ -1421,6 +1426,9 @@ impl crate::runtime::RuntimeSessionService {
             .and_then(|definition| definition.provider.as_ref());
         if configured != Some(provider) {
             return Err("provider definition changed before admission".to_string());
+        }
+        if pane_provider_definition_generation(provider) != preparation.key.config_generation {
+            return Err("provider configuration changed before admission".to_string());
         }
         if !self
             .session
@@ -1615,6 +1623,15 @@ fn pane_provider_context_generation(
     cwd.hash(&mut hasher);
     primary_pid.hash(&mut hasher);
     environment_signature.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Returns a deterministic generation for executable pane-provider configuration.
+fn pane_provider_definition_generation(definition: &PaneStatusProviderDefinition) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    definition.hash(&mut hasher);
     hasher.finish()
 }
 

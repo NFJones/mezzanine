@@ -118,6 +118,7 @@ fn client_loop_routes_input_to_pane_mux_and_mouse_actions() {
         },
         field: crate::host::terminal::PaneStatusField::AgentModel,
         style: crate::host::terminal::PaneStatusStyle::Automatic,
+        color_overrides: crate::host::terminal::FramePillColorOverrides::default(),
         action: crate::host::terminal::PaneStatusAction::Builtin(PaneAgentStatusField::Model),
         compact_display: "gpt".to_string(),
         min_width: None,

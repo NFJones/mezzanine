@@ -1580,6 +1580,10 @@ impl RuntimePresentationComponent {
         let clear_zen_focus_labels =
             !settings.terminal_zen_mode || settings.terminal_zen_focus_label_duration_ms == 0;
         let pane_status_changed = self.settings.pane_status != settings.pane_status;
+        let pane_providers_changed = !self
+            .settings
+            .pane_status
+            .providers_eq(&settings.pane_status);
         let pane_provider_visibility_changed = self.settings.pane_frames_enabled
             != settings.pane_frames_enabled
             || self.settings.terminal_zen_mode != settings.terminal_zen_mode;
@@ -1587,7 +1591,7 @@ impl RuntimePresentationComponent {
         if clear_zen_focus_labels {
             self.clear_all_zen_focus_labels();
         }
-        if pane_status_changed {
+        if pane_providers_changed {
             self.pane_status_provider_cache
                 .borrow_mut()
                 .invalidate_all();
