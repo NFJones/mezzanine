@@ -655,6 +655,66 @@ mod tests {
         assert_eq!(restored.authoritative_size, hidden.authoritative_size);
     }
 
+    /// Selector rectangles suppress only intersecting labels, without exposing
+    /// a clipped fragment beside the control. Modal ownership suppresses all
+    /// labels, and expiry while hidden cannot replay after modal dismissal.
+    #[test]
+    fn zen_focus_composition_selector_and_modal_precedence() {
+        let (mut service, primary) = fixture();
+        service
+            .execute_terminal_command(&primary, "new-window focus")
+            .unwrap();
+        let pane = service.session.active_pane_for(&primary).unwrap().clone();
+        service.presentation.pane_agent_status_selector =
+            Some(super::super::RuntimePaneAgentStatusSelector {
+                navigation: mez_mux::overlay::AnchoredSelector {
+                    pane_id: pane.id.to_string(),
+                    pane_index: pane.index,
+                    field: crate::host::terminal::PaneAgentStatusField::Settings,
+                    items: vec!["control".to_string()],
+                    active_index: 0,
+                    scroll_offset: 0,
+                    anchor_column: 0,
+                    anchor_row: 8,
+                    anchor_width: 8,
+                },
+                source_identity: None,
+                settings_entries: Vec::new(),
+            });
+        let hidden = view(&mut service, &primary);
+        assert!(hidden.lines[9].contains("control"));
+        assert!(!hidden.lines[9].contains("focus"));
+        service
+            .presentation
+            .pane_agent_status_selector
+            .as_mut()
+            .unwrap()
+            .anchor_column = 30;
+        let beside = view(&mut service, &primary);
+        assert!(beside.lines[9].contains("focus"));
+        assert!(beside.lines[9].contains("control"));
+        service.presentation.pane_agent_status_selector = None;
+        service
+            .show_primary_display_overlay(vec!["required modal".to_string()])
+            .unwrap();
+        let modal = view(&mut service, &primary);
+        assert!(
+            modal
+                .lines
+                .iter()
+                .any(|line| line.contains("required modal"))
+        );
+        assert!(!modal.lines.iter().any(|line| line.contains("focus")));
+        assert!(service.expire_zen_focus_labels_for_client(&primary, u64::MAX));
+        service.presentation.primary_display_overlay = None;
+        assert!(
+            !view(&mut service, &primary)
+                .lines
+                .iter()
+                .any(|line| line.contains("focus"))
+        );
+    }
+
     /// Rectangle boundary contact alone is not intersection.
     #[test]
     fn zen_focus_composition_rectangle_boundaries() {
