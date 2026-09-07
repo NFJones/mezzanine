@@ -738,7 +738,7 @@ fn maap_spawn_agent_action_schema() -> serde_json::Value {
                 serde_json::json!({
                     "type": ["string", "null"],
                     "enum": ["small", "medium", "large", null],
-                    "description": "Optional initial child model size. Provide it together with reasoning_effort to override automatic routing for the initial child turn only. Choose size for task scope, uncertainty, blast radius, and validation burden; a small final diff can still require large scope."
+                    "description": "Optional initial child model size. Provide it together with reasoning_effort to override automatic routing for the initial child turn only. Choose the smallest size adequate for task scope, uncertainty, blast radius, and validation burden; use validation to detect and correct an inadequate choice."
                 }),
             ),
             (
@@ -746,7 +746,7 @@ fn maap_spawn_agent_action_schema() -> serde_json::Value {
                 serde_json::json!({
                     "type": ["string", "null"],
                     "enum": ["low", "medium", "high", "xhigh", null],
-                    "description": "Optional initial child reasoning effort. Provide it together with size. Choose it for diagnostic depth, ambiguity, and consequence; implementation, debugging, refactoring, test-writing, and repository exploration must not use low. Choose the higher adjacent level when under-routing risks correctness or completion."
+                    "description": "Optional initial child reasoning effort. Provide it together with size. Choose the lowest adequate effort for diagnostic depth, ambiguity, and consequence; implementation, debugging, refactoring, test-writing, and repository exploration must not use low. Use validation to detect and correct an inadequate choice."
                 }),
             ),
         ],
@@ -1027,6 +1027,28 @@ mod tests {
                 .as_array()
                 .is_some_and(|required| required.contains(&serde_json::json!("session")))
         );
+    }
+
+    /// Verifies spawned-child sizing guidance favors the smallest adequate
+    /// selection and requires validation to reveal an inadequate initial choice.
+    #[test]
+    fn spawn_agent_schema_favors_validation_led_conservative_sizing() {
+        let schema = maap_action_batch_schema(&AllowedActionSet::all_enabled(), &[]);
+        let spawn = schema["properties"]["actions"]["items"]["anyOf"]
+            .as_array()
+            .and_then(|variants| {
+                variants.iter().find(|variant| {
+                    variant["properties"]["type"]["enum"] == serde_json::json!(["spawn_agent"])
+                })
+            })
+            .expect("spawn_agent schema variant");
+
+        assert!(spawn["properties"]["size"]["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("smallest size adequate")));
+        assert!(spawn["properties"]["reasoning_effort"]["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("Use validation to detect and correct")));
     }
 
     /// Verifies third-party MCP input schemas are normalized into the OpenAI

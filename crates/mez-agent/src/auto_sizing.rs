@@ -490,8 +490,10 @@ fn auto_sizing_policy(auto_sizing: &AutoSizingDispatch, turn: &AgentTurnRecord) 
          test-writing, and codebase exploration tasks must use medium reasoning or higher. \
          Never choose low reasoning for coding, implementation, debugging, refactoring, \
          test-writing, planning, investigation, or codebase exploration tasks. \
-         When evidence falls between adjacent levels and under-routing would materially risk \
-         correctness or completion, choose the higher level. Confidence measures how clearly \
+         When evidence falls between adjacent levels, choose the lower adequate level and require \
+         a concrete validation path that can detect an inadequate choice early. Increase size or \
+         reasoning only after evidence shows the current level cannot complete the work safely. \
+         Confidence measures how clearly \
          the evidence supports the classification, not how easy the task is. The rationale \
          must name the decisive scope signal and depth signal without answering the task. \
          Do not size the task from the latest prompt length alone: terse referential prompts \
@@ -1003,9 +1005,10 @@ mod tests {
     }
 
     /// Verifies the router receives an operational two-axis rubric rather than
-    /// only broad task labels. These boundaries keep a short but risky task
-    /// from being undersized, distinguish high from exceptional xhigh depth,
-    /// and require a pair the selected target can actually execute.
+    /// only broad task labels. These boundaries favor the smallest adequate
+    /// selection, require validation to surface under-sizing early, distinguish
+    /// high from exceptional xhigh depth, and require a pair the selected target
+    /// can actually execute.
     #[test]
     fn auto_sizing_policy_defines_scope_depth_and_valid_pair_boundaries() {
         let turn = AgentTurnRecord {
@@ -1030,6 +1033,8 @@ mod tests {
         assert!(policy.contains("including required investigation, edits, validation"));
         assert!(policy.contains("A tiny final diff can still require large scope"));
         assert!(policy.contains("multiple plausible architectures"));
+        assert!(policy.contains("choose the lower adequate level"));
+        assert!(policy.contains("concrete validation path"));
         assert!(policy.contains("Confidence measures how clearly the evidence supports"));
         assert!(policy.contains("never emit an intentionally invalid pair"));
     }
