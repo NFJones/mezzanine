@@ -62,6 +62,28 @@ while you inspect, edit, and validate work.
 - A provider account and supported sign-in method, or a configured compatible
   local backend, for model-backed agent work.
 
+## Supported providers
+
+Check your provider and authentication method before installing:
+
+| Provider or backend | Support | Authentication and requirements |
+| --- | --- | --- |
+| OpenAI | Built-in, using the Responses API | Browser sign-in (default interactive flow), device-code sign-in, or API key. Model access depends on your account. |
+| Anthropic | Built-in, using the Messages API | Anthropic Console API key. |
+| DeepSeek | Built-in, using its Chat Completions API | DeepSeek API key. |
+| OpenAI-compatible hosted or local backends | Configurable Responses or Chat Completions adapters | Configure the API base URL, models, and any credentials required by the backend. Compatibility depends on the endpoint and model. |
+
+Compatible backends must support the selected API and produce Mezzanine's
+structured action batches through tool calls or a supported structured-output
+mode. An OpenAI-compatible label alone does not guarantee compatibility with
+every model or server. Successful sign-in does not guarantee model entitlement
+or available quota.
+
+See [provider authentication](docs/getting-started/authentication.md) for sign-in
+and credential handling, and the
+[provider configuration reference](docs/configuration/reference.md#providersname)
+for adapter options and an LM Studio example.
+
 ## Quick start
 
 Clone the repository, then install the product package from its root:
