@@ -2345,11 +2345,9 @@ fn runtime_streaming_say_retires_settled_shell_preview() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    set_agent_pane_screen_for_test(
-        &mut service,
-        "%1",
-        TerminalScreen::new(Size::new(40, 12).unwrap(), 120).unwrap(),
-    );
+    let mut screen = TerminalScreen::new(Size::new(40, 4).unwrap(), 120).unwrap();
+    screen.feed(b"durable zero\r\ndurable one\r\ndurable two\r\ndurable three");
+    set_agent_pane_screen_for_test(&mut service, "%1", screen);
     for event in [
         mez_agent::StreamingSayEvent::Started {
             action_index: 0,
@@ -2401,6 +2399,7 @@ fn runtime_streaming_say_retires_settled_shell_preview() {
         .normal_content_lines()
         .join("\n");
     assert!(retained.contains("settled shell tail one"), "{retained}");
+    let retained_history_len = service.agent_pane_screen("%1").unwrap().history().len();
 
     service
         .apply_agent_streaming_say_event_to_terminal_buffer(
@@ -2425,21 +2424,155 @@ fn runtime_streaming_say_retires_settled_shell_preview() {
             .unwrap()
     );
 
-    let updated = service
-        .agent_pane_screen("%1")
-        .unwrap()
-        .normal_content_lines()
-        .join("\n");
+    let updated_screen = service.agent_pane_screen("%1").unwrap();
+    let updated = updated_screen.normal_content_lines().join("\n");
     assert!(
         updated.contains("provider one and provider two"),
         "{updated}"
     );
     assert!(!updated.contains("settled shell tail one"), "{updated}");
     assert!(!updated.contains("settled shell tail two"), "{updated}");
+    assert_eq!(updated_screen.history().len(), retained_history_len);
     assert!(
         service
             .agent_shell_output_previews_for_tests("%1")
             .is_empty()
+    );
+}
+
+/// Verifies a full-pane provider rebase retires only settled shell ownership.
+///
+/// When settled and active preview owners share a full pane, consuming the
+/// settled suffix must retain its viewport displacement, project the active
+/// owner exactly once, and transfer that rebased baseline to later provider
+/// cleanup without resurrecting or duplicating either owner.
+#[test]
+fn runtime_streaming_say_rebases_mixed_shell_preview_owners_in_full_pane() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(40, 4).unwrap(), 120).unwrap();
+    screen.feed(b"durable zero\r\ndurable one\r\ndurable two\r\ndurable three");
+    set_agent_pane_screen_for_test(&mut service, "%1", screen);
+    for event in [
+        mez_agent::StreamingSayEvent::Started {
+            action_index: 0,
+            status: mez_agent::SayStatus::Progress,
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE.to_string(),
+        },
+        mez_agent::StreamingSayEvent::TextDelta {
+            action_index: 0,
+            text: "provider one".to_string(),
+        },
+    ] {
+        service
+            .apply_agent_streaming_say_event_to_terminal_buffer("%1", "turn-provider", &event)
+            .unwrap();
+    }
+    let first_projection = RuntimeSessionService::build_agent_streaming_say_projection(
+        service
+            .take_agent_streaming_say_projection_work("%1", "turn-provider")
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(first_projection)
+            .unwrap()
+    );
+    let provider_history_len = service.agent_pane_screen("%1").unwrap().history().len();
+
+    let settled_owner = crate::runtime::render::RuntimeAgentShellPreviewOwner {
+        turn_id: "turn-shell-settled".to_string(),
+        action_id: "shell-settled".to_string(),
+        marker: "marker-settled".to_string(),
+    };
+    let active_owner = crate::runtime::render::RuntimeAgentShellPreviewOwner {
+        turn_id: "turn-shell-active".to_string(),
+        action_id: "shell-active".to_string(),
+        marker: "marker-active".to_string(),
+    };
+    service
+        .update_agent_shell_output_preview(
+            "%1",
+            settled_owner.clone(),
+            1,
+            &[
+                "settled shell one".to_string(),
+                "settled shell two".to_string(),
+            ],
+        )
+        .unwrap();
+    service
+        .update_agent_shell_output_preview(
+            "%1",
+            active_owner.clone(),
+            1,
+            &["active shell once".to_string()],
+        )
+        .unwrap();
+    assert!(service.settle_agent_shell_output_preview("%1", &settled_owner));
+    let retained_history_len = service.agent_pane_screen("%1").unwrap().history().len();
+
+    service
+        .apply_agent_streaming_say_event_to_terminal_buffer(
+            "%1",
+            "turn-provider",
+            &mez_agent::StreamingSayEvent::TextDelta {
+                action_index: 0,
+                text: " and provider two".to_string(),
+            },
+        )
+        .unwrap();
+    let second_projection = RuntimeSessionService::build_agent_streaming_say_projection(
+        service
+            .take_agent_streaming_say_projection_work("%1", "turn-provider")
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(second_projection)
+            .unwrap()
+    );
+
+    let rebased_screen = service.agent_pane_screen("%1").unwrap();
+    let rebased = rebased_screen.normal_content_lines().join("\n");
+    assert_eq!(rebased_screen.history().len(), retained_history_len);
+    assert!(
+        rebased.contains("provider one and provider two"),
+        "{rebased}"
+    );
+    assert!(!rebased.contains("settled shell one"), "{rebased}");
+    assert!(!rebased.contains("settled shell two"), "{rebased}");
+    assert_eq!(rebased.matches("active shell once").count(), 1, "{rebased}");
+    assert_eq!(service.agent_shell_output_previews_for_tests("%1").len(), 1);
+
+    assert!(
+        service
+            .discard_agent_streaming_say_presentation("%1", Some("turn-provider"))
+            .unwrap()
+    );
+    let restored_screen = service.agent_pane_screen("%1").unwrap();
+    let restored = restored_screen.normal_content_lines().join("\n");
+    assert_eq!(
+        restored_screen.history().len(),
+        retained_history_len.saturating_sub(provider_history_len)
+    );
+    assert!(!restored.contains("provider one"), "{restored}");
+    assert!(!restored.contains("settled shell one"), "{restored}");
+    assert_eq!(
+        restored.matches("active shell once").count(),
+        1,
+        "{restored}"
+    );
+    assert_eq!(
+        service.agent_shell_output_previews_for_tests("%1"),
+        vec![(active_owner, 1, 1, vec!["active shell once".to_string()])]
     );
 }
 

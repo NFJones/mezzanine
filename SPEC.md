@@ -2432,7 +2432,11 @@ its final bounded tail visible until the next durable pane append. Replacing or
 retiring transient preview or executor-progress rows at the pane bottom MUST
 preserve the viewport and history displacement already presented, MUST NOT
 cause a second scroll or baseline rewind, and SHOULD publish one atomic screen
-generation. Transient rows MUST NOT become durable presentation records or
+generation. When a provider projection retires settled shell owners, it MUST
+transfer the installed shell-preview generation's displacement to both the
+incoming provider screen and the streaming pre-provider baseline before
+reapplying each still-active owner exactly once. Transient rows MUST NOT become
+durable presentation records or
 resume history.
 An attached-terminal pane-step request accepted by the serialized runtime actor
 MUST await actor settlement without a client-side elapsed-time cutoff, so the

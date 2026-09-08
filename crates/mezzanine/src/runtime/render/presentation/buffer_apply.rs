@@ -2382,7 +2382,7 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
         conversation_id: &str,
-        provider_screen: TerminalScreen,
+        mut provider_screen: TerminalScreen,
     ) -> Result<u64> {
         let current_lineage = self
             .agent_pane_screen_lineage(pane_id, conversation_id)
@@ -2398,7 +2398,39 @@ impl RuntimeSessionService {
                 preview.conversation_id == conversation_id
                     && preview.installed_lineage == current_lineage
             });
+        let mut rebased_streaming_baseline = None;
         if let Some(preview) = preview_presentation.as_mut() {
+            if !preview.settled_owners.is_empty() {
+                let ui_theme = self.presentation.settings.ui_theme.clone();
+                let max_preview_rows = self.terminal_shell_output_preview_lines();
+                let column_cap = self.presentation.settings.terminal_agent_wrap_column_cap;
+                Self::rebase_screen_after_settled_agent_shell_previews(
+                    &mut provider_screen,
+                    preview,
+                    &ui_theme,
+                    max_preview_rows,
+                    column_cap,
+                )?;
+                if let Some(mut baseline) = self
+                    .presentation
+                    .agent_streaming_say_presentations
+                    .get(pane_id)
+                    .filter(|streaming| {
+                        streaming.conversation_id == conversation_id
+                            && streaming.installed_lineage == current_lineage
+                    })
+                    .map(|streaming| streaming.baseline_screen.as_ref().clone())
+                {
+                    Self::rebase_screen_after_settled_agent_shell_previews(
+                        &mut baseline,
+                        preview,
+                        &ui_theme,
+                        max_preview_rows,
+                        column_cap,
+                    )?;
+                    rebased_streaming_baseline = Some(baseline);
+                }
+            }
             Self::retire_settled_agent_shell_previews(preview);
             if preview.previews.is_empty() {
                 preview_presentation = None;
@@ -2443,6 +2475,9 @@ impl RuntimeSessionService {
             .get_mut(pane_id)
             .filter(|presentation| presentation.conversation_id == conversation_id)
         {
+            if let Some(baseline) = rebased_streaming_baseline {
+                presentation.baseline_screen = std::sync::Arc::new(baseline);
+            }
             presentation.provider_screen = std::sync::Arc::new(provider_screen);
             presentation.installed_lineage = installed_lineage;
             if presentation.projected_lineage.is_some() {
@@ -3520,6 +3555,43 @@ impl RuntimeSessionService {
         for owner in std::mem::take(&mut presentation.settled_owners) {
             presentation.previews.remove(&owner);
         }
+    }
+
+    /// Transfers installed-preview viewport displacement into one provider base.
+    ///
+    /// The caller must hold exact composite lineage for `presentation`. Settled
+    /// and active owners are projected with their original rows and order, then
+    /// their exact suffix is consumed so the complete already-presented history
+    /// displacement remains. The caller can then retire settled owners and
+    /// project each active owner once onto the rebased screen.
+    fn rebase_screen_after_settled_agent_shell_previews(
+        screen: &mut TerminalScreen,
+        presentation: &super::super::RuntimeAgentShellPreviewPresentation,
+        ui_theme: &mez_mux::theme::UiTheme,
+        max_visual_rows: usize,
+        column_cap: usize,
+    ) -> Result<()> {
+        let installed_rows = Self::append_agent_shell_previews_to_screen(
+            screen,
+            &presentation.previews,
+            ui_theme,
+            max_visual_rows,
+            column_cap,
+        )?;
+        if installed_rows == 0 {
+            return Ok(());
+        }
+        let suffix = screen
+            .capture_transient_suffix(installed_rows, false)
+            .ok_or_else(|| {
+                MezError::invalid_state("installed shell preview suffix was unavailable")
+            })?;
+        if !screen.clear_transient_suffix(suffix) {
+            return Err(MezError::invalid_state(
+                "installed shell preview suffix changed during provider rebase",
+            ));
+        }
+        Ok(())
     }
 
     /// Projects all active shell previews onto one preview-free pane screen.
