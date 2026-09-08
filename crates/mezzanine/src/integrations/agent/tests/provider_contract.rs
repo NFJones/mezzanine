@@ -170,6 +170,32 @@ fn provider_projection_matrix_preserves_chronology_and_neutral_authorship() {
             body.contains("not user-authored"),
             "{provider} did not identify neutral context: {body}"
         );
+        if provider == "openai-chat" {
+            let request: serde_json::Value = serde_json::from_str(&body).unwrap();
+            let messages = request["messages"].as_array().unwrap();
+            assert!(messages.iter().all(|message| {
+                message["role"] != "tool"
+                    || message["tool_call_id"]
+                        .as_str()
+                        .is_some_and(|id| !id.is_empty())
+            }));
+            let evidence = messages
+                .iter()
+                .filter(|message| {
+                    message["content"]
+                        .as_str()
+                        .is_some_and(|content| content.contains("ACTION_RESULT_MARKER"))
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(evidence.len(), 1);
+            assert_eq!(evidence[0]["role"], "system");
+            assert!(
+                evidence[0]["content"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("[Mezzanine context; not user-authored]\n")
+            );
+        }
     }
 }
 

@@ -454,7 +454,7 @@ fn projected_context_role(provider: &str, role: ModelMessageRole) -> &'static st
             ModelMessageRole::Developer => "developer_or_system",
             ModelMessageRole::User => "user",
             ModelMessageRole::Assistant => "assistant",
-            ModelMessageRole::Tool => "tool",
+            ModelMessageRole::Tool => "developer_or_system_evidence_wrapper",
             ModelMessageRole::Context => "developer_or_system_neutral_wrapper",
         },
     }
@@ -540,6 +540,17 @@ mod tests {
         );
         assert_eq!(diagnostics.snapshot.stable_projection_sha256.len(), 64);
         assert_eq!(diagnostics.snapshot.provider_projection_sha256.len(), 64);
+    }
+
+    /// Verifies generic Chat Completions diagnostics describe canonical tool
+    /// evidence as a neutral instruction wrapper rather than a native tool
+    /// message, which would require a validated call identity.
+    #[test]
+    fn context_continuity_reports_generic_tool_evidence_as_neutral() {
+        assert_eq!(
+            projected_context_role("compatible-provider", ModelMessageRole::Tool),
+            "developer_or_system_evidence_wrapper"
+        );
     }
 
     /// Verifies expected lifecycle changes are distinguished from rewrites.

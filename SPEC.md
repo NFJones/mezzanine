@@ -4828,7 +4828,15 @@ provider-level compatibility options for `tool_calls`, `tool_choice`,
 native OpenAI tools or structured JSON response-format output; structured JSON
 MUST reuse the same active-surface MAAP action-batch schema used by the
 canonical function tool and MUST be parsed as a MAAP batch from assistant
-content. When a compatible model catalog reports model capability tags such as
+content. A generic Chat Completions request MUST emit a native `role: "tool"`
+message only with a validated non-empty `tool_call_id` matching its owning
+assistant call. Provider-neutral action evidence without native call identity
+MUST instead be retained once, in canonical order, under the configured
+developer role or system compatibility fallback, MUST be marked as
+non-user-authored, and MUST NOT receive a fabricated call identity. This
+neutral fallback also applies to content and structured-JSON MAAP output and
+MUST NOT require a backend-specific option. When a compatible model catalog
+reports model capability tags such as
 LM Studio's `tool_use`, Mezzanine MUST preserve those tags in provider model
 metadata and propagate them into runtime-generated model profile options.
 The `anthropic-messages` adapter MUST use Anthropic Messages semantics, send

@@ -959,7 +959,13 @@ not auto-detect or fall back to unary JSON: malformed, non-SSE, provider-error,
 or unterminated responses fail with a compatibility diagnostic. Supported
 enabled aliases are `enable`, `true`, `yes`, and `on`; disabled aliases are
 `disable`, `false`, `no`, and `off`. Provider option values are strings, so use
-`streaming = "true"`, not a bare TOML boolean. LM Studio-style model
+`streaming = "true"`, not a bare TOML boolean. Generic history emits native
+`role = "tool"` messages only when a validated non-empty `tool_call_id` matches
+the owning assistant call. Canonical action evidence without native identity,
+including content or structured-JSON MAAP results, is retained once under the
+configured `developer` role or `system` compatibility fallback and is marked
+as non-user-authored. Mezzanine does not fabricate call IDs, and this safe
+fallback requires no backend-specific option. LM Studio-style model
 catalog capability tags such as `tool_use` are retained in provider model
 metadata and copied into runtime-generated profile options as
 `model_capabilities`. By default Mezzanine sends the canonical

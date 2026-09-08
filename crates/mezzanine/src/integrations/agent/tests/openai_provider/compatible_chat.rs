@@ -778,6 +778,18 @@ fn openai_compatible_chat_completions_provider_uses_generic_tool_surface() {
         .unwrap(),
     )
     .unwrap();
+    request.messages.push(ModelMessage {
+        role: ModelMessageRole::Assistant,
+        source: ContextSourceKind::TranscriptAssistant,
+        placement: mez_agent::ContextPlacement::ConversationAppend,
+        content: "PRIOR_ASSISTANT_MARKER".to_string(),
+    });
+    request.messages.push(ModelMessage {
+        role: ModelMessageRole::Tool,
+        source: ContextSourceKind::ActionResult,
+        placement: mez_agent::ContextPlacement::ConversationAppend,
+        content: "PRIOR_ACTION_RESULT_MARKER".to_string(),
+    });
     request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
     request.allowed_actions =
         mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly);
@@ -864,6 +876,29 @@ fn openai_compatible_chat_completions_provider_uses_generic_tool_surface() {
     assert_eq!(
         body["tools"][0]["function"]["name"],
         OPENAI_MAAP_FUNCTION_TOOL_NAME
+    );
+    let messages = body["messages"].as_array().unwrap();
+    assert!(messages.iter().all(|message| {
+        message["role"] != "tool"
+            || message["tool_call_id"]
+                .as_str()
+                .is_some_and(|id| !id.is_empty())
+    }));
+    let evidence = messages
+        .iter()
+        .filter(|message| {
+            message["content"]
+                .as_str()
+                .is_some_and(|content| content.contains("PRIOR_ACTION_RESULT_MARKER"))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(evidence.len(), 1);
+    assert_eq!(evidence[0]["role"], "system");
+    assert!(
+        evidence[0]["content"]
+            .as_str()
+            .unwrap()
+            .starts_with("[Mezzanine context; not user-authored]\n")
     );
     assert_eq!(body["parallel_tool_calls"], false);
     assert!(body.get("thinking").is_none());

@@ -469,8 +469,7 @@ fn openai_chat_completions_messages(
                 ModelMessageRole::Developer => (developer_role.as_str(), message.content.clone()),
                 ModelMessageRole::User => ("user", message.content.clone()),
                 ModelMessageRole::Assistant => ("assistant", message.content.clone()),
-                ModelMessageRole::Tool => ("tool", message.content.clone()),
-                ModelMessageRole::Context => (
+                ModelMessageRole::Tool | ModelMessageRole::Context => (
                     developer_role.as_str(),
                     format!(
                         "[Mezzanine context; not user-authored]\n{}",
@@ -1204,6 +1203,85 @@ mod tests {
         let developer_messages =
             openai_chat_completions_messages(&request, OpenAiDeveloperRole::Developer);
         assert_eq!(developer_messages[0]["role"], "developer");
+    }
+
+    /// Verifies canonical action evidence without a validated native call id is
+    /// retained once in chronology through an explicitly neutral wrapper.
+    ///
+    /// Generic Chat Completions must never manufacture native tool identity or
+    /// emit an unpaired `role: tool` message because strict compatible APIs
+    /// reject that request shape.
+    #[test]
+    fn openai_chat_completions_wraps_unpaired_action_evidence_as_neutral_context() {
+        let mut request = test_request();
+        for message in [
+            ModelMessage {
+                role: ModelMessageRole::User,
+                source: ContextSourceKind::UserInstruction,
+                placement: crate::ContextPlacement::ConversationAppend,
+                content: "USER_MARKER".to_string(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::Assistant,
+                source: ContextSourceKind::TranscriptAssistant,
+                placement: crate::ContextPlacement::ConversationAppend,
+                content: "ASSISTANT_MARKER".to_string(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::Tool,
+                source: ContextSourceKind::ActionResult,
+                placement: crate::ContextPlacement::ConversationAppend,
+                content: "CURRENT_ACTION_RESULT_MARKER".to_string(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::Tool,
+                source: ContextSourceKind::TranscriptTool,
+                placement: crate::ContextPlacement::ConversationAppend,
+                content: "HISTORICAL_TOOL_RESULT_MARKER".to_string(),
+            },
+        ] {
+            request.messages.push(message);
+        }
+
+        for (developer_role, expected_role) in [
+            (OpenAiDeveloperRole::System, "system"),
+            (OpenAiDeveloperRole::Developer, "developer"),
+        ] {
+            let messages = openai_chat_completions_messages(&request, developer_role);
+            assert!(messages.iter().all(|message| message["role"] != "tool"));
+            for marker in [
+                "CURRENT_ACTION_RESULT_MARKER",
+                "HISTORICAL_TOOL_RESULT_MARKER",
+            ] {
+                let matches = messages
+                    .iter()
+                    .filter(|message| {
+                        message["content"]
+                            .as_str()
+                            .is_some_and(|content| content.contains(marker))
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(matches.len(), 1, "unexpected projection for {marker}");
+                assert_eq!(matches[0]["role"], expected_role);
+                assert!(
+                    matches[0]["content"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("[Mezzanine context; not user-authored]\n")
+                );
+            }
+            let rendered = serde_json::to_string(&messages).unwrap();
+            let ordered_markers = [
+                "USER_MARKER",
+                "ASSISTANT_MARKER",
+                "CURRENT_ACTION_RESULT_MARKER",
+                "HISTORICAL_TOOL_RESULT_MARKER",
+            ];
+            let positions = ordered_markers
+                .map(|marker| rendered.find(marker).unwrap())
+                .to_vec();
+            assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+        }
     }
 
     /// Verifies invalid compatibility values fail at the lower request-policy
