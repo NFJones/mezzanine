@@ -503,6 +503,47 @@ fn default_config_advertised_options_are_uncomment_safe() {
     );
 }
 
+/// Verifies the activatable LM Studio example configures only the compatible
+/// connection and an empty model catalog instead of inventing local metadata.
+#[test]
+fn default_config_lmstudio_example_uses_empty_model_catalog() {
+    let activated = DEFAULT_CONFIG_TOML
+        .lines()
+        .map(|line| line.strip_prefix("#? ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let parsed: toml::Value = toml::from_str(&activated).unwrap();
+    let validation = validate_config_text(ConfigFormat::Toml, &activated, ConfigScope::Primary);
+    assert!(validation.valid, "{:?}", validation.diagnostics);
+
+    let lmstudio = parsed
+        .get("providers")
+        .and_then(|providers| providers.get("lmstudio"))
+        .and_then(toml::Value::as_table)
+        .unwrap();
+    assert_eq!(
+        lmstudio.get("kind").and_then(toml::Value::as_str),
+        Some("openai-compatible")
+    );
+    assert_eq!(
+        lmstudio.get("api").and_then(toml::Value::as_str),
+        Some("openai-chat-completions")
+    );
+    assert!(
+        lmstudio
+            .get("models")
+            .and_then(toml::Value::as_table)
+            .is_some_and(toml::Table::is_empty)
+    );
+    assert!(!lmstudio.contains_key("default_model"));
+    assert!(
+        parsed
+            .get("model_profiles")
+            .and_then(toml::Value::as_table)
+            .is_none_or(|profiles| !profiles.contains_key("local-lmstudio"))
+    );
+}
+
 /// Verifies first-launch configuration documents every supported non-provider
 /// surface while keeping provider catalogs reserved for successful auth login.
 ///

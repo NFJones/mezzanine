@@ -39,6 +39,11 @@ For a compatible custom provider with no configured or discoverable models,
 the typed list output includes an `add` command and live-catalog guidance rather
 than presenting an unexplained empty result.
 
+The generated LM Studio example intentionally starts with an empty structured
+model table. `/refresh-provider-info` discovers models only for the running
+session; use `mez config model add lmstudio MODEL_ID` to persist the exact model
+identity and only metadata confirmed by the backend or its documentation.
+
 Configured models remain available when discovery omits them, and discovered
 metadata fills only configured gaps. Aliases select the canonical model id;
 unlisted custom profile models remain valid. `/refresh-provider-info`

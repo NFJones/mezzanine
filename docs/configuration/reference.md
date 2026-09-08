@@ -1001,12 +1001,8 @@ kind = "openai-compatible"
 api = "openai-chat-completions"
 auth_profile = "default"
 base_url = "http://localhost:1234/v1"
-default_model = "local-model"
 
-[providers.lmstudio.models.local-model]
-id = "local-model"
-display_name = "Local model"
-context_window_tokens = 32768
+[providers.lmstudio.models]
 
 [providers.lmstudio.options]
 maap_output = "structured_json"
@@ -1015,6 +1011,11 @@ tool_choice = "required" # only used when maap_output selects native tools
 parallel_tool_calls = "disabled"
 streaming = "enabled" # optional; backend must implement standard OpenAI SSE
 ```
+
+The empty model table avoids guessing which model LM Studio currently serves
+or inventing token limits and capabilities. Use `/refresh-provider-info` to
+observe the live catalog for the current session, or persist the exact
+provider-facing model ID with `mez config model add lmstudio MODEL_ID`.
 
 ### `model_profiles.<name>`
 

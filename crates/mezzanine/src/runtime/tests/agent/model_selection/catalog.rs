@@ -158,6 +158,59 @@ async fn runtime_agent_shell_model_list_uses_code_defaults_when_config_models_em
     assert!(model_list.contains("| config |"), "{model_list}");
 }
 
+/// Verifies an empty custom OpenAI-compatible model table accepts live
+/// discoveries without inheriting the built-in OpenAI model catalog.
+#[tokio::test]
+async fn runtime_agent_shell_model_list_discovers_empty_compatible_catalog() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"default\"\n\n[providers.openai]\nkind = \"openai\"\ndefault_model = \"gpt-5.6-sol\"\n[providers.openai.models.primary]\nid = \"gpt-5.6-sol\"\n\n[providers.lmstudio]\nkind = \"openai-compatible\"\napi = \"openai-chat-completions\"\nbase_url = \"http://localhost:1234/v1\"\n[providers.lmstudio.models]\n"
+                .to_string(),
+        }])
+        .unwrap();
+    service.cache_provider_model_catalog_for_tests(
+        "lmstudio",
+        vec![mez_agent::ProviderModelInfo {
+            id: "loaded-local-model".to_string(),
+            display_name: None,
+            reasoning_levels: Vec::new(),
+            context_window_tokens: None,
+            max_input_tokens: None,
+            max_output_tokens: None,
+            capabilities: Vec::new(),
+        }],
+        Vec::new(),
+    );
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    service
+        .apply_pane_model_picker_selection("%1", "lmstudio: loaded-local-model")
+        .unwrap();
+
+    let model_list = service
+        .execute_agent_shell_command_async(&primary, "/model list")
+        .await
+        .unwrap();
+
+    assert!(model_list.contains("| lmstudio |"), "{model_list}");
+    assert!(model_list.contains("loaded-local-model"), "{model_list}");
+    for openai_model in ["gpt-5.6-sol", "gpt-6-astra", "gpt-5.4-mini"] {
+        assert!(!model_list.contains(openai_model), "{model_list}");
+    }
+}
+
 /// Verifies live provider observations merge with configured provider models.
 ///
 /// Discovery must add provider-only models without hiding configured-only

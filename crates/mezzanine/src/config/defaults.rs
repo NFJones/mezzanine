@@ -758,19 +758,11 @@ max_output_tokens = 16000
 #? api = "openai-chat-completions"
 #? auth_profile = "default"
 #? base_url = "http://localhost:1234/v1"
-#? default_model = "local-model"
 #
-#? [providers.lmstudio.models.local-model]
-#? id = "local-model"
-#? display_name = "Local model"
-#? aliases = ["local"]
-#? context_window_tokens = 32768
-#? max_input_tokens = 28672
-#? max_output_tokens = 4096
-#? reasoning_levels = ["low", "medium", "high"]
-#? capabilities = ["text"]
-#? [providers.lmstudio.models.local-model.provider_options]
-#? runtime = "local"
+#? [providers.lmstudio.models]
+# Add verified models with `id`; optional fields are `display_name`, `aliases`,
+# `context_window_tokens`, `max_input_tokens`, `max_output_tokens`,
+# `reasoning_levels`, `capabilities`, and `provider_options`.
 #
 #? [providers.lmstudio.options]
 #? maap_output = "structured_json"
@@ -780,23 +772,6 @@ max_output_tokens = 16000
 #? parallel_tool_calls = "disabled"
 #? output_token_field = "max_tokens"
 #? maap_surface = "canonical_batch"
-#
-#? [model_profiles.local-lmstudio]
-#? provider = "lmstudio"
-#? model = "local-model"
-#? reasoning_profile = "medium"
-#? latency_preference = "default"
-#? multimodal_required = false
-#? context_window_tokens = 32768
-#? max_input_tokens = 28672
-#? max_output_tokens = 4096
-#? safety_tier = "basic"
-#? privacy_tier = "local"
-#? residency = "local"
-#? approval_policy = "ask"
-#? fallback_profiles = []
-#? [model_profiles.local-lmstudio.provider_options]
-#? runtime = "local"
 # Compatibility aliases replace canonical profile fields above:
 # `reasoning_effort`, `multimodal`, and `context_limit_tokens`.
 
