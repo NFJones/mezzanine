@@ -188,6 +188,7 @@ impl TerminalScreen {
             && bottom == self.max_row()
             && self.alternate.should_record_scroll_off_to_history()
         {
+            self.normal_scroll_rows = self.normal_scroll_rows.saturating_add(count as u64);
             self.normal_viewport_detached_from_history = false;
             for row in top..top.saturating_add(count) {
                 self.history.push_styled_line_with_wrap(

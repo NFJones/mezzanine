@@ -38,6 +38,18 @@ Permission decisions remain runtime-owned. A model cannot grant itself host
 access, filesystem authority, credentials, or a hidden local executor. Review
 the requested action and its scope when approval is required.
 
+### Live command output
+
+When raw shell output is hidden, running commands show a bounded live tail below
+the command preview. `terminal.shell_output_preview_lines` controls its maximum
+wrapped display rows (five by default). On short panes, the combined preview
+window is also limited to the pane height, showing its newest rows without
+discarding the retained source. New output replaces that window in
+place. After completion, the next persistent log consumes the window from its
+first row. Shorter output or removal leaves unused rows blank: it does not pull
+earlier pane logs back down. Logs scroll upward again only when new output
+reaches the bottom of the pane. The live tail is not saved as transcript history.
+
 ## Related pages
 
 - [Commands, skills, and macros](commands-skills-and-macros.md)

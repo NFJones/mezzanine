@@ -816,6 +816,149 @@ fn runtime_shell_preview_handoff_preserves_bottom_viewport_origin() {
     assert_eq!(replaced.cursor_state().row, 3);
 }
 
+/// Verifies a shorter live revision cannot undo scrolling by an earlier tail.
+///
+/// The command window has already displaced durable rows. Replacing its three
+/// rows with one must clear the unused rows below, not pull history back down;
+/// the next durable append must then consume that same window head.
+#[test]
+fn runtime_shell_preview_shrink_preserves_visible_rows() {
+    let mut service = test_runtime_service();
+    let client_size = Size::new(60, 12).unwrap();
+    service
+        .attach_primary("primary", true, client_size, 120)
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let mut screen = TerminalScreen::new(Size::new(60, 5).unwrap(), 40).unwrap();
+    screen.feed(b"durable-zero\r\ndurable-one\r\ndurable-two\r\ndurable-three\r\ndurable-four");
+    service.set_agent_pane_screen("%1", conversation_id, screen);
+    let owner = crate::runtime::render::RuntimeAgentShellPreviewOwner {
+        turn_id: "turn-shrink".to_string(),
+        action_id: "shell-shrink".to_string(),
+        marker: "marker-shrink".to_string(),
+    };
+    service
+        .update_agent_shell_output_preview(
+            "%1",
+            owner.clone(),
+            1,
+            &[
+                "tail-one".to_string(),
+                "tail-two".to_string(),
+                "tail-three".to_string(),
+            ],
+        )
+        .unwrap();
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let displayed_tail = service
+        .render_client_view(ClientViewRole::Primary, client_size, &config)
+        .unwrap()
+        .unwrap();
+    service
+        .update_agent_shell_output_preview("%1", owner.clone(), 2, &["shorter tail".to_string()])
+        .unwrap();
+    assert_eq!(
+        service.agent_pane_screen("%1").unwrap().visible_lines(),
+        vec!["durable-three", "durable-four", "▐ shorter tail", "", ""]
+    );
+    assert!(service.settle_agent_shell_output_preview("%1", &owner));
+    service
+        .append_agent_status_text_to_terminal_buffer("%1", "next durable")
+        .unwrap();
+    assert_eq!(
+        service.agent_pane_screen("%1").unwrap().visible_lines(),
+        vec!["durable-three", "durable-four", "▐ next durable", "", ""]
+    );
+    let displayed_replacement = service
+        .render_client_view(ClientViewRole::Primary, client_size, &config)
+        .unwrap()
+        .unwrap();
+    for marker in ["durable-three", "durable-four"] {
+        let row = displayed_tail
+            .lines
+            .iter()
+            .position(|line| line.contains(marker))
+            .unwrap();
+        assert_eq!(
+            displayed_replacement
+                .lines
+                .iter()
+                .position(|line| line.contains(marker)),
+            Some(row)
+        );
+    }
+    assert_eq!(
+        displayed_replacement
+            .lines
+            .iter()
+            .position(|line| line.contains("next durable"))
+            .unwrap(),
+        displayed_tail
+            .lines
+            .iter()
+            .position(|line| line.contains("tail-one"))
+            .unwrap(),
+    );
+}
+
+/// Verifies a clipped command window remains usable after a shorter revision.
+///
+/// A tail taller than the pane can put its original head into history. New
+/// live and durable rows must use the visible window head rather than disappear
+/// into that obsolete off-screen position.
+#[test]
+fn runtime_shell_preview_shrink_keeps_clipped_replacement_visible() {
+    let mut service = test_runtime_service();
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let mut screen = TerminalScreen::new(Size::new(60, 2).unwrap(), 40).unwrap();
+    screen.feed(b"durable-zero\r\ndurable-one");
+    service.set_agent_pane_screen("%1", conversation_id, screen);
+    let owner = crate::runtime::render::RuntimeAgentShellPreviewOwner {
+        turn_id: "turn-clipped".to_string(),
+        action_id: "shell-clipped".to_string(),
+        marker: "marker-clipped".to_string(),
+    };
+    service
+        .update_agent_shell_output_preview(
+            "%1",
+            owner.clone(),
+            1,
+            &[
+                "tail-one".to_string(),
+                "tail-two".to_string(),
+                "tail-three".to_string(),
+            ],
+        )
+        .unwrap();
+    service
+        .update_agent_shell_output_preview("%1", owner.clone(), 2, &["replacement".to_string()])
+        .unwrap();
+    assert_eq!(
+        service.agent_pane_screen("%1").unwrap().visible_lines(),
+        vec!["▐ replacement", ""]
+    );
+    assert!(service.settle_agent_shell_output_preview("%1", &owner));
+    service
+        .append_agent_status_text_to_terminal_buffer("%1", "next durable")
+        .unwrap();
+    assert_eq!(
+        service.agent_pane_screen("%1").unwrap().visible_lines(),
+        vec!["▐ next durable", ""]
+    );
+}
+
 /// Verifies aggregate turn cancellation retires only the matching owners.
 ///
 /// Cancellation may cover managed or native work and therefore operates at the

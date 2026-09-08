@@ -2410,7 +2410,10 @@ MUST be bounded by `terminal.shell_output_preview_lines`, which defaults to 5,
 after grapheme-safe wrapping at the pane's current content width. Whitespace
 boundaries SHOULD be preferred, but an unbroken overflowing segment MUST be
 hard-wrapped so one logical line cannot consume more visual rows than the
-configured tail permits. New command-output lines SHOULD replace that block in
+configured tail permits. The combined preview window MUST also fit within the
+agent pane's physical rows; when concurrent previews exceed that space, only
+the newest rows in owner display order are shown, while each owner's logical
+source remains available for updates and resize. New command-output lines SHOULD replace that block in
 place instead of appending transcript history, and pane resize MUST reflow the
 retained logical source before selecting the newest visual-row tail. The next
 durable agent transcript row SHOULD clear or overwrite the preview. If a PTY
@@ -2432,12 +2435,17 @@ its final bounded tail visible until the next durable pane append. Replacing or
 retiring transient preview or executor-progress rows at the pane bottom MUST
 preserve the viewport and history displacement already presented, MUST NOT
 cause a second scroll or baseline rewind, and SHOULD publish one atomic screen
-generation. When a provider projection retires settled shell owners, it MUST
-transfer the installed shell-preview generation's displacement to both the
-incoming provider screen and the streaming pre-provider baseline before
-reapplying each still-active owner exactly once. Transient rows MUST NOT become
-durable presentation records or
-resume history.
+generation. Live snapshot replacement MUST preserve a forward-only viewport
+origin independently of retained history length. Shorter shell-tail revisions,
+provider revisions, and provider rollback MUST NOT pull scrolled-off rows back
+into view. Replacement rows MUST consume the vacated window from its head,
+leaving unused rows blank until later output reaches the bottom margin. When a
+provider projection retires settled shell owners, it MUST reapply each active
+owner exactly once and align the resulting composite to the already presented
+origin, not replay retired output to manufacture displacement. This coordinate
+is local to related live snapshots; reconstruction, reflow, and conversation
+replacement establish a new coordinate system. Transient rows MUST NOT become
+durable presentation records or resume history.
 An attached-terminal pane-step request accepted by the serialized runtime actor
 MUST await actor settlement without a client-side elapsed-time cutoff, so the
 caller cannot abandon an accepted mutation while it remains eligible to apply.

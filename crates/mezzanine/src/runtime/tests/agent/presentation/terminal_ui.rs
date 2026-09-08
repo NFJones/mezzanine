@@ -2440,6 +2440,145 @@ fn runtime_streaming_say_retires_settled_shell_preview() {
     );
 }
 
+/// Verifies a new provider response consumes an already displayed shell window.
+///
+/// Unlike an update to a provider response that predates the shell preview,
+/// this is the ordinary next-response handoff. Both its first projection and
+/// subsequent deltas must leave durable rows at their installed coordinates.
+#[test]
+fn runtime_streaming_say_after_settled_tail_preserves_visible_rows() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(60, 5).unwrap(), 40).unwrap();
+    screen.feed(b"durable-zero\r\ndurable-one\r\ndurable-two\r\ndurable-three\r\ndurable-four");
+    set_agent_pane_screen_for_test(&mut service, "%1", screen);
+    let owner = crate::runtime::render::RuntimeAgentShellPreviewOwner {
+        turn_id: "turn-shell".to_string(),
+        action_id: "shell".to_string(),
+        marker: "marker".to_string(),
+    };
+    service
+        .update_agent_shell_output_preview(
+            "%1",
+            owner.clone(),
+            1,
+            &[
+                "tail-one".to_string(),
+                "tail-two".to_string(),
+                "tail-three".to_string(),
+            ],
+        )
+        .unwrap();
+    assert!(service.settle_agent_shell_output_preview("%1", &owner));
+    assert_eq!(
+        service.agent_pane_screen("%1").unwrap().visible_lines(),
+        vec![
+            "durable-three",
+            "durable-four",
+            "▐ tail-one",
+            "▐ tail-two",
+            "▐ tail-three"
+        ]
+    );
+    service
+        .apply_agent_streaming_say_event_to_terminal_buffer(
+            "%1",
+            "turn-next",
+            &mez_agent::StreamingSayEvent::Started {
+                action_index: 0,
+                status: mez_agent::SayStatus::Progress,
+                content_type: mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE.to_string(),
+            },
+        )
+        .unwrap();
+    let mut frames = Vec::new();
+    for text in ["replacement", " continued"] {
+        service
+            .apply_agent_streaming_say_event_to_terminal_buffer(
+                "%1",
+                "turn-next",
+                &mez_agent::StreamingSayEvent::TextDelta {
+                    action_index: 0,
+                    text: text.to_string(),
+                },
+            )
+            .unwrap();
+        let projection = RuntimeSessionService::build_agent_streaming_say_projection(
+            service
+                .take_agent_streaming_say_projection_work("%1", "turn-next")
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            service
+                .apply_agent_streaming_say_projection_result(projection)
+                .unwrap()
+        );
+        frames.push(service.agent_pane_screen("%1").unwrap().visible_lines());
+    }
+    assert_eq!(
+        frames,
+        vec![
+            vec![
+                "durable-three",
+                "durable-four",
+                "▐ mez> replacement",
+                "",
+                ""
+            ],
+            vec![
+                "durable-three",
+                "durable-four",
+                "▐ mez> replacement continued",
+                "",
+                ""
+            ],
+        ]
+    );
+    service
+        .apply_agent_streaming_say_event_to_terminal_buffer(
+            "%1",
+            "turn-next",
+            &mez_agent::StreamingSayEvent::TextDelta {
+                action_index: 0,
+                text: "\nline two\nline three\nline four".to_string(),
+            },
+        )
+        .unwrap();
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(
+        service
+            .take_agent_streaming_say_projection_work("%1", "turn-next")
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap()
+    );
+    let before_rollback = service.agent_pane_screen("%1").unwrap().visible_lines();
+    assert!(
+        service
+            .discard_agent_streaming_say_presentation("%1", Some("turn-next"))
+            .unwrap()
+    );
+    let after_rollback = service.agent_pane_screen("%1").unwrap().visible_lines();
+    for marker in ["durable-three", "durable-four"] {
+        assert_eq!(
+            after_rollback.iter().position(|line| line.contains(marker)),
+            before_rollback
+                .iter()
+                .position(|line| line.contains(marker)),
+            "rollback moved {marker} downward: {before_rollback:?} -> {after_rollback:?}",
+        );
+    }
+}
+
 /// Verifies a full-pane provider rebase retires only settled shell ownership.
 ///
 /// When settled and active preview owners share a full pane, consuming the
@@ -2483,8 +2622,6 @@ fn runtime_streaming_say_rebases_mixed_shell_preview_owners_in_full_pane() {
             .apply_agent_streaming_say_projection_result(first_projection)
             .unwrap()
     );
-    let provider_history_len = service.agent_pane_screen("%1").unwrap().history().len();
-
     let settled_owner = crate::runtime::render::RuntimeAgentShellPreviewOwner {
         turn_id: "turn-shell-settled".to_string(),
         action_id: "shell-settled".to_string(),
@@ -2559,10 +2696,7 @@ fn runtime_streaming_say_rebases_mixed_shell_preview_owners_in_full_pane() {
     );
     let restored_screen = service.agent_pane_screen("%1").unwrap();
     let restored = restored_screen.normal_content_lines().join("\n");
-    assert_eq!(
-        restored_screen.history().len(),
-        retained_history_len.saturating_sub(provider_history_len)
-    );
+    assert_eq!(restored_screen.history().len(), retained_history_len);
     assert!(!restored.contains("provider one"), "{restored}");
     assert!(!restored.contains("settled shell one"), "{restored}");
     assert_eq!(

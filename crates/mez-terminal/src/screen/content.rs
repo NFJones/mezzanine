@@ -1,7 +1,9 @@
 //! Public content and history projections for a terminal screen.
 //!
 //! This module exposes visible lines, styled lines, history, and grid size from
-//! canonical screen state. It does not parse input or perform cell edits.
+//! canonical screen state, plus generation-bound transient cleanup and snapshot
+//! viewport alignment. It does not parse terminal input. Snapshot alignment is
+//! opt-in for related live projections, never ordinary process-screen replay.
 
 use super::*;
 
@@ -216,6 +218,7 @@ impl TerminalScreen {
     /// recorded to normal history.
     pub fn clear_visible_into_history(&mut self) {
         self.mark_render_changed();
+        self.reset_normal_viewport_origin();
         if self.alternate.active() {
             self.clear_screen();
             return;
@@ -243,6 +246,44 @@ impl TerminalScreen {
     /// terminal output arrives, while its prior rows remain available in history.
     pub fn normal_viewport_detached_from_history(&self) -> bool {
         self.normal_viewport_detached_from_history
+    }
+
+    /// Advances a related snapshot to an already presented normal viewport origin.
+    ///
+    /// Callers must supply screens from the same presentation lineage. A shorter
+    /// replacement retains blank space below its content instead of bringing
+    /// scrolled-off rows back into view. The insertion cursor follows its source
+    /// row, clamped to the top if that row has already left the viewport. History
+    /// length is deliberately not used: retention and transient cleanup can both
+    /// remove history without reversing displayed scrolling. Geometry changes
+    /// and alternate screens require their own reconstruction and are ignored.
+    pub fn preserve_normal_viewport_origin(&mut self, presented: &Self) {
+        if self.size != presented.size
+            || self.normal_scroll_epoch.0 != presented.normal_scroll_epoch.0
+            || self.alternate.active()
+            || presented.alternate.active()
+            || self.normal_scroll_rows >= presented.normal_scroll_rows
+        {
+            return;
+        }
+        let displacement = presented.normal_scroll_rows - self.normal_scroll_rows;
+        // Once all source rows leave the grid, further displacement is only a
+        // coordinate change; do not manufacture an unbounded blank history.
+        let rows = displacement.min(u64::from(self.size.rows)) as usize;
+        self.scroll_region_up_from(0, self.max_row(), rows);
+        if self.cursor.row < rows {
+            self.cursor.column = 0;
+            self.wrap_pending = false;
+        }
+        self.cursor.row = self.cursor.row.saturating_sub(rows);
+        self.normal_scroll_rows = presented.normal_scroll_rows;
+        self.mark_render_changed();
+    }
+
+    /// Starts a new physical coordinate system after explicit reconstruction.
+    pub(super) fn reset_normal_viewport_origin(&mut self) {
+        self.normal_scroll_epoch = next_render_generation();
+        self.normal_scroll_rows = 0;
     }
 
     /// Captures a generation-bound visible suffix after transient rows render.
@@ -356,6 +397,7 @@ impl TerminalScreen {
         visible_lines: &[TerminalStyledLine],
     ) {
         self.mark_render_changed();
+        self.reset_normal_viewport_origin();
         self.history.clear();
         for line in history_lines {
             self.history.push_styled_line(line.clone());

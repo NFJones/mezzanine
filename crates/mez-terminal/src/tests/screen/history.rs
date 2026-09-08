@@ -185,6 +185,100 @@ fn terminal_screen_clears_history_spanning_transient_suffix() {
     assert_eq!(screen.cursor_state().row, 0);
 }
 
+/// Verifies snapshot alignment tracks displayed scrolling through history rotation.
+///
+/// A shorter replacement must keep its durable row at the installed coordinate,
+/// preserve styles and raw-copy metadata, and leave reusable blank space below.
+/// History capacity cannot serve as a displacement counter once it is full.
+#[test]
+fn terminal_screen_snapshot_alignment_survives_history_rotation() {
+    let mut baseline =
+        TerminalScreen::new_with_history_config(Size::new(20, 4).unwrap(), 2, 1).unwrap();
+    baseline
+        .feed(b"old-zero\r\nold-one\r\nold-two\r\nold-three\r\nold-four\r\n\x1b[31mdurable\x1b[0m");
+    baseline.set_recent_normal_copy_texts(&["raw durable".to_string()], "skip");
+    let mut presented = baseline.clone();
+    presented.feed(b"\r\ntail-one\r\ntail-two");
+    let mut replacement = baseline.clone();
+    replacement.feed(b"\r\nnext");
+    assert_eq!(presented.history().len(), replacement.history().len());
+
+    replacement.preserve_normal_viewport_origin(&presented);
+
+    assert_eq!(
+        replacement.visible_lines(),
+        vec!["old-four", "durable", "next", ""]
+    );
+    assert_eq!(replacement.cursor_state().row, 2);
+    assert_eq!(
+        replacement.visible_styled_lines()[1],
+        presented.visible_styled_lines()[1]
+    );
+    assert_eq!(
+        replacement.history().lines().collect::<Vec<_>>(),
+        vec!["old-two", "old-three"]
+    );
+    let aligned = replacement.clone();
+    replacement.preserve_normal_viewport_origin(&presented);
+    assert_eq!(replacement, aligned, "alignment must be idempotent");
+    replacement.feed(b"\r\nlast");
+    assert_eq!(
+        replacement.visible_lines(),
+        vec!["old-four", "durable", "next", "last"]
+    );
+    replacement.feed(b"\r\nscroll");
+    assert_eq!(
+        replacement.visible_lines(),
+        vec!["durable", "next", "last", "scroll"]
+    );
+}
+
+/// Verifies hidden protocol traffic cannot manufacture visible displacement.
+///
+/// The hidden parser uses temporary cells and history; scrolling those cells
+/// must not advance the coordinate used by a later live snapshot replacement.
+#[test]
+fn terminal_screen_snapshot_alignment_ignores_hidden_protocol_scrolling() {
+    let mut screen = TerminalScreen::new(Size::new(20, 3).unwrap(), 20).unwrap();
+    screen.feed(b"zero\r\none\r\ntwo");
+    let mut snapshot = screen.clone();
+    screen.feed_protocol_preserving_content(b"\r\nhidden-one\r\nhidden-two\r\nhidden-three");
+    let before = snapshot.clone();
+    snapshot.preserve_normal_viewport_origin(&screen);
+    assert_eq!(snapshot, before);
+    assert_eq!(screen.visible_lines(), before.visible_lines());
+}
+
+/// Verifies reconstruction does not inherit an unrelated physical scroll origin.
+///
+/// Equal geometry does not imply shared coordinates: replay and a resize round
+/// trip may both produce a different row mapping. Alternate buffers are likewise
+/// outside the live normal-screen replacement contract.
+#[test]
+fn terminal_screen_snapshot_alignment_rejects_unrelated_coordinates() {
+    let size = Size::new(20, 3).unwrap();
+    let mut presented = TerminalScreen::new(size, 20).unwrap();
+    presented.feed(b"zero\r\none\r\ntwo\r\nthree\r\nfour");
+    let mut unrelated = TerminalScreen::new(size, 20).unwrap();
+    unrelated.feed(b"independent");
+    let before = unrelated.clone();
+    unrelated.preserve_normal_viewport_origin(&presented);
+    assert_eq!(unrelated, before);
+
+    let mut resized = presented.clone();
+    resized.resize(Size::new(20, 4).unwrap());
+    resized.resize(size);
+    let before = resized.clone();
+    resized.preserve_normal_viewport_origin(&presented);
+    assert_eq!(resized, before);
+
+    let mut alternate = presented.clone();
+    alternate.feed(b"\x1b[?1049h");
+    let before = alternate.clone();
+    alternate.preserve_normal_viewport_origin(&presented);
+    assert_eq!(alternate, before);
+}
+
 /// Verifies copy metadata mutation clones only its owning immutable chunk.
 ///
 /// Copy-mode metadata must remain isolated between screen generations without

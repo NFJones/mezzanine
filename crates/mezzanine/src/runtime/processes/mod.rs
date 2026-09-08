@@ -2124,16 +2124,19 @@ impl RuntimeSessionService {
     /// Returns the newly installed lineage, or `None` when the pane has no
     /// retained agent screen for the requested conversation. Delayed projections
     /// can retain this token without comparing complete terminal histories.
+    /// Related live snapshots preserve the furthest presented viewport origin;
+    /// reconstructed screens carry a distinct coordinate epoch and are exempt.
     pub(crate) fn update_agent_pane_screen_preserving_interaction(
         &mut self,
         pane_id: &str,
         conversation_id: &str,
-        screen: TerminalScreen,
+        mut screen: TerminalScreen,
     ) -> Option<u64> {
         let current = self.process.agent_pane_screens.get_mut(pane_id)?;
         if current.conversation_id != conversation_id {
             return None;
         }
+        screen.preserve_normal_viewport_origin(&current.screen);
         self.process.next_agent_pane_screen_lineage = self
             .process
             .next_agent_pane_screen_lineage

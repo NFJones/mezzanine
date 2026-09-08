@@ -268,6 +268,8 @@ impl TerminalScreen {
             alternate: AlternateScreenState::new(),
             alternate_screen_generation: 0,
             history: HistoryBuffer::new_with_rotation(history_limit, history_rotate_lines)?,
+            normal_scroll_rows: 0,
+            normal_scroll_epoch: next_render_generation(),
             normal_viewport_detached_from_history: false,
             render_generation: next_render_generation(),
             synchronized_output: SynchronizedOutputState::default(),
@@ -382,6 +384,8 @@ impl TerminalScreen {
             .map(RetainedScreenContent::take_saved);
         let empty_history = self.history.empty_with_same_policy();
         let previous_history = std::mem::replace(&mut self.history, empty_history);
+        let previous_scroll_rows = self.normal_scroll_rows;
+        let previous_scroll_epoch = self.normal_scroll_epoch;
         let previous_activity_events = self.activity_events;
         let previous_bell_events = self.bell_events;
 
@@ -419,6 +423,8 @@ impl TerminalScreen {
                 .restore_current(self);
         }
         self.history = previous_history;
+        self.normal_scroll_rows = previous_scroll_rows;
+        self.normal_scroll_epoch = previous_scroll_epoch;
         self.activity_events = previous_activity_events;
         self.bell_events = previous_bell_events;
         if outcome.begin_epoch.is_some() && !synchronized_output_was_active {
@@ -437,6 +443,7 @@ impl TerminalScreen {
             return;
         }
         self.mark_render_changed();
+        self.reset_normal_viewport_origin();
 
         // DECSTBM margins describe coordinates in the current grid. Reset
         // them before choosing a resize strategy so stale bounds cannot drive
@@ -471,6 +478,7 @@ impl TerminalScreen {
     /// cursor reports, and resizes all use one consistent footprint model.
     pub fn rebuild_for_width_policy_change(&mut self, emoji_width: TerminalEmojiWidth) {
         self.mark_render_changed();
+        self.reset_normal_viewport_origin();
         self.emoji_width = emoji_width;
         let size = self.size;
         // A delayed wrap records that the previous width policy filled the

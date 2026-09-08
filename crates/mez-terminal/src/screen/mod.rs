@@ -790,6 +790,16 @@ pub struct TerminalScreen {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) history: HistoryBuffer,
+    /// Cumulative full-normal-screen scroll rows, independent of history retention.
+    ///
+    /// Cloned presentation snapshots share this coordinate so replacement can
+    /// preserve forward-only viewport movement even when history rotates.
+    pub(super) normal_scroll_rows: u64,
+    /// Identity of the physical coordinate system shared only by live clones.
+    ///
+    /// Reconstruction and reflow establish new coordinates; their scroll counts
+    /// cannot be compared with snapshots from the previous geometry or source.
+    pub(super) normal_scroll_epoch: RenderGeneration,
     /// Whether the normal-screen viewport was detached from scrollback by a
     /// full-screen clear such as shell `Ctrl+L`.
     pub(super) normal_viewport_detached_from_history: bool,
