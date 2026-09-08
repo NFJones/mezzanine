@@ -472,7 +472,7 @@ pub(in crate::host::terminal::render) fn pane_frame_policy_mode_rendition(
     } else if value == "full-access" {
         ui_theme.colors.agent_status_running.rendition()
     } else if value == "auto-allow" {
-        ui_theme.colors.agent_reasoning.rendition()
+        ui_theme.colors.agent_model.rendition()
     } else if value == "ask" {
         ui_theme.colors.agent_status_blocked.rendition()
     } else {
@@ -780,16 +780,45 @@ mod policy_mode_tests {
         );
     }
 
-    /// Verifies persistent host execution uses the failure/warning theme slot
-    /// and remains visually distinct from sandboxed full access.
+    /// Verifies configurable toggles, latency preferences, and policy modes
+    /// share one quiet background while semantic foreground accents distinguish
+    /// enabled, disabled, identity, caution, and unsafe values.
     #[test]
-    fn host_access_policy_mode_uses_warning_rendition() {
+    fn configurable_agent_pills_use_semantic_foreground_renditions() {
         let ui_theme = mez_mux::theme::deepforest_ui_theme();
 
-        let host = pane_frame_policy_mode_rendition("host-access", &ui_theme);
-        let full = pane_frame_policy_mode_rendition("full-access", &ui_theme);
-
-        assert_eq!(host, ui_theme.colors.agent_status_failed.rendition());
-        assert_ne!(host, full);
+        for rendition in [
+            pane_frame_agent_thinking_rendition("on", &ui_theme),
+            pane_frame_agent_planning_rendition("on", &ui_theme),
+            pane_frame_agent_routing_rendition("auto:on", &ui_theme),
+            pane_frame_latency_rendition("fast", &ui_theme),
+            pane_frame_policy_mode_rendition("full-access", &ui_theme),
+        ] {
+            assert_eq!(rendition, ui_theme.colors.agent_status_running.rendition());
+        }
+        for rendition in [
+            pane_frame_agent_thinking_rendition("off", &ui_theme),
+            pane_frame_agent_planning_rendition("off", &ui_theme),
+            pane_frame_agent_routing_rendition("auto:off", &ui_theme),
+            pane_frame_latency_rendition("slow", &ui_theme),
+        ] {
+            assert_eq!(rendition, ui_theme.colors.agent_status_idle.rendition());
+        }
+        assert_eq!(
+            pane_frame_latency_rendition("default", &ui_theme),
+            ui_theme.colors.agent_model.rendition()
+        );
+        assert_eq!(
+            pane_frame_policy_mode_rendition("auto-allow", &ui_theme),
+            ui_theme.colors.agent_model.rendition()
+        );
+        assert_eq!(
+            pane_frame_policy_mode_rendition("ask", &ui_theme),
+            ui_theme.colors.agent_status_blocked.rendition()
+        );
+        assert_eq!(
+            pane_frame_policy_mode_rendition("host-access", &ui_theme),
+            ui_theme.colors.agent_status_failed.rendition()
+        );
     }
 }

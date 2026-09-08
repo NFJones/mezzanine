@@ -2643,11 +2643,15 @@ drop-down MUST remain open after the opening click's release event, MUST close
 without applying a value when Escape is pressed or the user clicks outside the
 selector, and MUST NOT forward selector navigation or cancelling Escape keys to
 the pane process. The status pill SHOULD use distinct theme colors for
-idle/completed, running/queued, blocked, and failed/interrupted states, and the
-running/queued status pill SHOULD animate a subtle gradient scan behind its
-text. The running/queued scan SHOULD be derived from the active theme's running
-status color using a harmonious neighboring-hue range, so the animation remains
-theme-relative while avoiding abrupt reuse of unrelated pill accents.
+idle/completed, running/queued, blocked, and failed/interrupted states. Ordinary
+status and configurable agent pills SHOULD share a quiet container background
+and distinguish state through readable theme-relative foreground accents;
+approval attention MAY retain a filled danger treatment. Model identity SHOULD
+use a secondary accent, reasoning SHOULD use a tertiary accent, enabled or fast
+states SHOULD use a primary accent, disabled or slow states SHOULD use a muted
+accent, and unsafe policy states SHOULD use a danger accent. The running/queued
+status pill SHOULD animate a subtle scan by blending its primary foreground
+accent into the quiet container without reaching the raw saturated accent.
 
 ### 7.5 Readline Semantics
 

@@ -630,9 +630,98 @@ fn builtin_themes_use_readable_accent_text_for_window_status_metadata() {
     }
 }
 
-/// Verifies saturated fills communicate selection or semantic state rather
-/// than decorating persistent chrome. This keeps a predictable hierarchy:
-/// primary for active/success, tertiary for caution, and danger for failure.
+/// Verifies agent status pills use a quiet common container with semantic
+/// foreground accents rather than persistent saturated fills. Approval remains
+/// a filled danger treatment because it requires immediate user attention.
+#[test]
+fn builtin_themes_use_readable_accent_text_for_agent_status_pills() {
+    for name in BUILTIN_UI_THEME_NAMES {
+        let definition =
+            builtin_ui_theme_definition(name).unwrap_or_else(|| panic!("missing theme {name}"));
+        let theme = resolve_ui_theme(name, definition).expect("built-in theme must resolve");
+        let container = theme.aliases["container"];
+        let pairs = [
+            (
+                "idle",
+                theme.colors.agent_status_idle,
+                theme.aliases["container_muted_foreground"],
+            ),
+            (
+                "running",
+                theme.colors.agent_status_running,
+                theme.aliases["container_primary_foreground"],
+            ),
+            (
+                "blocked",
+                theme.colors.agent_status_blocked,
+                theme.aliases["container_tertiary_foreground"],
+            ),
+            (
+                "failed",
+                theme.colors.agent_status_failed,
+                theme.aliases["container_danger_foreground"],
+            ),
+        ];
+
+        for (status, pair, foreground) in pairs {
+            assert_eq!(
+                pair.background, container,
+                "{name} {status} should keep the quiet container"
+            );
+            assert_eq!(
+                pair.foreground, foreground,
+                "{name} {status} should use its semantic accent"
+            );
+            assert!(
+                test_contrast_ratio(pair.foreground, pair.background) >= 4.5,
+                "{name} {status} should remain readable"
+            );
+        }
+        assert_eq!(
+            theme.colors.agent_approval_attention.background, theme.aliases["danger"],
+            "{name} approval attention should retain a filled danger treatment"
+        );
+    }
+}
+
+/// Verifies configurable agent identity and reasoning pills share the quiet
+/// container while using distinct, readable palette foregrounds. Toggle,
+/// latency, and policy renderers can then reuse semantic status pairs without
+/// multiplying persistent background colors.
+#[test]
+fn builtin_themes_use_readable_accent_text_for_configurable_agent_pills() {
+    for name in BUILTIN_UI_THEME_NAMES {
+        let definition =
+            builtin_ui_theme_definition(name).unwrap_or_else(|| panic!("missing theme {name}"));
+        let theme = resolve_ui_theme(name, definition).expect("built-in theme must resolve");
+        let container = theme.aliases["container"];
+        let model = theme.colors.agent_model;
+        let reasoning = theme.colors.agent_reasoning;
+
+        assert_eq!(
+            model.background, container,
+            "{name} model should keep the quiet container"
+        );
+        assert_eq!(
+            reasoning.background, container,
+            "{name} reasoning should keep the quiet container"
+        );
+        assert_eq!(
+            model.foreground,
+            theme.aliases["container_secondary_foreground"]
+        );
+        assert_eq!(
+            reasoning.foreground,
+            theme.aliases["container_tertiary_foreground"]
+        );
+        assert!(test_contrast_ratio(model.foreground, container) >= 4.5);
+        assert!(test_contrast_ratio(reasoning.foreground, container) >= 4.5);
+    }
+}
+
+/// Verifies saturated fills communicate selection or urgent semantic state
+/// rather than decorating persistent chrome. Ordinary agent statuses use the
+/// restrained foreground-accent contract tested above.
 #[test]
 fn builtin_themes_reserve_accent_fills_for_active_and_semantic_states() {
     for name in BUILTIN_UI_THEME_NAMES {
@@ -648,17 +737,13 @@ fn builtin_themes_reserve_accent_fills_for_active_and_semantic_states() {
             ("scroll_indicator", theme.colors.scroll_indicator),
             ("pane_progress", theme.colors.pane_progress),
             ("iroh_status_good", theme.colors.iroh_status_good),
-            ("agent_status_running", theme.colors.agent_status_running),
             ("copy_selection", theme.colors.copy_selection),
         ];
 
         for (slot, pair) in primary_pairs {
             assert_eq!(pair.background, primary, "{name} {slot} should use primary");
         }
-        for (slot, pair) in [
-            ("iroh_status_degraded", theme.colors.iroh_status_degraded),
-            ("agent_status_blocked", theme.colors.agent_status_blocked),
-        ] {
+        for (slot, pair) in [("iroh_status_degraded", theme.colors.iroh_status_degraded)] {
             assert_eq!(
                 pair.background, tertiary,
                 "{name} {slot} should use tertiary"
@@ -670,7 +755,6 @@ fn builtin_themes_reserve_accent_fills_for_active_and_semantic_states() {
                 "agent_approval_attention",
                 theme.colors.agent_approval_attention,
             ),
-            ("agent_status_failed", theme.colors.agent_status_failed),
         ] {
             assert_eq!(pair.background, danger, "{name} {slot} should use danger");
         }

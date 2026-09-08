@@ -992,9 +992,11 @@ fn definition_from_palette(palette: UiThemePalette<'_>) -> UiThemeDefinition {
     let container = low_chroma_container_palette_hex(palette.surface);
     let container_foreground = contrast_managed_palette_hex(palette.foreground, &container);
     let container_muted_foreground = contrast_managed_palette_hex(palette.muted, &container);
+    let container_primary_foreground = contrast_managed_palette_hex(palette.primary, &container);
     let container_secondary_foreground =
         contrast_managed_palette_hex(palette.secondary, &container);
     let container_tertiary_foreground = contrast_managed_palette_hex(palette.tertiary, &container);
+    let container_danger_foreground = contrast_managed_palette_hex(palette.danger, &container);
     let primary_text = contrasting_binary_hex_for_background(palette.primary);
     let secondary_text = contrasting_binary_hex_for_background(palette.secondary);
     let tertiary_text = contrasting_binary_hex_for_background(palette.tertiary);
@@ -1014,6 +1016,7 @@ fn definition_from_palette(palette: UiThemePalette<'_>) -> UiThemeDefinition {
         ("container", container),
         ("container_foreground", container_foreground),
         ("container_muted_foreground", container_muted_foreground),
+        ("container_primary_foreground", container_primary_foreground),
         (
             "container_secondary_foreground",
             container_secondary_foreground,
@@ -1022,6 +1025,7 @@ fn definition_from_palette(palette: UiThemePalette<'_>) -> UiThemeDefinition {
             "container_tertiary_foreground",
             container_tertiary_foreground,
         ),
+        ("container_danger_foreground", container_danger_foreground),
         ("foreground", palette.foreground.to_string()),
         ("muted_text", muted_text.to_string()),
         ("muted", muted),
@@ -1085,20 +1089,20 @@ fn definition_from_palette(palette: UiThemePalette<'_>) -> UiThemeDefinition {
         ("agent_transcript_error_bg", "surface"),
         ("agent_transcript_command_fg", "tertiary_foreground"),
         ("agent_transcript_command_bg", "surface"),
-        ("agent_model_fg", "container_muted_foreground"),
+        ("agent_model_fg", "container_secondary_foreground"),
         ("agent_model_bg", "container"),
-        ("agent_reasoning_fg", "container_muted_foreground"),
+        ("agent_reasoning_fg", "container_tertiary_foreground"),
         ("agent_reasoning_bg", "container"),
         ("agent_status_idle_fg", "container_muted_foreground"),
         ("agent_status_idle_bg", "container"),
-        ("agent_status_running_fg", "primary_text"),
-        ("agent_status_running_bg", "primary"),
-        ("agent_status_blocked_fg", "tertiary_text"),
-        ("agent_status_blocked_bg", "tertiary"),
+        ("agent_status_running_fg", "container_primary_foreground"),
+        ("agent_status_running_bg", "container"),
+        ("agent_status_blocked_fg", "container_tertiary_foreground"),
+        ("agent_status_blocked_bg", "container"),
         ("agent_approval_attention_fg", "danger_text"),
         ("agent_approval_attention_bg", "danger"),
-        ("agent_status_failed_fg", "danger_text"),
-        ("agent_status_failed_bg", "danger"),
+        ("agent_status_failed_fg", "container_danger_foreground"),
+        ("agent_status_failed_bg", "container"),
         ("display_overlay_fg", "container_foreground"),
         ("display_overlay_bg", "container"),
         ("copy_selection_fg", "primary_text"),

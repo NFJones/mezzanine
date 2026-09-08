@@ -344,7 +344,27 @@ fn openai_committed_request_state_does_not_add_volatile_duplicate() {
         provider_options: std::collections::BTreeMap::new(),
         safety_tier: None,
     };
-    let request = assemble_model_request(
+    let mut initial = assemble_model_request(
+        &profile,
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "user".to_string(),
+            content: "inspect the repo".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    mez_agent::apply_model_request_control(
+        &mut initial,
+        Some(mez_agent::AllowedActionSet::capability_decision()),
+        Some(mez_agent::ModelInteractionKind::CapabilityDecision),
+    );
+    mez_agent::append_request_state_transition(&mut initial);
+    let initial_body: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&initial).unwrap()).unwrap();
+    let mut request = assemble_model_request(
         &profile,
         &turn(),
         &AgentContext::new(vec![
@@ -358,16 +378,33 @@ fn openai_committed_request_state_does_not_add_volatile_duplicate() {
                 source: ContextSourceKind::CommittedEvidence,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "Mezzanine request state".to_string(),
-                content: "generation=1\ninteraction_kind=capability_decision\nallowed_actions=say,request_capability"
-                    .to_string(),
+                content:
+                    "interaction_kind=capability_decision\nallowed_actions=say,request_capability"
+                        .to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::TranscriptAssistant,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: "assistant response".to_string(),
+                content: "inspect the repository next".to_string(),
             },
         ])
         .unwrap(),
     )
     .unwrap();
+    mez_agent::apply_model_request_control(
+        &mut request,
+        Some(mez_agent::AllowedActionSet::capability_decision()),
+        Some(mez_agent::ModelInteractionKind::CapabilityDecision),
+    );
+    mez_agent::append_request_state_transition(&mut request);
 
     let body: serde_json::Value =
         serde_json::from_str(&openai_responses_request_body(&request).unwrap()).unwrap();
+    let initial_input = initial_body["input"].as_array().unwrap();
+    let rebuilt_input = body["input"].as_array().unwrap();
+    assert_eq!(initial_input, &rebuilt_input[..initial_input.len()]);
+    assert!(rebuilt_input.len() > initial_input.len());
     let request_state_messages = body["input"]
         .as_array()
         .unwrap()

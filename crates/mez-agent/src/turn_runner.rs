@@ -492,13 +492,12 @@ pub fn apply_model_request_control(
     }
 }
 
-/// Appends the authoritative action surface as an immutable chronological
-/// transition when it differs from the latest state already sent this turn.
+/// Appends the authoritative interaction and action surface only when it
+/// differs from the latest state already present in request chronology.
 ///
-/// Provider loops call this immediately before each concrete request. Because
-/// continuations clone the prior request, earlier generations remain in place
-/// and the newly authoritative state extends rather than rewrites the
-/// provider-visible input.
+/// Accepted request state is promoted into durable chronology, so rebuilt
+/// continuations and later ordinary turns retain the original block in place.
+/// A changed controller state appends one new immutable transition.
 pub fn append_request_state_transition(request: &mut ModelRequest) {
     const REQUEST_STATE_HEADER: &str = "[Mezzanine request state]";
 
@@ -520,18 +519,6 @@ pub fn append_request_state_transition(request: &mut ModelRequest) {
     if latest_state.is_some_and(|message| message.content.ends_with(&state)) {
         return;
     }
-    let generation = request
-        .messages
-        .iter()
-        .filter(|message| {
-            matches!(
-                message.source,
-                crate::ContextSourceKind::RuntimeHint | crate::ContextSourceKind::CommittedEvidence
-            ) && message.placement == crate::ContextPlacement::ConversationAppend
-                && message.content.starts_with(REQUEST_STATE_HEADER)
-        })
-        .count()
-        .saturating_add(1);
     let insert_at = request.messages.len();
     request.messages.insert(
         insert_at,
@@ -539,7 +526,7 @@ pub fn append_request_state_transition(request: &mut ModelRequest) {
             role: crate::ModelMessageRole::Context,
             source: crate::ContextSourceKind::RuntimeHint,
             placement: crate::ContextPlacement::ConversationAppend,
-            content: format!("{REQUEST_STATE_HEADER}\ngeneration={generation}\n{state}"),
+            content: format!("{REQUEST_STATE_HEADER}\n{state}"),
         },
     );
 }
@@ -811,6 +798,51 @@ mod tests {
         .expect("test context should be valid")
     }
 
+    /// Verifies request state contains only model-relevant controller fields
+    /// and appends a new transition only when either field changes.
+    #[test]
+    fn request_state_transition_is_initial_and_change_only() {
+        let environment = FakeEnvironment {
+            responses: RefCell::new(VecDeque::new()),
+            requests: RefCell::new(Vec::new()),
+        };
+        let turn = test_turn();
+        let mut request = environment
+            .assemble_request(&turn, &test_context())
+            .expect("test request should assemble");
+        request.interaction_kind = ModelInteractionKind::ActionExecution;
+        request.allowed_actions = AllowedActionSet::say_only();
+
+        append_request_state_transition(&mut request);
+        append_request_state_transition(&mut request);
+
+        let request_states = request
+            .messages
+            .iter()
+            .filter(|message| message.content.starts_with("[Mezzanine request state]"))
+            .collect::<Vec<_>>();
+        assert_eq!(request_states.len(), 1);
+        assert_eq!(
+            request_states[0].content,
+            "[Mezzanine request state]\ninteraction_kind=action_execution\nallowed_actions=say"
+        );
+        assert!(!request_states[0].content.contains("generation="));
+
+        request.allowed_actions = AllowedActionSet::action_execution_base();
+        append_request_state_transition(&mut request);
+
+        let request_states = request
+            .messages
+            .iter()
+            .filter(|message| message.content.starts_with("[Mezzanine request state]"))
+            .collect::<Vec<_>>();
+        assert_eq!(request_states.len(), 2);
+        assert!(request_states[1].content.ends_with(&format!(
+            "interaction_kind=action_execution\nallowed_actions={}",
+            request.allowed_actions.action_type_names().join(",")
+        )));
+    }
+
     /// Builds one provider response containing a single capability request.
     fn capability_response(
         _turn: &AgentTurnRecord,
@@ -827,8 +859,10 @@ mod tests {
             quota_usage: Vec::new(),
             action_batch: Some(MaapBatch {
                 rationale: "request capability".to_string(),
+
                 actions: vec![AgentAction {
                     id: action_id.to_string(),
+
                     payload: AgentActionPayload::RequestCapability {
                         capability,
                         reason: reason.to_string(),
@@ -850,8 +884,10 @@ mod tests {
             quota_usage: Vec::new(),
             action_batch: Some(MaapBatch {
                 rationale: "finish the task".to_string(),
+
                 actions: vec![AgentAction {
                     id: "say-final".to_string(),
+
                     payload: AgentActionPayload::Say {
                         status: SayStatus::Final,
                         text: "Done.".to_string(),
@@ -1082,6 +1118,7 @@ mod tests {
         };
         let action = AgentAction {
             id: "say-1".to_string(),
+
             payload: AgentActionPayload::Say {
                 status: SayStatus::Final,
                 text: "Done.".to_string(),
@@ -1098,6 +1135,7 @@ mod tests {
                 quota_usage: Vec::new(),
                 action_batch: Some(MaapBatch {
                     rationale: "finish the task".to_string(),
+
                     actions: vec![action],
                 }),
                 provider_transcript_events: Vec::new(),

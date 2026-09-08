@@ -642,8 +642,10 @@ Default aliases:
 | `container` | `"#2f302b"` | Quiet surface-relative container fill. |
 | `container_foreground` | `"#eef7d0"` | General foreground on the container fill. |
 | `container_muted_foreground` | `"#8e9e5b"` | Low-emphasis foreground on the container fill. |
+| `container_primary_foreground` | `"#bfff00"` | Restrained primary accent on the container fill. |
 | `container_secondary_foreground` | `"#7fbf3f"` | Restrained secondary accent on the container fill. |
 | `container_tertiary_foreground` | `"#d7ff5f"` | Restrained tertiary accent on the container fill. |
+| `container_danger_foreground` | `"#ff5c57"` | Restrained danger accent on the container fill. |
 | `danger_foreground` | `"#ff5c57"` | Foreground danger accent. |
 | `danger_text` | `"#000000"` | Text placed on the danger accent. |
 | `muted_text` | `"#000000"` | Text placed on the muted accent. |
@@ -708,20 +710,20 @@ Default color slots:
 | `agent_transcript_error_bg` | `"surface"` | Agent error background. |
 | `agent_transcript_command_fg` | `"tertiary_foreground"` | Agent command foreground. |
 | `agent_transcript_command_bg` | `"surface"` | Agent command background. |
-| `agent_model_fg` | `"container_muted_foreground"` | Agent model pill foreground. |
+| `agent_model_fg` | `"container_secondary_foreground"` | Model, preset, and agent-name pill foreground with a restrained secondary accent. |
 | `agent_model_bg` | `"container"` | Agent model pill background. |
-| `agent_reasoning_fg` | `"container_muted_foreground"` | Agent reasoning pill foreground. |
+| `agent_reasoning_fg` | `"container_tertiary_foreground"` | Agent reasoning pill foreground with a restrained tertiary accent. |
 | `agent_reasoning_bg` | `"container"` | Agent reasoning pill background. |
 | `agent_status_idle_fg` | `"container_muted_foreground"` | Idle agent status foreground. |
 | `agent_status_idle_bg` | `"container"` | Idle agent status background. |
-| `agent_status_running_fg` | `"primary_text"` | Running agent status foreground. |
-| `agent_status_running_bg` | `"primary"` | Running agent status background. |
-| `agent_status_blocked_fg` | `"tertiary_text"` | Blocked agent status foreground. |
-| `agent_status_blocked_bg` | `"tertiary"` | Blocked agent status background. |
+| `agent_status_running_fg` | `"container_primary_foreground"` | Running agent status foreground with a restrained primary accent. |
+| `agent_status_running_bg` | `"container"` | Running agent status background. |
+| `agent_status_blocked_fg` | `"container_tertiary_foreground"` | Blocked agent status foreground with a restrained tertiary accent. |
+| `agent_status_blocked_bg` | `"container"` | Blocked agent status background. |
 | `agent_approval_attention_fg` | `"danger_text"` | Approval-attention foreground for pane, window, and group pills. |
 | `agent_approval_attention_bg` | `"danger"` | Approval-attention background for pane, window, and group pills. |
-| `agent_status_failed_fg` | `"danger_text"` | Failed agent status foreground. |
-| `agent_status_failed_bg` | `"danger"` | Failed agent status background. |
+| `agent_status_failed_fg` | `"container_danger_foreground"` | Failed agent status foreground with a restrained danger accent. |
+| `agent_status_failed_bg` | `"container"` | Failed agent status background. |
 | `display_overlay_fg` | `"container_foreground"` | Display overlay foreground. |
 | `display_overlay_bg` | `"container"` | Display overlay background. |
 | `copy_selection_fg` | `"primary_text"` | Copy selection foreground. |

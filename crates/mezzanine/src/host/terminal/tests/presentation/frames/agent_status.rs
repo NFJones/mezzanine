@@ -275,7 +275,9 @@ fn render_default_pane_frame_agent_status_uses_separate_themed_pills_without_nam
             && span.length == " high ".len()
     }));
     assert!(view.line_style_spans[0].iter().any(|span| {
-        span.rendition.background == Some(TerminalColor::Rgb(0xbf, 0xff, 0x00))
+        span.rendition.background == Some(config.ui_theme.colors.agent_status_running.background)
+            && span.rendition.foreground
+                == Some(config.ui_theme.colors.agent_status_running.foreground)
             && span.length == " thinking ".len()
     }));
     assert!(!view.lines[0].contains("Nova"));
@@ -306,13 +308,12 @@ fn render_default_pane_frame_agent_status_uses_separate_themed_pills_without_nam
     );
 }
 
-/// Verifies active agent status animation uses a wider theme-relative color
-/// range across all built-in palettes.
+/// Verifies active agent status animation uses a restrained theme-relative
+/// primary wash across all built-in palettes.
 ///
-/// The scan is derived from the running-status background with neighboring
-/// hues, so each theme should produce multiple related true-color backgrounds
-/// with visible separation from the base color without borrowing an unrelated
-/// pill accent.
+/// The scan blends the running foreground into the quiet status container, so
+/// each theme should produce multiple related backgrounds without reaching the
+/// raw accent or borrowing an unrelated status fill.
 #[test]
 fn render_active_agent_status_gradient_uses_theme_relative_harmony() {
     fn rgb_distance(left: TerminalColor, right: TerminalColor) -> i32 {
@@ -387,12 +388,12 @@ fn render_active_agent_status_gradient_uses_theme_relative_harmony() {
             unique_backgrounds.iter().any(|color| rgb_distance(
                 *color,
                 theme.colors.agent_status_running.background
-            ) >= 30),
-            "{name} should visibly widen the running-status range from its base color: {unique_backgrounds:?}"
+            ) >= 10),
+            "{name} should visibly tint the running-status container: {unique_backgrounds:?}"
         );
         assert!(
-            !unique_backgrounds.contains(&theme.colors.agent_reasoning.background),
-            "{name} should not reuse the reasoning pill accent as the running scan highlight"
+            !unique_backgrounds.contains(&theme.colors.agent_status_running.foreground),
+            "{name} running scan should remain short of the raw semantic accent"
         );
     }
 }
@@ -697,22 +698,26 @@ fn render_default_pane_frame_agent_status_stopped_is_muted() {
     .unwrap()
     .unwrap();
     let status_start = display_column_for_fragment(&view.lines[0], "stopped");
-    let status_background = view.line_style_spans[0]
+    let status_rendition = view.line_style_spans[0]
         .iter()
         .rev()
         .find(|span| {
             span.start <= status_start && span.start.saturating_add(span.length) > status_start
         })
-        .and_then(|span| span.rendition.background)
+        .map(|span| span.rendition)
         .unwrap();
 
     assert_eq!(
-        status_background,
-        config.ui_theme.colors.agent_status_idle.background
+        status_rendition.background,
+        Some(config.ui_theme.colors.agent_status_idle.background)
+    );
+    assert_eq!(
+        status_rendition.foreground,
+        Some(config.ui_theme.colors.agent_status_idle.foreground)
     );
     assert_ne!(
-        status_background,
-        config.ui_theme.colors.agent_status_failed.background
+        status_rendition.foreground,
+        Some(config.ui_theme.colors.agent_status_failed.foreground)
     );
 }
 
@@ -843,12 +848,13 @@ fn render_agent_planning_pill_has_fixed_label_and_state_colors() {
     let absent = render(None);
     let enabled_start = display_column_for_fragment(&enabled.lines[0], "plan");
     let disabled_start = display_column_for_fragment(&disabled.lines[0], "plan");
-    let background_at = |view: &RenderedClientView, column| {
+    let rendition_at = |view: &RenderedClientView, column| {
         view.line_style_spans[0]
             .iter()
             .rev()
             .find(|span| span.start <= column && span.start.saturating_add(span.length) > column)
-            .and_then(|span| span.rendition.background)
+            .map(|span| span.rendition)
+            .expect("planning pill should have a rendition")
     };
 
     assert!(enabled.lines[0].contains(" plan "), "{}", enabled.lines[0]);
@@ -858,12 +864,12 @@ fn render_agent_planning_pill_has_fixed_label_and_state_colors() {
         disabled.lines[0]
     );
     assert!(!absent.lines[0].contains("plan"), "{}", absent.lines[0]);
+    let enabled_rendition = rendition_at(&enabled, enabled_start);
+    let disabled_rendition = rendition_at(&disabled, disabled_start);
+    assert_eq!(enabled_rendition.background, disabled_rendition.background);
     assert_eq!(
-        background_at(&enabled, enabled_start),
+        enabled_rendition.foreground,
         Some(TerminalColor::Rgb(0xbf, 0xff, 0x00))
     );
-    assert_ne!(
-        background_at(&disabled, disabled_start),
-        background_at(&enabled, enabled_start)
-    );
+    assert_ne!(disabled_rendition.foreground, enabled_rendition.foreground);
 }
