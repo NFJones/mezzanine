@@ -312,19 +312,12 @@ fn deepseek_provider_transcript_event_message(
             content,
             reasoning_content,
             tool_calls,
-        } => {
-            let mut message = serde_json::json!({
-                "role": "assistant",
-                "content": content,
-                "tool_calls": tool_calls,
-            });
-            if let Some(reasoning_content) =
-                reasoning_content.as_deref().filter(|text| !text.is_empty())
-            {
-                message["reasoning_content"] = serde_json::json!(reasoning_content);
-            }
-            message
-        }
+        } => serde_json::json!({
+            "role": "assistant",
+            "content": content,
+            "reasoning_content": reasoning_content.as_deref().unwrap_or_default(),
+            "tool_calls": tool_calls,
+        }),
         ProviderTranscriptEvent::DeepSeekToolResult {
             tool_call_id,
             content,
@@ -831,6 +824,7 @@ mod tests {
 
         assert_eq!(messages.len(), 3);
         assert_eq!(messages[0]["role"], "assistant");
+        assert_eq!(messages[0]["reasoning_content"], "");
         assert_eq!(messages[1]["role"], "tool");
         assert_eq!(messages[1]["tool_call_id"], "call_late");
         assert!(
