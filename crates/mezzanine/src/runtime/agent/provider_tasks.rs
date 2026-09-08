@@ -116,14 +116,7 @@ impl RuntimeSessionService {
         Option<mez_agent::ModelInteractionKind>,
     ) {
         let previous_execution = self.agent_turn_executions().get(&turn.turn_id);
-        let mut allowed_actions = self.agent_enabled_actions().clone();
-        let terminal_or_at_depth_limit = self
-            .subagent_lineage(&turn.agent_id)
-            .is_some_and(|lineage| lineage.terminal || lineage.depth >= self.max_subagent_depth());
-        if terminal_or_at_depth_limit {
-            allowed_actions.remove(mez_agent::AllowedAction::SpawnAgent);
-        }
-        let allowed_actions = Some(allowed_actions);
+        let allowed_actions = Some(self.agent_enabled_actions().clone());
         let interaction_kind = self
             .agent
             .agent_turn_interaction_kinds

@@ -6249,16 +6249,18 @@ The model response MAY contain user-facing text, shell command proposals, local
 message proposals, subagent spawn proposals, configuration change proposals,
 MCP tool proposals, approval responses, or completion status.
 
-Ordinary model interaction MUST use a static provider action schema containing
-every valid executable MAAP action. The schema MUST NOT vary with turn phase,
-capability decisions, integration discovery, or request-local availability.
-`agents.enabled_actions` MUST define the static action subset accepted by
-runtime validation and MUST default to every executable action. The model MUST
-use enabled actions directly without first emitting `request_capability`;
+Ordinary model interaction MUST use a provider action schema containing exactly
+the executable MAAP action subset configured by `agents.enabled_actions`. That
+configured subset MUST remain constant across ordinary turns, continuations,
+agent lineage, terminal profiles, and depth limits until configuration changes,
+and MUST be used by both provider exposure and runtime validation. It MUST
+default to every executable action. The model MUST use enabled actions directly
+without first emitting `request_capability`;
 capability and model-selected skill actions MUST NOT appear in the ordinary
 provider schema or configurable action set. Integration availability,
-permission policy, approval, and argument validation remain runtime-owned and
-MUST return explicit action results when a selected enabled action cannot run.
+permission policy, approval, subagent depth or terminal-profile limits, and
+argument validation remain runtime-owned and MUST return explicit action
+results when a selected enabled action cannot run.
 Repair and internal structured-output interactions MAY constrain response
 semantics without changing the provider-visible action catalog.
 

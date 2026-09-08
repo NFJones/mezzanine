@@ -260,6 +260,11 @@ impl RuntimeSessionService {
         routed_root: bool,
     ) -> Result<RuntimeSubagentLineage> {
         let parent_lineage = self.subagent_lineage_for_agent(parent_agent_id);
+        if !routed_root && parent_lineage.terminal {
+            return Err(MezError::forbidden(format!(
+                "terminal subagent profile cannot spawn children for {parent_agent_id}"
+            )));
+        }
         if !routed_root && parent_lineage.depth >= self.max_subagent_depth() {
             return Err(MezError::forbidden(format!(
                 "subagent depth limit reached for {parent_agent_id}: depth {} of {}",

@@ -43,10 +43,10 @@ fn nonterminal_subagent_provider_surface_retains_spawn_agent_below_limit() {
     assert!(allowed_actions.contains(mez_agent::AllowedAction::SendMessage));
 }
 
-/// Verifies terminal-profile and maximum-depth agents have `spawn_agent`
-/// removed from their static provider action set.
+/// Verifies terminal-profile and maximum-depth agents retain the configured
+/// provider action set while execution-time policy rejects unavailable spawns.
 #[test]
-fn terminal_and_max_depth_subagent_surfaces_exclude_spawn_agent() {
+fn terminal_and_max_depth_subagent_surfaces_retain_spawn_agent() {
     let mut service = test_runtime_service();
     let turn = mez_agent::AgentTurnRecord {
         turn_id: "turn-child".to_string(),
@@ -78,7 +78,7 @@ fn terminal_and_max_depth_subagent_surfaces_exclude_spawn_agent() {
         .agent_provider_request_control_for_turn(&turn)
         .0
         .expect("provider turns should have a static action set");
-    assert!(!depth_limited_actions.contains(mez_agent::AllowedAction::SpawnAgent));
+    assert!(depth_limited_actions.contains(mez_agent::AllowedAction::SpawnAgent));
 
     service.set_subagent_lineage(
         turn.agent_id.clone(),
@@ -94,7 +94,7 @@ fn terminal_and_max_depth_subagent_surfaces_exclude_spawn_agent() {
         .agent_provider_request_control_for_turn(&turn)
         .0
         .expect("provider turns should have a static action set");
-    assert!(!terminal_actions.contains(mez_agent::AllowedAction::SpawnAgent));
+    assert!(terminal_actions.contains(mez_agent::AllowedAction::SpawnAgent));
 }
 
 /// Verifies that runtime hook diagnostics use the same canonical event label as

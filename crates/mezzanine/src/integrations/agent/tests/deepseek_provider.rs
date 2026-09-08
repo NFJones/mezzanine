@@ -146,13 +146,13 @@ fn deepseek_chat_completions_request_body_dispatches_static_actions_on_initial_s
     assert!(action_types.contains(&"memory_store".to_string()));
     assert!(!action_types.contains(&"request_capability".to_string()));
     assert!(
-        description.contains("The schema is a static catalog of every valid action"),
+        description.contains(
+            "The schema contains exactly the executable action subset enabled by runtime configuration"
+        ),
         "{description}"
     );
     assert!(
-        description.contains(
-            "The schema includes fixed mcp_server_search and mcp_server_get actions plus a generic mcp_call action"
-        ),
+        description.contains("When MCP actions are included, search configured MCP metadata"),
         "{description}"
     );
     assert!(
@@ -301,7 +301,9 @@ fn deepseek_chat_completions_request_body_uses_static_schema_for_initial_action_
         DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME
     );
     let description = tool["function"]["description"].as_str().unwrap();
-    assert!(description.contains("The schema is a static catalog of every valid action"));
+    assert!(description.contains(
+        "The schema contains exactly the executable action subset enabled by runtime configuration"
+    ));
     assert!(description.contains("Return a function call, not prose"));
     assert!(description.contains("use enabled actions directly without capability negotiation"));
     assert!(description.contains("Wrong: *** Replace File"));
@@ -382,7 +384,9 @@ fn deepseek_chat_completions_request_body_forces_maap_tool_without_thinking_for_
     assert!(!action_types.contains(&"request_capability".to_string()));
     assert!(action_types.contains(&"send_message".to_string()));
     assert!(action_types.contains(&"spawn_agent".to_string()));
-    assert!(description.contains("The schema is a static catalog of every valid action"));
+    assert!(description.contains(
+        "The schema contains exactly the executable action subset enabled by runtime configuration"
+    ));
     assert!(
         description.contains("use enabled actions directly without capability negotiation"),
         "{description}"
@@ -587,7 +591,9 @@ fn deepseek_provider_accepts_openai_compatible_provider_identity() {
         .as_str()
         .unwrap();
     assert!(description.contains("Return a function call, not prose"));
-    assert!(description.contains("The schema is a static catalog of every valid action"));
+    assert!(description.contains(
+        "The schema contains exactly the executable action subset enabled by runtime configuration"
+    ));
     assert!(description.contains("use enabled actions directly without capability negotiation"));
     assert!(description.contains("Wrong: *** Replace File"));
     let batch = response.action_batch.unwrap();

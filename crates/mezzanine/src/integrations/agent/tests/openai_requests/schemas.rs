@@ -81,9 +81,7 @@ fn openai_available_mcp_keeps_memory_on_default_surface() {
     assert_eq!(mcp_actions.len(), 1);
     assert_eq!(mcp_actions[0]["properties"]["arguments"]["type"], "string");
     assert!(
-        description.contains(
-            "The schema includes fixed mcp_server_search and mcp_server_get actions plus a generic mcp_call action"
-        ),
+        description.contains("When MCP actions are included, search configured MCP metadata"),
         "{description}"
     );
     assert!(
@@ -113,13 +111,13 @@ fn openai_available_mcp_keeps_memory_on_default_surface() {
 }
 
 #[test]
-/// Verifies OpenAI MAAP tool schemas track the current allowed action surface.
+/// Verifies OpenAI MAAP tool schemas track the configured action surface.
 ///
 /// A single canonical function keeps action selection simple for the model, and
 /// its schema carries the request's current allowed actions. The stable prompt
 /// text can remain reusable while the provider request shape reflects the live
 /// action schema.
-fn openai_maap_schema_is_stable_across_non_mcp_action_surfaces() {
+fn openai_maap_schema_tracks_configured_non_mcp_action_surfaces() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
@@ -155,7 +153,7 @@ fn openai_maap_schema_is_stable_across_non_mcp_action_surfaces() {
 
     assert!(capability_body.get("text").is_none());
     assert!(execution_body.get("text").is_none());
-    assert_eq!(capability_body["tools"], execution_body["tools"]);
+    assert_ne!(capability_body["tools"], execution_body["tools"]);
     assert_eq!(
         capability_body["tool_choice"]["name"],
         "submit_maap_action_batch"
@@ -168,7 +166,7 @@ fn openai_maap_schema_is_stable_across_non_mcp_action_surfaces() {
         capability_diagnostics.response_format_sha256,
         execution_diagnostics.response_format_sha256
     );
-    assert_eq!(
+    assert_ne!(
         capability_diagnostics.tools_sha256,
         execution_diagnostics.tools_sha256
     );
@@ -184,7 +182,7 @@ fn openai_maap_schema_is_stable_across_non_mcp_action_surfaces() {
         capability_diagnostics.stable_projection_sha256,
         execution_diagnostics.stable_projection_sha256
     );
-    assert_eq!(
+    assert_ne!(
         capability_diagnostics.provider_request_shape_sha256,
         execution_diagnostics.provider_request_shape_sha256
     );
@@ -599,13 +597,13 @@ fn openai_responses_request_body_describes_config_change_schema() {
 }
 
 #[test]
-/// Verifies OpenAI Responses exposes the static executable action catalog
-/// through one canonical tool while retaining configured runtime validation.
+/// Verifies OpenAI Responses exposes the configured executable action subset
+/// through one canonical tool while retaining static argument schemas.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
-fn openai_responses_request_body_exposes_static_execution_action_catalog() {
+fn openai_responses_request_body_exposes_configured_shell_action_catalog() {
     let mut request = assemble_model_request(
         &ModelProfile {
             provider: "openai".to_string(),
@@ -658,17 +656,7 @@ fn openai_responses_request_body_exposes_static_execution_action_catalog() {
 
     let action_schemas = openai_tool_action_schemas(shell_tool);
     let action_types = openai_tool_action_types(shell_tool);
-    assert!(action_types.contains(&"say".to_string()));
-    assert!(action_types.contains(&"shell_command".to_string()));
-    assert!(action_types.contains(&"apply_patch".to_string()));
-    assert!(!action_types.contains(&"request_skills".to_string()));
-    assert!(!action_types.contains(&"call_skill".to_string()));
-    let removed_user_input_action = ["request", "user_input"].join("_");
-    assert!(!action_types.contains(&removed_user_input_action));
-    assert!(!action_types.contains(&"request_capability".to_string()));
-    assert!(!action_types.contains(&"abort".to_string()));
-    assert!(action_types.contains(&"fetch_url".to_string()));
-    assert!(action_types.contains(&"web_search".to_string()));
+    assert_eq!(action_types, ["say", "shell_command", "apply_patch"]);
     assert_eq!(value["input"].as_array().unwrap().len(), 1);
 
     let shell_schema = action_schemas
@@ -767,12 +755,9 @@ fn openai_responses_request_body_uses_auto_sizing_schema_for_router() {
 }
 
 #[test]
-/// Verifies request-local allowed-action changes cannot mutate the static
-/// provider schema.
-///
-/// Runtime validation still receives the configured request action set, while
-/// the provider tool remains byte-stable and exposes the complete catalog.
-fn openai_responses_request_body_keeps_schema_static_for_narrow_runtime_surface() {
+/// Verifies the OpenAI provider schema exposes exactly the configured action
+/// subset while retaining the generic static argument shape for each action.
+fn openai_responses_request_body_exposes_configured_runtime_surface() {
     let mut request = assemble_model_request(
         &ModelProfile {
             provider: "openai".to_string(),
@@ -808,14 +793,10 @@ fn openai_responses_request_body_keeps_schema_static_for_narrow_runtime_surface(
 
     assert_eq!(value["tool_choice"]["name"], "submit_maap_action_batch");
     assert_eq!(value["tools"].as_array().unwrap().len(), 1);
-    assert!(action_types.contains(&"say".to_string()));
-    assert!(!action_types.contains(&"request_capability".to_string()));
-    assert!(action_types.contains(&"shell_command".to_string()));
-    assert!(action_types.contains(&"apply_patch".to_string()));
-    assert!(action_types.contains(&"fetch_url".to_string()));
-    assert!(action_types.contains(&"web_search".to_string()));
-    assert!(action_types.contains(&"mcp_call".to_string()));
-    assert!(action_types.contains(&"spawn_agent".to_string()));
+    assert_eq!(
+        action_types,
+        ["say", "shell_command", "apply_patch", "fetch_url"]
+    );
 }
 
 #[test]
@@ -875,9 +856,7 @@ fn openai_responses_request_body_uses_mcp_tool_argument_schemas() {
     assert_openai_strict_schema_shape(&mcp_tool["parameters"]);
     assert_eq!(value["tool_choice"]["name"], "submit_maap_action_batch");
     assert!(
-        description.contains(
-            "The schema includes fixed mcp_server_search and mcp_server_get actions plus a generic mcp_call action"
-        ),
+        description.contains("When MCP actions are included, search configured MCP metadata"),
         "{description}"
     );
     assert!(
@@ -890,12 +869,12 @@ fn openai_responses_request_body_uses_mcp_tool_argument_schemas() {
         .filter(|schema| schema["properties"]["type"]["enum"][0] == "mcp_call")
         .collect::<Vec<_>>();
 
-    assert_eq!(action_schemas.len(), 17);
     let action_types = openai_tool_action_types(mcp_tool);
-    assert!(!action_types.contains(&"request_skills".to_string()));
-    assert!(!action_types.contains(&"call_skill".to_string()));
-    assert!(action_types.contains(&"mcp_server_search".to_string()));
-    assert!(action_types.contains(&"mcp_server_get".to_string()));
+    assert_eq!(action_schemas.len(), 4);
+    assert_eq!(
+        action_types,
+        ["say", "mcp_server_search", "mcp_server_get", "mcp_call"]
+    );
     assert_eq!(mcp_schemas.len(), 1);
     assert_eq!(mcp_schemas[0]["properties"]["server"]["type"], "string");
     assert_eq!(mcp_schemas[0]["properties"]["tool"]["type"], "string");

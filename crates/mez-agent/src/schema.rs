@@ -95,14 +95,14 @@ pub fn maap_current_action_batch_description(
 /// Returns the request-independent OpenAI Responses MAAP tool description.
 pub fn maap_cache_stable_action_batch_description() -> String {
     maap_action_batch_description_with_mcp_manifest(
-        "The schema includes fixed mcp_server_search and mcp_server_get actions plus a generic mcp_call action. Search configured MCP metadata, retrieve a selected server's safe metadata, then use mcp_call only when the current action surface and MCP context identify a callable server/tool pair; runtime validation rejects unavailable tools and invalid arguments.",
+        "When MCP actions are included, search configured MCP metadata, retrieve a selected server's safe metadata, then use mcp_call only when the current action surface and MCP context identify a callable server/tool pair; runtime validation rejects unavailable tools and invalid arguments.",
     )
 }
 
 /// Builds shared MAAP tool guidance with the selected MCP routing contract.
 fn maap_action_batch_description_with_mcp_manifest(mcp_manifest: &str) -> String {
     format!(
-        "Submit one validated Mezzanine MAAP action batch. {} {} The schema is a static catalog of every valid action; runtime configuration determines which catalog actions are enabled and runtime validation rejects disabled actions, unavailable integrations, or invalid arguments. Use only action objects in this function schema and use enabled actions directly without capability negotiation. The function call is only the transport envelope for the chosen action batch, not a prerequisite task step; do not put required-function-call or schema-wrapper compliance language in the batch rationale. Choose the smallest action that makes concrete progress: direct inspection or execution beats placeholder setup. If an executable action is useful, put that action in this function call now. Safely gather task-local facts from current context, action results, local artifacts, web results, MCP results, or another enabled action instead of asking the user. Do not ask for identifiers, URLs, versions, paths, command forms, config names, repository metadata, or CI targets when they can be safely discovered. Do not use memory actions to rehydrate facts already present in current action results. Model-selected skill lookup/loading and capability negotiation are not valid actions. {} {}",
+        "Submit one validated Mezzanine MAAP action batch. {} {} The schema contains exactly the executable action subset enabled by runtime configuration; runtime validation rejects unavailable integrations, contextually unavailable actions, or invalid arguments. Use only action objects in this function schema and use enabled actions directly without capability negotiation. The function call is only the transport envelope for the chosen action batch, not a prerequisite task step; do not put required-function-call or schema-wrapper compliance language in the batch rationale. Choose the smallest action that makes concrete progress: direct inspection or execution beats placeholder setup. If an executable action is useful, put that action in this function call now. Safely gather task-local facts from current context, action results, local artifacts, web results, MCP results, or another enabled action instead of asking the user. Do not ask for identifiers, URLs, versions, paths, command forms, config names, repository metadata, or CI targets when they can be safely discovered. Do not use memory actions to rehydrate facts already present in current action results. Model-selected skill lookup/loading and capability negotiation are not valid actions. {} {}",
         OpenAiMaapToolSurface::FUNCTION_CALL_DISCIPLINE,
         OpenAiMaapToolSurface::ACTION_BATCH_ENVELOPE_RULE,
         mcp_manifest,
@@ -116,7 +116,7 @@ fn maap_action_batch_description_with_mcp_manifest(mcp_manifest: &str) -> String
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub fn maap_action_batch_schema(
-    _allowed_actions: &AllowedActionSet,
+    allowed_actions: &AllowedActionSet,
     _available_mcp_tools: &[McpPromptTool],
 ) -> serde_json::Value {
     serde_json::json!({
@@ -131,7 +131,7 @@ pub fn maap_action_batch_schema(
                 "type": "array",
                 "minItems": 1,
                 "description": "At least one visible or executable action from this function tool's currently active MAAP action surface.",
-                "items": maap_action_schema()
+                "items": maap_action_schema(allowed_actions)
             }
         },
         "required": ["rationale", "actions"],
@@ -144,9 +144,13 @@ pub fn maap_action_batch_schema(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn maap_action_schema() -> serde_json::Value {
+fn maap_action_schema(allowed_actions: &AllowedActionSet) -> serde_json::Value {
     let mut action_schemas = Vec::new();
-    for action in &AllowedActionSet::all_enabled().actions {
+    for action in AllowedActionSet::all_enabled()
+        .actions
+        .iter()
+        .filter(|action| allowed_actions.contains(**action))
+    {
         match action {
             AllowedAction::Say => action_schemas.push(maap_say_action_schema()),
             AllowedAction::RequestCapability => {}
@@ -953,16 +957,16 @@ pub fn normalize_openai_strict_schema(mut value: serde_json::Value) -> serde_jso
 mod tests {
     use super::*;
 
-    /// Verifies provider-neutral action-batch construction is byte-stable and
-    /// exposes every executable action independently of request-local state.
+    /// Verifies provider-neutral action-batch construction exposes exactly the
+    /// configured action set while retaining deterministic variant order.
     #[test]
-    fn action_batch_schema_is_static_across_allowed_action_inputs() {
+    fn action_batch_schema_exposes_exact_allowed_action_subset() {
         let narrow = maap_action_batch_schema(
             &AllowedActionSet::from_actions([AllowedAction::Say, AllowedAction::ShellCommand]),
             &[],
         );
         let complete = maap_action_batch_schema(&AllowedActionSet::all_enabled(), &[]);
-        assert_eq!(narrow, complete);
+        assert_ne!(narrow, complete);
 
         let variants = narrow["properties"]["actions"]["items"]["anyOf"]
             .as_array()
@@ -972,28 +976,7 @@ mod tests {
             .filter_map(|variant| variant["properties"]["type"]["enum"][0].as_str())
             .collect::<Vec<_>>();
 
-        assert_eq!(
-            action_types,
-            [
-                "say",
-                "shell_command",
-                "apply_patch",
-                "web_search",
-                "fetch_url",
-                "send_message",
-                "spawn_agent",
-                "config_change",
-                "mcp_server_search",
-                "mcp_server_get",
-                "mcp_call",
-                "memory_search",
-                "memory_store",
-                "issue_add",
-                "issue_update",
-                "issue_query",
-                "issue_delete",
-            ]
-        );
+        assert_eq!(action_types, ["say", "shell_command"]);
     }
 
     /// Verifies the static spawn schema requires a nullable session field so

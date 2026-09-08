@@ -434,10 +434,10 @@ fn chat_completions_maap_tool_description(
 
 /// Builds the DeepSeek shim argument schema for the selected function.
 fn deepseek_maap_tool_schema(
-    _request: &ModelRequest,
+    request: &ModelRequest,
     _shim_kind: DeepSeekMaapShimKind,
 ) -> serde_json::Value {
-    deepseek_maap_action_batch_schema(&AllowedActionSet::all_enabled(), &[])
+    deepseek_maap_action_batch_schema(&request.allowed_actions, &request.available_mcp_tools)
 }
 
 /// Maps Mezzanine reasoning effort levels to DeepSeek-supported values.

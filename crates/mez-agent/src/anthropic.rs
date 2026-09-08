@@ -1260,6 +1260,37 @@ mod tests {
         }
     }
 
+    /// Verifies Anthropic exposes exactly the configured executable action
+    /// subset in canonical catalog order.
+    #[test]
+    fn anthropic_maap_tool_exposes_exact_configured_action_subset() {
+        let mut request = anthropic_cache_test_request(vec![crate::ModelMessage {
+            role: ModelMessageRole::User,
+            source: crate::ContextSourceKind::UserInstruction,
+            placement: crate::ContextPlacement::ConversationAppend,
+            content: "inspect the repository".to_string(),
+        }]);
+        request.allowed_actions = crate::AllowedActionSet::from_actions([
+            crate::AllowedAction::ShellCommand,
+            crate::AllowedAction::Say,
+        ]);
+
+        let body: serde_json::Value = serde_json::from_str(
+            &anthropic_messages_request_body(&request, false, &AnthropicMessagesOptions::default())
+                .unwrap(),
+        )
+        .unwrap();
+        let action_types =
+            body["tools"][0]["input_schema"]["properties"]["actions"]["items"]["anyOf"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|schema| schema["properties"]["type"]["enum"][0].as_str().unwrap())
+                .collect::<Vec<_>>();
+
+        assert_eq!(action_types, ["say", "shell_command"]);
+    }
+
     /// Verifies neutral chronological state remains separate from prior
     /// Anthropic native messages.
     ///

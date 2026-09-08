@@ -1085,6 +1085,35 @@ mod tests {
         }
     }
 
+    /// Verifies compatible Chat Completions exposes exactly the configured
+    /// executable action subset in canonical catalog order.
+    #[test]
+    fn openai_chat_maap_tool_exposes_exact_configured_action_subset() {
+        let mut request = test_request();
+        request.allowed_actions = AllowedActionSet::from_actions([
+            crate::AllowedAction::FetchUrl,
+            crate::AllowedAction::Say,
+        ]);
+
+        let body: serde_json::Value = serde_json::from_str(
+            &openai_chat_completions_request_body(
+                &request,
+                OpenAiChatCompletionsOptions::default(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let action_types =
+            body["tools"][0]["function"]["parameters"]["properties"]["actions"]["items"]["anyOf"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|schema| schema["properties"]["type"]["enum"][0].as_str().unwrap())
+                .collect::<Vec<_>>();
+
+        assert_eq!(action_types, ["say", "fetch_url"]);
+    }
+
     /// Verifies compatible Chat Completions accepts durable message growth and
     /// warns on a same-epoch rewrite without blocking the request or later comparisons.
     #[test]

@@ -6,14 +6,13 @@
 //! for the actions and MCP tools eligible on an individual request.
 
 use crate::{
-    AllowedActionSet, MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME, ModelRequest,
+    MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME, ModelRequest,
     maap_action_batch_schema,
 };
 
 /// Builds the OpenAI MAAP function-tool list for the current request.
 pub(crate) fn openai_maap_action_batch_tools(request: &ModelRequest) -> Vec<serde_json::Value> {
-    let _ = request;
-    vec![openai_maap_current_action_batch_tool()]
+    vec![openai_maap_current_action_batch_tool(request)]
 }
 
 /// Builds the canonical OpenAI Responses MAAP action-batch tool.
@@ -21,29 +20,17 @@ pub(crate) fn openai_maap_action_batch_tools(request: &ModelRequest) -> Vec<serd
 /// A single current-schema tool keeps provider-visible action selection simple:
 /// the model chooses the best action object inside one batch instead of first
 /// reasoning about a surface-specific wrapper function name.
-fn openai_maap_current_action_batch_tool() -> serde_json::Value {
+fn openai_maap_current_action_batch_tool(request: &ModelRequest) -> serde_json::Value {
     serde_json::json!({
         "type": "function",
         "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
         "description": crate::schema::maap_cache_stable_action_batch_description(),
         "strict": true,
-        "parameters": openai_cache_stable_action_batch_schema()
+        "parameters": maap_action_batch_schema(
+            &request.allowed_actions,
+            &request.available_mcp_tools,
+        )
     })
-}
-
-/// Returns the provider-visible OpenAI action schema surface.
-///
-/// OpenAI prompt caching is sensitive to request-body tool bytes, so normal
-/// action turns use one stable superset and rely on compact request state plus
-/// runtime validation for actual eligibility.
-/// Builds the byte-stable OpenAI schema with one generic MCP action variant.
-///
-/// The canonical schema shape below is produced in this crate and therefore
-/// guarantees the documented action-union path. MCP arguments use compact JSON
-/// text so third-party tool schemas cannot change provider-visible tool bytes;
-/// canonical parsing normalizes that text before active-tool validation.
-fn openai_cache_stable_action_batch_schema() -> serde_json::Value {
-    maap_action_batch_schema(&AllowedActionSet::all_enabled(), &[])
 }
 
 /// Returns the provider-facing description for the current MAAP action-batch tool.

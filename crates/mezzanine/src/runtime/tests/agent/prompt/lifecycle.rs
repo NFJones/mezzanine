@@ -92,10 +92,10 @@ fn runtime_native_subagent_startup_bypasses_pane_bootstrap() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies a terminal profile is snapshotted when its child is spawned and
-/// removes `spawn_agent` from that child's first static provider action set.
+/// Verifies a terminal profile is snapshotted when its child is spawned while
+/// retaining the configured provider action set for execution-time validation.
 #[test]
-fn runtime_terminal_profile_spawn_excludes_spawn_agent() {
+fn runtime_terminal_profile_spawn_retains_spawn_agent_surface() {
     let mut service = test_runtime_service();
     service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
     service
@@ -151,13 +151,65 @@ fn runtime_terminal_profile_spawn_excludes_spawn_agent() {
         .turns()
         .iter()
         .find(|turn| turn.turn_id == turn_id)
+        .cloned()
         .expect("spawned terminal child turn should exist");
     let allowed_actions = service
-        .agent_provider_request_control_for_turn(turn)
+        .agent_provider_request_control_for_turn(&turn)
         .0
         .expect("spawned child should have a static action set");
 
-    assert!(!allowed_actions.contains(mez_agent::AllowedAction::SpawnAgent));
+    assert!(allowed_actions.contains(mez_agent::AllowedAction::SpawnAgent));
+
+    let action = runtime_spawn_agent_action("spawn-from-terminal", "delegate again");
+    let mut execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "spawn from terminal profile".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "delegate from terminal profile".to_string(),
+                actions: vec![action.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![mez_agent::ActionResult::running(
+            &turn,
+            &action,
+            Vec::new(),
+            None,
+        )],
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+
+    assert_eq!(
+        service
+            .execute_running_spawn_actions_for_turn(&turn, &mut execution)
+            .unwrap(),
+        1
+    );
+    assert_eq!(execution.action_results[0].status, ActionStatus::Denied);
+    assert_eq!(
+        execution.action_results[0]
+            .error
+            .as_ref()
+            .map(|error| error.code.as_str()),
+        Some("forbidden")
+    );
+    assert!(
+        execution.action_results[0]
+            .structured_content_json
+            .as_deref()
+            .is_some_and(
+                |content| content.contains("terminal subagent profile cannot spawn children")
+            )
+    );
     service.terminate_all_pane_processes().unwrap();
 }
 
