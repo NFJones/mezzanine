@@ -366,6 +366,8 @@ struct RuntimeAgentShellPreviewPresentation {
     installed_lineage: u64,
     /// Durable pane generation onto which previews are projected.
     baseline_screen: std::sync::Arc<TerminalScreen>,
+    /// Physical rows occupied by the installed preview suffix.
+    transient_rows: usize,
     /// Next pane-local first-seen order.
     next_order: u64,
     /// Independently mutable previews keyed by exact shell owner.
@@ -413,6 +415,8 @@ struct RuntimeActionPresentationProgressPresentation {
     conversation_id: String,
     installed_lineage: u64,
     baseline_screen: std::sync::Arc<TerminalScreen>,
+    /// Physical rows occupied by the installed executor-progress suffix.
+    transient_rows: usize,
     projected_context: RuntimeActionPresentationProjectionContext,
     next_order: u64,
     components: std::collections::BTreeMap<
@@ -1538,6 +1542,7 @@ impl RuntimePresentationComponent {
                 conversation_id: conversation_id.to_string(),
                 installed_lineage: 0,
                 baseline_screen: std::sync::Arc::new(baseline_screen),
+                transient_rows: 0,
                 next_order: 0,
                 previews: std::collections::BTreeMap::new(),
                 settled_owners: std::collections::BTreeSet::new(),

@@ -2077,6 +2077,7 @@ impl RuntimeSessionService {
             observed_action,
             display_output_after_completion,
             apply_patch_file_outcomes,
+            confirmed_patch_sections,
         ) = {
             let execution = self
                 .agent_turn_executions_mut()
@@ -2132,6 +2133,23 @@ impl RuntimeSessionService {
                 matches!(action.payload, AgentActionPayload::ApplyPatch { .. })
                     && apply_patch_transaction_phase(&transaction_ref.command)
                         == Some(ApplyPatchTransactionPhase::Write);
+            let confirmed_patch_sections = if is_apply_patch_write
+                && !transaction_ref.observed_output_truncated
+                && !transport_diagnostics.output_truncated()
+                && !transport_diagnostics.transport_incomplete()
+            {
+                let mut decoder =
+                    mez_agent::semantic_patch_planning::ApplyPatchProgressDecoder::new();
+                decoder
+                    .push(transaction_ref.observed_output_preview.as_bytes())
+                    .and_then(|mut progress| {
+                        progress.extend(decoder.finish()?);
+                        Ok(progress.confirmed_sections)
+                    })
+                    .ok()
+            } else {
+                None
+            };
             let apply_patch_file_outcomes = if is_apply_patch_write
                 && !transaction_ref.observed_output_truncated
                 && !transport_diagnostics.output_truncated()
@@ -2333,6 +2351,7 @@ impl RuntimeSessionService {
                 action,
                 local_plan.display_output_after_completion,
                 apply_patch_file_outcomes,
+                confirmed_patch_sections,
             )
         };
         if matches!(
@@ -2380,6 +2399,23 @@ impl RuntimeSessionService {
                 &transaction_ref.observed_output_preview,
             );
         }
+        let progress_identity =
+            mez_agent::ActionPresentationExecutionIdentity::Transaction(marker.to_string());
+        let matching_promoted_patch = confirmed_patch_sections.as_ref().is_some_and(|sections| {
+            !sections.is_empty()
+                && self.promoted_action_patch_sections_match(
+                    turn_id,
+                    action_id,
+                    &progress_identity,
+                    sections,
+                )
+        }) || (exit_code == 0
+            && self.promoted_action_patch_output_matches(
+                turn_id,
+                action_id,
+                &progress_identity,
+                &transaction_ref.observed_output_preview,
+            ));
         self.append_agent_trace_turn_event(pane_id, turn_id, &action_transition_trace)?;
         self.append_agent_trace_maap_action_results(
             pane_id,
@@ -2396,6 +2432,7 @@ impl RuntimeSessionService {
                 || self.agent_action_result_renders_in_normal_mode(&observed_action))
             && !self.agent_shell_view_enabled(pane_id)
             && !transaction_ref.observed_output_preview.trim().is_empty()
+            && !matching_promoted_patch
         {
             self.append_agent_action_result_text_to_terminal_buffer(
                 pane_id,

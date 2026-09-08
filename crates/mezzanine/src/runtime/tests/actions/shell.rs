@@ -755,6 +755,67 @@ fn runtime_shell_preview_claim_cleanup_waits_for_next_durable_row() {
     );
 }
 
+/// Verifies a settled multi-row shell tail is replaced without rewinding a full pane.
+///
+/// Once the transient tail has scrolled durable rows into history, the next
+/// durable item must reuse that presented displacement instead of rebuilding
+/// from the pre-tail baseline and shifting the complete viewport downward.
+#[test]
+fn runtime_shell_preview_handoff_preserves_bottom_viewport_origin() {
+    let mut service = test_runtime_service();
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let mut screen = TerminalScreen::new(Size::new(60, 5).unwrap(), 40).unwrap();
+    screen.feed(b"durable-zero\r\ndurable-one\r\ndurable-two\r\ndurable-three\r\ndurable-four");
+    service.set_agent_pane_screen("%1", conversation_id, screen);
+    let owner = crate::runtime::render::RuntimeAgentShellPreviewOwner {
+        turn_id: "turn-bottom-handoff".to_string(),
+        action_id: "shell-bottom-handoff".to_string(),
+        marker: "marker-bottom-handoff".to_string(),
+    };
+    service
+        .update_agent_shell_output_preview(
+            "%1",
+            owner.clone(),
+            1,
+            &[
+                "tail-one".to_string(),
+                "tail-two".to_string(),
+                "tail-three".to_string(),
+            ],
+        )
+        .unwrap();
+    assert!(service.settle_agent_shell_output_preview("%1", &owner));
+    let projected = service.agent_pane_screen("%1").unwrap();
+    assert_eq!(
+        projected.visible_lines(),
+        vec![
+            "durable-three",
+            "durable-four",
+            "▐ tail-one",
+            "▐ tail-two",
+            "▐ tail-three",
+        ]
+    );
+    let projected_history_len = projected.history().len();
+
+    service
+        .append_agent_status_text_to_terminal_buffer("%1", "next durable")
+        .unwrap();
+
+    let replaced = service.agent_pane_screen("%1").unwrap();
+    assert_eq!(replaced.history().len(), projected_history_len);
+    assert_eq!(
+        replaced.visible_lines(),
+        vec!["durable-three", "durable-four", "▐ next durable", "", "",]
+    );
+    assert_eq!(replaced.cursor_state().row, 3);
+}
+
 /// Verifies aggregate turn cancellation retires only the matching owners.
 ///
 /// Cancellation may cover managed or native work and therefore operates at the

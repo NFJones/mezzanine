@@ -2428,8 +2428,12 @@ update or cleanup. Preview replacement and cleanup MUST mutate the pane only
 while the pane still matches the exact screen generation installed by the
 preview compositor; a lineage mismatch MUST discard stale preview metadata
 without changing the intervening pane content. A settled shell preview MAY keep
-its final bounded tail visible until the next durable pane append, but transient
-preview rows MUST NOT become durable presentation records or resume history.
+its final bounded tail visible until the next durable pane append. Replacing or
+retiring transient preview or executor-progress rows at the pane bottom MUST
+preserve the viewport and history displacement already presented, MUST NOT
+cause a second scroll or baseline rewind, and SHOULD publish one atomic screen
+generation. Transient rows MUST NOT become durable presentation records or
+resume history.
 An attached-terminal pane-step request accepted by the serialized runtime actor
 MUST await actor settlement without a client-side elapsed-time cutoff, so the
 caller cannot abandon an accepted mutation while it remains eligible to apply.

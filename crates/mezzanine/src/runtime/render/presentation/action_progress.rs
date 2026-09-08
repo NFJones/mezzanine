@@ -79,6 +79,7 @@ impl RuntimeSessionService {
                 conversation_id: conversation_id.clone(),
                 installed_lineage: current_lineage,
                 baseline_screen: std::sync::Arc::new(current_screen),
+                transient_rows: 0,
                 projected_context: context.clone(),
                 next_order: 0,
                 components: std::collections::BTreeMap::new(),
@@ -151,7 +152,7 @@ impl RuntimeSessionService {
             return Ok(true);
         }
         let mut candidate = presentation.baseline_screen.as_ref().clone();
-        Self::append_action_progress_sections_to_screen(
+        let (_ansi_text, transient_rows) = Self::append_action_progress_sections_to_screen(
             &mut candidate,
             &sections,
             self.ui_theme(),
@@ -166,6 +167,7 @@ impl RuntimeSessionService {
             installed_lineage,
         );
         presentation.installed_lineage = installed_lineage;
+        presentation.transient_rows = transient_rows;
         self.presentation
             .action_presentation_progress
             .insert(pane_id, presentation);
@@ -367,6 +369,32 @@ impl RuntimeSessionService {
             })
     }
 
+    /// Reports whether final managed output contains every promoted mutation.
+    pub(crate) fn promoted_action_patch_output_matches(
+        &self,
+        turn_id: &str,
+        action_id: &str,
+        execution: &ActionPresentationExecutionIdentity,
+        output: &str,
+    ) -> bool {
+        let promoted = self
+            .presentation
+            .action_presentation_progress
+            .values()
+            .flat_map(|presentation| presentation.promoted_components.iter())
+            .filter(|(key, _)| {
+                key.turn_id == turn_id
+                    && key.action_id == action_id
+                    && &key.execution == execution
+                    && key.component.is_confirmed()
+            })
+            .collect::<Vec<_>>();
+        !promoted.is_empty()
+            && promoted
+                .iter()
+                .all(|(_key, source)| output.contains(source.as_str()))
+    }
+
     /// Composes retained executor progress over a newly rebuilt lower baseline.
     pub(super) fn compose_action_presentation_progress_over(
         &mut self,
@@ -394,11 +422,12 @@ impl RuntimeSessionService {
         presentation.projected_context = self.action_progress_projection_context(pane_id)?;
         let sections = self.render_action_progress_components(pane_id, &presentation)?;
         let mut composite = baseline;
-        Self::append_action_progress_sections_to_screen(
+        let (_ansi_text, transient_rows) = Self::append_action_progress_sections_to_screen(
             &mut composite,
             &sections,
             self.ui_theme(),
         )?;
+        presentation.transient_rows = transient_rows;
         Ok((composite, Some(presentation)))
     }
 
@@ -668,8 +697,9 @@ impl RuntimeSessionService {
         screen: &mut TerminalScreen,
         sections: &[RenderedProgressSection],
         ui_theme: &mez_mux::theme::UiTheme,
-    ) -> Result<String> {
+    ) -> Result<(String, usize)> {
         let mut bytes = String::new();
+        let mut physical_rows = 0usize;
         for (style, lines) in sections {
             if lines.is_empty() {
                 continue;
@@ -685,6 +715,7 @@ impl RuntimeSessionService {
                 bytes.push_str("\r\n");
             }
             for line in lines {
+                physical_rows = physical_rows.saturating_add(1);
                 append_styled_agent_terminal_rendered_line(&mut bytes, *style, line, ui_theme);
                 bytes.push_str("\x1b[0m\r\n");
             }
@@ -696,7 +727,7 @@ impl RuntimeSessionService {
                 "projecting executor-owned action progress",
             )?;
         }
-        Ok(bytes)
+        Ok((bytes, physical_rows))
     }
 
     fn action_progress_pane_for_key(
@@ -757,7 +788,7 @@ impl RuntimeSessionService {
             .insert(key.clone(), component.source.clone());
 
         let old_lineage = presentation.installed_lineage;
-        let mut durable_base = self
+        let preview_rows = self
             .presentation
             .agent_shell_output_previews
             .get(pane_id)
@@ -765,9 +796,17 @@ impl RuntimeSessionService {
                 preview.conversation_id == presentation.conversation_id
                     && preview.installed_lineage == old_lineage
             })
-            .map(|preview| preview.baseline_screen.as_ref().clone())
-            .unwrap_or_else(|| presentation.baseline_screen.as_ref().clone());
-        let ansi_text = Self::append_action_progress_sections_to_screen(
+            .map_or(0, |preview| preview.transient_rows);
+        let Some(mut durable_base) = self.clear_installed_agent_transient_suffixes(
+            pane_id,
+            &presentation.conversation_id,
+            old_lineage,
+            preview_rows,
+            presentation.transient_rows,
+        ) else {
+            return Ok(false);
+        };
+        let (ansi_text, _promoted_rows) = Self::append_action_progress_sections_to_screen(
             &mut durable_base,
             &target_sections,
             self.ui_theme(),
@@ -784,7 +823,7 @@ impl RuntimeSessionService {
             streaming.provider_screen = std::sync::Arc::new(durable_base.clone());
         }
         let mut progress_baseline = durable_base.clone();
-        if let Some(preview) = self
+        let preview_source = self
             .presentation
             .agent_shell_output_previews
             .get(pane_id)
@@ -792,19 +831,28 @@ impl RuntimeSessionService {
                 preview.conversation_id == presentation.conversation_id
                     && preview.installed_lineage == old_lineage
             })
-        {
-            Self::append_agent_shell_previews_to_screen(
+            .map(|preview| preview.previews.clone());
+        if let Some(previews) = preview_source {
+            let reprojected_preview_rows = Self::append_agent_shell_previews_to_screen(
                 &mut progress_baseline,
-                &preview.previews,
+                &previews,
                 self.ui_theme(),
                 self.terminal_shell_output_preview_lines(),
                 self.presentation.settings.terminal_agent_wrap_column_cap,
             )?;
+            if let Some(preview) = self
+                .presentation
+                .agent_shell_output_previews
+                .get_mut(pane_id)
+            {
+                preview.baseline_screen = std::sync::Arc::new(durable_base.clone());
+                preview.transient_rows = reprojected_preview_rows;
+            }
         }
         presentation.baseline_screen = std::sync::Arc::new(progress_baseline.clone());
         let remaining = self.render_action_progress_components(pane_id, &presentation)?;
         let mut candidate = progress_baseline;
-        Self::append_action_progress_sections_to_screen(
+        let (_remaining_ansi, transient_rows) = Self::append_action_progress_sections_to_screen(
             &mut candidate,
             &remaining,
             self.ui_theme(),
@@ -825,6 +873,7 @@ impl RuntimeSessionService {
             installed_lineage,
         );
         presentation.installed_lineage = installed_lineage;
+        presentation.transient_rows = transient_rows;
         self.presentation
             .action_presentation_progress
             .insert(pane_id.to_string(), presentation);
@@ -869,6 +918,29 @@ impl RuntimeSessionService {
         self.render_action_progress_components(pane_id, &one)
     }
 
+    /// Removes the exact installed executor-progress suffix in place.
+    ///
+    /// The returned screen retains any viewport displacement already exposed
+    /// by the transient rows. A stale lineage or suffix leaves the installed
+    /// screen untouched and rejects cleanup.
+    fn clear_installed_action_progress_suffix(
+        &self,
+        pane_id: &str,
+        presentation: &RuntimeActionPresentationProgressPresentation,
+    ) -> Option<TerminalScreen> {
+        if self.agent_pane_screen_lineage(pane_id, &presentation.conversation_id)
+            != Some(presentation.installed_lineage)
+        {
+            return None;
+        }
+        let mut screen = self.agent_pane_screen(pane_id)?.clone();
+        if presentation.transient_rows == 0 {
+            return Some(screen);
+        }
+        let suffix = screen.capture_transient_suffix(presentation.transient_rows, true)?;
+        screen.clear_transient_suffix(suffix).then_some(screen)
+    }
+
     fn rollback_action_progress_component(
         &mut self,
         pane_id: &str,
@@ -903,11 +975,16 @@ impl RuntimeSessionService {
                 .insert(pane_id.to_string(), presentation);
             return Ok(false);
         }
+        let Some(mut candidate) =
+            self.clear_installed_action_progress_suffix(pane_id, &presentation)
+        else {
+            return Ok(false);
+        };
         presentation.components.remove(key);
         presentation.projected_context = self.action_progress_projection_context(pane_id)?;
         let remaining = self.render_action_progress_components(pane_id, &presentation)?;
-        let mut candidate = presentation.baseline_screen.as_ref().clone();
-        Self::append_action_progress_sections_to_screen(
+        presentation.baseline_screen = std::sync::Arc::new(candidate.clone());
+        let (_ansi_text, transient_rows) = Self::append_action_progress_sections_to_screen(
             &mut candidate,
             &remaining,
             self.ui_theme(),
@@ -931,6 +1008,7 @@ impl RuntimeSessionService {
             return Ok(true);
         }
         presentation.installed_lineage = installed_lineage;
+        presentation.transient_rows = transient_rows;
         self.presentation
             .action_presentation_progress
             .insert(pane_id.to_string(), presentation);
@@ -1000,10 +1078,15 @@ impl RuntimeSessionService {
             {
                 continue;
             }
+            let Some(mut candidate) =
+                self.clear_installed_action_progress_suffix(&pane_id, &presentation)
+            else {
+                continue;
+            };
             presentation.projected_context = self.action_progress_projection_context(&pane_id)?;
             let remaining = self.render_action_progress_components(&pane_id, &presentation)?;
-            let mut candidate = presentation.baseline_screen.as_ref().clone();
-            Self::append_action_progress_sections_to_screen(
+            presentation.baseline_screen = std::sync::Arc::new(candidate.clone());
+            let (_ansi_text, transient_rows) = Self::append_action_progress_sections_to_screen(
                 &mut candidate,
                 &remaining,
                 self.ui_theme(),
@@ -1027,6 +1110,7 @@ impl RuntimeSessionService {
                 continue;
             }
             presentation.installed_lineage = installed_lineage;
+            presentation.transient_rows = transient_rows;
             self.presentation
                 .action_presentation_progress
                 .insert(pane_id, presentation);

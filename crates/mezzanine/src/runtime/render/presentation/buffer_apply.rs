@@ -2405,10 +2405,11 @@ impl RuntimeSessionService {
             }
         }
         let mut composite_screen = provider_screen.clone();
+        let mut transient_rows = 0;
         if let Some(preview) = preview_presentation.as_ref() {
             let ui_theme = self.presentation.settings.ui_theme.clone();
             let max_preview_rows = self.terminal_shell_output_preview_lines();
-            Self::append_agent_shell_previews_to_screen(
+            transient_rows = Self::append_agent_shell_previews_to_screen(
                 &mut composite_screen,
                 &preview.previews,
                 &ui_theme,
@@ -2431,6 +2432,7 @@ impl RuntimeSessionService {
         if let Some(mut preview) = preview_presentation {
             preview.installed_lineage = installed_lineage;
             preview.baseline_screen = std::sync::Arc::new(provider_screen.clone());
+            preview.transient_rows = transient_rows;
             self.presentation
                 .agent_shell_output_previews
                 .insert(pane_id.to_string(), preview);
@@ -3530,7 +3532,7 @@ impl RuntimeSessionService {
         ui_theme: &mez_mux::theme::UiTheme,
         max_visual_rows: usize,
         column_cap: usize,
-    ) -> Result<()> {
+    ) -> Result<usize> {
         let mut ordered = previews.values().collect::<Vec<_>>();
         ordered.sort_by_key(|preview| preview.first_seen_order);
         let content_columns = bounded_agent_terminal_presentation_columns(
@@ -3540,6 +3542,7 @@ impl RuntimeSessionService {
         .saturating_sub(UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX))
         .max(1);
         let mut bytes = String::new();
+        let mut physical_rows = 0usize;
         let cursor = screen.cursor_state();
         let current_line_has_content = screen
             .visible_lines()
@@ -3559,6 +3562,7 @@ impl RuntimeSessionService {
                     bytes.push_str("\r\n");
                 }
                 first_line = false;
+                physical_rows = physical_rows.saturating_add(1);
                 let rendition = agent_terminal_label_rendition(
                     AgentTerminalPresentationStyle::Status,
                     ui_theme,
@@ -3582,9 +3586,38 @@ impl RuntimeSessionService {
             }
         }
         if first_line {
-            return Ok(());
+            return Ok(0);
         }
-        Self::feed_agent_terminal_screen(screen, bytes.as_bytes(), "projecting shell previews")
+        Self::feed_agent_terminal_screen(screen, bytes.as_bytes(), "projecting shell previews")?;
+        Ok(physical_rows)
+    }
+
+    /// Removes installed transient layers while preserving their viewport displacement.
+    pub(super) fn clear_installed_agent_transient_suffixes(
+        &self,
+        pane_id: &str,
+        conversation_id: &str,
+        installed_lineage: u64,
+        preview_rows: usize,
+        progress_rows: usize,
+    ) -> Option<TerminalScreen> {
+        if self.agent_pane_screen_lineage(pane_id, conversation_id) != Some(installed_lineage) {
+            return None;
+        }
+        let mut screen = self.agent_pane_screen(pane_id)?.clone();
+        if progress_rows > 0 {
+            let suffix = screen.capture_transient_suffix(progress_rows, true)?;
+            if !screen.clear_transient_suffix(suffix) {
+                return None;
+            }
+        }
+        if preview_rows > 0 {
+            let suffix = screen.capture_transient_suffix(preview_rows, progress_rows > 0)?;
+            if !screen.clear_transient_suffix(suffix) {
+                return None;
+            }
+        }
+        Some(screen)
     }
 
     /// Returns a preview-free candidate and retained projection for one pane write.
@@ -3622,11 +3655,33 @@ impl RuntimeSessionService {
             let mut presentation = presentation.ok_or_else(|| {
                 MezError::invalid_state("checked shell preview presentation disappeared")
             })?;
-            let baseline = presentation.baseline_screen.as_ref().clone();
+            let progress_rows = self
+                .presentation
+                .action_presentation_progress
+                .get(pane_id)
+                .filter(|progress| {
+                    progress.conversation_id == conversation_id
+                        && progress.installed_lineage == current_lineage
+                })
+                .map_or(0, |progress| progress.transient_rows);
+            let Some(baseline) = self.clear_installed_agent_transient_suffixes(
+                pane_id,
+                &conversation_id,
+                current_lineage,
+                presentation.transient_rows,
+                progress_rows,
+            ) else {
+                self.presentation
+                    .agent_shell_output_previews
+                    .remove(pane_id);
+                return Ok((conversation_id, current_screen, None));
+            };
             Self::retire_settled_agent_shell_previews(&mut presentation);
             if presentation.previews.is_empty() {
                 return Ok((conversation_id, baseline, None));
             }
+            presentation.baseline_screen = std::sync::Arc::new(baseline.clone());
+            presentation.transient_rows = 0;
             return Ok((conversation_id, baseline, Some(presentation)));
         }
         if presentation.is_some() {
@@ -3638,7 +3693,7 @@ impl RuntimeSessionService {
     }
 
     /// Atomically installs one durable candidate and reprojects active previews.
-    fn install_agent_shell_preview_write(
+    pub(super) fn install_agent_shell_preview_write(
         &mut self,
         pane_id: &str,
         conversation_id: &str,
@@ -3652,10 +3707,11 @@ impl RuntimeSessionService {
             })?;
         let mut composite_screen = baseline_screen.clone();
         let mut presentation = presentation;
+        let mut transient_rows = 0;
         if let Some(presentation) = presentation.as_ref() {
             let ui_theme = self.presentation.settings.ui_theme.clone();
             let max_preview_rows = self.terminal_shell_output_preview_lines();
-            Self::append_agent_shell_previews_to_screen(
+            transient_rows = Self::append_agent_shell_previews_to_screen(
                 &mut composite_screen,
                 &presentation.previews,
                 &ui_theme,
@@ -3685,6 +3741,7 @@ impl RuntimeSessionService {
         if let Some(mut presentation) = presentation.take() {
             presentation.installed_lineage = installed_lineage;
             presentation.baseline_screen = std::sync::Arc::new(baseline_screen);
+            presentation.transient_rows = transient_rows;
             self.presentation
                 .agent_shell_output_previews
                 .insert(pane_id.to_string(), presentation);
@@ -3773,6 +3830,7 @@ impl RuntimeSessionService {
                     .agent_pane_screen_lineage(pane_id, &conversation_id)
                     .unwrap_or_default(),
                 baseline_screen: std::sync::Arc::new(preview_baseline),
+                transient_rows: 0,
                 next_order: 0,
                 previews: std::collections::BTreeMap::new(),
                 settled_owners: std::collections::BTreeSet::new(),
@@ -3808,7 +3866,7 @@ impl RuntimeSessionService {
         let ui_theme = self.presentation.settings.ui_theme.clone();
         let max_preview_rows = self.terminal_shell_output_preview_lines();
         let mut candidate = presentation.baseline_screen.as_ref().clone();
-        Self::append_agent_shell_previews_to_screen(
+        let transient_rows = Self::append_agent_shell_previews_to_screen(
             &mut candidate,
             &presentation.previews,
             &ui_theme,
@@ -3841,6 +3899,7 @@ impl RuntimeSessionService {
             }
         }
         presentation.installed_lineage = installed_lineage;
+        presentation.transient_rows = transient_rows;
         self.presentation
             .agent_shell_output_previews
             .insert(pane_id.to_string(), presentation);
@@ -3922,33 +3981,27 @@ impl RuntimeSessionService {
                 presentation.previews.remove(&owner);
                 presentation.settled_owners.remove(&owner);
             }
-            let mut candidate = presentation.baseline_screen.as_ref().clone();
-            if !presentation.previews.is_empty() {
-                let ui_theme = self.presentation.settings.ui_theme.clone();
-                let max_preview_rows = self.terminal_shell_output_preview_lines();
-                Self::append_agent_shell_previews_to_screen(
-                    &mut candidate,
-                    &presentation.previews,
-                    &ui_theme,
-                    max_preview_rows,
-                    self.presentation.settings.terminal_agent_wrap_column_cap,
-                )?;
-            }
-            let installed_lineage = self
-                .update_agent_pane_screen_preserving_interaction(
-                    &pane_id,
-                    &presentation.conversation_id,
-                    candidate,
-                )
-                .ok_or_else(|| {
-                    MezError::invalid_state("shell preview turn retirement conversation changed")
-                })?;
-            if !presentation.previews.is_empty() {
-                presentation.installed_lineage = installed_lineage;
-                self.presentation
-                    .agent_shell_output_previews
-                    .insert(pane_id, presentation);
-            }
+            let progress_rows = self
+                .presentation
+                .action_presentation_progress
+                .get(&pane_id)
+                .filter(|progress| {
+                    progress.conversation_id == presentation.conversation_id
+                        && progress.installed_lineage == presentation.installed_lineage
+                })
+                .map_or(0, |progress| progress.transient_rows);
+            let Some(baseline) = self.clear_installed_agent_transient_suffixes(
+                &pane_id,
+                &presentation.conversation_id,
+                presentation.installed_lineage,
+                presentation.transient_rows,
+                progress_rows,
+            ) else {
+                continue;
+            };
+            let conversation_id = presentation.conversation_id.clone();
+            let retained = (!presentation.previews.is_empty()).then_some(presentation);
+            self.install_agent_shell_preview_write(&pane_id, &conversation_id, baseline, retained)?;
         }
         Ok(retired)
     }

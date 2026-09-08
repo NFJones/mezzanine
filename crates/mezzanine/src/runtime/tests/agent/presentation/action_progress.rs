@@ -413,6 +413,65 @@ fn runtime_action_progress_fences_identity_revision_and_screen_lineage() {
     assert!(!after_stale_lineage.contains("stale-lineage-output"));
 }
 
+/// Verifies retiring executor progress preserves a full pane's viewport origin.
+///
+/// Progress rows may scroll durable content while they are visible. Retirement
+/// must clear that exact suffix from the installed composite rather than
+/// rebuilding from the older baseline and moving every visible row.
+#[test]
+fn runtime_action_progress_retirement_preserves_bottom_viewport_origin() {
+    let (mut service, turn) =
+        running_action_progress_fixture(shell_action(), "marker-bottom", "sleep 1");
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let mut screen = TerminalScreen::new(Size::new(60, 5).unwrap(), 40).unwrap();
+    screen.feed(b"durable-zero\r\ndurable-one\r\ndurable-two\r\ndurable-three\r\ndurable-four");
+    service.set_agent_pane_screen("%1", conversation_id, screen);
+
+    assert!(
+        service
+            .apply_action_presentation_progress(transaction_progress(
+                &turn.turn_id,
+                "shell-1",
+                "marker-bottom",
+                1,
+                ActionPresentationComponentIdentity::ShellOutput,
+                "progress-one\nprogress-two\nprogress-three",
+            ))
+            .unwrap()
+    );
+    let projected = service.agent_pane_screen("%1").unwrap();
+    let history_len = projected.history().len();
+    assert!(
+        projected
+            .visible_lines()
+            .iter()
+            .any(|line| line.contains("progress-three"))
+    );
+
+    assert_eq!(
+        service
+            .retire_action_presentation_progress_for_action(&turn.turn_id, "shell-1")
+            .unwrap(),
+        1
+    );
+
+    let retired = service.agent_pane_screen("%1").unwrap();
+    assert_eq!(retired.history().len(), history_len);
+    assert_eq!(retired.visible_lines()[0], "durable-four");
+    assert!(
+        retired
+            .visible_lines()
+            .iter()
+            .all(|line| !line.contains("progress-"))
+    );
+    assert_eq!(retired.cursor_state().row, 1);
+}
+
 /// Verifies ordinary read bodies remain hidden in normal logging mode even
 /// when an exact managed read-phase marker and running action accept their
 /// typed source. Acceptance may retain bounded reconciliation state, but it
