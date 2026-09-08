@@ -224,7 +224,8 @@ fn client_view_offsets_style_spans_across_side_by_side_panes() {
     assert!(view.line_style_spans[0].iter().any(|span| {
         span.start == 3
             && span.length == 1
-            && span.rendition.foreground == Some(TerminalColor::Rgb(0xd8, 0xff, 0x5a))
+            && span.rendition.foreground
+                == Some(config.ui_theme.colors.pane_border_active.foreground)
             && span.rendition.background.is_none()
     }));
 }
@@ -359,7 +360,8 @@ fn default_client_loop_config_renders_window_and_pane_state_rows() {
     assert!(
         view.line_style_spans[0]
             .iter()
-            .any(|span| span.rendition.background == Some(TerminalColor::Rgb(0x7f, 0xbf, 0x3f)))
+            .any(|span| span.rendition.background
+                == Some(UiTheme::default().colors.pane_frame_active.background))
     );
     assert!(view.cursor_visible);
     assert_eq!(view.cursor_row, 1);

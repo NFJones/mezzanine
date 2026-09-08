@@ -771,8 +771,24 @@ mod tests {
     /// The CLI host client must exercise the protected management socket for
     /// status, fresh creation, default resolution, listing, reconciliation,
     /// and graceful shutdown without bypassing the session supervisor.
-    #[tokio::test(flavor = "current_thread")]
-    async fn host_management_socket_routes_lifecycle_and_session_requests() {
+    #[test]
+    fn host_management_socket_routes_lifecycle_and_session_requests() {
+        std::thread::Builder::new()
+            .name("host-management-lifecycle".to_string())
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(host_management_socket_routes_lifecycle_and_session_requests_async())
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    async fn host_management_socket_routes_lifecycle_and_session_requests_async() {
         let root = test_root("management");
         let env = test_env(&root);
         let runtime_root = default_socket_directory(&env.runtime).unwrap().path;

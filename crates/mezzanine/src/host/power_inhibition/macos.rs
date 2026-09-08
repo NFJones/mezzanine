@@ -164,7 +164,7 @@ impl<A: MacOsPowerInhibitionApi + std::fmt::Debug + Send> Drop for MacOsPowerInh
     }
 }
 
-impl<A: MacOsPowerInhibitionApi + std::fmt::Debug + Send> PowerInhibitionBackend
+impl<A: MacOsPowerInhibitionApi + std::fmt::Debug + Send + 'static> PowerInhibitionBackend
     for MacOsPowerInhibitionBackend<A>
 {
     fn kind(&self) -> PowerInhibitionBackendKind {

@@ -391,7 +391,9 @@ fn openai_compatible_chat_completions_provider_describes_callable_mcp_tools() {
         .as_str()
         .unwrap();
     assert!(
-        description.contains("The schema is a static catalog of every valid action"),
+        description.contains(
+            "The schema contains exactly the executable action subset enabled by runtime configuration"
+        ),
         "{description}"
     );
     assert!(

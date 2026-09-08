@@ -72,7 +72,10 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     );
     let capability_description = capability_tool["description"].as_str().unwrap();
     assert!(capability_description.contains("Return a function call, not prose"));
-    assert!(capability_description.contains("static catalog of every valid action"));
+    assert!(
+        capability_description
+            .contains("exactly the executable action subset enabled by runtime configuration")
+    );
     assert!(capability_description.contains("transport envelope"));
     assert!(capability_description.contains("not a prerequisite task step"));
     assert!(capability_description.contains("required-function-call"));
@@ -112,7 +115,7 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert_eq!(
         openai_tool_action_schemas(capability_tool).len(),
         17,
-        "the canonical OpenAI tool exposes a stable action superset with generic MCP"
+        "the all-enabled fixture exposes every currently configured action"
     );
     assert_eq!(
         capability_tool["parameters"]["properties"]["actions"]["minItems"],

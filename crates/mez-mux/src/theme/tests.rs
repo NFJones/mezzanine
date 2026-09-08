@@ -743,12 +743,10 @@ fn builtin_themes_reserve_accent_fills_for_active_and_semantic_states() {
         for (slot, pair) in primary_pairs {
             assert_eq!(pair.background, primary, "{name} {slot} should use primary");
         }
-        for (slot, pair) in [("iroh_status_degraded", theme.colors.iroh_status_degraded)] {
-            assert_eq!(
-                pair.background, tertiary,
-                "{name} {slot} should use tertiary"
-            );
-        }
+        assert_eq!(
+            theme.colors.iroh_status_degraded.background, tertiary,
+            "{name} iroh_status_degraded should use tertiary"
+        );
         for (slot, pair) in [
             ("iroh_status_poor", theme.colors.iroh_status_poor),
             (

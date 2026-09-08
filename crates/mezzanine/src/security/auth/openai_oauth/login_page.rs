@@ -251,7 +251,7 @@ pub(super) fn login_page_theme_tokens(ui_theme: &UiTheme) -> LoginPageThemeToken
         login_page_mix(text_primary, bg, 0.35),
     );
     let accent_primary = login_page_rgb_from_terminal_color(
-        ui_theme.colors.agent_status_running.background,
+        ui_theme.colors.agent_status_running.foreground,
         LoginPageRgb::new(87, 199, 133),
     );
     let accent_secondary = login_page_rgb_from_terminal_color(
