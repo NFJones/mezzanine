@@ -441,9 +441,9 @@ fn foreground_serve_zen_round_trip_resizes_real_pane_pty() {
     assert!(!text.contains("mez: Io"), "{text}");
 }
 
-/// Reconstructs the real foreground terminal to distinguish a focus pill from
-/// command echo. Once the bottom-left label appears, no more input is sent
-/// until its timer-driven repaint removes it from the visible screen.
+/// Reconstructs the real foreground terminal to distinguish a pane-name focus
+/// pill from command echo. Cursor blinking is disabled so, once the label
+/// appears, only its own timer-driven repaint can remove it from the screen.
 #[test]
 fn foreground_zen_focus_label_expires_without_input() {
     let root = test_root("zen-focus-idle");
@@ -452,6 +452,13 @@ fn foreground_zen_focus_label_expires_without_input() {
     fs::create_dir_all(&home).unwrap();
     fs::create_dir_all(&runtime).unwrap();
     fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+    let config_dir = home.join(".config/mezzanine");
+    fs::create_dir_all(&config_dir).unwrap();
+    fs::write(
+        config_dir.join("config.toml"),
+        "version = 92\n[terminal]\ncursor_blink = false\n",
+    )
+    .unwrap();
     let socket = runtime.join("focus.sock");
     let mut process = spawn_foreground_serve(&root, &home, &runtime, &socket);
     let mut output = Vec::new();
@@ -465,23 +472,42 @@ fn foreground_zen_focus_label_expires_without_input() {
             .unwrap();
     screen.feed(&output);
     process
-        .write_input(b"\x01:zen on; new-window foreground-focus\r")
+        .write_input(b"\x01:split-window; rename-pane foreground-focus; select-pane -t 0\r")
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    process
+        .read_until(&mut output, Duration::from_secs(10), |text| {
+            text.contains("1 foreground-focus")
+        })
+        .unwrap();
+    screen.feed(&output);
+    output.clear();
+    process
+        .write_input(b"\x01:zen on; select-pane -t 1\r")
+        .unwrap();
+    let transition_started_at = Instant::now();
+    let deadline = transition_started_at + Duration::from_secs(10);
     let mut appeared = false;
     let mut expired = false;
     while Instant::now() < deadline {
         match process.output_rx.recv_timeout(Duration::from_millis(20)) {
             Ok(chunk) => {
                 output.extend_from_slice(&chunk);
+                appeared |= output
+                    .windows(b"1 foreground-focus".len())
+                    .any(|window| window == b"1 foreground-focus");
                 screen.feed(&chunk);
-                let rows = screen.visible_lines();
-                let visible = rows[23].trim() == "1 foreground-focus";
-                if visible {
-                    appeared = true;
-                }
-                if appeared && !visible {
+                let visible = screen
+                    .visible_lines()
+                    .iter()
+                    .any(|row| row.contains("1 foreground-focus"));
+                if appeared
+                    && transition_started_at.elapsed() >= Duration::from_millis(900)
+                    && !visible
+                {
                     expired = true;
+                    break;
+                }
+                if expired {
                     break;
                 }
             }
