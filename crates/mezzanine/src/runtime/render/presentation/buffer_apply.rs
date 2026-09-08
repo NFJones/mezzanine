@@ -2720,14 +2720,18 @@ impl RuntimeSessionService {
             .iter()
             .map(|(action_index, header)| {
                 let header = streaming_action_execution_display_header(header);
+                let rendered_lines = wrap_rich_text_line_to_width_with_source_ranges_hard(
+                    agent_action_execution_rendered_line(&header, &work.ui_theme),
+                    work.frame_width,
+                )
+                .into_iter()
+                .map(|wrapped| wrapped.line)
+                .collect();
                 (
                     *action_index,
                     StreamingSayProjection {
                         style: AgentTerminalPresentationStyle::Status,
-                        rendered_lines: vec![agent_action_execution_rendered_line(
-                            &header,
-                            &work.ui_theme,
-                        )],
+                        rendered_lines,
                         copy_lines: Vec::new(),
                     },
                 )

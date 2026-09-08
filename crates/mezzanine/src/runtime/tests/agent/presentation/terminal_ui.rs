@@ -1542,7 +1542,17 @@ fn runtime_streaming_summary_and_web_header_match_static_projection_and_restore(
     let mut static_render = test_runtime_service();
     for service in [&mut streaming, &mut static_render] {
         service
-            .attach_primary("primary", true, Size::new(48, 12).unwrap(), 120)
+            .replace_config_layers(vec![ConfigLayer {
+                name: "primary".to_string(),
+                path: None,
+                format: ConfigFormat::Toml,
+                scope: ConfigScope::Primary,
+                trusted: true,
+                text: "[terminal]\nagent_wrap_column_cap = 24\n".to_string(),
+            }])
+            .unwrap();
+        service
+            .attach_primary("primary", true, Size::new(80, 12).unwrap(), 120)
             .unwrap();
         service
             .agent_shell_store_mut()
@@ -1551,7 +1561,7 @@ fn runtime_streaming_summary_and_web_header_match_static_projection_and_restore(
         set_agent_pane_screen_for_test(
             service,
             "%1",
-            TerminalScreen::new(Size::new(48, 12).unwrap(), 120).unwrap(),
+            TerminalScreen::new(Size::new(80, 12).unwrap(), 120).unwrap(),
         );
         service
             .append_agent_status_text_to_terminal_buffer("%1", "baseline")
@@ -1559,7 +1569,7 @@ fn runtime_streaming_summary_and_web_header_match_static_projection_and_restore(
     }
     let baseline = streaming.agent_pane_screen("%1").unwrap().clone();
     let summary = "Inspect current streaming previews";
-    let query = "streaming previews";
+    let query = "streaming-previews-with-an-unbroken-target-0123456789abcdefghij";
     let action = mez_agent::AgentAction {
         id: "search-streamed".to_string(),
 
@@ -1599,6 +1609,18 @@ fn runtime_streaming_summary_and_web_header_match_static_projection_and_restore(
         streaming
             .apply_agent_streaming_say_projection_result(projection)
             .unwrap()
+    );
+
+    let streamed_lines = streaming
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
+    assert!(
+        streamed_lines
+            .iter()
+            .filter(|line| !line.trim().is_empty())
+            .all(|line| unicode_width::UnicodeWidthStr::width(line.as_str()) <= 24),
+        "{streamed_lines:?}"
     );
 
     static_render
