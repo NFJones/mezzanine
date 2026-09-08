@@ -962,6 +962,8 @@ fn runtime_issue_browser_fix_hotkey_dispatches_only_selected_list_issue() {
 
     apply_record_browser_input(&mut service, &primary, b"f");
 
+    assert!(service.primary_display_overlay().is_none());
+
     let turn_id = service
         .agent_shell_store()
         .get(&pane_id)
@@ -1017,6 +1019,8 @@ fn runtime_issue_browser_fix_hotkey_dispatches_from_detail_view() {
     );
 
     apply_record_browser_input(&mut service, &primary, b"f");
+
+    assert!(service.primary_display_overlay().is_none());
 
     let turn_id = service
         .agent_shell_store()

@@ -705,27 +705,38 @@ impl RuntimeSessionService {
             let Some(issue_id) = selected.active_record_id().map(str::to_string) else {
                 return Ok(Some(false));
             };
-            let error = if self.agent_shell_pane_has_active_turn(&pane_id) {
-                Some("pane agent is busy; wait for its active turn to finish before fixing this issue".to_string())
+            let (dispatched, error) = if self.agent_shell_pane_has_active_turn(&pane_id) {
+                (false, Some("pane agent is busy; wait for its active turn to finish before fixing this issue".to_string()))
             } else {
                 let prompt = format!(
                     "$fix-issues\n\nFix only issue `{issue_id}`. Do not query, modify, or resolve any other issue. Stop after this issue is either verified and resolved or concretely blocked."
                 );
                 match self.execute_agent_shell_command(primary_client_id, &prompt) {
-                    Ok(response) => serde_json::from_str::<serde_json::Value>(&response)
-                        .ok()
-                        .filter(|value| {
-                            value.get("kind").and_then(serde_json::Value::as_str) != Some("mutated")
-                        })
-                        .and_then(|value| {
+                    Ok(response) => match serde_json::from_str::<serde_json::Value>(&response) {
+                        Ok(value)
+                            if matches!(
+                                value.get("kind").and_then(serde_json::Value::as_str),
+                                Some("turn_started" | "mutated")
+                            ) =>
+                        {
+                            (true, None)
+                        }
+                        Ok(value) => (
+                            false,
                             value
                                 .get("body")
                                 .and_then(serde_json::Value::as_str)
-                                .map(str::to_string)
-                        }),
-                    Err(error) => Some(error.message().to_string()),
+                                .map(str::to_string),
+                        ),
+                        Err(_) => (false, None),
+                    },
+                    Err(error) => (false, Some(error.message().to_string())),
                 }
             };
+            if dispatched {
+                self.presentation.primary_display_overlay = None;
+                return Ok(Some(true));
+            }
             let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                 return Ok(Some(false));
             };
