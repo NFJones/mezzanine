@@ -172,25 +172,38 @@ async fn async_actor_expires_zen_focus_label_without_terminal_activity() {
             reason: RenderInvalidationReason::Overlay,
         }));
     }
-    let timer_effects = service
-        .client_status_refresh_timer_transition(primary.as_str(), None, now_ms)
-        .unwrap()
-        .side_effects;
-    let [RuntimeSideEffect::ScheduleTimer { key, .. }] = timer_effects.as_slice() else {
-        panic!("expected one zen focus-label expiry timer: {timer_effects:?}");
-    };
-    let key = key.clone();
-    let expiry_ms = key.generation;
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
 
     let client = async {
+        let snapshot = handle
+            .render_iroh_client_snapshot(primary.clone(), false)
+            .await
+            .unwrap()
+            .expect("attached primary should render its pending focus label");
+        assert!(!snapshot.presentation_ids.is_empty());
         handle
-            .queue_runtime_side_effects(timer_effects)
+            .acknowledge_zen_focus_label_presentations(
+                primary.clone(),
+                snapshot.presentation_ids,
+                now_ms,
+            )
             .await
             .unwrap();
-        handle.drain_timer_side_effects(4).await.unwrap();
+        let timer_effects = handle.drain_timer_side_effects(4).await.unwrap();
+        let key = timer_effects
+            .iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::StatusRefresh =>
+                {
+                    Some(key.clone())
+                }
+                _ => None,
+            })
+            .expect("committed focus-label presentation should schedule expiry");
+        let expiry_ms = key.generation;
         let mut batch = RuntimeEventBatch::new();
         batch.push(RuntimeEvent::Timer(TimerEvent {
             key,
@@ -229,6 +242,23 @@ async fn async_actor_zen_focus_replacement_survives_old_timer() {
     service
         .execute_terminal_command(&primary, "zen on; new-window original")
         .unwrap();
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let (_, original_ids) = service
+        .render_client_view_for_client_with_resolved_config_and_receipts(
+            &primary,
+            ClientViewRole::Primary,
+            Size::new(80, 24).unwrap(),
+            &config,
+        )
+        .unwrap();
+    let original_presented_at = crate::runtime::current_unix_millis();
+    assert!(service.acknowledge_zen_focus_label_presentations(
+        &primary,
+        &original_ids,
+        original_presented_at,
+    ));
     let effects = service
         .client_status_refresh_timer_transition(
             primary.as_str(),
@@ -257,6 +287,20 @@ async fn async_actor_zen_focus_replacement_survives_old_timer() {
     let client = async {
         handle.queue_runtime_side_effects(effects).await.unwrap();
         handle.drain_timer_side_effects(16).await.unwrap();
+        let replacement = handle
+            .render_iroh_client_snapshot(primary.clone(), false)
+            .await
+            .unwrap()
+            .expect("attached primary should render replacement label");
+        assert!(!replacement.presentation_ids.is_empty());
+        handle
+            .acknowledge_zen_focus_label_presentations(
+                primary.clone(),
+                replacement.presentation_ids,
+                crate::runtime::current_unix_millis(),
+            )
+            .await
+            .unwrap();
         let mut batch = RuntimeEventBatch::new();
         batch.push(RuntimeEvent::Timer(TimerEvent {
             key: old.clone(),
@@ -264,7 +308,7 @@ async fn async_actor_zen_focus_replacement_survives_old_timer() {
         }));
         assert_eq!(
             handle.submit_runtime_events(batch).await.unwrap().applied,
-            1
+            0
         );
         let timers = handle.drain_timer_side_effects(16).await.unwrap();
         let next = timers
@@ -274,7 +318,7 @@ async fn async_actor_zen_focus_replacement_survives_old_timer() {
                     if key.kind == RuntimeTimerKind::StatusRefresh =>
                 {
                     assert!(key.generation > old.generation);
-                    assert_eq!(*delay_ms, key.generation - old.generation);
+                    assert!(*delay_ms > 0 && *delay_ms <= 60_000);
                     Some(key.clone())
                 }
                 _ => None,
@@ -296,14 +340,6 @@ async fn async_actor_zen_focus_replacement_survives_old_timer() {
         }
         handle.drain_render_side_effects(16).await.unwrap();
         let mut duplicate = RuntimeEventBatch::new();
-        let observer_timers = handle.drain_timer_side_effects(16).await.unwrap();
-        assert!(observer_timers.iter().any(|effect| matches!(
-            effect,
-            RuntimeSideEffect::ScheduleTimer { key, .. }
-                if key.kind == RuntimeTimerKind::StatusRefresh
-                    && key.owner_id == observer.as_str()
-                    && key.generation == next.generation
-        )));
         duplicate.push(RuntimeEvent::Timer(TimerEvent {
             key: old,
             now_ms: u64::MAX,
@@ -334,7 +370,6 @@ async fn async_actor_zen_focus_replacement_survives_old_timer() {
                     .any(|line| line.contains("replacement"))
             );
         }
-        assert!(!handle.drain_timer_side_effects(16).await.unwrap().iter().any(|effect| matches!(effect, RuntimeSideEffect::ScheduleTimer { key, .. } if key.kind == RuntimeTimerKind::StatusRefresh)));
         handle.shutdown().await.unwrap();
     };
     tokio::join!(client, actor.run());

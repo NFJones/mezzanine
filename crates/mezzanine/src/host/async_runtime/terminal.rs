@@ -5,12 +5,12 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    AsyncAttachedTerminalIo, AsyncRenderedClientFrame, AsyncRuntimeSessionHandle,
-    AsyncRuntimeSideEffectServiceConfig, AsyncTerminalClientConfigSnapshot,
-    AttachedTerminalClientLoopConfig, AttachedTerminalClientLoopReport, AttachedTerminalFdRole,
-    AttachedTerminalOutputModes, ClientId, ClientStatusLine, ClientViewRole, MezError, Result,
-    RuntimeSideEffect, Size, TerminalClientLoopConfig,
-    plan_attached_terminal_client_step_with_host_paste_buffer,
+    AsyncAttachedTerminalIo, AsyncRenderedClientFlush, AsyncRenderedClientFrame,
+    AsyncRuntimeSessionHandle, AsyncRuntimeSideEffectServiceConfig,
+    AsyncTerminalClientConfigSnapshot, AttachedTerminalClientLoopConfig,
+    AttachedTerminalClientLoopReport, AttachedTerminalFdRole, AttachedTerminalOutputModes,
+    ClientId, ClientStatusLine, ClientViewRole, MezError, Result, RuntimeSideEffect, Size,
+    TerminalClientLoopConfig, plan_attached_terminal_client_step_with_host_paste_buffer,
     run_async_client_output_flush_service,
 };
 use crate::host::terminal::TerminalClientLoopAction;
@@ -215,11 +215,14 @@ where
     let flush = queue_and_flush_async_attached_terminal_output(
         handle,
         io,
-        recovery.client_id,
+        AsyncRenderedClientFlush {
+            client_id: recovery.client_id,
+            presentation_ids: refreshed.presentation_ids,
+            lines,
+            line_style_spans: spans,
+            modes: output_modes,
+        },
         true,
-        lines,
-        spans,
-        output_modes,
     )
     .await?;
     merge_attached_terminal_flush_report(report, &flush);
@@ -243,27 +246,25 @@ fn cursor_blink_elapsed_ms(epoch: std::time::Instant) -> u64 {
 async fn queue_and_flush_async_attached_terminal_output<I>(
     handle: &AsyncRuntimeSessionHandle,
     io: &mut I,
-    client_id: ClientId,
+    flush: AsyncRenderedClientFlush,
     schedule_render_timers: bool,
-    lines: Vec<String>,
-    line_style_spans: Vec<Vec<mez_terminal::TerminalStyleSpan>>,
-    modes: AttachedTerminalOutputModes,
 ) -> Result<super::AsyncClientOutputFlushServiceReport>
 where
     I: AsyncAttachedTerminalIo,
 {
-    let timer_client_id = client_id.clone();
+    let timer_client_id = flush.client_id.clone();
     handle
         .queue_runtime_side_effects(vec![RuntimeSideEffect::FlushClientOutput {
-            client_id: client_id.clone(),
-            lines,
-            line_style_spans,
-            modes,
+            client_id: flush.client_id.clone(),
+            presentation_ids: flush.presentation_ids,
+            lines: flush.lines,
+            line_style_spans: flush.line_style_spans,
+            modes: flush.modes,
         }])
         .await?;
     let report = run_async_client_output_flush_service(
         handle,
-        client_id,
+        flush.client_id,
         io,
         AsyncRuntimeSideEffectServiceConfig {
             max_polls: 1,
@@ -439,6 +440,7 @@ where
             AsyncRenderedClientFrame {
                 config: terminal_config.clone(),
                 render_token: None,
+                presentation_ids: Vec::new(),
                 view: None,
             }
         };
@@ -555,11 +557,14 @@ where
                 queue_and_flush_async_attached_terminal_output(
                     handle,
                     io,
-                    request.client_id.clone(),
+                    AsyncRenderedClientFlush {
+                        client_id: request.client_id.clone(),
+                        presentation_ids: frame.presentation_ids.clone(),
+                        lines: step.output_lines.clone(),
+                        line_style_spans: step.output_line_style_spans.clone(),
+                        modes: output_modes,
+                    },
                     request.role == ClientViewRole::Primary,
-                    step.output_lines.clone(),
-                    step.output_line_style_spans.clone(),
-                    output_modes,
                 ),
             )
             .await?;
@@ -656,11 +661,14 @@ where
                         queue_and_flush_async_attached_terminal_output(
                             handle,
                             io,
-                            request.client_id.clone(),
+                            AsyncRenderedClientFlush {
+                                client_id: request.client_id.clone(),
+                                presentation_ids: refreshed.presentation_ids,
+                                lines,
+                                line_style_spans: spans,
+                                modes: output_modes,
+                            },
                             request.role == ClientViewRole::Primary,
-                            lines,
-                            spans,
-                            output_modes,
                         ),
                     )
                     .await?;

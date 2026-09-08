@@ -313,16 +313,16 @@ impl AsyncRuntimeSessionActor {
                         self.resolve_terminal_client_config_snapshot_for_client(&client_id, config)
                     })
                     .and_then(|config| {
-                        let view = if render {
+                        let (view, presentation_ids) = if render {
                             self.service
-                                .render_client_view_for_client_with_resolved_config(
+                                .render_client_view_for_client_with_resolved_config_and_receipts(
                                     &client_id,
                                     role,
                                     client_size,
                                     config.config(),
                                 )?
                         } else {
-                            None
+                            (None, Vec::new())
                         };
                         let render_token = if render {
                             self.client_render_token(&client_id, role)?
@@ -339,6 +339,7 @@ impl AsyncRuntimeSessionActor {
                         Ok(AsyncRenderedClientFrame {
                             config,
                             render_token,
+                            presentation_ids,
                             view,
                         })
                     });
@@ -376,9 +377,9 @@ impl AsyncRuntimeSessionActor {
                     let config = self
                         .service
                         .terminal_client_loop_config(Default::default())?;
-                    let Some(view) = self
+                    let (Some(view), presentation_ids) = self
                         .service
-                        .render_client_view_for_client_with_resolved_config(
+                        .render_client_view_for_client_with_resolved_config_and_receipts(
                             &client_id,
                             role,
                             client_size,
@@ -403,11 +404,31 @@ impl AsyncRuntimeSessionActor {
                     self.ensure_client_render_timers(&client_id)?;
                     Ok(Some(AsyncIrohRenderSnapshot {
                         view,
+                        presentation_ids,
                         iroh_status_slot,
                         event_cutoff,
                         invalidate_output,
                     }))
                 })();
+                let _ = reply.send(result);
+                false
+            }
+            AsyncRuntimeRequest::AcknowledgeZenFocusLabelPresentations {
+                client_id,
+                presentation_ids,
+                presented_at_ms,
+                reply,
+            } => {
+                let changed = self.service.acknowledge_zen_focus_label_presentations(
+                    &client_id,
+                    &presentation_ids,
+                    presented_at_ms,
+                );
+                let result = if changed {
+                    self.ensure_client_render_timers(&client_id)
+                } else {
+                    Ok(0)
+                };
                 let _ = reply.send(result);
                 false
             }

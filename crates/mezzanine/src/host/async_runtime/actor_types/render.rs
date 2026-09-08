@@ -109,6 +109,8 @@ pub struct AsyncRenderedClientFrame {
     pub config: AsyncTerminalClientConfigSnapshot,
     /// Identity and revisions used to validate coordinate-derived input.
     pub(in crate::host::async_runtime) render_token: Option<AsyncClientRenderToken>,
+    /// Focus-label presentation IDs actually painted into this frame.
+    pub(in crate::host::async_runtime) presentation_ids: Vec<u64>,
     /// Stores the view value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -121,6 +123,8 @@ pub struct AsyncRenderedClientFrame {
 pub struct AsyncIrohRenderSnapshot {
     /// Complete logical view for the exact attached primary or observer.
     pub view: RenderedClientView,
+    /// Focus-label presentation IDs actually painted into this snapshot.
+    pub(crate) presentation_ids: Vec<u64>,
     /// Optional client-space slot reserved for the locally composed Iroh pill.
     pub iroh_status_slot: Option<crate::host::terminal::TerminalIrohStatusSlot>,
     /// Latest ordered event whose applied state is represented by `view`.
@@ -140,6 +144,8 @@ pub struct AsyncRenderedClientFlush {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub client_id: ClientId,
+    /// Focus-label presentation IDs painted into this exact frame.
+    pub presentation_ids: Vec<u64>,
     /// Stores the lines value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

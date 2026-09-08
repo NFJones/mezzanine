@@ -207,7 +207,6 @@ fn runtime_zen_focus_editor_takeover_expires_without_replay() {
             .live_zen_focus_labels_for_client(&primary, crate::runtime::current_unix_millis())
             .is_some()
     );
-
     let _identities = start_prompt_editor(&mut service, &primary);
     service
         .external_editor_screen_mut_for_tests("%1")
@@ -232,7 +231,7 @@ fn runtime_zen_focus_editor_takeover_expires_without_replay() {
             .iter()
             .any(|line| line.contains("hidden-focus-identity"))
     );
-    assert!(service.expire_zen_focus_labels_for_client(&primary, u64::MAX));
+    assert!(!service.expire_zen_focus_labels_for_client(&primary, u64::MAX));
     assert!(service.abort_external_editor_session("%1").unwrap());
     let config = service
         .terminal_client_loop_config(TerminalClientLoopConfig::default())
@@ -256,7 +255,7 @@ fn runtime_zen_focus_editor_takeover_expires_without_replay() {
     assert!(
         service
             .live_zen_focus_labels_for_client(&primary, crate::runtime::current_unix_millis())
-            .is_none()
+            .is_some()
     );
     service.terminate_all_pane_processes().unwrap();
     let _ = fs::remove_dir_all(root);

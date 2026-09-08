@@ -664,19 +664,19 @@ impl AsyncRuntimeSessionActor {
         self.service.prepare_client_render(&client_id, role)?;
         let config = self.service.terminal_client_loop_config(config)?;
         let composition_started = std::time::Instant::now();
-        let view = self
+        let (view, presentation_ids) = self
             .service
-            .render_client_view_for_client_with_resolved_config(
+            .render_client_view_for_client_with_resolved_config_and_receipts(
                 &client_id,
                 role,
                 client_size,
                 &config,
-            );
+            )?;
         self.metrics.record_phase_latency(
             crate::host::async_runtime::AsyncRuntimeLatencyPhase::RenderComposition,
             u64::try_from(composition_started.elapsed().as_millis()).unwrap_or(u64::MAX),
         );
-        let Some(view) = view? else {
+        let Some(view) = view else {
             return Ok(None);
         };
         let status_pill_effects = self
@@ -700,6 +700,7 @@ impl AsyncRuntimeSessionActor {
         );
         let flush = AsyncRenderedClientFlush {
             client_id,
+            presentation_ids,
             lines,
             line_style_spans,
             modes: AttachedTerminalOutputModes {

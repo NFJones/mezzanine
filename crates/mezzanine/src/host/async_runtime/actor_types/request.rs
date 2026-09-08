@@ -223,6 +223,17 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Receives the complete snapshot when the client remains renderable.
         reply: oneshot::Sender<Result<Option<super::AsyncIrohRenderSnapshot>>>,
     },
+    /// Arms focus labels after their frame reaches a transport commit boundary.
+    AcknowledgeZenFocusLabelPresentations {
+        /// Exact attached client whose projected labels were presented.
+        client_id: ClientId,
+        /// Generation identities painted into the committed frame.
+        presentation_ids: Vec<u64>,
+        /// Wall-clock presentation instant used to start each lifetime.
+        presented_at_ms: u64,
+        /// Reports the number of render timers scheduled after arming.
+        reply: oneshot::Sender<Result<usize>>,
+    },
     /// Represents the Render Client Side Effect case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -1164,6 +1175,7 @@ impl AsyncRuntimeRequest {
             Self::RenderClientView { .. }
             | Self::RenderClientFrame { .. }
             | Self::RenderIrohClientSnapshot { .. }
+            | Self::AcknowledgeZenFocusLabelPresentations { .. }
             | Self::RenderClientSideEffect { .. }
             | Self::EnsureClientRenderTimers { .. }
             | Self::TerminalClientLoopConfigSnapshot { .. } => Family::Render,

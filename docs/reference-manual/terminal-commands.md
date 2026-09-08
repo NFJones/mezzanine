@@ -124,6 +124,12 @@ command syntax. Committed focus changes show the highest changed identity:
 group at top-left, window at bottom-left, or pane at its top-left/shared top
 divider. Labels reserve no rows and run no status providers. Required controls
 take precedence; observers inherit their source primary's remaining lifetime.
+A label remains pending, without an expiry timer, until a frame actually paints
+it and reaches the client. Local terminals start the lifetime only after the
+complete ANSI frame commits, including retained partial or deferred frames.
+Iroh uses a successful server-stream flush as the delivery approximation and
+does not suppress an otherwise identical view carrying a new pending label.
+Stale or duplicate delivery receipts do not renew a lifetime.
 
 `show-iroh-status` displays a table for the invoking remote client's selected
 Iroh path. It includes RTT, jitter, recent transfer rates, loss and congestion

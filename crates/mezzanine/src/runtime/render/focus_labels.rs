@@ -3,8 +3,9 @@
 //! Focus labels are presentation state, not mux navigation state. Callers take
 //! explicit snapshots around committed mutations and reconcile them here; view
 //! rendering must never infer or renew focus changes. Records retain stable IDs
-//! and absolute deadlines so observers can project their source primary's
-//! remaining lifetime without creating independent labels.
+//! while pending, then absolute deadlines after first committed presentation so
+//! observers can project their source primary's remaining lifetime without
+//! creating independent labels.
 
 use super::{
     RenderInvalidationReason, RuntimePresentationComponent, RuntimeSessionService,
@@ -41,17 +42,21 @@ pub(crate) enum RuntimeZenFocusLabelTarget {
     Pane(PaneId),
 }
 
-/// One client-local label with its visible ancestors and fixed deadline.
+/// One client-local label with its visible ancestors and presentation lifetime.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeZenFocusLabel {
+    /// Monotonic identity for this exact label installation.
+    pub(crate) presentation_id: u64,
     /// Stable target resolved to display metadata only when rendering.
     pub(crate) target: RuntimeZenFocusLabelTarget,
     /// Active group containing the target at commit time.
     pub(crate) group_id: Option<WindowGroupId>,
     /// Active window containing the target at commit time.
     pub(crate) window_id: Option<WindowId>,
-    /// Absolute expiration time in Unix milliseconds.
-    pub(crate) expires_at_unix_ms: u64,
+    /// Snapshotted visible lifetime to arm after first presentation.
+    pub(crate) duration_ms: u64,
+    /// Absolute expiration time after presentation, or `None` while pending.
+    pub(crate) expires_at_unix_ms: Option<u64>,
 }
 
 /// Bounded transient labels retained for one attached primary.
@@ -63,6 +68,8 @@ pub(crate) struct RuntimeZenFocusLabelState {
     pub(crate) window: Option<RuntimeZenFocusLabel>,
     /// Most recently changed pane that remains live.
     pub(crate) pane: Option<RuntimeZenFocusLabel>,
+    /// Last presentation identity allocated for this source primary.
+    next_presentation_id: u64,
     /// Last post-mutation navigation revision processed by any nested hook.
     last_reconciled_navigation_revision: Option<u64>,
 }
@@ -75,25 +82,25 @@ impl RuntimeZenFocusLabelState {
             self.window.is_some(),
             self.pane.is_some(),
         );
-        if self
-            .group
-            .as_ref()
-            .is_some_and(|label| label.expires_at_unix_ms <= now_ms)
-        {
+        if self.group.as_ref().is_some_and(|label| {
+            label
+                .expires_at_unix_ms
+                .is_some_and(|expires_at| expires_at <= now_ms)
+        }) {
             self.group = None;
         }
-        if self
-            .window
-            .as_ref()
-            .is_some_and(|label| label.expires_at_unix_ms <= now_ms)
-        {
+        if self.window.as_ref().is_some_and(|label| {
+            label
+                .expires_at_unix_ms
+                .is_some_and(|expires_at| expires_at <= now_ms)
+        }) {
             self.window = None;
         }
-        if self
-            .pane
-            .as_ref()
-            .is_some_and(|label| label.expires_at_unix_ms <= now_ms)
-        {
+        if self.pane.as_ref().is_some_and(|label| {
+            label
+                .expires_at_unix_ms
+                .is_some_and(|expires_at| expires_at <= now_ms)
+        }) {
             self.pane = None;
         }
         before
@@ -113,8 +120,25 @@ impl RuntimeZenFocusLabelState {
         ]
         .into_iter()
         .flatten()
-        .map(|label| label.expires_at_unix_ms)
+        .filter_map(|label| label.expires_at_unix_ms)
         .min()
+    }
+
+    /// Arms matching pending labels exactly once at first committed presentation.
+    fn arm_presented(&mut self, presentation_ids: &[u64], presented_at_ms: u64) -> bool {
+        let mut changed = false;
+        for label in [&mut self.group, &mut self.window, &mut self.pane]
+            .into_iter()
+            .flatten()
+        {
+            if label.expires_at_unix_ms.is_none()
+                && presentation_ids.contains(&label.presentation_id)
+            {
+                label.expires_at_unix_ms = Some(presented_at_ms.saturating_add(label.duration_ms));
+                changed = true;
+            }
+        }
+        changed
     }
 }
 
@@ -164,7 +188,7 @@ impl RuntimePresentationComponent {
         client_id: &ClientId,
         before: &RuntimeZenFocusSnapshot,
         after: &RuntimeZenFocusSnapshot,
-        now_ms: u64,
+        _now_ms: u64,
     ) -> bool {
         let duration_ms = self.settings.terminal_zen_focus_label_duration_ms;
         let client_state = self.client_states.entry(client_id.clone()).or_default();
@@ -198,13 +222,16 @@ impl RuntimePresentationComponent {
             return false;
         }
 
-        let expires_at_unix_ms = now_ms.saturating_add(duration_ms);
+        state.next_presentation_id = state.next_presentation_id.saturating_add(1).max(1);
+        let presentation_id = state.next_presentation_id;
         if before.group_id != after.group_id {
             state.group = after.group_id.clone().map(|group_id| RuntimeZenFocusLabel {
+                presentation_id,
                 target: RuntimeZenFocusLabelTarget::Group(group_id),
                 group_id: after.group_id.clone(),
                 window_id: after.window_id.clone(),
-                expires_at_unix_ms,
+                duration_ms,
+                expires_at_unix_ms: None,
             });
             state.window = None;
             state.pane = None;
@@ -213,18 +240,22 @@ impl RuntimePresentationComponent {
                 .window_id
                 .clone()
                 .map(|window_id| RuntimeZenFocusLabel {
+                    presentation_id,
                     target: RuntimeZenFocusLabelTarget::Window(window_id),
                     group_id: after.group_id.clone(),
                     window_id: after.window_id.clone(),
-                    expires_at_unix_ms,
+                    duration_ms,
+                    expires_at_unix_ms: None,
                 });
             state.pane = None;
         } else if before.pane_id != after.pane_id {
             state.pane = after.pane_id.clone().map(|pane_id| RuntimeZenFocusLabel {
+                presentation_id,
                 target: RuntimeZenFocusLabelTarget::Pane(pane_id),
                 group_id: after.group_id.clone(),
                 window_id: after.window_id.clone(),
-                expires_at_unix_ms,
+                duration_ms,
+                expires_at_unix_ms: None,
             });
         }
         client_state.presentation_revision = client_state.presentation_revision.saturating_add(1);
@@ -381,6 +412,26 @@ impl RuntimeSessionService {
         let source = self.zen_focus_label_source_client_id(client_id)?;
         self.presentation.live_zen_focus_labels(&source, now_ms)
     }
+
+    /// Arms generation-matched labels after a rendered frame is delivered.
+    pub(crate) fn acknowledge_zen_focus_label_presentations(
+        &mut self,
+        client_id: &ClientId,
+        presentation_ids: &[u64],
+        presented_at_ms: u64,
+    ) -> bool {
+        let Some(source) = self.zen_focus_label_source_client_id(client_id) else {
+            return false;
+        };
+        self.presentation
+            .client_states
+            .get_mut(&source)
+            .is_some_and(|state| {
+                state
+                    .zen_focus_labels
+                    .arm_presented(presentation_ids, presented_at_ms)
+            })
+    }
 }
 
 #[cfg(test)]
@@ -415,6 +466,34 @@ mod tests {
             .or(state.pane.as_ref())
             .unwrap()
             .expires_at_unix_ms
+            .expect("focus label should be armed")
+    }
+
+    fn label_presentation_ids(state: &RuntimeZenFocusLabelState) -> Vec<u64> {
+        [
+            state.group.as_ref(),
+            state.window.as_ref(),
+            state.pane.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|label| label.presentation_id)
+        .collect()
+    }
+
+    fn acknowledge_current_labels(
+        service: &mut RuntimeSessionService,
+        client_id: &ClientId,
+        presented_at_ms: u64,
+    ) -> bool {
+        let state = service
+            .live_zen_focus_labels_for_client(client_id, presented_at_ms)
+            .expect("focus mutation should retain a live label");
+        service.acknowledge_zen_focus_label_presentations(
+            client_id,
+            &label_presentation_ids(&state),
+            presented_at_ms,
+        )
     }
 
     fn empty_step(action: TerminalClientLoopAction) -> AttachedTerminalClientStepPlan {
@@ -609,6 +688,14 @@ mod tests {
             state.window.as_ref().map(|label| &label.target),
             Some(RuntimeZenFocusLabelTarget::Window(target)) if target == &second_window
         ));
+        assert_eq!(state.next_due_ms(), None);
+        assert!(acknowledge_current_labels(&mut service, &primary, 10));
+        assert!(!service.acknowledge_zen_focus_label_presentations(&primary, &[u64::MAX], 20,));
+        assert!(!acknowledge_current_labels(&mut service, &primary, 20));
+        let state = service
+            .presentation
+            .live_zen_focus_labels(&primary, 20)
+            .unwrap();
         assert_eq!(label_deadline(&state), 1_010);
 
         assert!(
@@ -643,6 +730,11 @@ mod tests {
             state.window.as_ref().map(|label| &label.target),
             Some(RuntimeZenFocusLabelTarget::Window(target)) if target == &first_window
         ));
+        assert!(acknowledge_current_labels(&mut service, &primary, 700));
+        let state = service
+            .presentation
+            .live_zen_focus_labels(&primary, 700)
+            .unwrap();
         assert_eq!(label_deadline(&state), 1_700);
     }
 
@@ -664,6 +756,12 @@ mod tests {
 
         assert_eq!(
             service.zen_focus_label_next_due_ms_for_client(&primary, 1_099),
+            None
+        );
+        assert!(acknowledge_current_labels(&mut service, &observer, 100));
+
+        assert_eq!(
+            service.zen_focus_label_next_due_ms_for_client(&primary, 1_099),
             Some(1_100)
         );
         assert_eq!(
@@ -675,6 +773,7 @@ mod tests {
         service.session.previous_window(&primary).unwrap();
         service.reconcile_zen_focus_snapshots_at(before, 500);
         assert!(!service.expire_zen_focus_labels_for_client(&observer, 1_100));
+        assert!(acknowledge_current_labels(&mut service, &primary, 500));
         assert_eq!(
             service.zen_focus_label_next_due_ms_for_client(&primary, 1_100),
             Some(1_500)
@@ -764,6 +863,15 @@ mod tests {
             .session
             .attach_observer_with_terminal("observer", None, 1)
             .unwrap();
+
+        assert!(
+            service
+                .client_status_refresh_timer_transition(primary.as_str(), None, 200)
+                .unwrap()
+                .side_effects
+                .is_empty()
+        );
+        assert!(acknowledge_current_labels(&mut service, &primary, 100));
 
         for client in [&primary, &observer] {
             let transition = service
@@ -872,6 +980,12 @@ mod tests {
 
         let response = service.dispatch_runtime_control_body(&request, &primary);
         assert!(response.contains(r#""result""#), "{response}");
+        let presented_at_ms = current_unix_millis();
+        assert!(acknowledge_current_labels(
+            &mut service,
+            &primary,
+            presented_at_ms,
+        ));
         let deadline = label_deadline(
             &service
                 .live_zen_focus_labels_for_client(&primary, current_unix_millis())
@@ -955,6 +1069,7 @@ mod tests {
             .new_window(&primary, "second", true)
             .unwrap();
         service.reconcile_zen_focus_snapshots_at(before, 100);
+        assert!(acknowledge_current_labels(&mut service, &primary, 100));
         let original_deadline = label_deadline(
             &service
                 .presentation

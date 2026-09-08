@@ -206,6 +206,24 @@ impl AsyncRuntimeSessionHandle {
         .await?
     }
 
+    /// Arms generation-matched focus labels after a transport commits a frame.
+    pub(crate) async fn acknowledge_zen_focus_label_presentations(
+        &self,
+        client_id: ClientId,
+        presentation_ids: Vec<u64>,
+        presented_at_ms: u64,
+    ) -> Result<usize> {
+        self.request(
+            |reply| AsyncRuntimeRequest::AcknowledgeZenFocusLabelPresentations {
+                client_id,
+                presentation_ids,
+                presented_at_ms,
+                reply,
+            },
+        )
+        .await?
+    }
+
     /// Renders from an actor-resolved snapshot, refreshing stale generations.
     pub(in crate::host::async_runtime) async fn render_client_frame_with_snapshot(
         &self,

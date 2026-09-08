@@ -273,6 +273,16 @@ where
             let flush = io
                 .flush_pending_output(DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES)
                 .await?;
+            let committed_ids = io.take_committed_presentation_ids();
+            if !committed_ids.is_empty() {
+                handle
+                    .acknowledge_zen_focus_label_presentations(
+                        request.client_id.clone(),
+                        committed_ids,
+                        crate::runtime::current_unix_millis(),
+                    )
+                    .await?;
+            }
             report.batches = report.batches.saturating_add(1);
             report.loop_report.bytes_written = report
                 .loop_report
@@ -915,6 +925,28 @@ where
     ) -> AsyncTerminalIoFuture<'a, AsyncTerminalOutputWriteReport> {
         self.inner
             .write_styled_output_with_modes_bounded(lines, line_style_spans, modes, max_bytes)
+    }
+
+    fn write_owned_styled_output_with_modes_bounded_and_receipts<'a>(
+        &'a mut self,
+        lines: Vec<String>,
+        line_style_spans: Vec<Vec<TerminalStyleSpan>>,
+        modes: super::AttachedTerminalOutputModes,
+        presentation_ids: Vec<u64>,
+        max_bytes: usize,
+    ) -> AsyncTerminalIoFuture<'a, AsyncTerminalOutputWriteReport> {
+        self.inner
+            .write_owned_styled_output_with_modes_bounded_and_receipts(
+                lines,
+                line_style_spans,
+                modes,
+                presentation_ids,
+                max_bytes,
+            )
+    }
+
+    fn take_committed_presentation_ids(&mut self) -> Vec<u64> {
+        self.inner.take_committed_presentation_ids()
     }
 
     /// Runs the terminal size operation for this subsystem.

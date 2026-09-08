@@ -3738,7 +3738,14 @@ presentation and geometry behavior when it is true is defined in section 6.4.
 defaulting to 1000. Zero disables transient focus labels. This live session-wide
 setting follows normal configuration precedence. Positive changes apply only to
 future focus transitions; zero and leaving zen mode clear outstanding labels.
-The display is static and remains available with reduced motion enabled.
+The display is static and remains available with reduced motion enabled. A label
+MUST remain pending without an expiry timer until a frame that actually paints it
+is committed to a client. Its snapshotted lifetime starts at that first committed
+presentation; stale or duplicate presentation receipts MUST NOT renew it. For an
+attached local terminal, commit means the complete ANSI frame was written,
+including any retained partial or deferred frame. For Iroh render streams, a
+successful server stream flush is the delivery approximation; identical logical
+views carrying a new pending presentation identity MUST NOT be suppressed.
 
 `terminal.pane_spawn_directory` MUST default to `home` and MUST accept `home`
 or `same-directory`. For ordinary pane, window, and group creation without an

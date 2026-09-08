@@ -158,6 +158,23 @@ pub trait AsyncAttachedTerminalIo: Send {
         })
     }
 
+    /// Writes an owned frame with presentation receipts retained until commit.
+    fn write_owned_styled_output_with_modes_bounded_and_receipts<'a>(
+        &'a mut self,
+        lines: Vec<String>,
+        line_style_spans: Vec<Vec<TerminalStyleSpan>>,
+        modes: AttachedTerminalOutputModes,
+        _presentation_ids: Vec<u64>,
+        max_bytes: usize,
+    ) -> AsyncTerminalIoFuture<'a, AsyncTerminalOutputWriteReport> {
+        self.write_owned_styled_output_with_modes_bounded(lines, line_style_spans, modes, max_bytes)
+    }
+
+    /// Takes focus-label IDs whose complete terminal frames committed.
+    fn take_committed_presentation_ids(&mut self) -> Vec<u64> {
+        Vec::new()
+    }
+
     /// Reads the current terminal size when available.
     fn terminal_size<'a>(&'a mut self) -> AsyncTerminalIoFuture<'a, Option<Size>> {
         Box::pin(async { Ok(None) })
@@ -332,6 +349,8 @@ pub struct AsyncAttachedTerminalFdLoopIo {
     pending_output_frame: Option<PendingAttachedTerminalOutputFrame>,
     /// Latest render deferred until an already-started frame completes.
     deferred_output_frame: Option<DeferredAttachedTerminalOutputFrame>,
+    /// Focus-label IDs from complete frames awaiting actor acknowledgement.
+    committed_presentation_ids: Vec<u64>,
     /// Whether a full redraw was requested while a pending frame was still
     /// being written.
     pending_output_invalidates_next_frame: bool,
@@ -370,6 +389,7 @@ impl AsyncAttachedTerminalFdLoopIo {
             previous_output_frame: None,
             pending_output_frame: None,
             deferred_output_frame: None,
+            committed_presentation_ids: Vec::new(),
             pending_output_invalidates_next_frame: false,
             output_write_limit_bytes: DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES,
             completed_output_flushes_since_short_write: 0,
@@ -440,6 +460,7 @@ impl AsyncAttachedTerminalFdLoopIo {
             pending_enhanced_keyboard_transition: enhanced_keyboard_transition,
             next_state,
             next_application_keypad_mode: modes.application_keypad,
+            presentation_ids: Vec::new(),
         });
     }
 
@@ -449,6 +470,7 @@ impl AsyncAttachedTerminalFdLoopIo {
         lines: Vec<String>,
         line_style_spans: Vec<Vec<TerminalStyleSpan>>,
         modes: AttachedTerminalOutputModes,
+        presentation_ids: Vec<u64>,
     ) {
         let keypad_transition = if modes.application_keypad != self.application_keypad_mode {
             Some(modes.application_keypad)
@@ -479,6 +501,7 @@ impl AsyncAttachedTerminalFdLoopIo {
             pending_enhanced_keyboard_transition: enhanced_keyboard_transition,
             next_state,
             next_application_keypad_mode: modes.application_keypad,
+            presentation_ids,
         });
     }
 
@@ -498,6 +521,7 @@ impl AsyncAttachedTerminalFdLoopIo {
                 lines: lines.to_vec(),
                 line_style_spans: line_style_spans.to_vec(),
                 modes,
+                presentation_ids: Vec::new(),
             });
             return;
         }
@@ -625,6 +649,8 @@ impl AsyncAttachedTerminalFdLoopIo {
             return;
         };
         self.application_keypad_mode = pending.next_application_keypad_mode;
+        self.committed_presentation_ids
+            .extend(pending.presentation_ids);
         if self.pending_output_invalidates_next_frame {
             self.previous_output_frame = None;
             self.pending_output_invalidates_next_frame = false;
@@ -636,6 +662,7 @@ impl AsyncAttachedTerminalFdLoopIo {
                 deferred.lines,
                 deferred.line_style_spans,
                 deferred.modes,
+                deferred.presentation_ids,
             );
         }
     }
@@ -711,6 +738,8 @@ struct PendingAttachedTerminalOutputFrame {
     next_state: AttachedTerminalOutputFrameState,
     /// Application-keypad state to commit only after all bytes are written.
     next_application_keypad_mode: bool,
+    /// Focus-label generations painted into this exact encoded frame.
+    presentation_ids: Vec<u64>,
 }
 
 impl PendingAttachedTerminalOutputFrame {
@@ -729,6 +758,8 @@ struct DeferredAttachedTerminalOutputFrame {
     line_style_spans: Vec<Vec<TerminalStyleSpan>>,
     /// Host presentation modes for the rendered frame.
     modes: AttachedTerminalOutputModes,
+    /// Focus-label generations painted into this deferred frame.
+    presentation_ids: Vec<u64>,
 }
 
 /// Owns foreground raw-mode and async presentation cleanup for one attached TTY.
@@ -1001,14 +1032,53 @@ impl AsyncAttachedTerminalIo for AsyncAttachedTerminalFdLoopIo {
                     lines,
                     line_style_spans,
                     modes,
+                    presentation_ids: Vec::new(),
                 });
             } else {
                 self.pending_output_frame = None;
                 self.deferred_output_frame = None;
-                self.queue_owned_pending_output_frame(lines, line_style_spans, modes);
+                self.queue_owned_pending_output_frame(lines, line_style_spans, modes, Vec::new());
             }
             self.flush_pending_output_bounded(max_bytes).await
         })
+    }
+
+    fn write_owned_styled_output_with_modes_bounded_and_receipts<'a>(
+        &'a mut self,
+        lines: Vec<String>,
+        line_style_spans: Vec<Vec<TerminalStyleSpan>>,
+        modes: AttachedTerminalOutputModes,
+        presentation_ids: Vec<u64>,
+        max_bytes: usize,
+    ) -> AsyncTerminalIoFuture<'a, AsyncTerminalOutputWriteReport> {
+        Box::pin(async move {
+            if self
+                .pending_output_frame
+                .as_ref()
+                .is_some_and(|pending| pending.written > 0)
+            {
+                self.deferred_output_frame = Some(DeferredAttachedTerminalOutputFrame {
+                    lines,
+                    line_style_spans,
+                    modes,
+                    presentation_ids,
+                });
+            } else {
+                self.pending_output_frame = None;
+                self.deferred_output_frame = None;
+                self.queue_owned_pending_output_frame(
+                    lines,
+                    line_style_spans,
+                    modes,
+                    presentation_ids,
+                );
+            }
+            self.flush_pending_output_bounded(max_bytes).await
+        })
+    }
+
+    fn take_committed_presentation_ids(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.committed_presentation_ids)
     }
 
     /// Runs the terminal size operation for this subsystem.

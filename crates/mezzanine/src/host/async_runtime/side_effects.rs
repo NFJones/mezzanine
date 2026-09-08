@@ -1424,6 +1424,7 @@ where
             };
             apply(RuntimeSideEffect::FlushClientOutput {
                 client_id: flush.client_id,
+                presentation_ids: flush.presentation_ids,
                 lines: flush.lines,
                 line_style_spans: flush.line_style_spans,
                 modes: flush.modes,
@@ -1519,6 +1520,16 @@ where
                     u64::try_from(flush_started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 );
                 let write_report = write_result?;
+                let committed_ids = io.take_committed_presentation_ids();
+                if !committed_ids.is_empty() {
+                    handle
+                        .acknowledge_zen_focus_label_presentations(
+                            client_id.clone(),
+                            committed_ids,
+                            crate::runtime::current_unix_millis(),
+                        )
+                        .await?;
+                }
                 report.bytes_written = report
                     .bytes_written
                     .saturating_add(write_report.bytes_written);
@@ -1550,6 +1561,7 @@ where
             .saturating_add(u64::try_from(effects.len()).unwrap_or(u64::MAX));
         for effect in effects {
             let RuntimeSideEffect::FlushClientOutput {
+                presentation_ids,
                 lines,
                 line_style_spans,
                 modes,
@@ -1560,10 +1572,11 @@ where
             };
             let flush_started = std::time::Instant::now();
             let write_result = io
-                .write_owned_styled_output_with_modes_bounded(
+                .write_owned_styled_output_with_modes_bounded_and_receipts(
                     lines,
                     line_style_spans,
                     modes,
+                    presentation_ids,
                     DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES,
                 )
                 .await;
@@ -1573,6 +1586,16 @@ where
             );
             match write_result {
                 Ok(write_report) => {
+                    let committed_ids = io.take_committed_presentation_ids();
+                    if !committed_ids.is_empty() {
+                        handle
+                            .acknowledge_zen_focus_label_presentations(
+                                client_id.clone(),
+                                committed_ids,
+                                crate::runtime::current_unix_millis(),
+                            )
+                            .await?;
+                    }
                     report.bytes_written = report
                         .bytes_written
                         .saturating_add(write_report.bytes_written);

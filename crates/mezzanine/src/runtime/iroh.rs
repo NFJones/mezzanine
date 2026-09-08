@@ -223,11 +223,15 @@ impl IrohRenderUpdateFrame {
 fn encode_iroh_render_update_frame(
     snapshot: &crate::host::async_runtime::AsyncIrohRenderSnapshot,
     base_view: Option<&serde_json::Value>,
+    base_presentation_ids: &[u64],
     base_revision: u64,
     revision: u64,
 ) -> Result<Option<IrohRenderUpdateFrame>> {
     let view = iroh_render_view_value(snapshot)?;
-    if base_view == Some(&view) && !snapshot.invalidate_output {
+    if base_view == Some(&view)
+        && base_presentation_ids == snapshot.presentation_ids
+        && !snapshot.invalidate_output
+    {
         return Ok(None);
     }
     let snapshot_frame = encode_iroh_render_snapshot_frame(snapshot, revision, &view);
@@ -1792,6 +1796,7 @@ async fn serve_registered_runtime_iroh_event_stream(
     let mut delivered = 0u64;
     let mut render_revision = 0u64;
     let mut sent_render_view: Option<serde_json::Value> = None;
+    let mut sent_presentation_ids = Vec::new();
     if push_render {
         let snapshot = handle
             .render_iroh_client_snapshot(caller_client_id.clone(), true)
@@ -1820,6 +1825,15 @@ async fn serve_registered_runtime_iroh_event_stream(
             .await
             .map_err(|_| MezError::invalid_state("Iroh render snapshot flush timed out"))?
             .map_err(|_| MezError::invalid_state("Iroh render snapshot flush failed"))?;
+        // The server-side stream flush is the documented Iroh delivery
+        // approximation; failed writes or flushes never arm label lifetimes.
+        handle
+            .acknowledge_zen_focus_label_presentations(
+                caller_client_id.clone(),
+                snapshot.presentation_ids.clone(),
+                crate::runtime::current_unix_millis(),
+            )
+            .await?;
         compression_metrics.record_render_update(
             false,
             snapshot.view.lines.len(),
@@ -1829,6 +1843,7 @@ async fn serve_registered_runtime_iroh_event_stream(
         );
         compression_metrics.record_render_write_wait(write_started.elapsed());
         sent_render_view = Some(view);
+        sent_presentation_ids = snapshot.presentation_ids;
         last_delivered_event_id = snapshot.event_cutoff;
         pending.clear();
     }
@@ -1916,6 +1931,7 @@ async fn serve_registered_runtime_iroh_event_stream(
                 let update = encode_iroh_render_update_frame(
                     &snapshot,
                     sent_render_view.as_ref(),
+                    &sent_presentation_ids,
                     render_revision,
                     next_revision,
                 )?;
@@ -1949,6 +1965,15 @@ async fn serve_registered_runtime_iroh_event_stream(
                         .await
                         .map_err(|_| MezError::invalid_state("Iroh render update flush timed out"))?
                         .map_err(|_| MezError::invalid_state("Iroh render update flush failed"))?;
+                    // As above, only a successful server-side flush constitutes
+                    // the documented approximate Iroh presentation receipt.
+                    handle
+                        .acknowledge_zen_focus_label_presentations(
+                            caller_client_id.clone(),
+                            snapshot.presentation_ids.clone(),
+                            crate::runtime::current_unix_millis(),
+                        )
+                        .await?;
                     compression_metrics.record_render_update(
                         update.kind == IrohRenderUpdateKind::Delta,
                         update.changed_rows,
@@ -1959,6 +1984,7 @@ async fn serve_registered_runtime_iroh_event_stream(
                     compression_metrics.record_render_write_wait(write_started.elapsed());
                     render_revision = next_revision;
                     sent_render_view = Some(update.view);
+                    sent_presentation_ids = snapshot.presentation_ids.clone();
                 }
                 last_delivered_event_id = snapshot.event_cutoff;
             } else if let Some(batch_last) = triggers.last_event_id {
@@ -2356,9 +2382,15 @@ mod tests {
                     ..mez_terminal::GraphicRendition::default()
                 },
             }];
-            let delta_update = encode_iroh_render_update_frame(&changed, Some(&base_view), 1, 2)
-                .unwrap()
-                .expect("changed view should produce an update");
+            let delta_update = encode_iroh_render_update_frame(
+                &changed,
+                Some(&base_view),
+                &base.presentation_ids,
+                1,
+                2,
+            )
+            .unwrap()
+            .expect("changed view should produce an update");
             assert_eq!(delta_update.kind, IrohRenderUpdateKind::Delta);
             assert_eq!(delta_update.changed_rows, 1);
             let delta_frame = delta_update.frame;
@@ -2387,19 +2419,45 @@ mod tests {
                 snapshot_frame.len(),
             );
             assert!(
-                encode_iroh_render_update_frame(&changed, Some(&changed_view), 2, 3,)
-                    .unwrap()
-                    .is_none()
+                encode_iroh_render_update_frame(
+                    &changed,
+                    Some(&changed_view),
+                    &changed.presentation_ids,
+                    2,
+                    3,
+                )
+                .unwrap()
+                .is_none()
+            );
+
+            let mut new_receipt = changed.clone();
+            new_receipt.presentation_ids.push(u64::MAX);
+            assert!(
+                encode_iroh_render_update_frame(
+                    &new_receipt,
+                    Some(&changed_view),
+                    &changed.presentation_ids,
+                    2,
+                    3,
+                )
+                .unwrap()
+                .is_some(),
+                "new pending presentation IDs must bypass identical-view suppression"
             );
 
             let mut broad_change = changed.clone();
             for (index, line) in broad_change.view.lines.iter_mut().enumerate() {
                 *line = format!("replacement row {index} with enough changed content");
             }
-            let broad_update =
-                encode_iroh_render_update_frame(&broad_change, Some(&changed_view), 2, 3)
-                    .unwrap()
-                    .expect("broad change should produce an update");
+            let broad_update = encode_iroh_render_update_frame(
+                &broad_change,
+                Some(&changed_view),
+                &changed.presentation_ids,
+                2,
+                3,
+            )
+            .unwrap()
+            .expect("broad change should produce an update");
             assert_eq!(broad_update.kind, IrohRenderUpdateKind::Snapshot);
             let broad_frame = broad_update.frame;
             let (broad_body, _) =
@@ -2411,10 +2469,15 @@ mod tests {
 
             let mut invalidating = changed;
             invalidating.invalidate_output = true;
-            let snapshot_update =
-                encode_iroh_render_update_frame(&invalidating, Some(&changed_view), 2, 3)
-                    .unwrap()
-                    .expect("invalidation must force an update");
+            let snapshot_update = encode_iroh_render_update_frame(
+                &invalidating,
+                Some(&changed_view),
+                &invalidating.presentation_ids,
+                2,
+                3,
+            )
+            .unwrap()
+            .expect("invalidation must force an update");
             assert_eq!(snapshot_update.kind, IrohRenderUpdateKind::Snapshot);
             let snapshot_frame = snapshot_update.frame;
             let (snapshot_body, _) =
@@ -2508,9 +2571,15 @@ mod tests {
             RuntimeIrohCompressionCodec::Lz4,
         ] {
             for (workload, snapshot) in &workloads {
-                let selected = encode_iroh_render_update_frame(snapshot, Some(&base_view), 1, 2)
-                    .unwrap()
-                    .expect("benchmark workload should select an update");
+                let selected = encode_iroh_render_update_frame(
+                    snapshot,
+                    Some(&base_view),
+                    &base.presentation_ids,
+                    1,
+                    2,
+                )
+                .unwrap()
+                .expect("benchmark workload should select an update");
                 let selected_kind = match selected.kind {
                     IrohRenderUpdateKind::Snapshot => "snapshot",
                     IrohRenderUpdateKind::Delta => "delta",
@@ -2532,9 +2601,15 @@ mod tests {
                 let mut selected_wire_bytes = 0u64;
                 for _ in 0..ITERATIONS {
                     let started = std::time::Instant::now();
-                    let update = encode_iroh_render_update_frame(snapshot, Some(&base_view), 1, 2)
-                        .unwrap()
-                        .expect("benchmark workload should keep selecting an update");
+                    let update = encode_iroh_render_update_frame(
+                        snapshot,
+                        Some(&base_view),
+                        &base.presentation_ids,
+                        1,
+                        2,
+                    )
+                    .unwrap()
+                    .expect("benchmark workload should keep selecting an update");
                     let encoded = policy
                         .encode_frame(&update.frame, IrohFrameCompressionMode::Eligible)
                         .unwrap();

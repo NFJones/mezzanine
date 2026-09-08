@@ -218,6 +218,10 @@ impl RuntimeSessionService {
     }
 
     /// Renders one exact attached client's view after validating its live role.
+    #[allow(
+        dead_code,
+        reason = "transport-neutral exact-client view API retained for non-receipt callers"
+    )]
     pub fn render_client_view_for_client_with_resolved_config(
         &mut self,
         client_id: &mez_core::ids::ClientId,
@@ -225,8 +229,25 @@ impl RuntimeSessionService {
         client_size: Size,
         config: &TerminalClientLoopConfig,
     ) -> Result<Option<RenderedClientView>> {
+        self.render_client_view_for_client_with_resolved_config_and_receipts(
+            client_id,
+            role,
+            client_size,
+            config,
+        )
+        .map(|(view, _)| view)
+    }
+
+    /// Renders one exact client and returns IDs for focus labels actually painted.
+    pub(crate) fn render_client_view_for_client_with_resolved_config_and_receipts(
+        &mut self,
+        client_id: &mez_core::ids::ClientId,
+        role: ClientViewRole,
+        client_size: Size,
+        config: &TerminalClientLoopConfig,
+    ) -> Result<(Option<RenderedClientView>, Vec<u64>)> {
         self.prepare_client_render(client_id, role)?;
-        self.render_client_view_with_resolved_config(role, client_size, config)
+        self.render_client_view_with_resolved_config_and_receipts(role, client_size, config)
     }
 
     pub fn render_client_view(
@@ -250,15 +271,26 @@ impl RuntimeSessionService {
         client_size: Size,
         config: &TerminalClientLoopConfig,
     ) -> Result<Option<RenderedClientView>> {
+        self.render_client_view_with_resolved_config_and_receipts(role, client_size, config)
+            .map(|(view, _)| view)
+    }
+
+    /// Renders a view with transport-owned presentation receipt metadata.
+    fn render_client_view_with_resolved_config_and_receipts(
+        &self,
+        role: ClientViewRole,
+        client_size: Size,
+        config: &TerminalClientLoopConfig,
+    ) -> Result<(Option<RenderedClientView>, Vec<u64>)> {
         let Some(window) = self.session.active_window() else {
             return if self.session.windows().is_empty() {
-                Ok(None)
+                Ok((None, Vec::new()))
             } else {
                 Err(MezError::invalid_state("session has no active window"))
             };
         };
         if let Some(view) = self.external_editor_takeover_view(role, client_size, config, window) {
-            return Ok(Some(view));
+            return Ok((Some(view), Vec::new()));
         }
         if role == ClientViewRole::Primary
             && let Some(mut view) = self.presentation.mouse_resize_drag_baseline_view.clone()
@@ -274,7 +306,7 @@ impl RuntimeSessionService {
                 window.active_pane_index(),
                 &config.ui_theme,
             );
-            return Ok(Some(view));
+            return Ok((Some(view), Vec::new()));
         }
         let active_pane_ids = window
             .panes()
@@ -323,9 +355,12 @@ impl RuntimeSessionService {
         {
             self.overlay_copy_modes_on_view(window, view)?;
         }
-        if let Some(view) = view.as_mut() {
-            self.overlay_zen_focus_labels(window, presentation_plan.as_ref(), config, view);
-        }
+        let presentation_ids = view
+            .as_mut()
+            .map(|view| {
+                self.overlay_zen_focus_labels(window, presentation_plan.as_ref(), config, view)
+            })
+            .unwrap_or_default();
         if role == ClientViewRole::Primary
             && let Some(view) = view.as_mut()
             && let Some(selector) = self.presentation.pane_agent_status_selector.as_ref()
@@ -356,7 +391,7 @@ impl RuntimeSessionService {
         {
             self.overlay_primary_error_status(view, message);
         }
-        Ok(view)
+        Ok((view, presentation_ids))
     }
 
     /// Projects an active external editor as the complete attached terminal.

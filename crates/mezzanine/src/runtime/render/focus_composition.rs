@@ -31,7 +31,7 @@ impl RuntimeSessionService {
         plan: &WindowPresentationPlan,
         config: &TerminalClientLoopConfig,
         view: &mut RenderedClientView,
-    ) {
+    ) -> Vec<u64> {
         if !self.presentation.settings.terminal_zen_mode
             || self
                 .presentation
@@ -39,17 +39,19 @@ impl RuntimeSessionService {
                 .terminal_zen_focus_label_duration_ms
                 == 0
             || self.presentation.primary_display_overlay.is_some()
+            || self.presentation.primary_error_status_overlay.is_some()
         {
-            return;
+            return Vec::new();
         }
         let Some(client) = self.presentation.projected_client_id.as_ref() else {
-            return;
+            return Vec::new();
         };
         let Some(labels) = self.live_zen_focus_labels_for_client(client, current_unix_millis())
         else {
-            return;
+            return Vec::new();
         };
         let mut painted = Vec::new();
+        let mut presentation_ids = Vec::new();
         for (scope, label) in [
             (FocusLabelScope::Group, labels.group),
             (FocusLabelScope::Window, labels.window),
@@ -156,7 +158,9 @@ impl RuntimeSessionService {
                 view.cursor_visible = false;
             }
             painted.push(region);
+            presentation_ids.push(label.presentation_id);
         }
+        presentation_ids
     }
 }
 
@@ -233,15 +237,20 @@ mod tests {
         let config = service
             .terminal_client_loop_config(TerminalClientLoopConfig::default())
             .unwrap();
-        service
-            .render_client_view_for_client_with_resolved_config(
+        let (view, presentation_ids) = service
+            .render_client_view_for_client_with_resolved_config_and_receipts(
                 client,
                 ClientViewRole::Primary,
                 Size::new(40, 10).unwrap(),
                 &config,
             )
-            .unwrap()
-            .unwrap()
+            .unwrap();
+        service.acknowledge_zen_focus_label_presentations(
+            client,
+            &presentation_ids,
+            current_unix_millis(),
+        );
+        view.unwrap()
     }
 
     /// A real committed window change must paint one bottom-left identity;
@@ -337,10 +346,10 @@ mod tests {
             .session
             .rename_pane(&primary, Some(pane_id.as_str()), "界🙂e\u{301}-long-title")
             .unwrap();
+        let shown = view(&mut service, &primary);
         let expected = service
             .live_zen_focus_labels_for_client(&primary, current_unix_millis())
             .unwrap();
-        let shown = view(&mut service, &primary);
         assert!(
             shown
                 .lines
@@ -523,10 +532,12 @@ mod tests {
             let original_plan = plan.clone();
             let group = service.session.active_group().unwrap().id.clone();
             let label = |target| RuntimeZenFocusLabel {
+                presentation_id: 1,
                 target,
                 group_id: Some(group.clone()),
                 window_id: Some(window.id.clone()),
-                expires_at_unix_ms: u64::MAX,
+                duration_ms: 1_000,
+                expires_at_unix_ms: Some(u64::MAX),
             };
             let state = &mut service
                 .presentation
@@ -805,11 +816,14 @@ mod tests {
             background: TerminalColor::Rgb(65, 43, 21),
         };
         service.presentation.settings.ui_theme.colors.window_active = colors;
-        let labels = service
-            .live_zen_focus_labels_for_client(&primary, current_unix_millis())
-            .unwrap();
+        let mut labels = None;
         for _ in 0..2 {
             let shown = view(&mut service, &primary);
+            let labels = labels.get_or_insert_with(|| {
+                service
+                    .live_zen_focus_labels_for_client(&primary, current_unix_millis())
+                    .unwrap()
+            });
             assert!(shown.lines[9].contains("themed-focus"));
             assert!(!shown.lines[0].contains("themed-focus"));
             let span = shown.line_style_spans[9]

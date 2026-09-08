@@ -70,6 +70,7 @@ async fn async_render_side_effect_service_composes_flush_effects() {
         lines,
         line_style_spans,
         modes,
+        ..
     } = &flushed[0]
     else {
         panic!("render service should emit a flush side effect");
@@ -353,6 +354,7 @@ async fn async_client_output_flush_service_writes_styled_flush_effects() {
             .queue_runtime_side_effects(vec![
                 RuntimeSideEffect::FlushClientOutput {
                     client_id: primary.clone(),
+                    presentation_ids: Vec::new(),
                     lines: vec!["flush-one".to_string(), "flush-two".to_string()],
                     line_style_spans: vec![Vec::new(), Vec::new()],
                     modes: AttachedTerminalOutputModes {
@@ -364,6 +366,7 @@ async fn async_client_output_flush_service_writes_styled_flush_effects() {
                 },
                 RuntimeSideEffect::FlushClientOutput {
                     client_id: other_client.clone(),
+                    presentation_ids: Vec::new(),
                     lines: vec!["other-client".to_string()],
                     line_style_spans: vec![Vec::new()],
                     modes: AttachedTerminalOutputModes::default(),
@@ -445,6 +448,7 @@ async fn async_client_output_flush_service_prefers_new_frame_over_stale_pending_
         handle
             .queue_runtime_side_effects(vec![RuntimeSideEffect::FlushClientOutput {
                 client_id: primary.clone(),
+                presentation_ids: Vec::new(),
                 lines: vec!["newer frame".to_string()],
                 line_style_spans: vec![Vec::new()],
                 modes: AttachedTerminalOutputModes::default(),

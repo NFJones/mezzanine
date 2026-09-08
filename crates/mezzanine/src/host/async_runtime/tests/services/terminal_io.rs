@@ -335,6 +335,50 @@ async fn async_fd_attached_terminal_io_completes_started_frame_before_newer_fram
     assert!(first_tail < newer_frame, "{output:?}");
 }
 
+/// Verifies focus-label receipts remain owned by their exact encoded frames
+/// across partial writes and a newer deferred render.
+#[tokio::test]
+async fn async_fd_attached_terminal_io_receipts_follow_partial_and_deferred_frame_commits() {
+    let (driver, _peer) = StdUnixStream::pair().unwrap();
+    let driver_output = driver.try_clone().unwrap();
+    let mut io =
+        AsyncAttachedTerminalFdLoopIo::new(driver.as_raw_fd(), driver_output.as_raw_fd(), None)
+            .unwrap();
+
+    let first = io
+        .write_owned_styled_output_with_modes_bounded_and_receipts(
+            vec![format!("{}first", "x".repeat(4096))],
+            Vec::new(),
+            AttachedTerminalOutputModes::default(),
+            vec![11],
+            1,
+        )
+        .await
+        .unwrap();
+    assert!(first.is_partial());
+    assert!(io.take_committed_presentation_ids().is_empty());
+
+    let second = io
+        .write_owned_styled_output_with_modes_bounded_and_receipts(
+            vec!["second".to_string()],
+            Vec::new(),
+            AttachedTerminalOutputModes::default(),
+            vec![22],
+            1,
+        )
+        .await
+        .unwrap();
+    assert!(second.is_partial());
+    assert!(io.take_committed_presentation_ids().is_empty());
+
+    let mut committed = Vec::new();
+    while io.pending_output_bytes() > 0 {
+        io.flush_pending_output(1024).await.unwrap();
+        committed.extend(io.take_committed_presentation_ids());
+    }
+    assert_eq!(committed, vec![11, 22]);
+}
+
 /// Verifies Kitty keyboard negotiation is stack-balanced across repeated
 /// frames, differential invalidation, and prompt closure.
 #[tokio::test]

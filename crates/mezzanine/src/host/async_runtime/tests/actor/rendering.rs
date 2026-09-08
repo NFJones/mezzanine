@@ -1055,6 +1055,7 @@ async fn async_actor_coalesces_client_flush_side_effects_before_capacity_check()
             .queue_runtime_side_effects(vec![
                 RuntimeSideEffect::FlushClientOutput {
                     client_id: primary.clone(),
+                    presentation_ids: Vec::new(),
                     lines: vec!["stale-one".to_string()],
                     line_style_spans: vec![Vec::new()],
                     modes: AttachedTerminalOutputModes {
@@ -1064,6 +1065,7 @@ async fn async_actor_coalesces_client_flush_side_effects_before_capacity_check()
                 },
                 RuntimeSideEffect::FlushClientOutput {
                     client_id: primary.clone(),
+                    presentation_ids: Vec::new(),
                     lines: vec!["stale-two".to_string()],
                     line_style_spans: vec![Vec::new()],
                     modes: AttachedTerminalOutputModes {
@@ -1073,6 +1075,7 @@ async fn async_actor_coalesces_client_flush_side_effects_before_capacity_check()
                 },
                 RuntimeSideEffect::FlushClientOutput {
                     client_id: primary.clone(),
+                    presentation_ids: Vec::new(),
                     lines: vec!["latest".to_string()],
                     line_style_spans: vec![Vec::new()],
                     modes: AttachedTerminalOutputModes {

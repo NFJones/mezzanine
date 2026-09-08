@@ -32,12 +32,14 @@ pub(super) fn coalesce_output_side_effects_for_enqueue(
             }
             RuntimeSideEffect::FlushClientOutput {
                 client_id,
+                presentation_ids,
                 lines,
                 line_style_spans,
                 modes,
             } => {
                 let mut effect = Some(RuntimeSideEffect::FlushClientOutput {
                     client_id: client_id.clone(),
+                    presentation_ids,
                     lines,
                     line_style_spans,
                     modes,

@@ -1017,6 +1017,8 @@ pub enum RuntimeSideEffect {
         /// The field is part of structured state exchanged across this module
         /// boundary and should remain aligned with the owning type invariant.
         client_id: ClientId,
+        /// Focus-label presentation IDs painted into this exact frame.
+        presentation_ids: Vec<u64>,
         /// Stores the lines value for this data structure.
         ///
         /// The field is part of structured state exchanged across this module
