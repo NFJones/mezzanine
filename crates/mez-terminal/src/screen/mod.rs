@@ -826,6 +826,22 @@ pub struct TerminalScreen {
     pub(super) utf8_tail: Vec<u8>,
 }
 
+/// Exact visible normal-screen suffix owned by a transient compositor.
+///
+/// The descriptor is generation- and geometry-bound so delayed cleanup cannot
+/// erase intervening terminal output. Clearing the suffix preserves history
+/// already created while the transient rows were presented.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminalTransientSuffix {
+    size: Size,
+    render_generation: u64,
+    history_len: usize,
+    start_physical_row: usize,
+    end_physical_row: usize,
+    cursor: TerminalCursorState,
+    trailing_blank_row: bool,
+}
+
 mod cells;
 mod content;
 mod editing;

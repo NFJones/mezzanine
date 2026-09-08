@@ -245,6 +245,93 @@ impl TerminalScreen {
         self.normal_viewport_detached_from_history
     }
 
+    /// Captures a generation-bound visible suffix after transient rows render.
+    ///
+    /// `physical_rows` is the number of rendered terminal rows owned by the
+    /// transient compositor. `trailing_blank_row` is true when the compositor
+    /// ended with a newline and left the cursor on the blank row after them.
+    /// Rows may span the newest history records and the live grid when a
+    /// transient block is taller than the remaining viewport.
+    pub fn capture_transient_suffix(
+        &self,
+        physical_rows: usize,
+        trailing_blank_row: bool,
+    ) -> Option<TerminalTransientSuffix> {
+        if physical_rows == 0 || self.alternate.active() {
+            return None;
+        }
+        let cursor = self.cursor_state();
+        let cursor_physical_row = self.history.len().saturating_add(cursor.row);
+        let end_physical_row = if trailing_blank_row {
+            cursor_physical_row.checked_sub(1)?
+        } else {
+            cursor_physical_row
+        };
+        let start_physical_row = end_physical_row
+            .saturating_add(1)
+            .checked_sub(physical_rows)?;
+        Some(TerminalTransientSuffix {
+            size: self.size,
+            render_generation: self.render_generation(),
+            history_len: self.history.len(),
+            start_physical_row,
+            end_physical_row,
+            cursor,
+            trailing_blank_row,
+        })
+    }
+
+    /// Clears an exact transient suffix without rewinding the visible viewport.
+    ///
+    /// History rows displaced while the suffix was presented remain retained,
+    /// while the owned visible cells, styles, wrapping, and copy metadata are
+    /// reset. The cursor returns to the suffix start so durable output can take
+    /// its place without causing another bottom-margin scroll.
+    pub fn clear_transient_suffix(&mut self, suffix: TerminalTransientSuffix) -> bool {
+        if self.alternate.active()
+            || self.size != suffix.size
+            || self.render_generation() != suffix.render_generation
+            || self.history.len() != suffix.history_len
+            || self.cursor_state() != suffix.cursor
+            || suffix.start_physical_row > suffix.end_physical_row
+            || suffix.end_physical_row >= self.normal_physical_line_count()
+        {
+            return false;
+        }
+        let history_rows_to_remove = suffix.history_len.saturating_sub(suffix.start_physical_row);
+        for _ in 0..history_rows_to_remove {
+            if self.history.pop_styled_line().is_none() {
+                return false;
+            }
+        }
+        let visible_start = suffix.start_physical_row.saturating_sub(suffix.history_len);
+        let visible_end = suffix
+            .end_physical_row
+            .saturating_sub(suffix.history_len)
+            .min(self.cells.len().saturating_sub(1));
+        let mut clear_end = visible_end;
+        if suffix.trailing_blank_row {
+            clear_end = clear_end.max(suffix.cursor.row);
+        }
+        for row in visible_start..=clear_end {
+            self.cells[row] = blank_row(self.size.columns);
+            self.renditions[row] =
+                blank_rendition_row(self.size.columns, GraphicRendition::default());
+            self.line_wraps[row] = false;
+            self.line_copy_texts[row] = None;
+        }
+        self.cursor = Cursor {
+            row: suffix
+                .start_physical_row
+                .saturating_sub(self.history.len())
+                .min(self.cells.len().saturating_sub(1)),
+            column: 0,
+        };
+        self.wrap_pending = false;
+        self.mark_render_changed();
+        true
+    }
+
     /// Restores plain normal-screen history and styled visible rows.
     ///
     /// Snapshot resume uses this path to rebuild a non-live pane's rendered

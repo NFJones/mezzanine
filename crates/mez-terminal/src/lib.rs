@@ -36,7 +36,9 @@ pub use protocol::{
     TerminalClipboardRequest, TerminalClipboardSelection, TerminalOscEvent, TerminalProgressState,
 };
 
-pub use screen::{AlternateScreenState, SynchronizedOutputFeedOutcome, TerminalScreen};
+pub use screen::{
+    AlternateScreenState, SynchronizedOutputFeedOutcome, TerminalScreen, TerminalTransientSuffix,
+};
 
 pub use screen_error::TerminalScreenConfigError;
 

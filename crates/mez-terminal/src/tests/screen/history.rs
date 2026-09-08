@@ -91,6 +91,100 @@ fn history_buffer_clone_copies_only_the_bounded_mutable_tail() {
     assert_eq!(snapshot.lines().last(), Some("snapshot-only"));
 }
 
+/// Verifies a transient suffix can be cleared before reaching the bottom margin.
+///
+/// The cleanup must restore the insertion cursor to the suffix head, erase all
+/// owned row styling and copy metadata, and reject a descriptor after any
+/// intervening terminal mutation.
+#[test]
+fn terminal_screen_clears_generation_bound_transient_suffix_before_bottom() {
+    let mut screen = TerminalScreen::new(Size::new(20, 5).unwrap(), 20).unwrap();
+    screen.feed(b"durable\r\n\x1b[31mtransient-one\x1b[0m\r\ntransient-two");
+    screen.set_recent_normal_copy_texts(&["raw one".to_string(), "raw two".to_string()], "skip");
+    let suffix = screen
+        .capture_transient_suffix(2, false)
+        .expect("two transient rows should fit in the live grid");
+    let stale = suffix;
+
+    assert!(screen.clear_transient_suffix(suffix));
+    assert_eq!(screen.cursor_state().row, 1);
+    assert_eq!(screen.cursor_state().column, 0);
+    assert_eq!(screen.visible_lines()[0], "durable");
+    assert!(
+        screen.visible_lines()[1..]
+            .iter()
+            .all(|line| line.is_empty())
+    );
+    assert!(
+        screen.visible_styled_lines()[1..]
+            .iter()
+            .all(|line| line.style_spans.is_empty() && line.copy_text.is_none())
+    );
+
+    screen.feed(b"replacement");
+    let after_replacement = screen.clone();
+    assert!(!screen.clear_transient_suffix(stale));
+    assert_eq!(screen, after_replacement);
+}
+
+/// Verifies transient cleanup preserves history displacement at the bottom.
+///
+/// Once transient rows have scrolled the live viewport, removing them must not
+/// rewind history or cause the following durable row to scroll the viewport a
+/// second time. Unaffected visible rows remain at the same screen coordinate.
+#[test]
+fn terminal_screen_clears_transient_suffix_without_rewinding_bottom_scroll() {
+    let mut screen = TerminalScreen::new(Size::new(20, 3).unwrap(), 20).unwrap();
+    screen.feed(b"durable-zero\r\ndurable-one\r\ndurable-two");
+    screen.feed(b"\r\ntransient-one\r\ntransient-two");
+    let suffix = screen
+        .capture_transient_suffix(2, false)
+        .expect("bottom transient rows should remain visible");
+    let history_len = screen.history().len();
+
+    assert_eq!(
+        screen.visible_lines(),
+        vec!["durable-two", "transient-one", "transient-two"]
+    );
+    assert!(screen.clear_transient_suffix(suffix));
+    assert_eq!(screen.history().len(), history_len);
+    assert_eq!(screen.visible_lines(), vec!["durable-two", "", ""]);
+    assert_eq!(screen.cursor_state().row, 1);
+
+    screen.feed(b"durable-next");
+    assert_eq!(screen.history().len(), history_len);
+    assert_eq!(
+        screen.visible_lines(),
+        vec!["durable-two", "durable-next", ""]
+    );
+}
+
+/// Verifies a transient suffix can span history on a short pane.
+///
+/// Only transient history rows are removed; durable rows displaced before the
+/// suffix remain retained and the live viewport stays at its presented origin.
+#[test]
+fn terminal_screen_clears_history_spanning_transient_suffix() {
+    let mut screen = TerminalScreen::new(Size::new(20, 2).unwrap(), 20).unwrap();
+    screen.feed(b"durable-zero\r\ndurable-one");
+    screen.feed(b"\r\ntransient-one\r\ntransient-two\r\ntransient-three");
+    let suffix = screen
+        .capture_transient_suffix(3, false)
+        .expect("transient suffix should span history and the live grid");
+
+    assert_eq!(
+        screen.history().lines().collect::<Vec<_>>(),
+        vec!["durable-zero", "durable-one", "transient-one"]
+    );
+    assert!(screen.clear_transient_suffix(suffix));
+    assert_eq!(
+        screen.history().lines().collect::<Vec<_>>(),
+        vec!["durable-zero", "durable-one"]
+    );
+    assert_eq!(screen.visible_lines(), vec!["", ""]);
+    assert_eq!(screen.cursor_state().row, 0);
+}
+
 /// Verifies copy metadata mutation clones only its owning immutable chunk.
 ///
 /// Copy-mode metadata must remain isolated between screen generations without
