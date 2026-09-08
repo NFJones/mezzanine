@@ -28,8 +28,7 @@ pub(in crate::host::terminal::render) use layout::{
 pub(in crate::host::terminal::render) use pane::render_pane_lines;
 pub(in crate::host::terminal::render) use pane::{
     PaneFrameRightStatusSegment, compact_pane_working_directory, pane_agent_prompt_space_reserved,
-    pane_agent_prompt_transparent, pane_agent_shell_visible, pane_frame_fill_char,
-    render_styled_pane_lines,
+    pane_agent_shell_visible, pane_frame_fill_char, render_styled_pane_lines,
 };
 pub(crate) use pane::{
     PaneStatusDiagnosticProjection, pane_frame_row_layout, pane_frame_status_diagnostic_projection,

@@ -779,6 +779,52 @@ fn render_attached_client_view_reserves_agent_prompt_row() {
     assert!(!observer.readline_input_active);
 }
 
+/// Verifies focused prompt composition never treats a matching foreground
+/// rendition as proof that pane content belongs to a stale display overlay.
+/// Bash assignment names use this exact collision in the deepforest theme.
+#[test]
+fn render_attached_client_view_preserves_prompt_style_collision_content() {
+    let mut ids = IdFactory::default();
+    let window = Window::new(&mut ids, 0, "main", Size::new(72, 4).unwrap());
+    let pane_id = window.panes()[0].id.to_string();
+    let source = "i=0; while true; do echo \"$i\"; i=$((i + 1)); sleep 1; done";
+    let mut screen = TerminalScreen::new(Size::new(72, 2).unwrap(), 10).unwrap();
+    screen.feed(format!("\x1b[38;2;228;239;232m{source}\x1b[0m").as_bytes());
+    let mut screens = BTreeMap::new();
+    screens.insert(pane_id.clone(), screen);
+    let mut frame_context = TerminalFrameContext::default();
+    frame_context.panes.insert(
+        pane_id,
+        TerminalPaneFrameContext {
+            mode: Some("agent".to_string()),
+            ..TerminalPaneFrameContext::default()
+        },
+    );
+    let config = TerminalClientLoopConfig {
+        frame_context,
+        window_frames_enabled: false,
+        ui_theme: mez_mux::theme::deepforest_ui_theme(),
+        ..TerminalClientLoopConfig::default()
+    };
+
+    let view = render_attached_client_view(
+        ClientViewRole::Primary,
+        &window,
+        &screens,
+        &config,
+        window.size,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert!(
+        view.lines.iter().any(|line| line.contains(source)),
+        "{view:?}"
+    );
+    assert_eq!(view.cursor_row, 3);
+    assert!(view.lines[3].contains("mez>"), "{:?}", view.lines);
+}
+
 /// Verifies that copy mode keeps the pane-local agent prompt reservation while
 /// making the prompt itself invisible. Mouse selection uses copy mode for text
 /// selection, and retaining the reserved row prevents the terminal buffer from
@@ -1050,14 +1096,11 @@ fn render_attached_client_view_draws_one_agent_live_footer_at_prompt_edge() {
     assert_eq!(footer_rows, vec![prompt_row], "{view:?}");
 }
 
-/// Verifies stale live-footer cleanup uses terminal cells rather than chars.
-///
-/// Wide glyphs in a neighboring split can make byte/char offsets differ from
-/// terminal columns. The cleanup pass must still recognize and remove stale
-/// agent footer text in the active pane so a new prompt-edge footer does not
-/// leave behind a blank gutterless row or duplicate status line.
+/// Verifies footer-like transcript text remains content beside a wide-glyph
+/// neighbor while the current UI-owned footer is composed once at the prompt.
+/// Matching glyphs never establish ownership and terminal columns remain intact.
 #[test]
-fn render_agent_live_footer_cleanup_handles_wide_neighbor_glyphs() {
+fn render_agent_live_footer_preserves_lookalike_content_with_wide_neighbor() {
     let mut ids = IdFactory::default();
     let mut window = Window::new(&mut ids, 0, "main", Size::new(96, 4).unwrap());
     window
@@ -1082,7 +1125,8 @@ fn render_agent_live_footer_cleanup_handles_wide_neighbor_glyphs() {
     let mut screens = BTreeMap::new();
     let mut left = TerminalScreen::new(window.panes()[0].size, 10).unwrap();
     left.feed("✅ left".as_bytes());
-    let mut right = TerminalScreen::new(window.panes()[1].size, 10).unwrap();
+    let right_size = Size::new(window.panes()[1].size.columns, 3).unwrap();
+    let mut right = TerminalScreen::new(right_size, 10).unwrap();
     right.feed("running (5m 39s • esc to interrupt)".as_bytes());
     screens.insert(window.panes()[0].id.to_string(), left);
     screens.insert(pane_id, right);
@@ -1109,7 +1153,22 @@ fn render_agent_live_footer_cleanup_handles_wide_neighbor_glyphs() {
         .filter_map(|(row, line)| line.contains("esc to interrupt").then_some(row))
         .collect::<Vec<_>>();
 
-    assert_eq!(footer_rows.len(), 1, "{:?}", view.lines);
+    assert_eq!(footer_rows.len(), 2, "{:?}", view.lines);
+    assert!(
+        view.lines
+            .iter()
+            .any(|line| line.contains("running (5m 39s • esc to interrupt)")),
+        "{:?}",
+        view.lines
+    );
+    assert!(
+        view.lines
+            .iter()
+            .any(|line| line.contains("mez> running (5m 40s • esc to interrupt)")),
+        "{:?}",
+        view.lines
+    );
+    assert!(view.lines.iter().any(|line| line.contains("✅ left")));
     assert!(
         view.lines
             .iter()

@@ -34,6 +34,10 @@ Press `Ctrl+A [` to enter pane-local copy mode. You can scroll normal terminal
 content, move a selection cursor, and copy without sending keys to the pane
 program. `Ctrl+A ]` pastes the most recent buffer into the active pane.
 
+Entering or leaving copy mode and moving focus between panes does not change
+the underlying pane text or syntax styling. Only the copy cursor and active
+selection add temporary presentation styling.
+
 Default copy-mode controls are:
 
 | Key | Result |

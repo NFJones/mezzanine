@@ -1117,6 +1117,11 @@ reasoning, and status pills,
 command prompts, pane-local agent prompts, agent transcript
 gutters, transcript labels, transcript status/error/command lines, display
 overlays, status rows, and copy-selection highlighting.
+Colors, graphic renditions, and visible glyphs MUST NOT be used as ownership
+markers when composing or removing Mezzanine UI. Unoccluded pane content MUST
+retain the same text and effective styling across focus changes and copy-mode
+entry or exit; only deliberate prompt, overlay, cursor, and selection regions
+may replace or augment those cells.
 Pane content emitted by hosted applications MUST continue to use the SGR
 colors, attributes, and true-color values emitted by those applications.
 Non-interactive Mezzanine-authored text rendered inside pane buffers or full

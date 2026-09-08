@@ -23,15 +23,12 @@ use mez_mux::presentation::{
 };
 #[cfg(test)]
 use mez_mux::presentation::{WindowPresentationOptions, plan_window_presentation};
-use mez_mux::render::line_slice;
 use mez_mux::render::{
     FramePillboxEntry, FramePillboxSegment, FrameStatusSegment, PositionedFrameStatus,
     RenderedFrameStatus, TerminalRenderCell, compose_frame_pillbox_row, compose_frame_text_row,
-    display_overlay_targets as agent_display_overlay_targets, fit_styled_width, fitted_text_width,
-    frame_pillbox_segment_columns, frame_style_rendition,
-    overlay_display_lines as overlay_agent_display_lines, overlay_fixed_column_style_spans,
-    position_frame_status, render_frame_pillbox_segments, render_frame_pillbox_text,
-    sanitize_frame_text, style_span_overlaps_columns, style_span_segments_outside_range,
+    fit_styled_width, fitted_text_width, frame_pillbox_segment_columns, frame_style_rendition,
+    overlay_display_lines as overlay_agent_display_lines, position_frame_status,
+    render_frame_pillbox_segments, render_frame_pillbox_text, sanitize_frame_text,
     styled_frame_line_with_rendition, write_text_cells_with_width as write_frame_text_cells,
 };
 #[cfg(test)]
@@ -52,9 +49,9 @@ use dividers::{merged_pane_frame_boundary_style_spans, pane_divider_rendition};
 pub(crate) use frame::render_focus_label;
 pub(crate) use frame::window_iroh_status_slot_layout;
 use frame::{
-    AGENT_STATUS_SCAN_BAND_WIDTH, pane_agent_prompt_space_reserved, pane_agent_prompt_transparent,
-    pane_agent_shell_visible, pane_border_rendition, render_styled_pane_lines,
-    styled_group_frame_line, styled_window_frame_line, write_styled_merged_pane_frames_on_dividers,
+    AGENT_STATUS_SCAN_BAND_WIDTH, pane_agent_prompt_space_reserved, pane_agent_shell_visible,
+    pane_border_rendition, render_styled_pane_lines, styled_group_frame_line,
+    styled_window_frame_line, write_styled_merged_pane_frames_on_dividers,
 };
 pub(crate) use frame::{
     PaneStatusDiagnosticProjection, pane_frame_row_layout, pane_frame_status_diagnostic_projection,
@@ -76,7 +73,6 @@ use mez_mux::render::{
     contrasting_binary_foreground, gradient_highlight_for_offset, neutral_surface_step,
     normalize_overlay_canvas, overlay_text_style_width, push_or_extend_style_span,
 };
-use mez_mux::render::{clipped_prompt_region, write_line_segment};
 pub use overlay::compose_modal_display_overlay_lines;
 #[cfg(test)]
 pub use overlay::{
@@ -86,11 +82,11 @@ pub use overlay::{
 pub use panes::{draw_window_from_screens, render_window, render_window_with_pane_frame_template};
 #[cfg(test)]
 use prompt::agent_live_footer_style_spans;
+#[cfg(test)]
 pub(crate) use prompt::agent_prompt_input_rendition;
-use prompt::{
-    AgentPromptBlock, agent_live_footer_state_label, display_overlay_text_rendition,
-    render_agent_prompt_block,
-};
+#[cfg(test)]
+use prompt::display_overlay_text_rendition;
+use prompt::{AgentPromptBlock, render_agent_prompt_block};
 pub use prompt::{
     agent_prompt_reserved_line_count, compose_prompt_overlay_presentation_with_styles,
 };
@@ -287,14 +283,6 @@ pub fn render_attached_client_view_with_screen_and_row_resolvers<'a>(
             .get(window.active_pane_index())
             .is_some_and(|pane| pane_agent_shell_visible(&config.frame_context, pane.id.as_str()));
     let agent_prompt_region = active_agent_prompt_region(window, presentation_plan, config, role)?;
-    align_active_agent_prompt_block_to_region(
-        window,
-        config,
-        role,
-        agent_prompt_region,
-        &mut lines,
-        &mut line_style_spans,
-    );
     let requires_client_scroll = role == ClientViewRole::Observer
         && (client_size.columns < window.size.columns || client_size.rows < window.size.rows);
     let active_pane_screen =
@@ -481,245 +469,4 @@ fn active_pane_render_region(
         columns: usize::from(pane_plan.content_region.columns),
         rows: usize::from(pane_plan.content_region.rows),
     }))
-}
-
-/// Reconciles the active agent prompt text with the authoritative prompt
-/// region used by cursor placement.
-///
-/// The default attach path can resize the window before every render layer has
-/// observed the new pane dimensions. The cursor path computes from the window
-/// geometry, while pane-line composition may still contain a stale prompt block
-/// from the prior pane height. This pass treats the computed prompt region as
-/// authoritative, removes any previously styled agent prompt cells inside that
-/// pane body, and overlays the current prompt block at the bottom of the active
-/// pane.
-fn align_active_agent_prompt_block_to_region(
-    window: &Window,
-    config: &TerminalClientLoopConfig,
-    role: ClientViewRole,
-    agent_prompt_region: Option<ReadlinePromptRegion>,
-    lines: &mut [String],
-    line_style_spans: &mut [Vec<TerminalStyleSpan>],
-) {
-    if role != ClientViewRole::Primary {
-        return;
-    }
-    let Some(region) = agent_prompt_region else {
-        return;
-    };
-    let Some(region) = clipped_prompt_region(region, usize::from(window.size.columns), lines.len())
-    else {
-        return;
-    };
-    let active_index = window.active_pane_index();
-    let Some(active_pane) = window.panes().get(active_index) else {
-        return;
-    };
-    if !pane_agent_shell_visible(&config.frame_context, active_pane.id.as_str()) {
-        return;
-    }
-
-    let pane_context = config.frame_context.panes.get(active_pane.id.as_str());
-    let block = render_agent_prompt_block(region.columns, region.rows, pane_context);
-    let transparent = pane_agent_prompt_transparent(&config.frame_context, active_pane.id.as_str());
-    let prompt_lines = if transparent {
-        block.transparent_prompt_styled_lines(region.columns)
-    } else {
-        block.prompt_styled_lines(
-            region.columns,
-            &config.ui_theme,
-            config.frame_context.animation_tick_ms,
-        )
-    };
-    let display_lines = if transparent {
-        Vec::new()
-    } else {
-        block.display_styled_lines(
-            region.columns,
-            &config.ui_theme,
-            config.frame_context.animation_tick_ms,
-        )
-    };
-    if prompt_lines.is_empty() && display_lines.is_empty() {
-        return;
-    }
-
-    clear_stale_agent_prompt_segments(lines, line_style_spans, region, &config.ui_theme);
-    let visible_prompt_count = prompt_lines.len().min(region.rows);
-    let prompt_start_row = region
-        .row
-        .saturating_add(region.rows.saturating_sub(visible_prompt_count));
-    let display_targets = active_agent_display_overlay_targets(
-        lines,
-        region.row,
-        prompt_start_row,
-        &display_lines,
-        |line| line_segment_is_blank(line, region.column, region.columns),
-    );
-    let display_source_start = display_lines.len().saturating_sub(display_targets.len());
-    for (row, styled_line) in display_targets
-        .into_iter()
-        .zip(display_lines[display_source_start..].iter())
-    {
-        overlay_styled_prompt_line(
-            lines,
-            line_style_spans,
-            row,
-            region.column,
-            region.columns,
-            styled_line,
-        );
-    }
-    for (offset, styled_line) in prompt_lines
-        .iter()
-        .skip(prompt_lines.len().saturating_sub(visible_prompt_count))
-        .enumerate()
-    {
-        overlay_styled_prompt_line(
-            lines,
-            line_style_spans,
-            prompt_start_row.saturating_add(offset),
-            region.column,
-            region.columns,
-            styled_line,
-        );
-    }
-}
-
-/// Clears stale prompt and display-overlay cells from a pane body without
-/// disturbing normal terminal content in the same region.
-///
-/// The live footer uses theme-relative animated foreground spans instead of the
-/// normal display-overlay rendition, so it is identified by its owned text
-/// shape rather than by style alone.
-fn clear_stale_agent_prompt_segments(
-    lines: &mut [String],
-    line_style_spans: &mut [Vec<TerminalStyleSpan>],
-    region: ReadlinePromptRegion,
-    ui_theme: &UiTheme,
-) {
-    let prompt_rendition = agent_prompt_input_rendition(ui_theme);
-    let display_rendition = display_overlay_text_rendition(ui_theme);
-    let region_start = region.column;
-    let region_end = region.column.saturating_add(region.columns);
-    for row in region.row..region.row.saturating_add(region.rows) {
-        let clear_live_footer_segment = lines.get(row).is_some_and(|line| {
-            line_segment_is_agent_live_footer(line, region.column, region.columns)
-        });
-        if clear_live_footer_segment && let Some(line) = lines.get_mut(row) {
-            write_line_segment(line, region_start, region.columns, "");
-        }
-        let Some(spans) = line_style_spans.get_mut(row) else {
-            continue;
-        };
-        let mut retained = Vec::with_capacity(spans.len());
-        for span in std::mem::take(spans) {
-            if (!clear_live_footer_segment
-                && !style_span_is_agent_prompt_block(span, prompt_rendition, display_rendition))
-                || !style_span_overlaps_columns(span, region_start, region_end)
-            {
-                retained.push(span);
-                continue;
-            }
-            let span_end = span.start.saturating_add(span.length);
-            let overlap_start = span.start.max(region_start);
-            let overlap_end = span_end.min(region_end);
-            if overlap_start < overlap_end
-                && let Some(line) = lines.get_mut(row)
-            {
-                write_line_segment(
-                    line,
-                    overlap_start,
-                    overlap_end.saturating_sub(overlap_start),
-                    "",
-                );
-            }
-            retained.extend(style_span_segments_outside_range(
-                span,
-                overlap_start,
-                overlap_end,
-            ));
-        }
-        *spans = retained;
-    }
-}
-
-/// Reports whether a rendered line segment is Mezzanine-owned live footer text.
-fn line_segment_is_agent_live_footer(line: &str, column: usize, width: usize) -> bool {
-    let segment = line_slice(line, column, column.saturating_add(width));
-    agent_live_footer_state_label(segment.trim_end()).is_some()
-}
-
-/// Overlays one styled prompt line at the requested row and column range.
-fn overlay_styled_prompt_line(
-    lines: &mut [String],
-    line_style_spans: &mut [Vec<TerminalStyleSpan>],
-    row: usize,
-    column: usize,
-    width: usize,
-    styled_line: &TerminalStyledLine,
-) {
-    let Some(line) = lines.get_mut(row) else {
-        return;
-    };
-    write_line_segment(line, column, width, &styled_line.text);
-    let Some(spans) = line_style_spans.get_mut(row) else {
-        return;
-    };
-    overlay_fixed_column_style_spans(spans, column, width, &styled_line.style_spans);
-}
-
-/// Chooses active-pane display overlay rows while keeping the live footer at
-/// the bottom edge of the prompt region.
-fn active_agent_display_overlay_targets(
-    lines: &[String],
-    content_start: usize,
-    content_end: usize,
-    display_lines: &[TerminalStyledLine],
-    is_blank: impl Fn(&String) -> bool,
-) -> Vec<usize> {
-    if display_lines.is_empty() || content_start >= content_end {
-        return Vec::new();
-    }
-    let Some(last_display) = display_lines.last() else {
-        return Vec::new();
-    };
-    if agent_live_footer_state_label(last_display.text.trim_end()).is_none() {
-        return agent_display_overlay_targets(
-            lines,
-            content_start,
-            content_end,
-            display_lines.len(),
-            is_blank,
-        );
-    }
-
-    let footer_row = content_end.saturating_sub(1);
-    let preceding_targets = agent_display_overlay_targets(
-        lines,
-        content_start,
-        footer_row,
-        display_lines.len().saturating_sub(1),
-        is_blank,
-    );
-    preceding_targets
-        .into_iter()
-        .chain(std::iter::once(footer_row))
-        .collect()
-}
-
-/// Reports whether a rendered line segment contains only blank cells.
-fn line_segment_is_blank(line: &str, column: usize, width: usize) -> bool {
-    line_slice(line, column, column.saturating_add(width))
-        .chars()
-        .all(char::is_whitespace)
-}
-
-/// Identifies prompt-block styles that should not survive a resize mismatch.
-fn style_span_is_agent_prompt_block(
-    span: TerminalStyleSpan,
-    prompt_rendition: GraphicRendition,
-    display_rendition: GraphicRendition,
-) -> bool {
-    span.rendition == prompt_rendition || span.rendition == display_rendition
 }

@@ -154,6 +154,9 @@ pub(in crate::host::terminal::render) fn render_styled_pane_lines(
     for line in content.iter().skip(start).take(content_rows) {
         lines.push(fit_styled_width(line, width));
     }
+    while lines.len() < content_start.saturating_add(content_rows) {
+        lines.push(TerminalStyledLine::plain(" ".repeat(width)));
+    }
     let content_end = lines.len();
     overlay_agent_display_lines(
         &mut lines,
@@ -239,6 +242,9 @@ pub(in crate::host::terminal::render) fn render_pane_lines(
     let content_start = lines.len();
     for line in content.iter().skip(start).take(content_rows) {
         lines.push(fit_width(line, width));
+    }
+    while lines.len() < content_start.saturating_add(content_rows) {
+        lines.push(" ".repeat(width));
     }
     let content_end = lines.len();
     overlay_agent_display_lines(
