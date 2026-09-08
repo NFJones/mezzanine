@@ -968,6 +968,7 @@ impl RuntimeSessionService {
                 .filter(|key| matches(key))
                 .cloned()
                 .collect::<Vec<_>>();
+            let removes_visible_components = !component_keys.is_empty();
             retired = retired
                 .saturating_add(component_keys.len())
                 .saturating_add(promoted_keys.len());
@@ -983,6 +984,16 @@ impl RuntimeSessionService {
             }
             for key in promoted_keys {
                 presentation.promoted_components.remove(&key);
+            }
+            if !removes_visible_components {
+                if !presentation.components.is_empty()
+                    || !presentation.promoted_components.is_empty()
+                {
+                    self.presentation
+                        .action_presentation_progress
+                        .insert(pane_id, presentation);
+                }
+                continue;
             }
             if self.agent_pane_screen_lineage(&pane_id, &presentation.conversation_id)
                 != Some(old_lineage)

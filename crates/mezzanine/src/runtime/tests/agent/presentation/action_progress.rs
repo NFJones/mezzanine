@@ -522,6 +522,26 @@ fn runtime_action_progress_reconciles_provisional_results_without_replay() {
         .normal_content_lines()
         .join("\n");
     assert_eq!(promoted.matches("exact-success-output").count(), 1);
+    let promoted_screen = service.agent_pane_screen("%1").unwrap().clone();
+    let promoted_lineage = service
+        .agent_pane_screen_lineage("%1", &turn.conversation_id)
+        .unwrap();
+
+    assert_eq!(
+        service
+            .retire_action_presentation_progress_for_action(&turn.turn_id, &action.id)
+            .unwrap(),
+        1
+    );
+    assert_eq!(service.agent_pane_screen("%1").unwrap(), &promoted_screen);
+    assert_eq!(
+        service.agent_pane_screen_lineage("%1", &turn.conversation_id),
+        Some(promoted_lineage)
+    );
+    assert_eq!(
+        service.action_presentation_progress_counts_for_tests("%1"),
+        (0, 0)
+    );
 }
 
 /// Verifies an executor-confirmed semantic mutation uses the readable static
