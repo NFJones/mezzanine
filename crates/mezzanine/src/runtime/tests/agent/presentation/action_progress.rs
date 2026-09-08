@@ -129,6 +129,121 @@ fn transaction_progress(
     )
 }
 
+/// Verifies live shell progress wraps to the configured agent column cap and
+/// retains only the newest physical rows after wrapping.
+#[test]
+fn runtime_shell_action_progress_honors_configured_column_cap() {
+    let (mut service, turn) =
+        running_action_progress_fixture(shell_action(), "marker-cap", "sleep 1");
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[terminal]\nagent_wrap_column_cap = 16\nshell_output_preview_lines = 3\n"
+                .to_string(),
+        }])
+        .unwrap();
+
+    assert!(
+        service
+            .apply_action_presentation_progress(transaction_progress(
+                &turn.turn_id,
+                "shell-1",
+                "marker-cap",
+                1,
+                ActionPresentationComponentIdentity::ShellOutput,
+                "discarddiscard alpha beta gamma 0123456789abcdefghij",
+            ))
+            .unwrap()
+    );
+
+    let visible = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
+    let progress_rows = visible
+        .iter()
+        .filter(|line| {
+            line.contains("gamma")
+                || line.contains("efghij")
+                || line.chars().any(|character| character.is_ascii_digit())
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(progress_rows.len(), 3, "{visible:?}");
+    assert!(
+        progress_rows
+            .iter()
+            .all(|line| unicode_width::UnicodeWidthStr::width(line.as_str()) <= 16),
+        "{visible:?}"
+    );
+    assert!(
+        visible.iter().all(|line| !line.contains("discarddiscard")),
+        "{visible:?}"
+    );
+}
+
+/// Verifies debug-visible provisional read output uses the same configured
+/// cap for whitespace wrapping and hard splitting of unbroken tokens.
+#[test]
+fn runtime_provisional_read_progress_honors_configured_column_cap() {
+    let (mut service, turn) = running_action_progress_fixture(
+        patch_action(),
+        "read-cap",
+        "# __MEZ_APPLY_PATCH_READ_PHASE__",
+    );
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[terminal]\nagent_wrap_column_cap = 16\n".to_string(),
+        }])
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .set_log_level("%1", AgentLogLevel::Debug)
+        .unwrap();
+
+    assert!(
+        service
+            .apply_action_presentation_progress(transaction_progress(
+                &turn.turn_id,
+                "patch-1",
+                "read-cap",
+                1,
+                ActionPresentationComponentIdentity::ProvisionalReadBody,
+                "read alpha beta 0123456789abcdefghij",
+            ))
+            .unwrap()
+    );
+
+    let visible = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
+    let progress_rows = visible
+        .iter()
+        .filter(|line| {
+            line.contains("read")
+                || line.contains("alpha")
+                || line.contains("beta")
+                || line.chars().any(|character| character.is_ascii_digit())
+        })
+        .collect::<Vec<_>>();
+    assert!(progress_rows.len() >= 3, "{visible:?}");
+    assert!(
+        progress_rows
+            .iter()
+            .all(|line| unicode_width::UnicodeWidthStr::width(line.as_str()) <= 16),
+        "{visible:?}"
+    );
+}
+
 /// Verifies exact execution identity and monotonically newer component revisions
 /// fence executor progress before it can replace the pane. The first accepted
 /// source composes over an existing shell-preview baseline, while a stale marker,

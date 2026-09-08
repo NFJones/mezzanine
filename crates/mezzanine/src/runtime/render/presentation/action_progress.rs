@@ -11,12 +11,13 @@ use super::actions::bounded_agent_action_result_display_lines;
 use super::buffer_apply::AGENT_PRESENTATION_STYLED_LINES_CONTENT_TYPE;
 use super::diff::readable_agent_diff_display_lines_for_width;
 use super::style::AgentTerminalPresentationStyle;
-use super::text::append_styled_agent_terminal_rendered_line;
+use super::text::{append_styled_agent_terminal_rendered_line, sanitized_agent_terminal_line};
 use super::{RichTextLine, RichTextLineKind};
 use crate::runtime::render::{
     MezError, Result, RuntimeActionPresentationProgressComponent,
     RuntimeActionPresentationProgressKey, RuntimeActionPresentationProgressPresentation,
     RuntimeActionPresentationProjectionContext, RuntimeSessionService, TerminalScreen,
+    wrap_rich_text_line_to_width_with_source_ranges_hard,
 };
 use mez_agent::{
     ACTION_PRESENTATION_PROGRESS_MAX_SOURCE_BYTES, ActionPresentationComponentIdentity,
@@ -568,13 +569,19 @@ impl RuntimeSessionService {
                             &key.action_id,
                         ) =>
                 {
-                    mez_agent::shell_observation::latest_agent_shell_transaction_output_lines(
-                        &component.source,
-                        self.terminal_shell_output_preview_lines(),
-                    )
-                    .into_iter()
-                    .map(Self::plain_action_progress_line)
-                    .collect::<Vec<_>>()
+                    let max_rows = self.terminal_shell_output_preview_lines();
+                    let mut rendered =
+                        mez_agent::shell_observation::latest_agent_shell_transaction_output_lines(
+                            &component.source,
+                            max_rows,
+                        )
+                        .into_iter()
+                        .flat_map(|line| Self::plain_action_progress_lines(line, display_width))
+                        .collect::<Vec<_>>();
+                    if rendered.len() > max_rows {
+                        rendered.drain(..rendered.len() - max_rows);
+                    }
+                    rendered
                 }
                 ActionPresentationComponentIdentity::ProvisionalReadBody
                     if !presentation.projected_context.shell_view
@@ -583,7 +590,7 @@ impl RuntimeSessionService {
                 {
                     bounded_agent_action_result_display_lines(&component.source)
                         .into_iter()
-                        .map(Self::plain_action_progress_line)
+                        .flat_map(|line| Self::plain_action_progress_lines(line, display_width))
                         .collect::<Vec<_>>()
                 }
                 ActionPresentationComponentIdentity::ConfirmedMutation { .. }
@@ -609,13 +616,19 @@ impl RuntimeSessionService {
         Ok(sections)
     }
 
-    fn plain_action_progress_line(display: String) -> RichTextLine {
-        RichTextLine {
-            display,
-            style_spans: Vec::new(),
-            copy_text: None,
-            kind: RichTextLineKind::Normal,
-        }
+    fn plain_action_progress_lines(display: String, display_width: usize) -> Vec<RichTextLine> {
+        wrap_rich_text_line_to_width_with_source_ranges_hard(
+            RichTextLine {
+                display: sanitized_agent_terminal_line(&display),
+                style_spans: Vec::new(),
+                copy_text: None,
+                kind: RichTextLineKind::Normal,
+            },
+            display_width,
+        )
+        .into_iter()
+        .map(|wrapped| wrapped.line)
+        .collect()
     }
 
     fn append_action_progress_sections_to_screen(
