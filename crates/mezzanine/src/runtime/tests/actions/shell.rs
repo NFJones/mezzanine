@@ -489,6 +489,66 @@ fn runtime_shell_output_preview_limit_counts_visual_rows() {
     );
 }
 
+/// Hidden shell previews honor the configured agent wrap cap on panes wider
+/// than the cap while retaining the newest visual rows after wrapping.
+#[test]
+fn runtime_shell_output_preview_honors_configured_column_cap() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[terminal]\nagent_wrap_column_cap = 12\n".to_string(),
+        }])
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(40, 12).unwrap(), 20).unwrap();
+    screen.feed(b"ready\n");
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    service.set_agent_pane_screen("%1", conversation_id, screen);
+    let owner = crate::runtime::render::RuntimeAgentShellPreviewOwner {
+        turn_id: "turn-capped-preview".to_string(),
+        action_id: "shell-capped-preview".to_string(),
+        marker: "marker-capped-preview".to_string(),
+    };
+    let source = "discard discard alpha beta gamma 0123456789abcdefghij".to_string();
+
+    service
+        .update_agent_shell_output_preview("%1", owner, 1, std::slice::from_ref(&source))
+        .unwrap();
+
+    let visible = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
+    let preview_rows = visible
+        .iter()
+        .filter(|line| {
+            ["alpha", "beta", "gamma", "0123456789", "abcdefghij"]
+                .iter()
+                .any(|segment| line.contains(segment))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(preview_rows.len(), 5, "{visible:?}");
+    assert!(
+        preview_rows
+            .iter()
+            .all(|line| unicode_width::UnicodeWidthStr::width(line.as_str()) <= 12),
+        "{visible:?}"
+    );
+    assert!(
+        visible.iter().all(|line| !line.contains("discard")),
+        "{visible:?}"
+    );
+}
+
 /// Verifies concurrent shell previews retain actor chronology and durable rows.
 ///
 /// Each running action owns an independent preview slot. Updating one owner

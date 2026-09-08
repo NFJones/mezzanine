@@ -2410,6 +2410,7 @@ impl RuntimeSessionService {
                 &preview.previews,
                 &ui_theme,
                 max_preview_rows,
+                self.presentation.settings.terminal_agent_wrap_column_cap,
             )?;
         }
         let installed_lineage = self
@@ -3521,12 +3522,16 @@ impl RuntimeSessionService {
         >,
         ui_theme: &mez_mux::theme::UiTheme,
         max_visual_rows: usize,
+        column_cap: usize,
     ) -> Result<()> {
         let mut ordered = previews.values().collect::<Vec<_>>();
         ordered.sort_by_key(|preview| preview.first_seen_order);
-        let content_columns = usize::from(screen.size().columns)
-            .saturating_sub(UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX))
-            .max(1);
+        let content_columns = bounded_agent_terminal_presentation_columns(
+            usize::from(screen.size().columns),
+            column_cap,
+        )
+        .saturating_sub(UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX))
+        .max(1);
         let mut bytes = String::new();
         let cursor = screen.cursor_state();
         let current_line_has_content = screen
@@ -3648,6 +3653,7 @@ impl RuntimeSessionService {
                 &presentation.previews,
                 &ui_theme,
                 max_preview_rows,
+                self.presentation.settings.terminal_agent_wrap_column_cap,
             )?;
         }
         let (composite_screen, progress_presentation) = self
@@ -3800,6 +3806,7 @@ impl RuntimeSessionService {
             &presentation.previews,
             &ui_theme,
             max_preview_rows,
+            self.presentation.settings.terminal_agent_wrap_column_cap,
         )?;
         let (candidate, progress_presentation) = self.compose_action_presentation_progress_over(
             pane_id,
@@ -3917,6 +3924,7 @@ impl RuntimeSessionService {
                     &presentation.previews,
                     &ui_theme,
                     max_preview_rows,
+                    self.presentation.settings.terminal_agent_wrap_column_cap,
                 )?;
             }
             let installed_lineage = self

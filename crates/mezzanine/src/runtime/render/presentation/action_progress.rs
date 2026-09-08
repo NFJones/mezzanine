@@ -752,6 +752,7 @@ impl RuntimeSessionService {
                 &preview.previews,
                 self.ui_theme(),
                 self.terminal_shell_output_preview_lines(),
+                self.presentation.settings.terminal_agent_wrap_column_cap,
             )?;
         }
         presentation.baseline_screen = std::sync::Arc::new(progress_baseline.clone());
