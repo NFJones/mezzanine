@@ -178,10 +178,12 @@ pub(in crate::cli) async fn run_attach<W: Write>(
         let (body, _) = decode_control_frame(&response, 1024 * 1024)?;
         if io::stdin().is_terminal() && io::stdout().is_terminal() {
             ensure_control_response_success(body.as_str())?;
+            let observer_client_id = attached_client_id_from_initialize_response(body.as_str())?;
             let event_binding_token = event_binding_token_from_initialize_response(body.as_str())?;
             return run_control_socket_attached_observer_client(
                 &mut stream,
                 socket_path,
+                observer_client_id,
                 Size::new(columns, rows)?,
                 event_binding_token,
             )

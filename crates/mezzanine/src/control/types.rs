@@ -530,6 +530,7 @@ pub(crate) const OBSERVER_CONTROL_METHODS: &[&str] = &[
     "client/detach",
     "terminal/resize",
     "terminal/view",
+    "terminal/presentation/acknowledge",
     "event/list",
 ];
 
@@ -609,6 +610,7 @@ pub(crate) const PRIMARY_CONTROL_METHODS: &[&str] = &[
     "buffer/delete",
     "terminal/step",
     "terminal/view",
+    "terminal/presentation/acknowledge",
     "terminal/command",
     "frame/read",
     "agent/shell/show",

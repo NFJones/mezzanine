@@ -55,6 +55,8 @@ struct AttachClientFrame {
     line_style_spans: Vec<Vec<TerminalStyleSpan>>,
     /// Host terminal modes associated with this frame.
     modes: AttachedTerminalOutputModes,
+    /// Focus-label identities painted into this exact server frame.
+    presentation_ids: Vec<u64>,
     /// Optional client-space Iroh status slot.
     iroh_status_slot: Option<crate::host::terminal::TerminalIrohStatusSlot>,
     /// Latest server event whose applied state is represented by this view.

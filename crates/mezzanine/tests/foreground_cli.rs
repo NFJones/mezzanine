@@ -441,9 +441,9 @@ fn foreground_serve_zen_round_trip_resizes_real_pane_pty() {
     assert!(!text.contains("mez: Io"), "{text}");
 }
 
-/// Reconstructs the real foreground terminal to distinguish a pane-name focus
-/// pill from command echo. Cursor blinking is disabled so, once the label
-/// appears, only its own timer-driven repaint can remove it from the screen.
+/// Reconstructs a detached control-socket attach terminal to distinguish a
+/// pane-name focus pill from command echo. Cursor blinking is disabled so,
+/// once the label appears, only its acknowledged timer can remove it.
 #[test]
 fn foreground_zen_focus_label_expires_without_input() {
     let root = test_root("zen-focus-idle");
@@ -460,11 +460,13 @@ fn foreground_zen_focus_label_expires_without_input() {
     )
     .unwrap();
     let socket = runtime.join("focus.sock");
-    let mut process = spawn_foreground_serve(&root, &home, &runtime, &socket);
+    let mut daemon = spawn_detached_serve(&home, &runtime, &socket);
+    wait_for_path(&socket, Duration::from_secs(10)).unwrap();
+    let mut process = spawn_foreground_attach(&root, &home, &runtime, &socket);
     let mut output = Vec::new();
     process
         .read_until(&mut output, Duration::from_secs(10), |text| {
-            text.contains("serving: true") && contains_default_shell_pane_frame(text)
+            contains_default_shell_pane_frame(text) && text.contains("$")
         })
         .unwrap();
     let mut screen =
@@ -481,9 +483,15 @@ fn foreground_zen_focus_label_expires_without_input() {
         .unwrap();
     screen.feed(&output);
     output.clear();
+    process.write_input(b"\x01:zen on\r").unwrap();
     process
-        .write_input(b"\x01:zen on; select-pane -t 1\r")
+        .read_until(&mut output, Duration::from_secs(10), |text| {
+            text.contains("\x1b[2J\x1b[H")
+        })
         .unwrap();
+    screen.feed(&output);
+    output.clear();
+    process.write_input(b"\x01\x1b[C").unwrap();
     let transition_started_at = Instant::now();
     let deadline = transition_started_at + Duration::from_secs(10);
     let mut appeared = false;
@@ -526,6 +534,7 @@ fn foreground_zen_focus_label_expires_without_input() {
     process
         .read_until_exit(&mut output, Duration::from_secs(5))
         .unwrap();
+    wait_for_process_exit(&mut daemon, Duration::from_secs(5)).unwrap();
 }
 
 /// Verifies every pane-status preset can be selected through the real command

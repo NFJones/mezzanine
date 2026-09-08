@@ -419,7 +419,7 @@ v2 removes those methods and adds `client/set_layout_owner`.
 | Pane | `pane/list`, `pane/create`, `pane/select`, `pane/resize`, `pane/move`, `pane/swap`, `pane/break`, `pane/join`, `pane/close`, `pane/rename`, `pane/zoom`, `pane/input-sync`, `pane/attention`, `pane/status`, `pane/notice`, `pane/capture` | Inspect panes, mutate layout and presentation, control synchronized input, completion attention, source-owned status, or bounded notices, or capture pane content. List is RO; capture is RO when policy permits. Status and notices are available to primary and automation clients; rename, zoom, and input synchronization are primary-only. |
 | Buffer | `buffer/list`, `buffer/create`, `buffer/read`, `buffer/delete` | Primary-only bounded internal paste-buffer inspection and mutation. List/read are RO; create requires explicit replacement for existing names. |
 | Frame | `frame/read` | Read rendered frame fields and text (RO). |
-| Terminal | `terminal/view`, `terminal/step`, `terminal/resize`, `terminal/command` | Render a client view, submit bytes/primary size, update exact-client observer-v3 geometry, or invoke a terminal command. Primary-only mutation applies to step and command; resize is observer-v3-only and never changes primary or canonical geometry. |
+| Terminal | `terminal/view`, `terminal/presentation/acknowledge`, `terminal/step`, `terminal/resize`, `terminal/command` | Render a client view, acknowledge receipt-bearing local frame commits, submit bytes/primary size, update exact-client observer-v3 geometry, or invoke a terminal command. Presentation acknowledgement is available to primary and observer clients; primary-only mutation applies to step and command; resize is observer-v3-only and never changes primary or canonical geometry. |
 | Agent | `agent/list`, `agent/task/list`, `agent/spawn`, `agent/shell/show`, `agent/shell/hide`, `agent/shell/command` | Inspect agents/tasks (RO), manage an agent shell, start prompt work, or spawn an agent. |
 | Approval | `approval/list`, `approval/decide` | Inspect pending approvals (RO) or make a primary decision. |
 | Configuration | `config/get`, `config/set`, `config/unset`, `config/reload`, `config/validate` | Inspect or validate config (RO), or mutate/reload it. |
@@ -438,7 +438,8 @@ render with `terminal/view`:
 {"jsonrpc":"2.0","id":2,"method":"terminal/view","params":{"client_size":{"columns":120,"rows":40}}}
 ```
 
-The result is `{ "view": RenderedClientView | null, "event_cutoff": integer }`.
+The result is `{ "view": RenderedClientView | null, "presentation_ids":
+[integer], "event_cutoff": integer }`.
 `event_cutoff` is the latest ordered server event whose applied state is
 represented when the authoritative view is rendered. A view includes its role;
 authoritative and client size; viewport and scroll bounds; cursor state;
@@ -459,11 +460,21 @@ values are rejected by servers that implement the extension.
 
 The result reports input count, forwarded bytes,
 multiplexer/agent/mouse actions, redraw requirements, unsupported actions,
-optional `view`, optional `event_cutoff`, UI theme, acknowledged client detach,
-and session termination. When an inline view is present, `event_cutoff` is from
-the same authoritative render boundary and can cover queued ordinary redraw
-wakeups. A true `client_detached` ends that attach loop cleanly without implying
-that the durable session was terminated.
+optional `view`, `presentation_ids`, optional `event_cutoff`, UI theme,
+acknowledged client detach, and session termination. When an inline view is
+present, `event_cutoff` and `presentation_ids` are from the same authoritative
+render boundary. After completely writing a local frame, a control or legacy
+attach frontend sends those IDs through the authenticated idempotent
+`terminal/presentation/acknowledge` method. Matching pending zen focus labels
+then start their configured lifetime; malformed IDs are rejected and stale or
+duplicate IDs do not renew it. Pushed Iroh rendering retains its stream-flush
+acknowledgement and does not send this control handshake. A true
+`client_detached` ends that attach loop cleanly without implying that the
+durable session was terminated.
+
+```json
+{"jsonrpc":"2.0","id":4,"method":"terminal/presentation/acknowledge","params":{"idempotency_key":"frame-42","presentation_ids":[7]}}
+```
 
 ```json
 {"jsonrpc":"2.0","id":3,"method":"terminal/step","params":{"idempotency_key":"ui-step-0001","client_size":{"columns":120,"rows":40},"render":true,"input_bytes":[108,115,13]}}

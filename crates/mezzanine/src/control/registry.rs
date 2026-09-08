@@ -90,6 +90,8 @@ pub(super) enum ControlDispatchKind {
     FrameRead,
     /// Render a terminal view.
     TerminalView,
+    /// Acknowledge focus-label presentations committed by an attach client.
+    TerminalPresentationAcknowledge,
     /// Update one attached client's local terminal geometry.
     TerminalResize,
     /// Step terminal input.
@@ -473,6 +475,11 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
         method: "terminal/view",
         dispatch: ControlDispatchKind::TerminalView,
         params_schema: ControlParamsSchema::Allowed(&["client_size", "view_offset", "viewport"]),
+    },
+    ControlMethodSpec {
+        method: "terminal/presentation/acknowledge",
+        dispatch: ControlDispatchKind::TerminalPresentationAcknowledge,
+        params_schema: ControlParamsSchema::Allowed(&["idempotency_key", "presentation_ids"]),
     },
     ControlMethodSpec {
         method: "terminal/resize",

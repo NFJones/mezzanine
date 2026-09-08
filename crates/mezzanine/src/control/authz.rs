@@ -58,6 +58,7 @@ pub(super) fn authorize_observer_method(
         "client/detach" => authorize_client_self_detach(caller_client_id, request),
         "terminal/resize" => Ok(()),
         "terminal/view" => Ok(()),
+        "terminal/presentation/acknowledge" => Ok(()),
         "event/list" => Ok(()),
         _ => Err(MezError::forbidden(
             "observer clients are not authorized for this control method",

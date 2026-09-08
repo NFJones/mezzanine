@@ -183,6 +183,114 @@ fn runtime_terminal_view_reports_latest_event_cutoff() {
     assert_eq!(response["result"]["event_cutoff"], expected_cutoff);
 }
 
+/// Verifies control-rendered zen labels carry commit receipts and arm exactly
+/// once after an authenticated client reports a complete local frame write.
+/// Malformed and duplicate receipts must not create or renew a deadline.
+#[test]
+fn runtime_terminal_view_focus_receipts_arm_once_after_acknowledgement() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.set_terminal_zen_mode_for_tests(true);
+    service
+        .execute_terminal_command(&primary, "new-window receipt-focus")
+        .unwrap();
+
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"view","method":"terminal/view","params":{"client_size":{"columns":80,"rows":24}}}"#,
+        &primary,
+    );
+    let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+    let presentation_ids = response["result"]["presentation_ids"]
+        .as_array()
+        .expect("terminal view should carry presentation receipts");
+    assert_eq!(presentation_ids.len(), 1);
+    assert_eq!(
+        service.zen_focus_label_next_due_ms_for_client(&primary, 1),
+        None,
+        "rendering alone must leave the label pending"
+    );
+
+    let presentation_id = presentation_ids[0].as_u64().unwrap();
+    let malformed = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"bad","method":"terminal/presentation/acknowledge","params":{"idempotency_key":"bad","presentation_ids":[0]}}"#,
+        &primary,
+    );
+    assert!(
+        malformed.contains(r#""mezzanine_code":"invalid_params""#),
+        "{malformed}"
+    );
+    assert_eq!(
+        service.zen_focus_label_next_due_ms_for_client(&primary, 1),
+        None
+    );
+
+    let acknowledgement = format!(
+        r#"{{"jsonrpc":"2.0","id":"ack","method":"terminal/presentation/acknowledge","params":{{"idempotency_key":"ack-{presentation_id}","presentation_ids":[{presentation_id}]}}}}"#
+    );
+    let first = service.dispatch_runtime_control_body(&acknowledgement, &primary);
+    assert!(first.contains(r#""acknowledged":true"#), "{first}");
+    let deadline = service
+        .zen_focus_label_next_due_ms_for_client(&primary, 1)
+        .expect("acknowledgement should arm the configured expiry");
+
+    let duplicate = service.dispatch_runtime_control_body(&acknowledgement, &primary);
+    assert_eq!(
+        duplicate, first,
+        "idempotent replay should reuse its response"
+    );
+    assert_eq!(
+        service.zen_focus_label_next_due_ms_for_client(&primary, 1),
+        Some(deadline),
+        "duplicate acknowledgement must not renew the deadline"
+    );
+
+    let stale = service.dispatch_runtime_control_body(
+        &format!(
+            r#"{{"jsonrpc":"2.0","id":"stale","method":"terminal/presentation/acknowledge","params":{{"idempotency_key":"stale-{presentation_id}","presentation_ids":[{presentation_id}]}}}}"#
+        ),
+        &primary,
+    );
+    assert!(stale.contains(r#""acknowledged":false"#), "{stale}");
+    assert_eq!(
+        service.zen_focus_label_next_due_ms_for_client(&primary, 1),
+        Some(deadline),
+        "stale acknowledgement must not renew the deadline"
+    );
+}
+
+/// Verifies an inline terminal-step view carries the receipt for a pane label
+/// created by the same direct prefix-arrow focus mutation.
+#[test]
+fn runtime_terminal_step_focus_view_carries_presentation_receipt() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .execute_terminal_command(
+            &primary,
+            "split-window; rename-pane receipt-pane; select-pane -t 0; zen on",
+        )
+        .unwrap();
+
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"focus","method":"terminal/step","params":{"idempotency_key":"focus-arrow","client_size":{"columns":80,"rows":24},"render":true,"input_bytes":[1,27,91,67]}}"#,
+        &primary,
+    );
+    let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+
+    assert_eq!(response["result"]["application"]["mux_actions_applied"], 1);
+    assert!(!response["result"]["view"].is_null());
+    assert_eq!(
+        response["result"]["presentation_ids"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+}
+
 /// Verifies conditional terminal-step rendering returns a view only when the
 /// applied mutation changes presentation, with a cutoff from the same runtime
 /// boundary.

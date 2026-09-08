@@ -357,6 +357,9 @@ fn primary_control_method_fixture_request(
         "terminal/view" => {
             r#"{"jsonrpc":"2.0","id":1,"method":"terminal/view","params":{"client_size":{"columns":80,"rows":24}}}"#.to_string()
         }
+        "terminal/presentation/acknowledge" => {
+            r#"{"jsonrpc":"2.0","id":1,"method":"terminal/presentation/acknowledge","params":{"idempotency_key":"terminal-presentation-acknowledge","presentation_ids":[1]}}"#.to_string()
+        }
         "terminal/command" => {
             r#"{"jsonrpc":"2.0","id":1,"method":"terminal/command","params":{"input":"list-windows","idempotency_key":"terminal-command"}}"#.to_string()
         }

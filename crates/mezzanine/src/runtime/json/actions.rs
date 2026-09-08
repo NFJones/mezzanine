@@ -57,6 +57,7 @@ pub(crate) fn runtime_mutating_method(method: &str) -> bool {
             | "client/set_layout_owner"
             | "terminal/resize"
             | "terminal/step"
+            | "terminal/presentation/acknowledge"
             | "terminal/command"
             | "agent/shell/command"
             | "agent/spawn"

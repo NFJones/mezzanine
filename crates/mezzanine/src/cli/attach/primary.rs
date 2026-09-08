@@ -8,10 +8,11 @@ use super::event_stream::{
     read_attached_client_input_or_iroh_event, read_attached_client_input_or_runtime_event,
 };
 use super::requests::{
-    read_async_control_response_frames, read_async_control_response_frames_or_disconnected,
-    refresh_attached_client_size_async, render_iroh_attach_client_frame_async,
-    render_iroh_attach_client_frame_bounded_async, request_and_render_primary_view_async,
-    request_primary_resize_async, request_primary_view_frame_async, terminal_step_control_request,
+    acknowledge_committed_focus_labels_async, read_async_control_response_frames,
+    read_async_control_response_frames_or_disconnected, refresh_attached_client_size_async,
+    render_iroh_attach_client_frame_async, render_iroh_attach_client_frame_bounded_async,
+    request_and_render_primary_view_async, request_primary_resize_async,
+    request_primary_view_frame_async, terminal_step_control_request,
     terminal_step_if_changed_control_request, write_async_control_body_or_disconnected,
 };
 use super::responses::{
@@ -563,6 +564,19 @@ where
                     "Iroh attach disconnected while reading a terminal view; reattach required",
                 ));
             }
+            if !frame.presentation_ids.is_empty()
+                && !acknowledge_committed_focus_labels_async(
+                    stream,
+                    &primary_client_id,
+                    &frame.presentation_ids,
+                    iteration,
+                )
+                .await?
+            {
+                return Err(MezError::invalid_state(
+                    "Iroh attach disconnected while acknowledging a committed terminal view; reattach required",
+                ));
+            }
             cached_frame = Some(frame);
             animation_refresh.update_from_rendered_view(outcome.animation_refresh_interval_ms);
             render_requested = false;
@@ -740,6 +754,19 @@ where
                     "Iroh attach disconnected while reading a terminal view; reattach required",
                 ));
             }
+            if !frame.presentation_ids.is_empty()
+                && !acknowledge_committed_focus_labels_async(
+                    stream,
+                    &primary_client_id,
+                    &frame.presentation_ids,
+                    iteration,
+                )
+                .await?
+            {
+                return Err(MezError::invalid_state(
+                    "Iroh attach disconnected while acknowledging a committed terminal view; reattach required",
+                ));
+            }
             cached_frame = Some(frame);
             animation_refresh.update_from_rendered_view(outcome.animation_refresh_interval_ms);
         }
@@ -910,6 +937,7 @@ mod pushed_snapshot_tests {
                         lines: vec!["pushed initial".to_string()],
                         line_style_spans: vec![Vec::new()],
                         modes: super::super::AttachedTerminalOutputModes::default(),
+                        presentation_ids: Vec::new(),
                         iroh_status_slot: None,
                         event_cutoff: Some(7),
                     },
@@ -1067,6 +1095,7 @@ mod pushed_snapshot_tests {
                             lines: vec!["visible before acknowledgement".to_string()],
                             line_style_spans: vec![Vec::new()],
                             modes: super::super::AttachedTerminalOutputModes::default(),
+                            presentation_ids: Vec::new(),
                             iroh_status_slot: None,
                             event_cutoff: Some(8),
                         },
@@ -1140,6 +1169,7 @@ mod pushed_snapshot_tests {
                             lines: vec!["large pushed frame".to_string()],
                             line_style_spans: vec![Vec::new()],
                             modes: super::super::AttachedTerminalOutputModes::default(),
+                            presentation_ids: Vec::new(),
                             iroh_status_slot: None,
                             event_cutoff: Some(9),
                         },
@@ -1262,6 +1292,7 @@ where
             if !request_and_render_primary_view_async(
                 stream,
                 terminal_io,
+                &primary_client_id,
                 client_size,
                 iteration,
                 cursor_blink_epoch,
@@ -1305,6 +1336,7 @@ where
             && !request_and_render_primary_view_async(
                 stream,
                 terminal_io,
+                &primary_client_id,
                 client_size,
                 iteration,
                 cursor_blink_epoch,
@@ -1388,6 +1420,7 @@ where
             let outcome = request_and_render_primary_view_async(
                 stream,
                 terminal_io,
+                &primary_client_id,
                 client_size,
                 iteration,
                 cursor_blink_epoch,
@@ -1444,6 +1477,7 @@ where
             let outcome = request_and_render_primary_view_async(
                 stream,
                 terminal_io,
+                &primary_client_id,
                 client_size,
                 iteration,
                 cursor_blink_epoch,

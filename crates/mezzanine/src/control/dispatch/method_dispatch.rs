@@ -551,6 +551,13 @@ pub(super) fn dispatch_parsed_request(
             require_idempotency_key(params)?;
             Err(MezError::invalid_state("terminal runtime is not attached"))
         }
+        ControlDispatchKind::TerminalPresentationAcknowledge => {
+            let params = request.params.as_deref().ok_or_else(|| {
+                MezError::invalid_args("terminal/presentation/acknowledge requires a params object")
+            })?;
+            require_idempotency_key(params)?;
+            Err(MezError::invalid_state("terminal runtime is not attached"))
+        }
         ControlDispatchKind::TerminalCommand => {
             let params = request.params.as_deref().ok_or_else(|| {
                 MezError::invalid_args("terminal/command requires a params object")

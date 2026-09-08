@@ -6,9 +6,9 @@ use super::event_stream::{
     read_attached_client_input_or_iroh_event, read_attached_client_input_or_runtime_event,
 };
 use super::requests::{
-    refresh_attached_client_size_async, render_attach_client_frame_async,
-    render_iroh_attach_client_frame_async, request_observer_resize_async,
-    request_primary_view_frame_async,
+    acknowledge_committed_focus_labels_async, refresh_attached_client_size_async,
+    render_attach_client_frame_async, render_iroh_attach_client_frame_async,
+    request_observer_resize_async, request_primary_view_frame_async,
 };
 use super::{
     AsRawFd, AsyncAttachedTerminalIo, AsyncAttachedTerminalPresentationGuard,
@@ -24,6 +24,7 @@ use super::{
 pub(in crate::cli) async fn run_control_socket_attached_observer_client(
     stream: &mut UnixStream,
     control_socket_path: &std::path::Path,
+    observer_client_id: ClientId,
     client_size: Size,
     event_binding_token: String,
 ) -> Result<()> {
@@ -41,7 +42,7 @@ pub(in crate::cli) async fn run_control_socket_attached_observer_client(
         &mut control_stream,
         terminal_guard.io_mut(),
         None,
-        None,
+        Some(observer_client_id),
         client_size,
         std::time::Duration::from_secs(30),
         event_stream.as_mut(),
@@ -118,7 +119,7 @@ where
         stream,
         terminal_io,
         None,
-        None,
+        Some(ClientId::parse('c', "c2".to_string()).unwrap()),
         client_size,
         std::time::Duration::from_secs(30),
         None,
@@ -345,6 +346,20 @@ where
         if !outcome.connected {
             break Ok(());
         }
+        if !pushed_render_owner
+            && !frame.presentation_ids.is_empty()
+            && !acknowledge_committed_focus_labels_async(
+                stream,
+                observer_client_id.as_ref().ok_or_else(|| {
+                    MezError::invalid_state("legacy observer render omitted its client id")
+                })?,
+                &frame.presentation_ids,
+                iteration,
+            )
+            .await?
+        {
+            break Ok(());
+        }
         cached_frame = Some(frame);
         animation_refresh.update_from_rendered_view(outcome.animation_refresh_interval_ms);
         render_requested = false;
@@ -372,6 +387,7 @@ mod pushed_snapshot_tests {
                         lines: vec!["pushed observer".to_string()],
                         line_style_spans: vec![Vec::new()],
                         modes: super::super::AttachedTerminalOutputModes::default(),
+                        presentation_ids: Vec::new(),
                         iroh_status_slot: None,
                         event_cutoff: Some(7),
                     },

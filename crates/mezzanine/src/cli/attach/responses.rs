@@ -132,13 +132,41 @@ pub(super) fn terminal_step_response_client_frame(
         .get("result")
         .and_then(|result| result.get("event_cutoff"))
         .and_then(serde_json::Value::as_u64);
+    let presentation_ids = parsed
+        .get("result")
+        .and_then(|result| result.get("presentation_ids"))
+        .map(parse_focus_label_presentation_ids)
+        .transpose()?
+        .unwrap_or_default();
     Ok(Some(super::AttachClientFrame {
         lines: terminal_step_response_lines(body)?,
         line_style_spans: terminal_step_response_line_style_spans(body)?,
         modes: terminal_step_response_output_modes(body)?.unwrap_or_default(),
+        presentation_ids,
         iroh_status_slot,
         event_cutoff,
     }))
+}
+
+/// Decodes bounded positive focus-label presentation identities.
+fn parse_focus_label_presentation_ids(value: &serde_json::Value) -> Result<Vec<u64>> {
+    let ids = value.as_array().ok_or_else(|| {
+        MezError::invalid_state("terminal response presentation_ids must be an array")
+    })?;
+    if ids.len() > 3 {
+        return Err(MezError::invalid_state(
+            "terminal response presentation_ids exceeds the focus-label scope bound",
+        ));
+    }
+    ids.iter()
+        .map(|value| {
+            value.as_u64().filter(|value| *value > 0).ok_or_else(|| {
+                MezError::invalid_state(
+                    "terminal response presentation_ids entries must be positive integers",
+                )
+            })
+        })
+        .collect()
 }
 
 /// Decodes one server-owned client-space Iroh status slot.
@@ -512,6 +540,28 @@ mod tests {
             .expect("view should decode");
 
         assert_eq!(frame.event_cutoff, Some(42));
+    }
+
+    /// Verifies control attach frames retain bounded positive focus receipts
+    /// and reject malformed values before any acknowledgement can be sent.
+    #[test]
+    fn terminal_view_decodes_and_validates_focus_label_presentation_ids() {
+        let response = r#"{"result":{"view":{"lines":["plain"],"line_style_spans":[[]],"cursor":{"row":0,"column":0,"visible":false},"output_modes":{}},"presentation_ids":[7]}}"#;
+        let frame = terminal_step_response_client_frame(response)
+            .unwrap()
+            .expect("view should decode");
+        assert_eq!(frame.presentation_ids, [7]);
+
+        for malformed in [
+            r#"{"result":{"view":{"lines":["plain"]},"presentation_ids":"7"}}"#,
+            r#"{"result":{"view":{"lines":["plain"]},"presentation_ids":[0]}}"#,
+            r#"{"result":{"view":{"lines":["plain"]},"presentation_ids":[1,2,3,4]}}"#,
+        ] {
+            assert!(
+                terminal_step_response_client_frame(malformed).is_err(),
+                "malformed receipts should be rejected: {malformed}"
+            );
+        }
     }
 
     /// Verifies semantic slot decoding and local composition use compact

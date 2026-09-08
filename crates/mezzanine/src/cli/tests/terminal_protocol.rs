@@ -129,7 +129,25 @@ async fn control_socket_primary_attach_loop_uses_async_terminal_io() {
         );
         server_stream
             .write_all(&encode_control_body(
-                r#"{"jsonrpc":"2.0","id":"cli-terminal-view-0","result":{"view":{"lines":["detached async"],"line_style_spans":[[]],"cursor":{"row":0,"column":14,"visible":true,"style":"bar","blink":false},"output_modes":{"application_keypad":false}}}}"#,
+                r#"{"jsonrpc":"2.0","id":"cli-terminal-view-0","result":{"view":{"lines":["detached async"],"line_style_spans":[[]],"cursor":{"row":0,"column":14,"visible":true,"style":"bar","blink":false},"output_modes":{"application_keypad":false}},"presentation_ids":[17]}}"#,
+            ))
+            .unwrap();
+        server_stream.flush().unwrap();
+
+        let request = read_control_response_frames(&mut server_stream, 1024 * 1024, 1).unwrap();
+        let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            parsed.get("method").and_then(serde_json::Value::as_str),
+            Some("terminal/presentation/acknowledge")
+        );
+        assert_eq!(
+            parsed["params"]["presentation_ids"],
+            serde_json::json!([17])
+        );
+        server_stream
+            .write_all(&encode_control_body(
+                r#"{"jsonrpc":"2.0","id":"cli-terminal-presentation-ack-0","result":{"acknowledged":true}}"#,
             ))
             .unwrap();
         server_stream.flush().unwrap();
@@ -1246,9 +1264,25 @@ async fn control_socket_observer_attach_loop_renders_immediately() {
             parsed.get("method").and_then(serde_json::Value::as_str),
             Some("terminal/view")
         );
-        let response = r#"{"jsonrpc":"2.0","id":"cli-terminal-view-0","result":{"view":{"lines":["observer live view"],"line_style_spans":[[]],"cursor":{"row":0,"column":18,"visible":true,"style":"block","blink":false},"output_modes":{"application_keypad":false}}}}"#;
+        let response = r#"{"jsonrpc":"2.0","id":"cli-terminal-view-0","result":{"view":{"lines":["observer live view"],"line_style_spans":[[]],"cursor":{"row":0,"column":18,"visible":true,"style":"block","blink":false},"output_modes":{"application_keypad":false}},"presentation_ids":[7]}}"#;
         server_stream
             .write_all(&encode_control_body(response))
+            .unwrap();
+        server_stream.flush().unwrap();
+
+        let acknowledgement =
+            read_control_response_frames(&mut server_stream, 1024 * 1024, 1).unwrap();
+        let (body, _) = decode_control_frame(&acknowledgement, 1024 * 1024).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            parsed.get("method").and_then(serde_json::Value::as_str),
+            Some("terminal/presentation/acknowledge")
+        );
+        assert_eq!(parsed["params"]["presentation_ids"], serde_json::json!([7]));
+        server_stream
+            .write_all(&encode_control_body(
+                r#"{"jsonrpc":"2.0","id":"cli-terminal-presentation-ack-0","result":{"acknowledged":true}}"#,
+            ))
             .unwrap();
         server_stream.flush().unwrap();
     });

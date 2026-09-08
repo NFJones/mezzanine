@@ -24,6 +24,36 @@ use super::{
 };
 use crate::runtime::{MouseAction, RenderInvalidationReason};
 
+/// Parses the bounded positive receipt identities accepted from one committed frame.
+fn runtime_focus_label_presentation_ids(params: &str) -> Result<Vec<u64>> {
+    let value: serde_json::Value = serde_json::from_str(params).map_err(|_| {
+        MezError::invalid_args("terminal/presentation/acknowledge params are invalid JSON")
+    })?;
+    let ids = value
+        .as_object()
+        .and_then(|object| object.get("presentation_ids"))
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            MezError::invalid_args(
+                "terminal/presentation/acknowledge presentation_ids must be an array",
+            )
+        })?;
+    if ids.is_empty() || ids.len() > 3 {
+        return Err(MezError::invalid_args(
+            "terminal/presentation/acknowledge presentation_ids must contain 1 through 3 entries",
+        ));
+    }
+    ids.iter()
+        .map(|value| {
+            value.as_u64().filter(|value| *value > 0).ok_or_else(|| {
+                MezError::invalid_args(
+                    "terminal/presentation/acknowledge presentation_ids entries must be positive integers",
+                )
+            })
+        })
+        .collect()
+}
+
 impl RuntimeSessionService {
     /// Runs the dispatch runtime mutating request operation for this subsystem.
     ///
@@ -121,6 +151,9 @@ impl RuntimeSessionService {
             "session/kill" => self.dispatch_runtime_session_kill(primary_client_id, params),
             "terminal/resize" => self.dispatch_runtime_observer_resize(primary_client_id, params),
             "terminal/step" => self.dispatch_runtime_terminal_step(primary_client_id, params),
+            "terminal/presentation/acknowledge" => {
+                self.dispatch_runtime_terminal_presentation_acknowledge(primary_client_id, params)
+            }
             "terminal/command" => self.dispatch_runtime_terminal_command(primary_client_id, params),
             "agent/shell/command" => {
                 self.dispatch_runtime_agent_shell_command(primary_client_id, params)
@@ -138,6 +171,21 @@ impl RuntimeSessionService {
             self.reconcile_zen_focus_snapshots(focus_before);
         }
         result
+    }
+
+    /// Arms focus labels painted into a frame after its client commits locally.
+    pub(super) fn dispatch_runtime_terminal_presentation_acknowledge(
+        &mut self,
+        caller_client_id: &mez_core::ids::ClientId,
+        params: &str,
+    ) -> Result<String> {
+        let presentation_ids = runtime_focus_label_presentation_ids(params)?;
+        let acknowledged = self.acknowledge_zen_focus_label_presentations(
+            caller_client_id,
+            &presentation_ids,
+            crate::runtime::current_unix_millis(),
+        );
+        Ok(format!(r#"{{"acknowledged":{acknowledged}}}"#))
     }
 
     /// Updates only the authenticated observer's retained terminal geometry.
@@ -720,18 +768,19 @@ impl RuntimeSessionService {
             )
         }) && (self.presentation.mouse_resize_drag_active()
             || self.presentation.pending_divider_layout_commit_active());
-        let view = if !defer_divider_inline_view
+        let (view, presentation_ids) = if !defer_divider_inline_view
             && (render
                 || (render_if_changed
                     && (application.view_refresh_required || application.full_redraw_required)))
         {
-            self.render_client_view_with_resolved_config(
+            self.render_client_view_for_client_with_resolved_config_and_receipts(
+                primary_client_id,
                 ClientViewRole::Primary,
                 client_size,
                 &terminal_config,
             )?
         } else {
-            None
+            (None, Vec::new())
         };
         if view.is_none()
             && let Some(reason) = render_reason
@@ -763,6 +812,7 @@ impl RuntimeSessionService {
             input.len(),
             &application,
             view.as_ref(),
+            &presentation_ids,
             iroh_status_slot.as_ref(),
             event_cutoff,
             client_detached,
@@ -803,11 +853,15 @@ impl RuntimeSessionService {
                 .unwrap_or(self.session.authoritative_size),
             None => self.session.authoritative_size,
         };
-        self.prepare_client_render(caller_client_id, role)?;
         let terminal_config =
             self.terminal_client_loop_config(TerminalClientLoopConfig::default())?;
-        let mut view =
-            self.render_client_view_with_resolved_config(role, client_size, &terminal_config)?;
+        let (mut view, presentation_ids) = self
+            .render_client_view_for_client_with_resolved_config_and_receipts(
+                caller_client_id,
+                role,
+                client_size,
+                &terminal_config,
+            )?;
         if let (Some(params), Some(view)) = (params, view.as_mut())
             && let Some((row, column)) = runtime_json_optional_view_offset(params)?
         {
@@ -825,7 +879,12 @@ impl RuntimeSessionService {
             .map(|event_log| event_log.latest_event_id())
             .unwrap_or(0);
         Ok(format!(
-            r#"{{"view":{view_json},"event_cutoff":{event_cutoff}}}"#
+            r#"{{"view":{view_json},"presentation_ids":[{}],"event_cutoff":{event_cutoff}}}"#,
+            presentation_ids
+                .iter()
+                .map(u64::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
         ))
     }
 

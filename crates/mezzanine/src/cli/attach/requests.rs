@@ -113,6 +113,23 @@ pub(super) fn observer_resize_control_request(
     )
 }
 
+/// Builds an idempotent acknowledgement for focus labels in a committed frame.
+fn terminal_presentation_acknowledgement_request(
+    iteration: u64,
+    client_id: &ClientId,
+    presentation_ids: &[u64],
+) -> String {
+    let presentation_ids = presentation_ids
+        .iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        r#"{{"jsonrpc":"2.0","id":"cli-terminal-presentation-ack-{iteration}","method":"terminal/presentation/acknowledge","params":{{"idempotency_key":"cli-{}-terminal-presentation-ack-{presentation_ids}","presentation_ids":[{presentation_ids}]}}}}"#,
+        json_escape(client_id.as_str()),
+    )
+}
+
 /// Runs the refresh attached client size async operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -157,6 +174,7 @@ pub(super) async fn write_styled_output_or_disconnected_async<I: AsyncAttachedTe
 pub(super) async fn request_and_render_primary_view_async<I, S>(
     stream: &mut S,
     terminal_io: &mut I,
+    client_id: &ClientId,
     client_size: Size,
     iteration: u64,
     cursor_blink_epoch: std::time::Instant,
@@ -169,7 +187,51 @@ where
     else {
         return Ok(PrimaryViewRenderOutcome::disconnected());
     };
-    render_attach_client_frame_async(terminal_io, &frame, cursor_blink_epoch).await
+    let outcome = render_attach_client_frame_async(terminal_io, &frame, cursor_blink_epoch).await?;
+    if outcome.connected
+        && !frame.presentation_ids.is_empty()
+        && !acknowledge_committed_focus_labels_async(
+            stream,
+            client_id,
+            &frame.presentation_ids,
+            iteration,
+        )
+        .await?
+    {
+        return Ok(PrimaryViewRenderOutcome::disconnected());
+    }
+    Ok(outcome)
+}
+
+/// Arms focus-label receipts only after their complete local frame commits.
+pub(super) async fn acknowledge_committed_focus_labels_async<S>(
+    stream: &mut S,
+    client_id: &ClientId,
+    presentation_ids: &[u64],
+    iteration: u64,
+) -> Result<bool>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    if presentation_ids.is_empty() {
+        return Ok(true);
+    }
+    let request =
+        terminal_presentation_acknowledgement_request(iteration, client_id, presentation_ids);
+    if !write_async_control_body_or_disconnected(stream, &request).await? {
+        return Ok(false);
+    }
+    let Some(response) =
+        read_async_control_response_frames_or_disconnected(stream, 1024 * 1024, 1).await?
+    else {
+        return Ok(false);
+    };
+    let (body, _) = decode_control_frame(&response, 1024 * 1024)?;
+    if control_response_forbidden(body.as_str())? {
+        return Ok(false);
+    }
+    ensure_control_response_success(body.as_str())?;
+    Ok(true)
 }
 
 /// Requests and decodes one terminal view without presenting it locally.
