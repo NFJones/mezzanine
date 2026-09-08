@@ -109,7 +109,30 @@ fn runtime_record_browser_copy_key_copies_focused_record_to_clipboard() {
         overlay
             .lines
             .iter()
-            .any(|line| line.contains("copied to clipboard"))
+            .all(|line| !line.contains("Error:") && !line.contains("copied to clipboard")),
+        "{:?}",
+        overlay.lines
+    );
+    assert_eq!(
+        service.primary_error_status_overlay(),
+        Some("mez: Focused record copied to clipboard.")
+    );
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let view = service
+        .render_client_view(ClientViewRole::Primary, Size::new(80, 12).unwrap(), &config)
+        .unwrap()
+        .unwrap();
+    let notice_row = view
+        .lines
+        .iter()
+        .position(|line| line.contains("Focused record copied to clipboard"))
+        .expect("copy success notice should be rendered");
+    assert!(
+        view.line_style_spans[notice_row].iter().any(|span| {
+            span.rendition == config.ui_theme.colors.agent_status_running.rendition()
+        })
     );
 }
 
@@ -171,6 +194,7 @@ fn runtime_record_browser_copy_key_reports_host_clipboard_failure() {
                 line.contains("Could not copy the focused record to the host clipboard")
             })
     );
+    assert!(service.primary_error_status_overlay().is_none());
 }
 
 /// Verifies record-browser arrows cycle across rows and Ctrl+Up/Ctrl+Down move

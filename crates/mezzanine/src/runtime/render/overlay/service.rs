@@ -1184,15 +1184,17 @@ impl RuntimeSessionService {
                     prose_width,
                 )));
             }
-            record_browser
-                .browser
-                .set_error(Some("Focused record copied to clipboard.".to_string()));
-            return Ok(Some(render_record_browser_overlay(
+            record_browser.browser.set_error(None);
+            let changed = render_record_browser_overlay(
                 overlay,
                 &self.presentation.settings.ui_theme,
                 terminal_width,
                 prose_width,
-            )));
+            );
+            self.show_primary_notice_overlay(vec![
+                "Focused record copied to clipboard.".to_string(),
+            ])?;
+            return Ok(Some(changed));
         }
         let action = match input {
             b"i" if matches!(
