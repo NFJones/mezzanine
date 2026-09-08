@@ -38,7 +38,7 @@ pub struct IssueQueryValidation<'a> {
     pub kind: Option<&'a str>,
     /// Optional issue state filter.
     pub state: Option<&'a str>,
-    /// Optional title/body substring filter.
+    /// Optional ID/title/body substring filter.
     pub text: Option<&'a str>,
     /// Optional maximum result count.
     pub limit: Option<u64>,

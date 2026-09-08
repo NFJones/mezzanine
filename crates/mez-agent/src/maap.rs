@@ -335,7 +335,7 @@ pub enum AgentActionPayload {
         kind: Option<String>,
         /// Optional issue state filter: open, in-progress, or resolved.
         state: Option<String>,
-        /// Optional title/body substring filter.
+        /// Optional ID/title/body substring filter.
         text: Option<String>,
         /// Optional maximum records to return.
         limit: Option<u64>,

@@ -294,7 +294,7 @@ pub struct IssueQuery {
     pub kind: Option<IssueKind>,
     /// Optional open/in-progress/resolved filter.
     pub state: Option<IssueState>,
-    /// Optional case-insensitive title/body substring query.
+    /// Optional case-insensitive ID/title/body substring query.
     pub text: Option<String>,
     /// Maximum records returned.
     pub limit: usize,

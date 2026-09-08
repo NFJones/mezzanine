@@ -11296,7 +11296,9 @@ gated `issues` capability whose concrete action subset contains `issue_add`,
 execute through the runtime-owned local issue store, MUST scope records to the
 active pane project, and MUST return bounded action results for provider
 continuation. `issue_query` MUST default to open issues when no state filter is
-provided and MAY filter by open, in-progress, or resolved state. `issue_add`
+provided, MAY filter by open, in-progress, or resolved state, and its optional
+text filter MUST perform a case-insensitive substring match over issue ID,
+title, and body. `issue_add`
 MAY set an initial state and MUST default it to open when omitted. Issues MUST
 have an integer priority from 0 through 100 inclusive and MUST default to 10
 when creation omits priority. `issue_add` MAY set the initial priority.

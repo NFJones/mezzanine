@@ -66,6 +66,88 @@ fn issue_store_adds_and_queries_by_project_and_kind() {
     assert_eq!(results, vec![defect]);
 }
 
+/// Verifies project issue text queries match full and partial UUIDs while
+/// preserving kind, state, and no-match filtering behavior.
+#[test]
+fn issue_store_query_matches_issue_uuid_text() {
+    let store = temp_store("query-uuid");
+    let issue = store
+        .add_issue(
+            "/repo".to_string(),
+            IssueKind::Task,
+            "UUID lookup target".to_string(),
+            None,
+            None,
+            10,
+        )
+        .unwrap();
+    let _other = store
+        .add_issue(
+            "/repo".to_string(),
+            IssueKind::Defect,
+            "Unrelated issue".to_string(),
+            None,
+            None,
+            11,
+        )
+        .unwrap();
+    let resolved = store
+        .update_issue(
+            "/repo".to_string(),
+            issue.id.clone(),
+            IssueUpdate {
+                state: Some(IssueState::Resolved),
+                ..IssueUpdate::default()
+            },
+            20,
+        )
+        .unwrap()
+        .record
+        .unwrap();
+
+    let full_id_results = store
+        .query_issues(
+            &IssueQuery::new_with_state(
+                "/repo".to_string(),
+                Some(IssueKind::Task),
+                Some(IssueState::Resolved),
+                Some(resolved.id.clone()),
+                Some(1),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(full_id_results, vec![resolved.clone()]);
+
+    let partial_id_results = store
+        .query_issues(
+            &IssueQuery::new_with_state(
+                "/repo".to_string(),
+                None,
+                Some(IssueState::Resolved),
+                Some(resolved.id[..8].to_string()),
+                Some(10),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(partial_id_results, vec![resolved]);
+
+    let no_match = store
+        .query_issues(
+            &IssueQuery::new_with_state(
+                "/repo".to_string(),
+                None,
+                None,
+                Some("00000000-0000-0000-0000-000000000000".to_string()),
+                Some(10),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    assert!(no_match.is_empty());
+}
+
 /// Verifies issue state defaults to open, resolved issues remain queryable, and
 /// default work queries exclude resolved issue history.
 #[test]

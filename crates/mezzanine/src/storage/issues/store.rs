@@ -136,7 +136,7 @@ impl IssueStore {
             .map(|value| format!("%{}%", escape_like(value)));
         if text.is_some() {
             sql.push_str(&format!(
-                " AND (title LIKE ?{parameter_index} ESCAPE '\\' OR body LIKE ?{parameter_index} ESCAPE '\\')"
+                " AND (id LIKE ?{parameter_index} ESCAPE '\\' OR title LIKE ?{parameter_index} ESCAPE '\\' OR body LIKE ?{parameter_index} ESCAPE '\\')"
             ));
             parameter_index = parameter_index.saturating_add(1);
         }

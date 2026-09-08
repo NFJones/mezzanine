@@ -541,7 +541,7 @@ fn maap_issue_query_action_schema() -> serde_json::Value {
                 "text",
                 serde_json::json!({
                     "type": ["string", "null"],
-                    "description": "Optional title/body substring filter. Use null for no text filter."
+                    "description": "Optional issue ID, title, or body substring filter. Use null for no text filter."
                 }),
             ),
             (
