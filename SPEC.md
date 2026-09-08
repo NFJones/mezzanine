@@ -3112,10 +3112,15 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 91 is the current implemented configuration schema version for this
+schema version 92 is the current implemented configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
+
+The `91 -> 92` migration MUST remove every authored
+`frames.window.pills.<name>.style` leaf while preserving all other window-pill
+settings and every `frames.pane.pills.<name>.style` value. Schema version 92
+MUST reject the removed window-pill leaf.
 
 The `90 -> 91` migration MUST advance only the schema version. It MUST preserve
 configured and omitted `frames.window.pills.<name>.foreground`,
@@ -3878,13 +3883,12 @@ configurable right-aligned window status template and `pills` for named
 command-backed right-status pill definitions. `frames.window.pills` MUST be a
 map keyed by pill name. Each pill definition MUST support `command` and
 `interval_seconds`, and MAY support `label`, `initial`, `timeout_ms`,
-`empty_behavior`, `error_behavior`, `max_output_chars`, `style`, `foreground`,
+`empty_behavior`, `error_behavior`, `max_output_chars`, `foreground`,
 and `background`. `foreground` and `background` MUST be palette identifiers in
 the resolved active theme, including effective `theme.aliases`; pill paths MUST
 reject raw hex colors and unknown palette names with the exact authored leaf.
 The channels MUST override the existing window-pill rendition independently,
-MUST preserve omitted channels and non-color attributes, and MUST NOT reinterpret
-the separate `style` value as a palette name. The
+MUST preserve omitted channels and non-color attributes. The
 right-status template field `#{pill.<name>}` MUST render the cached output for
 that configured pill as a status pill. Implementations MUST execute a configured
 pill command only while `#{pill.<name>}` appears in the effective

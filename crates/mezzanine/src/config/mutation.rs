@@ -28,7 +28,6 @@ const MUTABLE_WINDOW_STATUS_PILL_KEYS: &[&str] = &[
     "empty_behavior",
     "error_behavior",
     "max_output_chars",
-    "style",
     "foreground",
     "background",
 ];

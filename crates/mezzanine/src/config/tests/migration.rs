@@ -3399,8 +3399,11 @@ fn migrates_schema_90_without_materializing_status_pill_colors() {
         let root = parse_config_json_value(format, &plan.text).unwrap();
 
         assert_eq!(plan.from_version, 90);
-        assert_eq!(plan.to_version, 91);
-        assert_eq!(root.pointer("/version"), Some(&serde_json::json!(91)));
+        assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(
+            root.pointer("/version"),
+            Some(&serde_json::json!(CURRENT_CONFIG_SCHEMA_VERSION))
+        );
         assert_eq!(
             root.pointer("/frames/window/pills/build/foreground")
                 .and_then(serde_json::Value::as_str),
@@ -3409,6 +3412,45 @@ fn migrates_schema_90_without_materializing_status_pill_colors() {
         assert!(
             root.pointer("/frames/window/pills/build/background")
                 .is_none()
+        );
+
+        let repeated = migrate_config_text(format, &plan.text).unwrap();
+        assert!(!repeated.changed);
+        assert_eq!(repeated.text, plan.text);
+    }
+}
+
+/// Schema v92 removes the inert window-pill style leaf while preserving pane
+/// pill semantic styles and every functional window-pill setting.
+#[test]
+fn migrates_schema_91_by_removing_only_window_status_pill_styles() {
+    for (format, text) in [
+        (
+            ConfigFormat::Toml,
+            "version = 91\n[frames.window.pills.build]\ncommand = \"printf ok\"\ninterval_seconds = 10\nstyle = \"default\"\nforeground = \"primary_text\"\n[frames.pane.pills.model]\nfield = \"agent.model\"\nstyle = \"agent-model\"\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":91,"frames":{"window":{"pills":{"build":{"command":"printf ok","interval_seconds":10,"style":"default","foreground":"primary_text"}}},"pane":{"pills":{"model":{"field":"agent.model","style":"agent-model"}}}}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 91\nframes:\n  window:\n    pills:\n      build:\n        command: printf ok\n        interval_seconds: 10\n        style: default\n        foreground: primary_text\n  pane:\n    pills:\n      model:\n        field: agent.model\n        style: agent-model\n",
+        ),
+    ] {
+        let plan = migrate_config_text(format, text).unwrap();
+        let root = parse_config_json_value(format, &plan.text).unwrap();
+
+        assert_eq!(plan.from_version, 91);
+        assert_eq!(plan.to_version, 92);
+        assert!(root.pointer("/frames/window/pills/build/style").is_none());
+        assert_eq!(
+            root.pointer("/frames/window/pills/build/foreground"),
+            Some(&serde_json::json!("primary_text"))
+        );
+        assert_eq!(
+            root.pointer("/frames/pane/pills/model/style"),
+            Some(&serde_json::json!("agent-model"))
         );
 
         let repeated = migrate_config_text(format, &plan.text).unwrap();

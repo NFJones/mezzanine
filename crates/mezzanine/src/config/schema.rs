@@ -97,7 +97,7 @@ pub fn config_change_setting_path_annotations() -> Vec<ConfigChangePathAnnotatio
             pattern: "frames.window.pills.<name>.<key>",
             purpose: "Adjust one supported command-backed window status-pill setting.",
             value_type: "string or integer",
-            format: "`<name>` is an ASCII identifier; `<key>` is one of label, command, interval_seconds, initial, timeout_ms, empty_behavior, error_behavior, max_output_chars, style, foreground, or background. Color values are names in the effective theme palette, not raw hex colors.",
+            format: "`<name>` is an ASCII identifier; `<key>` is one of label, command, interval_seconds, initial, timeout_ms, empty_behavior, error_behavior, max_output_chars, foreground, or background. Color values are names in the effective theme palette, not raw hex colors.",
             operations: CONFIG_CHANGE_OPERATION_NAMES,
         },
         ConfigChangePathAnnotation {

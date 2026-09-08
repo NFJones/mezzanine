@@ -514,7 +514,6 @@ pub(super) fn validate_frames_path(segments: &[&str]) -> Option<String> {
                         | "empty_behavior"
                         | "error_behavior"
                         | "max_output_chars"
-                        | "style"
                         | "foreground"
                         | "background"
                 )

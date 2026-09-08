@@ -442,13 +442,13 @@ Command-backed status pills are configured under `frames.window.pills.<name>`
 and render only when the active right-status template references
 `#{pill.<name>}`. A pill definition requires `command` and `interval_seconds`;
 it may also set `label`, `initial`, `timeout_ms`, `empty_behavior`,
-`error_behavior`, `max_output_chars`, `style`, `foreground`, and `background`.
+`error_behavior`, `max_output_chars`, `foreground`, and `background`.
 Color values are names in the resolved active theme palette, including
 `theme.aliases`; raw hex colors are rejected at pill paths, so define an alias
 for a fixed color. Each channel is independent and an omitted channel retains
-the existing window-pill rendition. The separate `style` setting is not a
-palette reference. Command output uses stdout, is trimmed to the first line, is
-bounded by `max_output_chars`, and is cached between refresh intervals. Empty
+the existing window-pill rendition. Command output uses stdout, is trimmed to
+the first line, is bounded by `max_output_chars`, and is cached between refresh
+intervals. Empty
 output behavior is `hide`, `show_empty`, or `keep_previous`; error behavior is
 `hide`, `show_error`, or `keep_previous`. Configured pills whose names are not
 present in `frames.window.right_status` are not executed. Color and active-theme

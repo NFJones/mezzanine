@@ -562,6 +562,7 @@ fn config_mutation_allows_only_supported_named_pill_leaves() {
     for path in [
         "frames.pane.pills.model.unknown",
         "frames.window.pills.build.unknown",
+        "frames.window.pills.build.style",
         "frames.pane.pills.model.style.extra",
     ] {
         let error = plan_config_mutation(

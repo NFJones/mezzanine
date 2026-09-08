@@ -1762,3 +1762,28 @@ fn validates_status_pill_palette_name_leaves() {
         );
     }
 }
+
+/// Window status pills reject the removed inert style leaf while pane pills
+/// retain their documented semantic style selector.
+#[test]
+fn rejects_window_status_pill_style_but_accepts_pane_pill_style() {
+    let validation = validate_config_text(
+        ConfigFormat::Toml,
+        &format!(
+            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[frames.window.pills.build]\ncommand = \"printf ok\"\ninterval_seconds = 10\nstyle = \"default\"\n[frames.pane.pills.model]\nfield = \"agent.model\"\nstyle = \"agent-model\"\n"
+        ),
+        ConfigScope::Primary,
+    );
+
+    assert!(!validation.valid);
+    assert!(validation.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "frames.window.pills.build.style"
+            && diagnostic.message == "pane or window status pill setting is not supported"
+    }));
+    assert!(
+        validation
+            .diagnostics
+            .iter()
+            .all(|diagnostic| { diagnostic.path != "frames.pane.pills.model.style" })
+    );
+}

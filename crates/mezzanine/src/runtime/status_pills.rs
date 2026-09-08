@@ -82,8 +82,6 @@ pub(super) struct RuntimeStatusPillDefinition {
     pub(super) error_behavior: RuntimeStatusPillErrorBehavior,
     /// Maximum number of Unicode scalar values retained from output.
     pub(super) max_output_chars: usize,
-    /// Optional style selector reserved for future theme differentiation.
-    pub(super) style: Option<String>,
     /// Optional unresolved palette names used only by presentation.
     pub(super) color_overrides: FramePillColorOverrides,
 }
@@ -99,7 +97,6 @@ impl RuntimeStatusPillDefinition {
             && self.empty_behavior == other.empty_behavior
             && self.error_behavior == other.error_behavior
             && self.max_output_chars == other.max_output_chars
-            && self.style == other.style
     }
 
     /// Formats the display text for this pill from an optional value.
@@ -159,7 +156,6 @@ impl RuntimeStatusPillRefreshPlan {
                 empty_behavior: RuntimeStatusPillEmptyBehavior::Hide,
                 error_behavior: RuntimeStatusPillErrorBehavior::Hide,
                 max_output_chars,
-                style: None,
                 color_overrides: FramePillColorOverrides::default(),
             },
         }
@@ -329,7 +325,6 @@ pub(super) fn runtime_status_pill_definitions_from_config(
                     | "empty_behavior"
                     | "error_behavior"
                     | "max_output_chars"
-                    | "style"
                     | "foreground"
                     | "background"
             ) {
@@ -393,7 +388,6 @@ pub(super) fn runtime_status_pill_definitions_from_config(
                     name,
                 )?,
                 max_output_chars,
-                style: runtime_status_pill_optional_string(object.get("style"), "style", name)?,
                 color_overrides: FramePillColorOverrides {
                     foreground: runtime_status_pill_optional_string(
                         object.get("foreground"),
@@ -2460,7 +2454,6 @@ mod tests {
                 empty_behavior: RuntimeStatusPillEmptyBehavior::Hide,
                 error_behavior: RuntimeStatusPillErrorBehavior::Hide,
                 max_output_chars: DEFAULT_STATUS_PILL_MAX_OUTPUT_CHARS,
-                style: None,
                 color_overrides: FramePillColorOverrides::default(),
             },
         );
@@ -2475,7 +2468,6 @@ mod tests {
                 empty_behavior: RuntimeStatusPillEmptyBehavior::Hide,
                 error_behavior: RuntimeStatusPillErrorBehavior::ShowError,
                 max_output_chars: DEFAULT_STATUS_PILL_MAX_OUTPUT_CHARS,
-                style: None,
                 color_overrides: FramePillColorOverrides::default(),
             },
         );
@@ -2549,7 +2541,6 @@ mod tests {
                 empty_behavior: RuntimeStatusPillEmptyBehavior::Hide,
                 error_behavior: RuntimeStatusPillErrorBehavior::Hide,
                 max_output_chars: DEFAULT_STATUS_PILL_MAX_OUTPUT_CHARS,
-                style: None,
                 color_overrides: FramePillColorOverrides::default(),
             },
         );
