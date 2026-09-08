@@ -281,12 +281,15 @@ impl RuntimeSessionService {
         .max(1))
     }
 
-    /// Returns display cells available after the agent transcript gutter.
+    /// Returns bounded display cells available after the agent transcript gutter.
     fn agent_terminal_markdown_terminal_width(&self, pane_id: &str) -> Result<usize> {
         let columns = self.agent_terminal_presentation_columns(pane_id)?;
-        Ok(columns
-            .saturating_sub(UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX))
-            .max(1))
+        Ok(bounded_agent_terminal_presentation_columns(
+            columns,
+            self.presentation.settings.terminal_agent_wrap_column_cap,
+        )
+        .saturating_sub(UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX))
+        .max(1))
     }
 
     /// Returns display cells available for editable pane-local prompt text.

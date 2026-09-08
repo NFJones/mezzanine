@@ -2371,8 +2371,8 @@ presentation limit; if no whitespace boundary exists in the overflowing
 segment, Mezzanine SHOULD leave the segment intact and rely on normal terminal
 soft wrapping instead of inserting a hard split.
 Markdown table rows MUST preserve their table layout until they exceed the
-pane terminal width; that configured cap MUST NOT force table rows to wrap on
-wider terminals.
+smaller of the pane terminal width or the configured
+`terminal.agent_wrap_column_cap` display-cell limit.
 Durable agent presentation records MUST retain semantic source and renderer
 media type whenever available. On `/resume`, Mezzanine MUST rerender
 source-backed records at the active pane geometry and MUST treat saved rows or

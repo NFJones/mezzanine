@@ -900,13 +900,24 @@ fn runtime_agent_markdown_thematic_break_expands_to_capped_divider_width() {
     );
 }
 
-/// Verifies markdown tables keep their row layout on wide terminals.
+/// Verifies markdown tables honor the configured wrap cap on wide terminals.
 ///
-/// Prose markdown is capped at 120 cells for readability, but table rows need
-/// to remain horizontally inspectable until they exceed the actual pane width.
+/// A pane wider than the configured cap must not let table presentation exceed
+/// that cap. The renderer should wrap or stack the table while preserving all
+/// authored cell content.
 #[test]
-fn runtime_agent_markdown_tables_wrap_only_at_terminal_width() {
+fn runtime_agent_markdown_tables_honor_configured_wrap_cap() {
     let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[terminal]\nagent_wrap_column_cap = 60\n".to_string(),
+        }])
+        .unwrap();
     service
         .attach_primary("primary", true, Size::new(200, 40).unwrap(), 120)
         .unwrap();
@@ -931,22 +942,30 @@ fn runtime_agent_markdown_tables_wrap_only_at_terminal_width() {
         .agent_pane_screen("%1")
         .unwrap()
         .normal_styled_content_lines();
-    let data_row = styled_lines
+    let table_lines = styled_lines
         .iter()
-        .find(|line| line.text.contains(&first_cell) && line.text.contains(&second_cell))
-        .unwrap();
+        .filter(|line| {
+            line.text.contains('│')
+                || line.text.contains('┌')
+                || line.text.contains('├')
+                || line.text.contains('└')
+        })
+        .collect::<Vec<_>>();
 
     assert!(
-        data_row.text.chars().count() > 120,
-        "table row should exceed the prose cap: {data_row:?}"
+        table_lines.len() > 3,
+        "table should wrap or stack within the configured cap: {styled_lines:?}"
     );
     assert!(
-        data_row.text.chars().count() <= 200,
-        "table row should still fit the terminal width: {data_row:?}"
+        table_lines
+            .iter()
+            .all(|line| line.text.chars().count() <= 60),
+        "table rows should fit the configured cap: {table_lines:?}"
     );
     assert!(
-        data_row.text.contains("│") && data_row.text.contains(&second_cell),
-        "{data_row:?}"
+        styled_lines.iter().any(|line| line.text.contains("alpha"))
+            && styled_lines.iter().any(|line| line.text.contains("beta")),
+        "table cell content should remain visible: {styled_lines:?}"
     );
 }
 
