@@ -222,6 +222,9 @@ impl RuntimePresentationComponent {
             return false;
         }
 
+        state.group = None;
+        state.window = None;
+        state.pane = None;
         state.next_presentation_id = state.next_presentation_id.saturating_add(1).max(1);
         let presentation_id = state.next_presentation_id;
         if before.group_id != after.group_id {
@@ -698,6 +701,28 @@ mod tests {
             .unwrap();
         assert_eq!(label_deadline(&state), 1_010);
 
+        let before_pane_change = service.capture_zen_focus_snapshots();
+        let focused_pane = service
+            .session
+            .split_active_pane(&primary, mez_mux::layout::SplitDirection::Vertical)
+            .unwrap();
+        assert_eq!(
+            service.reconcile_zen_focus_snapshots_at(before_pane_change, 30),
+            vec![primary.clone()]
+        );
+        let state = service
+            .presentation
+            .live_zen_focus_labels(&primary, 30)
+            .unwrap();
+        assert!(state.group.is_none());
+        assert!(state.window.is_none());
+        assert!(matches!(
+            state.pane.as_ref().map(|label| &label.target),
+            Some(RuntimeZenFocusLabelTarget::Pane(target)) if target == &focused_pane
+        ));
+        assert_eq!(state.next_due_ms(), None);
+        assert!(acknowledge_current_labels(&mut service, &primary, 30));
+
         assert!(
             service
                 .reconcile_zen_focus_snapshots_at(before, 500)
@@ -710,7 +735,7 @@ mod tests {
                     .live_zen_focus_labels(&primary, 500)
                     .unwrap()
             ),
-            1_010
+            1_030
         );
 
         let before = service.capture_zen_focus_snapshots();

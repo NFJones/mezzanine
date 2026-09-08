@@ -882,12 +882,12 @@ left, window labels at the bottom left, and pane labels at the pane top left
 in current zen geometry, using an eligible top divider or overlaying the first
 content row. Labels MUST NOT reserve rows, resize PTYs, restart providers, or
 create mouse targets. Required controls and modal UI take precedence.
-Each primary owns bounded per-scope label state; observers share their source's
-remaining lifetime. Replacement restarts expiry without queueing; ancestor
-changes clear lower scopes. Overlapping labels prefer group, window, then pane
-without relocating anchors. Redraw, rename, attach, zen entry, no-op selection,
-and zoom-only changes MUST NOT renew labels. Expiry MUST redraw idle clients
-and restore current underlying content rather than a saved row.
+Each primary owns exactly one current focus label; observers share their
+source's remaining lifetime. Every later focus change replaces that label with
+the highest changed scope without queueing prior scopes. Redraw, rename, attach,
+zen entry, no-op selection, and zoom-only changes MUST NOT renew labels. Expiry
+MUST redraw idle clients and restore current underlying content rather than a
+saved row.
 
 Default foreground rendering MUST include thin visible pane dividers for split
 boundaries, including horizontal divider rows between stacked panes when pane

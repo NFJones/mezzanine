@@ -56,10 +56,11 @@ impl RuntimeSessionService {
             (FocusLabelScope::Group, labels.group),
             (FocusLabelScope::Window, labels.window),
             (FocusLabelScope::Pane, labels.pane),
-        ] {
-            let Some(label) = label else {
-                continue;
-            };
+        ]
+        .into_iter()
+        .filter_map(|(scope, label)| label.map(|label| (scope, label)))
+        .take(1)
+        {
             use super::focus_labels::RuntimeZenFocusLabelTarget;
             let group = self.session.active_group();
             let target_matches = match &label.target {
@@ -371,8 +372,11 @@ mod tests {
         );
     }
 
-    /// Command input owns the bottom row but leaves a nonintersecting group
-    /// identity visible. Closing the prompt does not renew any label deadline.
+    /// Command input owns the bottom row of the sole current focus label.
+    ///
+    /// A newer window transition replaces an earlier group label, so suppressing
+    /// the window label must not reveal the stale group identity. Closing the
+    /// prompt exposes the same pending window label without renewing it.
     #[test]
     fn zen_focus_composition_command_prompt_wins_only_at_intersection() {
         let (mut service, primary) = fixture();
@@ -392,7 +396,7 @@ mod tests {
             decoder: Default::default(),
         });
         let shown = view(&mut service, &primary);
-        assert!(shown.lines[0].contains("group-control"));
+        assert!(!shown.lines[0].contains("group-control"));
         assert!(!shown.lines[9].contains("window-control"));
         assert!(shown.primary_prompt_active);
         service.presentation.primary_prompt_input = None;
@@ -514,9 +518,11 @@ mod tests {
         assert_eq!(pill.text, " identity ");
     }
 
-    /// All three live scopes compete at fixed anchors on a one-row canvas.
-    /// On a taller canvas the window can coexist with the group, but the pane
-    /// cannot relocate away from the group's occupied top-left cells.
+    /// Defensive rendering exposes only one scope from invalid legacy state.
+    ///
+    /// Lifecycle reconciliation now guarantees one live label. If stale state
+    /// nevertheless contains several scopes, rendering must select the highest
+    /// scope rather than displaying multiple pills or revealing them serially.
     #[test]
     fn zen_focus_composition_scope_collisions_never_relocate() {
         use super::super::focus_labels::{RuntimeZenFocusLabel, RuntimeZenFocusLabelTarget};
@@ -576,25 +582,8 @@ mod tests {
             let mut shown = baseline.clone();
             service.overlay_zen_focus_labels(&window, &plan, &config, &mut shown);
             assert!(shown.lines[0].contains("GROUP"));
-            assert_eq!(
-                shown.lines.iter().any(|line| line.contains("WINDOW")),
-                rows > 1
-            );
+            assert!(!shown.lines.iter().any(|line| line.contains("WINDOW")));
             assert!(!shown.lines.iter().any(|line| line.contains("PANE")));
-            service
-                .presentation
-                .client_states
-                .get_mut(&primary)
-                .unwrap()
-                .zen_focus_labels
-                .group = None;
-            let mut shown = baseline;
-            service.overlay_zen_focus_labels(&window, &plan, &config, &mut shown);
-            assert!(shown.lines[usize::from(rows - 1)].contains("WINDOW"));
-            assert_eq!(
-                shown.lines.iter().any(|line| line.contains("PANE")),
-                rows > 1
-            );
             assert_eq!(plan, original_plan);
             assert_eq!(shown.authoritative_size, window.size);
         }
