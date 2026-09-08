@@ -129,6 +129,69 @@ fn transaction_progress(
     )
 }
 
+/// Verifies a row-only pane resize rebases retained action-progress state so a
+/// later revision cannot restore the previous screen height.
+#[test]
+fn runtime_row_only_resize_rebases_running_action_progress() {
+    let (mut service, turn) =
+        running_action_progress_fixture(shell_action(), "marker-rows", "sleep 1");
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    assert!(
+        service
+            .apply_action_presentation_progress(transaction_progress(
+                &turn.turn_id,
+                "shell-1",
+                "marker-rows",
+                1,
+                ActionPresentationComponentIdentity::ShellOutput,
+                "progress before row resize",
+            ))
+            .unwrap()
+    );
+    let old_size = service.agent_pane_screen("%1").unwrap().size();
+
+    service
+        .resize_attached_primary_terminal(&primary, Size::new(80, 30).unwrap())
+        .unwrap();
+
+    let resized_size = service.agent_pane_screen("%1").unwrap().size();
+    assert_eq!(resized_size.columns, old_size.columns);
+    assert!(
+        resized_size.rows > old_size.rows,
+        "{old_size:?} -> {resized_size:?}"
+    );
+    assert!(
+        service
+            .apply_action_presentation_progress(transaction_progress(
+                &turn.turn_id,
+                "shell-1",
+                "marker-rows",
+                2,
+                ActionPresentationComponentIdentity::ShellOutput,
+                "progress after row resize",
+            ))
+            .unwrap()
+    );
+    assert_eq!(
+        service.agent_pane_screen("%1").unwrap().size(),
+        resized_size
+    );
+    assert!(
+        service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .iter()
+            .any(|line| line.contains("progress after row resize"))
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies live shell progress wraps to the configured agent column cap and
 /// retains only the newest physical rows after wrapping.
 #[test]

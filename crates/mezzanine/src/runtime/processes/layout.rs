@@ -797,9 +797,11 @@ impl RuntimeSessionService {
                         session.visibility != crate::runtime::AgentShellVisibility::Hidden
                     })
                     || process_presentation_geometry_changed;
-            if agent_geometry_should_update && agent_screen_width_changed {
-                self.presentation
-                    .defer_agent_presentation_resize(pane_id, process_size);
+            if agent_geometry_should_update && agent_screen_geometry_changed {
+                if agent_screen_width_changed {
+                    self.presentation
+                        .defer_agent_presentation_resize(pane_id, process_size);
+                }
                 let agent_session_id = self
                     .agent_shell_store()
                     .get(pane_id)
@@ -824,11 +826,6 @@ impl RuntimeSessionService {
                             process_size,
                         );
                 }
-            } else if agent_geometry_should_update
-                && agent_screen_geometry_changed
-                && let Some(screen) = self.agent_pane_screen_mut(pane_id)
-            {
-                screen.resize(process_size);
             }
             if let Some(screen) = self
                 .process
