@@ -11,7 +11,10 @@ use super::actions::bounded_agent_action_result_display_lines;
 use super::buffer_apply::AGENT_PRESENTATION_STYLED_LINES_CONTENT_TYPE;
 use super::diff::readable_agent_diff_display_lines_for_width;
 use super::style::AgentTerminalPresentationStyle;
-use super::text::{append_styled_agent_terminal_rendered_line, sanitized_agent_terminal_line};
+use super::text::{
+    agent_terminal_label_rendition, agent_terminal_text_width,
+    append_styled_agent_terminal_rendered_line, sanitized_agent_terminal_line,
+};
 use super::{RichTextLine, RichTextLineKind};
 use crate::runtime::render::{
     MezError, Result, RuntimeActionPresentationProgressComponent,
@@ -576,7 +579,9 @@ impl RuntimeSessionService {
                             max_rows,
                         )
                         .into_iter()
-                        .flat_map(|line| Self::plain_action_progress_lines(line, display_width))
+                        .flat_map(|line| {
+                            Self::shell_output_progress_lines(line, display_width, self.ui_theme())
+                        })
                         .collect::<Vec<_>>();
                     if rendered.len() > max_rows {
                         rendered.drain(..rendered.len() - max_rows);
@@ -621,6 +626,34 @@ impl RuntimeSessionService {
             RichTextLine {
                 display: sanitized_agent_terminal_line(&display),
                 style_spans: Vec::new(),
+                copy_text: None,
+                kind: RichTextLineKind::Normal,
+            },
+            display_width,
+        )
+        .into_iter()
+        .map(|wrapped| wrapped.line)
+        .collect()
+    }
+
+    fn shell_output_progress_lines(
+        display: String,
+        display_width: usize,
+        ui_theme: &mez_mux::theme::UiTheme,
+    ) -> Vec<RichTextLine> {
+        let display = sanitized_agent_terminal_line(&display);
+        let length = agent_terminal_text_width(&display);
+        wrap_rich_text_line_to_width_with_source_ranges_hard(
+            RichTextLine {
+                display,
+                style_spans: vec![mez_terminal::TerminalStyleSpan {
+                    start: 0,
+                    length,
+                    rendition: agent_terminal_label_rendition(
+                        AgentTerminalPresentationStyle::Status,
+                        ui_theme,
+                    ),
+                }],
                 copy_text: None,
                 kind: RichTextLineKind::Normal,
             },

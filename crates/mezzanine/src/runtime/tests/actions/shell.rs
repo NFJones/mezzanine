@@ -1080,6 +1080,62 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
         .normal_content_lines()
         .join("\n");
     assert!(pane_text.contains("native-live-first"), "{pane_text}");
+    let assert_live_output_style = |service: &RuntimeSessionService, text: &str| {
+        let styled_lines = service
+            .pane_screen("%1")
+            .unwrap()
+            .normal_styled_content_lines();
+        let output_line = styled_lines
+            .iter()
+            .find(|line| line.text.contains(text))
+            .unwrap_or_else(|| panic!("missing native output `{text}` in {styled_lines:?}"));
+        let output_column = output_line.text.find(text).unwrap();
+        let rendition = styled_line_rendition_at(output_line, output_column);
+        assert_eq!(
+            rendition.foreground,
+            Some(config.ui_theme.colors.agent_transcript_status.foreground)
+        );
+        assert!(rendition.dim, "{output_line:?}");
+
+        let view = service
+            .render_client_view(ClientViewRole::Primary, Size::new(80, 24).unwrap(), &config)
+            .unwrap()
+            .unwrap();
+        let row = view
+            .lines
+            .iter()
+            .position(|line| line.contains(text))
+            .unwrap_or_else(|| panic!("missing native output `{text}` in {:?}", view.lines));
+        let column = view.lines[row].find(text).unwrap();
+        let rendition = view.line_style_spans[row]
+            .iter()
+            .rev()
+            .find(|span| column >= span.start && column < span.start.saturating_add(span.length))
+            .map(|span| span.rendition)
+            .unwrap_or_default();
+        assert_eq!(
+            rendition.foreground,
+            Some(config.ui_theme.colors.agent_transcript_status.foreground)
+        );
+        assert!(rendition.dim, "{:?}", view.line_style_spans[row]);
+    };
+    assert_live_output_style(&service, "native-live-first");
+
+    assert!(
+        service
+            .apply_native_shell_progress(crate::runtime::RuntimeNativeShellProgress {
+                presentation: mez_agent::ActionPresentationProgress::new(
+                    "turn-1",
+                    "shell-1",
+                    mez_agent::ActionPresentationExecutionIdentity::Attempt(marker.clone()),
+                    revision.saturating_add(1),
+                    mez_agent::ActionPresentationComponentIdentity::ShellOutput,
+                    "native-live-first\nnative-live-second",
+                ),
+            })
+            .unwrap()
+    );
+    assert_live_output_style(&service, "native-live-second");
     assert_eq!(
         service.action_presentation_progress_counts_for_tests("%1"),
         (1, 0)
