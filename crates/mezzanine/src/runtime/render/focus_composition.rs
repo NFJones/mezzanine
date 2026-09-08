@@ -123,16 +123,11 @@ impl RuntimeSessionService {
                     .frame_context
                     .panes
                     .get(window.active_pane().id.as_str());
-                let rows = if context.is_some_and(|context| !context.agent_display_lines.is_empty())
-                {
-                    prompt.rows
-                } else {
-                    crate::host::terminal::agent_prompt_reserved_line_count(
-                        prompt.columns,
-                        prompt.rows,
-                        context,
-                    )
-                };
+                let rows = crate::host::terminal::agent_prompt_reserved_line_count(
+                    prompt.columns,
+                    prompt.rows,
+                    context,
+                );
                 let protected = PresentationRegion {
                     row: u16::try_from(prompt.row.saturating_add(prompt.rows.saturating_sub(rows)))
                         .unwrap_or(u16::MAX),
@@ -712,6 +707,77 @@ mod tests {
                 .lines
                 .iter()
                 .any(|line| line.contains("focus"))
+        );
+    }
+
+    /// A pane focus label remains visible above an active agent prompt.
+    ///
+    /// Agent input and status protect only the rendered rows at the bottom of
+    /// the pane, so the fixed pane-label anchor remains available when the two
+    /// regions do not intersect.
+    #[test]
+    fn zen_focus_composition_pane_label_avoids_active_agent_prompt_rows() {
+        let (mut service, primary) = fixture();
+        service.presentation.settings.pane_frame_template = "#{pane.title}".to_string();
+        let before = service.capture_zen_focus_snapshots();
+        let focused_pane = service
+            .session
+            .split_active_pane(&primary, mez_mux::layout::SplitDirection::Horizontal)
+            .unwrap();
+        service
+            .session
+            .rename_pane(&primary, Some(focused_pane.as_str()), "agent-focus")
+            .unwrap();
+        service.reconcile_zen_focus_snapshots(before);
+        let pane = service.session.active_pane_for(&primary).unwrap().clone();
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume(pane.id.as_str())
+            .unwrap();
+        service
+            .apply_attached_agent_prompt_input_for_pane(
+                &primary,
+                pane.id.as_str(),
+                b"required input",
+            )
+            .unwrap();
+
+        let shown = view(&mut service, &primary);
+
+        assert!(
+            shown
+                .lines
+                .iter()
+                .any(|line| line.contains("required input"))
+        );
+        assert!(
+            shown.lines.iter().any(|line| line.contains("agent-focus")),
+            "{:?}",
+            shown.lines
+        );
+        let labels = service
+            .live_zen_focus_labels_for_client(&primary, current_unix_millis())
+            .expect("painted pane label should remain live");
+        assert!(
+            labels
+                .pane
+                .as_ref()
+                .is_some_and(|label| label.expires_at_unix_ms.is_some()),
+            "painted pane label should be armed: {labels:?}"
+        );
+        assert!(service.expire_zen_focus_labels_for_client(&primary, u64::MAX));
+        let expired = view(&mut service, &primary);
+        assert!(
+            expired
+                .lines
+                .iter()
+                .any(|line| line.contains("required input"))
+        );
+        assert!(
+            !expired
+                .lines
+                .iter()
+                .any(|line| line.contains("agent-focus"))
         );
     }
 
