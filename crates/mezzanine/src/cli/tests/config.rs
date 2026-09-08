@@ -239,6 +239,322 @@ fn config_set_project_scope_requires_trusted_project_root() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// Verifies typed provider-model commands preserve opaque ids, generate the
+/// same deterministic path-safe collision suffixes as schema migration, and
+/// apply updates selectively without dropping unrelated model metadata.
+#[test]
+fn config_model_add_list_and_update_are_typed_and_deterministic() {
+    let (env, home) = test_env("config-model-lifecycle");
+    let paths = env.config_paths().unwrap();
+    let config_path = paths.ensure_default_config().unwrap();
+    fs::write(
+        &config_path,
+        format!(
+            "version = {}\n[providers.custom]\nkind = \"custom\"\napi = \"openai-chat-completions\"\nbase_url = \"http://localhost:1234/v1\"\nmodels = {{}}\n",
+            crate::config::CURRENT_CONFIG_SCHEMA_VERSION
+        ),
+    )
+    .unwrap();
+    let mut stderr = Vec::new();
+
+    for (id, display_name) in [
+        ("vendor/model:latest", "Latest"),
+        ("vendor.model/latest", "Alternate"),
+    ] {
+        let mut stdout = Vec::new();
+        run_with(
+            vec![
+                "mez".to_string(),
+                "--json".to_string(),
+                "config".to_string(),
+                "model".to_string(),
+                "add".to_string(),
+                "custom".to_string(),
+                id.to_string(),
+                "--display-name".to_string(),
+                display_name.to_string(),
+                "--aliases".to_string(),
+                format!("{display_name}-alias,stable-{display_name}"),
+                "--context-window-tokens".to_string(),
+                "32768".to_string(),
+                "--provider-option".to_string(),
+                "service_tier=priority".to_string(),
+            ],
+            env.clone(),
+            false,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+    }
+
+    let mut update_stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "--json".to_string(),
+            "config".to_string(),
+            "model".to_string(),
+            "update".to_string(),
+            "custom".to_string(),
+            "vendor.model/latest".to_string(),
+            "--max-output-tokens".to_string(),
+            "4096".to_string(),
+        ],
+        env.clone(),
+        false,
+        &mut update_stdout,
+        &mut stderr,
+    )
+    .unwrap();
+
+    let text = fs::read_to_string(&config_path).unwrap();
+    assert!(
+        text.contains("[providers.custom.models.vendor-model-latest]"),
+        "{text}"
+    );
+    assert!(
+        text.contains("[providers.custom.models.vendor-model-latest-2]"),
+        "{text}"
+    );
+    assert!(text.contains("id = \"vendor/model:latest\""), "{text}");
+    assert!(text.contains("display_name = \"Alternate\""), "{text}");
+    assert!(text.contains("context_window_tokens = 32768"), "{text}");
+    assert!(text.contains("max_output_tokens = 4096"), "{text}");
+    assert!(text.contains("service_tier = \"priority\""), "{text}");
+
+    let mut list_stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "--json".to_string(),
+            "config".to_string(),
+            "model".to_string(),
+            "list".to_string(),
+            "custom".to_string(),
+        ],
+        env.clone(),
+        false,
+        &mut list_stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    let output: serde_json::Value = serde_json::from_slice(&list_stdout).unwrap();
+    let models = output["models"].as_array().unwrap();
+    assert_eq!(models.len(), 2);
+    assert_eq!(models[0]["id"], "vendor.model/latest");
+    assert_eq!(models[1]["id"], "vendor/model:latest");
+
+    let mut remove_stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "--json".to_string(),
+            "config".to_string(),
+            "model".to_string(),
+            "remove".to_string(),
+            "custom".to_string(),
+            "vendor.model/latest".to_string(),
+        ],
+        env,
+        false,
+        &mut remove_stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    let remove: serde_json::Value = serde_json::from_slice(&remove_stdout).unwrap();
+    assert_eq!(remove["operation"], "remove");
+    assert_eq!(remove["id"], "vendor.model/latest");
+    let text = fs::read_to_string(&config_path).unwrap();
+    assert!(!text.contains("id = \"vendor.model/latest\""), "{text}");
+    assert!(text.contains("id = \"vendor/model:latest\""), "{text}");
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
+/// Verifies typed provider-model mutations reject duplicate metadata, invalid
+/// token limits, secret-looking provider options, and destructive changes to
+/// ids still selected by either a provider default or a model profile.
+#[test]
+fn config_model_validation_and_reference_guards_are_safe() {
+    let (env, home) = test_env("config-model-guards");
+    let paths = env.config_paths().unwrap();
+    let config_path = paths.ensure_default_config().unwrap();
+    fs::write(
+        &config_path,
+        format!(
+            "version = {}\n[providers.custom]\nkind = \"custom\"\napi = \"openai-chat-completions\"\nbase_url = \"http://localhost:1234/v1\"\ndefault_model = \"alpha/model\"\n[providers.custom.models.alpha]\nid = \"alpha/model\"\naliases = [\"alpha\"]\n[model_profiles.work]\nprovider = \"custom\"\nmodel = \"alpha/model\"\n",
+            crate::config::CURRENT_CONFIG_SCHEMA_VERSION
+        ),
+    )
+    .unwrap();
+    let original = fs::read_to_string(&config_path).unwrap();
+    let mut stderr = Vec::new();
+
+    for arguments in [
+        vec!["add", "custom", "beta", "--aliases", "duplicate,duplicate"],
+        vec!["add", "custom", "beta", "--context-window-tokens", "0"],
+        vec![
+            "add",
+            "custom",
+            "beta",
+            "--provider-option",
+            "api_key=secret",
+        ],
+        vec!["remove", "custom", "alpha/model"],
+        vec![
+            "update",
+            "custom",
+            "alpha/model",
+            "--new-id",
+            "renamed/model",
+        ],
+    ] {
+        let mut argv = vec!["mez".to_string(), "config".to_string(), "model".to_string()];
+        argv.extend(arguments.into_iter().map(str::to_string));
+        let mut stdout = Vec::new();
+        assert!(
+            run_with(argv, env.clone(), false, &mut stdout, &mut stderr).is_err(),
+            "unexpected success: {}",
+            String::from_utf8_lossy(&stdout)
+        );
+        assert_eq!(fs::read_to_string(&config_path).unwrap(), original);
+    }
+
+    let _ = fs::remove_dir_all(home);
+}
+
+/// Verifies an explicitly empty compatible-provider catalog is reported
+/// deterministically with a command that can populate it.
+#[test]
+fn config_model_list_empty_catalog_includes_guidance() {
+    let (env, home) = test_env("config-model-empty");
+    let paths = env.config_paths().unwrap();
+    let config_path = paths.ensure_default_config().unwrap();
+    fs::write(
+        &config_path,
+        format!(
+            "version = {}\n[providers.local]\nkind = \"custom\"\napi = \"openai-chat-completions\"\nbase_url = \"http://localhost:1234/v1\"\nmodels = {{}}\n",
+            crate::config::CURRENT_CONFIG_SCHEMA_VERSION
+        ),
+    )
+    .unwrap();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    run_with(
+        vec![
+            "mez".to_string(),
+            "--json".to_string(),
+            "config".to_string(),
+            "model".to_string(),
+            "list".to_string(),
+            "local".to_string(),
+        ],
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
+
+    let output: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(output["models"], serde_json::json!([]));
+    assert!(
+        output["guidance"]
+            .as_str()
+            .unwrap()
+            .contains("mez config model add local MODEL_ID")
+    );
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
+/// Verifies typed model commands honor an explicit JSON user target and can
+/// safely rename an unreferenced opaque id while regenerating its local key.
+/// A leading hyphen in the provider-facing id must remain data rather than
+/// being interpreted as an option by the CLI parser.
+#[test]
+fn config_model_rename_supports_opaque_ids_and_explicit_json_files() {
+    let (env, home) = test_env("config-model-json-rename");
+    let paths = env.config_paths().unwrap();
+    paths.ensure_default_config().unwrap();
+    let config_path = paths.root().join("catalog.json");
+    fs::write(
+        &config_path,
+        format!(
+            "{{\"version\":{},\"providers\":{{\"custom\":{{\"kind\":\"custom\",\"api\":\"openai-chat-completions\",\"base_url\":\"http://localhost:1234/v1\",\"models\":{{}}}}}}}}",
+            crate::config::CURRENT_CONFIG_SCHEMA_VERSION
+        ),
+    )
+    .unwrap();
+    let target = config_path.to_string_lossy().to_string();
+    let mut stderr = Vec::new();
+
+    let mut add_stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "config".to_string(),
+            "model".to_string(),
+            "add".to_string(),
+            "custom".to_string(),
+            "--vendor/model".to_string(),
+            "--scope".to_string(),
+            "user".to_string(),
+            "--file".to_string(),
+            target.clone(),
+        ],
+        env.clone(),
+        false,
+        &mut add_stdout,
+        &mut stderr,
+    )
+    .unwrap();
+
+    let mut update_stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "--json".to_string(),
+            "config".to_string(),
+            "model".to_string(),
+            "update".to_string(),
+            "custom".to_string(),
+            "--vendor/model".to_string(),
+            "--new-id".to_string(),
+            "vendor/model:v2".to_string(),
+            "--file".to_string(),
+            target,
+        ],
+        env,
+        false,
+        &mut update_stdout,
+        &mut stderr,
+    )
+    .unwrap();
+
+    let output: serde_json::Value = serde_json::from_slice(&update_stdout).unwrap();
+    assert_eq!(output["id"], "vendor/model:v2");
+    assert_eq!(output["entry_key"], "vendor-model-v2");
+    let document: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(config_path).unwrap()).unwrap();
+    assert_eq!(
+        document["providers"]["custom"]["models"]["vendor-model-v2"]["id"],
+        "vendor/model:v2"
+    );
+    assert!(
+        document["providers"]["custom"]["models"]
+            .get("vendor-model")
+            .is_none()
+    );
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Verifies sandbox trust subcommands persist project decisions.
 ///
 /// This regression scenario documents the behavior being protected so a

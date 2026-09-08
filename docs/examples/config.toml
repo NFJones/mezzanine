@@ -430,6 +430,8 @@ database_path = ""
 # Global agent defaults, limits, routing, and subagent scheduling.
 [agents]
 # Provider/profile names resolve to runtime fallbacks until auth login adds a catalog.
+# After adding a compatible provider, use `mez config model add PROVIDER MODEL_ID`
+# to create validated model records without hand-writing generated entry keys.
 default_provider = "openai"
 default_model_profile = "default"
 # Disabled by default. `system` inhibits automatic idle system sleep only while

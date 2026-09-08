@@ -88,6 +88,8 @@ mod auth;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod config;
+/// Owns typed provider-model catalog configuration commands.
+mod config_model;
 /// Exposes the control client module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

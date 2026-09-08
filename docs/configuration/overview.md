@@ -121,6 +121,14 @@ project overlays must declare the current schema version and are not migrated
 automatically. When `mez config set --scope project` creates or updates an
 eligible overlay, it writes the current version for that managed file.
 
+Use `mez config model list PROVIDER` to inspect configured provider-model
+records and `add`, `update`, or `remove` to edit them without constructing
+dotted paths or local entry keys. These typed commands use the same user or
+trusted-project `--scope` and `--file` selection as other offline mutations and
+validate the complete document before replacing it. Provider-facing model ids
+remain opaque; destructive id changes are refused while configuration still
+references the old id.
+
 The checked-in [example configuration](../examples/config.toml) is the
 provider-free first-launch template for version 91. Actual generation adjusts
 `permissions.approval_policy` and `permissions.sandbox` for the current

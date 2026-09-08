@@ -22,10 +22,22 @@ The precedence is profile override, configured model, provider discovery,
 built-in metadata, then fallback. Configured lists replace lower lists; option
 maps merge per key. A model record's `reasoning_levels` lists supported choices,
 while a profile's `reasoning_profile` selects one choice.
+Use `mez config model list PROVIDER` to inspect these configured base records.
+`mez config model add`, `update`, and `remove` address records by the opaque
+provider-facing id and generate path-safe local keys automatically. Updates are
+selective; explicit clear flags remove optional scalar metadata or provider
+options, while an empty list value clears list metadata. Renaming or removing
+an id is refused until matching provider-default and model-profile references
+are updated. All model commands accept the normal offline `--scope` and
+`--file` target selectors.
 Use `/model list` to see the active provider's available catalog and `/model`
 to select a model or supported reasoning level for the pane. When live provider
 metadata is unavailable, the list can fall back to configured models and labels
 that source accordingly.
+
+For a compatible custom provider with no configured or discoverable models,
+the typed list output includes an `add` command and live-catalog guidance rather
+than presenting an unexplained empty result.
 
 Configured models remain available when discovery omits them, and discovered
 metadata fills only configured gaps. Aliases select the canonical model id;

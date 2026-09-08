@@ -901,6 +901,15 @@ be unique within a provider. Token limits must be positive integers, but Mez
 does not constrain their relationship; the provider remains authoritative for
 whether a user-selected combination is supported.
 
+Manage these records with `mez config model list PROVIDER`, `add PROVIDER ID`,
+`update PROVIDER ID`, and `remove PROVIDER ID`. The canonical id is opaque;
+Mez derives a deterministic path-safe entry key and appends `-2`, `-3`, and so
+on when normalized keys collide. `update` changes only supplied fields and has
+explicit clear/remove flags. Removing or renaming an id is refused while the
+provider's `default_model` or one of that provider's model profiles references
+it. The commands accept the same user or trusted-project `--scope` and `--file`
+targets as other offline config mutations and validate before persistence.
+
 Each metadata field resolves independently in this order: explicit
 `model_profiles.<name>` override, configured provider-model record, discovered
 provider catalog. Omitted token limits remain unknown rather than being inferred

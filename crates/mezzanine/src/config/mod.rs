@@ -47,6 +47,11 @@ mod parsers;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod paths;
+/// Exposes provider-model configuration helpers.
+///
+/// Provider-facing ids remain opaque while this module owns deterministic
+/// path-safe local keys shared by migrations and typed CLI editing.
+mod provider_models;
 /// Exposes the schema module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -110,6 +115,7 @@ use parsers::{
 #[cfg(test)]
 use paths::write_private_config_file_async;
 use paths::{format_diagnostics, write_private_config_file};
+pub(crate) use provider_models::unique_model_entry_key;
 use schema::{
     AGENT_AUTO_SIZING_KEYS, AGENT_KEYS, AUDIT_KEYS, AUTH_KEYS, BUBBLEWRAP_PERMISSION_KEYS,
     COMMAND_RULE_EFFECT_KEYS, COMMAND_RULE_KEYS, CONTROL_KEYS, EXTERNAL_EDITOR_KEYS, HISTORY_KEYS,

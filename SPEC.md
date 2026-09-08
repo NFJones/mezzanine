@@ -5132,6 +5132,20 @@ including when explicitly empty. Provider-model records define reusable model
 facts; `model_profiles` define usage policy and MAY override those facts for a
 specific profile. Provider-model option defaults MUST NOT contain credentials.
 
+`mez config model list|add|update|remove` MUST provide typed offline management
+of these records for the existing `--scope` and `--file` persistence targets.
+Provider-facing ids MUST be treated as opaque printable non-empty text. Local
+entry keys MUST use the same deterministic path-safe normalization and numeric
+collision suffixes as the `76 -> 77` migration. Updates MUST change only fields
+explicitly selected by the caller. Removing a model or changing its canonical
+id MUST be refused while the old id is referenced by that provider's
+`default_model` or by a `model_profiles` entry for that provider. The commands
+MUST validate unique ids, aliases and list members, positive token limits, and
+string-only non-secret provider options before using the normal validated
+whole-document persistence path. Plain and JSON output MUST be deterministic,
+and an empty compatible-provider catalog MUST include guidance for adding a
+configured model or enabling a supported live catalog endpoint.
+
 Effective model metadata MUST resolve each field independently in this order:
 an explicit model-profile override, the configured provider-model record,
 provider discovery metadata, built-in provider/model metadata, then a

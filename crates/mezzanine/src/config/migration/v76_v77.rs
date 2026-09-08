@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 
 use super::ops::{parse_json_compatible_config, set_json_path_value, set_toml_path_item};
 use super::{ConfigFormat, MezError, Result};
+use crate::config::unique_model_entry_key;
 
 /// Converts provider model-id arrays into keyed records and advances to v77.
 pub(super) fn migrate_v76_to_v77(format: ConfigFormat, text: &str) -> Result<String> {
@@ -109,41 +110,5 @@ fn migrate_json_provider_models(document: &mut serde_json::Value) {
             models.insert(key, serde_json::json!({ "id": model_id }));
         }
         provider.insert("models".to_string(), serde_json::Value::Object(models));
-    }
-}
-
-/// Returns one deterministic path-safe key, adding a numeric collision suffix.
-fn unique_model_entry_key(model_id: &str, used_keys: &mut BTreeSet<String>) -> String {
-    let base = path_safe_model_entry_key(model_id);
-    if used_keys.insert(base.clone()) {
-        return base;
-    }
-    for suffix in 2usize.. {
-        let candidate = format!("{base}-{suffix}");
-        if used_keys.insert(candidate.clone()) {
-            return candidate;
-        }
-    }
-    unreachable!("an unbounded numeric suffix always provides a unique model entry key")
-}
-
-/// Normalizes a provider-facing model id into an ASCII config-path segment.
-fn path_safe_model_entry_key(model_id: &str) -> String {
-    let mut key = String::new();
-    let mut previous_separator = false;
-    for character in model_id.trim().chars() {
-        if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
-            key.push(character.to_ascii_lowercase());
-            previous_separator = false;
-        } else if !previous_separator {
-            key.push('-');
-            previous_separator = true;
-        }
-    }
-    let key = key.trim_matches(['-', '_']);
-    if key.is_empty() {
-        "model".to_string()
-    } else {
-        key.to_string()
     }
 }

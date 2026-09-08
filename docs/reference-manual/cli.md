@@ -109,7 +109,7 @@ to the processes that existed when the snapshot was taken.
 
 | Command | Subcommands and scope |
 | --- | --- |
-| `mez config` | `init`, `path`, `default`, `validate`, `get`, `layers`, `set`, and `unset`. `set` and `unset` write the user configuration by default; their `--scope project` option targets an eligible trusted project overlay. |
+| `mez config` | `init`, `path`, `default`, `validate`, `get`, `layers`, `set`, `unset`, and typed `model list|add|update|remove`. Mutations write the user configuration by default; `--scope project` targets an eligible trusted project overlay and `--file PATH` selects an eligible file in that scope. |
 | `mez auth` | `status`, `login`, and `logout` for provider credentials and metadata. |
 | `mez mcp` | `list`, `inspect`, `login`, `logout`, `status`, `add`, `remove`, `enable`, `disable`, `set`, `unset`, `tools`, and `approval` manage configured MCP servers, stored MCP credentials, tool filters, and server approval settings. |
 | `mez sandbox` | Inspect version-2 backend status, plan or enable the platform backend, disable confinement, manage presets and sanitized profiles, inspect managed-home caches, and manage project trust. Plans report the selected backend and fixed-executable presence; unavailable mutating enablement fails without changing state. `mez sandbox trust` supports `list`, `inspect PATH`, `add PATH`, `reject PATH`, and `revoke PATH`. |
@@ -117,6 +117,17 @@ to the processes that existed when the snapshot was taken.
 | `mez memory` | List, inspect, add, edit, delete, archive, mark stale, restore, record use or confirmation, supersede, prune, export, and search persistent memory records. |
 | `mez remote` | Use authenticated local Unix control for `status`, `invite`, `clients`, `rename CLIENT_ID LABEL`, and `revoke CLIENT_ID [--reason TEXT]`. Client-local commands are `pair --invite-file PATH [--name NAME]`, `invitation inspect PATH`, and `profile list|show|rename|remove|check`. Paired Iroh clients cannot use server trust-administration methods. |
 | `mez completion <shell>` | Generate a completion definition for `bash`, `elvish`, `fish`, `powershell`, or `zsh`. |
+
+`mez config model` manages one configured provider's reusable model records by
+their opaque canonical ids; callers never need to construct the path-safe table
+entry key. `add` accepts `--display-name`, comma-separated `--aliases`, token
+limits, comma-separated `--reasoning-levels` and `--capabilities`, and repeated
+non-secret string `--provider-option KEY=VALUE` values. `update` is selective
+and also provides explicit `--clear-*` and `--remove-provider-option` controls.
+`remove` and `update --new-id` refuse to invalidate `default_model` or
+`model_profiles` references. Use global `--json` for stable machine-readable
+output. An empty compatible-provider list explains how to add a model or use a
+supported live catalog endpoint.
 
 ### Iroh targeting and pairing
 

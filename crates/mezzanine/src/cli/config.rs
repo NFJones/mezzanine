@@ -4,6 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
+use super::config_model::{ConfigModelCliArgs, run_config_model};
 use super::mcp::load_runtime_config_layers;
 use super::{
     Args, CliEnv, CliOutputFormat, ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigMutation,
@@ -72,6 +73,9 @@ pub(super) fn run_config<W: Write>(
         Some(ConfigCliCommand::Unset(args)) => {
             run_config_unset(args, &paths, output_format, stdout)?
         }
+        Some(ConfigCliCommand::Model(args)) => {
+            run_config_model(*args, &paths, output_format, stdout)?
+        }
     }
 
     Ok(())
@@ -111,6 +115,8 @@ enum ConfigCliCommand {
     Set(ConfigSetCliArgs),
     /// Removes a persisted scalar config value.
     Unset(ConfigUnsetCliArgs),
+    /// Manages typed provider model records.
+    Model(Box<ConfigModelCliArgs>),
 }
 
 /// Typed process CLI arguments for `mez config set`.
@@ -270,22 +276,22 @@ fn run_config_unset<W: Write>(
 ///
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
-struct CliConfigMutationTarget {
+pub(super) struct CliConfigMutationTarget {
     /// Stores the scope value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    scope: ConfigScope,
+    pub(super) scope: ConfigScope,
     /// Stores the scope name value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    scope_name: &'static str,
+    pub(super) scope_name: &'static str,
     /// Stores the path value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    path: PathBuf,
+    pub(super) path: PathBuf,
 }
 
 /// Runs the cli config mutation target operation for this subsystem.
@@ -293,7 +299,7 @@ struct CliConfigMutationTarget {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn cli_config_mutation_target(
+pub(super) fn cli_config_mutation_target(
     paths: &ConfigPaths,
     options: CliConfigPersistOptions,
 ) -> Result<CliConfigMutationTarget> {
@@ -330,17 +336,11 @@ fn cli_config_mutation_target(
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, clap::Args)]
-struct CliConfigPersistOptions {
-    /// Stores the scope value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
+pub(super) struct CliConfigPersistOptions {
+    /// Persistence scope: `user` or `project`.
     #[arg(long)]
     scope: Option<String>,
-    /// Stores the file value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
+    /// Explicit config file within the selected scope.
     #[arg(long)]
     file: Option<PathBuf>,
 }

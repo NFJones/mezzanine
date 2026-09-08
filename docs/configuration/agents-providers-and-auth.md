@@ -18,6 +18,9 @@ definitions belong under `providers.<name>`. Reusable model facts belong under
 `providers.<name>.models.<entry>`, whose required `id` is the canonical
 provider-facing model id. Named `model_profiles.<name>` combine that base model
 with reasoning, latency, capability, policy, and non-secret option overrides.
+Use `mez config model list|add|update|remove` to manage base records by opaque
+provider-facing id; Mez generates deterministic local entry keys and refuses
+to remove or rename ids still referenced by `default_model` or a model profile.
 Use `/model`, `/routing`, and `/thinking` for pane-scoped runtime choices where
 supported.
 
