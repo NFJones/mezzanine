@@ -459,6 +459,67 @@ pub fn runtime_action_status_name(status: ActionStatus) -> &'static str {
     }
 }
 
+/// Recognized runtime limit responsible for a forbidden `spawn_agent` result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSpawnAgentDenialReason {
+    /// The current agent is already at the immutable delegation depth limit.
+    Depth,
+    /// The current agent has reached its transient direct-child capacity.
+    Capacity,
+}
+
+/// Recognizes canonical runtime diagnostics for bounded spawn-limit recovery.
+///
+/// Depth diagnostics are matched exactly through their numeric `depth N of M`
+/// suffix so unrelated forbidden or authorization failures cannot become
+/// model-correctable merely by mentioning a depth limit.
+pub fn runtime_spawn_agent_denial_reason(message: &str) -> Option<RuntimeSpawnAgentDenialReason> {
+    if let Some((parent, limits)) = message
+        .strip_prefix("subagent depth limit reached for ")
+        .and_then(|rest| rest.split_once(": depth "))
+        && !parent.is_empty()
+        && numeric_limit_pair(limits, " of ")
+    {
+        return Some(RuntimeSpawnAgentDenialReason::Depth);
+    }
+    if let Some((parent, limits)) = message
+        .strip_prefix("subagent spawn limit reached for ")
+        .and_then(|rest| rest.split_once(": active direct children "))
+        && !parent.is_empty()
+        && numeric_capacity_diagnostic(limits)
+    {
+        return Some(RuntimeSpawnAgentDenialReason::Capacity);
+    }
+    None
+}
+
+/// Validates one canonical pair of unsigned integer limit values.
+fn numeric_limit_pair(values: &str, separator: &str) -> bool {
+    values
+        .split_once(separator)
+        .is_some_and(|(current, maximum)| {
+            !current.is_empty()
+                && current.bytes().all(|byte| byte.is_ascii_digit())
+                && !maximum.is_empty()
+                && maximum.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
+
+/// Validates the canonical direct-child capacity diagnostic suffix.
+fn numeric_capacity_diagnostic(values: &str) -> bool {
+    let Some((active, configured)) = values.split_once(", agents.") else {
+        return false;
+    };
+    let Some((name, limit)) = configured.rsplit_once(' ') else {
+        return false;
+    };
+    !active.is_empty()
+        && active.bytes().all(|byte| byte.is_ascii_digit())
+        && matches!(name, "max_root_subagents" | "max_subagents_per_subagent")
+        && !limit.is_empty()
+        && limit.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 /// Returns true when a failed action result is safe to hand back to the model
 /// for bounded self-correction attempts.
 pub fn runtime_action_result_is_feedback_candidate(result: &ActionResult) -> bool {
@@ -485,10 +546,7 @@ pub fn runtime_action_result_is_feedback_candidate(result: &ActionResult) -> boo
     if result.action_type == "spawn_agent"
         && result.status == ActionStatus::Denied
         && error.code == "forbidden"
-        && error
-            .message
-            .to_ascii_lowercase()
-            .contains("subagent spawn limit reached")
+        && runtime_spawn_agent_denial_reason(&error.message).is_some()
     {
         return true;
     }
@@ -1495,6 +1553,50 @@ mod tests {
                 runtime_action_result_is_feedback_candidate(&result),
                 expected,
                 "{code}"
+            );
+        }
+    }
+
+    /// Verifies only recognized spawn capacity and depth diagnostics make a
+    /// forbidden denial eligible for bounded model correction.
+    #[test]
+    fn spawn_denial_classification_accepts_limits_but_not_unrelated_forbidden_errors() {
+        let action = AgentAction {
+            id: "spawn-1".to_string(),
+
+            payload: AgentActionPayload::SpawnAgent {
+                role: "worker".to_string(),
+                placement: "new-window".to_string(),
+                cooperation_mode: "explore-only".to_string(),
+                read_scopes: None,
+                write_scopes: None,
+                session_mode: None,
+                size: None,
+                reasoning_effort: None,
+                task_prompt: "inspect the repository".to_string(),
+            },
+        };
+        for (message, expected) in [
+            (
+                "subagent depth limit reached for agent-child: depth 2 of 2",
+                true,
+            ),
+            (
+                "subagent spawn limit reached for agent-root: active direct children 4, agents.max_root_subagents 4",
+                true,
+            ),
+            (
+                "subagent profile permission override cannot broaden parent policy",
+                false,
+            ),
+        ] {
+            let result =
+                ActionResult::failed(&turn(), &action, ActionStatus::Denied, "forbidden", message)
+                    .unwrap();
+            assert_eq!(
+                runtime_action_result_is_feedback_candidate(&result),
+                expected,
+                "{message}"
             );
         }
     }

@@ -6336,6 +6336,20 @@ provider schema or configurable action set. Integration availability,
 permission policy, approval, subagent depth or terminal-profile limits, and
 argument validation remain runtime-owned and MUST return explicit action
 results when a selected enabled action cannot run.
+Canonical forbidden `spawn_agent` results for transient direct-child capacity
+and immutable current-agent delegation depth MUST be eligible for the existing
+bounded action-failure correction path. Other forbidden, terminal-profile,
+authorization, and policy denials MUST remain nonrecoverable. A depth-limit
+result MUST preserve the original parent identity and `depth N of M` diagnostic
+in both its error and structured result, MUST state that no child was created
+and the maximum delegation depth was reached, and MUST instruct the model not
+to retry `spawn_agent` or bypass or increase the limit. It MUST direct the
+current agent to complete the remaining work with non-delegating actions and to
+report a concrete blocker only when direct execution is unavailable. This
+guidance MUST be carried by the action result and MUST NOT be added as a
+`RuntimeHint` context block. Transient direct-child capacity may later become
+available as existing children settle; the current agent's depth cannot change
+within its delegation lineage.
 Repair and internal structured-output interactions MAY constrain response
 semantics without changing the provider-visible action catalog.
 

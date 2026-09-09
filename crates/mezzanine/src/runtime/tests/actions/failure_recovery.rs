@@ -747,3 +747,223 @@ fn runtime_spawn_limit_denial_queues_model_recovery() {
     );
     service.terminate_all_pane_processes().unwrap();
 }
+
+/// Verifies an immutable current-agent depth denial enters bounded recovery.
+///
+/// Unlike transient child capacity, reaching the lineage depth limit requires
+/// the current agent to stop delegating and finish with direct actions.
+#[test]
+fn runtime_spawn_depth_denial_queues_model_recovery() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-depth-limit-feedback","input":"delegate at maximum depth"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.remove_pending_agent_provider_task("turn-1");
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-1")
+        .cloned()
+        .unwrap();
+    let action = runtime_spawn_agent_action("spawn-over-depth", "start a nested child");
+    let denied = mez_agent::ActionResult::failed(
+        &turn,
+        &action,
+        ActionStatus::Denied,
+        "forbidden",
+        "subagent depth limit reached for agent-%1: depth 2 of 2",
+    )
+    .unwrap();
+    let mut execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture(&turn.turn_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "spawn over depth".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "test action batch rationale".to_string(),
+
+                actions: vec![action],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![denied],
+        final_turn: false,
+        terminal_state: AgentTurnState::Failed,
+    };
+
+    append_test_execution_assistant_context(&mut service, &turn, &execution);
+    let queued = service
+        .queue_agent_failure_feedback_for_correction(
+            &turn,
+            &mut execution,
+            "subagent_depth_limit_reached",
+        )
+        .unwrap();
+
+    assert!(queued);
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    assert!(service.agent_provider_task_is_pending("turn-1"));
+    let context = service.agent_turn_contexts().get("turn-1").unwrap();
+    assert!(context.blocks().iter().any(|block| {
+        block.source == ContextSourceKind::ActionResult
+            && block
+                .content
+                .contains("[action_result spawn-over-depth spawn_agent denied]")
+            && block.content.contains("subagent depth limit reached")
+    }));
+    assert!(
+        context
+            .blocks()
+            .iter()
+            .all(|block| block.source != ContextSourceKind::RuntimeHint)
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies the actual maximum-depth spawn path creates no child state and
+/// returns explicit direct-execution guidance in the action result itself.
+#[test]
+fn runtime_spawn_depth_denial_has_guidance_and_no_spawn_side_effects() {
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "attempt nested delegation")
+        .unwrap();
+    service.remove_pending_agent_provider_task(&started.turn_id);
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    assert_eq!(service.max_subagent_depth(), 2);
+    service.set_subagent_lineage(
+        turn.agent_id.clone(),
+        RuntimeSubagentLineage {
+            parent_agent_id: "agent-parent".to_string(),
+            root_agent_id: "agent-root".to_string(),
+            depth: 2,
+            display_name: "depth-limited child".to_string(),
+            terminal: false,
+        },
+    );
+    let allowed_actions = service
+        .agent_provider_request_control_for_turn(&turn)
+        .0
+        .expect("provider turns should retain their static action set");
+    assert!(allowed_actions.contains(mez_agent::AllowedAction::SpawnAgent));
+
+    let action = runtime_spawn_agent_action("spawn-at-depth-limit", "start a child");
+    let planned = mez_agent::ActionResult::running(&turn, &action, Vec::new(), None);
+    let mut execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "spawn at depth limit".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "delegate nested work".to_string(),
+                actions: vec![action],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![planned],
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+    let turn_count = service.agent_turn_ledger().turns().len();
+    let window_count = service.session().windows().len();
+
+    assert_eq!(
+        service
+            .execute_running_spawn_actions_for_turn(&turn, &mut execution)
+            .unwrap(),
+        1
+    );
+
+    let denied = &execution.action_results[0];
+    assert_eq!(denied.status, ActionStatus::Denied);
+    let diagnostic = "subagent depth limit reached for agent-%1: depth 2 of 2";
+    assert_eq!(denied.error.as_ref().unwrap().message, diagnostic);
+    assert!(
+        denied
+            .content
+            .iter()
+            .any(|block| block.text.contains("no child was created"))
+    );
+    assert!(
+        denied
+            .content
+            .iter()
+            .any(|block| block.text.contains("do not retry spawn_agent"))
+    );
+    let structured = denied.structured_content_json.as_deref().unwrap();
+    assert!(structured.contains(diagnostic), "{structured}");
+    assert!(
+        structured.contains("maximum delegation depth reached"),
+        "{structured}"
+    );
+    assert_eq!(service.agent_turn_ledger().turns().len(), turn_count);
+    assert_eq!(service.joined_subagent_dependency_count(), 0);
+    assert_eq!(service.session().windows().len(), window_count);
+
+    append_test_execution_assistant_context(&mut service, &turn, &execution);
+    assert!(
+        service
+            .queue_agent_failure_feedback_for_correction(
+                &turn,
+                &mut execution,
+                "subagent_depth_limit_reached",
+            )
+            .unwrap()
+    );
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    assert!(context.blocks().iter().any(|block| {
+        block.source == ContextSourceKind::ActionResult
+            && block.content.contains(diagnostic)
+            && block.content.contains("no child was created")
+            && block.content.contains("do not retry spawn_agent")
+            && block
+                .content
+                .contains("complete the remaining work directly")
+    }));
+    assert!(
+        context
+            .blocks()
+            .iter()
+            .all(|block| block.source != ContextSourceKind::RuntimeHint)
+    );
+    service.terminate_all_pane_processes().unwrap();
+}

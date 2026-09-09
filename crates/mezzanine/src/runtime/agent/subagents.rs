@@ -4,7 +4,10 @@
 //! status/result delivery, and terminal subagent cleanup. It keeps parent-child
 //! lifecycle coordination out of the main runtime agent facade.
 
-use mez_agent::{MacroRunPhase, MacroStepTaskResult, normalize_subagent_spawn_role};
+use mez_agent::{
+    MacroRunPhase, MacroStepTaskResult, normalize_subagent_spawn_role,
+    outcome::{RuntimeSpawnAgentDenialReason, runtime_spawn_agent_denial_reason},
+};
 
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentId, AgentTurnExecution,
@@ -641,18 +644,36 @@ impl RuntimeSessionService {
                     } else {
                         ActionStatus::Failed
                     };
+                    let error_code = runtime_mezzanine_error_code(error.kind());
+                    let diagnostic = error.message().to_string();
                     let mut result = ActionResult::failed(
                         turn,
                         &action,
                         status,
-                        runtime_mezzanine_error_code(error.kind()),
-                        error.message().to_string(),
+                        error_code,
+                        diagnostic.clone(),
                     )?;
-                    result.structured_content_json = Some(format!(
-                        r#"{{"spawn":null,"delivery_status":"failed","error":{{"code":"{}","message":"{}"}}}}"#,
-                        runtime_mezzanine_error_code(error.kind()),
-                        json_escape(error.message())
-                    ));
+                    if runtime_spawn_agent_denial_reason(&diagnostic)
+                        == Some(RuntimeSpawnAgentDenialReason::Depth)
+                    {
+                        let guidance = "no child was created; maximum delegation depth reached; do not retry spawn_agent or bypass or increase the limit; complete the remaining work directly with non-delegating actions; report a concrete blocker only if direct execution is unavailable.";
+                        result
+                            .content
+                            .push(mez_agent::ActionContentBlock::text(guidance));
+                        result.structured_content_json = Some(format!(
+                            r#"{{"spawn":null,"delivery_status":"failed","reason":"{}","guidance":"{}","error":{{"code":"{}","message":"{}"}}}}"#,
+                            json_escape(&diagnostic),
+                            json_escape(guidance),
+                            error_code,
+                            json_escape(&diagnostic)
+                        ));
+                    } else {
+                        result.structured_content_json = Some(format!(
+                            r#"{{"spawn":null,"delivery_status":"failed","error":{{"code":"{}","message":"{}"}}}}"#,
+                            error_code,
+                            json_escape(&diagnostic)
+                        ));
+                    }
                     result
                 }
             };
