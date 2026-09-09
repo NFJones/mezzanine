@@ -341,6 +341,7 @@ mod tests {
     struct FakeState {
         calls: Mutex<Vec<String>>,
         block_acquire: AtomicBool,
+        block_successful_system_acquire: AtomicBool,
         entered_acquire: AtomicBool,
         system_acquire_failures: AtomicUsize,
         display_acquire_failures: AtomicUsize,
@@ -436,6 +437,23 @@ mod tests {
             };
             if FakeState::fail_next(failures) {
                 return Err(format!("{resource:?} acquisition unavailable"));
+            }
+            if resource == PowerInhibitionResource::System
+                && self
+                    .state
+                    .block_successful_system_acquire
+                    .load(Ordering::Acquire)
+            {
+                let guard = self.state.gate_lock.lock().unwrap();
+                let _guard = self
+                    .state
+                    .gate
+                    .wait_while(guard, |_| {
+                        self.state
+                            .block_successful_system_acquire
+                            .load(Ordering::Acquire)
+                    })
+                    .unwrap();
             }
             Ok(Box::new(FakeLease {
                 state: Arc::clone(&self.state),
@@ -662,10 +680,17 @@ mod tests {
     fn failed_acquisition_retries_until_desired_generation_is_satisfied() {
         let (state, handle, worker) = fake_service(false);
         state.system_acquire_failures.store(1, Ordering::Release);
+        state
+            .block_successful_system_acquire
+            .store(true, Ordering::Release);
         let worker = std::thread::spawn(move || worker.run());
 
         assert_eq!(handle.publish(PowerInhibitionMode::System), 1);
-        wait_until(|| !state.calls().is_empty());
+        wait_until(|| {
+            let snapshot = handle.snapshot();
+            snapshot.confirmed_generation == 0
+                && snapshot.last_error == Some(PowerInhibitionErrorClass::SystemAcquire)
+        });
         let failed = handle.snapshot();
         assert_eq!(failed.desired_generation, 1);
         assert_eq!(failed.confirmed_generation, 0);
@@ -678,6 +703,10 @@ mod tests {
             Some(PowerInhibitionErrorClass::SystemAcquire)
         );
 
+        state
+            .block_successful_system_acquire
+            .store(false, Ordering::Release);
+        state.gate.notify_all();
         wait_until(|| handle.snapshot().confirmed_generation == 1);
         assert_eq!(state.calls(), ["acquire:System", "acquire:System"]);
         drop(handle);
