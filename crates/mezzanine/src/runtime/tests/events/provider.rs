@@ -89,6 +89,19 @@ async fn runtime_provider_completion_queues_network_action_for_worker() {
         service.agent_turn_executions()[&turn.turn_id].action_results[0].status,
         ActionStatus::Running
     );
+    assert!(service.mark_agent_provider_persistence_pending(&turn.turn_id));
+    assert!(service.pending_approved_external_actions().is_empty());
+    assert!(
+        service
+            .claim_approved_external_action(&turn.turn_id, &action.id)
+            .unwrap()
+            .is_none()
+    );
+    assert!(service.clear_agent_provider_persistence_pending(&turn.turn_id));
+    assert_eq!(
+        service.pending_approved_external_actions(),
+        vec![(turn.turn_id.clone(), action.id.clone())]
+    );
     service
         .agent_turn_ledger_mut()
         .finish_turn(&turn.turn_id, AgentTurnState::Blocked)

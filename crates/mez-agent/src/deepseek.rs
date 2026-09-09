@@ -266,7 +266,9 @@ fn deepseek_chat_completions_request_body(
                         messages.push(deepseek_provider_transcript_event_message(&event));
                     }
                     ProviderTranscriptEvent::OpenAiResponseOutput { .. }
-                    | ProviderTranscriptEvent::OpenAiFunctionCallOutput { .. } => {}
+                    | ProviderTranscriptEvent::OpenAiFunctionCallOutput { .. }
+                    | ProviderTranscriptEvent::OpenAiChatCompletionsAssistantToolCall { .. }
+                    | ProviderTranscriptEvent::OpenAiChatCompletionsToolResult { .. } => {}
                 }
             }
             continue;
@@ -426,7 +428,11 @@ fn deepseek_provider_transcript_event_message(
 ) -> serde_json::Value {
     match event {
         ProviderTranscriptEvent::OpenAiResponseOutput { .. }
-        | ProviderTranscriptEvent::OpenAiFunctionCallOutput { .. } => serde_json::Value::Null,
+        | ProviderTranscriptEvent::OpenAiFunctionCallOutput { .. }
+        | ProviderTranscriptEvent::OpenAiChatCompletionsAssistantToolCall { .. }
+        | ProviderTranscriptEvent::OpenAiChatCompletionsToolResult { .. } => {
+            serde_json::Value::Null
+        }
         ProviderTranscriptEvent::DeepSeekAssistantToolCall {
             content,
             reasoning_content,

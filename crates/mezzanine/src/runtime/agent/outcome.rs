@@ -71,8 +71,14 @@ fn provider_tool_result_event(
                 content: content.to_string(),
             })
         }
-        ProviderApiCompatibility::OpenAiChatCompletions
-        | ProviderApiCompatibility::AnthropicMessages => Err(MezError::invalid_state(format!(
+        ProviderApiCompatibility::OpenAiChatCompletions => Ok(
+            mez_agent::ProviderTranscriptEvent::OpenAiChatCompletionsToolResult {
+                provider_id: provider_owner.provider_id().to_string(),
+                tool_call_id: tool_call_id.to_string(),
+                content: content.to_string(),
+            },
+        ),
+        ProviderApiCompatibility::AnthropicMessages => Err(MezError::invalid_state(format!(
             "provider API `{}` does not support native tool-result continuity",
             provider_owner.api().as_str()
         ))),
@@ -657,7 +663,14 @@ mod tests {
                 content: "deepseek result".to_string(),
             }
         );
-        assert!(provider_tool_result_event(&chat, "call-chat", "chat result").is_err());
+        assert_eq!(
+            provider_tool_result_event(&chat, "call-chat", "chat result").unwrap(),
+            ProviderTranscriptEvent::OpenAiChatCompletionsToolResult {
+                provider_id: "configured-chat".to_string(),
+                tool_call_id: "call-chat".to_string(),
+                content: "chat result".to_string(),
+            }
+        );
     }
 
     /// Verifies pending approval output preserves actionable identifiers while

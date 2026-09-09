@@ -23,7 +23,7 @@ use super::{
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn run_config<W: Write>(
+pub(super) async fn run_config<W: Write>(
     parsed: ConfigCliArgs,
     env: CliEnv,
     output_format: CliOutputFormat,
@@ -74,7 +74,7 @@ pub(super) fn run_config<W: Write>(
             run_config_unset(args, &paths, output_format, stdout)?
         }
         Some(ConfigCliCommand::Model(args)) => {
-            run_config_model(*args, &paths, output_format, stdout)?
+            run_config_model(*args, &paths, output_format, stdout).await?
         }
     }
 

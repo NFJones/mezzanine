@@ -300,6 +300,12 @@ impl RuntimeSessionService {
                         .into_iter()
                         .map(|id| (owner.clone(), id)),
                 );
+                provider_tool_calls.extend(
+                    event
+                        .openai_chat_completions_tool_call_ids()
+                        .into_iter()
+                        .map(|id| (owner.clone(), id)),
+                );
             }
             context
                 .append_evidence_event(

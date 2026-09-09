@@ -268,6 +268,23 @@ fn openai_chat_completions_model_response(
     headers: BTreeMap<String, String>,
     provider_id: &str,
 ) -> Result<ModelResponse> {
+    let provider_transcript_events = parsed
+        .native_tool_calls
+        .map(|tool_calls| {
+            mez_agent::ProviderTranscriptEvent::validated_openai_chat_completions_assistant_tool_call(
+                provider_id.to_string(),
+                parsed.raw_text.clone(),
+                tool_calls,
+            )
+            .ok_or_else(|| {
+                MezError::invalid_state(
+                    "validated Chat Completions tool calls could not be bound to the configured provider owner",
+                )
+            })
+        })
+        .transpose()?
+        .into_iter()
+        .collect();
     Ok(ModelResponse {
         provider: provider_id.to_string(),
         model: parsed.model,
@@ -276,7 +293,7 @@ fn openai_chat_completions_model_response(
         latest_request_usage: None,
         quota_usage: provider_quota_usage_from_headers(&headers),
         action_batch: parsed.action_batch,
-        provider_transcript_events: Vec::new(),
+        provider_transcript_events,
     })
 }
 

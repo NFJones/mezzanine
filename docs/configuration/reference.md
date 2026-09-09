@@ -902,13 +902,32 @@ does not constrain their relationship; the provider remains authoritative for
 whether a user-selected combination is supported.
 
 Manage these records with `mez config model list PROVIDER`, `add PROVIDER ID`,
-`update PROVIDER ID`, and `remove PROVIDER ID`. The canonical id is opaque;
+`update PROVIDER ID`, `remove PROVIDER ID`, and `sync PROVIDER`. The canonical id is opaque;
 Mez derives a deterministic path-safe entry key and appends `-2`, `-3`, and so
 on when normalized keys collide. `update` changes only supplied fields and has
 explicit clear/remove flags. Removing or renaming an id is refused while the
 provider's `default_model` or one of that provider's model profiles references
 it. The commands accept the same user or trusted-project `--scope` and `--file`
 targets as other offline config mutations and validate before persistence.
+
+`mez config model sync PROVIDER` queries the selected provider's raw live
+catalog. It previews by default; `--apply` persists, and independent `--prune`
+includes configured-only records in the proposed removals. Without `--prune`,
+an absent live observation never removes a configured record. A prune
+application is atomic and is refused if any proposed record is selected by the
+provider default or a provider-matching model profile, including through an
+alias. Project targets may inherit connection fields from user configuration,
+but sync writes only minimal model records to the selected project layer.
+
+Sync matches exact provider-facing ids and fills only omitted `display_name`,
+`reasoning_levels`, `context_window_tokens`, `max_input_tokens`,
+`max_output_tokens`, and `capabilities`. Explicit metadata, including empty
+lists, remains authoritative; aliases and provider options are never replaced.
+The deterministic output reports additions, fill-only updates, conflicts,
+retained records, proposed removals, and blockers. Failed or unsupported
+catalog requests leave the file unchanged and direct the caller to
+`mez config model add PROVIDER MODEL_ID`. Credentials are neither persisted nor
+included in output.
 
 Each metadata field resolves independently in this order: explicit
 `model_profiles.<name>` override, configured provider-model record, discovered
@@ -979,7 +998,11 @@ enabled aliases are `enable`, `true`, `yes`, and `on`; disabled aliases are
 `disable`, `false`, `no`, and `off`. Provider option values are strings, so use
 `streaming = "true"`, not a bare TOML boolean. Generic history emits native
 `role = "tool"` messages only when a validated non-empty `tool_call_id` matches
-the owning assistant call. Canonical action evidence without native identity,
+the owning assistant call. Successful native calls retain their exact assistant
+`tool_calls` objects and replay matching result messages immediately afterward
+in declaration order, but only for the same configured provider and
+`openai-chat-completions` API. Partial, reordered, duplicate, late, unknown, or
+foreign native chains fall back to neutral history. Canonical action evidence without native identity,
 including content or structured-JSON MAAP results, is retained once under the
 configured `developer` role or `system` compatibility fallback and is marked
 as non-user-authored. Mezzanine does not fabricate call IDs, and this safe
@@ -1023,8 +1046,13 @@ streaming = "enabled" # optional; backend must implement standard OpenAI SSE
 
 The empty model table avoids guessing which model LM Studio currently serves
 or inventing token limits and capabilities. Use `/refresh-provider-info` to
-observe the live catalog for the current session, or persist the exact
-provider-facing model ID with `mez config model add lmstudio MODEL_ID`.
+observe the live catalog ephemerally for the current session. Use
+`mez config model sync lmstudio` to preview the raw catalog and add `--apply`
+for durable records, or persist one exact provider-facing model ID with
+`mez config model add lmstudio MODEL_ID`. Runtime refresh retains its
+configured/built-in fallback behavior; durable sync never plans from that
+merged cache and requires explicit `--prune` before treating absence as removal
+evidence.
 
 ### `model_profiles.<name>`
 

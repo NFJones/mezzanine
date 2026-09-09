@@ -98,7 +98,7 @@ use model_catalog::runtime_markdown_table;
 use model_catalog::runtime_model_catalog_unavailable_reason;
 pub(crate) use model_catalog::{
     RuntimeAgentPromptProviderInfoRefresh, RuntimeProviderInfoRefreshOutcome,
-    RuntimeProviderInfoRefreshWork,
+    RuntimeProviderInfoRefreshWork, fetch_raw_provider_model_catalog,
 };
 use remember::runtime_remember_scope_display;
 use slash::{

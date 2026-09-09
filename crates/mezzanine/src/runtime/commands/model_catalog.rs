@@ -472,9 +472,15 @@ async fn execute_provider_info_refresh_entry(
             credential_outcome: Some("denied"),
         };
     };
-    let metadata = match auth_store.read_metadata_for_provider(&entry.provider_id) {
-        Ok(Some(metadata)) => metadata,
-        Ok(None) | Err(_) => {
+    let metadata = {
+        let auth_store = auth_store.clone();
+        let provider_id = entry.provider_id.clone();
+        tokio::task::spawn_blocking(move || auth_store.read_metadata_for_provider(&provider_id))
+            .await
+    };
+    let metadata = match metadata {
+        Ok(Ok(Some(metadata))) => metadata,
+        Ok(Ok(None) | Err(_)) | Err(_) => {
             let fallback = entry.fallback.clone();
             return RuntimeProviderInfoRefreshEntryOutcome {
                 entry,
@@ -491,65 +497,84 @@ async fn execute_provider_info_refresh_entry(
             credential_outcome: Some("unsupported"),
         };
     }
-    let endpoint_override = entry
-        .provider_config
-        .base_url
-        .as_deref()
-        .filter(|endpoint| !endpoint.is_empty());
-    let provider: Result<Box<dyn AsyncModelProvider>> = match api {
-        ProviderApiCompatibility::OpenAiResponses => {
-            openai_responses_provider_from_auth_store_with_provider_options(
-                auth_store,
-                &entry.provider_id,
-                endpoint_override,
-                &entry.provider_config.options,
-                DEFAULT_PROVIDER_TIMEOUT_MS,
-                ReqwestProviderHttpTransport,
-            )
-            .map(|provider| Box::new(provider) as Box<dyn AsyncModelProvider>)
-        }
-        ProviderApiCompatibility::OpenAiChatCompletions => {
-            openai_compatible_provider_from_auth_store_with_provider_options(
-                auth_store,
-                &entry.provider_id,
-                endpoint_override,
-                &entry.provider_config.options,
-                DEFAULT_PROVIDER_TIMEOUT_MS,
-                ReqwestProviderHttpTransport,
-            )
-            .map(|provider| Box::new(provider) as Box<dyn AsyncModelProvider>)
-        }
-        ProviderApiCompatibility::DeepSeekChatCompletions => {
-            deepseek_chat_completions_provider_from_auth_store_with_provider_options(
-                auth_store,
-                &entry.provider_id,
-                endpoint_override,
-                DEFAULT_PROVIDER_TIMEOUT_MS,
-                ReqwestProviderHttpTransport,
-            )
-            .map(|provider| Box::new(provider) as Box<dyn AsyncModelProvider>)
-        }
-        ProviderApiCompatibility::AnthropicMessages => unreachable!(),
-    };
-    let Ok(provider) = provider else {
+    let result =
+        fetch_raw_provider_model_catalog(entry.provider_config.clone(), auth_store.clone()).await;
+    if result.is_err() {
         let fallback = entry.fallback.clone();
         return RuntimeProviderInfoRefreshEntryOutcome {
             entry,
             result: Ok(fallback),
             credential_outcome: Some("denied"),
         };
-    };
-    let fallback = entry.fallback.clone();
-    let result = provider
-        .list_models_async()
-        .await
-        .map(RuntimeModelCatalog::from_provider)
-        .or(Ok(fallback));
+    }
+    let result = result.map(RuntimeModelCatalog::from_provider);
     RuntimeProviderInfoRefreshEntryOutcome {
         entry,
         result,
         credential_outcome: Some("granted"),
     }
+}
+
+/// Fetches one raw provider model catalog without applying runtime fallbacks.
+///
+/// Credential lookup and concrete provider construction may use blocking
+/// secret stores, so those operations run on Tokio's blocking pool. The
+/// provider's asynchronous HTTP model-list request runs after construction on
+/// the caller's async executor. Callers decide independently whether a fetch
+/// failure should become an ephemeral runtime fallback or a durable CLI error.
+pub(crate) async fn fetch_raw_provider_model_catalog(
+    provider_config: crate::runtime::RuntimeProviderConfig,
+    auth_store: crate::security::auth::AuthStore,
+) -> Result<ProviderModelCatalog> {
+    let provider = tokio::task::spawn_blocking(move || {
+        let api = resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())?;
+        let endpoint_override = provider_config
+            .base_url
+            .as_deref()
+            .filter(|endpoint| !endpoint.is_empty());
+        match api {
+            ProviderApiCompatibility::OpenAiResponses => {
+                openai_responses_provider_from_auth_store_with_provider_options(
+                    &auth_store,
+                    &provider_config.provider_id,
+                    endpoint_override,
+                    &provider_config.options,
+                    DEFAULT_PROVIDER_TIMEOUT_MS,
+                    ReqwestProviderHttpTransport,
+                )
+                .map(|provider| Box::new(provider) as Box<dyn AsyncModelProvider>)
+            }
+            ProviderApiCompatibility::OpenAiChatCompletions => {
+                openai_compatible_provider_from_auth_store_with_provider_options(
+                    &auth_store,
+                    &provider_config.provider_id,
+                    endpoint_override,
+                    &provider_config.options,
+                    DEFAULT_PROVIDER_TIMEOUT_MS,
+                    ReqwestProviderHttpTransport,
+                )
+                .map(|provider| Box::new(provider) as Box<dyn AsyncModelProvider>)
+            }
+            ProviderApiCompatibility::DeepSeekChatCompletions => {
+                deepseek_chat_completions_provider_from_auth_store_with_provider_options(
+                    &auth_store,
+                    &provider_config.provider_id,
+                    endpoint_override,
+                    DEFAULT_PROVIDER_TIMEOUT_MS,
+                    ReqwestProviderHttpTransport,
+                )
+                .map(|provider| Box::new(provider) as Box<dyn AsyncModelProvider>)
+            }
+            ProviderApiCompatibility::AnthropicMessages => Err(MezError::invalid_state(
+                "Anthropic provider model listing is not implemented yet",
+            )),
+        }
+    })
+    .await
+    .map_err(|error| {
+        MezError::invalid_state(format!("provider model catalog setup task failed: {error}"))
+    })??;
+    provider.list_models_async().await
 }
 
 /// Carries Runtime Model Catalog state for this subsystem.

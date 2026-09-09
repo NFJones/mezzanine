@@ -206,104 +206,15 @@ struct DeviceAuthorizationResponse {
     code_verifier: String,
 }
 
-/// Compact web token set used by the browser callback page.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LoginPageThemeTokens {
-    /// Page background color.
-    bg: String,
-    /// Card surface color.
-    surface: String,
-    /// Raised card detail color.
-    surface_elevated: String,
-    /// Card and badge border color.
-    border: String,
-    /// Primary readable text color.
-    text_primary: String,
-    /// Secondary readable text color.
-    text_secondary: String,
-    /// Primary accent color derived from the active Mezzanine theme.
-    accent_primary: String,
-    /// Secondary accent color derived from the active Mezzanine theme.
-    accent_secondary: String,
-    /// Success state color derived from the active Mezzanine theme.
-    success: String,
-    /// CSS alpha value that controls glow strength.
-    glow_strength: &'static str,
-    /// Whether the active token set is dark.
-    is_dark: bool,
-}
-
-/// RGB color used while translating terminal theme colors to CSS.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct LoginPageRgb {
-    /// Red channel.
-    red: u8,
-    /// Green channel.
-    green: u8,
-    /// Blue channel.
-    blue: u8,
-}
-
-impl LoginPageRgb {
-    /// Builds an RGB color from explicit channel values.
-    fn new(red: u8, green: u8, blue: u8) -> Self {
-        Self { red, green, blue }
-    }
-}
-
-/// Browser callback page state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LoginPageKind {
-    /// Successful provider callback.
-    Success,
-    /// Failed provider callback.
-    Error,
-}
-
-impl LoginPageKind {
-    /// Selects a page state from the HTTP status code.
-    fn from_status(status: u16) -> Self {
-        if status == 200 {
-            Self::Success
-        } else {
-            Self::Error
-        }
-    }
-
-    /// Returns the short badge label for this page state.
-    fn badge(self) -> &'static str {
-        match self {
-            Self::Success => "OK",
-            Self::Error => "ERR",
-        }
-    }
-
-    /// Returns the page headline for this page state.
-    fn headline(self) -> &'static str {
-        match self {
-            Self::Success => "Login successful",
-            Self::Error => "Sign-in failed",
-        }
-    }
-
-    /// Returns the follow-up instruction for this page state.
-    fn hint(self) -> &'static str {
-        match self {
-            Self::Success => "You can close this tab and return to Mezzanine.",
-            Self::Error => "Return to Mezzanine and try the sign-in flow again.",
-        }
-    }
-}
-
 /// Runs the default browser-based ChatGPT sign-in flow.
 mod browser_flow;
 mod callback_server;
 mod claims;
 mod http;
-mod login_page;
 mod pkce;
 mod platform_browser;
 
+use super::callback_page::LoginPageThemeTokens;
 use claims::{deserialize_device_interval, deserialize_optional_u64};
 
 pub use browser_flow::{

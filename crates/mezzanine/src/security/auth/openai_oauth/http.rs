@@ -1,6 +1,6 @@
 //! OAuth provider HTTP requests and response error projection.
 
-use super::login_page::write_http_response_with_tokens;
+use super::super::callback_page::write_http_response_with_tokens;
 use super::pkce::form_body;
 use super::platform_browser::json_escape;
 use super::{

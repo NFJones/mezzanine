@@ -6,6 +6,8 @@
 //! transcript entries and lets provider adapters opt into rendering them back
 //! into native request messages.
 
+use std::collections::BTreeSet;
+
 use serde_json::Value;
 
 /// Marker prefix for hidden provider-native transcript entries.
@@ -17,6 +19,8 @@ const PROVIDER_TRANSCRIPT_EVENT_VERSION: &str = "mez-provider-transcript-event/v
 const DEEPSEEK_PROVIDER_ID: &str = "deepseek";
 /// Provider identifier for OpenAI Responses-native transcript events.
 const OPENAI_PROVIDER_ID: &str = "openai";
+/// API-family marker for generic OpenAI-compatible Chat Completions events.
+const OPENAI_CHAT_COMPLETIONS_API_ID: &str = "openai_chat_completions";
 /// DeepSeek assistant tool-call event kind.
 const DEEPSEEK_ASSISTANT_TOOL_CALL_KIND: &str = "assistant_tool_call";
 /// DeepSeek tool-result event kind.
@@ -25,6 +29,11 @@ const DEEPSEEK_TOOL_RESULT_KIND: &str = "tool_result";
 const OPENAI_RESPONSE_OUTPUT_KIND: &str = "response_output";
 /// OpenAI Responses function-call-output event kind.
 const OPENAI_FUNCTION_CALL_OUTPUT_KIND: &str = "function_call_output";
+/// Generic Chat Completions assistant tool-call event kind.
+const OPENAI_CHAT_COMPLETIONS_ASSISTANT_TOOL_CALL_KIND: &str =
+    "chat_completions_assistant_tool_call";
+/// Generic Chat Completions tool-result event kind.
+const OPENAI_CHAT_COMPLETIONS_TOOL_RESULT_KIND: &str = "chat_completions_tool_result";
 
 /// Hidden provider-native transcript event replayed only by compatible
 /// provider adapters.
@@ -41,6 +50,24 @@ pub enum ProviderTranscriptEvent {
         call_id: String,
         /// Provider-facing action result text.
         output: String,
+    },
+    /// Generic Chat Completions assistant message with native MAAP calls.
+    OpenAiChatCompletionsAssistantToolCall {
+        /// Configured provider instance that produced the opaque call ids.
+        provider_id: String,
+        /// Assistant-visible content associated with the native call.
+        content: String,
+        /// Native Chat Completions tool-call objects in declaration order.
+        tool_calls: Vec<Value>,
+    },
+    /// Generic Chat Completions result paired with one native call id.
+    OpenAiChatCompletionsToolResult {
+        /// Configured provider instance that owns the opaque call id.
+        provider_id: String,
+        /// Native Chat Completions tool-call identity being answered.
+        tool_call_id: String,
+        /// Provider-facing action result text.
+        content: String,
     },
     /// DeepSeek assistant message containing thinking-mode tool-call metadata.
     DeepSeekAssistantToolCall {
@@ -77,6 +104,30 @@ impl ProviderTranscriptEvent {
                 "kind": OPENAI_FUNCTION_CALL_OUTPUT_KIND,
                 "call_id": call_id,
                 "output": output,
+            }),
+            Self::OpenAiChatCompletionsAssistantToolCall {
+                provider_id,
+                content,
+                tool_calls,
+            } => serde_json::json!({
+                "version": PROVIDER_TRANSCRIPT_EVENT_VERSION,
+                "api": OPENAI_CHAT_COMPLETIONS_API_ID,
+                "provider": provider_id,
+                "kind": OPENAI_CHAT_COMPLETIONS_ASSISTANT_TOOL_CALL_KIND,
+                "content": content,
+                "tool_calls": tool_calls,
+            }),
+            Self::OpenAiChatCompletionsToolResult {
+                provider_id,
+                tool_call_id,
+                content,
+            } => serde_json::json!({
+                "version": PROVIDER_TRANSCRIPT_EVENT_VERSION,
+                "api": OPENAI_CHAT_COMPLETIONS_API_ID,
+                "provider": provider_id,
+                "kind": OPENAI_CHAT_COMPLETIONS_TOOL_RESULT_KIND,
+                "tool_call_id": tool_call_id,
+                "content": content,
             }),
             Self::DeepSeekAssistantToolCall {
                 content,
@@ -118,6 +169,33 @@ impl ProviderTranscriptEvent {
         }
         let provider = value.get("provider")?.as_str()?;
         let kind = value.get("kind")?.as_str()?;
+        if value.get("api").and_then(Value::as_str) == Some(OPENAI_CHAT_COMPLETIONS_API_ID) {
+            return match kind {
+                OPENAI_CHAT_COMPLETIONS_ASSISTANT_TOOL_CALL_KIND => {
+                    Self::validated_openai_chat_completions_assistant_tool_call(
+                        provider.to_string(),
+                        value
+                            .get("content")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        value.get("tool_calls")?.as_array()?.clone(),
+                    )
+                }
+                OPENAI_CHAT_COMPLETIONS_TOOL_RESULT_KIND => {
+                    let tool_call_id = value.get("tool_call_id")?.as_str()?;
+                    if !provider_instance_id_is_valid(provider) || tool_call_id.is_empty() {
+                        return None;
+                    }
+                    Some(Self::OpenAiChatCompletionsToolResult {
+                        provider_id: provider.to_string(),
+                        tool_call_id: tool_call_id.to_string(),
+                        content: value.get("content")?.as_str()?.to_string(),
+                    })
+                }
+                _ => None,
+            };
+        }
         match (provider, kind) {
             (OPENAI_PROVIDER_ID, OPENAI_RESPONSE_OUTPUT_KIND) => {
                 let items = value.get("items")?.as_array()?.clone();
@@ -180,6 +258,15 @@ impl ProviderTranscriptEvent {
                     output: crate::historical_tool_result_context_content(output)?,
                 })
             }
+            Self::OpenAiChatCompletionsToolResult {
+                provider_id,
+                tool_call_id,
+                content,
+            } => Some(Self::OpenAiChatCompletionsToolResult {
+                provider_id: provider_id.clone(),
+                tool_call_id: tool_call_id.clone(),
+                content: crate::historical_tool_result_context_content(content)?,
+            }),
             Self::DeepSeekToolResult {
                 tool_call_id,
                 content,
@@ -187,9 +274,9 @@ impl ProviderTranscriptEvent {
                 tool_call_id: tool_call_id.clone(),
                 content: crate::historical_tool_result_context_content(content)?,
             }),
-            Self::OpenAiResponseOutput { .. } | Self::DeepSeekAssistantToolCall { .. } => {
-                Some(self.clone())
-            }
+            Self::OpenAiResponseOutput { .. }
+            | Self::OpenAiChatCompletionsAssistantToolCall { .. }
+            | Self::DeepSeekAssistantToolCall { .. } => Some(self.clone()),
         }
     }
 
@@ -204,8 +291,56 @@ impl ProviderTranscriptEvent {
                 .collect(),
             Self::OpenAiResponseOutput { .. }
             | Self::OpenAiFunctionCallOutput { .. }
+            | Self::OpenAiChatCompletionsAssistantToolCall { .. }
+            | Self::OpenAiChatCompletionsToolResult { .. }
             | Self::DeepSeekToolResult { .. } => Vec::new(),
         }
+    }
+
+    /// Builds a strictly validated generic Chat Completions assistant event.
+    pub fn validated_openai_chat_completions_assistant_tool_call(
+        provider_id: String,
+        content: String,
+        tool_calls: Vec<Value>,
+    ) -> Option<Self> {
+        if !provider_instance_id_is_valid(&provider_id)
+            || Self::validated_openai_chat_completions_tool_calls(&tool_calls).is_none()
+        {
+            return None;
+        }
+        Some(Self::OpenAiChatCompletionsAssistantToolCall {
+            provider_id,
+            content,
+            tool_calls,
+        })
+    }
+
+    /// Validates native generic Chat Completions MAAP calls for safe replay.
+    pub fn validated_openai_chat_completions_tool_calls(tool_calls: &[Value]) -> Option<()> {
+        if tool_calls.is_empty()
+            || !tool_calls
+                .iter()
+                .all(openai_chat_completions_tool_call_is_valid)
+        {
+            return None;
+        }
+        let mut ids = BTreeSet::new();
+        tool_calls
+            .iter()
+            .all(|call| ids.insert(call["id"].as_str().expect("validated call id").to_string()))
+            .then_some(())
+    }
+
+    /// Returns generic Chat Completions MAAP call ids in declaration order.
+    pub fn openai_chat_completions_tool_call_ids(&self) -> Vec<String> {
+        let Self::OpenAiChatCompletionsAssistantToolCall { tool_calls, .. } = self else {
+            return Vec::new();
+        };
+        tool_calls
+            .iter()
+            .filter_map(|call| call.get("id").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect()
     }
 
     /// Builds a validated opaque OpenAI Responses output event.
@@ -244,11 +379,13 @@ impl ProviderTranscriptEvent {
     }
 
     /// Returns the provider id that exclusively owns this native event.
-    pub fn provider_id(&self) -> &'static str {
+    pub fn provider_id(&self) -> &str {
         match self {
             Self::OpenAiResponseOutput { .. } | Self::OpenAiFunctionCallOutput { .. } => {
                 OPENAI_PROVIDER_ID
             }
+            Self::OpenAiChatCompletionsAssistantToolCall { provider_id, .. }
+            | Self::OpenAiChatCompletionsToolResult { provider_id, .. } => provider_id,
             Self::DeepSeekAssistantToolCall { .. } | Self::DeepSeekToolResult { .. } => {
                 DEEPSEEK_PROVIDER_ID
             }
@@ -264,9 +401,38 @@ impl ProviderTranscriptEvent {
                 "call_id": call_id,
                 "output": output,
             })]),
-            Self::DeepSeekAssistantToolCall { .. } | Self::DeepSeekToolResult { .. } => None,
+            Self::OpenAiChatCompletionsAssistantToolCall { .. }
+            | Self::OpenAiChatCompletionsToolResult { .. }
+            | Self::DeepSeekAssistantToolCall { .. }
+            | Self::DeepSeekToolResult { .. } => None,
         }
     }
+}
+
+fn provider_instance_id_is_valid(provider_id: &str) -> bool {
+    !provider_id.is_empty()
+        && provider_id.trim() == provider_id
+        && provider_id.chars().all(|character| !character.is_control())
+}
+
+fn openai_chat_completions_tool_call_is_valid(call: &Value) -> bool {
+    call.get("id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.is_empty())
+        && call.get("type").and_then(Value::as_str) == Some("function")
+        && call
+            .get("function")
+            .and_then(|function| function.get("name"))
+            .and_then(Value::as_str)
+            == Some(crate::MAAP_ACTION_BATCH_TOOL_NAME)
+        && call
+            .get("function")
+            .and_then(|function| function.get("arguments"))
+            .and_then(Value::as_str)
+            .is_some_and(|arguments| {
+                !arguments.is_empty()
+                    && serde_json::from_str::<Value>(arguments).is_ok_and(|value| value.is_object())
+            })
 }
 
 /// Validates the minimum replay contract for one opaque Responses output item.
@@ -329,6 +495,75 @@ mod tests {
                 "name": "submit_maap_action_batch",
                 "arguments": "{}"
             })]),
+            None
+        );
+    }
+
+    /// Verifies generic Chat Completions events retain the configured provider
+    /// instance and reject native MAAP calls without replay-safe identity.
+    #[test]
+    fn openai_chat_completions_events_round_trip_and_reject_partial_calls() {
+        let tool_calls = vec![serde_json::json!({
+            "id": "call_compatible_1",
+            "type": "function",
+            "function": {
+                "name": "submit_maap_action_batch",
+                "arguments": "{}"
+            }
+        })];
+        let event = ProviderTranscriptEvent::validated_openai_chat_completions_assistant_tool_call(
+            "bedrock".to_string(),
+            "visible assistant content".to_string(),
+            tool_calls,
+        )
+        .unwrap();
+
+        assert_eq!(
+            ProviderTranscriptEvent::from_transcript_content(&event.to_transcript_content()),
+            Some(event.clone())
+        );
+        assert_eq!(event.provider_id(), "bedrock");
+        assert_eq!(
+            event.openai_chat_completions_tool_call_ids(),
+            ["call_compatible_1"]
+        );
+        assert_eq!(
+            ProviderTranscriptEvent::validated_openai_chat_completions_assistant_tool_call(
+                "bedrock".to_string(),
+                String::new(),
+                vec![serde_json::json!({
+                    "type": "function",
+                    "function": {
+                        "name": "submit_maap_action_batch",
+                        "arguments": "{}"
+                    }
+                })],
+            ),
+            None
+        );
+        assert_eq!(
+            ProviderTranscriptEvent::validated_openai_chat_completions_assistant_tool_call(
+                "bedrock".to_string(),
+                String::new(),
+                vec![
+                    serde_json::json!({
+                        "id": "duplicate-call",
+                        "type": "function",
+                        "function": {
+                            "name": "submit_maap_action_batch",
+                            "arguments": "{}"
+                        }
+                    }),
+                    serde_json::json!({
+                        "id": "duplicate-call",
+                        "type": "function",
+                        "function": {
+                            "name": "submit_maap_action_batch",
+                            "arguments": "{}"
+                        }
+                    }),
+                ],
+            ),
             None
         );
     }

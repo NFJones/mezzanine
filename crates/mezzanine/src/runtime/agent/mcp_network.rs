@@ -178,8 +178,12 @@ impl RuntimeSessionService {
             .filter(|identity| {
                 !self
                     .agent
-                    .claimed_approved_external_actions
-                    .contains_key(*identity)
+                    .pending_agent_provider_persistence
+                    .contains(&identity.0)
+                    && !self
+                        .agent
+                        .claimed_approved_external_actions
+                        .contains_key(*identity)
             })
             .cloned()
             .collect()
@@ -260,6 +264,13 @@ impl RuntimeSessionService {
         action_id: &str,
     ) -> Result<Option<RuntimeApprovedExternalActionDispatch>> {
         let identity = (turn_id.to_string(), action_id.to_string());
+        if self
+            .agent
+            .pending_agent_provider_persistence
+            .contains(turn_id)
+        {
+            return Ok(None);
+        }
         if self
             .agent
             .claimed_approved_external_actions

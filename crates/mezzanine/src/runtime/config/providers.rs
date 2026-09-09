@@ -396,7 +396,7 @@ fn runtime_model_profile_positive_token_count_with_aliases(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn runtime_provider_config_from_config(
+pub(crate) fn runtime_provider_config_from_config(
     provider_id: &str,
     value: &Value,
 ) -> Result<RuntimeProviderConfig> {

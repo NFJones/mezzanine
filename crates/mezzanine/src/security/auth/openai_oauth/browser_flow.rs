@@ -1,12 +1,12 @@
 //! Browser and device-code OAuth flow orchestration.
 
+use super::super::callback_page::login_page_theme_tokens;
 use super::callback_server::parse_callback_request;
 use super::claims::provider_credential_from_tokens;
 use super::http::{
     exchange_code_for_tokens_async, poll_device_authorization_async, refresh_tokens_async,
     request_device_code_async, write_http_response_with_tokens_async,
 };
-use super::login_page::login_page_theme_tokens;
 use super::pkce::{build_authorize_url, generate_pkce, random_urlsafe_token};
 use super::platform_browser::open_browser;
 use super::{

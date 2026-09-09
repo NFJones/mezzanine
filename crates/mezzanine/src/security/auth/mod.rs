@@ -4,6 +4,8 @@
 //! interface. Auth metadata records only non-secret provider state and opaque
 //! references to stored credentials.
 
+/// Shared browser callback presentation for provider and MCP OAuth flows.
+mod callback_page;
 /// Exposes the command store module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -57,7 +59,7 @@ pub use command_store::{
 #[cfg(test)]
 pub use file_store::PrivateFileCredentialStore;
 
-pub use mcp_oauth::run_mcp_oauth_login_async;
+pub use mcp_oauth::run_mcp_oauth_login_with_theme_async;
 pub use openai_oauth::{
     OpenAiProviderCredential, run_openai_browser_login_with_theme_async,
     run_openai_device_code_login_async,

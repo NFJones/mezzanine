@@ -71,6 +71,7 @@ or repository document.
 ## Related pages
 
 - [First session](first-session.md)
+- [Configure AWS Bedrock through its OpenAI-compatible API](../agent/aws-bedrock-openai-compatible.md)
 - [Agent and integrations](../agent/README.md)
 - [Configuration](../configuration/README.md)
 - [Operations and troubleshooting](../operations/README.md)

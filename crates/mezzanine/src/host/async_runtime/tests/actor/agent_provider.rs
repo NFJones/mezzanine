@@ -399,12 +399,15 @@ async fn async_actor_applies_agent_provider_completion_events() {
 }
 
 /// Verifies provider-produced issue writes cross the actor-validation,
-/// blocking persistence, and typed actor-resume boundaries in order.
+/// blocking persistence, and typed actor-resume boundaries before a sibling
+/// external action becomes dispatchable.
 ///
 /// The issue database must remain untouched after provider event ingress and
 /// appear only after the persistence worker drains the validated settlement.
+/// The sibling network action must remain queued but fenced until that same
+/// settlement stores the execution used by external-action dispatch.
 #[tokio::test(flavor = "current_thread")]
-async fn async_actor_defers_provider_issue_actions_to_persistence_worker() {
+async fn async_actor_fences_external_actions_while_provider_persistence_settles() {
     let config_root = std::env::temp_dir().join(format!(
         "mez-provider-issue-settlement-{}-{:?}",
         std::process::id(),
@@ -434,7 +437,7 @@ async fn async_actor_defers_provider_issue_actions_to_persistence_worker() {
         .find(|turn| turn.turn_id == task.turn_id)
         .cloned()
         .unwrap();
-    let action = mez_agent::AgentAction {
+    let issue_action = mez_agent::AgentAction {
         id: "issue-add-1".to_string(),
 
         payload: mez_agent::AgentActionPayload::IssueAdd {
@@ -445,6 +448,15 @@ async fn async_actor_defers_provider_issue_actions_to_persistence_worker() {
             body: None,
             notes: None,
             depends_on: Vec::new(),
+        },
+    };
+    let network_action = mez_agent::AgentAction {
+        id: "fetch-after-issue-1".to_string(),
+
+        payload: mez_agent::AgentActionPayload::FetchUrl {
+            url: "https://example.test/after-issue".to_string(),
+            format: None,
+            max_bytes: None,
         },
     };
     let execution = mez_agent::AgentTurnExecution {
@@ -477,9 +489,7 @@ async fn async_actor_defers_provider_issue_actions_to_persistence_worker() {
             memory_actions_enabled: false,
             issue_actions_enabled: true,
             interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
-            allowed_actions: mez_agent::AllowedActionSet::for_capability(
-                mez_agent::AgentCapability::Issues,
-            ),
+            allowed_actions: mez_agent::AllowedActionSet::all_enabled(),
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: mez_agent::ContextSourceKind::UserInstruction,
@@ -491,25 +501,33 @@ async fn async_actor_defers_provider_issue_actions_to_persistence_worker() {
         response: mez_agent::ModelResponse {
             provider: task.model_profile.provider.clone(),
             model: task.model_profile.model.clone(),
-            raw_text: "issue action".to_string(),
+            raw_text: "issue and network actions".to_string(),
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
-                rationale: "persist one issue".to_string(),
+                rationale: "persist one issue before fetching a source".to_string(),
 
-                actions: vec![action.clone()],
+                actions: vec![issue_action.clone(), network_action.clone()],
             }),
             provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
-        action_results: vec![mez_agent::ActionResult::running(
-            &turn,
-            &action,
-            vec!["issue action accepted".to_string()],
-            Some(r#"{"state":"pending_persistence"}"#.to_string()),
-        )],
+        action_results: vec![
+            mez_agent::ActionResult::running(
+                &turn,
+                &issue_action,
+                vec!["issue action accepted".to_string()],
+                Some(r#"{"state":"pending_persistence"}"#.to_string()),
+            ),
+            mez_agent::ActionResult::running(
+                &turn,
+                &network_action,
+                vec!["network action accepted for worker execution".to_string()],
+                None,
+            ),
+        ],
         final_turn: true,
         terminal_state: mez_agent::AgentTurnState::Running,
     };
@@ -533,6 +551,14 @@ async fn async_actor_defers_provider_issue_actions_to_persistence_worker() {
         let ingress = handle.submit_runtime_events(batch).await.unwrap();
         assert_eq!(ingress.applied, 1);
         assert!(!database_path.exists());
+        assert!(
+            handle
+                .drain_agent_provider_dispatch_side_effects(8)
+                .await
+                .unwrap()
+                .is_empty(),
+            "external dispatch must remain fenced while persistence owns the turn"
+        );
 
         let persistence = run_async_persistence_side_effect_service(
             &handle,
@@ -549,6 +575,17 @@ async fn async_actor_defers_provider_issue_actions_to_persistence_worker() {
         assert_eq!(persistence.completed, 1);
         assert_eq!(persistence.failed, 0);
         assert_eq!(persistence.applied_events, 1);
+        assert_eq!(
+            handle
+                .drain_agent_provider_dispatch_side_effects(8)
+                .await
+                .unwrap(),
+            vec![RuntimeSideEffect::DispatchApprovedExternalAction {
+                turn_id: turn.turn_id.clone(),
+                action_id: network_action.id.clone(),
+            }],
+            "persistence settlement must release the preserved network action"
+        );
         handle.shutdown().await.unwrap();
     };
 
@@ -560,7 +597,11 @@ async fn async_actor_defers_provider_issue_actions_to_persistence_worker() {
         })
         .unwrap();
     assert_eq!(count, 1);
-    assert!(!exit.service.agent_turn_is_running(&turn.turn_id));
+    assert!(exit.service.agent_turn_is_running(&turn.turn_id));
+    assert_eq!(
+        exit.service.pending_approved_external_actions(),
+        vec![(turn.turn_id.clone(), network_action.id)]
+    );
     exit.service.terminate_all_pane_processes().unwrap();
     let _ = std::fs::remove_dir_all(config_root);
 }

@@ -103,6 +103,14 @@ fn assemble_model_request_from_context_for_api(
             })
         })
         .filter_map(|metadata| metadata.execution_group_id().cloned())
+        .filter(|group| {
+            api != Some(ProviderApiCompatibility::OpenAiChatCompletions)
+                || openai_chat_completions_native_group_is_complete(
+                    context,
+                    group,
+                    &profile.provider,
+                )
+        })
         .collect::<BTreeSet<_>>();
     let prompt_profile = AgentPromptProfile::for_model(&profile.model);
     let mut messages = Vec::with_capacity(blocks.len() + 1);
@@ -195,6 +203,57 @@ fn assemble_model_request_from_context_for_api(
     };
     constrain_skill_actions_for_loaded_context(&mut request);
     Ok(request)
+}
+
+/// Reports whether one generic Chat Completions execution group contains one
+/// complete assistant-call/result chain in declaration order.
+///
+/// Neutral assistant and action-result blocks are suppressed only after this
+/// check succeeds. Partial, duplicated, reordered, or foreign native events
+/// therefore fail closed to the provider-neutral projection.
+fn openai_chat_completions_native_group_is_complete(
+    context: &AgentContext,
+    group: &crate::ContextExecutionGroupId,
+    provider_id: &str,
+) -> bool {
+    let mut expected_ids = None;
+    let mut result_ids = Vec::new();
+    for (index, block) in context.blocks().iter().enumerate() {
+        let Some(metadata) = context.metadata_for_block(index) else {
+            return false;
+        };
+        if metadata.execution_group_id() != Some(group) || metadata.provider_owner().is_none() {
+            continue;
+        }
+        let Some(event) = crate::ProviderTranscriptEvent::from_transcript_content(&block.content)
+        else {
+            return false;
+        };
+        match event {
+            crate::ProviderTranscriptEvent::OpenAiChatCompletionsAssistantToolCall {
+                provider_id: event_provider_id,
+                tool_calls,
+                ..
+            } if event_provider_id == provider_id && expected_ids.is_none() => {
+                expected_ids = Some(
+                    tool_calls
+                        .iter()
+                        .filter_map(|call| call.get("id").and_then(serde_json::Value::as_str))
+                        .map(str::to_string)
+                        .collect::<Vec<_>>(),
+                );
+            }
+            crate::ProviderTranscriptEvent::OpenAiChatCompletionsToolResult {
+                provider_id: event_provider_id,
+                tool_call_id,
+                ..
+            } if event_provider_id == provider_id && expected_ids.is_some() => {
+                result_ids.push(tool_call_id);
+            }
+            _ => return false,
+        }
+    }
+    expected_ids.is_some_and(|expected_ids| expected_ids == result_ids)
 }
 
 /// Maps canonical context semantics to provider-neutral message roles.
@@ -572,6 +631,119 @@ mod tests {
                         .content
                         .starts_with(crate::PROVIDER_TRANSCRIPT_EVENT_MARKER)
             }));
+        }
+    }
+
+    /// Verifies generic Chat Completions native state is selected only for the
+    /// exact configured provider and API, with neutral history retained for
+    /// provider-instance and API switches.
+    #[test]
+    fn model_request_assembly_scopes_generic_chat_continuity_to_exact_owner() {
+        let provider = "configured-chat";
+        let assistant_native =
+            ProviderTranscriptEvent::validated_openai_chat_completions_assistant_tool_call(
+                provider.to_string(),
+                String::new(),
+                vec![serde_json::json!({
+                    "id": "call-chat-1",
+                    "type": "function",
+                    "function": {
+                        "name": "submit_maap_action_batch",
+                        "arguments": "{}"
+                    }
+                })],
+            )
+            .unwrap()
+            .to_transcript_content();
+        let result_native = ProviderTranscriptEvent::OpenAiChatCompletionsToolResult {
+            provider_id: provider.to_string(),
+            tool_call_id: "call-chat-1".to_string(),
+            content: "native result".to_string(),
+        }
+        .to_transcript_content();
+        let owner = crate::ProviderContinuityOwner::new(
+            ProviderApiCompatibility::OpenAiChatCompletions,
+            provider,
+        )
+        .unwrap();
+        let mut context = AgentContext::new(vec![ContextBlock::user_event(
+            "user",
+            "continue the compatible execution",
+        )])
+        .unwrap();
+        let group = crate::ContextExecutionGroupId::new("provider-execution-chat").unwrap();
+        context
+            .append_assistant_event("assistant", "neutral assistant", group.clone())
+            .unwrap();
+        context
+            .append_evidence_event(
+                ContextSourceKind::TranscriptTool,
+                "native assistant",
+                assistant_native.clone(),
+                group.clone(),
+                Some(owner.clone()),
+                true,
+            )
+            .unwrap();
+        context
+            .append_evidence_event(
+                ContextSourceKind::ActionResult,
+                "action result",
+                "neutral result",
+                group.clone(),
+                None,
+                true,
+            )
+            .unwrap();
+        context
+            .append_evidence_event(
+                ContextSourceKind::TranscriptTool,
+                "native result",
+                result_native.clone(),
+                group,
+                Some(owner),
+                true,
+            )
+            .unwrap();
+
+        for (api, selected_provider, expects_native) in [
+            (
+                ProviderApiCompatibility::OpenAiChatCompletions,
+                provider,
+                true,
+            ),
+            (
+                ProviderApiCompatibility::OpenAiChatCompletions,
+                "other-chat",
+                false,
+            ),
+            (ProviderApiCompatibility::OpenAiResponses, provider, false),
+        ] {
+            let request = assemble_model_request_from_context_with_api(
+                &model_profile(selected_provider),
+                api,
+                ModelRequestIdentity {
+                    turn_id: "turn-1",
+                    agent_id: "agent-1",
+                    pane_id: "%1",
+                },
+                &context,
+                &TestPromptAssets,
+            )
+            .unwrap();
+            assert_eq!(
+                request.messages.iter().any(|message| {
+                    message.content == assistant_native || message.content == result_native
+                }),
+                expects_native
+            );
+            assert_eq!(
+                request.messages.iter().any(|message| {
+                    message.content.contains("neutral assistant")
+                        || message.content.contains("neutral result")
+                }),
+                !expects_native
+            );
         }
     }
 

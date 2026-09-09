@@ -65,6 +65,7 @@ allowed project-specific settings only after the project is trusted.
 ## Related pages
 
 - [Providers and models](../agent/providers-and-models.md)
+- [Configure AWS Bedrock through its OpenAI-compatible API](../agent/aws-bedrock-openai-compatible.md)
 - [Authenticate a provider](../getting-started/authentication.md)
 - [MCP integration](../agent/mcp-integration.md)
 - [Configuration reference](reference.md)

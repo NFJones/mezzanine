@@ -136,6 +136,13 @@ fn provider_transcript_entries_for_execution(
                 output: provider_tool_result_content_for_execution(execution),
             });
         }
+        for tool_call_id in event.openai_chat_completions_tool_call_ids() {
+            events.push(ProviderTranscriptEvent::OpenAiChatCompletionsToolResult {
+                provider_id: event.provider_id().to_string(),
+                tool_call_id,
+                content: provider_tool_result_content_for_execution(execution),
+            });
+        }
         for tool_call_id in event.deepseek_tool_call_ids() {
             events.push(ProviderTranscriptEvent::DeepSeekToolResult {
                 tool_call_id,

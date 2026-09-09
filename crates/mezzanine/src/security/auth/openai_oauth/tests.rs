@@ -1,12 +1,12 @@
 //! OpenAI OAuth behavior and regression tests.
 
+use super::super::callback_page::{login_page_theme_tokens, write_http_response_with_tokens};
 use super::browser_flow::{
     browser_login_launch_message, wait_for_browser_authorization_code_async,
 };
 use super::callback_server::{parse_callback_request, write_http_response};
 use super::claims::{current_unix_seconds, parse_jwt_claims, provider_credential_from_tokens};
 use super::http::{device_code_request_body, poll_device_authorization_async};
-use super::login_page::{login_page_theme_tokens, write_http_response_with_tokens};
 use super::pkce::{build_authorize_url, form_body, generate_pkce};
 use super::{
     DEFAULT_CLIENT_ID, DEFAULT_ISSUER, DeviceCodeResponse, MezErrorKind, PkceCodes, TokenResponse,

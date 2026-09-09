@@ -17,7 +17,12 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::error::{MezError, Result};
 
+use super::callback_page::{
+    LoginPageKind, LoginPageThemeTokens, login_page_theme_tokens, write_http_response_with_kind,
+    write_http_response_with_tokens,
+};
 use super::types::McpOAuthCredential;
+use mez_mux::theme::UiTheme;
 
 const MCP_BROWSER_PORT: u16 = 1457;
 const MCP_BROWSER_FALLBACK_PORT: u16 = 1458;
@@ -26,7 +31,8 @@ const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_CLIENT_ID: &str = "mezzanine";
 
 /// Runs an MCP OAuth authorization-code + PKCE browser login.
-pub async fn run_mcp_oauth_login_async(
+pub async fn run_mcp_oauth_login_with_theme_async(
+    ui_theme: &UiTheme,
     server_url: &str,
     scopes: &[String],
     client_id: Option<&str>,
@@ -56,7 +62,9 @@ pub async fn run_mcp_oauth_login_async(
         "{}",
         browser_login_launch_message(&auth_url, browser_opened)
     );
-    let callback = wait_for_browser_authorization_code_async(listener, &state).await?;
+    let page_tokens = login_page_theme_tokens(ui_theme);
+    let callback =
+        wait_for_browser_authorization_code_async(listener, &state, &page_tokens).await?;
     let mut credential = exchange_mcp_code_for_tokens_async(
         &metadata.token_endpoint,
         &client_id,
@@ -475,6 +483,7 @@ fn bind_browser_login_listener() -> Result<TcpListener> {
 async fn wait_for_browser_authorization_code_async(
     listener: TcpListener,
     expected_state: &str,
+    page_tokens: &LoginPageThemeTokens,
 ) -> Result<McpOAuthCallback> {
     listener.set_nonblocking(true)?;
     let listener = tokio::net::TcpListener::from_std(listener)?;
@@ -493,11 +502,24 @@ async fn wait_for_browser_authorization_code_async(
     let request = String::from_utf8_lossy(&buffer[..bytes_read]);
     let callback = match parse_callback_request(&request, expected_state) {
         Ok(callback) => {
-            let _ = write_http_response_async(&mut stream, 200, "MCP login complete.").await;
+            let _ = write_http_response_async_with_kind(
+                &mut stream,
+                200,
+                "MCP authorization callback accepted. Return to Mezzanine while token exchange completes.",
+                page_tokens,
+                LoginPageKind::CallbackAccepted,
+            )
+            .await;
             callback
         }
         Err(error) => {
-            let _ = write_http_response_async(&mut stream, 400, "MCP login failed.").await;
+            let _ = write_http_response_async(
+                &mut stream,
+                400,
+                "MCP authorization callback failed.",
+                page_tokens,
+            )
+            .await;
             return Err(error);
         }
     };
@@ -508,19 +530,58 @@ async fn write_http_response_async(
     stream: &mut tokio::net::TcpStream,
     status: u16,
     message: &str,
+    page_tokens: &LoginPageThemeTokens,
 ) -> Result<()> {
-    let reason = if status == 200 { "OK" } else { "Bad Request" };
-    let body = format!("<html><body>{message}</body></html>");
-    let response = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    tokio::time::timeout(HTTP_REQUEST_TIMEOUT, stream.write_all(response.as_bytes()))
+    let response = mcp_callback_http_response(status, message, page_tokens)?;
+    tokio::time::timeout(HTTP_REQUEST_TIMEOUT, stream.write_all(&response))
         .await
         .map_err(|_| {
             MezError::invalid_state("MCP OAuth browser callback timed out while writing")
         })??;
     Ok(())
+}
+
+async fn write_http_response_async_with_kind(
+    stream: &mut tokio::net::TcpStream,
+    status: u16,
+    message: &str,
+    page_tokens: &LoginPageThemeTokens,
+    kind: LoginPageKind,
+) -> Result<()> {
+    let mut response = Vec::new();
+    write_http_response_with_kind(&mut response, status, message, page_tokens, kind)?;
+    tokio::time::timeout(HTTP_REQUEST_TIMEOUT, stream.write_all(&response))
+        .await
+        .map_err(|_| {
+            MezError::invalid_state("MCP OAuth browser callback timed out while writing")
+        })??;
+    Ok(())
+}
+
+fn mcp_callback_http_response(
+    status: u16,
+    message: &str,
+    page_tokens: &LoginPageThemeTokens,
+) -> Result<Vec<u8>> {
+    let mut response = Vec::new();
+    write_http_response_with_tokens(&mut response, status, message, page_tokens)?;
+    Ok(response)
+}
+
+#[cfg(test)]
+fn mcp_callback_accepted_http_response(
+    message: &str,
+    page_tokens: &LoginPageThemeTokens,
+) -> Result<Vec<u8>> {
+    let mut response = Vec::new();
+    write_http_response_with_kind(
+        &mut response,
+        200,
+        message,
+        page_tokens,
+        LoginPageKind::CallbackAccepted,
+    )?;
+    Ok(response)
 }
 
 fn parse_callback_request(request: &str, expected_state: &str) -> Result<McpOAuthCallback> {
@@ -755,10 +816,12 @@ mod tests {
         McpOAuthMetadata, PkceCodes, Value, authorization_code_form, build_authorize_url,
         canonical_mcp_resource, credential_from_token_response,
         discover_mcp_protected_resource_async, dynamic_client_registration_body,
+        login_page_theme_tokens, mcp_callback_accepted_http_response, mcp_callback_http_response,
         optional_string_json_field, parse_callback_request, protected_resource_metadata_url,
         refresh_token_form, string_json_field, validate_discovered_resource,
     };
     use crate::security::auth::{MCP_TEST_LONG_ACCESS_TOKEN, MCP_TEST_LONG_REFRESH_TOKEN};
+    use mez_mux::theme::UiTheme;
     use std::io::{Read, Write};
 
     /// Verifies authorize URLs carry the PKCE, scope, and resource fields MCP
@@ -944,5 +1007,62 @@ mod tests {
         assert_eq!(callback.scopes, ["read:all:twg", "write:all:twg"]);
         let error = parse_callback_request(request, "bad").unwrap_err();
         assert!(error.message().contains("state did not match"));
+    }
+
+    /// Verifies MCP callbacks use the shared themed transcript presentation
+    /// for both successful and failed browser authorization responses.
+    #[test]
+    fn mcp_callback_response_uses_shared_themed_presentation() {
+        let dark_tokens = login_page_theme_tokens(&UiTheme::default());
+        let dark = String::from_utf8(
+            mcp_callback_accepted_http_response("MCP callback accepted.", &dark_tokens).unwrap(),
+        )
+        .unwrap();
+        let light_theme = mez_mux::theme::resolve_ui_theme(
+            "gruvbox_light",
+            mez_mux::theme::builtin_ui_theme_definition("gruvbox_light").unwrap(),
+        )
+        .unwrap();
+        let light_tokens = login_page_theme_tokens(&light_theme);
+        let light = String::from_utf8(
+            mcp_callback_http_response(400, "MCP callback failed.", &light_tokens).unwrap(),
+        )
+        .unwrap();
+
+        assert!(dark.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(dark.contains("class=\"mez-shell\""));
+        assert!(dark.contains("class=\"mez-pane\""));
+        assert!(dark.contains("Authorization callback accepted"));
+        assert!(dark.contains("token exchange and credential storage complete"));
+        assert!(!dark.contains("Login successful"));
+        assert!(!dark.contains("You can close this tab"));
+        assert!(dark.contains("color-scheme: dark"));
+        assert!(light.starts_with("HTTP/1.1 400 Bad Request\r\n"));
+        assert!(light.contains("Sign-in failed"));
+        assert!(light.contains("color-scheme: light"));
+        assert_ne!(dark_tokens.bg, light_tokens.bg);
+    }
+
+    /// Verifies MCP callback HTTP framing counts UTF-8 bytes and escapes
+    /// browser-visible text without exposing raw markup.
+    #[test]
+    fn mcp_callback_response_escapes_html_and_counts_utf8_bytes() {
+        let tokens = login_page_theme_tokens(&UiTheme::default());
+        let response =
+            mcp_callback_http_response(400, "MCP <failed> — return & retry", &tokens).unwrap();
+        let response = String::from_utf8(response).unwrap();
+        let (headers, body) = response.split_once("\r\n\r\n").unwrap();
+        let content_length = headers
+            .lines()
+            .find_map(|line| line.strip_prefix("Content-Length: "))
+            .unwrap()
+            .parse::<usize>()
+            .unwrap();
+
+        assert_eq!(content_length, body.len());
+        assert!(body.contains("MCP &lt;failed&gt; — return &amp; retry"));
+        assert!(!body.contains("MCP <failed>"));
+        assert!(headers.contains("Content-Type: text/html; charset=utf-8"));
+        assert!(headers.contains("Connection: close"));
     }
 }

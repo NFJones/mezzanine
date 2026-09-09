@@ -1,8 +1,8 @@
 //! Local browser callback parsing and HTTP response handling.
 
-use super::claims::oauth_error_message;
 #[cfg(test)]
-use super::login_page::{login_page_theme_tokens, write_http_response_with_tokens};
+use super::super::callback_page::{login_page_theme_tokens, write_http_response_with_tokens};
+use super::claims::oauth_error_message;
 use super::pkce::parse_query;
 use super::{MezError, Result};
 #[cfg(test)]

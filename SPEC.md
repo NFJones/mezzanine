@@ -4842,7 +4842,13 @@ MUST reuse the same active-surface MAAP action-batch schema used by the
 canonical function tool and MUST be parsed as a MAAP batch from assistant
 content. A generic Chat Completions request MUST emit a native `role: "tool"`
 message only with a validated non-empty `tool_call_id` matching its owning
-assistant call. Provider-neutral action evidence without native call identity
+assistant call. Native tool-call continuations MUST retain the exact validated
+assistant `tool_calls` objects and emit matching result messages immediately
+after that assistant message, in declaration order. The native chain MUST be
+replayed only for the exact `openai-chat-completions` API and configured
+provider owner; missing, duplicate, reordered, late, unknown, or foreign result
+identity MUST fail closed to the provider-neutral projection. Provider-neutral
+action evidence without native call identity
 MUST instead be retained once, in canonical order, under the configured
 developer role or system compatibility fallback, MUST be marked as
 non-user-authored, and MUST NOT receive a fabricated call identity. This
@@ -5158,8 +5164,9 @@ including when explicitly empty. Provider-model records define reusable model
 facts; `model_profiles` define usage policy and MAY override those facts for a
 specific profile. Provider-model option defaults MUST NOT contain credentials.
 
-`mez config model list|add|update|remove` MUST provide typed offline management
-of these records for the existing `--scope` and `--file` persistence targets.
+`mez config model list|add|update|remove|sync` MUST provide typed offline
+management of these records for the existing `--scope` and `--file`
+persistence targets.
 Provider-facing ids MUST be treated as opaque printable non-empty text. Local
 entry keys MUST use the same deterministic path-safe normalization and numeric
 collision suffixes as the `76 -> 77` migration. Updates MUST change only fields
@@ -5171,6 +5178,34 @@ string-only non-secret provider options before using the normal validated
 whole-document persistence path. Plain and JSON output MUST be deterministic,
 and an empty compatible-provider catalog MUST include guidance for adding a
 configured model or enabling a supported live catalog endpoint.
+
+`mez config model sync PROVIDER` MUST fetch that provider's raw live catalog
+without using the runtime catalog cache, configured or built-in fallback
+candidates, or other merged `RuntimeModelCatalog` data. The default invocation
+MUST preview a deterministic plan without writing. `--apply` MUST be required
+to persist the plan, and `--prune` MUST independently opt configured-only
+records into removal planning. Configured-only records MUST otherwise remain.
+Synchronization MUST match exact provider-facing ids rather than local table
+keys, reject empty, invalid, or duplicate live ids, and allocate deterministic
+collision-safe local keys for additions. Live metadata MAY fill only omitted
+`display_name`, `reasoning_levels`, `context_window_tokens`,
+`max_input_tokens`, `max_output_tokens`, and `capabilities`; explicit local
+values, including empty lists, aliases, and provider options MUST remain
+authoritative and differing observations MUST be reported as conflicts.
+
+A prune application MUST collect every provider-default and provider-matching
+model-profile reference, including selections through aliases, before any
+removal. If any proposed removal is referenced, the complete synchronization
+write MUST be refused. Project-target synchronization MAY read inherited
+provider connection fields and references from the effective configuration,
+but MUST write only model overrides to the selected target layer and MUST NOT
+copy inherited provider records or credentials into that layer. Synchronization
+MUST load the selected target once, fetch before mutation, validate one rendered
+result, and perform at most one atomic persistence operation. An unsupported or
+failed catalog request, a provider identity mismatch, or an invalid live
+catalog MUST leave the target byte-for-byte unchanged and provide guidance that
+includes `mez config model add PROVIDER MODEL_ID`. Output and diagnostics MUST
+not expose credentials.
 
 Effective model metadata MUST resolve each field independently in this order:
 an explicit model-profile override, the configured provider-model record,
@@ -5255,6 +5290,12 @@ startup after configuration and authentication stores are available. After
 startup, live provider catalog refresh MUST be explicit through a user or
 control action such as `/refresh-provider-info`; pane creation, pane selection,
 and model selector rendering MUST NOT independently prefetch provider catalogs.
+Runtime `/refresh-provider-info` MUST remain an ephemeral, best-effort cache
+refresh with its configured and built-in fallback behavior. It MUST NOT persist
+provider-model records. Durable synchronization through `mez config model sync`
+MUST remain a separate explicit offline workflow, and absence from one live
+catalog response MUST NOT become deletion evidence unless the caller supplies
+`--prune`.
 
 The `mcp_servers` table MUST be a map keyed by MCP server identity. Each MCP
 server entry MUST support `name`, `command`, and `args` for stdio servers,

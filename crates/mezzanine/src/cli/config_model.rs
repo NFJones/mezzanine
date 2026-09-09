@@ -15,7 +15,17 @@ use super::{
     CliOutputFormat, ConfigFormat, ConfigPaths, MezError, Result, Subcommand, serialize_json,
     write_json_or_plain,
 };
-use crate::config::{parse_config_json_value, persist_config_text, unique_model_entry_key};
+use crate::config::{
+    ConfigLayer, ConfigScope, ProviderModelSyncAddition, ProviderModelSyncBlocker,
+    ProviderModelSyncConflict, ProviderModelSyncUpdate, load_primary_config_layers,
+    parse_config_json_value, persist_config_text, plan_config_mutations, plan_provider_model_sync,
+    plan_provider_model_sync_for_target, provider_model_reference_paths, unique_model_entry_key,
+};
+use crate::runtime::{
+    fetch_raw_provider_model_catalog, runtime_effective_config_value,
+    runtime_provider_config_from_config,
+};
+use crate::security::auth::{AuthPaths, AuthStore};
 
 /// Typed arguments for `mez config model`.
 #[derive(Debug, Clone, clap::Args)]
@@ -30,12 +40,30 @@ pub(super) struct ConfigModelCliArgs {
 enum ConfigModelCliCommand {
     /// Lists configured model records for one provider.
     List(ConfigModelListCliArgs),
+    /// Compares raw live models with configured records and optionally persists the plan.
+    Sync(ConfigModelSyncCliArgs),
     /// Adds one provider-facing model id.
     Add(ConfigModelAddCliArgs),
     /// Selectively updates one provider-facing model id.
     Update(ConfigModelUpdateCliArgs),
     /// Removes one unreferenced provider-facing model id.
     Remove(ConfigModelRemoveCliArgs),
+}
+
+/// Arguments for explicit provider-model synchronization.
+#[derive(Debug, Clone, clap::Args)]
+struct ConfigModelSyncCliArgs {
+    /// Provider configuration name.
+    provider: String,
+    /// Persists the rendered plan after complete validation.
+    #[arg(long)]
+    apply: bool,
+    /// Proposes removal of configured-only records independently of apply.
+    #[arg(long)]
+    prune: bool,
+    /// Configuration persistence target.
+    #[command(flatten)]
+    target: CliConfigPersistOptions,
 }
 
 /// Arguments shared by provider-model list operations.
@@ -207,8 +235,48 @@ struct ConfigModelMutationOutput {
     changed: bool,
 }
 
+/// Deterministic preview or apply result for one provider-model synchronization.
+#[derive(Serialize)]
+struct ConfigModelSyncOutput<'a> {
+    /// Operation identifier.
+    operation: &'static str,
+    /// Provider whose raw live catalog was fetched.
+    provider: &'a str,
+    /// Selected persistence scope.
+    scope: &'static str,
+    /// Selected config path.
+    path: String,
+    /// Whether persistence was explicitly requested.
+    apply: bool,
+    /// Whether configured-only records were considered for removal.
+    prune: bool,
+    /// Whether the plan differs from the current model table.
+    changed: bool,
+    /// Whether one validated atomic write was performed.
+    persisted: bool,
+    /// Secret-free raw provider catalog source.
+    source: &'a str,
+    /// Number of raw live models used by the planner.
+    live_model_count: usize,
+    /// Newly discovered model records.
+    additions: &'a [ProviderModelSyncAddition],
+    /// Fill-only metadata updates.
+    updates: &'a [ProviderModelSyncUpdate],
+    /// Explicit configured values retained over differing live observations.
+    conflicts: &'a [ProviderModelSyncConflict],
+    /// Configured-only ids retained because pruning was not requested.
+    retained: &'a [String],
+    /// Configured-only ids proposed for removal.
+    removals: &'a [String],
+    /// Complete reference blockers preventing prune application.
+    blockers: &'a [ProviderModelSyncBlocker],
+    /// Actionable preview or blocker guidance.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    guidance: Option<String>,
+}
+
 /// Runs one typed provider-model config operation.
-pub(super) fn run_config_model<W: Write>(
+pub(super) async fn run_config_model<W: Write>(
     parsed: ConfigModelCliArgs,
     paths: &ConfigPaths,
     output_format: CliOutputFormat,
@@ -234,10 +302,100 @@ pub(super) fn run_config_model<W: Write>(
             })?;
             write_json_or_plain(stdout, output_format, &output)
         }
+        ConfigModelCliCommand::Sync(args) => {
+            run_model_sync(args, paths, output_format, stdout).await
+        }
         ConfigModelCliCommand::Add(args) => run_model_add(args, paths, output_format, stdout),
         ConfigModelCliCommand::Update(args) => run_model_update(args, paths, output_format, stdout),
         ConfigModelCliCommand::Remove(args) => run_model_remove(args, paths, output_format, stdout),
     }
+}
+
+/// Fetches, plans, previews, and optionally persists one provider model sync.
+async fn run_model_sync<W: Write>(
+    args: ConfigModelSyncCliArgs,
+    paths: &ConfigPaths,
+    output_format: CliOutputFormat,
+    stdout: &mut W,
+) -> Result<()> {
+    let provider = validated_text("provider", &args.provider)?;
+    let target = cli_config_mutation_target(paths, args.target)?;
+    let mut document = load_model_document(&target)?;
+    let effective_root = model_sync_effective_root(paths, &target, &document)?;
+    let provider_value = effective_root
+        .get("providers")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|providers| providers.get(&provider))
+        .ok_or_else(|| MezError::config(format!("provider `{provider}` is not configured")))?;
+    let provider_config = runtime_provider_config_from_config(&provider, provider_value)?;
+    let auth_store = AuthStore::new(AuthPaths::under_config_root(paths.root()));
+    let catalog = fetch_raw_provider_model_catalog(provider_config, auth_store)
+        .await
+        .map_err(|error| {
+            MezError::new(
+                error.kind(),
+                format!(
+                    "provider model sync fetch failed for `{provider}`: {}; configuration was not changed; add a model manually with `mez config model add {provider} MODEL_ID`",
+                    error.message()
+                ),
+            )
+        })?;
+    if catalog.provider != provider {
+        return Err(MezError::invalid_state(format!(
+            "provider model sync returned catalog for `{}` while `{provider}` was requested; configuration was not changed; add a model manually with `mez config model add {provider} MODEL_ID`",
+            catalog.provider
+        )));
+    }
+    let plan = if target.scope == ConfigScope::Primary {
+        plan_provider_model_sync(&document.root, &provider, &catalog.models, args.prune)?
+    } else {
+        plan_provider_model_sync_for_target(
+            &document.root,
+            &effective_root,
+            &provider,
+            &catalog.models,
+            args.prune,
+        )?
+    };
+    let changed = plan.changed();
+    let blocked = args.prune && !plan.blockers.is_empty();
+    let persisted = args.apply && changed && !blocked;
+    if persisted {
+        *sync_provider_models_mut(&mut document.root, &provider)? = plan.result_models.clone();
+        persist_model_document(&target, &document, &provider)?;
+    }
+    let guidance = if blocked {
+        Some(format!(
+            "Prune was not applied because configured model references must be updated first; configuration was not changed. To add a model manually, run `mez config model add {provider} MODEL_ID`."
+        ))
+    } else if !args.apply && changed {
+        Some(format!(
+            "Preview only; rerun with `mez config model sync {provider} --apply{}` to persist this plan.",
+            if args.prune { " --prune" } else { "" }
+        ))
+    } else {
+        None
+    };
+    let output = serialize_json(&ConfigModelSyncOutput {
+        operation: "sync",
+        provider: &provider,
+        scope: target.scope_name,
+        path: target.path.to_string_lossy().into_owned(),
+        apply: args.apply,
+        prune: args.prune,
+        changed,
+        persisted,
+        source: &catalog.source,
+        live_model_count: catalog.models.len(),
+        additions: &plan.additions,
+        updates: &plan.updates,
+        conflicts: &plan.conflicts,
+        retained: &plan.retained,
+        removals: &plan.removals,
+        blockers: &plan.blockers,
+        guidance,
+    })?;
+    write_json_or_plain(stdout, output_format, &output)
 }
 
 /// Parsed config document plus source text used for change detection.
@@ -260,6 +418,38 @@ fn load_model_document(target: &CliConfigMutationTarget) -> Result<ModelDocument
         original,
         root,
     })
+}
+
+/// Builds the read view used by synchronization without changing its target.
+///
+/// User files are complete primary configurations. Project files are overlays,
+/// so their provider connection may be inherited from the primary user layer.
+/// Only the selected project file is included; unrelated overlays are neither
+/// read nor copied into the synchronization target.
+fn model_sync_effective_root(
+    paths: &ConfigPaths,
+    target: &CliConfigMutationTarget,
+    document: &ModelDocument,
+) -> Result<serde_json::Value> {
+    if target.scope == ConfigScope::Primary {
+        return Ok(document.root.clone());
+    }
+    let normalized = plan_config_mutations(
+        document.format,
+        &document.original,
+        target.scope,
+        Vec::new(),
+    )?;
+    let mut layers = load_primary_config_layers(paths)?;
+    layers.push(ConfigLayer {
+        name: "model-sync-target".to_string(),
+        path: Some(target.path.clone()),
+        format: document.format,
+        scope: target.scope,
+        trusted: true,
+        text: normalized.text,
+    });
+    runtime_effective_config_value(&layers)
 }
 
 /// Adds one model record after validating its typed metadata.
@@ -612,6 +802,31 @@ fn provider_models_mut<'a>(
         .ok_or_else(|| MezError::config("provider models must be a table of model records"))
 }
 
+/// Returns the target model table, creating only overlay container tables.
+fn sync_provider_models_mut<'a>(
+    root: &'a mut serde_json::Value,
+    provider: &str,
+) -> Result<&'a mut serde_json::Map<String, serde_json::Value>> {
+    let root = root
+        .as_object_mut()
+        .ok_or_else(|| MezError::config("configuration document root must be a mapping"))?;
+    let providers = root
+        .entry("providers".to_string())
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+        .as_object_mut()
+        .ok_or_else(|| MezError::config("configuration providers must be a table"))?;
+    let provider = providers
+        .entry(provider.to_string())
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+        .as_object_mut()
+        .ok_or_else(|| MezError::config("provider configuration must be a table"))?;
+    provider
+        .entry("models".to_string())
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+        .as_object_mut()
+        .ok_or_else(|| MezError::config("provider models must be a table of model records"))
+}
+
 /// Finds one model's generated entry key by canonical id.
 fn model_entry_key(root: &serde_json::Value, provider: &str, id: &str) -> Result<String> {
     model_entries(root, provider)?
@@ -685,34 +900,14 @@ fn refuse_referenced_model_id(
     id: &str,
     operation: &str,
 ) -> Result<()> {
-    let mut references = Vec::new();
-    if root
-        .get("providers")
+    let record = model_entries(root, provider)?
+        .values()
+        .find(|record| record.get("id").and_then(serde_json::Value::as_str) == Some(id))
         .and_then(serde_json::Value::as_object)
-        .and_then(|providers| providers.get(provider))
-        .and_then(serde_json::Value::as_object)
-        .and_then(|provider| provider.get("default_model"))
-        .and_then(serde_json::Value::as_str)
-        == Some(id)
-    {
-        references.push(format!("providers.{provider}.default_model"));
-    }
-    if let Some(profiles) = root
-        .get("model_profiles")
-        .and_then(serde_json::Value::as_object)
-    {
-        for (name, profile) in profiles {
-            let profile = match profile.as_object() {
-                Some(profile) => profile,
-                None => continue,
-            };
-            if profile.get("provider").and_then(serde_json::Value::as_str) == Some(provider)
-                && profile.get("model").and_then(serde_json::Value::as_str) == Some(id)
-            {
-                references.push(format!("model_profiles.{name}.model"));
-            }
-        }
-    }
+        .ok_or_else(|| MezError::config("provider model record must be a table"))?;
+    let mut identities = vec![id.to_string()];
+    identities.extend(record_string_list(record, "aliases")?);
+    let references = provider_model_reference_paths(root, provider, &identities);
     if references.is_empty() {
         return Ok(());
     }
@@ -842,13 +1037,27 @@ fn render_toml_models(original: &str, root: &serde_json::Value, provider: &str) 
     let mut document = original
         .parse::<toml_edit::DocumentMut>()
         .map_err(|error| MezError::config(format!("invalid TOML config: {error}")))?;
-    let provider_table = document
+    if document.as_table().get("providers").is_none() {
+        let mut providers = toml_edit::Table::new();
+        providers.set_implicit(true);
+        document
+            .as_table_mut()
+            .insert("providers", toml_edit::Item::Table(providers));
+    }
+    let providers = document
         .as_table_mut()
         .get_mut("providers")
         .and_then(toml_edit::Item::as_table_mut)
-        .and_then(|providers| providers.get_mut(provider))
+        .ok_or_else(|| MezError::config("configuration providers must be a table"))?;
+    if providers.get(provider).is_none() {
+        let mut provider_table = toml_edit::Table::new();
+        provider_table.set_implicit(true);
+        providers.insert(provider, toml_edit::Item::Table(provider_table));
+    }
+    let provider_table = providers
+        .get_mut(provider)
         .and_then(toml_edit::Item::as_table_mut)
-        .ok_or_else(|| MezError::config(format!("provider `{provider}` is not configured")))?;
+        .ok_or_else(|| MezError::config(format!("provider `{provider}` must be a table")))?;
     let mut models_table = toml_edit::Table::new();
     models_table.set_implicit(true);
     for (entry_key, record) in model_entries(root, provider)? {

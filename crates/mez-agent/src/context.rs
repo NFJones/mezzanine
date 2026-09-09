@@ -473,7 +473,22 @@ impl ProviderContinuityOwner {
                 ProviderApiCompatibility::OpenAiResponses,
                 ProviderTranscriptEvent::OpenAiResponseOutput { .. }
                     | ProviderTranscriptEvent::OpenAiFunctionCallOutput { .. }
-            ) | (
+            )
+        ) || matches!(
+            (self.api(), event),
+            (
+                ProviderApiCompatibility::OpenAiChatCompletions,
+                ProviderTranscriptEvent::OpenAiChatCompletionsAssistantToolCall {
+                    provider_id,
+                    ..
+                } | ProviderTranscriptEvent::OpenAiChatCompletionsToolResult {
+                    provider_id,
+                    ..
+                }
+            ) if provider_id == self.provider_id()
+        ) || matches!(
+            (self.api(), event),
+            (
                 ProviderApiCompatibility::DeepSeekChatCompletions,
                 ProviderTranscriptEvent::DeepSeekAssistantToolCall { .. }
                     | ProviderTranscriptEvent::DeepSeekToolResult { .. }
@@ -2509,17 +2524,23 @@ fn context_semantic_error(index: usize, block: &ContextBlock, reason: &str) -> A
 
 /// Returns the exclusive owner encoded by one provider continuity payload.
 fn provider_owner_for_block(block: &ContextBlock) -> Option<ProviderContinuityOwner> {
-    ProviderTranscriptEvent::from_transcript_content(&block.content).and_then(|event| {
-        match event.provider_id() {
-            "openai" => {
-                ProviderContinuityOwner::new(ProviderApiCompatibility::OpenAiResponses, "openai")
-            }
-            "deepseek" => ProviderContinuityOwner::new(
-                ProviderApiCompatibility::DeepSeekChatCompletions,
-                "deepseek",
-            ),
-            _ => None,
+    ProviderTranscriptEvent::from_transcript_content(&block.content).and_then(|event| match event {
+        ProviderTranscriptEvent::OpenAiResponseOutput { .. }
+        | ProviderTranscriptEvent::OpenAiFunctionCallOutput { .. } => {
+            ProviderContinuityOwner::new(ProviderApiCompatibility::OpenAiResponses, "openai")
         }
+        ProviderTranscriptEvent::OpenAiChatCompletionsAssistantToolCall { provider_id, .. }
+        | ProviderTranscriptEvent::OpenAiChatCompletionsToolResult { provider_id, .. } => {
+            ProviderContinuityOwner::new(
+                ProviderApiCompatibility::OpenAiChatCompletions,
+                provider_id,
+            )
+        }
+        ProviderTranscriptEvent::DeepSeekAssistantToolCall { .. }
+        | ProviderTranscriptEvent::DeepSeekToolResult { .. } => ProviderContinuityOwner::new(
+            ProviderApiCompatibility::DeepSeekChatCompletions,
+            "deepseek",
+        ),
     })
 }
 
@@ -3751,6 +3772,39 @@ mod tests {
         )
         .unwrap();
         assert!(ImportedExecutionEvent::new(block, group, 2, Some(mismatched_owner)).is_err());
+    }
+
+    /// Verifies initial durable import infers the generic Chat Completions API
+    /// and configured provider before exact execution metadata is restored.
+    #[test]
+    fn durable_import_accepts_generic_chat_continuity_owner() {
+        let event = ProviderTranscriptEvent::validated_openai_chat_completions_assistant_tool_call(
+            "local-openai-chat".to_string(),
+            String::new(),
+            vec![serde_json::json!({
+                "id": "call-restored-1",
+                "type": "function",
+                "function": {
+                    "name": "submit_maap_action_batch",
+                    "arguments": "{}"
+                }
+            })],
+        )
+        .unwrap();
+        let block = ContextBlock {
+            source: ContextSourceKind::TranscriptTool,
+            placement: ContextPlacement::ConversationAppend,
+            label: "generic native call".to_string(),
+            content: event.to_transcript_content(),
+        };
+
+        let context = AgentContext::import_durable_blocks(vec![block]).unwrap();
+        let owner = context.chronology()[0].provider_owner().unwrap();
+
+        assert!(owner.matches_provider(
+            ProviderApiCompatibility::OpenAiChatCompletions,
+            "local-openai-chat"
+        ));
     }
 
     /// Verifies exact continuity owners reject identities whose byte-exact

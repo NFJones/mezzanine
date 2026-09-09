@@ -384,6 +384,15 @@ fn openai_compatible_chat_completions_provider_describes_callable_mcp_tools() {
     .unwrap();
     let response = provider.send_request(&request).unwrap();
 
+    assert_eq!(response.provider_transcript_events.len(), 1);
+    assert!(matches!(
+        &response.provider_transcript_events[0],
+        mez_agent::ProviderTranscriptEvent::OpenAiChatCompletionsAssistantToolCall {
+            provider_id,
+            tool_calls,
+            ..
+        } if provider_id == "local-openai-chat" && tool_calls[0]["id"] == "call_1"
+    ));
     assert_eq!(
         response.action_batch.unwrap().rationale,
         "generic compatible provider called MCP"
@@ -624,6 +633,7 @@ fn openai_compatible_chat_completions_provider_recovers_structured_maap_from_rea
     .unwrap();
     let response = provider.send_request(&request).unwrap();
 
+    assert!(response.provider_transcript_events.is_empty());
     assert_eq!(
         response.action_batch.unwrap().rationale,
         "generic compatible provider returned structured JSON in reasoning_content"
@@ -718,6 +728,7 @@ fn openai_compatible_chat_completions_provider_supports_structured_maap_output()
     .unwrap();
     let response = provider.send_request(&request).unwrap();
 
+    assert!(response.provider_transcript_events.is_empty());
     assert_eq!(
         response.action_batch.unwrap().rationale,
         "generic compatible provider returned structured JSON"

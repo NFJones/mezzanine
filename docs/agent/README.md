@@ -19,6 +19,7 @@ This section owns the following agent guidance:
 - [Subagents and messaging](subagents-and-messaging.md)
 - [Context and continuity](context-and-continuity.md)
 - [Providers and models](providers-and-models.md)
+- [AWS Bedrock through the OpenAI-compatible API](aws-bedrock-openai-compatible.md)
 - [MCP integration](mcp-integration.md)
 
 ## Related pages

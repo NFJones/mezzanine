@@ -1,10 +1,80 @@
-//! Themed browser callback page rendering and color translation.
+//! Shared themed browser callback-page rendering and color translation.
 
-use super::platform_browser::html_escape;
-use super::{LoginPageKind, LoginPageRgb, LoginPageThemeTokens};
 use mez_mux::theme::UiTheme;
 use mez_terminal::TerminalColor;
 use std::io::Write;
+
+/// Compact web token set used by browser callback pages.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct LoginPageThemeTokens {
+    pub(super) bg: String,
+    pub(super) surface: String,
+    pub(super) surface_elevated: String,
+    pub(super) border: String,
+    pub(super) text_primary: String,
+    pub(super) text_secondary: String,
+    pub(super) accent_primary: String,
+    pub(super) accent_secondary: String,
+    pub(super) success: String,
+    pub(super) glow_strength: &'static str,
+    pub(super) is_dark: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct LoginPageRgb {
+    red: u8,
+    green: u8,
+    blue: u8,
+}
+
+impl LoginPageRgb {
+    fn new(red: u8, green: u8, blue: u8) -> Self {
+        Self { red, green, blue }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum LoginPageKind {
+    Success,
+    CallbackAccepted,
+    Error,
+}
+
+impl LoginPageKind {
+    fn from_status(status: u16) -> Self {
+        if status == 200 {
+            Self::Success
+        } else {
+            Self::Error
+        }
+    }
+
+    fn badge(self) -> &'static str {
+        match self {
+            Self::Success => "OK",
+            Self::CallbackAccepted => "WAIT",
+            Self::Error => "ERR",
+        }
+    }
+
+    fn headline(self) -> &'static str {
+        match self {
+            Self::Success => "Login successful",
+            Self::CallbackAccepted => "Authorization callback accepted",
+            Self::Error => "Sign-in failed",
+        }
+    }
+
+    fn hint(self) -> &'static str {
+        match self {
+            Self::Success => "You can close this tab and return to Mezzanine.",
+            Self::CallbackAccepted => {
+                "Return to Mezzanine while token exchange and credential storage complete."
+            }
+            Self::Error => "Return to Mezzanine and try the sign-in flow again.",
+        }
+    }
+}
 
 /// Writes a themed browser callback response to a blocking stream.
 pub(super) fn write_http_response_with_tokens(
@@ -13,12 +83,29 @@ pub(super) fn write_http_response_with_tokens(
     body: &str,
     tokens: &LoginPageThemeTokens,
 ) -> std::io::Result<()> {
+    write_http_response_with_kind(
+        stream,
+        status,
+        body,
+        tokens,
+        LoginPageKind::from_status(status),
+    )
+}
+
+/// Writes a themed callback response with an explicit workflow state.
+pub(super) fn write_http_response_with_kind(
+    stream: &mut impl Write,
+    status: u16,
+    body: &str,
+    tokens: &LoginPageThemeTokens,
+    kind: LoginPageKind,
+) -> std::io::Result<()> {
     let reason = match status {
         200 => "OK",
         400 => "Bad Request",
         _ => "OK",
     };
-    let document = login_page_document(status, body, tokens);
+    let document = login_page_document_with_kind(body, tokens, kind);
     write!(
         stream,
         "HTTP/1.1 {status} {reason}\r\n\
@@ -31,18 +118,19 @@ pub(super) fn write_http_response_with_tokens(
     )
 }
 
-/// Builds the browser callback page using active Mezzanine theme tokens.
-pub(super) fn login_page_document(
-    status: u16,
+fn login_page_document_with_kind(
     body: &str,
     tokens: &LoginPageThemeTokens,
+    kind: LoginPageKind,
 ) -> String {
-    let kind = LoginPageKind::from_status(status);
     let escaped_message = html_escape(body);
     let color_scheme = if tokens.is_dark { "dark" } else { "light" };
     let technical_note = match kind {
         LoginPageKind::Success => {
             "Localhost callback complete. No external page assets were loaded."
+        }
+        LoginPageKind::CallbackAccepted => {
+            "Localhost callback accepted. Credential exchange continues in Mezzanine."
         }
         LoginPageKind::Error => {
             "The localhost callback did not complete the requested credential exchange."
@@ -434,4 +522,19 @@ pub(super) fn login_page_is_dark(color: LoginPageRgb) -> bool {
 /// Computes perceptual luma for a browser-page RGB token.
 pub(super) fn login_page_luminance(color: LoginPageRgb) -> u16 {
     (u16::from(color.red) * 30 + u16::from(color.green) * 59 + u16::from(color.blue) * 11) / 100
+}
+
+fn html_escape(value: &str) -> String {
+    let mut escaped = String::new();
+    for ch in value.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#39;"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
 }

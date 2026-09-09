@@ -16,7 +16,7 @@ use crate::integrations::mcp::{
 };
 use crate::security::auth::{
     AuthCredentialState, McpAuthMetadata, McpAuthStatus, McpCredentialKind, McpOAuthCredential,
-    run_mcp_oauth_login_async,
+    run_mcp_oauth_login_with_theme_async,
 };
 use sha2::Digest;
 
@@ -96,8 +96,10 @@ pub(super) async fn run_mcp<W: Write>(
             let login_credential = if let Some(token) = token {
                 McpLoginCredential::StaticBearer(token)
             } else {
+                let ui_theme = super::auth::auth_login_ui_theme(&paths);
                 McpLoginCredential::OAuth(
-                    run_mcp_oauth_login_async(
+                    run_mcp_oauth_login_with_theme_async(
+                        &ui_theme,
                         server_url,
                         &scopes,
                         client_id.as_deref(),

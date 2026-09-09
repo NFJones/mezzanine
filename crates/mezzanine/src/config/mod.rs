@@ -115,7 +115,11 @@ use parsers::{
 #[cfg(test)]
 use paths::write_private_config_file_async;
 use paths::{format_diagnostics, write_private_config_file};
-pub(crate) use provider_models::unique_model_entry_key;
+pub(crate) use provider_models::{
+    ProviderModelSyncAddition, ProviderModelSyncBlocker, ProviderModelSyncConflict,
+    ProviderModelSyncUpdate, plan_provider_model_sync, plan_provider_model_sync_for_target,
+    provider_model_reference_paths, unique_model_entry_key,
+};
 use schema::{
     AGENT_AUTO_SIZING_KEYS, AGENT_KEYS, AUDIT_KEYS, AUTH_KEYS, BUBBLEWRAP_PERMISSION_KEYS,
     COMMAND_RULE_EFFECT_KEYS, COMMAND_RULE_KEYS, CONTROL_KEYS, EXTERNAL_EDITOR_KEYS, HISTORY_KEYS,

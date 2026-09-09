@@ -248,7 +248,7 @@ async fn run_with_inner<W: Write, E: Write>(
             let mut command = CliArgv::command();
             clap_complete::generate(args.shell, &mut command, "mez", stdout);
         }
-        Some(CliCommand::Config(args)) => run_config(args, env, output_format, stdout)?,
+        Some(CliCommand::Config(args)) => run_config(args, env, output_format, stdout).await?,
         Some(CliCommand::Host(args)) => {
             Box::pin(run_host(args, env, output_format, stdout)).await?
         }

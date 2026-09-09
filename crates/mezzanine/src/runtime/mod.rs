@@ -399,8 +399,9 @@ pub(crate) use agent_state::{
 };
 pub(crate) use commands::{
     RuntimeAgentPromptProviderInfoRefresh, RuntimeProviderInfoRefreshOutcome,
-    RuntimeProviderInfoRefreshWork,
+    RuntimeProviderInfoRefreshWork, fetch_raw_provider_model_catalog,
 };
+pub(crate) use config::runtime_provider_config_from_config;
 pub(crate) use deferred::AttachedClientClipboardWrite;
 pub use deferred::AttachedClientStepApplication;
 pub use env::{

@@ -460,29 +460,99 @@ fn openai_chat_completions_messages(
     request: &ModelRequest,
     developer_role: OpenAiDeveloperRole,
 ) -> Vec<serde_json::Value> {
-    request
-        .messages
-        .iter()
-        .map(|message| {
-            let (role, content) = match message.role {
-                ModelMessageRole::System => ("system", message.content.clone()),
-                ModelMessageRole::Developer => (developer_role.as_str(), message.content.clone()),
-                ModelMessageRole::User => ("user", message.content.clone()),
-                ModelMessageRole::Assistant => ("assistant", message.content.clone()),
-                ModelMessageRole::Tool | ModelMessageRole::Context => (
-                    developer_role.as_str(),
-                    format!(
-                        "[Mezzanine context; not user-authored]\n{}",
-                        message.content
-                    ),
+    let mut messages = Vec::with_capacity(request.messages.len());
+    let mut index = 0usize;
+    while index < request.messages.len() {
+        let message = &request.messages[index];
+        if let Some(crate::ProviderTranscriptEvent::OpenAiChatCompletionsAssistantToolCall {
+            provider_id,
+            content,
+            tool_calls,
+        }) = crate::ProviderTranscriptEvent::from_transcript_content(&message.content)
+        {
+            let call_ids = tool_calls
+                .iter()
+                .filter_map(|call| call.get("id").and_then(serde_json::Value::as_str))
+                .collect::<Vec<_>>();
+            let mut native_results = Vec::with_capacity(call_ids.len());
+            let mut deferred_context = Vec::new();
+            let mut scan_index = index + 1;
+            while scan_index < request.messages.len() && native_results.len() < call_ids.len() {
+                let result_message = &request.messages[scan_index];
+                match crate::ProviderTranscriptEvent::from_transcript_content(
+                    &result_message.content,
+                ) {
+                    Some(crate::ProviderTranscriptEvent::OpenAiChatCompletionsToolResult {
+                        provider_id: result_provider_id,
+                        tool_call_id,
+                        content,
+                    }) if result_provider_id == provider_id
+                        && call_ids.get(native_results.len()) == Some(&tool_call_id.as_str()) =>
+                    {
+                        native_results.push(serde_json::json!({
+                            "role": "tool",
+                            "tool_call_id": tool_call_id,
+                            "content": content,
+                        }));
+                    }
+                    Some(_) => break,
+                    None if matches!(
+                        result_message.role,
+                        ModelMessageRole::Context | ModelMessageRole::Tool
+                    ) =>
+                    {
+                        deferred_context.push(result_message)
+                    }
+                    None => break,
+                }
+                scan_index += 1;
+            }
+            if provider_id == request.provider && native_results.len() == call_ids.len() {
+                messages.push(serde_json::json!({
+                    "role": "assistant",
+                    "content": content,
+                    "tool_calls": tool_calls,
+                }));
+                messages.extend(native_results);
+                messages.extend(deferred_context.into_iter().map(|message| {
+                    serde_json::json!({
+                        "role": developer_role.as_str(),
+                        "content": format!(
+                            "[Mezzanine context; not user-authored]\n{}",
+                            message.content
+                        )
+                    })
+                }));
+                index = scan_index;
+                continue;
+            }
+            index += 1;
+            continue;
+        }
+        if crate::ProviderTranscriptEvent::from_transcript_content(&message.content).is_some() {
+            index += 1;
+            continue;
+        }
+        let (role, content) = match message.role {
+            ModelMessageRole::System => ("system", message.content.clone()),
+            ModelMessageRole::Developer => (developer_role.as_str(), message.content.clone()),
+            ModelMessageRole::User => ("user", message.content.clone()),
+            ModelMessageRole::Assistant => ("assistant", message.content.clone()),
+            ModelMessageRole::Tool | ModelMessageRole::Context => (
+                developer_role.as_str(),
+                format!(
+                    "[Mezzanine context; not user-authored]\n{}",
+                    message.content
                 ),
-            };
-            serde_json::json!({
-                "role": role,
-                "content": content
-            })
-        })
-        .collect::<Vec<_>>()
+            ),
+        };
+        messages.push(serde_json::json!({
+            "role": role,
+            "content": content
+        }));
+        index += 1;
+    }
+    messages
 }
 
 fn openai_chat_completions_maap_tool(request: &ModelRequest) -> serde_json::Value {
@@ -572,6 +642,8 @@ pub struct OpenAiChatCompletionsResponse {
     pub usage: ModelTokenUsage,
     /// Parsed MAAP batch when the request expected provider actions.
     pub action_batch: Option<MaapBatch>,
+    /// Validated native MAAP tool calls awaiting configured-owner binding.
+    pub native_tool_calls: Option<Vec<serde_json::Value>>,
 }
 
 /// Failure returned while decoding a compatible Chat Completions body.
@@ -651,11 +723,33 @@ pub fn parse_openai_chat_completions_response_body(
     ) {
         return Err(error.into());
     }
+    let native_tool_calls = if action_batch.is_some() {
+        message
+            .get("tool_calls")
+            .and_then(serde_json::Value::as_array)
+            .filter(|tool_calls| !tool_calls.is_empty())
+            .map(|tool_calls| {
+                crate::ProviderTranscriptEvent::validated_openai_chat_completions_tool_calls(
+                    tool_calls,
+                )
+                .ok_or_else(|| {
+                    openai_chat_malformed_output(
+                        "OpenAI-compatible Chat Completions native MAAP tool call is missing a valid non-empty id or replay field",
+                        &serde_json::Value::Array(tool_calls.clone()).to_string(),
+                    )
+                })?;
+                Ok::<_, ProviderMalformedOutputError>(tool_calls.clone())
+            })
+            .transpose()?
+    } else {
+        None
+    };
     Ok(OpenAiChatCompletionsResponse {
         model: envelope.model,
         raw_text,
         usage: openai_chat_completions_usage(&envelope.root),
         action_batch,
+        native_tool_calls,
     })
 }
 
@@ -1286,6 +1380,200 @@ mod tests {
         }
     }
 
+    /// Verifies a complete owner-matched native chain is replayed as one
+    /// assistant declaration immediately followed by its matching tool result.
+    #[test]
+    fn openai_chat_completions_replays_complete_native_tool_chain() {
+        let mut request = test_request();
+        let arguments = serde_json::json!({
+            "rationale": "inspect native continuity",
+            "actions": [{
+                "type": "say",
+                "status": "final",
+                "content_type": "text/plain; charset=utf-8",
+                "text": "done"
+            }]
+        })
+        .to_string();
+        let assistant =
+            crate::ProviderTranscriptEvent::validated_openai_chat_completions_assistant_tool_call(
+                request.provider.clone(),
+                "visible assistant text".to_string(),
+                vec![serde_json::json!({
+                    "id": "call-native-1",
+                    "type": "function",
+                    "function": {
+                        "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                        "arguments": arguments
+                    }
+                })],
+            )
+            .unwrap();
+        let result = crate::ProviderTranscriptEvent::OpenAiChatCompletionsToolResult {
+            provider_id: request.provider.clone(),
+            tool_call_id: "call-native-1".to_string(),
+            content: "[action_result action-1 say succeeded]".to_string(),
+        };
+        for event in [assistant, result] {
+            request.messages.push(ModelMessage {
+                role: ModelMessageRole::System,
+                source: ContextSourceKind::TranscriptTool,
+                placement: crate::ContextPlacement::ConversationAppend,
+                content: event.to_transcript_content(),
+            });
+        }
+        request.messages.push(ModelMessage {
+            role: ModelMessageRole::User,
+            source: ContextSourceKind::UserInstruction,
+            placement: crate::ContextPlacement::ConversationAppend,
+            content: "continue".to_string(),
+        });
+
+        let messages = openai_chat_completions_messages(&request, OpenAiDeveloperRole::Developer);
+        let assistant_index = messages
+            .iter()
+            .position(|message| message["tool_calls"][0]["id"] == "call-native-1")
+            .unwrap();
+
+        assert_eq!(messages[assistant_index]["role"], "assistant");
+        assert_eq!(
+            messages[assistant_index]["content"],
+            "visible assistant text"
+        );
+        assert_eq!(messages[assistant_index + 1]["role"], "tool");
+        assert_eq!(
+            messages[assistant_index + 1]["tool_call_id"],
+            "call-native-1"
+        );
+        assert_eq!(messages[assistant_index + 2]["content"], "continue");
+        assert!(
+            serde_json::to_string(&messages)
+                .unwrap()
+                .find(crate::PROVIDER_TRANSCRIPT_EVENT_MARKER)
+                .is_none()
+        );
+    }
+
+    /// Verifies an incomplete native chain never emits an orphan tool message.
+    /// Context assembly retains the neutral execution projection for this case;
+    /// the renderer independently drops malformed hidden native fragments.
+    #[test]
+    fn openai_chat_completions_drops_incomplete_native_tool_chain() {
+        let mut request = test_request();
+        let assistant =
+            crate::ProviderTranscriptEvent::validated_openai_chat_completions_assistant_tool_call(
+                request.provider.clone(),
+                String::new(),
+                vec![serde_json::json!({
+                    "id": "call-missing-result",
+                    "type": "function",
+                    "function": {
+                        "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                        "arguments": "{}"
+                    }
+                })],
+            )
+            .unwrap();
+        request.messages.push(ModelMessage {
+            role: ModelMessageRole::System,
+            source: ContextSourceKind::TranscriptTool,
+            placement: crate::ContextPlacement::ConversationAppend,
+            content: assistant.to_transcript_content(),
+        });
+        request.messages.push(ModelMessage {
+            role: ModelMessageRole::Tool,
+            source: ContextSourceKind::ActionResult,
+            placement: crate::ContextPlacement::ConversationAppend,
+            content: "neutral result fallback".to_string(),
+        });
+
+        let messages = openai_chat_completions_messages(&request, OpenAiDeveloperRole::Developer);
+
+        assert!(messages.iter().all(|message| message["role"] != "tool"));
+        assert!(messages.iter().any(|message| {
+            message["content"]
+                .as_str()
+                .is_some_and(|content| content.contains("neutral result fallback"))
+        }));
+        assert!(
+            !serde_json::to_string(&messages)
+                .unwrap()
+                .contains("call-missing-result")
+        );
+    }
+
+    /// Verifies runtime-derived context between hidden native records is moved
+    /// after the complete assistant/tool pair on the Chat Completions wire.
+    ///
+    /// MCP search and manifest evidence can settle before the native result is
+    /// appended. The provider request must preserve that evidence without
+    /// breaking the adjacency required by Chat Completions tool continuity.
+    #[test]
+    fn openai_chat_completions_defers_interleaved_context_until_after_native_results() {
+        let mut request = test_request();
+        let assistant =
+            crate::ProviderTranscriptEvent::validated_openai_chat_completions_assistant_tool_call(
+                request.provider.clone(),
+                String::new(),
+                vec![serde_json::json!({
+                    "id": "call-interleaved-1",
+                    "type": "function",
+                    "function": {
+                        "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                        "arguments": "{}"
+                    }
+                })],
+            )
+            .unwrap();
+        let result = crate::ProviderTranscriptEvent::OpenAiChatCompletionsToolResult {
+            provider_id: request.provider.clone(),
+            tool_call_id: "call-interleaved-1".to_string(),
+            content: "native result".to_string(),
+        };
+        for message in [
+            ModelMessage {
+                role: ModelMessageRole::System,
+                source: ContextSourceKind::TranscriptTool,
+                placement: crate::ContextPlacement::ConversationAppend,
+                content: assistant.to_transcript_content(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::Context,
+                source: ContextSourceKind::McpRetrievedManifest,
+                placement: crate::ContextPlacement::ConversationAppend,
+                content: "INTERLEAVED_MANIFEST".to_string(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::System,
+                source: ContextSourceKind::TranscriptTool,
+                placement: crate::ContextPlacement::ConversationAppend,
+                content: result.to_transcript_content(),
+            },
+        ] {
+            request.messages.push(message);
+        }
+
+        let messages = openai_chat_completions_messages(&request, OpenAiDeveloperRole::Developer);
+        let assistant_index = messages
+            .iter()
+            .position(|message| message["tool_calls"][0]["id"] == "call-interleaved-1")
+            .unwrap();
+
+        assert_eq!(messages[assistant_index]["role"], "assistant");
+        assert_eq!(messages[assistant_index + 1]["role"], "tool");
+        assert_eq!(
+            messages[assistant_index + 1]["tool_call_id"],
+            "call-interleaved-1"
+        );
+        assert_eq!(messages[assistant_index + 2]["role"], "developer");
+        assert!(
+            messages[assistant_index + 2]["content"]
+                .as_str()
+                .unwrap()
+                .contains("INTERLEAVED_MANIFEST")
+        );
+    }
+
     /// Verifies invalid compatibility values fail at the lower request-policy
     /// boundary with the stable invalid-argument category used by root error
     /// projection.
@@ -1420,9 +1708,65 @@ mod tests {
         assert_eq!(response.usage.input_tokens, 11);
         assert_eq!(response.usage.output_tokens, 7);
         assert_eq!(
+            response.native_tool_calls.as_ref().unwrap()[0]["id"],
+            "call_1"
+        );
+        assert_eq!(
             response.action_batch.unwrap().rationale,
             "streamed generic action"
         );
+    }
+
+    /// Verifies unary native MAAP parsing retains the exact call object while
+    /// rejecting a recognized call whose missing identity cannot be replayed.
+    #[test]
+    fn openai_chat_completions_native_tool_calls_require_and_retain_ids() {
+        let request = test_request();
+        let arguments = serde_json::json!({
+            "rationale": "retain native identity",
+            "actions": [{
+                "type": "say",
+                "status": "final",
+                "content_type": "text/plain; charset=utf-8",
+                "text": "done"
+            }]
+        })
+        .to_string();
+        let body = |id: Option<&str>| {
+            let mut call = serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                    "arguments": arguments
+                }
+            });
+            if let Some(id) = id {
+                call["id"] = serde_json::Value::String(id.to_string());
+            }
+            serde_json::json!({
+                "model": "local-chat-model",
+                "choices": [{
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [call]
+                    }
+                }]
+            })
+            .to_string()
+        };
+
+        let parsed =
+            parse_openai_chat_completions_response_body(&body(Some("call-unary-1")), &request)
+                .unwrap();
+        assert_eq!(
+            parsed.native_tool_calls.as_ref().unwrap()[0]["id"],
+            "call-unary-1"
+        );
+
+        let error = parse_openai_chat_completions_response_body(&body(None), &request).unwrap_err();
+        assert!(error.to_string().contains("valid non-empty id"));
     }
 
     /// Verifies incomplete or malformed streams fail closed instead of

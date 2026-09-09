@@ -266,7 +266,7 @@ where
 /// Login should not fail because a decorative callback page cannot load theme
 /// settings. Configuration errors are therefore treated as a signal to fall
 /// back to the default theme while preserving the credential workflow.
-fn auth_login_ui_theme(paths: &ConfigPaths) -> UiTheme {
+pub(super) fn auth_login_ui_theme(paths: &ConfigPaths) -> UiTheme {
     let Ok(layers) = load_runtime_config_layers(paths) else {
         return UiTheme::default();
     };

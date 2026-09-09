@@ -109,7 +109,7 @@ to the processes that existed when the snapshot was taken.
 
 | Command | Subcommands and scope |
 | --- | --- |
-| `mez config` | `init`, `path`, `default`, `validate`, `get`, `layers`, `set`, `unset`, and typed `model list|add|update|remove`. Mutations write the user configuration by default; `--scope project` targets an eligible trusted project overlay and `--file PATH` selects an eligible file in that scope. |
+| `mez config` | `init`, `path`, `default`, `validate`, `get`, `layers`, `set`, `unset`, and typed `model list|add|update|remove|sync`. Mutations write the user configuration by default; `--scope project` targets an eligible trusted project overlay and `--file PATH` selects an eligible file in that scope. |
 | `mez auth` | `status`, `login`, and `logout` for provider credentials and metadata. |
 | `mez mcp` | `list`, `inspect`, `login`, `logout`, `status`, `add`, `remove`, `enable`, `disable`, `set`, `unset`, `tools`, and `approval` manage configured MCP servers, stored MCP credentials, tool filters, and server approval settings. |
 | `mez sandbox` | Inspect version-2 backend status, plan or enable the platform backend, disable confinement, manage presets and sanitized profiles, inspect managed-home caches, and manage project trust. Plans report the selected backend and fixed-executable presence; unavailable mutating enablement fails without changing state. `mez sandbox trust` supports `list`, `inspect PATH`, `add PATH`, `reject PATH`, and `revoke PATH`. |
@@ -128,6 +128,33 @@ and also provides explicit `--clear-*` and `--remove-provider-option` controls.
 `model_profiles` references. Use global `--json` for stable machine-readable
 output. An empty compatible-provider list explains how to add a model or use a
 supported live catalog endpoint.
+
+`mez config model sync PROVIDER` fetches only that provider's raw live model
+catalog and compares it with explicit configured records. It does not use the
+session catalog cache or configured and built-in runtime fallback models.
+Synchronization previews without writing by default:
+
+```console
+mez config model sync PROVIDER
+mez config model sync PROVIDER --apply
+mez config model sync PROVIDER --prune
+mez config model sync PROVIDER --prune --apply
+```
+
+`--apply` is the explicit persistence switch. `--prune` is independent: it
+includes configured-only records in the removal plan, while omission retains
+them. Referenced records block the complete prune application, including
+provider defaults and model profiles that select an alias. Live metadata fills
+only omitted display, reasoning, token-limit, and capability fields; explicit
+configured values, explicit empty lists, aliases, and provider options win and
+conflicts appear in the output. Project targets may use an inherited provider
+connection but receive only their own model overrides. Failed or unsupported
+catalog discovery does not alter the target and directs the caller to
+`mez config model add PROVIDER MODEL_ID`.
+
+This command is distinct from `/refresh-provider-info`: the slash command
+updates only the running session's best-effort catalog cache and retains runtime
+fallback behavior, while `config model sync` is the deliberate durable path.
 
 ### Iroh targeting and pairing
 

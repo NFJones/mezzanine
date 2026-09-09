@@ -36,6 +36,17 @@ options, while an empty list value clears list metadata. Renaming or removing
 an id is refused until matching provider-default and model-profile references
 are updated. All model commands accept the normal offline `--scope` and
 `--file` target selectors.
+
+Use `mez config model sync PROVIDER` to compare explicit records with the raw
+live catalog. Sync is a preview unless `--apply` is present. Add `--prune` to
+plan configured-only removals; `--prune` still does not write without
+`--apply`, and referenced canonical ids or aliases block the whole prune write.
+Without `--prune`, models absent from one provider response remain configured.
+Observed display names, reasoning levels, token limits, and capabilities fill
+only omitted fields. Explicit values—including empty lists—remain authoritative
+and are reported as conflicts when they differ from the observation. Project
+sync can use an inherited user-level provider connection while persisting only
+minimal model overrides in the selected project file.
 Use `/model list` to see the active provider's available catalog and `/model`
 to select a model or supported reasoning level for the pane. When live provider
 metadata is unavailable, the list can fall back to configured models and labels
@@ -47,15 +58,19 @@ than presenting an unexplained empty result.
 
 The generated LM Studio example intentionally starts with an empty structured
 model table. `/refresh-provider-info` discovers models only for the running
-session; use `mez config model add lmstudio MODEL_ID` to persist the exact model
-identity and only metadata confirmed by the backend or its documentation.
+session. Use `mez config model sync lmstudio` to preview raw discoveries and
+rerun with `--apply` to persist them, or use
+`mez config model add lmstudio MODEL_ID` when the backend does not support a
+compatible catalog endpoint. Sync never imports OpenAI built-ins into an empty
+custom-provider response and never invents token limits from a model name.
 
 Configured models remain available when discovery omits them, and discovered
 metadata fills only configured gaps. Aliases select the canonical model id;
 unlisted custom profile models remain valid. `/refresh-provider-info`
 rematerializes future profile lookups, but an in-flight turn keeps its cloned
-profile. Configuration reload similarly rebases retained generated selections
-against the new configured model base.
+profile. Its cache and fallback effects are ephemeral and never edit config.
+Configuration reload after a durable sync similarly rebases retained generated
+selections against the new configured model base.
 
 Model selection does not establish an entitlement or silently lower configured
 safety, privacy, residency, or approval characteristics. If a preferred model
@@ -90,6 +105,7 @@ ordinary configuration.
 ## Related pages
 
 - [Authenticate a provider](../getting-started/authentication.md)
+- [Configure AWS Bedrock through its OpenAI-compatible API](aws-bedrock-openai-compatible.md)
 - [Configuration](../configuration/README.md)
 - [Operations and troubleshooting](../operations/README.md)
 - [Normative provider selection contract](../../SPEC.md#23-provider-model-selection)
