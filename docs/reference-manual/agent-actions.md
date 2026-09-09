@@ -11,10 +11,11 @@ Read [Agent overview](../agent/overview.md) and [Approvals and review](../safety
 
 ## Action batch model
 
-An agent response is a validated `maap/1` batch with a concise rationale and
-one or more actions. Mezzanine assigns turn and action identities, validates
-the configured static action set, independently classifies effects, and records
-a result for every syntactically identifiable action. A result can be
+An agent response is a validated `maap/1` batch containing a concise rationale
+and one or more actions. Mezzanine assigns turn and action identities,
+validates actions against the current allowed set, independently classifies
+their effects, and records a result for every syntactically identifiable
+action. A result can be
 `rejected`, `blocked`, `denied`, `running`, `succeeded`, `failed`, `cancelled`,
 `timed_out`, or `interrupted`. A batch-level parse or schema failure that
 prevents Mezzanine from identifying an action is recorded as a malformed
@@ -24,7 +25,10 @@ are not authoritative.
 `say` presents display-only text as `progress`, `final`, or `blocked`; text
 that looks like a command or patch does not execute. Action results are bounded
 evidence for a later continuation, while credentials, hidden policy, and raw
-terminal state remain outside ordinary model context.
+terminal state remain outside ordinary model context. A blocked action result
+means execution is waiting at a resumable approval boundary. A `say` action
+with status `blocked` instead ends the conversation because user input or an
+external condition is required.
 
 ## Action families
 
@@ -32,30 +36,34 @@ terminal state remain outside ordinary model context.
 | --- | --- | --- |
 | `say` | Present progress, completion, or a blocker to the user. | It is display-only and cannot execute text that resembles a command or patch. |
 | `shell_command` | Local shell inspection, commands, validation, and filesystem operations. | Uses the effective native or pane shell mode and can require approval. |
-| `apply_patch` | Semantic file-content add, update, move, or delete using `*** Begin Patch` format. | It is a MAAP action, never a shell executable. |
+| `apply_patch` | Semantic file-content add, update, move, or delete using `*** Begin Patch` format. | It is a MAAP action, never a shell executable; confirmed earlier file changes remain applied if a later file operation fails. |
 | `web_search`, `fetch_url` | User-requested current web search or HTTP(S) retrieval. | They are runtime network actions, not local-path readers. |
 | `send_message`, `spawn_agent` | Local coordination and pane-backed delegation. | `spawn_agent` may use `session: fork` for a bounded immutable parent-history snapshot or `session: new` for isolation; scope and policy inherit independently and cannot be broadened by that choice. |
 | `config_change` | Supported live leaf configuration mutation. | Set values accept strings, signed integers, booleans, or string arrays; execution-boundary settings remain direct-user-only. |
-| `mcp_server_search`, `mcp_server_get` | Discover configured MCP servers and retrieve one durable complete tool contract. | Search results and retrieval records are safe durable chronology; retrieval is required before a later call. |
+| `mcp_server_search`, `mcp_server_get` | Discover configured MCP servers and retrieve one complete tool contract. | Retrieve the selected server before a later call; discovery does not invoke an external tool. |
 | `mcp_call` | Call a durably retrieved, currently available configured MCP tool. | The live registry revalidates server, tool, arguments, external capability, and approval policy. |
 | `memory_search`, `memory_store` | Retrieve or retain runtime-owned durable memory when enabled. | Records must be safe, durable, and non-secret. |
 | `issue_add`, `issue_update`, `issue_query`, `issue_delete` | Manage runtime-owned local issues for the active project. | Issue records remain subject to the configured action set and project-store rules. |
 
-The provider schema is request-independent and contains exactly the executable
-subset selected by `agents.enabled_actions`; that setting defaults to every
-executable action. Capability negotiation and model-selected skill actions are
-not part of the ordinary provider schema. The model uses enabled actions
-directly; live integration availability, permissions, and action arguments
-remain runtime-validated and failures return explicit action results.
+The active provider schema exposes only the action subset allowed for the
+current request. `agents.enabled_actions` supplies the configured upper bound
+and defaults to every executable action. Capability negotiation and
+model-selected skill actions are not part of the ordinary provider schema. The
+model uses exposed actions directly; the runtime still revalidates live
+integration availability, permissions, and arguments, returning an explicit
+action result on failure.
 
 ## Local mutation and recovery
 
 Use `shell_command` for shell-visible inspection and `apply_patch` for ordinary
 file-content changes. Patch paths are normally relative to the pane working
-directory; traversal is rejected. A patch failure is evidence, not success:
-inspect current file context and issue a smaller fresh patch rather than replay
-the same stale hunk. Shell commands report pane-shell transport, bounded output,
-exit, timeout, and truncation data.
+directory; traversal is rejected. Under active, non-bypassed Bubblewrap,
+absolute paths may target effective write scopes. Other execution modes reject
+absolute patch headers and targets outside the pane working directory. A patch
+failure is evidence, not success: preserve confirmed per-file changes, inspect
+the failed target's current context, and issue a smaller fresh patch rather
+than replaying the same stale hunk. Shell commands report pane-shell transport,
+bounded output, exit, timeout, and truncation data.
 
 Blocked actions wait for a primary-client decision; observers cannot decide
 them. Denied, timed-out, cancelled, and policy-forbidden actions remain in the

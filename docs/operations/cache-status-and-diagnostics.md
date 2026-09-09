@@ -40,11 +40,12 @@ provider cache decision.
 `Provider wire prefix` compares the complete ordered OpenAI input sent on the
 wire, together with cache-affecting request-envelope components. Ordinary
 requests in one conversation and cache epoch retain every previously sent input
-item byte-for-byte and append newly settled chronology after it. The reported `input_bytes` is the canonical serialized size of the
-effective input array actually sent. `common_bytes` is the corresponding size
-of the identical leading item array, while `envelope_unchanged` confirms that
-instructions, response format, tools, tool choice, cache key, and request
-controls did not change. `append_only=true` requires both conditions.
+item byte-for-byte and append newly settled chronology after it. The reported
+`input_bytes` is the canonical serialized size of the effective input array
+actually sent. `common_bytes` is the corresponding size of the identical
+leading item array, while `envelope_unchanged` confirms that instructions,
+response format, tools, tool choice, cache key, and request controls did not
+change. `append_only=true` requires both conditions.
 Pane environment facts are frozen as typed prompt-boundary snapshots: an
 unchanged environment adds no message, while a changed or unavailable
 environment appends a new snapshot without rewriting the prior prefix.

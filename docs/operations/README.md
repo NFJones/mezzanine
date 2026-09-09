@@ -3,7 +3,8 @@
 ## Purpose
 
 Guide persistent-host operation, lifecycle management, recovery, diagnostics,
-cache inspection, and symptom-based troubleshooting.
+cache inspection, power inhibition, optional remote transport rollout, and
+symptom-based troubleshooting.
 
 ## Prerequisites
 
@@ -18,12 +19,12 @@ This section owns the following operational guidance:
 - [Cache status and diagnostics](cache-status-and-diagnostics.md)
 - [Power inhibition](power-inhibition.md)
 - [Troubleshooting](troubleshooting.md)
-- [Remote pairing and recovery](../safety-and-trust/remote-pairing-and-recovery.md)
 - [Iroh production operations and rollout](iroh-production-operations-and-rollout.md)
 
 ## Related pages
 
 - [Configuration](../configuration/README.md)
+- [Remote pairing and recovery](../safety-and-trust/remote-pairing-and-recovery.md)
 - [Safety, trust, and security](../safety-and-trust/README.md)
 - [Manual reference](../reference-manual/README.md)
 

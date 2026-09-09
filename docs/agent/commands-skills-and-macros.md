@@ -77,16 +77,15 @@ runtime-owned project issues rather than an external tracker, and `/issue edit
 <id> body|notes` externally edits only the selected prose field. Structured
 metadata remains in typed commands. `/init` creates the default `AGENTS.md`
 scaffold only when it is absent; it does not overwrite an existing instruction
-file. Durable edits use full-record
-compare-and-swap checks, so concurrent changes or deletion retain the private
+file. Durable edits use full-record compare-and-swap checks, so concurrent
+changes or deletion retain the private
 draft for `/editor-recovery` instead of overwriting the record. External editors
 launched from commands or retained record browsers run directly on the Mez
 server with a dedicated PTY and never through the pane shell, regardless of
-agent shell mode. `/init` creates
-a project instruction scaffold. `/auth-status`, `/refresh-provider-info`,
-`/debug-config`, `/reset-status`, and `/log-level` provide non-secret
-authentication, provider, configuration, token-accounting, and verbosity
-diagnostics. Use `/exit` to hide the agent shell after active work stops.
+agent shell mode. `/auth-status`, `/refresh-provider-info`, `/debug-config`,
+`/reset-status`, and `/log-level` provide non-secret authentication, provider,
+configuration, token-accounting, and verbosity diagnostics. Use `/exit` to hide
+the agent shell after active work stops.
 
 ## Invoke a skill or macro explicitly
 
@@ -111,8 +110,11 @@ and approvals still apply to every step. Use `/list-macros` before invoking an
 unfamiliar macro.
 
 Use `@<server-id>` only when a task requires a configured MCP server. That
-server's callable metadata is available for the current turn, not permanently
-added to the conversation.
+creates a durable reference that makes the server eligible for
+`mcp_server_get`; it does not expose callable tool metadata by itself. A
+successful `mcp_server_get` records the complete tool contract needed for
+`mcp_call`. Compaction clears retrieved tool contracts, but retains explicit
+references, so retrieve the server again after compaction.
 
 ## Related pages
 

@@ -71,14 +71,15 @@ channel.
 Use `mez snapshot create` to save layout state, and `mez snapshot` to list
 saved snapshots. The `inspect`, `delete`, `resume`, and `resume-latest`
 subcommands operate on those saved layouts. Snapshot payload version 5 retains
-shared session topology, canonical geometry, names, known pane working directories,
-and a client-independent landing view. It never restores attached client IDs,
-layout ownership, client-local focus/history/zoom, transient presentation,
-observer authority, event credentials, credentials, terminal history, agent
-conversations, local message state, live MCP state, pending approvals, approval
-grants, or pane processes. Restored sessions begin with zero attached primaries
-by default; `--serve --attach-primary` creates the documented interactive
-primary during live restore.
+shared session topology, canonical geometry, names, known pane working
+directories, and a client-independent landing view. It never restores attached
+client IDs, layout ownership, client-local focus/history/zoom, transient
+presentation, observer authority, event credentials or cursors, provider
+credentials, terminal history, agent conversations, local message state, live
+MCP state, pending approvals, approval grants, or pane processes. Restored
+sessions begin with zero attached primaries by default; `--serve
+--attach-primary` creates the documented interactive primary during live
+restore.
 
 Snapshots are stored under Mezzanine's user-private configuration area. The
 snapshot CLI uses its `snapshots` directory, while live session layout commands

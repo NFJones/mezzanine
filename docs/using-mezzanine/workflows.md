@@ -28,9 +28,10 @@ Begin a prompt with `$<skill-name>` to invoke an available skill or
 task needs a configured MCP integration; injected tool details apply to that
 turn rather than becoming permanent context.
 
-Use subagents for bounded, separable work and keep the parent responsible for
-integration. See the agent guide for routing, messaging, continuity, and
-provider behavior.
+Request subagents explicitly for bounded, separable work, and keep the parent
+responsible for integration. Mezzanine can spawn them only when the active
+policy authorizes delegation. See the agent guide for routing, messaging,
+continuity, and provider behavior.
 
 ## Forward X11 applications from a remote session
 

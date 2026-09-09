@@ -19,13 +19,14 @@ state, declared scopes, and whether shell syntax can be safely classified. If
 it cannot establish that a command fits the active rules, it asks rather than
 assuming it is safe.
 
-Blocked actions remain pending until the primary client decides or a scoped
-policy change makes them allowable when pending work is re-evaluated. Read-only
-observers cannot approve, deny, or redirect them. Use the pane-local approval
-controls or the session approval view to inspect the exact requested action,
-then choose an appropriately narrow decision. A denial returns to the agent so
-it can adjust the work; a redirect supplies a new instruction before work
-continues.
+Blocked actions remain pending until the primary client decides. Pending
+configuration-change actions may resume automatically after an approval-policy
+change if the new policy allows that same action under the ordinary rules.
+Read-only observers cannot approve, deny, or redirect blocked actions. Use the
+pane-local approval controls or the session approval view to inspect the exact
+requested action, then choose an appropriately narrow decision. A denial
+returns to the agent so it can adjust the work; a redirect supplies a new
+instruction before work continues.
 
 ## Choose a policy deliberately
 

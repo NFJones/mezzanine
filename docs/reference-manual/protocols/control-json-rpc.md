@@ -313,25 +313,31 @@ reusing it with different inputs is a conflict. Pairing, invitation redemption,
 profile checks, and host administration use `host_only`, so those operations
 cannot accidentally provision a session.
 
-The implemented host RPC catalog is `host/get`, `host/shutdown`,
+The local host administration RPC catalog is `host/get`, `host/shutdown`,
 `host/reconcile`, `host/session/list`, `host/session/create`, and
-`host/session/resolve`. The lease catalog is `lease/list`, `lease/get`,
-`lease/checkpoint`, `lease/recover`, `lease/release`, `lease/revoke`, and
-`lease/gc`. Local Unix administration is authoritative by default; remote
-attach/create authority never implies lease administration. Lease targets may
-be exact lease IDs, session IDs, or unambiguous names. Active release/revoke
-requests require `terminate=true`; GC is a preview unless `apply=true` and can
-remove only released, revoked, or failed tombstones. Results omit create
-idempotency keys and creation fingerprints. Configured audit logging records
-the local host administrator, method, outcome, lease identity, and generation
-without request reasons, credentials, or other secret-bearing fields.
+`host/session/resolve`. The remote `host_only` path advertises only methods
+granted to the authenticated principal; its implemented remote operations are
+`host/session/list` and `host/session/kill`. Remote kill requires separately
+granted force-kill authority, `force=true`, an idempotency key, and an explicit
+target. The lease catalog is `lease/list`, `lease/get`, `lease/checkpoint`,
+`lease/recover`, `lease/release`, `lease/revoke`, and `lease/gc`. Local Unix
+administration is authoritative by default; remote attach/create authority
+never implies lease administration. Lease targets may be exact lease IDs,
+session IDs, or unambiguous names. Active release/revoke requests require
+`terminate=true`; GC is a preview unless `apply=true` and can remove only
+released, revoked, or failed tombstones. Results omit create idempotency keys
+and creation fingerprints. Configured audit logging records the local host
+administrator, method, outcome, lease identity, and generation without request
+reasons, credentials, or other secret-bearing fields.
 
 The result contains `selected_version`, a secret-free `server` identity, the
 granted role, negotiated `capabilities`, the attached `client`, and `session`
-state. Observer initialization attaches a read-only client immediately.
-Capabilities list available methods, event types, roles, transports, limits,
-and feature flags. Treat this advertised set—not this page—as the available
-surface for the connection.
+state. Version 3 additionally returns a secret-free `host` summary and a
+`lease` summary when session-bound; `host_only` returns null `lease`, `session`,
+and `client` values. Observer initialization attaches a read-only client
+immediately. Capabilities list available methods, event types, roles,
+transports, limits, and feature flags. Treat this advertised set—not this
+page—as the available surface for the connection.
 
 A successful invitation redemption adds `device_credential` to the initialize
 result. The invitation is not consumed until ordinary initialization can
@@ -427,7 +433,7 @@ v2 removes those methods and adds `client/set_layout_owner`.
 | Pane | `pane/list`, `pane/create`, `pane/select`, `pane/resize`, `pane/move`, `pane/swap`, `pane/break`, `pane/join`, `pane/close`, `pane/rename`, `pane/zoom`, `pane/input-sync`, `pane/attention`, `pane/status`, `pane/notice`, `pane/capture` | Inspect panes, mutate layout and presentation, control synchronized input, completion attention, source-owned status, or bounded notices, or capture pane content. List is RO; capture is RO when policy permits. Status and notices are available to primary and automation clients; rename, zoom, and input synchronization are primary-only. |
 | Buffer | `buffer/list`, `buffer/create`, `buffer/read`, `buffer/delete` | Primary-only bounded internal paste-buffer inspection and mutation. List/read are RO; create requires explicit replacement for existing names. |
 | Frame | `frame/read` | Read rendered frame fields and text (RO). |
-| Terminal | `terminal/view`, `terminal/presentation/acknowledge`, `terminal/step`, `terminal/resize`, `terminal/command` | Render a client view, acknowledge receipt-bearing local frame commits, submit bytes/primary size, update exact-client observer-v3 geometry, or invoke a terminal command. Presentation acknowledgement is available to primary and observer clients; primary-only mutation applies to step and command; resize is observer-v3-only and never changes primary or canonical geometry. |
+| Terminal | `terminal/view`, `terminal/presentation/acknowledge`, `terminal/step`, `terminal/resize`, `terminal/command` | Render a client view, acknowledge receipt-bearing local frame commits, submit bytes/primary size, update exact-client observer geometry, or invoke a terminal command. Presentation acknowledgement is available to primary and observer clients; primary-only mutation applies to step and command; resize is observer-only and never changes primary or canonical geometry. Negotiated observer v3 uses the resulting pushed render instead of fetching another view. |
 | Agent | `agent/list`, `agent/task/list`, `agent/spawn`, `agent/shell/show`, `agent/shell/hide`, `agent/shell/command` | Inspect agents/tasks (RO), manage an agent shell, start prompt work, or spawn an agent. |
 | Approval | `approval/list`, `approval/decide` | Inspect pending approvals (RO) or make a primary decision. |
 | Configuration | `config/get`, `config/set`, `config/unset`, `config/reload`, `config/validate` | Inspect or validate config (RO), or mutate/reload it. |

@@ -36,12 +36,14 @@ truncate content.
 
 ## Trust a project overlay
 
-Project configuration under `.mezzanine/config.toml`, `.mezzanine/config.yaml`,
-`.mezzanine/config.yml`, or `.mezzanine/config.json` remains pending until the
-primary user explicitly trusts or rejects the project root. Inspect the overlay
-and applicable instructions directly before deciding. The trust store records
-trusted, rejected, and revoked roots; inspect its persisted record before
-changing a decision:
+Newly discovered project configuration under `.mezzanine/config.toml`,
+`.mezzanine/config.yaml`, `.mezzanine/config.yml`, or
+`.mezzanine/config.json` remains pending until the primary user explicitly
+trusts or rejects the project root. A previously trusted root applies overlays
+discovered under that canonical root unless trust was revoked or policy
+requires renewed approval. Inspect the overlay and applicable instructions
+directly before deciding. The trust store records trusted, rejected, and
+revoked roots; inspect its persisted record before changing a decision:
 
 ```sh
 mez sandbox trust list

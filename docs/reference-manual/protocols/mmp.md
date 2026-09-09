@@ -30,7 +30,7 @@ invalid, negative, or oversized values and ignore unknown headers.
 
 ## Envelope and identity
 
-Every envelope is an object with these fields:
+The normative versioned message envelope is an object with these fields:
 
 | Field | Meaning |
 | --- | --- |
@@ -45,16 +45,26 @@ Every envelope is an object with these fields:
 | `content_type` | Payload media type. |
 | `payload` | The application payload. |
 
-The registration `hello` is the bootstrap exception to this full envelope: it
-contains `protocol`, `type`, an optional non-empty `role`, and optional
-`capabilities`. An omitted role defaults to `default`. It does not carry a
-registered sender identity, recipient, delivery metadata, or application
-payload. The service assigns the effective identity in `welcome`. After
-registration, the service—not the sender—validates identity against the
+The current endpoint enforces this full shape for `send`, `task_status`, and
+`task_result`. Its service operations use reduced, operation-specific request
+objects instead. In particular, registration `hello` contains `protocol`,
+`type`, an optional non-empty `role`, and optional `capabilities`; an omitted
+role defaults to `default`. The service assigns the effective identity in
+`welcome`.
+
+These reduced service-operation shapes are an implementation conformance gap.
+`SPEC.md` requires every message envelope to carry the full envelope and only
+allows a pre-registration `hello` sender to omit `agent_id` or use a
+provisional ID. The current full-envelope parser also requires `time` to be a
+non-empty string but does not yet validate the normative RFC 3339 or documented
+monotonic-time grammar.
+
+After registration, the service—not the sender—validates identity against the
 authenticated connection. Mismatched sender claims are rejected unless a
 documented trusted bridge rewrites them. MMP currently preserves accepted
-non-reserved extension fields at the top level; this is an explicit exception
-to the shared `extensions`-object convention.
+non-reserved extension fields at the top level, as required for forwarding by
+the MMP contract; this is an explicit exception to the shared
+`extensions`-object convention.
 
 ## Message types
 
@@ -68,7 +78,7 @@ to the shared `extensions`-object convention.
 | `mmp.receive` | Poll a subscribed recipient for a delivery batch; optional `limit` defaults to 100. |
 | `transport/receive` | Compatibility alias for `mmp.receive`. |
 | `deliver` | Service delivers a batch containing `cursor` and sequenced `messages`. |
-| `ack` | Advance the recipient subscription through `sequence` (or compatibility field `last_sequence`). |
+| `ack` | Service response acknowledging sender-side acceptance, or recipient request advancing a subscription through `sequence` (or compatibility field `last_sequence`). |
 | `error` | Structured protocol or delivery failure. |
 | `presence` | Announce status or capability changes. |
 | `heartbeat` | Prove connection liveness. |
@@ -94,8 +104,10 @@ connection-oriented best effort. A disconnect after the server write but
 before application consumption can lose that unconsumed delivery. Integrators
 must not treat the current automatic fanout path as an end-to-end receipt.
 
-The sender receives `ack` when a message is accepted for delivery. Body-level
-failures use
+The sender receives an `ack` with `message_id`, `queued_recipients`, and
+`status` when a message is accepted for delivery. A recipient's cursor-advance
+`ack` instead supplies `sequence` (or `last_sequence`) and receives the new
+`last_sequence`. Body-level failures use
 `{"protocol":"mmp/1","type":"error","error":{"code":"...","message":"...","retryable":false,"delivery_status":"..."}}`.
 Current dispatch can emit `unsupported_protocol`, `payload_too_large`,
 `expired`, `invalid_envelope`, `not_found`, `unauthorized`, `undeliverable`, and

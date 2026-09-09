@@ -200,9 +200,11 @@ direct or relay path.
    service manager restarts the host after a listener-task failure, because
    the current listener supervisor stops the paired Unix listener too.
 10. From a negotiated remote primary, copy a non-sensitive test value and verify
-    the server internal buffer, server-host clipboard attempt, and attaching
-    client clipboard independently. Confirm observers, other devices, and v1
-    clients receive no client-local effect.
+    the server internal buffer and attaching client clipboard independently.
+    Confirm the corresponding server-host clipboard command is suppressed and
+    that observers, other devices, and v1 clients receive no client-local
+    effect. Separately verify the best-effort server-host clipboard path from a
+    session without a negotiated client clipboard route.
 
 Persistent-host `remote/status` includes only `enabled` and `endpoint_id`.
 Session-local `show-metrics` output intentionally omits endpoint IDs, peer
@@ -267,7 +269,8 @@ Iroh while investigating.
 
 Use local Unix control for all trust administration.
 
-- Revoke a lost client immediately with `mez remote revoke` and a reason.
+- Revoke a lost client immediately with `mez remote revoke CLIENT_ID --reason
+  REASON`.
 - Stop the session before backing up or replacing server endpoint identity and
   trust state.
 - Treat endpoint key, trust database, client key, profile, and device credential

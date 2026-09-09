@@ -8,10 +8,12 @@ error rules remain with their owning protocol.
 
 ## JSON and text
 
-Protocol payloads are UTF-8 JSON values. JSON object fields are case-sensitive.
-Text media types use standard HTTP-style media types; plain text is written as
-`text/plain; charset=utf-8` and JSON payloads as `application/json` unless a
-protocol defines a more specific type.
+Structured protocol payloads are UTF-8 JSON values, and JSON object fields are
+case-sensitive. Protocol-specific binary or raw substreams are explicit
+exceptions; for example, control-transport compression records and negotiated
+X11 streams are not JSON. Text media types use standard HTTP-style media types;
+plain text is written as `text/plain; charset=utf-8` and JSON payloads as
+`application/json` unless a protocol defines a more specific type.
 
 Timestamps are RFC 3339 strings with an offset unless a protocol explicitly
 permits a documented monotonic form. Byte lengths are octet lengths, not

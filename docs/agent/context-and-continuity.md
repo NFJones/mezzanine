@@ -11,14 +11,15 @@ Use the [agent shell](../using-mezzanine/agent-shell.md) in an active pane.
 
 ## What a turn receives
 
-Each request combines an immutable epoch prefix with ordered durable
-conversation chronology. The epoch prefix contains invariant runtime and
-project guidance; chronology contains every task prelude, user or assistant
-event, and explicit action result appended since the latest compaction boundary.
-User, assistant, action-result, project-file, and terminal sources retain
-distinct roles. Terminal text becomes context only when an explicit action
-result includes it; live controller state, passive terminal content,
-credentials, and unrelated pane data are not normal model context.
+Each request combines a cache-stable invariant prefix, current project guidance,
+and ordered durable conversation chronology. Mez refreshes applicable project
+guidance before each provider request and supplies it as a final system-prompt
+suffix; chronology contains every task prelude, user or assistant event, and
+explicit action result appended since the latest compaction boundary. User,
+assistant, action-result, project-file, and terminal sources retain distinct
+roles. Terminal text becomes context only when an explicit action result
+includes it; live controller state, passive terminal content, credentials, and
+unrelated pane data are not normal model context.
 
 An action result has one bounded model-visible representation. Mez appends that
 representation once to the durable chronological prefix, stores it in the

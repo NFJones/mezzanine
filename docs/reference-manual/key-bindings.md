@@ -29,28 +29,30 @@ configuration can replace bindings.
 | `Ctrl+A` then arrow keys, `o`, or `;` | Select an adjacent, next, or last pane. |
 | `Ctrl+A q` | Display pane indexes and selection actions. |
 | `Ctrl+A z`, `Ctrl+A Space` | Toggle pane zoom / cycle layouts. |
-| `Ctrl+A x` / `Ctrl+A &` | Kill the active pane / current window. |
+| `Ctrl+A x` / `Ctrl+A &` | Kill the active pane / current window, with confirmation when required. |
 | `Ctrl+A !`, `Ctrl+A {`, `Ctrl+A }` | Break the active pane into a window / swap it with the previous or next pane. |
 | `Ctrl+A [` / `Ctrl+A PageUp` | Enter copy mode / enter copy mode and scroll up. |
-| `Ctrl+A ]`, `Ctrl+A #`, `Ctrl+A =`, `Ctrl+A -` | Paste, list, choose, or delete paste buffers. |
+| `Ctrl+A ]`, `Ctrl+A #`, `Ctrl+A =`, `Ctrl+A -` | Paste the latest buffer, list buffers, choose the active buffer, or delete the latest buffer in buffer context. |
 | `Ctrl+A ~` | Show Mez messages. |
 | `Ctrl+A a` | Toggle the focused pane's agent shell. |
 | `Ctrl+A e` | Open the visible agent-prompt draft in the configured external editor. |
 
 ## Prompt and browser controls
 
-In the Mezzanine command prompt and agent prompt, Tab and Shift+Tab select
-enumerable completions; shadow hints do not alter the editable input. The agent
-prompt recognizes `/` slash commands, `$` skills, `#` macros, and `@` MCP
-servers. `Ctrl+V` pastes host clipboard text into the visible agent prompt
-without submitting it. External editing is also non-submitting: after a
-successful editor close, the edited text returns to the in-pane prompt for
-review and normal submission. While the editor is open, it exclusively owns
-the complete attached terminal: Mez frames, prompts, overlays, and status rows
-are hidden, the editor receives raw terminal input, and closing it restores a
-full Mez redraw. The editor is a server-local subprocess on a dedicated PTY;
-the pane shell is not invoked, and its history, current input, and terminal
-screen remain unchanged.
+In the Mezzanine command prompt and agent prompt, Tab and Shift+Tab move forward
+and backward through enumerable completions. Applying a completion replaces
+only the active token and does not submit the prompt; shadow hints never alter
+editable input. The agent prompt recognizes `/` slash commands, `$` skills,
+`#` macros, and `@` MCP servers. `Ctrl+V` pastes host clipboard text into the
+visible agent prompt without submitting it.
+
+External editing is also non-submitting. After a successful editor close, the
+edited text returns to the in-pane prompt for review and normal submission.
+While the editor is open, it exclusively owns the complete attached terminal:
+Mez frames, prompts, overlays, and status rows are hidden, the editor receives
+raw terminal input, and closing it restores a full Mez redraw. The editor is a
+server-local subprocess on a dedicated PTY; the pane shell is not invoked, and
+its history, current input, and terminal screen remain unchanged.
 
 Changed drafts that cannot be safely applied after an editor failure,
 interruption, restart, or conflict remain in private host-owned recovery
@@ -73,12 +75,12 @@ a terminal emulator or nested multiplexer intercepts it; configure the binding
 or outer environment deliberately.
 
 For each configurable direct action, an omitted field retains the prefix
-binding listed above. Setting that field to a chord replaces the matching
-prefix binding with the direct chord; setting it to `null` disables both paths.
-`keys.edit_prompt` is the exception: it configures only the suffix used after
-the prefix, defaults to `e`, and may also be disabled with `null`. `list-keys`
-reports only the resulting effective bindings. A configured prefix command
-still shadows any remaining built-in action on the same suffix.
+binding listed above. Setting the field to a chord installs that direct chord
+and removes the corresponding built-in prefix action; setting it to `null`
+disables both paths. `keys.edit_prompt` is the exception: it configures only the
+suffix used after the prefix, defaults to `e`, and may also be disabled with
+`null`. `list-keys` reports only the resulting effective bindings. A configured
+prefix command still shadows any remaining built-in action on the same suffix.
 
 Run `list-key-presets` to choose from the interactive preset table. The
 `default` preset preserves the prefix-only defaults above. The `simple` preset

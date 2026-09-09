@@ -102,7 +102,9 @@ Configuration is conservative:
   primary-config migration. Window pills retain their semantic rendering and
   may still set explicit `foreground` and `background` palette names; pane-pill
   `style` remains supported.
-- Secret material is rejected from config. Use `mez auth` and credential stores.
+- Do not store secret material in config. Validation rejects secret-named paths
+  in project overlays and `auth`, plus credential-like inline MCP environment
+  and header entries; use `mez auth` and credential stores instead.
 - Live mutation accepts scalar strings, integers, booleans, and string arrays
   for supported paths.
 
@@ -1570,11 +1572,11 @@ credentials.
 | `hooks.<name>.shell` | string | omitted | Reserved compatibility field; accepted but not consumed by the current hook runtime. Use `command` with `kind = "focused_shell"`. |
 | `hooks.<name>.kind` | string | omitted | Invocation kind: `program`, `shell`, or `focused_shell`; omitted `kind` treats `command` as a focused-shell hook. |
 | `hooks.<name>.enabled` | boolean | omitted | Whether the hook is enabled. |
-| `hooks.<name>.required` | boolean | omitted | Whether hook failure blocks the triggering action. |
-| `hooks.<name>.agent_hook` | boolean | omitted | Whether the hook is agent-facing. |
+| `hooks.<name>.required` | boolean | omitted | When true, a `session_start` hook defaults to blocking on failure if `on_failure` is omitted. |
+| `hooks.<name>.agent_hook` | boolean | omitted | For focused-shell hooks, wait for shell availability; `agent_turn_start` and `user_prompt_submit` hooks also default to blocking on failure when this is true and `on_failure` is omitted. |
 | `hooks.<name>.timeout_ms` | integer | omitted | Hook timeout in milliseconds. |
 | `hooks.<name>.timeout_sec` | integer | omitted | Hook timeout in seconds. |
-| `hooks.<name>.on_failure` | string | omitted | Failure behavior. |
+| `hooks.<name>.on_failure` | string | event-dependent | Failure behavior: `block`, `warn`, or `ignore`. Pre-shell-command, permission-request, pre-MCP-tool-use, and layout-load hooks default to `block`; qualifying required or agent hooks also default to `block`; other hooks default to `warn`. A blocking failure becomes a warning if the triggering event has already completed. |
 | `hooks.<name>.match` | table | omitted | Single matcher definition. |
 | `hooks.<name>.matches` | array | omitted | Matcher group definitions. |
 | `hooks.<name>.env` | map | omitted | Reserved compatibility field; accepted but not consumed by the current hook runtime. |

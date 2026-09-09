@@ -20,8 +20,8 @@ host-dependent, and clipboard handling is policy-gated. Standard primary
 device-attributes queries (`CSI c` and `CSI 0 c`) receive the conservative
 VT100-with-no-options reply `CSI ? 1 ; 0 c`; unsupported query variants are
 ignored. General DCS controls and other unimplemented capabilities remain
-unsupported even though the two synchronized-output markers below are
-recognized.
+unsupported even though the two narrowly defined synchronized-output markers
+below are recognized.
 
 ### Synchronized output
 
@@ -41,11 +41,17 @@ state belongs to its pane and is not passed through to the outer terminal.
 Custom pane-frame templates can display the active scalar with
 `#{pane.progress}`.
 
-Panes receive `TERM=xterm-256color` by default. Mez-specific terminfo entries
-can be selected when installed. If a selected Mezzanine-specific entry is not
-available, the safe fallback order is `screen-256color`, `screen`, `vt100`,
-then `dumb`. The configured pane identity describes Mezzanine's compatibility
-surface rather than claiming unrestricted passthrough of the host terminal.
+### TERM and terminfo selection
+
+Panes receive `TERM=xterm-256color` by default. Mezzanine-specific
+`mez-256color` and `mezzanine-256color` entries describe the bounded
+`xterm-compatible` profile and may be used when installed. When a requested
+Mezzanine entry is unavailable, the safe installed fallback order is
+`screen-256color`, `screen`, `vt100`, then `dumb`. If none is installed, Mez
+uses its built-in `dumb` profile and sets `TERM=dumb`. Diagnostics expose the
+selected profile, terminfo name, and degraded capabilities. The pane identity
+describes Mezzanine's compatibility surface; it does not claim unrestricted
+passthrough of the host terminal.
 
 ## Rendering and input boundaries
 
@@ -54,6 +60,12 @@ single emoji-width policy across rendering, prompts, and copy mode. Use
 `terminal.emoji_width = "wide"` for two-cell emoji presentation or `"narrow"`
 for one-cell text fallback terminals. The setting does not make all complex
 emoji narrow.
+
+Rendering preserves styled blank cells and terminal autowrap semantics: a
+printable glyph in the final column sets a pending wrap rather than scrolling
+immediately. Pane-local alternate-screen state is composed into Mez's normal
+host presentation; attached clients do not switch the containing terminal to
+its alternate screen on behalf of a pane.
 
 Pane alternate screens are separate from normal history. Full-screen programs
 can remain visible and explicitly captured, but their rows are not injected
@@ -86,12 +98,12 @@ restored unchanged after the prompt is hidden.
 
 ## Diagnose a mismatch
 
-Inspect the effective profile, terminfo fallback, and terminal configuration.
-For shifted status glyphs, change `terminal.emoji_width` to match the host
-font. For a full-screen program, verify alternate-screen and mouse behavior
-before enabling passthrough. In nested multiplexers, do not assume exclusive
-control of the outer terminal; configure an outer binding when the default
-prefix does not arrive.
+Inspect the effective profile, selected terminfo name, degraded capability set,
+and terminal configuration. For shifted status glyphs, change
+`terminal.emoji_width` to match the host font. For a full-screen program,
+verify alternate-screen and mouse behavior before assuming a passthrough
+problem. In nested multiplexers, do not assume exclusive control of the outer
+terminal; configure an outer binding when the default prefix does not arrive.
 
 The compatibility suite covers UTF-8 and width, control sequences, cursor and
 screen operations, SGR, alternate screens, resize propagation, paste, focus,

@@ -15,20 +15,23 @@ Start an interactive primary client and open the command prompt with
 
 The command prompt parses Mezzanine commands; it never sends entered text to
 the focused pane shell. Commands accept shell-like quoted and escaped
-arguments. Separate multiple commands with an unquoted semicolon.
+arguments. An unquoted semicolon separates multiple commands; execution stops
+at the first command that fails.
 
 Use `help` in the prompt for the baseline command catalog, brief descriptions,
 and the effective key table. It is a catalog, not per-command argument help.
-Tab and Shift+Tab offer enumerable command and argument completions. Run
-`list-keys` or press `Ctrl+A ?` to inspect the active bindings and their
-configuration sources. Runtime- or store-backed commands can still reject an
-invocation when required state or authority is unavailable.
+Tab and Shift+Tab move forward and backward through enumerable command and
+argument completions. Applying a completion replaces only the active token and
+does not submit the command. Run `list-keys` or press `Ctrl+A ?` to inspect the
+active bindings and their configuration sources. Runtime- or store-backed
+commands can still reject an invocation when required state or authority is
+unavailable.
 
 ## Common command groups
 
 | Task | Commands |
 | --- | --- |
-| Manage windows and panes | `new-window`, `split-window`, `select-pane`, `resize-pane`, `rename-pane`, `list-windows`, and `list-panes` |
+| Manage windows and panes | `new-window`, `split-window`, `select-pane`, `resize-pane`, `rebalance-window`, `synchronize-panes`, `rename-pane`, `list-windows`, and `list-panes` |
 | Work with sessions and clients | `list-sessions`, `attach-session`, `detach-client`, `list-clients`, and `kill-session` |
 | Copy and retain output | `copy-mode`, `copy-selection`, `paste-clipboard`, `paste-buffer`, `list-buffers`, `search-history`, `export-history`, and `clear-history` |
 | Inspect and adjust the interface | `zen`, `pane-settings`, `show-pane-status`, `show-messages`, `show-iroh-status`, `list-keys`, `list-key-presets`, `set-key-preset`, `list-themes`, `set-theme`, `add-options`, `show-options`, `set-option`, `bind-key`, and `unbind-key` |
@@ -70,10 +73,19 @@ or primary-client authority. Review completion hints, command output, and any
 resulting prompt or approval rather than assuming a command affects a detached
 or observer client.
 
+## Selected command contracts
+
+The following commands have behavior or safety boundaries that are useful to
+know without opening the complete normative contract.
+
+### Configuration discovery
+
 `add-options` displays the schema-owned reference for supported live
 configuration paths, including purpose, type, and constrained value or format
 guidance. `show-options` remains the separate view of effective configured
 values and their source layers.
+
+### Pane status and providers
 
 `pane-settings [-t pane]` opens a keyboard selector for the active or requested
 pane's configured status entries, including values moved into menu overflow.
@@ -111,6 +123,8 @@ working directories, and raw admission failures. Missing and stale pane targets
 are errors. The command requires the same attached-primary read authority as
 other terminal diagnostic commands.
 
+### Zen mode
+
 `zen on`, `zen off`, and `zen toggle` control the session-wide live
 `terminal.zen_mode` override. Successful changes are silent because their
 effect is immediately visible; control clients still receive a structured
@@ -132,6 +146,8 @@ complete ANSI frame commits, including retained partial or deferred frames.
 Iroh uses a successful server-stream flush as the delivery approximation and
 does not suppress an otherwise identical view carrying a new pending label.
 Stale or duplicate delivery receipts do not renew a lifetime.
+
+### Iroh diagnostics
 
 `show-iroh-status` displays a table for the invoking remote client's selected
 Iroh path. It includes RTT, jitter, recent transfer rates, loss and congestion

@@ -19,8 +19,8 @@ mez [GLOBAL OPTIONS] [COMMAND [ARGUMENTS...]]
 Global options are `--json`, `-S PATH`, `-L NAME`, `--iroh-profile NAME`,
 `--iroh-invite-file PATH`, and `--save-as NAME`; they may appear before or after
 a command. `--save-as` requires an invitation target and selects the
-client-local alias used for later reconnects.
-`--json` selects machine-readable output. `-S` selects an explicit control
+client-local alias used for later reconnects. `--json` selects machine-readable
+output. `-S` selects an explicit control
 socket and `-L` selects a named socket in the Mez runtime directory. The Iroh
 selectors are explicit remote targets, conflict with Unix socket selectors,
 and never fall back to Unix after a remote failure. Without a subcommand, `mez`
@@ -45,12 +45,12 @@ or `mez attach` to select an existing one.
 Creating or attaching a primary client needs an interactive terminal. `mez
 serve` can run without one. Observer attachment also requires an interactive
 terminal and immediately creates a read-only client bound to the current layout
-owner. The runtime implements `mezctl/2` and accepts up to 16 independent attached primaries. Each
-has caller-local navigation and presentation; one elected layout owner controls
-canonical PTY geometry. `mez snapshot resume <snapshot-id> --serve`
-restores a snapshot as a foreground daemon; add `--attach-primary` only when
-the invoking terminal should attach as a primary client. Use `mez --help` and
-`mez <command> --help` for the current argument and target syntax.
+owner. The runtime implements `mezctl/2` and accepts up to 16 independently
+attached primaries. Each has caller-local navigation and presentation; one
+elected layout owner controls canonical PTY geometry. `mez snapshot resume
+<snapshot-id> --serve` restores a snapshot as a foreground daemon; add
+`--attach-primary` only when the invoking terminal should also attach. Use `mez
+--help` and `mez <command> --help` for the current argument and target syntax.
 
 ## Foreground service options
 
@@ -85,10 +85,10 @@ fresh view until input, focus, mouse, or resize activity occurs.
 ## Snapshot forms
 
 Snapshot payload version 5 preserves recoverable shared topology, canonical
-geometry, and client-independent landing navigation, not running processes, live client
-identities, layout ownership, transient presentation, terminal history, or
-agent conversations. Pending approvals and approval grants do not become
-authority in a restored session:
+geometry, and client-independent landing navigation. It does not preserve
+running processes, live client identities, layout ownership, transient
+presentation, terminal history, or agent conversations. Pending approvals and
+approval grants do not become authority in a restored session:
 
 | Command | Behavior |
 | --- | --- |
@@ -115,6 +115,7 @@ to the processes that existed when the snapshot was taken.
 | `mez sandbox` | Inspect version-2 backend status, plan or enable the platform backend, disable confinement, manage presets and sanitized profiles, inspect managed-home caches, and manage project trust. Plans report the selected backend and fixed-executable presence; unavailable mutating enablement fails without changing state. `mez sandbox trust` supports `list`, `inspect PATH`, `add PATH`, `reject PATH`, and `revoke PATH`. |
 | `mez issue` | Add, show, update, query, and delete local project issues. |
 | `mez memory` | List, inspect, add, edit, delete, archive, mark stale, restore, record use or confirmation, supersede, prune, export, and search persistent memory records. |
+| `mez session-catalog` | Inspect and rebuild the saved-session discovery catalog. |
 | `mez remote` | Use authenticated local Unix control for `status`, `invite`, `clients`, `rename CLIENT_ID LABEL`, and `revoke CLIENT_ID [--reason TEXT]`. Client-local commands are `pair --invite-file PATH [--name NAME]`, `invitation inspect PATH`, and `profile list|show|rename|remove|check`. Paired Iroh clients cannot use server trust-administration methods. |
 | `mez completion <shell>` | Generate a completion definition for `bash`, `elvish`, `fish`, `powershell`, or `zsh`. |
 

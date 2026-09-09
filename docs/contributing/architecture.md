@@ -57,10 +57,11 @@ Follow the closest owner rather than forwarding contracts through
 named `tests/` module under the owning subsystem. Shared fixtures must serve at
 least two test owners; leave one-consumer setup beside its tests.
 
-Each substantial module and item needs documentation describing its purpose,
-inputs, outputs, boundaries, invariants, and errors as applicable. Preserve
-the workspace's focused-module organization instead of expanding `main.rs` or
-creating catch-all files.
+New or substantially changed modules need a module-level comment covering
+their purpose, boundaries, and key invariants. Public and private Rust items
+need rustdoc that describes their behavior, inputs, outputs, and error
+conditions. Preserve the workspace's focused-module organization instead of
+expanding `main.rs` or creating catch-all files.
 
 ## Related pages
 

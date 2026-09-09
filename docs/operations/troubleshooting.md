@@ -147,9 +147,10 @@ aggregate failure count. Detach acknowledgement and stream cancellation do not
 wait for this durability work.
 
 The attaching client also appends the exact local relay error to
-`~/.config/mezzanine/x11-client.diagnostics.log`. The file is owner-private,
-bounded, and local to the attaching machine; it is not sent to the Mez host.
-Inspect its latest line when `last_failure_stage` begins with `client_`.
+`x11-client.diagnostics.log` under Mezzanine's user-private configuration
+directory. The file is owner-private, bounded, and local to the attaching
+machine; it is not sent to the Mez host. Inspect its latest line when
+`last_failure_stage` begins with `client_`.
 
 If `x11.restart_pending` is true, compare `x11.applied` with
 `x11.configured`; the applied values govern current route admission. Restart
@@ -181,9 +182,10 @@ choice and compression ratio do not change direct/relay path quality.
 
 ## An Iroh copy does not reach the attaching machine clipboard
 
-Confirm the attachment is a primary and negotiated event-stream version 2 with
-the explicit `client_clipboard_write` capability. Observers, version-1 peers,
-and legacy fallback sessions intentionally retain server-only copy behavior.
+Confirm the attachment is a primary and negotiated event-stream version 2 or 3
+with the explicit `client_clipboard_write` capability. Observers, version-1
+peers, and legacy fallback sessions intentionally retain server-only copy
+behavior.
 The attaching client, not the server, selects `terminal.clipboard_copy_command`;
 verify that the local command exists and can access the client desktop session.
 Linux clients try `wl-copy`, `xclip`, and `xsel` by default, while macOS clients

@@ -6,6 +6,11 @@ Configure and qualify Mezzanine's optional host power-inhibition policy for
 running agent turns without changing the host's idle timers or claiming to
 override explicit power-management decisions.
 
+## Prerequisites
+
+Use primary-user configuration on a supported native host. Linux display
+inhibition additionally requires the graphical session's D-Bus environment.
+
 ## Configure the policy
 
 `agents.active_turn_sleep_inhibition` is disabled by default and is restricted
@@ -41,9 +46,9 @@ On macOS, the backend uses native IOKit assertions. Other platforms report the
 request as unavailable. Runtime acquisition failures are nonfatal to agent
 work, and a missing display service may leave system-only protection.
 
-The generic confirmed states are `Inactive`, `System`, `SystemAndDisplay`,
-`SystemOnly`, and `Unavailable`. They distinguish resources confirmed as held
-from a desired configuration.
+The serialized confirmed aggregate states are `inactive`, `system`,
+`system-and-display`, `system-only`, and `unavailable`. They distinguish
+resources confirmed as held from a desired configuration.
 
 `mez --json host status` exposes the bounded state for each supervised session
 under `sessions[].power_inhibition`. The `--json` flag is global and must appear
@@ -103,3 +108,15 @@ display-power, suspend, lid, or battery settings.
 
 See the [configuration reference](../configuration/reference.md#agents) for the
 field contract.
+
+## Related pages
+
+- [Persistent multi-session host](persistent-host.md)
+- [Configuration reference](../configuration/reference.md#agents)
+- [Troubleshooting](troubleshooting.md)
+
+## Next step
+
+Inspect `mez --json host status` during a running turn. Confirm that
+`desired_mode` matches the configured policy and that `confirmed_generation`
+catches up to `desired_generation`.
