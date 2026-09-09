@@ -73,12 +73,6 @@ Check your provider and authentication method before installing:
 | DeepSeek | Built-in, using its Chat Completions API | DeepSeek API key. |
 | OpenAI-compatible hosted or local backends | Configurable Responses or Chat Completions adapters | Configure the API base URL, models, and any credentials required by the backend. Compatibility depends on the endpoint and model. |
 
-Compatible backends must support the selected API and produce Mezzanine's
-structured action batches through tool calls or a supported structured-output
-mode. An OpenAI-compatible label alone does not guarantee compatibility with
-every model or server. Successful sign-in does not guarantee model entitlement
-or available quota.
-
 See [provider authentication](docs/getting-started/authentication.md) for sign-in
 and credential handling, and the
 [provider configuration reference](docs/configuration/reference.md#providersname)
@@ -95,10 +89,7 @@ cargo install --path crates/mezzanine --locked
 ```
 
 Cargo normally installs `mez` in `~/.cargo/bin`. Ensure that directory is on
-`PATH`, or invoke `~/.cargo/bin/mez` in the commands below. From a repository
-checkout, `just install` uses the lockfile and falls back to
-`target/mez-install/bin` when Cargo's default install root is read-only; add
-that fallback directory to `PATH` when it is selected.
+`PATH`, or invoke `~/.cargo/bin/mez` in the commands below.
 
 Optionally create a baseline configuration, authenticate, and start Mezzanine
 in a working directory. Starting a session creates the default configuration
@@ -132,15 +123,7 @@ for the required prompt boundary and bootstrap behavior.
 Use `mez new` to create a new session, `mez list` to discover resumable sessions,
 and `mez attach` to return to one. In a running session, `Ctrl+A :` opens the
 Mezzanine command prompt, `Ctrl+A ?` shows effective key bindings, and
-`Ctrl+A a` toggles the agent shell. From the command prompt, `zen on`, `zen off`,
-and `zen toggle` hide or restore passive Mezzanine chrome for the live session;
-set `terminal.zen_mode` in configuration for persistent startup behavior.
-Zen focus changes briefly show an identity label without restoring chrome or
-resizing panes; `terminal.zen_focus_label_duration_ms` controls its lifetime.
-Pane-status presets provide standard, minimal, agent-focused, and full-controls
-layouts that can still be refined with explicit overrides. Use
-`show-pane-status [-t pane]` for a bounded, secret-safe explanation of the
-resolved layout and retained provider state, including while zen mode is on.
+`Ctrl+A a` toggles the agent shell.
 
 Within an agent pane, plan-only mode is available when you want to review an
 approach before allowing changes. See the [agent guide](docs/agent/README.md)
@@ -169,13 +152,6 @@ the local Unix socket as the administration and recovery path. See [Persistent
 multi-session host](docs/operations/persistent-host.md), [Remote pairing and
 recovery](docs/safety-and-trust/remote-pairing-and-recovery.md), and [Operations
 and troubleshooting](docs/operations/README.md).
-
-Agent turns can optionally request best-effort idle sleep and display
-inhibition while work is running, including while detached. The policy is
-disabled by default, cannot override explicit or safety-driven sleep, and uses
-native Linux or macOS APIs. See [Power
-inhibition](docs/operations/power-inhibition.md) before enabling or qualifying
-it on a production host.
 
 Use `mez --help` and the [CLI reference](docs/reference-manual/cli.md) for the
 current command contract. Use [Sessions and panes](docs/using-mezzanine/sessions-and-panes.md)
