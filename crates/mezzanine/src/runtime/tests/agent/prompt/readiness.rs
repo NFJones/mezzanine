@@ -259,6 +259,7 @@ fn runtime_provider_execution_completes_running_prompt_turn() {
             ModelProfile {
                 provider: "runtime-echo".to_string(),
                 model: "echo-model".to_string(),
+                model_capabilities: Default::default(),
                 reasoning_profile: None,
                 latency_preference: None,
                 multimodal_required: false,

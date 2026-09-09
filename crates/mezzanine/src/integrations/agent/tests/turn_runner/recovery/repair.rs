@@ -51,6 +51,7 @@ async fn turn_runner_repairs_malformed_failure_summary_response() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -176,6 +177,7 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -294,6 +296,7 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -419,6 +422,7 @@ fn turn_runner_retries_maap_validation_error_with_safe_durable_repair_evidence()
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,

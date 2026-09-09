@@ -912,11 +912,20 @@ targets as other offline config mutations and validate before persistence.
 
 Each metadata field resolves independently in this order: explicit
 `model_profiles.<name>` override, configured provider-model record, discovered
-provider catalog. Omitted token limits remain unknown rather than being inferred
-from the model name or a generic runtime fallback. Configured `reasoning_levels`
-and `capabilities` replace lower lists even when explicitly empty. Provider
-option maps merge per key in this order: provider root, discovered model,
-configured model, profile. The last value for a key wins.
+provider catalog, built-in provider/model metadata, then conservative runtime
+fallback. Omitted token limits remain unknown unless a built-in model record
+documents them; a generic runtime fallback does not invent limits. Configured
+`reasoning_levels` and `capabilities` replace lower lists even when explicitly
+empty. Provider option maps merge per key in this order: provider root,
+discovered model, configured model, profile. The last value for a key wins.
+
+The generated `deepseek-v4-pro` and `deepseek-v4-flash` records, and the
+code-defined fallback candidates used when their configured model table is
+empty, declare reasoning levels `high` and `max`. They also declare capability
+tags `native_thinking`, `function_tools`, `forced_tool_choice`, `streaming`, and
+`max_output_tokens`. Omitting either list allows this lower-precedence metadata
+to fill the gap; an explicitly empty list clears it. These declarations use
+existing fields and do not change the configuration schema version.
 
 A profile may use a configured alias; Mez stores and displays the canonical
 model `id`. Profiles may also name unlisted custom models. A provider catalog

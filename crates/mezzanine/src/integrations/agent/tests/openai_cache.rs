@@ -17,6 +17,7 @@ fn openai_current_action_results_remain_append_only_before_volatile_suffix() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
+        model_capabilities: Default::default(),
         reasoning_profile: None,
         latency_preference: None,
         multimodal_required: false,
@@ -105,6 +106,7 @@ fn openai_configured_mcp_catalog_remains_in_append_only_stable_input() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
+        model_capabilities: Default::default(),
         reasoning_profile: None,
         latency_preference: None,
         multimodal_required: false,
@@ -194,6 +196,7 @@ fn openai_promoted_conversation_entries_keep_complete_input_bytes() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
+        model_capabilities: Default::default(),
         reasoning_profile: None,
         latency_preference: None,
         multimodal_required: false,
@@ -281,6 +284,7 @@ fn openai_settled_controller_state_is_chronological_developer_input() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
+        model_capabilities: Default::default(),
         reasoning_profile: None,
         latency_preference: None,
         multimodal_required: false,
@@ -338,6 +342,7 @@ fn openai_committed_request_state_does_not_add_volatile_duplicate() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
+        model_capabilities: Default::default(),
         reasoning_profile: None,
         latency_preference: None,
         multimodal_required: false,
@@ -445,6 +450,7 @@ fn openai_historical_tool_results_replay_in_shared_append_only_prefix() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
+        model_capabilities: Default::default(),
         reasoning_profile: None,
         latency_preference: None,
         multimodal_required: false,
@@ -565,6 +571,7 @@ fn openai_long_session_keeps_observed_action_results_raw_without_committed_evide
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
+        model_capabilities: Default::default(),
         reasoning_profile: None,
         latency_preference: None,
         multimodal_required: false,
@@ -698,6 +705,7 @@ fn openai_long_session_stable_prefix_is_append_only_until_compaction() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
+        model_capabilities: Default::default(),
         reasoning_profile: None,
         latency_preference: None,
         multimodal_required: false,
@@ -839,6 +847,7 @@ fn openai_prompt_cache_diagnostics_fingerprint_provider_prefix_parts() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
+        model_capabilities: Default::default(),
         reasoning_profile: None,
         latency_preference: None,
         multimodal_required: false,
@@ -959,6 +968,7 @@ fn openai_prompt_cache_key_uses_lineage_provider_and_model_namespace() {
     let profile = |provider: &str, model: &str| ModelProfile {
         provider: provider.to_string(),
         model: model.to_string(),
+        model_capabilities: Default::default(),
         reasoning_profile: None,
         latency_preference: None,
         multimodal_required: false,
@@ -1066,6 +1076,7 @@ fn openai_prompt_cache_key_uses_stable_namespace_not_rendered_prefix_hash() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
+        model_capabilities: Default::default(),
         reasoning_profile: None,
         latency_preference: None,
         multimodal_required: false,
@@ -1188,6 +1199,7 @@ fn openai_prompt_cache_key_uses_unknown_lineage_without_session_identity() {
     let profile = |provider: &str, model: &str| ModelProfile {
         provider: provider.to_string(),
         model: model.to_string(),
+        model_capabilities: Default::default(),
         reasoning_profile: None,
         latency_preference: None,
         multimodal_required: false,
@@ -1241,6 +1253,7 @@ fn openai_cache_hashes_attribute_stable_volatile_and_control_changes() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-5.4".to_string(),
+        model_capabilities: Default::default(),
         reasoning_profile: None,
         latency_preference: None,
         multimodal_required: false,
@@ -1333,6 +1346,7 @@ fn openai_replays_current_turn_read_results_without_synthetic_ledger() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
+        model_capabilities: Default::default(),
         reasoning_profile: None,
         latency_preference: None,
         multimodal_required: false,
@@ -1420,6 +1434,7 @@ fn openai_stable_prefix_excludes_injected_mcp_integration_context() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
+        model_capabilities: Default::default(),
         reasoning_profile: None,
         latency_preference: None,
         multimodal_required: false,

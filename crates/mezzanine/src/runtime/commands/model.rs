@@ -296,13 +296,7 @@ impl RuntimeSessionService {
     /// Reports whether the provider behind one model profile exposes a native
     /// thinking-mode toggle.
     pub(crate) fn model_profile_supports_thinking_toggle(&self, profile: &ModelProfile) -> bool {
-        self.provider_registry()
-            .provider(&profile.provider)
-            .is_some_and(|provider| {
-                ProviderCapabilities::for_provider_config(&provider.kind, provider.api.as_deref())
-                    .map(|capabilities| capabilities.supports_thinking_toggle)
-                    .unwrap_or(false)
-            })
+        profile.model_capabilities.native_thinking
     }
 
     /// Executes `/model --routing` against the auto-sizing router profile.

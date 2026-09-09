@@ -22,6 +22,7 @@ fn openai_provider_can_be_constructed_from_auth_store_secret_reference() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -82,6 +83,7 @@ fn openai_provider_from_auth_store_expands_configured_base_url() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -151,6 +153,7 @@ fn openai_provider_from_auth_store_routes_chatgpt_credentials_to_codex_backend()
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -246,10 +249,8 @@ fn openai_provider_lists_models_through_authenticated_catalog_request() {
     assert_eq!(catalog.provider, "openai");
     assert_eq!(catalog.source, "provider");
     assert_eq!(catalog.models[0].id, "gpt-5.5");
-    assert_eq!(
-        catalog.reasoning_levels,
-        vec!["low", "medium", "high", "xhigh"]
-    );
+    assert!(catalog.reasoning_levels.is_empty());
+    assert_eq!(catalog.models[0].reasoning_levels, None);
     assert_eq!(catalog.quota_usage.len(), 1);
     assert_eq!(catalog.quota_usage[0].name, "requests");
     assert_eq!(catalog.quota_usage[0].used_percent_display(), "25.00%");
@@ -362,6 +363,7 @@ fn openai_responses_compatible_provider_omits_auth_when_metadata_is_absent() {
         &ModelProfile {
             provider: "lmstudio".to_string(),
             model: "local-model".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,

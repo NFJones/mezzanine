@@ -5,7 +5,7 @@
 //! failover safety comparison, and override precedence. Product configuration
 //! loading and runtime override mutation remain in the root package.
 
-use crate::{AgentContextResult, validate_context_required};
+use crate::{AgentContextResult, ModelCapabilities, validate_context_required};
 /// Conservative numerator for converting token context windows into word budgets.
 const MODEL_CONTEXT_BUDGET_WORDS_PER_TOKEN_NUMERATOR: usize = 3;
 /// Conservative denominator for converting token context windows into word budgets.
@@ -26,6 +26,8 @@ pub struct ModelProfile {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub model: String,
+    /// Typed capabilities effective for this exact selected model.
+    pub model_capabilities: ModelCapabilities,
     /// Stores the reasoning profile value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

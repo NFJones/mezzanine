@@ -15,6 +15,7 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -279,6 +280,7 @@ fn openai_responses_request_body_marks_action_results_as_execution_evidence() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -358,6 +360,7 @@ fn openai_responses_request_body_marks_prior_user_history_inactive() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -413,6 +416,7 @@ fn openai_responses_request_body_preserves_assistant_history_role() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,

@@ -2354,6 +2354,7 @@ fn runtime_provider_failure_persists_and_finishes_turn() {
             ModelProfile {
                 provider: "runtime-fail".to_string(),
                 model: "failing-model".to_string(),
+                model_capabilities: Default::default(),
                 reasoning_profile: None,
                 latency_preference: None,
                 multimodal_required: false,
@@ -2478,6 +2479,7 @@ fn runtime_provider_parse_failure_persists_raw_provider_text() {
             ModelProfile {
                 provider: "runtime-raw-fail".to_string(),
                 model: "failing-model".to_string(),
+                model_capabilities: Default::default(),
                 reasoning_profile: None,
                 latency_preference: None,
                 multimodal_required: false,
@@ -2610,6 +2612,7 @@ fn runtime_maap_validation_failure_persists_provider_response_detail() {
             ModelProfile {
                 provider: "runtime-batch".to_string(),
                 model: "test".to_string(),
+                model_capabilities: Default::default(),
                 reasoning_profile: None,
                 latency_preference: None,
                 multimodal_required: false,

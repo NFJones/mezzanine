@@ -20,6 +20,7 @@ use mez_agent::{
     SseEvent, provider_catalog_reasoning_levels,
     provider_error_detail as openai_provider_error_detail,
     provider_failure_json as openai_provider_failure_json,
+    provider_request_input_estimate_from_body,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -151,6 +152,22 @@ pub struct ChatCompletionsRetry {
     pub request: ProviderHttpRequest,
     /// Whether the retry response should be parsed as a stream.
     pub stream: bool,
+}
+
+/// Rejects an adapter-internal retry whose exact prepared body exceeds the
+/// request's pinned hard input cap.
+fn validate_retry_input_cap(request: &ModelRequest, retry: &ProviderHttpRequest) -> Result<()> {
+    let Some(max_input_tokens) = request.max_input_tokens else {
+        return Ok(());
+    };
+    let estimate = provider_request_input_estimate_from_body(&retry.body);
+    if estimate.exceeds_explicit_cap(max_input_tokens) {
+        return Err(MezError::invalid_args(format!(
+            "prepared provider retry exceeds configured input cap: estimated_input_tokens={} max_input_tokens={max_input_tokens} wire_bytes={}",
+            estimate.input_tokens, estimate.wire_bytes
+        )));
+    }
+    Ok(())
 }
 
 /// Carries shared Chat Completions provider state.
@@ -380,6 +397,7 @@ where
             self.timeout_ms,
             &parsed,
         )? {
+            validate_retry_input_cap(request, &retry.request)?;
             let retry_response = self.transport.send(&retry.request)?;
             if !(200..300).contains(&retry_response.status_code) {
                 return Err(self.provider_status_error("Chat Completions", &retry_response));
@@ -588,6 +606,7 @@ where
                         .observe(request, 1, Some("provider_forced_maap"), &first_result)
                         .await;
                 }
+                validate_retry_input_cap(request, &retry.request)?;
                 let retry_response = match self.transport.send_async(&retry.request).await {
                     Ok(response) => response,
                     Err(error) => {

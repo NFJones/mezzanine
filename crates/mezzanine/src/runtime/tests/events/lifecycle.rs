@@ -418,11 +418,11 @@ fn runtime_generated_profile_identity_differs_by_latency_preference() {
         vec![mez_agent::ProviderModelInfo {
             id: "gpt-5.5".to_string(),
             display_name: None,
-            reasoning_levels: vec!["high".to_string()],
+            reasoning_levels: Some(vec!["high".to_string()]),
             context_window_tokens: Some(1_050_000),
             max_input_tokens: None,
             max_output_tokens: None,
-            capabilities: Vec::new(),
+            capabilities: None,
         }],
         vec!["high".to_string()],
     );

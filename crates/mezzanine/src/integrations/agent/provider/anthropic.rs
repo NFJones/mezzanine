@@ -452,6 +452,8 @@ mod tests {
         let request = ModelRequest {
             provider: "anthropic".to_string(),
             model: "claude-3-7-sonnet".to_string(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
             reasoning_effort: None,
             thinking_enabled: None,
             latency_preference: None,
@@ -514,6 +516,8 @@ mod tests {
         let request = ModelRequest {
             provider: "anthropic".to_string(),
             model: "claude-fable-5".to_string(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
             reasoning_effort: Some("medium".to_string()),
             thinking_enabled: None,
             latency_preference: None,
@@ -560,6 +564,8 @@ mod tests {
         let request = ModelRequest {
             provider: "anthropic".to_string(),
             model: "claude-3-7-sonnet".to_string(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
             reasoning_effort: None,
             thinking_enabled: None,
             latency_preference: None,
@@ -621,6 +627,8 @@ mod tests {
         let request = ModelRequest {
             provider: "anthropic".to_string(),
             model: "claude-3-7-sonnet".to_string(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
             reasoning_effort: None,
             thinking_enabled: None,
             latency_preference: None,
@@ -668,6 +676,8 @@ mod tests {
         let request = ModelRequest {
             provider: "anthropic".to_string(),
             model: "claude-3-7-sonnet".to_string(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
             reasoning_effort: None,
             thinking_enabled: None,
             latency_preference: None,
@@ -720,6 +730,8 @@ mod tests {
         let request = ModelRequest {
             provider: "anthropic".to_string(),
             model: "claude-3-7-sonnet".to_string(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
             reasoning_effort: None,
             thinking_enabled: None,
             latency_preference: None,

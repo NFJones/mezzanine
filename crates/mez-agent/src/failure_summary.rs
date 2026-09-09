@@ -277,6 +277,8 @@ mod tests {
         ModelRequest {
             provider: "test".to_string(),
             model: "test-model".to_string(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
             reasoning_effort: None,
             thinking_enabled: None,
             latency_preference: None,

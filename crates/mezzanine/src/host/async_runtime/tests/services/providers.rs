@@ -221,6 +221,8 @@ fn native_shell_provider_execution(
         request: mez_agent::ModelRequest {
             provider: task.model_profile.provider.clone(),
             model: task.model_profile.model.clone(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
             reasoning_effort: task
                 .model_profile
                 .provider_options
@@ -502,6 +504,8 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
         request: mez_agent::ModelRequest {
             provider: task.model_profile.provider.clone(),
             model: task.model_profile.model.clone(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
             reasoning_effort: task
                 .model_profile
                 .provider_options
@@ -691,6 +695,8 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
         request: mez_agent::ModelRequest {
             provider: task.model_profile.provider.clone(),
             model: task.model_profile.model.clone(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
             reasoning_effort: task
                 .model_profile
                 .provider_options

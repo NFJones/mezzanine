@@ -1054,6 +1054,8 @@ pub(super) fn runtime_model_compaction_request(
     Ok(ModelRequest {
         provider: profile.provider.clone(),
         model: profile.model.clone(),
+        model_capabilities: profile.model_capabilities.clone(),
+        max_input_tokens: None,
         reasoning_effort: profile
             .provider_options
             .get("reasoning_effort")

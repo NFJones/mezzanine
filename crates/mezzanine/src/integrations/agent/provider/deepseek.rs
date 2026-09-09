@@ -12,15 +12,18 @@ use super::{
     MezError, ModelRequest, ModelResponse, ProviderHttpRequest, ProviderHttpResponse, Result,
     provider_quota_usage_from_headers, validate_non_empty,
 };
+use mez_agent::deepseek::{
+    prepare_deepseek_chat_completions_request,
+    prepare_deepseek_chat_completions_request_with_strategy,
+};
 use mez_agent::{
     DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME,
     DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT, DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME,
     DeepSeekChatCompletionsStreamDecoder, DeepSeekMaapRequestStrategy, DeepSeekResponse, SseEvent,
-    deepseek_chat_completions_endpoint_for_base_url,
-    deepseek_chat_completions_request_body_with_strategy, deepseek_effective_stream,
-    deepseek_maap_request_strategy, deepseek_models_endpoint_for_base_url,
-    deepseek_request_requires_maap, deepseek_should_retry_with_forced_maap,
-    parse_deepseek_chat_completions_provider_body, prepare_deepseek_request_prefix_extension,
+    deepseek_chat_completions_endpoint_for_base_url, deepseek_maap_request_strategy,
+    deepseek_models_endpoint_for_base_url, deepseek_request_requires_maap,
+    deepseek_should_retry_with_forced_maap, parse_deepseek_chat_completions_provider_body,
+    prepare_deepseek_request_prefix_extension,
 };
 use std::collections::BTreeMap;
 
@@ -97,7 +100,8 @@ impl ChatCompletionsDialect for DeepSeekChatCompletionsDialect {
     }
 
     fn effective_stream(&self, request: &ModelRequest, stream: bool) -> bool {
-        deepseek_effective_stream(stream, deepseek_maap_request_strategy(request))
+        prepare_deepseek_chat_completions_request(request, stream)
+            .is_ok_and(|preparation| preparation.effective_stream)
     }
 
     fn stream_decoder(
@@ -114,7 +118,7 @@ impl ChatCompletionsDialect for DeepSeekChatCompletionsDialect {
         request: &ModelRequest,
         api_key: Option<&str>,
         endpoint: &str,
-        stream: bool,
+        _stream: bool,
         timeout_ms: u64,
         previous_response: &ModelResponse,
     ) -> Result<Option<ChatCompletionsRetry>> {
@@ -130,7 +134,7 @@ impl ChatCompletionsDialect for DeepSeekChatCompletionsDialect {
             request,
             api_key,
             endpoint,
-            stream,
+            false,
             timeout_ms,
             DeepSeekMaapRequestStrategy::ForcedToolNonThinking,
         )?;
@@ -230,8 +234,10 @@ pub(super) fn build_deepseek_chat_completions_http_request_with_strategy(
             "DeepSeek provider timeout must be greater than zero",
         ));
     }
-    let stream = deepseek_effective_stream(stream, strategy);
-    let body = deepseek_chat_completions_request_body_with_strategy(request, stream, strategy)?;
+    let preparation =
+        prepare_deepseek_chat_completions_request_with_strategy(request, stream, strategy)?;
+    let stream = preparation.effective_stream;
+    let body = preparation.body;
     let mut headers = BTreeMap::new();
     headers.insert(
         "Accept".to_string(),

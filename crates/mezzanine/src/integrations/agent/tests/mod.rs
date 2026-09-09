@@ -950,6 +950,7 @@ fn openai_prompt_cache_retention_test_request(model: &str) -> ModelRequest {
         &ModelProfile {
             provider: "openai".to_string(),
             model: model.to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,

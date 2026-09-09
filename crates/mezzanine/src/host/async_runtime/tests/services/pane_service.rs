@@ -1865,6 +1865,8 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
             request: mez_agent::ModelRequest {
                 provider: task.model_profile.provider.clone(),
                 model: task.model_profile.model.clone(),
+                model_capabilities: Default::default(),
+                max_input_tokens: None,
                 reasoning_effort: task
                     .model_profile
                     .provider_options

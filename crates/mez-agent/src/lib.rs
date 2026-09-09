@@ -78,8 +78,14 @@ pub mod memory;
 pub mod memory_guardrail;
 /// Deterministic local-agent message protocol and delivery service state.
 pub mod messaging;
+/// Typed effective model-capability policy.
+pub mod model_capabilities;
 /// Provider-neutral model catalog construction and selection policy.
 pub mod model_catalog;
+pub use model_capabilities::{
+    ModelCapabilities, ModelCapabilityMetadataPolicy, deepseek_builtin_capability_tags,
+    deepseek_builtin_reasoning_efforts,
+};
 /// Provider-independent model profile records and selection policy.
 pub mod model_profile;
 /// Provider-independent successful model response contract.
@@ -458,7 +464,7 @@ pub use readiness::{
 };
 pub use request_accounting::{
     ProviderRequestInputEstimate, provider_request_input_estimate,
-    provider_text_input_token_estimate,
+    provider_request_input_estimate_from_body, provider_text_input_token_estimate,
 };
 pub use response_progress::ProviderResponseProgress;
 pub use routing::{

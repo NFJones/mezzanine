@@ -655,6 +655,8 @@ mod tests {
         ModelRequest {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
             reasoning_effort: None,
             thinking_enabled: None,
             latency_preference: None,
@@ -751,7 +753,8 @@ mod tests {
     /// without changing the cache-sensitive instruction prefix.
     #[test]
     fn capability_continuation_exposes_granted_actions_and_context() {
-        let original = request();
+        let mut original = request();
+        original.model_capabilities = crate::ModelCapabilities::conservative_unknown_deepseek();
         let continuation = capability_continuation_request(
             &original,
             &[CapabilityRequest {
@@ -800,6 +803,10 @@ mod tests {
             ModelInteractionKind::CapabilityContinuation.expected_cache_break_reason(),
             None
         );
+        assert_eq!(
+            continuation.model_capabilities, original.model_capabilities,
+            "capability continuations must retain the selected model contract"
+        );
     }
 
     /// A disallowed executable action is converted into capability routing when
@@ -829,7 +836,8 @@ mod tests {
     /// while bounding invalid provider text at a valid UTF-8 character boundary.
     #[test]
     fn maap_repair_requests_are_ephemeral_and_utf8_bounded() {
-        let original = request();
+        let mut original = request();
+        original.model_capabilities = crate::ModelCapabilities::conservative_unknown_deepseek();
         let raw_text = "é".repeat(7_000);
 
         let repair = maap_repair_request(&original, "invalid action batch", &raw_text, 2);
@@ -851,6 +859,10 @@ mod tests {
         assert_eq!(
             repair.messages.last().unwrap().placement,
             crate::ContextPlacement::ConversationAppend
+        );
+        assert_eq!(
+            repair.model_capabilities, original.model_capabilities,
+            "MAAP repairs must retain the selected model contract"
         );
     }
 

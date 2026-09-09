@@ -805,6 +805,7 @@ async fn runtime_executes_accepted_stdio_mcp_action_and_audits_call() {
             ModelProfile {
                 provider: "runtime-batch".to_string(),
                 model: "test".to_string(),
+                model_capabilities: Default::default(),
                 reasoning_profile: None,
                 latency_preference: None,
                 multimodal_required: false,
@@ -911,6 +912,7 @@ async fn runtime_mcp_tool_error_queues_continuation_without_disabling_server() {
             ModelProfile {
                 provider: "runtime-batch".to_string(),
                 model: "test".to_string(),
+                model_capabilities: Default::default(),
                 reasoning_profile: None,
                 latency_preference: None,
                 multimodal_required: false,
@@ -1223,6 +1225,7 @@ async fn runtime_full_access_executes_prompt_stdio_mcp_action() {
             ModelProfile {
                 provider: "runtime-batch".to_string(),
                 model: "test".to_string(),
+                model_capabilities: Default::default(),
                 reasoning_profile: None,
                 latency_preference: None,
                 multimodal_required: false,
@@ -1313,6 +1316,7 @@ async fn runtime_nonfinal_mcp_action_queues_provider_continuation() {
             ModelProfile {
                 provider: "runtime-batch".to_string(),
                 model: "test".to_string(),
+                model_capabilities: Default::default(),
                 reasoning_profile: None,
                 latency_preference: None,
                 multimodal_required: false,

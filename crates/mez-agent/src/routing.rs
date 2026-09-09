@@ -9,7 +9,10 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-use crate::{ModelCatalog, ModelProfile};
+use crate::{
+    ModelCapabilities, ModelCatalog, ModelProfile, ProviderApiCompatibility, resolve_provider_api,
+};
+use crate::{deepseek_builtin_capability_tags, deepseek_builtin_reasoning_efforts};
 
 /// Reusable provider-scoped base metadata for one canonical model.
 ///
@@ -378,6 +381,21 @@ impl ProviderRegistry {
             .map(|model| model.id.clone())
             .or_else(|| catalog_model.map(|model| model.id.clone()))
             .unwrap_or_else(|| definition.model.clone());
+        let api =
+            resolve_provider_api(&provider.kind, provider.api.as_deref()).map_err(|error| {
+                ProviderRoutingError::materialization(format!(
+                    "model profile provider `{}` has invalid API compatibility: {error}",
+                    definition.provider
+                ))
+            })?;
+        let built_in_reasoning_levels = (provider.kind == "deepseek"
+            && api == ProviderApiCompatibility::DeepSeekChatCompletions)
+            .then(|| deepseek_builtin_reasoning_efforts(&model))
+            .flatten();
+        let built_in_capabilities = (provider.kind == "deepseek"
+            && api == ProviderApiCompatibility::DeepSeekChatCompletions)
+            .then(|| deepseek_builtin_capability_tags(&model))
+            .flatten();
 
         let mut provider_options = provider.options.clone();
         if let Some(catalog_model) = catalog_model {
@@ -416,13 +434,15 @@ impl ProviderRegistry {
             .as_ref()
             .or_else(|| configured_model.and_then(|model| model.reasoning_levels.as_ref()))
             .map(Vec::as_slice)
-            .or_else(|| catalog_model.map(|model| model.reasoning_levels.as_slice()));
+            .or_else(|| catalog_model.and_then(|model| model.reasoning_levels_metadata()))
+            .or(built_in_reasoning_levels.as_deref());
         let capabilities = definition
             .capabilities
             .as_ref()
             .or_else(|| configured_model.and_then(|model| model.capabilities.as_ref()))
             .map(Vec::as_slice)
-            .or_else(|| catalog_model.map(|model| model.capabilities.as_slice()));
+            .or_else(|| catalog_model.and_then(|model| model.capabilities_metadata()))
+            .or(built_in_capabilities.as_deref());
         if let Some(reasoning_levels) = reasoning_levels {
             provider_options.insert(
                 "model_reasoning_levels".to_string(),
@@ -434,9 +454,37 @@ impl ProviderRegistry {
         }
         provider_options.extend(definition.provider_options.clone());
 
+        let model_capabilities = if api == ProviderApiCompatibility::DeepSeekChatCompletions {
+            ModelCapabilities::from_metadata(api, capabilities, reasoning_levels, true)
+        } else {
+            ModelCapabilities::for_api(api)
+        };
+        if let Some(reasoning) = definition
+            .reasoning_profile
+            .as_deref()
+            .filter(|reasoning| !reasoning.trim().is_empty())
+            && !model_capabilities.supports_reasoning_effort(reasoning)
+        {
+            return Err(ProviderRoutingError::materialization(format!(
+                "model profile reasoning effort `{reasoning}` is not supported by model `{model}`"
+            )));
+        }
+        if definition.provider_options.keys().any(|key| {
+            matches!(
+                key.as_str(),
+                "thinking" | "thinking_mode" | "thinking_enabled"
+            )
+        }) && !model_capabilities.native_thinking
+        {
+            return Err(ProviderRoutingError::materialization(format!(
+                "model `{model}` does not support a native thinking-mode toggle"
+            )));
+        }
+
         Ok(ModelProfile {
             provider: definition.provider.clone(),
             model,
+            model_capabilities,
             reasoning_profile: definition.reasoning_profile.clone(),
             latency_preference: definition.latency_preference.clone(),
             multimodal_required: definition.multimodal_required.unwrap_or(false),
@@ -626,6 +674,8 @@ mod tests {
     fn provider_registry_materializes_profile_definitions_with_base_inheritance() {
         let provider = ProviderConfig {
             provider_id: "custom".to_string(),
+            kind: "openai-compatible".to_string(),
+            api: Some("openai-chat-completions".to_string()),
             options: BTreeMap::from([
                 ("root-only".to_string(), "root".to_string()),
                 ("shared".to_string(), "root".to_string()),
@@ -692,6 +742,8 @@ mod tests {
     fn provider_registry_rematerializes_profiles_from_catalog_observations() {
         let provider = ProviderConfig {
             provider_id: "custom".to_string(),
+            kind: "openai-compatible".to_string(),
+            api: Some("openai-chat-completions".to_string()),
             models: vec![ProviderModelConfig {
                 id: "model-a".to_string(),
                 max_output_tokens: Some(16_000),
@@ -722,11 +774,11 @@ mod tests {
                 crate::ProviderModelInfo {
                     id: "model-a".to_string(),
                     display_name: None,
-                    reasoning_levels: vec!["medium".to_string()],
+                    reasoning_levels: Some(vec!["medium".to_string()]),
                     context_window_tokens: Some(777_000),
                     max_input_tokens: Some(700_000),
                     max_output_tokens: Some(8_000),
-                    capabilities: vec!["tool_use".to_string()],
+                    capabilities: Some(vec!["tool_use".to_string()]),
                 },
             )],
             ..crate::ModelCatalogInput::default()
@@ -750,6 +802,8 @@ mod tests {
     fn provider_registry_allows_unlisted_models_and_user_selected_limits() {
         let provider = ProviderConfig {
             provider_id: "custom".to_string(),
+            kind: "openai-compatible".to_string(),
+            api: Some("openai-chat-completions".to_string()),
             ..ProviderConfig::default()
         };
         let mut registry = ProviderRegistry {

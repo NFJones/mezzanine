@@ -37,6 +37,7 @@ fn turn_runner_accepts_allowed_shell_actions() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -122,6 +123,7 @@ fn turn_runner_accepts_ls_declared_as_current_directory_read() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -207,6 +209,7 @@ fn turn_runner_auto_allows_prompted_shell_actions_from_rationale() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -292,6 +295,7 @@ fn turn_runner_blocks_shell_actions_requiring_approval() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -388,6 +392,7 @@ fn turn_runner_allows_shell_actions_with_canonical_scope_escape() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -473,6 +478,7 @@ fn turn_runner_blocks_unknown_classified_shell_actions_without_declared_effect_f
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -550,6 +556,7 @@ fn turn_runner_executes_allowed_shell_actions_and_records_output() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -658,6 +665,7 @@ fn turn_runner_full_access_allows_out_of_scope_subagent_apply_patch() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -747,6 +755,7 @@ fn turn_runner_full_access_allows_out_of_scope_subagent_shell_command() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -816,6 +825,7 @@ fn turn_runner_keeps_final_shell_action_running_until_observed() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -895,6 +905,7 @@ fn turn_runner_routes_shell_actions_through_approval_policy_without_model_effect
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -985,6 +996,7 @@ fn turn_runner_routes_subagent_unknown_shell_actions_through_approval_policy() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -1062,6 +1074,7 @@ fn turn_runner_runs_prompted_shell_actions_with_auto_allow_assertion() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,

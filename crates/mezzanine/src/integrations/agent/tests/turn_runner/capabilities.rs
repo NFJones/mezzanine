@@ -53,6 +53,7 @@ fn turn_runner_denies_issues_capability_when_issue_tracking_disabled() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -147,6 +148,7 @@ fn turn_runner_exposes_mcp_actions_on_initial_surface_when_available() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -224,6 +226,7 @@ fn turn_runner_exposes_memory_actions_on_initial_surface_when_enabled() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -323,6 +326,7 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -447,6 +451,7 @@ fn turn_runner_grants_fetch_capability_without_context_url() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,

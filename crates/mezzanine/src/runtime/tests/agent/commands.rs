@@ -441,11 +441,11 @@ fn runtime_slash_command_latency_displays_and_applies_override() {
         vec![mez_agent::ProviderModelInfo {
             id: "gpt-5.5".to_string(),
             display_name: None,
-            reasoning_levels: vec!["high".to_string()],
+            reasoning_levels: Some(vec!["high".to_string()]),
             context_window_tokens: Some(1_050_000),
             max_input_tokens: None,
             max_output_tokens: None,
-            capabilities: Vec::new(),
+            capabilities: None,
         }],
         vec!["high".to_string()],
     );
@@ -582,4 +582,58 @@ fn runtime_slash_command_thinking_rejects_unsupported_provider() {
             .contains("does not support a thinking-mode toggle"),
         "{error}"
     );
+}
+
+/// Verifies `/thinking` consults the selected model contract rather than only
+/// the provider-wide DeepSeek API capability.
+///
+/// Unknown DeepSeek models use the conservative compatibility policy: MAAP
+/// function tools and output-token control remain available, but native
+/// thinking is not assumed. The pane-local command must reject the mutation
+/// without replacing the active profile.
+#[test]
+fn runtime_slash_command_thinking_rejects_unknown_deepseek_model() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_provider = \"deepseek\"\ndefault_model_profile = \"default\"\n\n[providers.deepseek]\nkind = \"deepseek\"\nmodels = [\"deepseek-experimental\"]\ndefault_model = \"deepseek-experimental\"\n\n[model_profiles.default]\nprovider = \"deepseek\"\nmodel = \"deepseek-experimental\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let (name_before, profile_before) = service
+        .active_model_profile_for_pane("%1", "agent-%1", None)
+        .unwrap();
+    assert_eq!(
+        profile_before.model_capabilities.metadata_policy,
+        mez_agent::ModelCapabilityMetadataPolicy::ConservativeUnknown
+    );
+    assert!(!profile_before.model_capabilities.native_thinking);
+
+    let error = service
+        .execute_agent_shell_thinking_command("%1", "/thinking on")
+        .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("does not support a thinking-mode toggle"),
+        "{error}"
+    );
+    let (name_after, profile_after) = service
+        .active_model_profile_for_pane("%1", "agent-%1", None)
+        .unwrap();
+    assert_eq!(name_after, name_before);
+    assert_eq!(profile_after, profile_before);
 }

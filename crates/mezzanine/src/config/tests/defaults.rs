@@ -976,9 +976,15 @@ fn authenticated_provider_defaults_preserve_openai_model_overrides() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies authenticated DeepSeek defaults carry the exact editable token limits.
+/// Verifies authenticated DeepSeek defaults carry the exact editable model
+/// metadata used by request capability policy.
+///
+/// Generated records are the authoritative built-in metadata after DeepSeek
+/// authentication. Both supported V4 models must therefore declare their
+/// token limits, provider-facing reasoning efforts, and capability tags rather
+/// than relying on broader API defaults or unknown-model inference.
 #[test]
-fn default_config_uses_configured_deepseek_model_token_limits() {
+fn default_config_uses_configured_deepseek_model_metadata() {
     let parsed: toml::Value = toml::from_str(DEFAULT_CONFIG_TOML).unwrap();
     let models = parsed
         .get("providers")
@@ -1008,10 +1014,44 @@ fn default_config_uses_configured_deepseek_model_token_limits() {
             (Some(expected.0), Some(expected.1), Some(expected.2)),
             "{entry}"
         );
+        assert_eq!(
+            model
+                .get("reasoning_levels")
+                .and_then(toml::Value::as_array)
+                .unwrap()
+                .iter()
+                .map(|value| value.as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["high", "max"],
+            "{entry}"
+        );
+        assert_eq!(
+            model
+                .get("capabilities")
+                .and_then(toml::Value::as_array)
+                .unwrap()
+                .iter()
+                .map(|value| value.as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec![
+                "native_thinking",
+                "function_tools",
+                "forced_tool_choice",
+                "streaming",
+                "max_output_tokens",
+            ],
+            "{entry}"
+        );
     }
 }
 
-/// Verifies DeepSeek authentication fills missing limits without replacing overrides.
+/// Verifies DeepSeek authentication fills missing metadata without replacing
+/// scalar overrides or explicitly empty list declarations.
+///
+/// Authentication materialization merges generated defaults into an existing
+/// user document. Missing DeepSeek metadata should be added, while empty
+/// `reasoning_levels` and `capabilities` arrays must remain deliberate
+/// replacements rather than being mistaken for omitted fields.
 #[test]
 fn authenticated_provider_defaults_preserve_deepseek_model_overrides() {
     let root = temp_root("authenticated-deepseek-limit-merge");
@@ -1019,7 +1059,7 @@ fn authenticated_provider_defaults_preserve_deepseek_model_overrides() {
     let path = paths.ensure_default_config().unwrap();
     fs::write(
         &path,
-        "version = 78\n[providers.deepseek]\nkind = \"deepseek\"\ndefault_model = \"deepseek-v4-pro\"\n[providers.deepseek.models.deepseek-v4-pro]\nid = \"deepseek-v4-pro\"\nmax_input_tokens = 123456\n",
+        "version = 78\n[providers.deepseek]\nkind = \"deepseek\"\ndefault_model = \"deepseek-v4-pro\"\n[providers.deepseek.models.deepseek-v4-pro]\nid = \"deepseek-v4-pro\"\nmax_input_tokens = 123456\nreasoning_levels = []\ncapabilities = []\n",
     )
     .unwrap();
 
@@ -1052,6 +1092,14 @@ fn authenticated_provider_defaults_preserve_deepseek_model_overrides() {
         pro.get("max_output_tokens")
             .and_then(toml::Value::as_integer),
         Some(60_000)
+    );
+    assert_eq!(
+        pro.get("reasoning_levels").and_then(toml::Value::as_array),
+        Some(&Vec::new())
+    );
+    assert_eq!(
+        pro.get("capabilities").and_then(toml::Value::as_array),
+        Some(&Vec::new())
     );
     assert!(models.contains_key("deepseek-v4-flash"));
 

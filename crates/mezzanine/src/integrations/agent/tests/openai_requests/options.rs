@@ -14,6 +14,7 @@ fn openai_responses_request_body_includes_reasoning_effort() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-5.1".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: Some("high".to_string()),
             latency_preference: None,
             multimodal_required: false,
@@ -52,6 +53,7 @@ fn openai_responses_request_body_omits_configured_max_output_tokens() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-5.1".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,

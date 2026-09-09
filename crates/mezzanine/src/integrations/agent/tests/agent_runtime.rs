@@ -19,6 +19,7 @@ fn turn_execution_can_be_converted_to_transcript_entries() {
             &ModelProfile {
                 provider: "openai".to_string(),
                 model: "default".to_string(),
+                model_capabilities: Default::default(),
                 reasoning_profile: None,
                 latency_preference: None,
                 multimodal_required: false,

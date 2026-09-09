@@ -42,6 +42,7 @@ fn assemble_test_model_request(context: &AgentContext) -> ModelRequest {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "default".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,

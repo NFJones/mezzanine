@@ -18,6 +18,7 @@ fn openai_responses_request_body_has_canonical_cache_shape_fixture() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-5.4".to_string(),
+        model_capabilities: Default::default(),
         reasoning_profile: Some("medium".to_string()),
         latency_preference: Some("fast".to_string()),
         multimodal_required: false,
@@ -118,6 +119,7 @@ fn openai_responses_request_body_excludes_large_mcp_catalog_from_tools() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -170,6 +172,7 @@ fn openai_responses_request_body_uses_stable_derived_prompt_cache_key() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
+        model_capabilities: Default::default(),
         reasoning_profile: None,
         latency_preference: None,
         multimodal_required: false,
@@ -232,6 +235,7 @@ fn capability_continuation_preserves_openai_instruction_prefix() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
+        model_capabilities: Default::default(),
         reasoning_profile: None,
         latency_preference: None,
         multimodal_required: false,

@@ -148,6 +148,8 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
         request: mez_agent::ModelRequest {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
             reasoning_effort: None,
             thinking_enabled: None,
             latency_preference: None,

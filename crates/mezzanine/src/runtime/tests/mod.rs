@@ -755,6 +755,7 @@ fn runtime_model_profile(provider: &str, model: &str) -> ModelProfile {
     ModelProfile {
         provider: provider.to_string(),
         model: model.to_string(),
+        model_capabilities: Default::default(),
         reasoning_profile: None,
         latency_preference: None,
         multimodal_required: false,
@@ -896,6 +897,8 @@ fn runtime_model_request_fixture_for_agent(
     mez_agent::ModelRequest {
         provider: "runtime-batch".to_string(),
         model: "test".to_string(),
+        model_capabilities: Default::default(),
+        max_input_tokens: None,
         reasoning_effort: None,
         thinking_enabled: None,
         latency_preference: None,
@@ -1459,6 +1462,7 @@ fn execute_runtime_send_message_to(
             ModelProfile {
                 provider: "runtime-batch".to_string(),
                 model: "test".to_string(),
+                model_capabilities: Default::default(),
                 reasoning_profile: None,
                 latency_preference: None,
                 multimodal_required: false,

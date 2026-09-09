@@ -418,6 +418,8 @@ pub fn auto_sizing_request(
     Ok(ModelRequest {
         provider: auto_sizing.router_profile.provider.clone(),
         model: auto_sizing.router_profile.model.clone(),
+        model_capabilities: auto_sizing.router_profile.model_capabilities.clone(),
+        max_input_tokens: auto_sizing.router_profile.max_input_tokens(),
         reasoning_effort: auto_sizing
             .router_profile
             .reasoning_profile
@@ -904,6 +906,7 @@ mod tests {
         let profile = |model: &str| ModelProfile {
             provider: "openai".to_string(),
             model: model.to_string(),
+            model_capabilities: Default::default(),
             ..ModelProfile::default()
         };
         let target = |size: &str| AutoSizingTargetProfile {
@@ -1047,6 +1050,7 @@ mod tests {
             let mut profile = ModelProfile {
                 provider: "custom".to_string(),
                 model: model.to_string(),
+                model_capabilities: Default::default(),
                 ..ModelProfile::default()
             };
             profile
@@ -1095,6 +1099,7 @@ mod tests {
         let profile = ModelProfile {
             provider: "deepseek".to_string(),
             model: "deepseek-v4-pro".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: Some("max".to_string()),
             latency_preference: None,
             multimodal_required: false,

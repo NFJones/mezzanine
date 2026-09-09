@@ -209,6 +209,7 @@ mod tests {
         let mut profile = ModelProfile {
             provider: "custom".to_string(),
             model: "model".to_string(),
+            model_capabilities: Default::default(),
             ..ModelProfile::default()
         };
         profile
@@ -233,6 +234,7 @@ mod tests {
                 &ModelProfile {
                     provider: "custom".to_string(),
                     model: "unknown".to_string(),
+                    model_capabilities: Default::default(),
                     ..ModelProfile::default()
                 },
                 ModelTokenUsage {

@@ -86,6 +86,7 @@ fn openai_compatible_chat_completions_duplicate_maap_tool_calls_are_malformed_ou
         &ModelProfile {
             provider: "local-openai-chat".to_string(),
             model: "local-chat-model".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -207,6 +208,7 @@ fn openai_compatible_chat_completions_length_finish_reason_is_output_limit_error
         &ModelProfile {
             provider: "local-openai-chat".to_string(),
             model: "local-chat-model".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -298,6 +300,7 @@ fn openai_compatible_chat_completions_provider_describes_callable_mcp_tools() {
         &ModelProfile {
             provider: "local-openai-chat".to_string(),
             model: "local-chat-model".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: Some("high".to_string()),
             latency_preference: None,
             multimodal_required: false,
@@ -432,6 +435,7 @@ fn openai_compatible_chat_completions_provider_honors_generic_maap_options() {
         &ModelProfile {
             provider: "local-openai-chat".to_string(),
             model: "local-chat-model".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -552,6 +556,7 @@ fn openai_compatible_chat_completions_provider_recovers_structured_maap_from_rea
         &ModelProfile {
             provider: "local-openai-chat".to_string(),
             model: "local-chat-model".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -646,6 +651,7 @@ fn openai_compatible_chat_completions_provider_supports_structured_maap_output()
         &ModelProfile {
             provider: "local-openai-chat".to_string(),
             model: "local-chat-model".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -762,6 +768,7 @@ fn openai_compatible_chat_completions_provider_uses_generic_tool_surface() {
         &ModelProfile {
             provider: "local-openai-chat".to_string(),
             model: "local-chat-model".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: Some("high".to_string()),
             latency_preference: None,
             multimodal_required: false,
@@ -926,6 +933,7 @@ fn openai_compatible_chat_completions_provider_supports_opt_in_streaming() {
         &ModelProfile {
             provider: "local-openai-chat".to_string(),
             model: "local-chat-model".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,

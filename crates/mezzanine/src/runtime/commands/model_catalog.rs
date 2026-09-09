@@ -690,6 +690,7 @@ fn runtime_configured_model_catalog_candidates(
             .is_none()
     {
         candidates.push(runtime_catalog_candidate(
+            provider_config,
             default_model,
             runtime_configured_reasoning_levels_for_model(provider_config, default_model),
             ModelCatalogSource::Configured,
@@ -697,6 +698,7 @@ fn runtime_configured_model_catalog_candidates(
     }
     for model in &provider_config.models {
         candidates.push(runtime_catalog_candidate(
+            provider_config,
             &model.id,
             runtime_configured_reasoning_levels_for_model(provider_config, &model.id),
             ModelCatalogSource::Default,
@@ -710,6 +712,7 @@ fn runtime_configured_model_catalog_candidates(
     };
     for model in &default_models {
         candidates.push(runtime_catalog_candidate(
+            provider_config,
             model,
             runtime_configured_reasoning_levels_for_model(provider_config, model),
             ModelCatalogSource::Default,
@@ -734,6 +737,7 @@ fn runtime_configured_model_catalog_candidates(
             reasoning_levels.push(reasoning.to_string());
         }
         candidates.push(runtime_catalog_candidate(
+            provider_config,
             &profile.model,
             reasoning_levels,
             ModelCatalogSource::Configured,
@@ -745,6 +749,7 @@ fn runtime_configured_model_catalog_candidates(
         && let Some(recommended_model) = runtime_provider_recommended_model(provider_config)
     {
         candidates.push(runtime_catalog_candidate(
+            provider_config,
             recommended_model,
             runtime_configured_reasoning_levels_for_model(provider_config, recommended_model),
             ModelCatalogSource::Recommended,
@@ -758,22 +763,76 @@ fn runtime_configured_model_catalog_candidates(
 /// Product configuration and provider API interpretation happen before this
 /// function; lower-crate policy receives only model metadata and source.
 fn runtime_catalog_candidate(
+    provider_config: &crate::runtime::RuntimeProviderConfig,
     model: &str,
     reasoning_levels: Vec<String>,
     source: ModelCatalogSource,
 ) -> ModelCatalogCandidate {
+    let capabilities = runtime_builtin_capabilities_for_model(provider_config, model);
+    let token_limits = runtime_builtin_token_limits_for_model(provider_config, model);
     ModelCatalogCandidate::available(
         source,
         ProviderModelInfo {
             id: model.to_string(),
             display_name: None,
-            reasoning_levels,
-            context_window_tokens: None,
-            max_input_tokens: None,
-            max_output_tokens: None,
-            capabilities: Vec::new(),
+            reasoning_levels: (!reasoning_levels.is_empty()).then_some(reasoning_levels),
+            context_window_tokens: token_limits.map(|limits| limits.0),
+            max_input_tokens: token_limits.map(|limits| limits.1),
+            max_output_tokens: token_limits.map(|limits| limits.2),
+            capabilities,
         },
     )
+}
+
+/// Returns capability metadata attached to code-defined fallback models.
+///
+/// These tags must match the generated provider-model records so an empty
+/// configured model table does not weaken a known DeepSeek model into the
+/// conservative unknown-model policy merely because live discovery is absent.
+fn runtime_builtin_capabilities_for_model(
+    provider_config: &crate::runtime::RuntimeProviderConfig,
+    model: &str,
+) -> Option<Vec<String>> {
+    match (
+        provider_config.kind.as_str(),
+        resolve_provider_api(&provider_config.kind, provider_config.api.as_deref()),
+        model,
+    ) {
+        (
+            "deepseek",
+            Ok(ProviderApiCompatibility::DeepSeekChatCompletions),
+            "deepseek-v4-pro" | "deepseek-v4-flash",
+        ) => [
+            "native_thinking",
+            "function_tools",
+            "forced_tool_choice",
+            "streaming",
+            "max_output_tokens",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>()
+        .into(),
+        _ => None,
+    }
+}
+
+/// Returns documented token limits for code-defined DeepSeek fallback models.
+fn runtime_builtin_token_limits_for_model(
+    provider_config: &crate::runtime::RuntimeProviderConfig,
+    model: &str,
+) -> Option<(usize, usize, usize)> {
+    if provider_config.kind != "deepseek"
+        || resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())
+            != Ok(ProviderApiCompatibility::DeepSeekChatCompletions)
+    {
+        return None;
+    }
+    match model {
+        "deepseek-v4-pro" => Some((1_000_000, 800_000, 60_000)),
+        "deepseek-v4-flash" => Some((500_000, 400_000, 30_000)),
+        _ => None,
+    }
 }
 
 /// Runs the runtime configured reasoning levels for model operation for this subsystem.
@@ -799,9 +858,13 @@ pub(super) fn runtime_configured_reasoning_levels_for_model(
             ProviderApiCompatibility::OpenAiResponses => {
                 levels.extend(openai_default_reasoning_levels_for_model(model));
             }
-            ProviderApiCompatibility::DeepSeekChatCompletions => {
+            ProviderApiCompatibility::DeepSeekChatCompletions
+                if provider_config.kind == "deepseek"
+                    && matches!(model, "deepseek-v4-pro" | "deepseek-v4-flash") =>
+            {
                 levels.extend(deepseek_default_reasoning_effort_levels());
             }
+            ProviderApiCompatibility::DeepSeekChatCompletions => {}
             ProviderApiCompatibility::AnthropicMessages => {
                 levels.extend(anthropic_default_reasoning_effort_levels());
             }
@@ -1067,8 +1130,214 @@ pub(super) fn runtime_model_catalog_unavailable_reason(error: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::runtime_configured_reasoning_levels_for_model;
+    use super::{
+        runtime_builtin_capabilities_for_model, runtime_configured_model_catalog,
+        runtime_configured_reasoning_levels_for_model,
+    };
     use std::collections::BTreeMap;
+
+    /// Verifies omitted unknown-DeepSeek metadata survives the complete
+    /// runtime catalog, profile materialization, request assembly, and wire
+    /// preparation path without becoming an explicit empty declaration.
+    ///
+    /// The omitted model must use the conservative unknown policy and prepare
+    /// a non-streaming forced-MAAP body. The explicitly empty model must retain
+    /// model-metadata provenance and reject the same tool-requiring request.
+    #[test]
+    fn unknown_deepseek_metadata_policy_survives_runtime_request_preparation() {
+        let root = serde_json::json!({
+            "agents": {
+                "default_provider": "deepseek",
+                "default_model_profile": "omitted"
+            },
+            "providers": {
+                "deepseek": {
+                    "kind": "deepseek",
+                    "api": "deepseek-chat-completions",
+                    "default_model": "deepseek-custom-omitted",
+                    "models": {
+                        "omitted": {
+                            "id": "deepseek-custom-omitted"
+                        },
+                        "cleared": {
+                            "id": "deepseek-custom-cleared",
+                            "reasoning_levels": [],
+                            "capabilities": []
+                        }
+                    }
+                }
+            },
+            "model_profiles": {
+                "omitted": {
+                    "provider": "deepseek",
+                    "model": "deepseek-custom-omitted"
+                },
+                "cleared": {
+                    "provider": "deepseek",
+                    "model": "deepseek-custom-cleared"
+                }
+            }
+        });
+        let mut registry = crate::runtime::runtime_provider_registry_from_config(&root).unwrap();
+        let provider = registry.providers().get("deepseek").unwrap().clone();
+        let catalog = runtime_configured_model_catalog("deepseek", &provider, &registry);
+
+        let omitted_entry = catalog.catalog.resolve("deepseek-custom-omitted").unwrap();
+        assert_eq!(omitted_entry.reasoning_levels_metadata(), None);
+        assert_eq!(omitted_entry.capabilities_metadata(), None);
+        let cleared_entry = catalog.catalog.resolve("deepseek-custom-cleared").unwrap();
+        assert_eq!(cleared_entry.reasoning_levels_metadata(), Some(&[][..]));
+        assert_eq!(cleared_entry.capabilities_metadata(), Some(&[][..]));
+
+        registry
+            .rematerialize_profiles_for_provider("deepseek", Some(&catalog.catalog))
+            .unwrap();
+        let omitted_profile = registry.resolve_profile("omitted").unwrap();
+        assert_eq!(
+            omitted_profile.model_capabilities.metadata_policy,
+            mez_agent::ModelCapabilityMetadataPolicy::ConservativeUnknown
+        );
+        let cleared_profile = registry.resolve_profile("cleared").unwrap();
+        assert_eq!(
+            cleared_profile.model_capabilities.metadata_policy,
+            mez_agent::ModelCapabilityMetadataPolicy::ModelMetadata
+        );
+        assert!(!cleared_profile.model_capabilities.function_tools);
+
+        let turn = mez_agent::AgentTurnRecord {
+            turn_id: "turn-deepseek-metadata".to_string(),
+            conversation_id: "conversation-deepseek-metadata".to_string(),
+            agent_id: "agent-deepseek-metadata".to_string(),
+            pane_id: "%deepseek-metadata".to_string(),
+            trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: 0,
+            deadline_at_unix_millis: 0,
+            policy_profile: "ask".to_string(),
+            model_profile: "omitted".to_string(),
+            parent_turn_id: None,
+            cooperation_mode: None,
+            initial_capability: None,
+            state: mez_agent::AgentTurnState::Queued,
+        };
+        let context = mez_agent::AgentContext::new(vec![mez_agent::ContextBlock::user_event(
+            "user",
+            "perform the requested action",
+        )])
+        .unwrap();
+        let mut omitted_request = crate::integrations::agent::context::assemble_model_request(
+            &omitted_profile,
+            mez_agent::ProviderApiCompatibility::DeepSeekChatCompletions,
+            &turn,
+            &context,
+        )
+        .unwrap();
+        omitted_request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
+        omitted_request.allowed_actions = mez_agent::AllowedActionSet::action_execution_base();
+        assert_eq!(
+            omitted_request.model_capabilities.metadata_policy,
+            mez_agent::ModelCapabilityMetadataPolicy::ConservativeUnknown
+        );
+        let prepared =
+            mez_agent::deepseek::prepare_deepseek_chat_completions_request(&omitted_request, true)
+                .unwrap();
+        assert_eq!(
+            prepared.strategy,
+            mez_agent::DeepSeekMaapRequestStrategy::ForcedToolNonThinking
+        );
+        assert!(!prepared.effective_stream);
+
+        let mut cleared_request = crate::integrations::agent::context::assemble_model_request(
+            &cleared_profile,
+            mez_agent::ProviderApiCompatibility::DeepSeekChatCompletions,
+            &turn,
+            &context,
+        )
+        .unwrap();
+        cleared_request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
+        cleared_request.allowed_actions = mez_agent::AllowedActionSet::action_execution_base();
+        assert!(
+            mez_agent::deepseek::prepare_deepseek_chat_completions_request(
+                &cleared_request,
+                false,
+            )
+            .unwrap_err()
+            .message()
+            .contains("does not support function tools")
+        );
+    }
+
+    /// Verifies code-defined DeepSeek fallback candidates carry the same
+    /// explicit reasoning and capability metadata as generated configuration.
+    ///
+    /// A provider with an empty model table has no configured candidate to
+    /// supply metadata and may also lack a live catalog. Known Pro and Flash
+    /// identities must remain model-metadata-backed so request policy can
+    /// distinguish them from conservative unknown DeepSeek models.
+    #[test]
+    fn deepseek_code_defaults_include_model_capability_metadata() {
+        let root = serde_json::json!({
+            "agents": {
+                "default_provider": "deepseek",
+                "default_model_profile": "deepseek-default"
+            },
+            "providers": {
+                "deepseek": {
+                    "kind": "deepseek",
+                    "api": "deepseek-chat-completions",
+                    "models": [],
+                    "default_model": "deepseek-v4-pro"
+                }
+            }
+        });
+        let registry = crate::runtime::runtime_provider_registry_from_config(&root).unwrap();
+        let provider = registry.providers().get("deepseek").unwrap();
+        let catalog = runtime_configured_model_catalog("deepseek", provider, &registry);
+
+        for model_id in ["deepseek-v4-pro", "deepseek-v4-flash"] {
+            let model = catalog.catalog.resolve(model_id).unwrap();
+            assert_eq!(model.reasoning_levels, vec!["high", "max"], "{model_id}");
+            assert_eq!(
+                model.capabilities,
+                vec![
+                    "native_thinking",
+                    "function_tools",
+                    "forced_tool_choice",
+                    "streaming",
+                    "max_output_tokens",
+                ],
+                "{model_id}"
+            );
+            let expected_limits = match model_id {
+                "deepseek-v4-pro" => (1_000_000, 800_000, 60_000),
+                "deepseek-v4-flash" => (500_000, 400_000, 30_000),
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                (
+                    model.context_window_tokens,
+                    model.max_input_tokens,
+                    model.max_output_tokens,
+                ),
+                (
+                    Some(expected_limits.0),
+                    Some(expected_limits.1),
+                    Some(expected_limits.2),
+                ),
+                "{model_id}"
+            );
+        }
+
+        let compatible_provider = crate::runtime::RuntimeProviderConfig {
+            provider_id: "custom".to_string(),
+            kind: "openai-compatible".to_string(),
+            api: Some("openai-chat-completions".to_string()),
+            ..crate::runtime::RuntimeProviderConfig::default()
+        };
+        assert_eq!(
+            runtime_builtin_capabilities_for_model(&compatible_provider, "deepseek-v4-pro"),
+            None
+        );
+    }
 
     /// Verifies configured Anthropic providers expose documented Messages API
     /// effort levels even when live model listing is unavailable.

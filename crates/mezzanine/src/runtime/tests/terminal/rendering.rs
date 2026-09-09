@@ -1251,11 +1251,11 @@ fn runtime_frame_context_uses_cached_catalog_context_window_for_named_compatible
         vec![mez_agent::ProviderModelInfo {
             id: "catalog-only-model".to_string(),
             display_name: None,
-            reasoning_levels: vec!["low".to_string()],
+            reasoning_levels: Some(vec!["low".to_string()]),
             context_window_tokens: Some(2_000_000),
             max_input_tokens: None,
             max_output_tokens: None,
-            capabilities: Vec::new(),
+            capabilities: None,
         }],
         vec!["low".to_string()],
     );
@@ -1496,11 +1496,11 @@ fn runtime_pane_agent_status_selector_applies_latency_preference() {
         vec![mez_agent::ProviderModelInfo {
             id: "gpt-5.5".to_string(),
             display_name: None,
-            reasoning_levels: vec!["low".to_string()],
+            reasoning_levels: Some(vec!["low".to_string()]),
             context_window_tokens: Some(1_050_000),
             max_input_tokens: None,
             max_output_tokens: None,
-            capabilities: Vec::new(),
+            capabilities: None,
         }],
         vec!["low".to_string(), "high".to_string()],
     );

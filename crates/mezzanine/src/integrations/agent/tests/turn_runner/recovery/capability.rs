@@ -27,6 +27,7 @@ fn turn_runner_fails_response_without_action_batch() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -115,6 +116,7 @@ fn turn_runner_recovers_mixed_capability_and_execution_batch_without_effects() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -230,6 +232,7 @@ fn turn_runner_recovers_mixed_capability_batch_before_heredoc_validation() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -363,6 +366,7 @@ fn turn_runner_repairs_legacy_complete_during_capability_decision() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,

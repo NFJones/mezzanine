@@ -202,6 +202,7 @@ fn runtime_agent_shell_copy_writes_latest_say_text_to_destinations() {
             ModelProfile {
                 provider: "runtime-batch".to_string(),
                 model: "test".to_string(),
+                model_capabilities: Default::default(),
                 reasoning_profile: None,
                 latency_preference: None,
                 multimodal_required: false,

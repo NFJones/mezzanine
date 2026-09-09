@@ -54,6 +54,7 @@ fn turn_runner_accepts_mcp_actions_matching_input_schema_arguments() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -148,6 +149,7 @@ fn turn_runner_accepts_mcp_actions_without_required_approval() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -238,6 +240,7 @@ fn turn_runner_auto_allows_mcp_actions_with_model_assertion() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -329,6 +332,7 @@ fn turn_runner_blocks_mcp_actions_requiring_approval() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -411,6 +415,7 @@ fn turn_runner_executes_accepted_mcp_actions() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -508,6 +513,7 @@ fn turn_runner_full_access_accepts_mcp_actions_requiring_approval() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -593,6 +599,7 @@ fn turn_runner_passes_mcp_tool_schemas_to_provider_request() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -678,6 +685,7 @@ fn turn_runner_rejects_mcp_actions_for_unavailable_tools_before_planning() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -780,6 +788,7 @@ fn turn_runner_rejects_mcp_actions_missing_required_schema_arguments_before_plan
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,

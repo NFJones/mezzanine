@@ -46,6 +46,7 @@ fn openai_available_mcp_keeps_memory_on_default_surface() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -121,6 +122,7 @@ fn openai_maap_schema_tracks_configured_non_mcp_action_surfaces() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
+        model_capabilities: Default::default(),
         reasoning_profile: None,
         latency_preference: None,
         multimodal_required: false,
@@ -204,6 +206,7 @@ fn openai_memory_search_schema_disallows_startup_rituals_and_repeat_searches() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -272,6 +275,7 @@ fn openai_memory_store_schema_excludes_episode_and_scratch_kinds() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -348,6 +352,7 @@ fn openai_responses_request_body_describes_apply_patch_format() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -494,6 +499,7 @@ fn openai_responses_request_body_describes_config_change_schema() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -608,6 +614,7 @@ fn openai_responses_request_body_exposes_configured_shell_action_catalog() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -707,6 +714,7 @@ fn openai_responses_request_body_uses_auto_sizing_schema_for_router() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-router".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: Some("low".to_string()),
             latency_preference: None,
             multimodal_required: false,
@@ -762,6 +770,7 @@ fn openai_responses_request_body_exposes_configured_runtime_surface() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -810,6 +819,7 @@ fn openai_responses_request_body_uses_mcp_tool_argument_schemas() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,

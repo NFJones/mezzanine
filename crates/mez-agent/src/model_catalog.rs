@@ -70,9 +70,8 @@ pub struct ModelCatalogCandidate {
 impl ModelCatalogCandidate {
     /// Creates one available candidate without aliases.
     pub fn available(source: ModelCatalogSource, model: ProviderModelInfo) -> Self {
-        let reasoning_levels =
-            (!model.reasoning_levels.is_empty()).then(|| model.reasoning_levels.clone());
-        let capabilities = (!model.capabilities.is_empty()).then(|| model.capabilities.clone());
+        let reasoning_levels = model.reasoning_levels.clone();
+        let capabilities = model.capabilities.clone();
         Self {
             model,
             source,
@@ -90,11 +89,11 @@ impl ModelCatalogCandidate {
             model: ProviderModelInfo {
                 id: model.id.clone(),
                 display_name: model.display_name.clone(),
-                reasoning_levels: model.reasoning_levels.clone().unwrap_or_default(),
+                reasoning_levels: model.reasoning_levels.clone(),
                 context_window_tokens: model.context_window_tokens,
                 max_input_tokens: model.max_input_tokens,
                 max_output_tokens: model.max_output_tokens,
-                capabilities: model.capabilities.clone().unwrap_or_default(),
+                capabilities: model.capabilities.clone(),
             },
             source: ModelCatalogSource::Configured,
             aliases: model.aliases.clone(),
@@ -149,6 +148,20 @@ pub struct ModelCatalogEntry {
 }
 
 impl ModelCatalogEntry {
+    /// Returns model reasoning metadata while preserving omission separately
+    /// from an explicit empty replacement declaration.
+    pub fn reasoning_levels_metadata(&self) -> Option<&[String]> {
+        self.reasoning_levels_explicit
+            .then_some(self.reasoning_levels.as_slice())
+    }
+
+    /// Returns model capability metadata while preserving omission separately
+    /// from an explicit empty replacement declaration.
+    pub fn capabilities_metadata(&self) -> Option<&[String]> {
+        self.capabilities_explicit
+            .then_some(self.capabilities.as_slice())
+    }
+
     /// Reprojects canonical metadata as an input candidate for catalog merging.
     ///
     /// Product adapters use this when combining an already normalized live
@@ -158,11 +171,15 @@ impl ModelCatalogEntry {
             model: ProviderModelInfo {
                 id: self.id.clone(),
                 display_name: self.display_name.clone(),
-                reasoning_levels: self.reasoning_levels.clone(),
+                reasoning_levels: self
+                    .reasoning_levels_explicit
+                    .then(|| self.reasoning_levels.clone()),
                 context_window_tokens: self.context_window_tokens,
                 max_input_tokens: self.max_input_tokens,
                 max_output_tokens: self.max_output_tokens,
-                capabilities: self.capabilities.clone(),
+                capabilities: self
+                    .capabilities_explicit
+                    .then(|| self.capabilities.clone()),
             },
             source: self.source,
             aliases: self.aliases.clone(),
@@ -273,7 +290,7 @@ impl ModelCatalog {
     /// Returns model-specific reasoning levels or the catalog-wide fallback.
     pub fn reasoning_levels_for(&self, requested: &str) -> Option<&[String]> {
         self.resolve(requested).map(|entry| {
-            if entry.reasoning_levels.is_empty() {
+            if entry.reasoning_levels.is_empty() && !entry.reasoning_levels_explicit {
                 self.reasoning_levels.as_slice()
             } else {
                 entry.reasoning_levels.as_slice()
@@ -319,13 +336,13 @@ impl ModelCatalog {
                 }
             })
             .transpose()?;
-        let levels = if entry.reasoning_levels.is_empty() {
+        let levels = if entry.reasoning_levels.is_empty() && !entry.reasoning_levels_explicit {
             self.reasoning_levels.as_slice()
         } else {
             entry.reasoning_levels.as_slice()
         };
         if let Some(reasoning) = reasoning
-            && !levels.is_empty()
+            && (entry.reasoning_levels_explicit || !levels.is_empty())
             && !levels.iter().any(|level| level == reasoning)
         {
             return Err(ModelCatalogSelectionError::new(
@@ -444,12 +461,16 @@ fn normalized_candidate(candidate: ModelCatalogCandidate) -> Option<ModelCatalog
             .map(|name| name.trim().to_string())
             .filter(|name| !name.is_empty()),
         reasoning_levels: normalize_model_catalog_values(
-            reasoning_levels.unwrap_or(model.reasoning_levels),
+            reasoning_levels
+                .or(model.reasoning_levels)
+                .unwrap_or_default(),
         ),
         context_window_tokens: model.context_window_tokens.filter(|limit| *limit > 0),
         max_input_tokens: model.max_input_tokens.filter(|limit| *limit > 0),
         max_output_tokens: model.max_output_tokens.filter(|limit| *limit > 0),
-        capabilities: normalize_model_catalog_values(capabilities.unwrap_or(model.capabilities)),
+        capabilities: normalize_model_catalog_values(
+            capabilities.or(model.capabilities).unwrap_or_default(),
+        ),
         provider_options,
         aliases,
         source,
@@ -547,14 +568,16 @@ mod tests {
             ProviderModelInfo {
                 id: id.to_string(),
                 display_name: display_name.map(str::to_string),
-                reasoning_levels: reasoning_levels
-                    .iter()
-                    .map(|level| (*level).to_string())
-                    .collect(),
+                reasoning_levels: (!reasoning_levels.is_empty()).then(|| {
+                    reasoning_levels
+                        .iter()
+                        .map(|level| (*level).to_string())
+                        .collect()
+                }),
                 context_window_tokens,
                 max_input_tokens: None,
                 max_output_tokens: None,
-                capabilities: Vec::new(),
+                capabilities: None,
             },
         )
     }
@@ -616,7 +639,7 @@ mod tests {
             &[" high ", "", "high"],
             Some(0),
         );
-        valid.model.capabilities = vec![" tool_use ".to_string(), "tool_use".to_string()];
+        valid.model.capabilities = Some(vec![" tool_use ".to_string(), "tool_use".to_string()]);
         valid.aliases = vec![" short ".to_string(), "".to_string()];
         let catalog = ModelCatalog::from_input(ModelCatalogInput {
             candidates: vec![
@@ -702,6 +725,14 @@ mod tests {
     fn model_catalog_selection_returns_typed_failures() {
         let mut unavailable = candidate(ModelCatalogSource::Discovered, "offline", None, &[], None);
         unavailable.availability = ModelAvailability::Unavailable;
+        let mut no_reasoning = candidate(
+            ModelCatalogSource::Configured,
+            "no-reasoning",
+            None,
+            &[],
+            None,
+        );
+        no_reasoning.reasoning_levels = Some(Vec::new());
         let catalog = ModelCatalog::from_input(ModelCatalogInput {
             candidates: vec![
                 candidate(
@@ -712,6 +743,7 @@ mod tests {
                     None,
                 ),
                 unavailable,
+                no_reasoning,
             ],
             ..ModelCatalogInput::default()
         });
@@ -721,7 +753,7 @@ mod tests {
                 .available_entries()
                 .map(|entry| entry.id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["ready"]
+            vec!["no-reasoning", "ready"]
         );
 
         assert_eq!(
@@ -743,6 +775,32 @@ mod tests {
         assert_eq!(
             catalog.select("ready", Some("max")).unwrap_err().kind(),
             ModelCatalogSelectionErrorKind::UnknownReasoning
+        );
+        assert_eq!(
+            catalog
+                .select("no-reasoning", Some("high"))
+                .unwrap_err()
+                .kind(),
+            ModelCatalogSelectionErrorKind::UnknownReasoning
+        );
+
+        let unconstrained = ModelCatalog::from_input(ModelCatalogInput {
+            candidates: vec![candidate(
+                ModelCatalogSource::Configured,
+                "omitted",
+                None,
+                &[],
+                None,
+            )],
+            ..ModelCatalogInput::default()
+        });
+        assert_eq!(
+            unconstrained
+                .select("omitted", Some("provider-defined"))
+                .unwrap()
+                .reasoning
+                .as_deref(),
+            Some("provider-defined")
         );
     }
 
@@ -794,7 +852,7 @@ mod tests {
         );
         discovered.model.max_input_tokens = Some(180_000);
         discovered.model.max_output_tokens = Some(8_000);
-        discovered.model.capabilities = vec!["vision".to_string(), "tools".to_string()];
+        discovered.model.capabilities = Some(vec!["vision".to_string(), "tools".to_string()]);
         discovered.provider_options = std::collections::BTreeMap::from([
             ("shared".to_string(), "catalog".to_string()),
             ("catalog-only".to_string(), "retained".to_string()),

@@ -22,6 +22,7 @@ fn turn_execution_persistence_appends_to_durable_transcript_store() {
             &ModelProfile {
                 provider: "openai".to_string(),
                 model: "default".to_string(),
+                model_capabilities: Default::default(),
                 reasoning_profile: None,
                 latency_preference: None,
                 multimodal_required: false,

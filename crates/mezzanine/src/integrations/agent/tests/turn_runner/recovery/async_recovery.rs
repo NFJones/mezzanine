@@ -73,6 +73,7 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -161,6 +162,7 @@ async fn async_turn_runner_retries_missing_provider_action_batch() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -255,6 +257,7 @@ async fn turn_runner_bubbles_context_limit_failure_to_runtime_recovery() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -337,6 +340,7 @@ async fn turn_runner_bubbles_provider_controller_retry_hint_to_runtime_retry() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -411,6 +415,7 @@ async fn turn_runner_bubbles_retryable_provider_failure_to_runtime_retry() {
         model_profile: ModelProfile {
             provider: "batch".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -494,6 +499,7 @@ async fn async_turn_runner_enforces_total_turn_deadline() {
         model_profile: ModelProfile {
             provider: "pending".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,

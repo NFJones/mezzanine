@@ -42,6 +42,11 @@ override provider discovery; discovery fills gaps ahead of built-in and
 conservative fallbacks. Lists replace lower-precedence lists, while option maps
 merge per key from provider root through model and profile. Aliases resolve to
 the canonical model id, but profiles may still name an unlisted custom model.
+For the built-in DeepSeek Pro and Flash models, generated and code-defined
+fallback metadata declares reasoning levels `high` and `max` together with
+`native_thinking`, `function_tools`, `forced_tool_choice`, `streaming`, and
+`max_output_tokens`. Omitted list fields inherit that metadata; explicit empty
+lists clear it.
 Refreshing provider information updates future resolutions without changing an
 in-flight turn; config reload rebases retained generated profiles.
 

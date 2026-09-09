@@ -17,6 +17,7 @@ fn model_request_assembly_adapts_product_turn_and_prompt_assets() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "default".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,

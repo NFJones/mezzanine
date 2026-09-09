@@ -489,6 +489,8 @@ mod tests {
             request: mez_agent::ModelRequest {
                 provider: "deepseek".to_string(),
                 model: "deepseek-v4-pro".to_string(),
+                model_capabilities: Default::default(),
+                max_input_tokens: None,
                 reasoning_effort: Some("high".to_string()),
                 thinking_enabled: None,
                 latency_preference: None,
@@ -569,6 +571,8 @@ mod tests {
             request: mez_agent::ModelRequest {
                 provider: "runtime-batch".to_string(),
                 model: "test".to_string(),
+                model_capabilities: Default::default(),
+                max_input_tokens: None,
                 reasoning_effort: None,
                 thinking_enabled: None,
                 latency_preference: None,
@@ -641,6 +645,8 @@ mod tests {
             request: mez_agent::ModelRequest {
                 provider: "openai".to_string(),
                 model: "gpt-test".to_string(),
+                model_capabilities: Default::default(),
+                max_input_tokens: None,
                 reasoning_effort: None,
                 thinking_enabled: None,
                 latency_preference: None,

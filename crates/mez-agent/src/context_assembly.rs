@@ -92,7 +92,7 @@ fn assemble_model_request_from_context_for_api(
     validate_context_semantics(context.blocks())?;
 
     let blocks = context.blocks();
-    let is_deepseek = profile.provider == "deepseek";
+    let is_deepseek = api == Some(ProviderApiCompatibility::DeepSeekChatCompletions);
     let provider_native_execution_groups = blocks
         .iter()
         .enumerate()
@@ -150,6 +150,10 @@ fn assemble_model_request_from_context_for_api(
     let mut request = ModelRequest {
         provider: profile.provider.clone(),
         model: profile.model.clone(),
+        model_capabilities: api
+            .map(|api| profile.model_capabilities.resolved_for_api(api))
+            .unwrap_or_else(|| profile.model_capabilities.clone()),
+        max_input_tokens: profile.max_input_tokens(),
         reasoning_effort: profile
             .reasoning_profile
             .clone()
@@ -774,6 +778,7 @@ mod tests {
         ModelProfile {
             provider: provider.to_string(),
             model: "test-model".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,

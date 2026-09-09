@@ -197,6 +197,8 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
             request: mez_agent::ModelRequest {
                 provider: "runtime-batch".to_string(),
                 model: "test".to_string(),
+                model_capabilities: Default::default(),
+                max_input_tokens: None,
                 reasoning_effort: None,
                 thinking_enabled: None,
                 latency_preference: None,

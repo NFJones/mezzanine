@@ -16,6 +16,7 @@ fn model_profile_context_window_preserves_explicit_override() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-5.5".to_string(),
+        model_capabilities: Default::default(),
         reasoning_profile: None,
         latency_preference: None,
         multimodal_required: false,
@@ -38,6 +39,7 @@ fn model_profile_max_input_limit_constrains_context_budget() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-5.3-codex".to_string(),
+        model_capabilities: Default::default(),
         reasoning_profile: None,
         latency_preference: None,
         multimodal_required: false,
@@ -57,6 +59,7 @@ fn model_profile_context_window_requires_deepseek_configuration() {
         let profile = ModelProfile {
             provider: "deepseek".to_string(),
             model: model.to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -89,6 +92,7 @@ fn model_profile_context_window_requires_openai_configuration() {
         let profile = ModelProfile {
             provider: "openai".to_string(),
             model: model.to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -118,6 +122,7 @@ fn model_profile_failover_requires_non_weaker_configured_characteristics() {
     let preferred = ModelProfile {
         provider: "openai".to_string(),
         model: "primary".to_string(),
+        model_capabilities: Default::default(),
         reasoning_profile: None,
         latency_preference: None,
         multimodal_required: false,
@@ -127,6 +132,7 @@ fn model_profile_failover_requires_non_weaker_configured_characteristics() {
     let safe = ModelProfile {
         provider: "openai".to_string(),
         model: "fallback".to_string(),
+        model_capabilities: Default::default(),
         reasoning_profile: None,
         latency_preference: None,
         multimodal_required: false,
@@ -193,6 +199,7 @@ fn model_profile_request_preconditions_accept_complete_identity() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-5.5".to_string(),
+        model_capabilities: Default::default(),
         ..ModelProfile::default()
     };
 
@@ -206,6 +213,7 @@ fn model_profile_request_preconditions_reject_blank_identity_fields() {
     let complete = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-5.5".to_string(),
+        model_capabilities: Default::default(),
         ..ModelProfile::default()
     };
     let cases = [
@@ -220,6 +228,7 @@ fn model_profile_request_preconditions_reject_blank_identity_fields() {
         (
             ModelProfile {
                 model: "\t".to_string(),
+                model_capabilities: Default::default(),
                 ..complete.clone()
             },
             "turn-1",

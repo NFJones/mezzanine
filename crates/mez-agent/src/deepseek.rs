@@ -11,8 +11,8 @@ use crate::provider_continuity::{
 };
 use crate::{
     AllowedActionSet, MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME, McpPromptTool,
-    ModelInteractionKind, ModelMessageRole, ModelRequest, ProviderApiCompatibility,
-    ProviderCapabilities, ProviderEndpointError, ProviderEndpointResult,
+    ModelCapabilities, ModelCapabilityMetadataPolicy, ModelInteractionKind, ModelMessageRole,
+    ModelRequest, ProviderApiCompatibility, ProviderEndpointError, ProviderEndpointResult,
     ProviderRequestAssemblyError, ProviderRequestAssemblyResult, ProviderTranscriptEvent,
     maap_action_batch_schema,
 };
@@ -72,6 +72,22 @@ pub enum DeepSeekMaapRequestStrategy {
     ForcedToolNonThinking,
 }
 
+/// Fully validated DeepSeek wire preparation for one transport attempt.
+///
+/// The preparation is the single source of truth for the selected MAAP
+/// strategy, capability-limited streaming mode, and exact serialized body.
+/// Transport, continuity, retry, and accounting callers must consume this
+/// result rather than independently recomputing any of those values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeepSeekRequestPreparation {
+    /// Effective provider-native MAAP strategy.
+    pub strategy: DeepSeekMaapRequestStrategy,
+    /// Effective streaming mode after applying model capability policy.
+    pub effective_stream: bool,
+    /// Exact canonical JSON body to submit to DeepSeek.
+    pub body: String,
+}
+
 /// DeepSeek-facing MAAP shim function selected for one provider request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DeepSeekMaapShimKind {
@@ -111,14 +127,120 @@ impl DeepSeekMaapShimKind {
     }
 }
 
+/// Validates and prepares one DeepSeek request using its effective strategy.
+pub fn prepare_deepseek_chat_completions_request(
+    request: &ModelRequest,
+    stream: bool,
+) -> Result<DeepSeekRequestPreparation> {
+    prepare_deepseek_chat_completions_request_with_strategy(
+        request,
+        stream,
+        deepseek_maap_request_strategy(request),
+    )
+}
+
+/// Validates and prepares one DeepSeek request with an explicit MAAP strategy.
+///
+/// Explicit strategies are used by the strict MAAP retry. The request's model
+/// capabilities still govern whether that strategy is legal and which
+/// optional controls may reach the wire.
+pub fn prepare_deepseek_chat_completions_request_with_strategy(
+    request: &ModelRequest,
+    stream: bool,
+    strategy: DeepSeekMaapRequestStrategy,
+) -> Result<DeepSeekRequestPreparation> {
+    let capabilities = request
+        .model_capabilities
+        .resolved_for_api(ProviderApiCompatibility::DeepSeekChatCompletions);
+    let conservative_unknown =
+        capabilities.metadata_policy == ModelCapabilityMetadataPolicy::ConservativeUnknown;
+    if strategy != DeepSeekMaapRequestStrategy::NoTool && !capabilities.function_tools {
+        return Err(MezError::invalid_args(format!(
+            "DeepSeek model `{}` does not support function tools required by this request",
+            request.model
+        )));
+    }
+    if strategy == DeepSeekMaapRequestStrategy::ForcedToolNonThinking
+        && !capabilities.forced_tool_choice
+    {
+        return Err(MezError::invalid_args(format!(
+            "DeepSeek model `{}` does not support forced tool choice required by this request",
+            request.model
+        )));
+    }
+    if request.max_output_tokens.is_some_and(|tokens| tokens > 0) && !capabilities.max_output_tokens
+    {
+        return Err(MezError::invalid_args(format!(
+            "DeepSeek model `{}` does not support max output-token control",
+            request.model
+        )));
+    }
+
+    let requested_thinking = strategy != DeepSeekMaapRequestStrategy::ForcedToolNonThinking
+        && deepseek_thinking_enabled_for_request(request);
+    if requested_thinking && !capabilities.native_thinking && !conservative_unknown {
+        return Err(MezError::invalid_args(format!(
+            "DeepSeek model `{}` does not support native thinking requested by this request",
+            request.model
+        )));
+    }
+    let effective_thinking = requested_thinking && capabilities.native_thinking;
+    let effective_reasoning_effort = if effective_thinking {
+        request
+            .reasoning_effort
+            .as_deref()
+            .filter(|effort| !effort.is_empty())
+    } else {
+        None
+    };
+    if let Some(reasoning_effort) = effective_reasoning_effort
+        && !capabilities.supports_reasoning_effort(reasoning_effort)
+    {
+        return Err(MezError::invalid_args(format!(
+            "DeepSeek model `{}` does not support reasoning effort `{reasoning_effort}`",
+            request.model
+        )));
+    }
+    if stream && !capabilities.streaming && !conservative_unknown {
+        return Err(MezError::invalid_args(format!(
+            "DeepSeek model `{}` does not support streaming requested by this request",
+            request.model
+        )));
+    }
+    let effective_stream = stream && capabilities.streaming;
+    let body = deepseek_chat_completions_request_body(
+        request,
+        effective_stream,
+        strategy,
+        &capabilities,
+        effective_thinking,
+        effective_reasoning_effort,
+    )?;
+    Ok(DeepSeekRequestPreparation {
+        strategy,
+        effective_stream,
+        body,
+    })
+}
+
 /// Builds the JSON body for a DeepSeek request with an explicit MAAP strategy.
 pub fn deepseek_chat_completions_request_body_with_strategy(
     request: &ModelRequest,
     stream: bool,
     strategy: DeepSeekMaapRequestStrategy,
 ) -> Result<String> {
-    let capabilities =
-        ProviderCapabilities::for_api(ProviderApiCompatibility::DeepSeekChatCompletions);
+    Ok(prepare_deepseek_chat_completions_request_with_strategy(request, stream, strategy)?.body)
+}
+
+/// Renders one already-validated DeepSeek request body.
+fn deepseek_chat_completions_request_body(
+    request: &ModelRequest,
+    stream: bool,
+    strategy: DeepSeekMaapRequestStrategy,
+    capabilities: &ModelCapabilities,
+    thinking_enabled: bool,
+    reasoning_effort: Option<&str>,
+) -> Result<String> {
     let mut messages = Vec::with_capacity(request.messages.len());
     let mut pending_tool_call_ids = Vec::new();
     for message in &request.messages {
@@ -176,7 +298,7 @@ pub fn deepseek_chat_completions_request_body_with_strategy(
     if let Some(max_output_tokens) = request
         .max_output_tokens
         .filter(|tokens| *tokens > 0)
-        .filter(|_| capabilities.supports_max_output_tokens)
+        .filter(|_| capabilities.max_output_tokens)
     {
         body["max_tokens"] = serde_json::json!(max_output_tokens);
     }
@@ -194,22 +316,19 @@ pub fn deepseek_chat_completions_request_body_with_strategy(
     if let Some(stop) = request.stop.as_ref().filter(|s| !s.is_empty()) {
         body["stop"] = serde_json::json!(stop);
     }
-    if strategy == DeepSeekMaapRequestStrategy::ForcedToolNonThinking
-        || request.thinking_enabled == Some(false)
+    if capabilities.native_thinking
+        && (strategy == DeepSeekMaapRequestStrategy::ForcedToolNonThinking
+            || request.thinking_enabled == Some(false))
     {
         body["thinking"] = serde_json::json!({"type": "disabled"});
-    } else if deepseek_thinking_enabled_for_request(request) {
+    } else if thinking_enabled {
         body["thinking"] = serde_json::json!({"type": "enabled"});
-        if let Some(reasoning_effort) = request
-            .reasoning_effort
-            .as_deref()
-            .filter(|effort| !effort.is_empty())
-        {
+        if let Some(reasoning_effort) = reasoning_effort {
             let deepseek_effort = deepseek_reasoning_effort(reasoning_effort);
             body["reasoning_effort"] = serde_json::json!(deepseek_effort);
         }
     }
-    if capabilities.supports_tool_calls && strategy != DeepSeekMaapRequestStrategy::NoTool {
+    if capabilities.function_tools && strategy != DeepSeekMaapRequestStrategy::NoTool {
         let shim_kind = DeepSeekMaapShimKind::for_request(request);
         if strategy == DeepSeekMaapRequestStrategy::ForcedToolNonThinking {
             body["tool_choice"] = deepseek_maap_tool_choice(shim_kind);
@@ -242,26 +361,25 @@ pub fn prepare_deepseek_request_prefix_extension(
     cache_namespace: &str,
     stream: bool,
 ) -> ProviderRequestAssemblyResult<()> {
-    let strategy = deepseek_maap_request_strategy(request);
-    let effective_stream = deepseek_effective_stream(stream, strategy);
-    let current_body =
-        deepseek_chat_completions_request_body_with_strategy(request, effective_stream, strategy)?;
+    let current = prepare_deepseek_chat_completions_request(request, stream)?;
     let previous_preparation = previous
-        .map(|previous| {
-            let strategy = deepseek_maap_request_strategy(previous);
-            let stream = deepseek_effective_stream(stream, strategy);
-            let body =
-                deepseek_chat_completions_request_body_with_strategy(previous, stream, strategy)?;
-            Ok::<_, ProviderRequestAssemblyError>((body, strategy, stream))
-        })
+        .map(|previous| prepare_deepseek_chat_completions_request(previous, stream))
         .and_then(Result::ok);
     let previous_body = previous_preparation
         .as_ref()
-        .map(|(body, _, _)| body.as_str());
+        .map(|preparation| preparation.body.as_str());
     let previous_api_shape = previous_preparation.as_ref().map_or_else(
-        || format!("deepseek-chat-completions;stream={effective_stream};strategy={strategy:?}"),
-        |(_, strategy, stream)| {
-            format!("deepseek-chat-completions;stream={stream};strategy={strategy:?}")
+        || {
+            format!(
+                "deepseek-chat-completions;stream={};strategy={:?}",
+                current.effective_stream, current.strategy
+            )
+        },
+        |previous| {
+            format!(
+                "deepseek-chat-completions;stream={};strategy={:?}",
+                previous.effective_stream, previous.strategy
+            )
         },
     );
     prepare_provider_native_request_prefix_extension(
@@ -271,11 +389,12 @@ pub fn prepare_deepseek_request_prefix_extension(
             cache_namespace,
             provider_label: "DeepSeek Chat Completions",
             current_api_shape: &format!(
-                "deepseek-chat-completions;stream={effective_stream};strategy={strategy:?}"
+                "deepseek-chat-completions;stream={};strategy={:?}",
+                current.effective_stream, current.strategy
             ),
             previous_api_shape: &previous_api_shape,
             input_field: "messages",
-            current_body: &current_body,
+            current_body: &current.body,
             previous_body,
         },
     )
@@ -349,6 +468,11 @@ pub fn deepseek_maap_request_strategy(request: &ModelRequest) -> DeepSeekMaapReq
     }
     if request.interaction_kind == ModelInteractionKind::CapabilityDecision
         || request.allowed_actions == AllowedActionSet::say_only()
+    {
+        return DeepSeekMaapRequestStrategy::ForcedToolNonThinking;
+    }
+    if request.model_capabilities.metadata_policy
+        == ModelCapabilityMetadataPolicy::ConservativeUnknown
     {
         return DeepSeekMaapRequestStrategy::ForcedToolNonThinking;
     }
@@ -514,13 +638,32 @@ fn deepseek_prune_unsupported_schema_keywords(value: &mut serde_json::Value) {
 mod tests {
     use super::*;
 
-    use crate::{ContextSourceKind, ModelMessage, PROVIDER_TRANSCRIPT_EVENT_MARKER};
+    use crate::{
+        ContextSourceKind, ModelCapabilities, ModelMessage, PROVIDER_TRANSCRIPT_EVENT_MARKER,
+    };
+
+    /// Returns the complete model-declared DeepSeek capabilities shared by the
+    /// known Pro and Flash catalog records.
+    fn known_deepseek_capabilities() -> ModelCapabilities {
+        ModelCapabilities {
+            metadata_policy: ModelCapabilityMetadataPolicy::ModelMetadata,
+            native_thinking: true,
+            supported_reasoning_efforts: vec!["high".to_string(), "max".to_string()],
+            reasoning_efforts_explicit: true,
+            function_tools: true,
+            forced_tool_choice: true,
+            streaming: true,
+            max_output_tokens: true,
+        }
+    }
 
     /// Builds a minimal DeepSeek model request for provider-shape tests.
     fn deepseek_test_request(messages: Vec<ModelMessage>) -> ModelRequest {
         ModelRequest {
             provider: "deepseek".to_string(),
             model: "deepseek-v4-pro".to_string(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
             reasoning_effort: Some("high".to_string()),
             thinking_enabled: None,
             latency_preference: None,
@@ -539,6 +682,153 @@ mod tests {
             stop: None,
             messages: messages.into(),
         }
+    }
+
+    /// Verifies the known DeepSeek Pro and Flash records produce the complete
+    /// native thinking request shape from their typed model capabilities.
+    ///
+    /// Both catalog records advertise the same wire features even though they
+    /// carry different token limits elsewhere. Preparation must preserve the
+    /// requested stream mode, map `xhigh` to DeepSeek's `max`, include the
+    /// explicit output cap, and advertise the MAAP tool without forcing it
+    /// while thinking is active.
+    #[test]
+    fn known_deepseek_pro_and_flash_prepare_native_thinking_bodies() {
+        for model in ["deepseek-v4-pro", "deepseek-v4-flash"] {
+            let mut request = deepseek_test_request(Vec::new());
+            request.model = model.to_string();
+            request.model_capabilities = known_deepseek_capabilities();
+            request.reasoning_effort = Some("xhigh".to_string());
+            request.thinking_enabled = Some(true);
+            request.max_output_tokens = Some(4096);
+
+            let preparation = prepare_deepseek_chat_completions_request(&request, true).unwrap();
+            let body: serde_json::Value = serde_json::from_str(&preparation.body).unwrap();
+
+            assert_eq!(
+                preparation.strategy,
+                DeepSeekMaapRequestStrategy::AutoToolThinking,
+                "{model}"
+            );
+            assert!(preparation.effective_stream, "{model}");
+            assert_eq!(body["model"], model);
+            assert_eq!(body["stream"], true);
+            assert_eq!(body["thinking"]["type"], "enabled");
+            assert_eq!(body["reasoning_effort"], "max");
+            assert_eq!(body["max_tokens"], 4096);
+            assert!(body.get("tool_choice").is_none(), "{model}: {body}");
+            assert_eq!(body["tools"].as_array().map(Vec::len), Some(1));
+        }
+    }
+
+    /// Verifies unknown DeepSeek models retain only the conservative MAAP and
+    /// output-bound compatibility floor in their exact provider body.
+    ///
+    /// Untrusted model metadata must not leak requested thinking, reasoning,
+    /// or streaming controls. It must still force the sole MAAP function and
+    /// retain `max_tokens`, because those are required for deterministic
+    /// action dispatch and bounded-output recovery on unknown DeepSeek models.
+    #[test]
+    fn conservative_unknown_deepseek_preparation_suppresses_optional_controls() {
+        let mut request = deepseek_test_request(Vec::new());
+        request.model = "deepseek-unlisted".to_string();
+        request.model_capabilities = ModelCapabilities::conservative_unknown_deepseek();
+        request.thinking_enabled = Some(true);
+        request.reasoning_effort = Some("max".to_string());
+        request.max_output_tokens = Some(2048);
+
+        let preparation = prepare_deepseek_chat_completions_request(&request, true).unwrap();
+        let body: serde_json::Value = serde_json::from_str(&preparation.body).unwrap();
+
+        assert_eq!(
+            preparation.strategy,
+            DeepSeekMaapRequestStrategy::ForcedToolNonThinking
+        );
+        assert!(!preparation.effective_stream);
+        assert_eq!(body["stream"], false);
+        assert!(body.get("thinking").is_none(), "{body}");
+        assert!(body.get("reasoning_effort").is_none(), "{body}");
+        assert_eq!(body["max_tokens"], 2048);
+        assert_eq!(
+            body["tool_choice"]["function"]["name"],
+            DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME
+        );
+        assert_eq!(body["tools"].as_array().map(Vec::len), Some(1));
+    }
+
+    /// Verifies model-declared capability gaps reject request combinations
+    /// that cannot be represented safely before any transport owns the body.
+    ///
+    /// Function tools, named forced choice, native thinking, reasoning levels,
+    /// and output-token controls are independently validated so adapters,
+    /// continuity, retries, and accounting all fail with the same diagnostic.
+    #[test]
+    fn deepseek_preparation_rejects_unsupported_request_controls() {
+        let mut missing_tools = deepseek_test_request(Vec::new());
+        missing_tools.model_capabilities = known_deepseek_capabilities();
+        missing_tools.model_capabilities.function_tools = false;
+        assert!(
+            prepare_deepseek_chat_completions_request(&missing_tools, false)
+                .unwrap_err()
+                .message()
+                .contains("does not support function tools")
+        );
+
+        let mut missing_forced_choice = deepseek_test_request(Vec::new());
+        missing_forced_choice.model_capabilities = known_deepseek_capabilities();
+        missing_forced_choice.model_capabilities.forced_tool_choice = false;
+        missing_forced_choice.thinking_enabled = Some(false);
+        assert!(
+            prepare_deepseek_chat_completions_request(&missing_forced_choice, false)
+                .unwrap_err()
+                .message()
+                .contains("does not support forced tool choice")
+        );
+
+        let mut missing_thinking = deepseek_test_request(Vec::new());
+        missing_thinking.model_capabilities = known_deepseek_capabilities();
+        missing_thinking.model_capabilities.native_thinking = false;
+        missing_thinking.thinking_enabled = Some(true);
+        assert!(
+            prepare_deepseek_chat_completions_request(&missing_thinking, false)
+                .unwrap_err()
+                .message()
+                .contains("does not support native thinking")
+        );
+
+        let mut unsupported_effort = deepseek_test_request(Vec::new());
+        unsupported_effort.model_capabilities = known_deepseek_capabilities();
+        unsupported_effort
+            .model_capabilities
+            .supported_reasoning_efforts = vec!["high".into()];
+        unsupported_effort.reasoning_effort = Some("max".to_string());
+        assert!(
+            prepare_deepseek_chat_completions_request(&unsupported_effort, false)
+                .unwrap_err()
+                .message()
+                .contains("does not support reasoning effort `max`")
+        );
+
+        let mut missing_streaming = deepseek_test_request(Vec::new());
+        missing_streaming.model_capabilities = known_deepseek_capabilities();
+        missing_streaming.model_capabilities.streaming = false;
+        assert!(
+            prepare_deepseek_chat_completions_request(&missing_streaming, true)
+                .unwrap_err()
+                .message()
+                .contains("does not support streaming")
+        );
+
+        let mut missing_output_control = deepseek_test_request(Vec::new());
+        missing_output_control.model_capabilities = known_deepseek_capabilities();
+        missing_output_control.model_capabilities.max_output_tokens = false;
+        missing_output_control.max_output_tokens = Some(1024);
+        assert!(
+            prepare_deepseek_chat_completions_request(&missing_output_control, false)
+                .unwrap_err()
+                .message()
+                .contains("does not support max output-token control")
+        );
     }
 
     /// Verifies DeepSeek accepts append-only native messages and warns on a

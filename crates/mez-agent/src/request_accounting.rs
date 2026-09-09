@@ -9,12 +9,11 @@
 
 use std::collections::BTreeMap;
 
+use crate::deepseek::prepare_deepseek_chat_completions_request;
 use crate::{
     AnthropicMessagesOptions, ModelRequest, OpenAiChatCompletionsOptions, ProviderApiCompatibility,
     ProviderRequestAssemblyResult, anthropic_messages_request_body,
-    deepseek_chat_completions_request_body_with_strategy, deepseek_effective_stream,
-    deepseek_maap_request_strategy, openai_chat_completions_request_body_with_stream,
-    openai_responses_request_body_with_stream,
+    openai_chat_completions_request_body_with_stream, openai_responses_request_body_with_stream,
 };
 
 /// Conservative number of canonical wire bytes represented by one estimated
@@ -27,6 +26,17 @@ pub fn provider_text_input_token_estimate(text: &str) -> usize {
     text.len()
         .saturating_add(PROVIDER_REQUEST_ESTIMATED_BYTES_PER_TOKEN - 1)
         .saturating_div(PROVIDER_REQUEST_ESTIMATED_BYTES_PER_TOKEN)
+}
+
+/// Estimates one exact prepared provider body without rendering it again.
+///
+/// Adapter-internal retries use this boundary after provider-specific
+/// preparation so cap enforcement measures the same bytes sent on the wire.
+pub fn provider_request_input_estimate_from_body(body: &str) -> ProviderRequestInputEstimate {
+    ProviderRequestInputEstimate {
+        wire_bytes: body.len(),
+        input_tokens: provider_text_input_token_estimate(body).max(1),
+    }
 }
 
 /// Complete canonical provider-request input estimate.
@@ -69,24 +79,14 @@ pub fn provider_request_input_estimate(
             )?
         }
         ProviderApiCompatibility::DeepSeekChatCompletions => {
-            let strategy = deepseek_maap_request_strategy(request);
-            deepseek_chat_completions_request_body_with_strategy(
-                request,
-                deepseek_effective_stream(stream, strategy),
-                strategy,
-            )?
+            prepare_deepseek_chat_completions_request(request, stream)?.body
         }
         ProviderApiCompatibility::AnthropicMessages => {
             let options = AnthropicMessagesOptions::from_provider_options(provider_options)?;
             anthropic_messages_request_body(request, stream, &options)?
         }
     };
-    let wire_bytes = wire_body.len();
-    let input_tokens = provider_text_input_token_estimate(&wire_body).max(1);
-    Ok(ProviderRequestInputEstimate {
-        wire_bytes,
-        input_tokens,
-    })
+    Ok(provider_request_input_estimate_from_body(&wire_body))
 }
 
 #[cfg(test)]
@@ -103,6 +103,8 @@ mod tests {
         ModelRequest {
             provider: provider.to_string(),
             model: "test-model".to_string(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
             reasoning_effort: None,
             thinking_enabled: None,
             latency_preference: None,
@@ -204,6 +206,47 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&expected).unwrap()["stream"],
             true
+        );
+    }
+
+    /// Verifies DeepSeek accounting measures the byte length of the exact
+    /// capability-shaped body returned by centralized request preparation.
+    ///
+    /// This exercises thinking, mapped reasoning effort, streaming, forced
+    /// MAAP schema rendering, and `max_tokens` together so accounting cannot
+    /// silently drift from the body used by the live provider adapter.
+    #[test]
+    fn deepseek_accounting_is_byte_exact_with_prepared_body() {
+        let mut request = complete_test_request("deepseek");
+        request.model = "deepseek-v4-pro".to_string();
+        request.model_capabilities = crate::ModelCapabilities {
+            metadata_policy: crate::ModelCapabilityMetadataPolicy::ModelMetadata,
+            native_thinking: true,
+            supported_reasoning_efforts: vec!["high".to_string(), "max".to_string()],
+            reasoning_efforts_explicit: true,
+            function_tools: true,
+            forced_tool_choice: true,
+            streaming: true,
+            max_output_tokens: true,
+        };
+        request.reasoning_effort = Some("max".to_string());
+        request.thinking_enabled = Some(true);
+        request.allowed_actions = AllowedActionSet::action_execution_base();
+
+        let prepared = prepare_deepseek_chat_completions_request(&request, true).unwrap();
+        let estimate = provider_request_input_estimate(
+            &request,
+            ProviderApiCompatibility::DeepSeekChatCompletions,
+            &BTreeMap::new(),
+            true,
+        )
+        .unwrap();
+
+        assert!(prepared.effective_stream);
+        assert_eq!(estimate.wire_bytes, prepared.body.len());
+        assert_eq!(
+            estimate.input_tokens,
+            provider_text_input_token_estimate(&prepared.body).max(1)
         );
     }
 }

@@ -60,6 +60,7 @@ fn runtime_agent_shell_model_command_overrides_pane_model_profile() {
             ModelProfile {
                 provider: "openai".to_string(),
                 model: "gpt-5.4".to_string(),
+                model_capabilities: Default::default(),
                 reasoning_profile: None,
                 latency_preference: None,
                 multimodal_required: false,
@@ -79,6 +80,55 @@ fn runtime_agent_shell_model_command_overrides_pane_model_profile() {
     );
 }
 
+/// Verifies product model selection rejects reasoning for an explicitly empty
+/// model declaration while leaving truly omitted unknown-model metadata
+/// unconstrained when no provider-wide fallback exists.
+///
+/// This covers the runtime command path above the provider-neutral catalog so
+/// an empty configured list cannot be mistaken for omission by generated
+/// profile selection.
+#[test]
+fn runtime_model_selection_distinguishes_empty_and_omitted_reasoning_metadata() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_provider = \"lmstudio\"\ndefault_model_profile = \"default\"\n\n[providers.lmstudio]\nkind = \"openai-compatible\"\napi = \"openai-chat-completions\"\nbase_url = \"http://localhost:1234/v1\"\ndefault_model = \"custom-omitted\"\n\n[providers.lmstudio.models.omitted]\nid = \"custom-omitted\"\n\n[providers.lmstudio.models.cleared]\nid = \"custom-cleared\"\nreasoning_levels = []\ncapabilities = []\n\n[model_profiles.default]\nprovider = \"lmstudio\"\nmodel = \"custom-omitted\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let omitted = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"omitted-reasoning","method":"agent/shell/command","params":{"idempotency_key":"omitted-reasoning","input":"/model custom-omitted provider-defined"}}"#,
+        &primary,
+    );
+    assert!(omitted.contains(r#""kind":"mutated""#), "{omitted}");
+    assert!(
+        omitted.contains("reasoning_profile=provider-defined"),
+        "{omitted}"
+    );
+
+    let cleared = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"cleared-reasoning","method":"agent/shell/command","params":{"idempotency_key":"cleared-reasoning","input":"/model custom-cleared high"}}"#,
+        &primary,
+    );
+    assert!(
+        cleared.contains("reasoning level `high` is not available for model `custom-cleared`"),
+        "{cleared}"
+    );
+}
+
 /// Verifies that clicking pane-frame model and reasoning status pills opens a
 /// selector backed by the live provider catalog cache and applies the selected
 /// value as a pane-scoped model override. This protects the mouse UI path from
@@ -94,7 +144,7 @@ fn runtime_pane_agent_status_selector_applies_model_and_reasoning() {
             format: ConfigFormat::Toml,
             scope: ConfigScope::Primary,
             trusted: true,
-            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"default\"\n\n[agents.auto_sizing]\nrouter_model_profile = \"named-provider-only\"\nsmall_model_profile = \"default\"\nmedium_model_profile = \"default\"\nlarge_model_profile = \"default\"\n\n[providers.openai]\nkind = \"openai\"\ndefault_model = \"gpt-5.5\"\n\n[providers.openai.models.default]\nid = \"gpt-5.5\"\n\n[providers.openai.models.provider-only]\nid = \"gpt-provider-only\"\nmax_output_tokens = 16000\ncapabilities = [\"vision\"]\n\n[providers.openai.models.provider-only.provider_options]\nservice_tier = \"configured\"\n\n[providers.openai.options]\nreasoning_effort = \"medium\"\n\n[model_profiles.default]\nprovider = \"openai\"\nmodel = \"gpt-5.5\"\nreasoning_profile = \"low\"\n\n[model_profiles.default.provider_options]\nreasoning_effort = \"low\"\n\n[model_profiles.named-provider-only]\nprovider = \"openai\"\nmodel = \"gpt-provider-only\"\nreasoning_profile = \"low\"\n"
+            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"default\"\n\n[agents.auto_sizing]\nrouter_model_profile = \"named-provider-only\"\nsmall_model_profile = \"default\"\nmedium_model_profile = \"default\"\nlarge_model_profile = \"default\"\n\n[providers.openai]\nkind = \"openai\"\ndefault_model = \"gpt-5.5\"\n\n[providers.openai.models.default]\nid = \"gpt-5.5\"\n\n[providers.openai.models.provider-only]\nid = \"gpt-provider-only\"\nmax_output_tokens = 16000\nreasoning_levels = [\"low\", \"medium\", \"high\"]\ncapabilities = [\"vision\"]\n\n[providers.openai.models.provider-only.provider_options]\nservice_tier = \"configured\"\n\n[providers.openai.options]\nreasoning_effort = \"medium\"\n\n[model_profiles.default]\nprovider = \"openai\"\nmodel = \"gpt-5.5\"\nreasoning_profile = \"low\"\n\n[model_profiles.default.provider_options]\nreasoning_effort = \"low\"\n\n[model_profiles.named-provider-only]\nprovider = \"openai\"\nmodel = \"gpt-provider-only\"\nreasoning_profile = \"low\"\n"
                 .to_string(),
         }])
         .unwrap();
@@ -110,11 +160,11 @@ fn runtime_pane_agent_status_selector_applies_model_and_reasoning() {
         vec![mez_agent::ProviderModelInfo {
             id: "gpt-provider-only".to_string(),
             display_name: Some("Provider Only".to_string()),
-            reasoning_levels: vec!["low".to_string(), "high".to_string()],
+            reasoning_levels: Some(vec!["low".to_string(), "high".to_string()]),
             context_window_tokens: Some(777_777),
             max_input_tokens: Some(666_666),
             max_output_tokens: Some(8_000),
-            capabilities: vec!["tool_use".to_string()],
+            capabilities: Some(vec!["tool_use".to_string()]),
         }],
         vec!["low".to_string(), "high".to_string()],
     );
@@ -362,7 +412,7 @@ default_model = "gpt-5.5"
 
 [providers.deepseek]
 kind = "deepseek"
-models = ["deepseek-v4-flash", "deepseek-v4"]
+models = ["deepseek-v4-flash", "deepseek-v4-pro"]
 default_model = "deepseek-v4-flash"
 
 [model_profiles.default]
@@ -398,7 +448,7 @@ latency_preference = "fast"
 
 [model_profiles.deepseek-default]
 provider = "deepseek"
-model = "deepseek-v4"
+model = "deepseek-v4-pro"
 reasoning_profile = "xhigh"
 
 [model_presets.openai]

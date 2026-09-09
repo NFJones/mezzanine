@@ -22,6 +22,12 @@ The precedence is profile override, configured model, provider discovery,
 built-in metadata, then fallback. Configured lists replace lower lists; option
 maps merge per key. A model record's `reasoning_levels` lists supported choices,
 while a profile's `reasoning_profile` selects one choice.
+The built-in `deepseek-v4-pro` and `deepseek-v4-flash` records advertise
+provider-facing reasoning levels `high` and `max`, plus `native_thinking`,
+`function_tools`, `forced_tool_choice`, `streaming`, and `max_output_tokens`.
+The same declarations are retained when the runtime falls back to its
+code-defined DeepSeek catalog. Omitting either list inherits lower-precedence
+metadata; configuring an empty list deliberately clears it.
 Use `mez config model list PROVIDER` to inspect these configured base records.
 `mez config model add`, `update`, and `remove` address records by the opaque
 provider-facing id and generate path-safe local keys automatically. Updates are
@@ -73,7 +79,10 @@ Use `/routing` to inspect automatic sizing. `/routing policy subagent` or
 `/routing policy in-place` changes the current pane policy; put `--global`
 before the policy value to persist the fallback for panes without an override.
 Use `/latency` for a pane-local latency/cost preference and `/thinking` only
-when the selected provider supports a native thinking toggle. Use
+when the selected model supports a native thinking toggle. Unknown DeepSeek
+models conservatively keep MAAP function tools, forced tool choice, and output
+token bounds while disabling native thinking, reasoning controls, and
+streaming until metadata establishes support. Use
 `/refresh-provider-info` before treating a stale model or quota catalog as an
 entitlement failure. Authentication secrets remain in `mez auth`, never
 ordinary configuration.

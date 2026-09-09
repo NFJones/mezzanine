@@ -334,6 +334,8 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
         request: mez_agent::ModelRequest {
             provider: task.model_profile.provider.clone(),
             model: task.model_profile.model.clone(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
             reasoning_effort: task
                 .model_profile
                 .provider_options

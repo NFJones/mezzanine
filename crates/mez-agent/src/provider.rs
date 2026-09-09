@@ -1142,16 +1142,18 @@ pub struct ProviderModelInfo {
     pub id: String,
     /// Optional provider display label.
     pub display_name: Option<String>,
-    /// Provider-supported reasoning levels.
-    pub reasoning_levels: Vec<String>,
+    /// Provider-supported reasoning levels, preserving omission separately
+    /// from an explicitly reported empty list.
+    pub reasoning_levels: Option<Vec<String>>,
     /// Provider-reported or locally documented context-window size in tokens.
     pub context_window_tokens: Option<usize>,
     /// Provider-reported maximum request-input size in tokens.
     pub max_input_tokens: Option<usize>,
     /// Provider-reported maximum response-output size in tokens.
     pub max_output_tokens: Option<usize>,
-    /// Provider-reported capability tags such as `tool_use`.
-    pub capabilities: Vec<String>,
+    /// Provider-reported capability tags such as `tool_use`, preserving
+    /// omission separately from an explicitly reported empty list.
+    pub capabilities: Option<Vec<String>>,
 }
 
 /// Describes a normalized provider model-catalog response.
@@ -1453,11 +1455,12 @@ pub fn parse_openai_models_http_body(
 
 #[cfg(test)]
 mod model_catalog_parse_tests {
-    use super::parse_openai_models_http_body;
+    use super::{ProviderModelInfo, parse_openai_models_http_body};
+    use crate::{ModelCatalog, ModelCatalogCandidate, ModelCatalogInput, ModelCatalogSource};
 
     #[test]
-    /// Verifies canonical catalog parsing retains provider metadata and fills
-    /// known model reasoning and context-window defaults.
+    /// Verifies canonical catalog parsing retains provider metadata while
+    /// leaving omitted reasoning metadata available for lower-precedence fill.
     fn openai_models_catalog_parser_extracts_models_and_reasoning_levels() {
         let models = parse_openai_models_http_body(
             r#"{"object":"list","data":[{"id":"gpt-5.5"},{"id":"gpt-custom","display_name":"Custom","reasoning":{"efforts":["tiny","large"]},"context_length":400000,"max_input_tokens":272000,"max_output_tokens":16000},{"id":"lmstudio-local","capabilities":["tool_use"],"structured_output":true}]}"#,
@@ -1470,7 +1473,10 @@ mod model_catalog_parse_tests {
             .find(|model| model.id == "gpt-custom")
             .unwrap();
         assert_eq!(custom.display_name.as_deref(), Some("Custom"));
-        assert_eq!(custom.reasoning_levels, vec!["tiny", "large"]);
+        assert_eq!(
+            custom.reasoning_levels,
+            Some(vec!["tiny".to_string(), "large".to_string()])
+        );
         assert_eq!(custom.context_window_tokens, Some(400_000));
         assert_eq!(custom.max_input_tokens, Some(272_000));
         assert_eq!(custom.max_output_tokens, Some(16_000));
@@ -1480,13 +1486,91 @@ mod model_catalog_parse_tests {
             .unwrap();
         assert_eq!(
             local.capabilities,
-            vec!["tool_use".to_string(), "structured_output".to_string()]
+            Some(vec![
+                "tool_use".to_string(),
+                "structured_output".to_string()
+            ])
         );
         let defaulted = models.iter().find(|model| model.id == "gpt-5.5").unwrap();
         assert_eq!(defaulted.context_window_tokens, None);
+        assert_eq!(defaulted.reasoning_levels, None);
+    }
+
+    /// Verifies discovery parsing and catalog precedence preserve the semantic
+    /// difference between omitted lists and explicitly reported empty lists.
+    ///
+    /// Built-in observations are intentionally supplied for both models before
+    /// the parsed discovery observations. An omitted discovery field must leave
+    /// that lower-precedence metadata intact, while an explicit empty array is
+    /// a higher-precedence replacement that clears it. The reasoning lookup is
+    /// also asserted because catalog-wide fallback must not silently restore a
+    /// list after the provider explicitly cleared it.
+    #[test]
+    fn discovered_empty_lists_clear_builtins_while_omitted_lists_inherit() {
+        let discovered = parse_openai_models_http_body(
+            r#"{"data":[{"id":"omitted"},{"id":"explicit-empty","reasoning_levels":[],"capabilities":[]}]}"#,
+        )
+        .unwrap();
+        let parsed_omitted = discovered
+            .iter()
+            .find(|model| model.id == "omitted")
+            .unwrap();
+        let parsed_empty = discovered
+            .iter()
+            .find(|model| model.id == "explicit-empty")
+            .unwrap();
+        assert_eq!(parsed_omitted.reasoning_levels, None);
+        assert_eq!(parsed_omitted.capabilities, None);
+        assert_eq!(parsed_empty.reasoning_levels, Some(Vec::new()));
+        assert_eq!(parsed_empty.capabilities, Some(Vec::new()));
+
+        let built_in = |id: &str| {
+            ModelCatalogCandidate::available(
+                ModelCatalogSource::Default,
+                ProviderModelInfo {
+                    id: id.to_string(),
+                    display_name: None,
+                    reasoning_levels: Some(vec!["low".to_string(), "high".to_string()]),
+                    context_window_tokens: None,
+                    max_input_tokens: None,
+                    max_output_tokens: None,
+                    capabilities: Some(vec!["tool_use".to_string(), "vision".to_string()]),
+                },
+            )
+        };
+        let catalog = ModelCatalog::from_input(ModelCatalogInput {
+            candidates: vec![
+                built_in("omitted"),
+                built_in("explicit-empty"),
+                ModelCatalogCandidate::available(
+                    ModelCatalogSource::Discovered,
+                    parsed_omitted.clone(),
+                ),
+                ModelCatalogCandidate::available(
+                    ModelCatalogSource::Discovered,
+                    parsed_empty.clone(),
+                ),
+            ],
+            reasoning_levels: vec!["provider-wide".to_string()],
+            ..ModelCatalogInput::default()
+        });
+
+        let omitted = catalog.resolve("omitted").unwrap();
+        assert_eq!(omitted.reasoning_levels, ["low", "high"]);
+        assert_eq!(omitted.capabilities, ["tool_use", "vision"]);
         assert_eq!(
-            defaulted.reasoning_levels,
-            vec!["low", "medium", "high", "xhigh"]
+            catalog.reasoning_levels_for("omitted").unwrap(),
+            &["low".to_string(), "high".to_string()]
+        );
+
+        let explicit_empty = catalog.resolve("explicit-empty").unwrap();
+        assert!(explicit_empty.reasoning_levels.is_empty());
+        assert!(explicit_empty.capabilities.is_empty());
+        assert!(
+            catalog
+                .reasoning_levels_for("explicit-empty")
+                .unwrap()
+                .is_empty()
         );
     }
 }
@@ -1515,7 +1599,7 @@ pub fn provider_catalog_reasoning_levels(models: &[ProviderModelInfo]) -> Vec<St
     dedupe_provider_strings(
         models
             .iter()
-            .flat_map(|model| model.reasoning_levels.iter().cloned())
+            .flat_map(|model| model.reasoning_levels.iter().flatten().cloned())
             .collect(),
     )
 }
@@ -1555,14 +1639,10 @@ where
         }
         _ => return None,
     };
-    let mut reasoning_levels = provider_reasoning_levels_from_value(value);
-    if reasoning_levels.is_empty() {
-        reasoning_levels = openai_default_reasoning_levels_for_model(&id);
-    }
     Some(ProviderModelInfo {
         id: id.clone(),
         display_name,
-        reasoning_levels,
+        reasoning_levels: provider_reasoning_levels_from_value(value),
         context_window_tokens: provider_context_window_tokens_from_value(value)
             .or_else(|| known_context_window_tokens(&id)),
         max_input_tokens: provider_max_input_tokens_from_value(value),
@@ -1571,7 +1651,15 @@ where
     })
 }
 
-fn provider_capabilities_from_value(value: &serde_json::Value) -> Vec<String> {
+fn provider_capabilities_from_value(value: &serde_json::Value) -> Option<Vec<String>> {
+    let object = value.as_object()?;
+    let capabilities_present = object.contains_key("capabilities")
+        || ["tool_use", "tools", "function_calling", "structured_output"]
+            .iter()
+            .any(|field| object.contains_key(*field));
+    if !capabilities_present {
+        return None;
+    }
     let mut capabilities = Vec::new();
     if let Some(values) = value
         .get("capabilities")
@@ -1608,7 +1696,7 @@ fn provider_capabilities_from_value(value: &serde_json::Value) -> Vec<String> {
             capabilities.push(field.to_string());
         }
     }
-    dedupe_provider_strings(capabilities)
+    Some(dedupe_provider_strings(capabilities))
 }
 
 fn provider_context_window_tokens_from_value(value: &serde_json::Value) -> Option<usize> {
@@ -1723,7 +1811,7 @@ fn provider_max_output_tokens_from_value(value: &serde_json::Value) -> Option<us
     None
 }
 
-fn provider_reasoning_levels_from_value(value: &serde_json::Value) -> Vec<String> {
+fn provider_reasoning_levels_from_value(value: &serde_json::Value) -> Option<Vec<String>> {
     for pointer in [
         "/reasoning/efforts",
         "/reasoning/levels",
@@ -1741,12 +1829,10 @@ fn provider_reasoning_levels_from_value(value: &serde_json::Value) -> Vec<String
                 .filter(|level| !level.trim().is_empty())
                 .map(str::to_string)
                 .collect::<Vec<_>>();
-            if !levels.is_empty() {
-                return dedupe_provider_strings(levels);
-            }
+            return Some(dedupe_provider_strings(levels));
         }
     }
-    Vec::new()
+    None
 }
 
 fn dedupe_provider_strings(values: Vec<String>) -> Vec<String> {
@@ -1944,11 +2030,11 @@ mod tests {
             models: vec![ProviderModelInfo {
                 id: "model".to_string(),
                 display_name: Some("Model".to_string()),
-                reasoning_levels: vec!["high".to_string()],
+                reasoning_levels: Some(vec!["high".to_string()]),
                 context_window_tokens: Some(128_000),
                 max_input_tokens: Some(120_000),
                 max_output_tokens: Some(8_000),
-                capabilities: vec!["tool_use".to_string()],
+                capabilities: Some(vec!["tool_use".to_string()]),
             }],
             reasoning_levels: vec!["high".to_string()],
             quota_usage: Vec::new(),
@@ -1957,7 +2043,10 @@ mod tests {
         assert_eq!(catalog.provider, "provider");
         assert_eq!(catalog.models[0].context_window_tokens, Some(128_000));
         assert_eq!(catalog.models[0].max_input_tokens, Some(120_000));
-        assert_eq!(catalog.models[0].capabilities, ["tool_use"]);
+        assert_eq!(
+            catalog.models[0].capabilities,
+            Some(vec!["tool_use".to_string()])
+        );
     }
 
     #[test]
@@ -1977,18 +2066,24 @@ mod tests {
             .find(|model| model.id == "gpt-custom")
             .unwrap();
         assert_eq!(custom.display_name.as_deref(), Some("Custom"));
-        assert_eq!(custom.reasoning_levels, ["tiny", "large"]);
+        assert_eq!(
+            custom.reasoning_levels,
+            Some(vec!["tiny".to_string(), "large".to_string()])
+        );
         assert_eq!(custom.context_window_tokens, Some(262_144));
         let local = models
             .iter()
             .find(|model| model.id == "lmstudio-local")
             .unwrap();
-        assert_eq!(local.capabilities, ["tool_use", "structured_output"]);
-        let defaulted = models.iter().find(|model| model.id == "gpt-5.5").unwrap();
         assert_eq!(
-            defaulted.reasoning_levels,
-            ["low", "medium", "high", "xhigh"]
+            local.capabilities,
+            Some(vec![
+                "tool_use".to_string(),
+                "structured_output".to_string()
+            ])
         );
+        let defaulted = models.iter().find(|model| model.id == "gpt-5.5").unwrap();
+        assert_eq!(defaulted.reasoning_levels, None);
         assert_eq!(defaulted.context_window_tokens, Some(1_050_000));
     }
 }

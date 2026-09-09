@@ -643,6 +643,10 @@ max_depth = 2
 # Model profiles are materialized by authentication/catalog setup. When a
 # profile sets max_input_tokens, Mez treats it as a hard estimated cap on the
 # complete wire request and proactively compacts before provider I/O.
+# Authenticated DeepSeek Pro and Flash model records declare reasoning levels
+# ["high", "max"] and capability tags ["native_thinking", "function_tools",
+# "forced_tool_choice", "streaming", "max_output_tokens"]. Omit either list to
+# inherit lower-precedence metadata, or set it to [] to clear that metadata.
 
 # Automatic model-size routing. First launch uses the synthesized default profile;
 # auth login replaces these references with provider-specific profiles.
@@ -789,12 +793,16 @@ id = "deepseek-v4-pro"
 context_window_tokens = 1000000
 max_input_tokens = 800000
 max_output_tokens = 60000
+reasoning_levels = ["high", "max"]
+capabilities = ["native_thinking", "function_tools", "forced_tool_choice", "streaming", "max_output_tokens"]
 
 [providers.deepseek.models.deepseek-v4-flash]
 id = "deepseek-v4-flash"
 context_window_tokens = 500000
 max_input_tokens = 400000
 max_output_tokens = 30000
+reasoning_levels = ["high", "max"]
+capabilities = ["native_thinking", "function_tools", "forced_tool_choice", "streaming", "max_output_tokens"]
 
 [model_profiles.anthropic-default]
 provider = "anthropic"

@@ -583,6 +583,8 @@ pub fn macro_step_model_request(parent_turn: &AgentTurnRecord) -> ModelRequest {
     ModelRequest {
         provider: "runtime".to_string(),
         model: "macro-orchestration".to_string(),
+        model_capabilities: Default::default(),
+        max_input_tokens: None,
         reasoning_effort: None,
         thinking_enabled: None,
         latency_preference: None,
@@ -691,6 +693,8 @@ pub fn macro_judge_model_request(
     Ok(ModelRequest {
         provider: model_profile.provider.clone(),
         model: model_profile.model.clone(),
+        model_capabilities: model_profile.model_capabilities.clone(),
+        max_input_tokens: model_profile.max_input_tokens(),
         reasoning_effort: model_profile.reasoning_profile.clone(),
         thinking_enabled: model_profile.thinking_enabled(),
         latency_preference: model_profile.latency_preference.clone(),
@@ -1082,6 +1086,7 @@ mod tests {
         let profile = crate::ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-5".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: Some("high".to_string()),
             ..crate::ModelProfile::default()
         };

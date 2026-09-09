@@ -181,6 +181,8 @@ pub fn sandbox_failure_assessment_request(
     Ok(ModelRequest {
         provider: model_profile.provider.clone(),
         model: model_profile.model.clone(),
+        model_capabilities: model_profile.model_capabilities.clone(),
+        max_input_tokens: model_profile.max_input_tokens(),
         reasoning_effort: model_profile.reasoning_profile.clone(),
         thinking_enabled: model_profile.thinking_enabled(),
         latency_preference: model_profile.latency_preference.clone(),

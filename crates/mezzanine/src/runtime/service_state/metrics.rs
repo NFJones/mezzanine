@@ -694,6 +694,8 @@ mod provider_wire_tests {
         mez_agent::ModelRequest {
             provider: "openai".to_string(),
             model: model.to_string(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
             reasoning_effort: None,
             thinking_enabled: None,
             latency_preference: None,

@@ -5185,6 +5185,28 @@ model. Discovery MUST add observed models and fill configured gaps without
 hiding a configured model that the provider omits or overriding explicit local
 metadata.
 
+DeepSeek profile materialization MUST produce a typed effective
+model-capability record covering metadata policy, native thinking, supported
+reasoning efforts, function tools, forced tool choice, streaming, and
+maximum-output-token control. That exact record MUST be pinned on the
+materialized `ModelProfile`, copied to every profile-derived `ModelRequest`,
+and preserved by retries, repairs, continuations, compaction, memory, routing,
+and other internal model requests. DeepSeek request validation, serialization,
+and preflight request accounting MUST consume the pinned record rather than
+independently infer model support. Unsupported DeepSeek profile or request
+combinations MUST fail before provider transport. Non-DeepSeek APIs MUST pin
+their `ProviderApi` capability defaults until their serializers enforce the
+same typed model contract completely. `/thinking` MUST consult a selected
+DeepSeek model's native thinking capability, not merely the DeepSeek API's
+widest capability set.
+
+An unknown model using the DeepSeek Chat Completions API MUST use a
+conservative capability policy. It MUST retain function tools, forced tool
+choice, and maximum-output-token control because those features are required
+for MAAP compatibility and bounded-output recovery. It MUST suppress native
+thinking, model-specific reasoning controls, and streaming until configured,
+discovered, or built-in metadata establishes support.
+
 Provider catalog refresh MUST rematerialize future profile resolutions for the
 affected provider. Already-cloned in-flight turn profiles MUST remain pinned to
 their original effective metadata. Configuration reload MUST rebase retained
@@ -5213,8 +5235,16 @@ context metadata for those Claude model families.
 The built-in DeepSeek provider default model MUST be `deepseek-v4-pro` unless
 the user overrides it through provider or model-profile configuration. The
 built-in DeepSeek provider model list SHOULD include `deepseek-v4-pro` and
-`deepseek-v4-flash`, and generated DeepSeek model profiles SHOULD use a
-`1000000` token context window for those V4 model families.
+`deepseek-v4-flash`. Both built-in records and their code-defined fallback
+catalog candidates MUST declare reasoning levels `high` and `max` and the
+capability tags `native_thinking`, `function_tools`, `forced_tool_choice`,
+`streaming`, and `max_output_tokens`. The Pro record MUST use a `1000000`
+token context window, `800000` maximum input tokens, and `60000` maximum output
+tokens. The Flash record MUST use a `500000` token context window, `400000`
+maximum input tokens, and `30000` maximum output tokens. These declarations use
+existing provider-model metadata fields and therefore do not change the config
+schema version. Omitted list metadata MUST remain distinct from an explicitly
+empty list, which clears lower-precedence built-in metadata.
 Custom or non-built-in providers do not have built-in models solely because
 they select a compatible API. Users SHOULD configure `models` and
 `default_model` for each compatible backend, and a live catalog refresh MAY

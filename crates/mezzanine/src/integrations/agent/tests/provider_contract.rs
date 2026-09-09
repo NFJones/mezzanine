@@ -16,6 +16,7 @@ fn model_provider_trait_returns_model_response() {
         &ModelProfile {
             provider: "echo".to_string(),
             model: "test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -52,6 +53,8 @@ fn provider_projection_matrix_preserves_chronology_and_neutral_authorship() {
     let request = ModelRequest {
         provider: "provider-matrix".to_string(),
         model: "model-matrix".to_string(),
+        model_capabilities: Default::default(),
+        max_input_tokens: None,
         reasoning_effort: None,
         thinking_enabled: None,
         latency_preference: None,
@@ -238,6 +241,7 @@ fn provider_effective_payloads_omit_foreign_native_events_without_reordering() {
     let profile = |provider: &str| ModelProfile {
         provider: provider.to_string(),
         model: "test-model".to_string(),
+        model_capabilities: Default::default(),
         reasoning_profile: None,
         latency_preference: None,
         multimodal_required: false,

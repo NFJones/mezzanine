@@ -1310,6 +1310,8 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
         request: mez_agent::ModelRequest {
             provider: task.model_profile.provider.clone(),
             model: task.model_profile.model.clone(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
             reasoning_effort: task
                 .model_profile
                 .provider_options

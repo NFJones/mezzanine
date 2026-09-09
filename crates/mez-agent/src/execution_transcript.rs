@@ -534,6 +534,8 @@ mod tests {
         ModelRequest {
             provider: "openai".to_string(),
             model: "default".to_string(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
             reasoning_effort: None,
             thinking_enabled: None,
             latency_preference: None,

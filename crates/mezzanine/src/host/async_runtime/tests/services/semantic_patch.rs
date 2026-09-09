@@ -151,6 +151,8 @@ async fn async_zsh_large_semantic_patch_completes_and_releases_input() {
             request: mez_agent::ModelRequest {
                 provider: task.model_profile.provider.clone(),
                 model: task.model_profile.model.clone(),
+                model_capabilities: Default::default(),
+                max_input_tokens: None,
                 reasoning_effort: task.model_profile.reasoning_profile.clone(),
                 thinking_enabled: task.model_profile.thinking_enabled(),
                 latency_preference: task.model_profile.latency_preference.clone(),

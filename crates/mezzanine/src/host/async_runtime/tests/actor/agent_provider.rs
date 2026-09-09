@@ -251,6 +251,8 @@ async fn async_actor_applies_agent_provider_completion_events() {
         request: mez_agent::ModelRequest {
             provider: task.model_profile.provider.clone(),
             model: task.model_profile.model.clone(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
             reasoning_effort: task
                 .model_profile
                 .provider_options
@@ -449,6 +451,8 @@ async fn async_actor_defers_provider_issue_actions_to_persistence_worker() {
         request: mez_agent::ModelRequest {
             provider: task.model_profile.provider.clone(),
             model: task.model_profile.model.clone(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
             reasoning_effort: task
                 .model_profile
                 .provider_options
@@ -635,6 +639,8 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
         request: mez_agent::ModelRequest {
             provider: task.model_profile.provider.clone(),
             model: task.model_profile.model.clone(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
             reasoning_effort: task
                 .model_profile
                 .provider_options

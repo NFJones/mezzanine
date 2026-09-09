@@ -13,6 +13,7 @@ fn openai_provider_http_error_includes_provider_message() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -79,6 +80,7 @@ fn openai_provider_http_error_redacts_secret_like_generic_values() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -133,6 +135,7 @@ fn openai_provider_stream_failure_includes_provider_failure_object() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -208,6 +211,7 @@ fn openai_provider_stream_incomplete_output_limit_is_recoverable() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,

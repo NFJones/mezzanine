@@ -70,6 +70,7 @@ fn assemble_model_request_points_deepseek_system_prompt_to_neutral_repository_in
         &ModelProfile {
             provider: "deepseek".to_string(),
             model: "deepseek-v4-pro".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: Some("high".to_string()),
             latency_preference: None,
             multimodal_required: false,
@@ -128,6 +129,7 @@ fn assemble_model_request_keeps_deepseek_repository_guidance_without_user_prompt
         &ModelProfile {
             provider: "deepseek".to_string(),
             model: "deepseek-v4-pro".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: Some("high".to_string()),
             latency_preference: None,
             multimodal_required: false,
@@ -176,6 +178,7 @@ fn assemble_model_request_preserves_hidden_provider_transcript_events_without_la
         &ModelProfile {
             provider: "deepseek".to_string(),
             model: "deepseek-v4-pro".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: Some("high".to_string()),
             latency_preference: None,
             multimodal_required: false,
@@ -253,6 +256,7 @@ fn assemble_model_request_omits_deepseek_continuity_for_all_nonowners() {
             &ModelProfile {
                 provider: provider.to_string(),
                 model: "test-model".to_string(),
+                model_capabilities: Default::default(),
                 reasoning_profile: None,
                 latency_preference: None,
                 multimodal_required: false,
@@ -328,6 +332,7 @@ fn assemble_model_request_keeps_mcp_availability_out_of_system_prompt() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -383,6 +388,7 @@ fn model_request_does_not_generate_evidence_ledger_block() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "default".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -413,6 +419,7 @@ fn model_request_keeps_context_sources_distinct() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "default".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -492,6 +499,7 @@ fn model_request_keeps_skill_actions_disabled_after_skill_catalog_result() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "default".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -550,6 +558,7 @@ fn model_request_preserves_action_results_before_provider_feedback() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "default".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -642,6 +651,7 @@ fn model_request_preserves_context_observation_order() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "default".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -701,6 +711,7 @@ fn model_request_preserves_context_observation_order() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "default".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -773,6 +784,7 @@ fn model_request_preserves_oversized_context_until_provider_feedback() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "default".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -822,6 +834,7 @@ fn model_request_suppresses_skill_actions_when_skill_context_loaded() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "default".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,

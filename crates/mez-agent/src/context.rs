@@ -2939,6 +2939,10 @@ pub struct ModelRequest {
     pub provider: String,
     /// Provider model identity.
     pub model: String,
+    /// Typed capabilities pinned when the selected profile was materialized.
+    pub model_capabilities: crate::ModelCapabilities,
+    /// Hard estimated cap on the complete provider-visible request input.
+    pub max_input_tokens: Option<usize>,
     /// Provider reasoning effort, when configured for this request.
     pub reasoning_effort: Option<String>,
     /// Explicit thinking-mode override for providers that support it.

@@ -23,6 +23,7 @@ fn deepseek_chat_completions_request_body_disables_thinking_when_profile_toggle_
         &ModelProfile {
             provider: "deepseek".to_string(),
             model: "deepseek-v4-pro".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: Some("xhigh".to_string()),
             latency_preference: None,
             multimodal_required: false,
@@ -87,6 +88,7 @@ fn deepseek_chat_completions_request_body_dispatches_static_actions_on_initial_s
         &ModelProfile {
             provider: "deepseek".to_string(),
             model: "deepseek-v4-pro".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: Some("xhigh".to_string()),
             latency_preference: None,
             multimodal_required: false,
@@ -201,6 +203,7 @@ fn deepseek_chat_completions_request_body_enables_thinking_without_reasoning_eff
         &ModelProfile {
             provider: "deepseek".to_string(),
             model: "deepseek-v4-pro".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -259,6 +262,7 @@ fn deepseek_chat_completions_request_body_uses_static_schema_for_initial_action_
         &ModelProfile {
             provider: "deepseek".to_string(),
             model: "deepseek-v4-pro".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: Some("xhigh".to_string()),
             latency_preference: None,
             multimodal_required: false,
@@ -331,6 +335,7 @@ fn deepseek_chat_completions_request_body_forces_maap_tool_without_thinking_for_
         &ModelProfile {
             provider: "deepseek".to_string(),
             model: "deepseek-v4-pro".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -407,6 +412,7 @@ fn deepseek_chat_completions_request_body_omits_tool_choice_for_no_tool_thinking
         &ModelProfile {
             provider: "deepseek".to_string(),
             model: "deepseek-v4-pro".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: Some("xhigh".to_string()),
             latency_preference: None,
             multimodal_required: false,
@@ -462,6 +468,7 @@ fn deepseek_chat_completions_request_body_uses_auto_maap_tool_with_thinking_when
         &ModelProfile {
             provider: "deepseek".to_string(),
             model: "deepseek-v4-pro".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: Some("xhigh".to_string()),
             latency_preference: None,
             multimodal_required: false,
@@ -522,6 +529,7 @@ fn deepseek_provider_accepts_openai_compatible_provider_identity() {
         &ModelProfile {
             provider: "deepseek_compatible".to_string(),
             model: "deepseek-v4-pro".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -616,6 +624,7 @@ fn deepseek_provider_rejects_missing_maap_after_strict_retry() {
         &ModelProfile {
             provider: "deepseek".to_string(),
             model: "deepseek-v4-pro".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: Some("high".to_string()),
             latency_preference: None,
             multimodal_required: false,
@@ -723,6 +732,7 @@ async fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_p
         &ModelProfile {
             provider: "deepseek".to_string(),
             model: "deepseek-v4-pro".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: Some("high".to_string()),
             latency_preference: None,
             multimodal_required: false,
@@ -742,6 +752,19 @@ async fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_p
     request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
     request.allowed_actions =
         mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly);
+    request.max_output_tokens = Some(3072);
+    request.temperature = Some("0.25".to_string());
+    request.stop = Some(vec!["STRICT_RETRY_STOP".to_string()]);
+    let expected_retry =
+        mez_agent::deepseek::prepare_deepseek_chat_completions_request_with_strategy(
+            &request,
+            false,
+            mez_agent::DeepSeekMaapRequestStrategy::ForcedToolNonThinking,
+        )
+        .unwrap();
+    let expected_retry_estimate =
+        mez_agent::provider_request_input_estimate_from_body(&expected_retry.body);
+    request.max_input_tokens = Some(expected_retry_estimate.input_tokens);
     let arguments = serde_json::json!({
         "rationale": "fallback produced structured output",
         "status": "final",
@@ -828,6 +851,11 @@ async fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_p
         assert_eq!(requests.len(), 2);
         let first_body: serde_json::Value = serde_json::from_str(&requests[0].body).unwrap();
         let second_body: serde_json::Value = serde_json::from_str(&requests[1].body).unwrap();
+        assert_eq!(requests[1].body, expected_retry.body);
+        assert_eq!(
+            mez_agent::provider_request_input_estimate_from_body(&requests[1].body),
+            expected_retry_estimate
+        );
         assert_eq!(first_body["thinking"]["type"], "enabled");
         assert!(first_body.get("tool_choice").is_none());
         assert_eq!(second_body["thinking"]["type"], "disabled");
@@ -835,6 +863,13 @@ async fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_p
             second_body["tool_choice"]["function"]["name"],
             DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME
         );
+        assert_eq!(second_body["stream"], false);
+        assert_eq!(second_body["model"], first_body["model"]);
+        assert_eq!(second_body["messages"], first_body["messages"]);
+        assert_eq!(second_body["max_tokens"], first_body["max_tokens"]);
+        assert_eq!(second_body["temperature"], first_body["temperature"]);
+        assert_eq!(second_body["stop"], first_body["stop"]);
+        assert_eq!(second_body["tools"], first_body["tools"]);
     }
     assert_eq!(response.usage.input_tokens, 22);
     assert_eq!(response.usage.output_tokens, 10);
@@ -870,4 +905,91 @@ async fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_p
     assert!(receiver.try_recv().is_err());
     let batch = response.action_batch.unwrap();
     assert_eq!(batch.rationale, "fallback produced structured output");
+}
+
+#[tokio::test]
+/// Verifies the forced-MAAP retry is rejected before its transport call when
+/// the exact prepared retry body exceeds the request's pinned input cap.
+///
+/// The cap is set one estimated token below the shared estimator's result for
+/// the exact forced retry body. The initial response still triggers retry
+/// construction, but the fake transport must record only the first request.
+async fn deepseek_provider_rejects_oversized_forced_retry_before_second_transport_call() {
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            model_capabilities: Default::default(),
+            reasoning_profile: Some("high".to_string()),
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "user".to_string(),
+            content: "say hello".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
+    request.allowed_actions =
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly);
+    request.max_output_tokens = Some(3072);
+    request.temperature = Some("0.25".to_string());
+    request.stop = Some(vec!["STRICT_RETRY_STOP".to_string()]);
+    let prepared_retry =
+        mez_agent::deepseek::prepare_deepseek_chat_completions_request_with_strategy(
+            &request,
+            false,
+            mez_agent::DeepSeekMaapRequestStrategy::ForcedToolNonThinking,
+        )
+        .unwrap();
+    let retry_estimate = mez_agent::provider_request_input_estimate_from_body(&prepared_retry.body);
+    request.max_input_tokens = Some(retry_estimate.input_tokens.saturating_sub(1));
+
+    let transport = AsyncSequencedFakeProviderHttpTransport::new(vec![ProviderHttpResponse {
+        status_code: 200,
+        headers: Default::default(),
+        body: serde_json::json!({
+            "model": "deepseek-v4-pro",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "reasoning_content": "I should answer somehow.",
+                    "content": "I can help with that."
+                }
+            }],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 4,
+                "reasoning_tokens": 3
+            }
+        })
+        .to_string(),
+    }]);
+    let provider = crate::integrations::agent::provider::DeepSeekChatCompletionsProvider::new(
+        "deepseek-key",
+        transport,
+    )
+    .unwrap();
+
+    let error = provider.send_request_async(&request).await.unwrap_err();
+
+    assert_eq!(provider.transport.requests.lock().unwrap().len(), 1);
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert!(
+        error.message().contains(&format!(
+            "estimated_input_tokens={} max_input_tokens={} wire_bytes={}",
+            retry_estimate.input_tokens,
+            retry_estimate.input_tokens.saturating_sub(1),
+            retry_estimate.wire_bytes
+        )),
+        "{}",
+        error.message()
+    );
 }

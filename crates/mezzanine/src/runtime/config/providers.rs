@@ -812,6 +812,7 @@ mod tests {
         let profile = mez_agent::ModelProfile {
             provider: "local".to_string(),
             model: "model-a".to_string(),
+            model_capabilities: Default::default(),
             provider_options: std::collections::BTreeMap::from([(
                 "streaming".to_string(),
                 "enabled".to_string(),
@@ -838,6 +839,8 @@ mod tests {
         let request = mez_agent::ModelRequest {
             provider: "local".to_string(),
             model: "model-a".to_string(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
             reasoning_effort: None,
             thinking_enabled: None,
             latency_preference: None,

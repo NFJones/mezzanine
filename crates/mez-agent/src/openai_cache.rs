@@ -313,6 +313,8 @@ mod tests {
         ModelRequest {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
             reasoning_effort: Some("medium".to_string()),
             thinking_enabled: None,
             latency_preference: Some("default".to_string()),
@@ -644,6 +646,8 @@ mod tests {
         let request = ModelRequest {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
             reasoning_effort: None,
             thinking_enabled: None,
             latency_preference: None,

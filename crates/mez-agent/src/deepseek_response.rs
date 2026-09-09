@@ -843,6 +843,8 @@ mod tests {
         ModelRequest {
             provider: "deepseek".to_string(),
             model: "deepseek-v4-pro".to_string(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
             reasoning_effort: Some("high".to_string()),
             thinking_enabled: None,
             latency_preference: None,

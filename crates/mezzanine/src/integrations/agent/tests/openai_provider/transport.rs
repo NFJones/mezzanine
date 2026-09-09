@@ -13,6 +13,7 @@ async fn openai_provider_async_posts_responses_request_and_parses_output_text() 
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,
@@ -73,6 +74,7 @@ fn openai_provider_posts_responses_request_and_parses_output_text() {
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
             multimodal_required: false,

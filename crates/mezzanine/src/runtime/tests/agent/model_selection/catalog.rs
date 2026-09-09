@@ -1,6 +1,7 @@
 //! Runtime tests for agent model_selection catalog behavior.
 
 use super::*;
+use crate::runtime::runtime_provider_registry_from_config;
 
 /// Verifies that `/refresh-provider-info` refreshes live provider metadata and
 /// caches the result for later model-list displays.
@@ -158,6 +159,46 @@ async fn runtime_agent_shell_model_list_uses_code_defaults_when_config_models_em
     assert!(model_list.contains("| config |"), "{model_list}");
 }
 
+/// Verifies product configuration keeps omitted list metadata distinct from an
+/// explicitly empty replacement list through runtime provider parsing.
+///
+/// Omission must remain `None` so lower-precedence built-in metadata can fill a
+/// gap, while an explicit empty list must remain `Some(empty)` so catalog
+/// merging can clear that metadata. Losing this distinction would make users
+/// unable to deliberately disable inferred model features.
+#[test]
+fn runtime_deepseek_config_preserves_omitted_and_explicit_empty_metadata() {
+    let root = serde_json::json!({
+        "agents": {
+            "default_provider": "deepseek",
+            "default_model_profile": "deepseek-default"
+        },
+        "providers": {
+            "deepseek": {
+                "kind": "deepseek",
+                "api": "deepseek-chat-completions",
+                "default_model": "deepseek-v4-pro",
+                "models": {
+                    "pro": {
+                        "id": "deepseek-v4-pro"
+                    },
+                    "flash": {
+                        "id": "deepseek-v4-flash",
+                        "reasoning_levels": [],
+                        "capabilities": []
+                    }
+                }
+            }
+        }
+    });
+    let registry = runtime_provider_registry_from_config(&root).unwrap();
+    let provider = registry.providers().get("deepseek").unwrap();
+    assert_eq!(provider.models[0].reasoning_levels, None);
+    assert_eq!(provider.models[0].capabilities, None);
+    assert_eq!(provider.models[1].reasoning_levels, Some(Vec::new()));
+    assert_eq!(provider.models[1].capabilities, Some(Vec::new()));
+}
+
 /// Verifies an empty custom OpenAI-compatible model table accepts live
 /// discoveries without inheriting the built-in OpenAI model catalog.
 #[tokio::test]
@@ -179,11 +220,11 @@ async fn runtime_agent_shell_model_list_discovers_empty_compatible_catalog() {
         vec![mez_agent::ProviderModelInfo {
             id: "loaded-local-model".to_string(),
             display_name: None,
-            reasoning_levels: Vec::new(),
+            reasoning_levels: None,
             context_window_tokens: None,
             max_input_tokens: None,
             max_output_tokens: None,
-            capabilities: Vec::new(),
+            capabilities: None,
         }],
         Vec::new(),
     );
@@ -234,11 +275,11 @@ async fn runtime_agent_shell_model_list_merges_provider_and_configured_models() 
         vec![mez_agent::ProviderModelInfo {
             id: "provider-only".to_string(),
             display_name: None,
-            reasoning_levels: vec!["low".to_string(), "high".to_string()],
+            reasoning_levels: Some(vec!["low".to_string(), "high".to_string()]),
             context_window_tokens: None,
             max_input_tokens: None,
             max_output_tokens: None,
-            capabilities: Vec::new(),
+            capabilities: None,
         }],
         vec!["low".to_string(), "high".to_string()],
     );
@@ -290,11 +331,11 @@ fn runtime_cached_catalog_rematerializes_named_profiles() {
         vec![mez_agent::ProviderModelInfo {
             id: "model-a".to_string(),
             display_name: None,
-            reasoning_levels: vec!["medium".to_string()],
+            reasoning_levels: Some(vec!["medium".to_string()]),
             context_window_tokens: Some(777_000),
             max_input_tokens: Some(700_000),
             max_output_tokens: Some(8_000),
-            capabilities: vec!["tool_use".to_string()],
+            capabilities: Some(vec!["tool_use".to_string()]),
         }],
         vec!["medium".to_string()],
     );

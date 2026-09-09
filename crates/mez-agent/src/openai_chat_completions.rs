@@ -1058,6 +1058,8 @@ mod tests {
         ModelRequest {
             provider: "local-openai-chat".to_string(),
             model: "local-chat-model".to_string(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
             reasoning_effort: None,
             thinking_enabled: None,
             latency_preference: None,
