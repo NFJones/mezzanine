@@ -234,13 +234,19 @@ pub(crate) fn agent_action_execution_display_header(action: &AgentAction) -> Opt
             role,
             placement,
             cooperation_mode,
+            session_mode,
+            size,
+            reasoning_effort,
             task_prompt,
             ..
         } => format!(
-            "spawn agent: {} ({}, {}): {}",
+            "spawn agent: {} ({}, {}, session={}, size={}, reasoning_effort={}): {}",
             agent_action_display_preview(role),
             agent_action_display_preview(placement),
             agent_action_display_preview(cooperation_mode),
+            session_mode.map_or("new", |mode| mode.as_str()),
+            size.as_deref().unwrap_or("default"),
+            reasoning_effort.as_deref().unwrap_or("default"),
             agent_action_display_preview(task_prompt)
         ),
         _ => return None,
@@ -572,4 +578,63 @@ pub(crate) fn truncate_to_utf8_boundary(value: &str, max_bytes: usize) -> String
         end -= 1;
     }
     value[..end].to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies spawn action headers expose explicit subagent session and
+    /// initial model controls without omitting the existing placement fields.
+    #[test]
+    fn spawn_action_header_includes_explicit_subagent_configuration() {
+        let action = AgentAction {
+            id: "spawn-1".to_string(),
+            payload: AgentActionPayload::SpawnAgent {
+                role: "worker".to_string(),
+                placement: "new-window".to_string(),
+                cooperation_mode: "owned-write".to_string(),
+                read_scopes: None,
+                write_scopes: None,
+                session_mode: Some(mez_agent::SubagentSessionMode::Fork),
+                size: Some("large".to_string()),
+                reasoning_effort: Some("high".to_string()),
+                task_prompt: "implement the fix".to_string(),
+            },
+        };
+
+        assert_eq!(
+            agent_action_execution_display_header(&action).as_deref(),
+            Some(
+                "spawn agent: worker (new-window, owned-write, session=fork, size=large, reasoning_effort=high): implement the fix"
+            )
+        );
+    }
+
+    /// Verifies omitted spawn controls remain explicit in logs through their
+    /// effective session default and stable unspecified model labels.
+    #[test]
+    fn spawn_action_header_includes_default_subagent_configuration() {
+        let action = AgentAction {
+            id: "spawn-1".to_string(),
+            payload: AgentActionPayload::SpawnAgent {
+                role: "explorer".to_string(),
+                placement: "new-window".to_string(),
+                cooperation_mode: "explore-only".to_string(),
+                read_scopes: None,
+                write_scopes: None,
+                session_mode: None,
+                size: None,
+                reasoning_effort: None,
+                task_prompt: "inspect the repository".to_string(),
+            },
+        };
+
+        assert_eq!(
+            agent_action_execution_display_header(&action).as_deref(),
+            Some(
+                "spawn agent: explorer (new-window, explore-only, session=new, size=default, reasoning_effort=default): inspect the repository"
+            )
+        );
+    }
 }

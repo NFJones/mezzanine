@@ -444,10 +444,18 @@ fn assistant_transcript_action_summary(action: &AgentAction) -> String {
             payload.len()
         ),
         AgentActionPayload::SpawnAgent {
-            role, task_prompt, ..
+            role,
+            session_mode,
+            size,
+            reasoning_effort,
+            task_prompt,
+            ..
         } => format!(
-            "spawn_agent role={} task_bytes={}",
+            "spawn_agent role={} session={} size={} reasoning_effort={} task_bytes={}",
             bounded_transcript_field(role),
+            session_mode.map_or("new", |mode| mode.as_str()),
+            size.as_deref().unwrap_or("default"),
+            reasoning_effort.as_deref().unwrap_or("default"),
             task_prompt.len()
         ),
         AgentActionPayload::ConfigChange {
@@ -944,6 +952,47 @@ mod tests {
         );
         assert!(assistant.content.contains("apply_patch patch_bytes="));
         assert!(!assistant.content.contains("large-inline-file-content"));
+    }
+
+    /// Verifies durable spawn summaries retain the subagent session and
+    /// initial model controls while continuing to omit full task text.
+    #[test]
+    fn turn_execution_transcript_summarizes_spawn_configuration() {
+        let action = AgentAction {
+            id: "spawn-1".to_string(),
+            payload: AgentActionPayload::SpawnAgent {
+                role: "worker".to_string(),
+                placement: "new-window".to_string(),
+                cooperation_mode: "owned-write".to_string(),
+                read_scopes: None,
+                write_scopes: None,
+                session_mode: Some(crate::SubagentSessionMode::Fork),
+                size: Some("large".to_string()),
+                reasoning_effort: Some("high".to_string()),
+                task_prompt: "private implementation details".to_string(),
+            },
+        };
+        let execution = execution(
+            vec![message(
+                ContextSourceKind::UserInstruction,
+                "user",
+                "delegate the implementation",
+            )],
+            "dispatching",
+            Some(MaapBatch {
+                rationale: "delegate focused work".to_string(),
+                actions: vec![action],
+            }),
+            Vec::new(),
+            Vec::new(),
+        );
+
+        let content = assistant_context_content_for_execution(&execution);
+
+        assert!(content.contains(
+            "spawn_agent role=worker session=fork size=large reasoning_effort=high task_bytes="
+        ));
+        assert!(!content.contains("private implementation details"));
     }
 
     #[test]
