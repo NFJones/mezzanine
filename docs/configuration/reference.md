@@ -63,7 +63,7 @@ copy/replace examples such as command-rule arrays, or provider catalog fields
 that are materialized only after authentication; they are not activation
 markers.
 
-The current config schema version is `91`. On launch, Mezzanine migrates an
+The current config schema version is `92`. On launch, Mezzanine migrates an
 older supported primary user config to the current schema before validation,
 backfilling missing defaults, rewriting renamed settings, and removing settings
 that no longer exist. Config files declaring a schema version newer than the
@@ -98,6 +98,10 @@ Configuration is conservative:
 - `agents.implementation_pressure_after_shell_actions` is removed by the
   v19-to-v20 primary-config migration and rejected in current-schema layers;
   model-facing action-pressure prompts are no longer part of runtime policy.
+- `frames.window.pills.<name>.style` is removed by the v91-to-v92
+  primary-config migration. Window pills retain their semantic rendering and
+  may still set explicit `foreground` and `background` palette names; pane-pill
+  `style` remains supported.
 - Secret material is rejected from config. Use `mez auth` and credential stores.
 - Live mutation accepts scalar strings, integers, booleans, and string arrays
   for supported paths.
@@ -122,7 +126,7 @@ shown.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `version` | integer | `91` | Config schema version. Do not change this. |
+| `version` | integer | `92` | Config schema version. Do not change this. |
 | `host` | table | see below | Disabled-by-default persistent host, recovery, and durable-lease policy. |
 | `runtime` | table | see below | Process runtime settings. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |
@@ -421,7 +425,7 @@ the live session, and persists it to the primary config. Later `bind-key`,
 | `frames.window.template` | string | `"#{window.list}"` | Left/main window frame template. |
 | `frames.window.right_status` | string | `"#{iroh.status} #{pane.pwd} #{button:-|terminal|split-window -h} #{button:+|terminal|split-window} #{button:□|terminal|new-window} #{button:⊕|terminal|new-group} #{button:λ|terminal|agent-shell} #{system.uptime} #{datetime.local}"` | Right-aligned status and command buttons; the built-in `pane.pwd` display is home-relative when possible and collapses deep paths to the last three segments. |
 | `frames.window.pills` | table | `{}` | Named command-backed status pills referenced from `frames.window.right_status` as `#{pill.<name>}`. |
-| `frames.window.style` | string | `"default"` | Frame text style: `default`, `bold`, `underline`, `inverse`, or `reverse`. |
+| `frames.window.style` | string | `"default"` | Frame text style: `default`, `bold`, `underline`, or `inverse`. |
 | `frames.window.visible_fields` | string array | `[...]` | Allowed template fields for window frames. |
 
 Default `frames.window.visible_fields`:

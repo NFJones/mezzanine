@@ -1,7 +1,8 @@
-# Mezzanine default configuration.
-# Active settings below materialize Mezzanine's built-in defaults. Optional
-# settings and dynamic-map examples remain commented so the first launch is
-# behaviorally unchanged while the complete configuration surface is visible.
+# Mezzanine default-configuration example.
+# This checked-in file mirrors the provider-free source template before
+# first-launch generation selects a platform-specific approval/sandbox pair.
+# Optional settings and dynamic-map examples remain commented so copying the
+# rest of the template does not enable external commands or integrations.
 # Lines prefixed with `#? ` are directly activatable: remove that prefix from
 # every such line at once and the result remains a valid configuration.
 # Plain commented snippets document alternatives that replace a marked choice.
@@ -540,6 +541,9 @@ fallback_policy = "use-default-profile"
 # Generated Linux and macOS configuration selects full-access when the fixed
 # Bubblewrap or Seatbelt executable is present, and auto-allow otherwise.
 # auto-allow uses the model gate; full-access skips prompts but stays sandboxed.
+# The active ask/bubblewrap values below are the portable source-template
+# values, not a pair emitted by first-launch generation. Prefer `mez config
+# init` when creating a real config so Mez selects a matched platform pair.
 # host-access is primary-user-only and executes
 # local shell actions on the host outside the configured sandbox.
 # Sandbox, scope, network, and approval settings are also primary-user-only;

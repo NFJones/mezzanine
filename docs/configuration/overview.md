@@ -115,7 +115,7 @@ the decision.
 
 ## Schema versions and examples
 
-The current schema is version `91`. Older primary user configurations migrate
+The current schema is version `92`. Older primary user configurations migrate
 on launch; a configuration declaring a newer schema is rejected. Existing
 project overlays must declare the current schema version and are not migrated
 automatically. When `mez config set --scope project` creates or updates an
@@ -130,7 +130,7 @@ remain opaque; destructive id changes are refused while configuration still
 references the old id.
 
 The checked-in [example configuration](../examples/config.toml) is the
-provider-free first-launch template for version 91. Actual generation adjusts
+provider-free first-launch template for version 92. Actual generation adjusts
 `permissions.approval_policy` and `permissions.sandbox` for the current
 platform and fixed Bubblewrap or Seatbelt executable presence, so those values
 can differ from the portable checked-in template. Presence is not capability,
