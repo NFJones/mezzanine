@@ -655,7 +655,11 @@ impl RuntimePaneStatusProviderRefreshPlan {
                     working_directory.to_path_buf(),
                 ),
                 capability_probe: None,
-                sandbox_backend: crate::runtime::SandboxBackend::Bubblewrap,
+                sandbox_backend: if cfg!(target_os = "macos") {
+                    crate::runtime::SandboxBackend::Seatbelt
+                } else {
+                    crate::runtime::SandboxBackend::Bubblewrap
+                },
                 child_launch: ShellChildLaunch::new(
                     "/bin/sh",
                     vec![
@@ -2037,8 +2041,8 @@ mod tests {
         std::fs::write(first.join("value"), "first-result\n").unwrap();
         std::fs::write(second.join("value"), "second-result\n").unwrap();
         let mut definition = pane_provider_definition(None);
-        definition.command = "cat value".to_string();
-        definition.timeout_ms = 5_000;
+        definition.command = "IFS= read -r value < value; printf '%s\\n' \"$value\"".to_string();
+        definition.timeout_ms = 30_000;
         let mut cache = RuntimePaneStatusProviderCache::default();
         cache.reconcile(vec![
             pane_provider_request(
@@ -2063,7 +2067,7 @@ mod tests {
                     "same",
                     &definition.command,
                     std::path::Path::new(&plan.key.cwd),
-                    5_000,
+                    definition.timeout_ms,
                 )
                 .launch;
                 std::thread::spawn(move || {

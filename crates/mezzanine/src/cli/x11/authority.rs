@@ -559,24 +559,19 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    /// Timed-out explicit cleanup must still remove private credential files
-    /// before returning the bounded xauth error.
+    /// Explicit cleanup must remove private credential files even when xauth
+    /// cannot be launched. Timeout behavior is covered independently above,
+    /// avoiding a second process-pressure-sensitive timeout fixture.
     #[tokio::test]
-    async fn timed_out_untrusted_cleanup_removes_private_artifacts() {
-        let root = test_root("cleanup-timeout");
+    async fn failed_untrusted_cleanup_removes_private_artifacts() {
+        let root = test_root("cleanup-failure");
         fs::create_dir_all(&root).unwrap();
         let authority_path = root.join("authority");
         write_private_file(&authority_path, &[]).unwrap();
-        let script = root.join("fake-xauth");
-        fs::write(
-            &script,
-            "#!/bin/sh\ntrap '' TERM\nwhile :; do sleep 1; done\n",
-        )
-        .unwrap();
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+        let missing_xauth = root.join("missing-xauth");
         let mut lease = UntrustedX11CredentialLease {
             cleanup: Some(XauthCleanup {
-                executable: script.as_os_str().to_os_string(),
+                executable: missing_xauth.as_os_str().to_os_string(),
                 authority_path,
                 directory: root.clone(),
                 display_name: ":17".to_string(),
@@ -586,7 +581,7 @@ mod tests {
 
         let error = lease.close().await.unwrap_err();
 
-        assert!(error.message().contains("timed out"), "{error:?}");
+        assert!(error.message().contains("unavailable"), "{error:?}");
         assert!(!root.exists());
     }
 

@@ -451,9 +451,9 @@ fn rejects_ambiguous_primary_config_files() {
 
 /// Verifies default config matches documented example.
 ///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
+/// The checked-in example intentionally carries source-template commentary
+/// that differs from first-launch output, so this compares active TOML values
+/// after selecting the current platform's generated security defaults.
 #[test]
 fn default_config_matches_documented_example() {
     let documented = include_str!("../../../../../docs/examples/config.toml");
@@ -470,7 +470,9 @@ fn default_config_matches_documented_example() {
             platform.default_approval_policy_name()
         ),
     );
-    assert_eq!(initial_config_toml().unwrap().trim(), documented.trim());
+    let generated = toml::from_str::<toml::Value>(&initial_config_toml().unwrap()).unwrap();
+    let documented = toml::from_str::<toml::Value>(&documented).unwrap();
+    assert_eq!(generated, documented);
 }
 
 /// Verifies every advertised optional assignment or table can be enabled at
