@@ -39,10 +39,13 @@ attach`. Bare remote attach reconnects to the existing host default, creating
 one only when none exists; use `new` when a fresh remote session is intentional.
 Add `--observer` to attach immediately with read-only access. These selectors
 do not inspect the local session registry and never fall back to a Unix socket.
+Observer attachment requires an attached layout-owner primary; if none exists,
+initialization fails before allocating an observer or changing session state.
 A role ceiling of `observer` cannot be elevated to primary attachment. Remote
 attach also negotiates an authorized event stream for redraw wakeups. An
-observer receives session-view events only from its atomic attachment cutoff
-onward. Revocation, detach, or stream failure terminates the remote attach and
+observer follows that exact source primary and receives session-view events
+only from its atomic attachment cutoff onward. Detaching the source primary,
+revocation, self-detach, or stream failure terminates the remote observer and
 requires an explicit reconnect. The configured Iroh setup timeout bounds both
 waiting for that stream and receiving its preface. It also provides one total
 transport-shutdown budget for the control bridge, X11 and event workers, and

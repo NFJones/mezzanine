@@ -45,10 +45,11 @@ The generic confirmed states are `Inactive`, `System`, `SystemAndDisplay`,
 `SystemOnly`, and `Unavailable`. They distinguish resources confirmed as held
 from a desired configuration.
 
-`mez host status --format json` exposes the bounded state for each supervised
-session under `sessions[].power_inhibition`. `configured_policy` records the
-effective user setting, while `desired_mode` and `desired_generation` record
-the latest runtime request. `confirmed_mode`, `confirmed_generation`,
+`mez --json host status` exposes the bounded state for each supervised session
+under `sessions[].power_inhibition`. The `--json` flag is global and must appear
+before the `host` subcommand. `configured_policy` records the effective user
+setting, while `desired_mode` and `desired_generation` record the latest runtime
+request. `confirmed_mode`, `confirmed_generation`,
 `confirmed_aggregate_state`, the two resource states, `backend_kind`, and
 `last_error_class` describe worker-confirmed progress. A lower confirmed
 generation means the latest desired request is pending or degraded. The status

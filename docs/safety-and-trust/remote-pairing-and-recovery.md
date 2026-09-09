@@ -189,7 +189,10 @@ session exists; bare remote `new` always requires creation authority. To attach
 an existing authorized session without fallback creation, use `mez
 --iroh-profile PROFILE attach SESSION_TARGET`; add `--observer` to request
 observer access. An observer-limited invitation or profile cannot attach as
-primary.
+primary. Observer attachment also requires an attached layout-owner primary;
+without one, initialization fails before allocating an observer or changing
+session state. The observer follows that exact source primary and disconnects
+when the source primary detaches.
 
 ### Understand host-scoped profiles and leases
 

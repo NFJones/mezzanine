@@ -39,8 +39,9 @@ truncate content.
 Project configuration under `.mezzanine/config.toml`, `.mezzanine/config.yaml`,
 `.mezzanine/config.yml`, or `.mezzanine/config.json` remains pending until the
 primary user explicitly trusts or rejects the project root. Inspect the overlay
-and applicable instructions first. The trust store records trusted, rejected,
-and revoked roots; inspect a root before changing its decision:
+and applicable instructions directly before deciding. The trust store records
+trusted, rejected, and revoked roots; inspect its persisted record before
+changing a decision:
 
 ```sh
 mez sandbox trust list
@@ -56,6 +57,22 @@ and `revoke` removes the prior trust decision from effect. The agent-shell
 pane. Trust decisions persist in the user-private trust store. Trusting an
 overlay does not itself grant host access, disable approval, or override a
 sandbox boundary.
+
+The current `mez sandbox trust inspect` CLI output is limited to the persisted
+trust record: canonical root, decision, Git marker, decision time, schema and
+trust-policy versions, and recorded VCS remote. It does **not** currently show
+the discovered overlay files, validation diagnostics, or capability-expansion
+summary required by the normative `ProjectTrustState` contract. Until that
+implementation gap is closed, inspect the overlay files themselves and use
+`mez config layers` to determine whether each layer is applied, pending, or
+ignored; do not treat the trust-record output as an overlay-content review.
+
+The direct `mez sandbox trust add`, `reject`, and `revoke` commands currently
+write the user-private trust store without proving that an attached primary
+client made the decision. This differs from the normative requirement that
+trust and rejection decisions require the primary client. Treat local account
+access to these commands as security-sensitive, and prefer the pane-local
+`/sandbox trust` decision flow when an attached primary is available.
 
 Even after trust, project overlays cannot change primary-user-only execution
 authority: approval policy or bypass, sandbox backend, read/write scopes,

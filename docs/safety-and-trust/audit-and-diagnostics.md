@@ -33,11 +33,14 @@ Audit records redact secrets by default: they must not contain raw credentials,
 provider tokens, private keys, or approval secrets. Sandboxed records identify
 `bubblewrap` or `seatbelt` and expose only bounded profile version, authority
 source, grant counts, effective network mode, and launch-plan digest. Approved
-fallback records retain the real origin backend but hash the proof or model
-rationale. Records exclude mount or host paths, launcher arguments, generated
-SBPL, command content, environment values, artifacts, lifecycle records, probe
-output, and raw assessment evidence. Configure the audit path and retention in
-the canonical configuration documentation.
+unsandboxed fallback records identify `policy-only` as the execution backend
+and record the original `bubblewrap` or `seatbelt` backend separately, together
+with the fallback classification, approving client, partial-effect warning,
+retry result, and a digest rather than raw proof or model rationale. Records
+exclude mount or host paths, launcher arguments, generated SBPL, command
+content, environment values, artifacts, lifecycle records, probe output, and
+raw assessment evidence. Configure the audit path and retention in the
+canonical configuration documentation.
 
 Set `audit.hash_chain = true` to cryptographically link consecutive records;
 this provides tamper evidence but is not proof against deletion or rollback.
