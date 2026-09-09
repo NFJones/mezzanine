@@ -29,7 +29,8 @@ mode. Use `just help` to list the available recipes. Keep generated output in
 ## Validate changes
 
 Use the narrowest check while developing, then run the complete required set
-before handoff:
+before handoff. The commands below are repository recipes; run them from the
+workspace root:
 
 ```sh
 just fmt
@@ -67,7 +68,9 @@ suite:
 Run platform-specific shell and PTY changes on both Linux and macOS when
 available. To reproduce the macOS CI shape, run the full test suite serially.
 
-The managed-shell wrapper builds each library test binary once with a separate
+The managed-shell recipe invokes
+`scripts/test-managed-shell-reliability.sh`. The wrapper builds each library
+test binary once with a separate
 900-second budget, then runs its harness with a 300-second budget per suite
 (600 seconds for the macOS large semantic-patch case). It prints phase names
 and budgets so compilation timeouts cannot be mistaken for hung tests. Override

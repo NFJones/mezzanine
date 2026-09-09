@@ -72,18 +72,29 @@ configuration sources and command expansions. Do not assume a key arrives when
 a terminal emulator or nested multiplexer intercepts it; configure the binding
 or outer environment deliberately.
 
-For each configurable action, an omitted direct field retains the prefix
+For each configurable direct action, an omitted field retains the prefix
 binding listed above. Setting that field to a chord replaces the matching
-prefix binding; setting it to `null` disables both paths. `list-keys` reports
-only the resulting effective bindings. A configured prefix command still
-shadows any remaining built-in action on the same suffix.
+prefix binding with the direct chord; setting it to `null` disables both paths.
+`keys.edit_prompt` is the exception: it configures only the suffix used after
+the prefix, defaults to `e`, and may also be disabled with `null`. `list-keys`
+reports only the resulting effective bindings. A configured prefix command
+still shadows any remaining built-in action on the same suffix.
 
 Run `list-key-presets` to choose from the interactive preset table. The
 `default` preset preserves the prefix-only defaults above. The `simple` preset
-keeps `Ctrl+A` as the prefix and replaces the corresponding prefix actions with
-direct Alt bindings for splits, windows, groups, and the agent shell plus
-Ctrl+Alt navigation bindings. Use
-`set-key-preset <name>` to apply and persist a built-in or configured preset.
+keeps `Ctrl+A` as the prefix and replaces 13 corresponding prefix actions:
+
+| Direct binding | Action |
+| --- | --- |
+| `Alt+\\` / `Alt+-` | Split vertically / horizontally. |
+| `Alt+=` / `Alt+Shift+=` | Create a window / window group. |
+| `Alt+]` | Toggle the agent shell. |
+| `Ctrl+Alt+Arrow` | Focus a pane in that direction. |
+| `Ctrl+Alt+PageUp` / `Ctrl+Alt+PageDown` | Focus the previous / next window. |
+| `Ctrl+Alt+Shift+PageUp` / `Ctrl+Alt+Shift+PageDown` | Focus the previous / next window group. |
+
+Use `set-key-preset <name>` to apply and persist a built-in or configured
+preset.
 
 ## Related pages
 

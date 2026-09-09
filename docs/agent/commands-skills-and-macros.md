@@ -75,7 +75,9 @@ for its stopping rules and conversation modes.
 only one memory's content in the configured external editor. `/issue` manages
 runtime-owned project issues rather than an external tracker, and `/issue edit
 <id> body|notes` externally edits only the selected prose field. Structured
-metadata remains in typed commands. Durable edits use full-record
+metadata remains in typed commands. `/init` creates the default `AGENTS.md`
+scaffold only when it is absent; it does not overwrite an existing instruction
+file. Durable edits use full-record
 compare-and-swap checks, so concurrent changes or deletion retain the private
 draft for `/editor-recovery` instead of overwriting the record. External editors
 launched from commands or retained record browsers run directly on the Mez

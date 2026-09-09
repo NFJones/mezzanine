@@ -13,15 +13,17 @@ complete a small reviewable task.
 
 ## Initialize configuration and start
 
-Optionally create and inspect the baseline configuration, then start Mezzanine
-from the project you want to work in. Starting a session also creates the
-default configuration when none exists:
+Start Mezzanine from the project you want to work in. Starting a session also
+creates the default configuration when none exists:
 
 ```sh
-mez config init
 cd /path/to/repository
 mez new
 ```
+
+To create and inspect the baseline configuration before starting a session,
+run `mez config init` first. It creates the default user configuration only
+when it is missing.
 
 `mez new` always creates a session. Bare `mez` first attaches to a session
 that accepts a primary client, then creates one only when none is available.

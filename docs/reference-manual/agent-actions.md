@@ -14,9 +14,11 @@ Read [Agent overview](../agent/overview.md) and [Approvals and review](../safety
 An agent response is a validated `maap/1` batch with a concise rationale and
 one or more actions. Mezzanine assigns turn and action identities, validates
 the configured static action set, independently classifies effects, and records
-a result for every accepted action: it may be blocked, denied, run, succeed,
-fail, time out, be cancelled, or be interrupted. Rejected batches and actions
-also receive results. Model-provided effect claims and bookkeeping identities
+a result for every syntactically identifiable action. A result can be
+`rejected`, `blocked`, `denied`, `running`, `succeeded`, `failed`, `cancelled`,
+`timed_out`, or `interrupted`. A batch-level parse or schema failure that
+prevents Mezzanine from identifying an action is recorded as a malformed
+response error instead. Model-provided effect claims and bookkeeping identities
 are not authoritative.
 
 `say` presents display-only text as `progress`, `final`, or `blocked`; text
@@ -39,11 +41,12 @@ terminal state remain outside ordinary model context.
 | `memory_search`, `memory_store` | Retrieve or retain runtime-owned durable memory when enabled. | Records must be safe, durable, and non-secret. |
 | `issue_add`, `issue_update`, `issue_query`, `issue_delete` | Manage runtime-owned local issues for the active project. | Issue records remain subject to the configured action set and project-store rules. |
 
-The provider schema is a request-independent catalog of every valid action.
-`agents.enabled_actions` determines the static subset accepted on ordinary
-turns and defaults to every executable action. The model uses enabled actions
-directly; integration availability, permissions, and action arguments remain
-runtime-validated and failures return explicit action results.
+The provider schema is request-independent and contains exactly the executable
+subset selected by `agents.enabled_actions`; that setting defaults to every
+executable action. Capability negotiation and model-selected skill actions are
+not part of the ordinary provider schema. The model uses enabled actions
+directly; live integration availability, permissions, and action arguments
+remain runtime-validated and failures return explicit action results.
 
 ## Local mutation and recovery
 

@@ -31,7 +31,9 @@ Use `mcp_server_search` when the relevant configured server is not already
 known, or mention `@<server-id>` to create a durable reference to a known
 server. Use `mcp_server_get` for a referencable server before `mcp_call`; it
 returns the complete safe tool and argument contract and records that retrieval
-in conversation chronology. Unknown, disabled, ambiguous, or unavailable
+in conversation chronology. Call only a server and tool advertised by the
+current action surface and retrieved contract; do not infer tools or argument
+shapes from a server name. Unknown, disabled, ambiguous, or unavailable
 identifiers expose no substitute tools.
 
 Configured always-exposed servers contribute only compact directory records to

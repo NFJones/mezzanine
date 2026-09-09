@@ -32,6 +32,8 @@ transient presentation.
 
 ## Transport, framing, and initialization
 
+### Base transports and Iroh event streams
+
 The default transport is a user-private Unix-domain socket. TCP is optional,
 loopback-only by default, and remote TCP is disabled unless explicitly
 configured. Unix clients should use peer credentials and the private socket
@@ -170,6 +172,8 @@ is published to service supervision. This response fence is drop-safe: write
 failure, transport loss, or task cancellation still releases teardown rather
 than leaving the session services alive indefinitely.
 
+### Iroh compression
+
 Schema v71 defines two compressed application-framing ALPNs:
 `mezzanine/transport/2/zstd` and
 `mezzanine/transport/2/lz4`. This is not Iroh or QUIC compression. On either
@@ -212,6 +216,8 @@ insufficient data. Decode, limit, unsupported-codec, and malformed-envelope
 failures remain connection-local and diagnostics must identify only the failure
 class, never credentials, topology, payload bytes, or payload-derived samples.
 
+### Iroh authentication and connection lifecycle
+
 An Iroh endpoint ID proves possession of a transport key only; it grants no
 Mezzanine authority by itself. Before any other method, the peer must call
 `control/initialize` for role `primary` or `observer` with either a single-endpoint-use
@@ -253,6 +259,8 @@ after a write, read, timeout, reset, or connection failure that leaves its
 outcome ambiguous, the client must fail visibly, close the channel, and require
 reattach without retrying buffered input.
 
+### Control framing and initialization
+
 Each stream frame is UTF-8 JSON preceded by this ASCII header block. The
 decimal `Content-Length` is the JSON body's octet length.
 
@@ -275,7 +283,7 @@ Unless an outer transport has already authenticated and negotiated a version,
 the first request is `control/initialize`.
 
 ```json
-{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"example-ui","client_version":"1.0.0","requested_version":2,"requested_role":"primary","client":{"name":"example-ui","terminal":{"columns":120,"rows":40,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}
+{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"example-ui","client_version":"1.0.0","requested_version":2,"requested_role":"primary","client":{"name":"example-ui","requested_role":"primary","interactive":true,"terminal":{"columns":120,"rows":40,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}
 ```
 
 The implemented direct-session endpoint accepts `mezctl/2`. The persistent

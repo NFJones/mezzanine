@@ -39,7 +39,7 @@ Protocol-defined extension data belongs under an `extensions` object unless the
 owning contract says otherwise. Receivers must ignore extension keys they do
 not understand. New message types use a reverse-DNS or URI-like namespace.
 
-Unknown required fields, malformed envelopes, unsupported versions, and
+Missing required fields, malformed envelopes, unsupported versions, and
 out-of-range limits are errors. A client should use the negotiated capability
 set rather than probing unsupported mutations.
 

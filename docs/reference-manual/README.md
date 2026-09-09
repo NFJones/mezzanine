@@ -15,11 +15,16 @@ before using this reference.
 
 This section owns the following reference material:
 
-- [CLI reference](cli.md)
-- [Key bindings](key-bindings.md)
-- [Terminal commands](terminal-commands.md)
-- [Agent actions](agent-actions.md)
-- [Terminal compatibility](terminal-compatibility.md)
+- [CLI reference](cli.md): process invocation, session administration,
+  snapshots, configuration, and remote targeting.
+- [Key bindings](key-bindings.md): default prefix controls, prompt input, and
+  key presets.
+- [Terminal commands](terminal-commands.md): the in-session `:` command
+  language and canonical command inventory.
+- [Agent actions](agent-actions.md): executable `maap/1` action families,
+  results, approvals, and recovery boundaries.
+- [Terminal compatibility](terminal-compatibility.md): pane-facing terminal
+  profiles, supported modes, and diagnostic boundaries.
 - [Protocol reference](protocols/README.md): implementer summaries for
   [`mezctl/2` and `mezctl/3` JSON-RPC](protocols/control-json-rpc.md),
   [`maap/1`](protocols/maap.md), and [`mmp/1`](protocols/mmp.md), with links to

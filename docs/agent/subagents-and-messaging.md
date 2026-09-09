@@ -21,8 +21,9 @@ through local messaging and remains responsible for integrating the outcome.
 Use the `explorer` role for read-heavy investigation and `worker` for bounded
 implementation. A cooperation mode constrains the intended work: `explore-only`
 does not modify state; `owned-write`, `coordinated-write`, and `serial-write`
-support scoped change coordination; `unrestricted` requires explicit authority.
-Child read and write authority inherits from, and can only narrow, the parent.
+support scoped change coordination; `unrestricted` requires explicit user
+approval unless the session policy already permits it. Child read and write
+authority inherits from, and can only narrow, the parent's effective authority.
 
 The default join behavior waits for a child result before the parent continues;
 detached work can report later through local messaging. Approval requests from

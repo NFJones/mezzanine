@@ -75,8 +75,10 @@ to the shared `extensions`-object convention.
 | `task_status` | Report task state. |
 | `task_result` | Report task completion. |
 
-Unknown message types, including otherwise well-formed namespaced types, are
-rejected by the current endpoint.
+Types outside the baseline list must use a reverse-DNS or URI-like namespace.
+The current endpoint recognizes that namespace grammar during validation but
+does not dispatch extension types, so it rejects them as unsupported endpoint
+operations. Namespace syntax alone does not advertise extension support.
 
 ## Delivery, expiry, and errors
 
@@ -86,9 +88,11 @@ channel. Explicit receive returns a `deliver` object shaped as
 An `ack` advances the durable subscription cursor through the supplied
 sequence. The current automatic fanout path, however, advances its server-side
 cursor after writing a delivery frame rather than after a recipient `ack`.
-Therefore it is connection-oriented best effort, not an end-to-end
-at-least-once guarantee: a disconnect after the server write but before
-application consumption can lose that unconsumed delivery.
+This is a known implementation conformance gap against the normative
+at-least-once requirement in `SPEC.md`: automatic fanout is currently
+connection-oriented best effort. A disconnect after the server write but
+before application consumption can lose that unconsumed delivery. Integrators
+must not treat the current automatic fanout path as an end-to-end receipt.
 
 The sender receives `ack` when a message is accepted for delivery. Body-level
 failures use

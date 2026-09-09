@@ -29,14 +29,16 @@ Structured providers carry one complete batch through their native tool or
 schema mechanism. Fallback text uses exactly one `mezzanine-action-json` fenced
 JSON block. In both cases the same validation, policy, audit, and result rules
 apply. The live provider schema exposes only the current allowed action
-surface; an absent action family must be requested, not emulated.
+surface. An absent action type must not be emitted or emulated. When
+`request_capability` is itself exposed, use it to request a coarse action
+family; otherwise the current surface is final for that response.
 
 ## Action catalog
 
 | Action | Required fields | Contract boundary |
 | --- | --- | --- |
 | `say` | `status`, `content_type`, `text` | Display-only `progress`, `final`, or `blocked` text. Supported plain-text, Markdown, and diff source is rendered while streaming, then validated and promoted in place without truncation or final replay. Commands and patches in text do not execute. |
-| `request_capability` | `capability`, `reason` | Requests a coarse runtime action family; it is not a user permission request. |
+| `request_capability` | `capability`, `reason` | When exposed, requests a coarse runtime action family; it is not a user permission request and does not itself grant the family. |
 | `shell_command` | `summary`, `command` | Sends exact local shell input through the effective native or pane shell transport. Optional `interactive`, `stateful`, and `timeout_ms` refine execution. |
 | `apply_patch` | `patch` | The only semantic file-content mutation action; payload uses Mezzanine `*** Begin Patch` format. |
 | `web_search` | `query` | Runtime-owned web search, only for user-requested current web information. |

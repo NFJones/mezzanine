@@ -17,11 +17,12 @@ The command prompt parses Mezzanine commands; it never sends entered text to
 the focused pane shell. Commands accept shell-like quoted and escaped
 arguments. Separate multiple commands with an unquoted semicolon.
 
-Use `help` in the prompt for the effective command catalog and argument
-syntax. Tab and Shift+Tab offer enumerable completions. Run `list-keys` or
-press `Ctrl+A ?` to inspect the active bindings and their configuration
-sources. The live prompt is authoritative because configuration and runtime
-state can affect what is available.
+Use `help` in the prompt for the baseline command catalog, brief descriptions,
+and the effective key table. It is a catalog, not per-command argument help.
+Tab and Shift+Tab offer enumerable command and argument completions. Run
+`list-keys` or press `Ctrl+A ?` to inspect the active bindings and their
+configuration sources. Runtime- or store-backed commands can still reject an
+invocation when required state or authority is unavailable.
 
 ## Common command groups
 
@@ -36,13 +37,14 @@ state can affect what is available.
 ## Baseline command inventory
 
 The baseline registry contains the following canonical commands. Live `help`
-remains authoritative for arguments, aliases, configured availability, and
-runtime requirements.
+shows this catalog with brief descriptions and effective bindings; prompt
+completion, command results, and approval prompts expose invocation-specific
+arguments and runtime requirements.
 
 - **Help and configuration:** `help`, `add-options`, `show-options`,
   `set-option`, `source-file`, `refresh-client`, `bind-key`, `unbind-key`,
-  `list-keys`, `list-key-presets`, `set-key-preset`, `list-themes`, and
-  `set-theme`.
+  `list-keys`, `list-key-presets`, `set-key-preset`, `list-themes`, `set-theme`,
+  and `zen`.
 - **Groups and windows:** `new-group`, `rename-group`, `kill-group`,
   `select-group`, `next-group`, `previous-group`, `last-group`, `list-groups`,
   `choose-group`, `new-window`, `rename-window`, `kill-window`,
@@ -51,8 +53,8 @@ runtime requirements.
 - **Panes and presentation:** `split-window`, `kill-pane`, `select-pane`,
   `resize-pane`, `next-pane`, `previous-pane`, `last-pane`, `rotate-pane`,
   `synchronize-panes`, `zoom-pane`, `swap-pane`, `break-pane`, `join-pane`,
-  `display-panes`, `pane-settings`, `show-pane-status`, `list-panes`, `rename-pane`, `capture-pane`, `pipe-pane`,
-  and `mark-pane-ready`.
+  `display-panes`, `pane-settings`, `list-panes`, `rename-pane`, `capture-pane`,
+  `pipe-pane`, and `mark-pane-ready`.
 - **Sessions and clients:** `list-clients`, `detach-client`, `attach-session`,
   `list-sessions`, `rename-session`, `kill-session`, `save-layout`,
   `load-layout`, and `exit`.
@@ -63,10 +65,10 @@ runtime requirements.
 - **Agent and diagnostics:** `agent-shell`, `show-messages`, `show-metrics`,
   `show-iroh-status`, and `show-pane-status`.
 
-Some commands require an active runtime, control endpoint, or primary-client
-authority. Use `help <command>` when available and review the resulting prompt
-or approval rather than assuming a command affects a detached or observer
-client.
+Some commands require an active runtime, control endpoint, configuration store,
+or primary-client authority. Review completion hints, command output, and any
+resulting prompt or approval rather than assuming a command affects a detached
+or observer client.
 
 `add-options` displays the schema-owned reference for supported live
 configuration paths, including purpose, type, and constrained value or format

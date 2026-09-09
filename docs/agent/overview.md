@@ -29,10 +29,12 @@ guidance rather than assuming a command was sent safely.
 ## Review visible actions
 
 The agent uses visible actions for local reads, shell commands, patches, and
-other local interaction. It can request capabilities and then receive an
-action surface appropriate to the task. Results become bounded conversation
-evidence, allowing the agent to repair recoverable failures without repeating
-already successful work.
+other local interaction. The runtime provides the enabled action surface for a
+request. That configured executable catalog remains stable across ordinary
+turns until configuration changes; runtime validation still decides integration
+availability, permissions, and arguments when an action executes. Results
+become bounded conversation evidence, allowing the agent to repair recoverable
+failures without repeating already successful work.
 
 Permission decisions remain runtime-owned. A model cannot grant itself host
 access, filesystem authority, credentials, or a hidden local executor. Review

@@ -15,7 +15,18 @@ this page as a behavioral contract.
 
 The Rust 2024 workspace has five packages. Dependency direction flows upward:
 the product package composes the four lower crates, while lower crates do not
-depend on the product package.
+depend on the product package. The current manifest graph is:
+
+```text
+mezzanine -> mez-agent -> mez-core
+          -> mez-mux -> mez-terminal -> mez-core
+          -> mez-core
+```
+
+`mez-agent` and `mez-terminal` each depend only on `mez-core`; `mez-mux`
+depends on `mez-core` and `mez-terminal`; `mezzanine` depends on all four lower
+crates. Keep new dependencies consistent with that layering rather than
+introducing a reverse edge.
 
 | Package | Owns | Boundary |
 | --- | --- | --- |

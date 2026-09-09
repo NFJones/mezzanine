@@ -34,9 +34,10 @@ projections from very old saved presentation records are replayed unchanged
 and are not rewrapped to this configured cap; they may wrap at the physical
 pane width because rewriting terminal-control bytes is unsafe.
 
-Type a request and press Enter. `Ctrl+V` pastes host clipboard text into the
-editable prompt while preserving multiline text. Prompt completion supports
-slash commands, `$` skills, `#` macros, and `@` MCP server names where enabled.
+Type a request and press Enter. Use `Ctrl+J` to insert a literal newline
+without submitting it. `Ctrl+V` pastes host clipboard text into the editable
+prompt while preserving multiline text. Prompt completion supports slash
+commands, `$` skills, `#` macros, and `@` MCP server names where enabled.
 The prompt remains in this in-pane entry area by default. Press `Ctrl+A e` (or
 the active key preset's `edit_prompt` binding) to request external editing;
 closing a successful editor returns the text to the same prompt and never

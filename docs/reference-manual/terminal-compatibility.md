@@ -15,9 +15,13 @@ diagnostics.
 The default `xterm-compatible` profile is a bounded implemented subset, not a
 claim of complete xterm emulation. It handles the documented C0, ESC, CSI, OSC,
 SGR, cursor, alternate-screen, application cursor/keypad, bracketed-paste,
-focus, mouse, title, clipboard, and save/restore behaviors. Unimplemented
-capabilities, including DCS controls unless documented otherwise, are marked
-unsupported rather than assumed to work.
+focus, mouse, title, clipboard, and save/restore behaviors. Focus reporting is
+host-dependent, and clipboard handling is policy-gated. Standard primary
+device-attributes queries (`CSI c` and `CSI 0 c`) receive the conservative
+VT100-with-no-options reply `CSI ? 1 ; 0 c`; unsupported query variants are
+ignored. General DCS controls and other unimplemented capabilities remain
+unsupported even though the two synchronized-output markers below are
+recognized.
 
 ### Synchronized output
 
@@ -55,7 +59,16 @@ Pane alternate screens are separate from normal history. Full-screen programs
 can remain visible and explicitly captured, but their rows are not injected
 into normal scrollback or default agent context. Host bracketed paste, mouse,
 focus, application cursor, and keypad behavior follow the active pane mode
-where supported.
+where supported. While a pane application has bracketed paste enabled, a host
+paste payload is forwarded opaquely across terminal-read chunks: bytes that
+look like a Mez prefix or mouse report are not interpreted as multiplexer
+input.
+
+When `terminal.enhanced_keyboard_reporting = true`, Mez-owned readline prompts
+on a primary client temporarily push Kitty keyboard flags 1 and 4. Mezzanine
+pops exactly its own stack level when the prompt relinquishes input, the option
+is disabled, presentation is restored, or the client detaches. This mode is not
+enabled for observers or ordinary pane input.
 
 Local Unix-socket and Iroh clients use the same server-owned external-editor
 subsystem. Each editor runs on a dedicated PTY independent of the pane PTY.
