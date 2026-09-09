@@ -265,12 +265,17 @@ impl SpawnedShellExecutor {
         &self,
         transaction: &ShellTransaction,
     ) -> Result<MaterializedShellLaunch> {
+        static NEXT_LAUNCH_DIRECTORY_ID: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let directory =
-            std::env::temp_dir().join(format!("mez-spawned-{}-{unique}", std::process::id()));
+        let sequence = NEXT_LAUNCH_DIRECTORY_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "mez-spawned-{}-{unique}-{sequence}",
+            std::process::id()
+        ));
         let mut directory_builder = fs::DirBuilder::new();
         directory_builder.mode(0o700);
         directory_builder.create(&directory).map_err(|error| {
