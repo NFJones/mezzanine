@@ -6415,8 +6415,16 @@ per-turn budget. That budget MUST default to
 `agents.action_failure_retry_limit`. Moved documents, 404s, alternate URLs,
 repeated URL fetches, repeated file reads, and repeated shell commands can all
 be legitimate task behavior; the runtime MUST NOT reject a repeat solely
-because an identical action already occurred earlier in the turn. The model
-MUST NOT repeat the same failed batch beyond the bounded correction budget.
+because an identical action already occurred earlier in the turn. The runtime
+MAY conservatively identify a sustained sequence of semantically equivalent
+successful `web_search` actions with no intervening result consumption,
+material source or scope change, direct fetch, or other concrete task progress.
+It SHOULD first guide the model to process existing results or change strategy,
+and MAY then return a model-correctable `network_action_no_progress` failure
+before the sequence exhausts the turn interaction or time budget. A direct URL
+fetch, materially different query, non-search task action, or actionable failed
+network request MUST reset that no-progress sequence. The model MUST NOT repeat
+the same failed batch beyond the bounded correction budget.
 Policy denials, user cancellations, approval rejections, and interrupted work
 MUST NOT be automatically retried through this failure-feedback path.
 

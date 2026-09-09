@@ -325,6 +325,11 @@ impl RuntimeSessionService {
                 runtime_loop_guard_failure_label("network_action_limit_exceeded")
                     .unwrap_or("network action"),
             ),
+            (
+                "network_action_no_progress",
+                runtime_loop_guard_failure_label("network_action_no_progress")
+                    .unwrap_or("network search progress"),
+            ),
         ] {
             let matching_results = execution
                 .action_results
@@ -399,6 +404,11 @@ impl RuntimeSessionService {
                 "network_action_limit_exceeded",
                 runtime_loop_guard_failure_label("network_action_limit_exceeded")
                     .unwrap_or("network action"),
+            ),
+            (
+                "network_action_no_progress",
+                runtime_loop_guard_failure_label("network_action_no_progress")
+                    .unwrap_or("network search progress"),
             ),
         ] {
             let matching_results = execution

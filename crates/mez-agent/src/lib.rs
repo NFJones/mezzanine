@@ -558,8 +558,9 @@ pub use turn::{
     AgentTurnTrigger, validate_turn_required,
 };
 pub use turn_activity::{
-    AgentNetworkActionHistory, AgentShellDispatchHistory, AgentTurnSteering,
-    agent_turn_steering_context_content, shell_command_looks_like_validation,
+    AgentNetworkActionHistory, AgentNetworkActionKind, AgentNetworkActionRecord,
+    AgentShellDispatchHistory, AgentTurnSteering, agent_turn_steering_context_content,
+    shell_command_looks_like_validation,
 };
 pub use turn_ledger::{AgentTurnLedger, AgentTurnRecord};
 pub use turn_runner::{

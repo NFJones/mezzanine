@@ -334,7 +334,7 @@ fn maap_web_search_action_schema() -> serde_json::Value {
         "web_search",
         [described_string_property(
             "query",
-            "Use only when the user asks for web search or current external information; not for local filesystem work or random/test/generated local content.",
+            "Use only when the user asks for web search or current external information; not for local filesystem work or random/test/generated local content. Inspect and use returned results before searching again. Do not repeatedly paraphrase an unproductive query; fetch a selected result, materially change source or scope, proceed with existing evidence, or report a bounded blocker.",
         )],
         &["query"],
     )
@@ -730,7 +730,7 @@ fn maap_spawn_agent_action_schema() -> serde_json::Value {
                 serde_json::json!({
                     "type": ["string", "null"],
                     "enum": ["fork", "new", null],
-                    "description": "Optional child conversation mode. Use fork only when the delegated task needs a bounded snapshot of parent chronology; use new for an isolated self-contained task. Use null or omit it to preserve the current isolated new-session behavior. Include task-critical facts in task_prompt in either mode."
+                    "description": "Optional child conversation mode. Prefer new for an isolated self-contained task. Use fork only when the child truly requires a bounded snapshot of parent chronology that cannot be supplied in task_prompt. Use null or omit it to preserve the current isolated new-session behavior. Include task-critical facts in task_prompt in either mode."
                 }),
             ),
             (
@@ -738,7 +738,7 @@ fn maap_spawn_agent_action_schema() -> serde_json::Value {
                 serde_json::json!({
                     "type": ["string", "null"],
                     "enum": ["small", "medium", "large", null],
-                    "description": "Optional initial child model size. Provide it together with reasoning_effort to override automatic routing for the initial child turn only. Choose the smallest size adequate for task scope, uncertainty, blast radius, and validation burden; use validation to detect and correct an inadequate choice."
+                    "description": "Optional initial child model size. Provide it together with reasoning_effort to override automatic routing for the initial child turn only. Bias toward a smaller size than your first estimate, choosing the smallest size adequate for task scope, uncertainty, blast radius, and validation burden; use validation to detect and correct an inadequate choice."
                 }),
             ),
             (
@@ -1006,6 +1006,12 @@ mod tests {
                 .as_array()
                 .is_some_and(|required| required.contains(&serde_json::json!("session")))
         );
+        assert!(
+            spawn["properties"]["session"]["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("Prefer new")
+                    && description.contains("truly requires"))
+        );
     }
 
     /// Verifies spawned-child sizing guidance favors the smallest adequate
@@ -1025,7 +1031,9 @@ mod tests {
         assert!(
             spawn["properties"]["size"]["description"]
                 .as_str()
-                .is_some_and(|description| description.contains("smallest size adequate"))
+                .is_some_and(|description| description
+                    .contains("smaller size than your first estimate")
+                    && description.contains("smallest size adequate"))
         );
         assert!(
             spawn["properties"]["reasoning_effort"]["description"]

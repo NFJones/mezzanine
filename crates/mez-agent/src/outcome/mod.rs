@@ -577,6 +577,7 @@ pub fn runtime_action_result_is_feedback_candidate(result: &ActionResult) -> boo
             | "mcp_tool_error"
             | "network_request_failed"
             | "network_http_error"
+            | "network_action_no_progress"
             | "unsupported_url_scheme"
             | "config_change_failed"
             | "invalid_message_payload"
@@ -811,6 +812,7 @@ pub fn runtime_loop_guard_failure_label(code: &str) -> Option<&'static str> {
     match code {
         "shell_dispatch_limit_exceeded" => Some("shell dispatch"),
         "network_action_limit_exceeded" => Some("network action"),
+        "network_action_no_progress" => Some("network search progress"),
         _ => None,
     }
 }

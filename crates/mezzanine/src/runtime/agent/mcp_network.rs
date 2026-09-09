@@ -482,7 +482,7 @@ impl RuntimeSessionService {
                     })?;
                     return Ok(None);
                 }
-                self.record_network_action_history(&turn.turn_id, &plan.policy_command);
+                self.record_network_action_history(&turn.turn_id, &action, &plan.policy_command);
                 None
             }
             _ => {
@@ -568,7 +568,7 @@ impl RuntimeSessionService {
         let Some(result_index) = result_index else {
             return Ok(false);
         };
-        let result = match outcome.result {
+        let mut result = match outcome.result {
             Ok(result) => result,
             Err(error) => {
                 let error_code = if matches!(&action.payload, AgentActionPayload::McpCall { .. }) {
@@ -585,6 +585,7 @@ impl RuntimeSessionService {
                 )?
             }
         };
+        self.append_network_action_progress_guidance(&turn.turn_id, &action, &mut result);
         if matches!(&action.payload, AgentActionPayload::McpCall { .. }) {
             self.append_approved_mcp_action_audit(
                 &turn,
@@ -967,6 +968,11 @@ impl RuntimeSessionService {
                         &action,
                         &execution.action_results[index],
                     )?;
+                    self.append_network_action_progress_guidance(
+                        &turn.turn_id,
+                        &action,
+                        &mut execution.action_results[index],
+                    );
                     preexecuted = preexecuted.saturating_add(1);
                 }
                 continue;
@@ -1023,9 +1029,10 @@ impl RuntimeSessionService {
                 ),
             )?;
             let transport = ReqwestProviderHttpTransport;
-            self.record_network_action_history(&turn.turn_id, &request_key);
-            let result =
+            self.record_network_action_history(&turn.turn_id, &action, &request_key);
+            let mut result =
                 execute_network_action_with_transport_async(turn, &action, &transport).await?;
+            self.append_network_action_progress_guidance(&turn.turn_id, &action, &mut result);
             if !result.is_error && self.agent_verbose_enabled(&turn.pane_id) {
                 self.append_agent_action_result_text_to_terminal_buffer(
                     &turn.pane_id,
@@ -1094,7 +1101,7 @@ impl RuntimeSessionService {
                 ),
             )?;
         }
-        self.record_network_action_history(&turn.turn_id, &plan.policy_command);
+        self.record_network_action_history(&turn.turn_id, action, &plan.policy_command);
         if !result.is_error && self.agent_verbose_enabled(&turn.pane_id) {
             self.append_agent_action_result_text_to_terminal_buffer(
                 &turn.pane_id,

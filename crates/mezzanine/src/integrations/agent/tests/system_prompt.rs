@@ -46,6 +46,8 @@ fn system_prompt_keeps_critical_behavioral_invariants() {
     for invariant in [
         "The provider action schema is static",
         "Use enabled actions directly",
+        "inspect and use its result before choosing another lookup",
+        "Do not consume a turn with paraphrased searches or equivalent reads",
         "do not invent state",
         "claim completion, root cause, validation, or file mutation only when current evidence proves it",
         "5-10 exact old/context lines",
@@ -59,6 +61,9 @@ fn system_prompt_keeps_critical_behavioral_invariants() {
         "Inline ```<syntax> code and ```mermaid diagrams are appropriate when useful",
         "do not add code or diagrams gratuitously",
         "reuse and extend existing abstractions when they fit",
+        "do not spawn subagents unless the user asks or tells you to delegate",
+        "Prefer a new isolated session",
+        "Bias the initial child selection toward a smaller model than your first estimate",
     ] {
         assert!(prompt.contains(invariant), "missing invariant: {invariant}");
     }
@@ -81,7 +86,7 @@ fn system_prompt_keeps_critical_behavioral_invariants() {
 fn system_prompt_keeps_mcp_awareness_abstract() {
     let prompt = build_agent_system_prompt(&AgentPromptProfile::for_model("test-model")).unwrap();
 
-    assert!(prompt.contains("Mezzanine pane agent profile default v32, model test-model"));
+    assert!(prompt.contains("Mezzanine pane agent profile default v33, model test-model"));
     assert!(prompt.contains("Use `mcp_server_search` to discover configured MCP servers"));
     assert!(!prompt.contains("Write scopes:"));
     assert!(!prompt.contains("Available MCP tool:"));

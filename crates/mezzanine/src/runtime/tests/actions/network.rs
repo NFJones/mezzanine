@@ -288,3 +288,116 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
     );
     service.terminate_all_pane_processes().unwrap();
 }
+
+/// Verifies ordinary research remains available while a fourth equivalent
+/// search is converted into bounded model-correctable no-progress evidence.
+#[test]
+fn runtime_equivalent_web_searches_receive_guidance_then_fail_closed() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-network-no-progress","input":"research AWS Bedrock docs"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.remove_pending_agent_provider_task("turn-1");
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-1")
+        .cloned()
+        .unwrap();
+    let queries = [
+        "AWS Bedrock model access official documentation",
+        "Amazon Bedrock model access docs",
+        "Bedrock model access documentation",
+    ];
+    let mut third_action = None;
+    for (index, query) in queries.iter().enumerate() {
+        let action = mez_agent::AgentAction {
+            id: format!("search-{}", index + 1),
+            payload: mez_agent::AgentActionPayload::WebSearch {
+                query: (*query).to_string(),
+                domains: Vec::new(),
+                recency_days: None,
+                max_results: None,
+            },
+        };
+        assert!(
+            service
+                .evaluate_and_record_network_action_for_tests(&turn, &action, query)
+                .unwrap()
+                .is_none()
+        );
+        third_action = Some(action);
+    }
+    let third_action = third_action.unwrap();
+    let mut third_result = mez_agent::ActionResult::succeeded(
+        &turn,
+        &third_action,
+        vec!["three useful search results".to_string()],
+        None,
+    );
+    service.append_network_action_progress_guidance_for_tests(
+        &turn.turn_id,
+        &third_action,
+        &mut third_result,
+    );
+    assert!(
+        third_result
+            .content_text()
+            .contains("Do not issue another paraphrased search")
+    );
+
+    let fourth = mez_agent::AgentAction {
+        id: "search-4".to_string(),
+        payload: mez_agent::AgentActionPayload::WebSearch {
+            query: "official docs for Amazon Bedrock model access".to_string(),
+            domains: Vec::new(),
+            recency_days: None,
+            max_results: None,
+        },
+    };
+    let guarded = service
+        .evaluate_and_record_network_action_for_tests(&turn, &fourth, "request-4")
+        .unwrap()
+        .expect("fourth equivalent search should be rejected");
+    assert_eq!(guarded.status, ActionStatus::Failed);
+    assert_eq!(
+        guarded.error.as_ref().map(|error| error.code.as_str()),
+        Some("network_action_no_progress")
+    );
+    assert!(mez_agent::outcome::runtime_action_result_is_feedback_candidate(&guarded));
+
+    let fetch = mez_agent::AgentAction {
+        id: "fetch-1".to_string(),
+        payload: mez_agent::AgentActionPayload::FetchUrl {
+            url: "https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html"
+                .to_string(),
+            format: None,
+            max_bytes: None,
+        },
+    };
+    assert!(
+        service
+            .evaluate_and_record_network_action_for_tests(&turn, &fetch, "fetch-request")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        service
+            .evaluate_and_record_network_action_for_tests(&turn, &fourth, "request-after-fetch")
+            .unwrap()
+            .is_none()
+    );
+    service.terminate_all_pane_processes().unwrap();
+}

@@ -237,6 +237,17 @@ impl RuntimeSessionService {
         turn_id: &str,
         results: &[ActionResult],
     ) -> Result<usize> {
+        let made_progress_beyond_search = results.iter().any(|result| {
+            if result.action_type != "web_search" {
+                return result.is_terminal();
+            }
+            result.is_error
+                && result.error.as_ref().map(|error| error.code.as_str())
+                    != Some("network_action_no_progress")
+        });
+        if made_progress_beyond_search {
+            self.mark_network_action_progress(turn_id);
+        }
         let action_ownership = self
             .agent
             .agent_execution_groups_by_turn

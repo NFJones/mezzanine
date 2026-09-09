@@ -31,8 +31,12 @@ use mez_agent::semantic_patch_planning::{
 };
 use mez_agent::shell_observation::latest_agent_shell_transaction_output_lines;
 use mez_agent::{
-    LocalExecutionOutput, local_execution_output_to_action_result, postprocess_local_shell_output,
+    ActionContentBlock, LocalExecutionOutput, local_execution_output_to_action_result,
+    postprocess_local_shell_output,
 };
+
+const ALLOWED_EQUIVALENT_WEB_SEARCHES: usize = 3;
+const NETWORK_SEARCH_PROGRESS_GUIDANCE: &str = "Search results are already available. Process them now: fetch a selected URL, materially change source or scope, proceed with available evidence, choose another action path, or report a concrete blocker. Do not issue another paraphrased search.";
 
 /// Describes why an `apply_patch` snapshot cannot safely reach write planning.
 ///
@@ -898,24 +902,104 @@ impl RuntimeSessionService {
             .record_success(command.to_string());
     }
 
-    /// Keeps the network action dispatch boundary symmetrical with shell
-    /// actions without enforcing a count-based per-turn cap.
+    /// Stops sustained semantically equivalent search-only sequences before
+    /// they consume the complete turn interaction budget.
     pub(super) fn network_action_loop_guard_failure(
         &self,
-        _turn: &AgentTurnRecord,
-        _action: &AgentAction,
-        _request: &str,
+        turn: &AgentTurnRecord,
+        action: &AgentAction,
+        request: &str,
     ) -> Result<Option<ActionResult>> {
-        Ok(None)
+        let AgentActionPayload::WebSearch { query, domains, .. } = &action.payload else {
+            return Ok(None);
+        };
+        let history = self
+            .agent
+            .agent_turn_network_action_history
+            .get(&turn.turn_id)
+            .cloned()
+            .unwrap_or_default();
+        let equivalent_searches = history.equivalent_search_streak(query, domains);
+        if equivalent_searches < ALLOWED_EQUIVALENT_WEB_SEARCHES {
+            return Ok(None);
+        }
+        let message = "repeated equivalent web searches made no concrete progress; process existing results, fetch a selected URL, materially change source or scope, proceed with available evidence, or report a concrete blocker";
+        let mut result = ActionResult::failed(
+            turn,
+            action,
+            ActionStatus::Failed,
+            "network_action_no_progress",
+            message,
+        )
+        .map_err(|error| MezError::invalid_state(error.to_string()))?;
+        result.structured_content_json = Some(format!(
+            r#"{{"guard":"network_action_loop","reason":"equivalent_search_no_progress","request":"{}","equivalent_searches":{},"guidance":"{}"}}"#,
+            json_escape(request),
+            equivalent_searches,
+            json_escape(message)
+        ));
+        Ok(Some(result))
+    }
+
+    /// Adds one model-facing strategy-change instruction to the last allowed
+    /// successful search before the next equivalent lookup is rejected.
+    pub(super) fn append_network_action_progress_guidance(
+        &self,
+        turn_id: &str,
+        action: &AgentAction,
+        result: &mut ActionResult,
+    ) {
+        if result.status != ActionStatus::Succeeded {
+            return;
+        }
+        let AgentActionPayload::WebSearch { query, domains, .. } = &action.payload else {
+            return;
+        };
+        let equivalent_searches = self
+            .agent
+            .agent_turn_network_action_history
+            .get(turn_id)
+            .map(|history| history.equivalent_search_streak(query, domains))
+            .unwrap_or(0);
+        if equivalent_searches == ALLOWED_EQUIVALENT_WEB_SEARCHES {
+            result
+                .content
+                .push(ActionContentBlock::text(NETWORK_SEARCH_PROGRESS_GUIDANCE));
+        }
     }
 
     /// Records a runtime-owned network request for loop detection.
-    pub(super) fn record_network_action_history(&mut self, turn_id: &str, request: &str) {
-        self.agent
+    pub(super) fn record_network_action_history(
+        &mut self,
+        turn_id: &str,
+        action: &AgentAction,
+        request: &str,
+    ) {
+        let history = self
+            .agent
             .agent_turn_network_action_history
             .entry(turn_id.to_string())
-            .or_default()
-            .record(request.to_string());
+            .or_default();
+        match &action.payload {
+            AgentActionPayload::WebSearch { query, domains, .. } => {
+                history.record_web_search(request.to_string(), query, domains);
+            }
+            AgentActionPayload::FetchUrl { .. } => {
+                history.record_fetch_url(request.to_string());
+            }
+            _ => {}
+        }
+    }
+
+    /// Resets network no-progress detection after another concrete task action.
+    pub(super) fn mark_network_action_progress(&mut self, turn_id: &str) {
+        if let Some(history) = self
+            .agent
+            .agent_turn_network_action_history
+            .get_mut(turn_id)
+        {
+            history.mark_progress();
+        }
     }
 
     /// Runs the dispatch stored running shell actions operation for this subsystem.

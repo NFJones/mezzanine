@@ -3045,6 +3045,32 @@ impl RuntimeSessionService {
         &self.agent.agent_turn_network_action_history
     }
 
+    /// Exercises the network no-progress boundary without issuing HTTP in tests.
+    #[cfg(test)]
+    pub(crate) fn evaluate_and_record_network_action_for_tests(
+        &mut self,
+        turn: &AgentTurnRecord,
+        action: &AgentAction,
+        request: &str,
+    ) -> Result<Option<ActionResult>> {
+        let guarded = self.network_action_loop_guard_failure(turn, action, request)?;
+        if guarded.is_none() {
+            self.record_network_action_history(&turn.turn_id, action, request);
+        }
+        Ok(guarded)
+    }
+
+    /// Applies result guidance after a test action has entered network history.
+    #[cfg(test)]
+    pub(crate) fn append_network_action_progress_guidance_for_tests(
+        &self,
+        turn_id: &str,
+        action: &AgentAction,
+        result: &mut ActionResult,
+    ) {
+        self.append_network_action_progress_guidance(turn_id, action, result);
+    }
+
     /// Returns whether one conversation retains a provider request baseline.
     pub(crate) fn agent_conversation_has_provider_request_chain_for_tests(
         &self,

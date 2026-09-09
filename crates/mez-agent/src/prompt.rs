@@ -76,7 +76,7 @@ pub fn validate_agent_prompt_required(field: &str, value: &str) -> AgentPromptRe
 pub const AGENT_PROMPT_PROFILE_NAME: &str = "default";
 
 /// Current version of the default agent prompt profile.
-pub const AGENT_PROMPT_PROFILE_VERSION: u32 = 32;
+pub const AGENT_PROMPT_PROFILE_VERSION: u32 = 33;
 
 /// Model identity used to assemble one agent system prompt.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -266,7 +266,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(prompt.starts_with("1. Identity\nprofile default version 32 model test-model"));
+        assert!(prompt.starts_with("1. Identity\nprofile default version 33 model test-model"));
         assert!(prompt.contains("3. Repository Instructions\nrepository contract"));
         assert!(prompt.contains("Embedded active repository instruction contents:"));
         assert!(prompt.contains("first repository rule\n\nsecond rule"));
