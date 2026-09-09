@@ -36,6 +36,59 @@ const ACTION_PRESENTATION_PROGRESS_MAX_COMPONENTS_PER_ACTION: usize = 64;
 type RenderedProgressSection = (AgentTerminalPresentationStyle, Vec<RichTextLine>);
 
 impl RuntimeSessionService {
+    /// Routes native shell output to the same owner used by final settlement.
+    ///
+    /// Validate the executor identity before touching preview state. Shell tails
+    /// must never also occupy the executor-progress layer: composing both layers
+    /// at completion would permanently double their viewport displacement.
+    pub(crate) fn apply_native_shell_output_progress(
+        &mut self,
+        progress: &ActionPresentationProgress,
+    ) -> Result<bool> {
+        let Some((pane_id, _action)) = self.action_progress_live_target(progress)? else {
+            return Ok(false);
+        };
+        if progress.source.len() > ACTION_PRESENTATION_PROGRESS_MAX_SOURCE_BYTES {
+            return Ok(false);
+        }
+        let ActionPresentationExecutionIdentity::Attempt(marker) = &progress.execution else {
+            return Ok(false);
+        };
+        if self.agent_shell_view_enabled(&pane_id)
+            || !self.agent_shell_transaction_action_shows_live_output(
+                &progress.turn_id,
+                &progress.action_id,
+            )
+        {
+            return Ok(false);
+        }
+        self.ensure_current_agent_presentation_screen(&pane_id)?;
+        let (conversation_id, _) = self.agent_presentation_target(&pane_id)?;
+        let owner = crate::runtime::render::RuntimeAgentShellPreviewOwner {
+            turn_id: progress.turn_id.clone(),
+            action_id: progress.action_id.clone(),
+            marker: marker.clone(),
+        };
+        if let Some(preview) = self.presentation.agent_shell_output_previews.get(&pane_id)
+            && (preview.conversation_id != conversation_id
+                || self.agent_pane_screen_lineage(&pane_id, &conversation_id)
+                    != Some(preview.installed_lineage)
+                || preview.settled_owners.contains(&owner)
+                || preview
+                    .previews
+                    .get(&owner)
+                    .is_some_and(|source| progress.revision <= source.revision))
+        {
+            return Ok(false);
+        }
+        let lines = mez_agent::shell_observation::latest_agent_shell_transaction_output_lines(
+            &progress.source,
+            self.terminal_shell_output_preview_lines(),
+        );
+        self.update_agent_shell_output_preview(&pane_id, owner, progress.revision, &lines)?;
+        Ok(true)
+    }
+
     /// Applies one bounded cumulative executor progress snapshot.
     ///
     /// Acceptance requires an exact running turn/action and either the claimed

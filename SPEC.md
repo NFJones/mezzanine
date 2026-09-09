@@ -2407,7 +2407,12 @@ While a model-authored shell command is running and raw shell output is hidden,
 Mezzanine SHOULD render the latest non-empty cleaned command-output lines as a
 transient preview block immediately below the command preview. The preview block
 MUST be bounded by `terminal.shell_output_preview_lines`, which defaults to 5,
-after grapheme-safe wrapping at the pane's current content width. Whitespace
+after grapheme-safe wrapping at the pane's current content width. It MUST grow
+only as output rows arrive, without reserving its maximum height or a trailing
+blank row. Native shell execution MUST use the same preview owner for live
+output and final settlement; completion MUST NOT compose a duplicate tail or
+introduce additional viewport displacement. Output received in a burst MAY be
+coalesced into one bounded update without delaying child pipe draining. Whitespace
 boundaries SHOULD be preferred, but an unbroken overflowing segment MUST be
 hard-wrapped so one logical line cannot consume more visual rows than the
 configured tail permits. The combined preview window MUST also fit within the

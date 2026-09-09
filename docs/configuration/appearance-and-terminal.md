@@ -51,6 +51,14 @@ split unbroken text only at grapheme boundaries. Legacy ANSI-only presentation
 records remain byte-preserving and can therefore wrap at the physical pane
 width instead.
 
+`terminal.shell_output_preview_lines` bounds the live command-output tail after
+wrapping (default `5`). The tail grows with received output rather than reserving
+its maximum height or an extra blank row. At the limit, newer output replaces
+rows inside the window. Native command completion retains that same window;
+the next log event overwrites it from the top, leaving unused rows available
+without moving earlier log content. Bursts may appear together in one update;
+the tail does not delay command execution to animate individual lines.
+
 `keys` configures the prefix and direct bindings; `frames` configures window
 and pane status presentation; `theme`, `themes`, and aliases configure colors.
 Use `Ctrl+A ?` or the `list-keys` terminal command to inspect effective bindings

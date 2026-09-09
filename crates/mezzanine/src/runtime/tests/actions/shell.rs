@@ -1166,7 +1166,10 @@ fn runtime_agent_shell_command_output_is_visible_in_verbose_mode() {
 /// Native execution drains stdout and stderr outside the pane PTY. A command
 /// that emits one line and then sleeps must publish that line through the
 /// worker progress relay while its action result is still running. Progress
-/// carrying a stale marker must be rejected without changing the pane.
+/// carrying a stale marker must be rejected without changing the pane. On a
+/// full pane each received row must displace only one row until the cap, and
+/// final settlement must reuse that window even when the final tail shrinks.
+/// Subsequent log rows consume the vacated space without rewinding the viewport.
 #[test]
 fn runtime_native_agent_shell_command_shows_transient_output_before_completion() {
     let mut service = test_runtime_service();
@@ -1247,6 +1250,23 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
     let worker = thread::spawn(move || {
         crate::runtime::execute_native_shell_dispatch_with_progress(dispatch, progress_sender)
     });
+    // Start at the bottom margin so every artificial reservation is observable.
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let mut screen = TerminalScreen::new(Size::new(80, 12).unwrap(), 40).unwrap();
+    screen.feed(
+        (0..12)
+            .map(|row| format!("durable-{row}"))
+            .collect::<Vec<_>>()
+            .join("\r\n")
+            .as_bytes(),
+    );
+    service.set_agent_pane_screen("%1", conversation_id, screen);
+    assert_eq!(service.agent_pane_screen("%1").unwrap().history().len(), 0);
     let progress_deadline = std::time::Instant::now() + Duration::from_secs(2);
     let progress = loop {
         if let Some(progress) = progress_receiver.borrow_and_update().clone() {
@@ -1327,6 +1347,12 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
     };
     assert_live_output_style(&service, "native-live-first");
 
+    assert_eq!(
+        service.agent_pane_screen("%1").unwrap().history().len(),
+        1,
+        "one received row must scroll only one row, with no trailing reservation"
+    );
+
     assert!(
         service
             .apply_native_shell_progress(crate::runtime::RuntimeNativeShellProgress {
@@ -1344,8 +1370,9 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
     assert_live_output_style(&service, "native-live-second");
     assert_eq!(
         service.action_presentation_progress_counts_for_tests("%1"),
-        (1, 0)
+        (0, 0)
     );
+    assert_eq!(service.agent_shell_output_previews_for_tests("%1").len(), 1);
 
     service
         .apply_native_shell_progress(crate::runtime::RuntimeNativeShellProgress {
@@ -1370,7 +1397,7 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
     );
     assert_eq!(
         service.action_presentation_progress_counts_for_tests("%1"),
-        (1, 0)
+        (0, 0)
     );
 
     assert!(
@@ -1396,9 +1423,50 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
         .join("\n");
     assert!(!pane_text.contains("stale-native-tail"), "{pane_text}");
 
+    let cap = service.terminal_shell_output_preview_lines();
+    for count in 3..=cap + 2 {
+        let source = (1..=count)
+            .map(|row| format!("live-row-{row}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            service
+                .apply_native_shell_progress(crate::runtime::RuntimeNativeShellProgress {
+                    presentation: mez_agent::ActionPresentationProgress::new(
+                        "turn-1",
+                        "shell-1",
+                        mez_agent::ActionPresentationExecutionIdentity::Attempt(marker.clone()),
+                        revision + count as u64,
+                        mez_agent::ActionPresentationComponentIdentity::ShellOutput,
+                        source,
+                    ),
+                })
+                .unwrap()
+        );
+        let screen = service.agent_pane_screen("%1").unwrap();
+        assert_eq!(screen.history().len(), count.min(cap));
+        assert_eq!(
+            screen.visible_lines()[0],
+            format!("durable-{}", count.min(cap))
+        );
+        assert_eq!(
+            screen
+                .visible_lines()
+                .iter()
+                .filter(|line| line.contains("live-row-"))
+                .count(),
+            count.min(cap)
+        );
+    }
+    let live_history_len = service.agent_pane_screen("%1").unwrap().history().len();
     fs::write(&release_path, b"release").unwrap();
     let outcome = worker.join().unwrap();
     assert!(service.complete_native_shell_action(outcome).unwrap());
+    assert_eq!(
+        service.agent_pane_screen("%1").unwrap().history().len(),
+        live_history_len,
+        "completion must reuse the live window, never compose a second tail"
+    );
     assert_eq!(
         service.action_presentation_progress_counts_for_tests("%1"),
         (0, 0),
@@ -1434,6 +1502,18 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
         !settled_text.contains("post-completion-native-tail"),
         "{settled_text}"
     );
+    for row in 1..cap {
+        service
+            .append_agent_status_text_to_terminal_buffer("%1", &format!("replacement-{row}"))
+            .unwrap();
+        let screen = service.agent_pane_screen("%1").unwrap();
+        assert_eq!(
+            screen.history().len(),
+            live_history_len,
+            "replacement rows must fill the vacated window before scrolling"
+        );
+        assert_eq!(screen.visible_lines()[0], format!("durable-{cap}"));
+    }
     service.terminate_all_pane_processes().unwrap();
     let _ = fs::remove_file(release_path);
 }

@@ -125,6 +125,9 @@ impl RuntimeSessionService {
         progress: crate::runtime::RuntimeNativeShellProgress,
     ) -> Result<bool> {
         let presentation = progress.presentation;
+        if presentation.component == mez_agent::ActionPresentationComponentIdentity::ShellOutput {
+            return self.apply_native_shell_output_progress(&presentation);
+        }
         let applied = self.apply_action_presentation_progress(presentation.clone())?;
         if applied && presentation.component.is_confirmed() {
             let _ = self.promote_confirmed_action_presentation_progress(&presentation)?;
