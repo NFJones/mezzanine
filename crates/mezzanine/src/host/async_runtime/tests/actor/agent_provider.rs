@@ -133,6 +133,14 @@ async fn async_actor_applies_agent_provider_failure_events() {
     let pending = service.pending_agent_provider_tasks();
     assert_eq!(pending.len(), 1);
     let task = pending[0].clone();
+    let high_water_mark = service
+        .agent_turn_contexts()
+        .get(&task.turn_id)
+        .unwrap()
+        .event_sequence_high_water_mark();
+    service
+        .record_claimed_agent_provider_context_for_tests(&task.turn_id, high_water_mark)
+        .unwrap();
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
@@ -142,6 +150,7 @@ async fn async_actor_applies_agent_provider_failure_events() {
         batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
             agent_id: AgentId::opaque(task.agent_id).unwrap(),
             turn_id: task.turn_id,
+            claim_generation: 1,
             kind: "invalid_state".to_string(),
             message: "provider worker failed before response".to_string(),
             provider_failure_json: None,
@@ -301,19 +310,60 @@ async fn async_actor_applies_agent_provider_completion_events() {
         final_turn: true,
         terminal_state: mez_agent::AgentTurnState::Completed,
     };
-    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+    let (claimless_handle, claimless_actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let claimless_client = async {
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Completed {
+            agent_id: AgentId::opaque(task.agent_id.clone()).unwrap(),
+            turn_id: task.turn_id.clone(),
+            claim_generation: 1,
+            execution: Box::new(execution.clone()),
+        }));
+        let report = claimless_handle.submit_runtime_events(batch).await.unwrap();
+        assert_eq!(report.accepted, 1);
+        assert_eq!(report.applied, 0);
+        claimless_handle.shutdown().await.unwrap();
+    };
+    let ((), mut claimless_exit) = tokio::join!(claimless_client, claimless_actor.run());
+    assert!(claimless_exit.service.agent_turn_is_running(&task.turn_id));
+    let high_water_mark = claimless_exit
+        .service
+        .agent_turn_contexts()
+        .get(&task.turn_id)
+        .unwrap()
+        .event_sequence_high_water_mark();
+    claimless_exit
+        .service
+        .record_claimed_agent_provider_context_for_tests(&task.turn_id, high_water_mark)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(claimless_exit.service)
         .build()
         .unwrap();
 
     let client = async {
-        let mut batch = RuntimeEventBatch::new();
-        batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Completed {
-            agent_id: AgentId::opaque(task.agent_id).unwrap(),
-            turn_id: task.turn_id,
-            execution: Box::new(execution),
-        }));
+        let completion = |claim_generation, execution: mez_agent::AgentTurnExecution| {
+            let mut batch = RuntimeEventBatch::new();
+            batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Completed {
+                agent_id: AgentId::opaque(task.agent_id.clone()).unwrap(),
+                turn_id: task.turn_id.clone(),
+                claim_generation,
+                execution: Box::new(execution),
+            }));
+            batch
+        };
+        let stale = handle
+            .submit_runtime_events(completion(2, execution.clone()))
+            .await
+            .unwrap();
+        assert_eq!(stale.accepted, 1);
+        assert_eq!(stale.applied, 0);
 
-        let report = handle.submit_runtime_events(batch).await.unwrap();
+        let report = handle
+            .submit_runtime_events(completion(1, execution))
+            .await
+            .unwrap();
         assert_eq!(report.accepted, 1);
         assert_eq!(report.applied, 1);
         assert_eq!(report.side_effects, 1);
@@ -342,7 +392,7 @@ async fn async_actor_applies_agent_provider_completion_events() {
         pane_text.contains("Typed completion applied."),
         "{pane_text}"
     );
-    assert_eq!(exit.commands_processed, 2);
+    assert_eq!(exit.commands_processed, 3);
     exit.service.terminate_all_pane_processes().unwrap();
 }
 
@@ -465,10 +515,15 @@ async fn async_actor_defers_provider_issue_actions_to_persistence_worker() {
         .unwrap();
 
     let client = async {
+        handle
+            .record_claimed_agent_provider_task_for_tests(task.turn_id.clone(), 1)
+            .await
+            .unwrap();
         let mut batch = RuntimeEventBatch::new();
         batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Completed {
             agent_id: AgentId::opaque(task.agent_id).unwrap(),
             turn_id: task.turn_id,
+            claim_generation: 1,
             execution: Box::new(execution),
         }));
         let ingress = handle.submit_runtime_events(batch).await.unwrap();
@@ -644,10 +699,15 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
         .unwrap();
 
     let client = async {
+        handle
+            .record_claimed_agent_provider_task_for_tests(task.turn_id.clone(), 1)
+            .await
+            .unwrap();
         let mut batch = RuntimeEventBatch::new();
         batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Completed {
             agent_id: AgentId::opaque(task.agent_id).unwrap(),
             turn_id: task.turn_id,
+            claim_generation: 1,
             execution: Box::new(execution),
         }));
 

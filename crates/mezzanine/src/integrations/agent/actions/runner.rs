@@ -83,6 +83,7 @@ impl<P: ModelProvider> AgentTurnEnvironment for SyncProductAgentTurnEnvironment<
     ) -> Result<ModelRequest> {
         Ok(assemble_model_request(
             &self.runner.model_profile,
+            self.runner.provider.api_compatibility(),
             turn,
             context,
         )?)
@@ -386,6 +387,7 @@ impl<P: AsyncModelProvider> AgentTurnEnvironment for ProductAgentTurnEnvironment
     ) -> Result<ModelRequest> {
         Ok(assemble_model_request(
             &self.runner.model_profile,
+            self.runner.provider.api_compatibility(),
             turn,
             context,
         )?)

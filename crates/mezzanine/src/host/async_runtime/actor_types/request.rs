@@ -810,6 +810,16 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<Option<RuntimeAgentProviderDispatch>>>,
     },
+    /// Installs a deterministic provider claim for actor-level regression tests.
+    #[cfg(test)]
+    RecordClaimedAgentProviderTaskForTests {
+        /// Turn that owns the synthetic claim.
+        turn_id: String,
+        /// Exact claim generation to install.
+        generation: u64,
+        /// Reports whether the synthetic claim was installed.
+        reply: oneshot::Sender<Result<()>>,
+    },
     /// Claims one approved network or MCP action for execution outside the actor.
     ClaimApprovedExternalAction {
         /// Turn that owns the approved action.
@@ -1228,6 +1238,8 @@ impl AsyncRuntimeRequest {
             | Self::TakeAgentPresentationResizeWork { .. }
             | Self::ApplyStreamingSayProjection { .. }
             | Self::ApplyAgentPresentationResize { .. } => Family::Provider,
+            #[cfg(test)]
+            Self::RecordClaimedAgentProviderTaskForTests { .. } => Family::Provider,
             Self::SubmitRuntimeEvents { .. } => Family::Event,
             Self::DrainRuntimeSideEffects { .. }
             | Self::QueueRuntimeSideEffects { .. }

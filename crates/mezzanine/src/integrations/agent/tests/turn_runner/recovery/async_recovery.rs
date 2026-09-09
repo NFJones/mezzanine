@@ -464,6 +464,11 @@ impl AsyncModelProvider for PendingProvider {
         "pending"
     }
 
+    /// Uses the Responses-compatible request shape for this synthetic fixture.
+    fn api_compatibility(&self) -> mez_agent::ProviderApiCompatibility {
+        mez_agent::ProviderApiCompatibility::OpenAiResponses
+    }
+
     /// Keeps the provider request pending until the turn-wide timeout cancels it.
     fn send_request_async<'a>(
         &'a self,

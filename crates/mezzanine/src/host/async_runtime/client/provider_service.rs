@@ -128,6 +128,7 @@ fn streaming_say_runtime_event_batch(
     agent_id: &AgentId,
     turn_id: &str,
     pane_id: &str,
+    claim_generation: u64,
     events: Vec<mez_agent::StreamingSayEvent>,
 ) -> RuntimeEventBatch {
     let mut batch = RuntimeEventBatch::new();
@@ -137,6 +138,7 @@ fn streaming_say_runtime_event_batch(
                 agent_id: agent_id.clone(),
                 turn_id: turn_id.to_string(),
                 pane_id: pane_id.to_string(),
+                claim_generation,
                 event,
             },
         ));
@@ -802,6 +804,7 @@ async fn monitor_runtime_agent_provider_dispatch(
         return Ok(None);
     }
     let pane_id = dispatch.turn.pane_id.clone();
+    let claim_generation = dispatch.claim_generation;
     let (progress_sender, mut progress_receiver) =
         tokio::sync::mpsc::channel(STREAMING_SAY_PROGRESS_CHANNEL_CAPACITY);
     let (observation_sender, mut observation_receiver) =
@@ -847,6 +850,7 @@ async fn monitor_runtime_agent_provider_dispatch(
                         &agent_id,
                         &turn_id,
                         &pane_id,
+                        claim_generation,
                         events,
                     );
                     handle.submit_runtime_events(batch).await?;
@@ -866,7 +870,12 @@ async fn monitor_runtime_agent_provider_dispatch(
                         break;
                     }
                 }
-                return Ok(Some(provider_worker_event(agent_id, turn_id, result)));
+                return Ok(Some(provider_worker_event(
+                    agent_id,
+                    turn_id,
+                    claim_generation,
+                    result,
+                )));
             }
             Some(observation) = observation_receiver.recv() => {
                 let mut batch = RuntimeEventBatch::new();
@@ -897,10 +906,11 @@ async fn monitor_runtime_agent_provider_dispatch(
                     &agent_id,
                     &turn_id,
                     &pane_id,
+                    claim_generation,
                     events,
                 );
-                handle.submit_runtime_events(batch).await?;
-                if projection_changed {
+                let report = handle.submit_runtime_events(batch).await?;
+                if projection_changed && report.applied > 0 {
                     if projection_workers.is_empty() {
                         spawn_streaming_say_projection_worker(
                             &mut projection_workers,
@@ -1096,6 +1106,7 @@ async fn submit_provider_wire_request_observation(
 fn provider_worker_event(
     agent_id: AgentId,
     turn_id: String,
+    claim_generation: u64,
     result: std::result::Result<Result<RuntimeAgentProviderWorkerOutcome>, tokio::task::JoinError>,
 ) -> (RuntimeEvent, bool) {
     match result {
@@ -1103,6 +1114,7 @@ fn provider_worker_event(
             RuntimeEvent::AgentProvider(AgentProviderEvent::Completed {
                 agent_id,
                 turn_id,
+                claim_generation,
                 execution,
             }),
             true,
@@ -1111,6 +1123,7 @@ fn provider_worker_event(
             RuntimeEvent::AgentProvider(AgentProviderEvent::RoutingSelected {
                 agent_id,
                 turn_id,
+                claim_generation,
                 selection,
             }),
             false,
@@ -1119,6 +1132,7 @@ fn provider_worker_event(
             RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
                 agent_id,
                 turn_id,
+                claim_generation,
                 kind: provider_worker_error_kind(&error).to_string(),
                 message: error.message().to_string(),
                 provider_failure_json: error.provider_failure_json().map(str::to_string),
@@ -1134,6 +1148,7 @@ fn provider_worker_event(
             RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
                 agent_id,
                 turn_id,
+                claim_generation,
                 kind: "invalid_state".to_string(),
                 message: format!("provider worker join failed: {error}"),
                 provider_failure_json: None,
@@ -1228,6 +1243,7 @@ async fn execute_runtime_agent_provider_dispatch(
     observation_sender: tokio::sync::mpsc::Sender<ProviderWireRequestObservation>,
 ) -> Result<RuntimeAgentProviderWorkerOutcome> {
     let RuntimeAgentProviderDispatch {
+        claim_generation: _,
         turn,
         context,
         allowed_actions,
@@ -1815,6 +1831,7 @@ mod tests {
         let (event, completed) = provider_worker_event(
             AgentId::opaque("agent-panic").unwrap(),
             "turn-panic".to_string(),
+            7,
             worker.await,
         );
 
@@ -1822,6 +1839,7 @@ mod tests {
         let RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
             agent_id,
             turn_id,
+            claim_generation,
             kind,
             message,
             provider_failure_json,
@@ -1833,6 +1851,7 @@ mod tests {
         };
         assert_eq!(agent_id.as_str(), "agent-panic");
         assert_eq!(turn_id, "turn-panic");
+        assert_eq!(claim_generation, 7);
         assert_eq!(kind, "invalid_state");
         assert!(message.contains("provider worker join failed"), "{message}");
         assert!(provider_failure_json.is_none());

@@ -8,8 +8,8 @@
 use super::{
     ActionPresentationInput, ActionResult, ActionStatus, AgentAction, AgentActionPayload,
     AgentTurnExecution, AgentTurnRecord, AgentTurnState, BlockedApprovalRequest, ContextSourceKind,
-    MezError, Result, RuntimeSessionService, action_outcome_line, action_summary,
-    current_unix_seconds, local_action_plan, network_action_plan,
+    MezError, ProviderApiCompatibility, Result, RuntimeSessionService, action_outcome_line,
+    action_summary, current_unix_seconds, local_action_plan, network_action_plan,
     runtime_action_result_is_feedback_candidate, runtime_action_type_is_shell_backed,
     runtime_agent_terminal_preview, runtime_agent_turn_duration_display,
     runtime_agent_turn_state_name, runtime_execution_can_feed_failure_to_model,
@@ -49,6 +49,33 @@ impl RuntimeTerminalActionObservations {
     /// Returns terminal results in actor observation order.
     pub(super) fn results(&self) -> &[ActionResult] {
         &self.results
+    }
+}
+
+/// Builds the native tool-result event required by one continuity owner's API.
+fn provider_tool_result_event(
+    provider_owner: &mez_agent::ProviderContinuityOwner,
+    tool_call_id: &str,
+    content: &str,
+) -> Result<mez_agent::ProviderTranscriptEvent> {
+    match provider_owner.api() {
+        ProviderApiCompatibility::OpenAiResponses => Ok(
+            mez_agent::ProviderTranscriptEvent::OpenAiFunctionCallOutput {
+                call_id: tool_call_id.to_string(),
+                output: content.to_string(),
+            },
+        ),
+        ProviderApiCompatibility::DeepSeekChatCompletions => {
+            Ok(mez_agent::ProviderTranscriptEvent::DeepSeekToolResult {
+                tool_call_id: tool_call_id.to_string(),
+                content: content.to_string(),
+            })
+        }
+        ProviderApiCompatibility::OpenAiChatCompletions
+        | ProviderApiCompatibility::AnthropicMessages => Err(MezError::invalid_state(format!(
+            "provider API `{}` does not support native tool-result continuity",
+            provider_owner.api().as_str()
+        ))),
     }
 }
 
@@ -325,20 +352,8 @@ impl RuntimeSessionService {
                 .collect::<Vec<_>>()
                 .join("\n\n");
             for (provider_owner, tool_call_id) in tool_calls {
-                let event = match provider_owner {
-                    mez_agent::ProviderContinuityOwner::OpenAi => {
-                        mez_agent::ProviderTranscriptEvent::OpenAiFunctionCallOutput {
-                            call_id: tool_call_id.clone(),
-                            output: tool_result_content.clone(),
-                        }
-                    }
-                    mez_agent::ProviderContinuityOwner::DeepSeek => {
-                        mez_agent::ProviderTranscriptEvent::DeepSeekToolResult {
-                            tool_call_id: tool_call_id.clone(),
-                            content: tool_result_content.clone(),
-                        }
-                    }
-                };
+                let event =
+                    provider_tool_result_event(provider_owner, tool_call_id, &tool_result_content)?;
                 let content = event.to_transcript_content();
                 if context
                     .blocks()
@@ -353,7 +368,7 @@ impl RuntimeSessionService {
                         format!("provider tool result {tool_call_id}"),
                         content,
                         group.clone(),
-                        Some(*provider_owner),
+                        Some(provider_owner.clone()),
                         true,
                     )
                     .map_err(|error| MezError::invalid_state(error.to_string()))?;
@@ -586,12 +601,53 @@ pub(super) fn runtime_agent_action_outcome_line(
 
 #[cfg(test)]
 mod tests {
-    use super::{RuntimeTerminalActionObservations, runtime_agent_pending_approval_log_line};
+    use super::{
+        RuntimeTerminalActionObservations, provider_tool_result_event,
+        runtime_agent_pending_approval_log_line,
+    };
     use mez_agent::{
         ActionContentBlock, ActionError, ActionResult, ActionStatus, AgentContext, ContextBlock,
-        ContextExecutionGroupId,
+        ContextExecutionGroupId, ProviderApiCompatibility, ProviderContinuityOwner,
+        ProviderTranscriptEvent,
         permissions::{BlockedApprovalRequest, BlockedApprovalState},
     };
+
+    /// Verifies settled tool results use the native event shape selected by
+    /// the exact owner's API and unsupported API families fail closed.
+    #[test]
+    fn provider_tool_result_shape_follows_owner_api() {
+        let openai = ProviderContinuityOwner::new(
+            ProviderApiCompatibility::OpenAiResponses,
+            "configured-openai",
+        )
+        .unwrap();
+        let deepseek = ProviderContinuityOwner::new(
+            ProviderApiCompatibility::DeepSeekChatCompletions,
+            "configured-deepseek",
+        )
+        .unwrap();
+        let chat = ProviderContinuityOwner::new(
+            ProviderApiCompatibility::OpenAiChatCompletions,
+            "configured-chat",
+        )
+        .unwrap();
+
+        assert_eq!(
+            provider_tool_result_event(&openai, "call-openai", "openai result").unwrap(),
+            ProviderTranscriptEvent::OpenAiFunctionCallOutput {
+                call_id: "call-openai".to_string(),
+                output: "openai result".to_string(),
+            }
+        );
+        assert_eq!(
+            provider_tool_result_event(&deepseek, "call-deepseek", "deepseek result").unwrap(),
+            ProviderTranscriptEvent::DeepSeekToolResult {
+                tool_call_id: "call-deepseek".to_string(),
+                content: "deepseek result".to_string(),
+            }
+        );
+        assert!(provider_tool_result_event(&chat, "call-chat", "chat result").is_err());
+    }
 
     /// Verifies pending approval output preserves actionable identifiers while
     /// advertising both the session-wide browser and pane-local command.

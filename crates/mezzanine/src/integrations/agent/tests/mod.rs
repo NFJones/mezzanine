@@ -16,7 +16,6 @@ use super::actions::{
     AgentTurnRunner, discover_tools_through_pane_shell, execute_mcp_action_through_runtime,
     execute_shell_action_through_pane, persist_turn_execution_transcript,
 };
-use super::context::assemble_model_request;
 use super::network::execute_network_action_with_transport_async;
 use super::prompt;
 use super::prompt::build_agent_system_prompt;
@@ -75,6 +74,27 @@ use std::thread;
 use std::time::Duration;
 
 mod fixtures;
+
+/// Assembles a test request with the provider kind's known default API.
+///
+/// Tests using custom configured provider identifiers must call the product
+/// adapter directly with their explicit API compatibility instead.
+fn assemble_model_request(
+    profile: &ModelProfile,
+    turn: &AgentTurnRecord,
+    context: &AgentContext,
+) -> mez_agent::AgentRequestAssemblyResult<ModelRequest> {
+    let api = match profile.provider.as_str() {
+        "openai-chat" | "local-openai-chat" | "lmstudio" => {
+            mez_agent::ProviderApiCompatibility::OpenAiChatCompletions
+        }
+        "deepseek_compatible" => mez_agent::ProviderApiCompatibility::DeepSeekChatCompletions,
+        "echo" => mez_agent::ProviderApiCompatibility::OpenAiResponses,
+        provider => mez_agent::ProviderApiCompatibility::default_for_kind(provider)
+            .expect("test model profile must identify a provider with an explicit known API"),
+    };
+    super::context::assemble_model_request(profile, api, turn, context)
+}
 
 /// Decodes one bounded POSIX shell-wrapper assignment transport for structural
 /// assertions in the product integration tests.
@@ -786,6 +806,11 @@ impl AsyncModelProvider for SequencedProvider {
     /// Returns the stable provider id used by tests.
     fn provider_id(&self) -> &str {
         "batch"
+    }
+
+    /// Uses the Responses-compatible request shape for this synthetic fixture.
+    fn api_compatibility(&self) -> mez_agent::ProviderApiCompatibility {
+        mez_agent::ProviderApiCompatibility::OpenAiResponses
     }
 
     /// Returns the next queued response through the async provider trait.

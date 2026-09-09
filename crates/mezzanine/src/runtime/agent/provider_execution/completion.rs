@@ -108,6 +108,11 @@ impl RuntimeSessionService {
             .claimed_agent_provider_tasks
             .get(turn_id)
             .map(|claim| claim.context_event_high_water_mark);
+        let provider_owner = self
+            .agent
+            .claimed_agent_provider_tasks
+            .get(turn_id)
+            .and_then(|claim| claim.provider_owner.clone());
         let current_high_water_mark = self
             .agent_turn_contexts()
             .get(turn_id)
@@ -245,6 +250,7 @@ impl RuntimeSessionService {
                 &turn,
                 &model_profile,
                 &provider_id,
+                provider_owner,
                 execution,
                 true,
             )

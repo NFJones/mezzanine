@@ -91,7 +91,7 @@ fn canonical_event_oracle(context: &mez_agent::AgentContext) -> Vec<CanonicalEve
             source: event.block().source,
             semantic_kind: event.semantic_kind(),
             retention: event.retention(),
-            provider_owner: event.provider_owner(),
+            provider_owner: event.provider_owner().cloned(),
             label: event.block().label.clone(),
         })
         .collect()

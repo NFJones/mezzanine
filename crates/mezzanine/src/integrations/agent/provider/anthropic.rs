@@ -43,6 +43,11 @@ impl ChatCompletionsDialect for AnthropicMessagesDialect {
         "anthropic"
     }
 
+    /// Returns the Anthropic Messages wire compatibility.
+    fn api_compatibility(&self) -> mez_agent::ProviderApiCompatibility {
+        mez_agent::ProviderApiCompatibility::AnthropicMessages
+    }
+
     /// Returns the default Anthropic Messages endpoint.
     fn default_chat_endpoint(&self) -> &'static str {
         ANTHROPIC_MESSAGES_ENDPOINT

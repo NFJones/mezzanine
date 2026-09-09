@@ -687,8 +687,22 @@ impl RuntimeSessionService {
                         &mcp_summary,
                         &model_profile,
                     )?;
+                    let provider_config = self
+                        .provider_registry()
+                        .provider(&model_profile.provider)
+                        .ok_or_else(|| {
+                            MezError::config(format!(
+                                "provider `{}` for active model profile is not configured",
+                                model_profile.provider
+                            ))
+                        })?;
+                    let api = resolve_provider_api(
+                        &provider_config.kind,
+                        provider_config.api.as_deref(),
+                    )?;
                     let mut retry_request = assemble_model_request(
                         &model_profile,
+                        api,
                         &turn,
                         &prepared.to_agent_context(),
                     )?;

@@ -558,6 +558,14 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
         final_turn: false,
         terminal_state: mez_agent::AgentTurnState::Running,
     };
+    let high_water_mark = service
+        .agent_turn_contexts()
+        .get(&task.turn_id)
+        .unwrap()
+        .event_sequence_high_water_mark();
+    service
+        .record_claimed_agent_provider_context_for_tests(&task.turn_id, high_water_mark)
+        .unwrap();
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
@@ -566,6 +574,7 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
         provider_batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Completed {
             agent_id: AgentId::opaque(task.agent_id).unwrap(),
             turn_id: task.turn_id.clone(),
+            claim_generation: 1,
             execution: Box::new(execution),
         }));
         let report = handle.submit_runtime_events(provider_batch).await.unwrap();
@@ -738,6 +747,14 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
         final_turn: false,
         terminal_state: mez_agent::AgentTurnState::Running,
     };
+    let high_water_mark = service
+        .agent_turn_contexts()
+        .get(&task.turn_id)
+        .unwrap()
+        .event_sequence_high_water_mark();
+    service
+        .record_claimed_agent_provider_context_for_tests(&task.turn_id, high_water_mark)
+        .unwrap();
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
@@ -746,6 +763,7 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
         provider_batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Completed {
             agent_id: AgentId::opaque(task.agent_id).unwrap(),
             turn_id: task.turn_id.clone(),
+            claim_generation: 1,
             execution: Box::new(execution),
         }));
         let report = handle.submit_runtime_events(provider_batch).await.unwrap();

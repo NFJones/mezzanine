@@ -395,10 +395,15 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
         .unwrap();
 
     let client = async {
+        handle
+            .record_claimed_agent_provider_task_for_tests(task.turn_id.clone(), 1)
+            .await
+            .unwrap();
         let mut batch = RuntimeEventBatch::new();
         batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Completed {
             agent_id: AgentId::opaque(task.agent_id).unwrap(),
             turn_id: task.turn_id.clone(),
+            claim_generation: 1,
             execution: Box::new(execution),
         }));
 

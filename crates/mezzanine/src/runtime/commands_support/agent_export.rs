@@ -184,7 +184,18 @@ fn runtime_agent_context_dump_for_pane(
         &model_profile,
     )?;
     let context = context.into_agent_context();
-    let mut request = assemble_model_request(&model_profile, &turn, &context)?;
+    let provider_config = service
+        .provider_registry()
+        .provider(&model_profile.provider)
+        .ok_or_else(|| {
+            MezError::config(format!(
+                "provider `{}` for active model profile is not configured",
+                model_profile.provider
+            ))
+        })?;
+    let api =
+        mez_agent::resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())?;
+    let mut request = assemble_model_request(&model_profile, api, &turn, &context)?;
     request.available_mcp_tools = available_mcp_tools;
     let dump = runtime_model_request_context_dump(&pane_id, &turn_id, &request)?;
     let message_count = request.messages.len();
@@ -241,7 +252,18 @@ fn runtime_idle_agent_context_dump_for_pane(
     let (context, available_mcp_tools) =
         service.prepare_agent_turn_model_context(&turn, context, &mcp_summary, &model_profile)?;
     let context = context.into_agent_context();
-    let mut request = assemble_model_request(&model_profile, &turn, &context)?;
+    let provider_config = service
+        .provider_registry()
+        .provider(&model_profile.provider)
+        .ok_or_else(|| {
+            MezError::config(format!(
+                "provider `{}` for active model profile is not configured",
+                model_profile.provider
+            ))
+        })?;
+    let api =
+        mez_agent::resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())?;
+    let mut request = assemble_model_request(&model_profile, api, &turn, &context)?;
     request.available_mcp_tools = available_mcp_tools;
     let dump = runtime_model_request_context_dump(pane_id, &turn_id, &request)?;
     let message_count = request.messages.len();

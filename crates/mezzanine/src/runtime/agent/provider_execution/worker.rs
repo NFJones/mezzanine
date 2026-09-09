@@ -379,7 +379,12 @@ impl RuntimeSessionService {
             super::super::issues::runtime_issues_enabled(self),
         );
         if self.agent_debug_enabled(&turn.pane_id) {
-            match assemble_model_request(&model_profile, &turn, &context) {
+            match assemble_model_request(
+                &model_profile,
+                provider.api_compatibility(),
+                &turn,
+                &context,
+            ) {
                 Ok(mut request) => {
                     mez_agent::apply_model_request_control(
                         &mut request,
@@ -587,10 +592,14 @@ impl RuntimeSessionService {
             }
         };
         execution.routing_token_usage_by_model = routing_token_usage_by_model;
-        self.apply_agent_provider_execution(
+        self.apply_agent_provider_execution_with_owner(
             &turn,
             &model_profile,
             provider.provider_id(),
+            mez_agent::ProviderContinuityOwner::new(
+                provider.api_compatibility(),
+                provider.provider_id(),
+            ),
             execution,
         )
     }
@@ -916,6 +925,10 @@ impl RuntimeSessionService {
             &turn,
             &model_profile,
             provider.provider_id(),
+            mez_agent::ProviderContinuityOwner::new(
+                provider.api_compatibility(),
+                provider.provider_id(),
+            ),
             execution,
             false,
         )

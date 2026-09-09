@@ -8,4 +8,4 @@ use mez_agent::AgentContext;
 
 mod assembly;
 
-pub use assembly::assemble_model_request;
+pub use assembly::{assemble_model_request, assemble_model_request_fail_closed};

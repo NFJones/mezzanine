@@ -259,7 +259,9 @@ pub use context_appenders::{
     project_guidance_context_block, set_project_guidance_context,
 };
 pub use context_assembly::{
-    ModelRequestIdentity, assemble_model_request_from_context, role_for_context_block,
+    ModelRequestIdentity, assemble_model_request_from_context,
+    assemble_model_request_from_context_api_unknown, assemble_model_request_from_context_with_api,
+    role_for_context_block,
 };
 pub use context_compaction::{
     DEFAULT_MODEL_CONTEXT_RETAINED_TAIL_PERCENT, ModelContextCompactionPlan,

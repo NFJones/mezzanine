@@ -91,6 +91,16 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         execution: &AgentTurnExecution,
     ) -> Result<()> {
+        self.append_agent_execution_chronology_for_provider(turn, execution, None)
+    }
+
+    /// Appends provider chronology with the immutable owner of native events.
+    pub(crate) fn append_agent_execution_chronology_for_provider(
+        &mut self,
+        turn: &AgentTurnRecord,
+        execution: &AgentTurnExecution,
+        provider_owner: Option<&mez_agent::ProviderContinuityOwner>,
+    ) -> Result<()> {
         let mut context = self
             .agent_turn_contexts()
             .get(&turn.turn_id)
@@ -236,6 +246,40 @@ impl RuntimeSessionService {
                 group_id.clone(),
             )
             .map_err(|error| MezError::invalid_state(error.to_string()))?;
+        let provider_owner = if execution.response.provider_transcript_events.is_empty() {
+            None
+        } else {
+            let owner = provider_owner.ok_or_else(|| {
+                MezError::invalid_state(
+                    "provider continuity events require an immutable configured provider owner",
+                )
+            })?;
+            let configured_provider_id = execution.request.provider.as_str();
+            if owner.provider_id() != configured_provider_id {
+                return Err(MezError::invalid_state(format!(
+                    "provider continuity claim owner `{}` does not match request provider `{configured_provider_id}`",
+                    owner.provider_id()
+                )));
+            }
+            if execution.response.provider != owner.provider_id() {
+                return Err(MezError::invalid_state(format!(
+                    "provider continuity response owner `{}` does not match configured provider `{configured_provider_id}`",
+                    execution.response.provider
+                )));
+            }
+            if execution
+                .response
+                .provider_transcript_events
+                .iter()
+                .any(|event| !owner.accepts_transcript_event(event))
+            {
+                return Err(MezError::invalid_state(format!(
+                    "provider continuity event does not match configured API `{}`",
+                    owner.api().as_str()
+                )));
+            }
+            Some(owner.clone())
+        };
         let mut provider_tool_calls = Vec::new();
         for (index, event) in execution
             .response
@@ -243,34 +287,27 @@ impl RuntimeSessionService {
             .iter()
             .enumerate()
         {
-            provider_tool_calls.extend(
-                event
-                    .deepseek_tool_call_ids()
-                    .into_iter()
-                    .map(|id| (mez_agent::ProviderContinuityOwner::DeepSeek, id)),
-            );
-            provider_tool_calls.extend(
-                event
-                    .openai_function_call_ids()
-                    .into_iter()
-                    .map(|id| (mez_agent::ProviderContinuityOwner::OpenAi, id)),
-            );
-            let provider_owner = match event.provider_id() {
-                "openai" => mez_agent::ProviderContinuityOwner::OpenAi,
-                "deepseek" => mez_agent::ProviderContinuityOwner::DeepSeek,
-                provider => {
-                    return Err(MezError::invalid_state(format!(
-                        "provider continuity event has unsupported owner `{provider}`"
-                    )));
-                }
-            };
+            if let Some(owner) = provider_owner.as_ref() {
+                provider_tool_calls.extend(
+                    event
+                        .deepseek_tool_call_ids()
+                        .into_iter()
+                        .map(|id| (owner.clone(), id)),
+                );
+                provider_tool_calls.extend(
+                    event
+                        .openai_function_call_ids()
+                        .into_iter()
+                        .map(|id| (owner.clone(), id)),
+                );
+            }
             context
                 .append_evidence_event(
                     ContextSourceKind::TranscriptTool,
                     format!("provider continuity event {}", index.saturating_add(1)),
                     event.to_transcript_content(),
                     group_id.clone(),
-                    Some(provider_owner),
+                    provider_owner.clone(),
                     true,
                 )
                 .map_err(|error| MezError::invalid_state(error.to_string()))?;

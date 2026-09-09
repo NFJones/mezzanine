@@ -41,6 +41,10 @@ impl ChatCompletionsDialect for OpenAiChatCompletionsDialect {
         "openai-compatible"
     }
 
+    fn api_compatibility(&self) -> mez_agent::ProviderApiCompatibility {
+        mez_agent::ProviderApiCompatibility::OpenAiChatCompletions
+    }
+
     fn default_chat_endpoint(&self) -> &'static str {
         "http://localhost:1234/v1/chat/completions"
     }

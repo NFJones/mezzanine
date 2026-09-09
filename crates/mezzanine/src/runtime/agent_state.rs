@@ -192,6 +192,8 @@ pub(crate) struct RuntimeAgentProviderClaim {
     pub conversation_id: String,
     /// Agent identity that owns the turn.
     pub agent_id: String,
+    /// Exact configured provider instance and API that own native continuity.
+    pub provider_owner: Option<mez_agent::ProviderContinuityOwner>,
     /// Timer generation associated with the current claim lease.
     pub generation: u64,
     /// Unix timestamp, in milliseconds, when the provider task was claimed.
@@ -253,6 +255,16 @@ impl RuntimeAgentProviderDispatchProvider {
         }
     }
 
+    /// Returns the exact wire API implemented by this dispatched provider.
+    pub(crate) fn api_compatibility(&self) -> mez_agent::ProviderApiCompatibility {
+        match self {
+            Self::OpenAi(_) => mez_agent::ProviderApiCompatibility::OpenAiResponses,
+            Self::DeepSeek(_) => mez_agent::ProviderApiCompatibility::DeepSeekChatCompletions,
+            Self::Anthropic(_) => mez_agent::ProviderApiCompatibility::AnthropicMessages,
+            Self::OpenAiCompatible(_) => mez_agent::ProviderApiCompatibility::OpenAiChatCompletions,
+        }
+    }
+
     /// Returns the wire streaming mode used to serialize one provider request.
     pub(crate) fn request_stream(&self, request: &ModelRequest) -> bool {
         match self {
@@ -270,6 +282,8 @@ impl RuntimeAgentProviderDispatchProvider {
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone)]
 pub struct RuntimeAgentProviderDispatch {
+    /// Exact actor-assigned generation of the provider claim owning this dispatch.
+    pub claim_generation: u64,
     /// Stores the turn value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

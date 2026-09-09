@@ -20,7 +20,9 @@ use sha2::{Digest, Sha256};
 use crate::action_result::ActionResult;
 use crate::mcp::McpPromptTool;
 use crate::surface::{AllowedActionSet, ModelInteractionKind};
-use crate::{AgentPromptError, AgentPromptErrorKind, ProviderTranscriptEvent};
+use crate::{
+    AgentPromptError, AgentPromptErrorKind, ProviderApiCompatibility, ProviderTranscriptEvent,
+};
 
 /// Sequence spacing reserved between newly appended canonical events.
 ///
@@ -384,36 +386,99 @@ impl StableContextBlock {
     }
 }
 
-/// Provider that exclusively owns one opaque continuity event.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ProviderContinuityOwner {
-    /// OpenAI Responses reasoning and function-call replay state.
-    OpenAi,
-    /// DeepSeek thinking/tool-call replay state.
-    DeepSeek,
+/// Opaque provider API and configured provider id that own native continuity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderContinuityOwner(ProviderContinuityOwnerRepr);
+
+/// Private representation preserving decoder-only historical scalar owners.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ProviderContinuityOwnerRepr {
+    LegacyOpenAi,
+    LegacyDeepSeek,
+    Exact {
+        api: ProviderApiCompatibility,
+        provider_id: String,
+    },
 }
 
 impl ProviderContinuityOwner {
-    /// Returns the durable provider identifier for this continuity owner.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::OpenAi => "openai",
-            Self::DeepSeek => "deepseek",
+    /// Builds one exact continuity owner for a configured provider and API.
+    pub fn new(api: ProviderApiCompatibility, provider_id: impl Into<String>) -> Option<Self> {
+        let provider_id = provider_id.into();
+        if provider_id.is_empty()
+            || provider_id.trim() != provider_id
+            || provider_id.chars().any(char::is_control)
+        {
+            return None;
+        }
+        Some(Self(ProviderContinuityOwnerRepr::Exact {
+            api,
+            provider_id,
+        }))
+    }
+
+    /// Returns the exact configured provider identifier.
+    pub fn provider_id(&self) -> &str {
+        match &self.0 {
+            ProviderContinuityOwnerRepr::LegacyOpenAi => "openai",
+            ProviderContinuityOwnerRepr::LegacyDeepSeek => "deepseek",
+            ProviderContinuityOwnerRepr::Exact { provider_id, .. } => provider_id,
         }
     }
 
-    /// Decodes one durable provider identifier.
-    pub fn from_provider_id(provider: &str) -> Option<Self> {
+    /// Returns the API compatibility owned by this continuity state.
+    pub fn api(&self) -> ProviderApiCompatibility {
+        match &self.0 {
+            ProviderContinuityOwnerRepr::LegacyOpenAi => ProviderApiCompatibility::OpenAiResponses,
+            ProviderContinuityOwnerRepr::LegacyDeepSeek => {
+                ProviderApiCompatibility::DeepSeekChatCompletions
+            }
+            ProviderContinuityOwnerRepr::Exact { api, .. } => *api,
+        }
+    }
+
+    /// Decodes one legacy durable provider identifier.
+    pub(crate) fn from_legacy_provider_id(provider: &str) -> Option<Self> {
         match provider {
-            "openai" => Some(Self::OpenAi),
-            "deepseek" => Some(Self::DeepSeek),
+            "openai" => Some(Self(ProviderContinuityOwnerRepr::LegacyOpenAi)),
+            "deepseek" => Some(Self(ProviderContinuityOwnerRepr::LegacyDeepSeek)),
             _ => None,
         }
     }
 
-    /// Returns whether this owner matches a configured provider id.
-    pub fn matches_provider(self, provider: &str) -> bool {
-        self.as_str() == provider
+    /// Returns the historical scalar durable representation, when applicable.
+    pub(crate) fn legacy_provider_id(&self) -> Option<&'static str> {
+        match self.0 {
+            ProviderContinuityOwnerRepr::LegacyOpenAi => Some("openai"),
+            ProviderContinuityOwnerRepr::LegacyDeepSeek => Some("deepseek"),
+            ProviderContinuityOwnerRepr::Exact { .. } => None,
+        }
+    }
+
+    /// Reports whether this owner came from a historical scalar record.
+    pub(crate) fn is_legacy(&self) -> bool {
+        self.legacy_provider_id().is_some()
+    }
+
+    /// Returns whether both owner dimensions match the selected provider.
+    pub fn matches_provider(&self, api: ProviderApiCompatibility, provider_id: &str) -> bool {
+        self.api() == api && self.provider_id() == provider_id
+    }
+
+    /// Returns whether a typed provider event belongs to this owner's API family.
+    pub fn accepts_transcript_event(&self, event: &ProviderTranscriptEvent) -> bool {
+        matches!(
+            (self.api(), event),
+            (
+                ProviderApiCompatibility::OpenAiResponses,
+                ProviderTranscriptEvent::OpenAiResponseOutput { .. }
+                    | ProviderTranscriptEvent::OpenAiFunctionCallOutput { .. }
+            ) | (
+                ProviderApiCompatibility::DeepSeekChatCompletions,
+                ProviderTranscriptEvent::DeepSeekAssistantToolCall { .. }
+                    | ProviderTranscriptEvent::DeepSeekToolResult { .. }
+            )
+        )
     }
 }
 
@@ -454,12 +519,12 @@ impl ImportedExecutionEvent {
                 "imported provider ownership requires a typed provider continuity payload",
             ));
         }
-        if let Some(owner) = provider_owner
+        if let Some(owner) = provider_owner.as_ref()
             && ProviderTranscriptEvent::from_transcript_content(&block.content)
-                .is_none_or(|event| event.provider_id() != owner.as_str())
+                .is_none_or(|event| !owner.accepts_transcript_event(&event))
         {
             return Err(AgentContextError::new(
-                "imported provider ownership must match the typed continuity payload",
+                "imported provider ownership API must match the typed continuity payload family",
             ));
         }
         Ok(Self {
@@ -486,8 +551,8 @@ impl ImportedExecutionEvent {
     }
 
     /// Returns the provider owner for opaque native continuity, when any.
-    pub fn provider_owner(&self) -> Option<ProviderContinuityOwner> {
-        self.provider_owner
+    pub fn provider_owner(&self) -> Option<&ProviderContinuityOwner> {
+        self.provider_owner.as_ref()
     }
 }
 
@@ -530,8 +595,8 @@ impl ContextBlockMetadata {
     }
 
     /// Returns the exclusive provider owner for opaque continuity state.
-    pub fn provider_owner(&self) -> Option<ProviderContinuityOwner> {
-        self.provider_owner
+    pub fn provider_owner(&self) -> Option<&ProviderContinuityOwner> {
+        self.provider_owner.as_ref()
     }
 
     /// Reports whether exact content can be recovered for semantic compaction.
@@ -593,8 +658,8 @@ impl ConversationEvent {
     }
 
     /// Returns the exclusive provider continuity owner, when applicable.
-    pub fn provider_owner(&self) -> Option<ProviderContinuityOwner> {
-        self.provider_owner
+    pub fn provider_owner(&self) -> Option<&ProviderContinuityOwner> {
+        self.provider_owner.as_ref()
     }
 
     /// Reports whether exact source content can be recovered after compaction.
@@ -609,7 +674,7 @@ impl ConversationEvent {
             retention: self.retention,
             event_sequence: Some(self.sequence),
             execution_group_id: self.execution_group_id.clone(),
-            provider_owner: self.provider_owner,
+            provider_owner: self.provider_owner.clone(),
             recoverable_for_compaction: self.recoverable_for_compaction,
             stable_slot_id: None,
             stable_source_fingerprint: None,
@@ -978,7 +1043,7 @@ impl AgentContext {
             event.semantic_kind = record.block.semantic_kind();
             event.retention = ContextRetention::ExecutionGroup;
             event.execution_group_id = Some(record.execution_group_id.clone());
-            event.provider_owner = record.provider_owner;
+            event.provider_owner = record.provider_owner.clone();
             event.recoverable_for_compaction = true;
             search_start = index.saturating_add(1);
         }
@@ -2446,8 +2511,13 @@ fn context_semantic_error(index: usize, block: &ContextBlock, reason: &str) -> A
 fn provider_owner_for_block(block: &ContextBlock) -> Option<ProviderContinuityOwner> {
     ProviderTranscriptEvent::from_transcript_content(&block.content).and_then(|event| {
         match event.provider_id() {
-            "openai" => Some(ProviderContinuityOwner::OpenAi),
-            "deepseek" => Some(ProviderContinuityOwner::DeepSeek),
+            "openai" => {
+                ProviderContinuityOwner::new(ProviderApiCompatibility::OpenAiResponses, "openai")
+            }
+            "deepseek" => ProviderContinuityOwner::new(
+                ProviderApiCompatibility::DeepSeekChatCompletions,
+                "deepseek",
+            ),
             _ => None,
         }
     })
@@ -2500,6 +2570,16 @@ fn validate_context_block_metadata(
             index,
             block,
             "provider continuity payload requires an explicit owner",
+        ));
+    }
+    if let Some(owner) = metadata.provider_owner.as_ref()
+        && ProviderTranscriptEvent::from_transcript_content(&block.content)
+            .is_none_or(|event| !owner.accepts_transcript_event(&event))
+    {
+        return Err(context_semantic_error(
+            index,
+            block,
+            "provider ownership API must match the typed continuity payload family",
         ));
     }
     if metadata.semantic_kind == ContextSemanticKind::UserEvent
@@ -2999,12 +3079,16 @@ pub fn validate_context_required(field: &str, value: &str) -> AgentContextResult
 mod tests {
     use super::{
         AgentContext, AgentContextError, AgentRequestAssemblyError, AgentRequestAssemblyErrorKind,
-        ContextBlock, ContextCachePolicy, ContextExecutionGroupId, ContextRetention,
-        ContextSemanticKind, ContextSourceKind, ContextStability, ModelMessage, ModelMessageRole,
-        ModelMessages, PreparedModelContext, StableContextBlock, StableContextSlotId,
+        ContextBlock, ContextCachePolicy, ContextExecutionGroupId, ContextPlacement,
+        ContextRetention, ContextSemanticKind, ContextSourceKind, ContextStability,
+        ImportedExecutionEvent, ModelMessage, ModelMessageRole, ModelMessages,
+        PreparedModelContext, ProviderContinuityOwner, StableContextBlock, StableContextSlotId,
         StableContextSourceFingerprint, validate_context_required, validate_context_semantics,
     };
-    use crate::{ActionContentBlock, ActionResult, ActionStatus, AgentPromptError};
+    use crate::{
+        ActionContentBlock, ActionResult, ActionStatus, AgentPromptError, ProviderApiCompatibility,
+        ProviderTranscriptEvent,
+    };
 
     /// Builds one valid successful or running action-result fixture.
     fn action_result(action_id: &str, status: ActionStatus, text: &str) -> ActionResult {
@@ -3610,6 +3694,84 @@ mod tests {
 
         assert!(error.message().contains("contiguous chronology prefix"));
         assert_eq!(context, original);
+    }
+
+    /// Verifies restoration retains an exact provider/API owner and rejects a
+    /// mismatched transcript family without mutating the imported context.
+    #[test]
+    fn imported_execution_restoration_preserves_exact_owner_and_fails_closed() {
+        let content = ProviderTranscriptEvent::validated_openai_response_output(vec![
+            serde_json::json!({"type":"reasoning","id":"reasoning-1"}),
+        ])
+        .unwrap()
+        .to_transcript_content();
+        let assistant = ContextBlock::assistant_event("assistant", "neutral fallback");
+        let block = ContextBlock {
+            source: ContextSourceKind::TranscriptTool,
+            placement: ContextPlacement::ConversationAppend,
+            label: "native response".to_string(),
+            content,
+        };
+        let group = ContextExecutionGroupId::new("restored-execution").unwrap();
+        let owner = ProviderContinuityOwner::new(
+            ProviderApiCompatibility::OpenAiResponses,
+            "configured-openai",
+        )
+        .unwrap();
+        let assistant_record =
+            ImportedExecutionEvent::new(assistant.clone(), group.clone(), 1, None).unwrap();
+        let native_record =
+            ImportedExecutionEvent::new(block.clone(), group.clone(), 2, Some(owner.clone()))
+                .unwrap();
+        let mut context =
+            AgentContext::import_durable_blocks(vec![assistant, block.clone()]).unwrap();
+
+        context
+            .restore_imported_execution_events(&[assistant_record.clone(), native_record.clone()])
+            .unwrap();
+        assert_eq!(context.chronology()[1].provider_owner(), Some(&owner));
+        assert_eq!(context.chronology()[1].execution_group_id(), Some(&group));
+
+        let original = context.clone();
+        let reordered = [native_record, assistant_record];
+        let error = context
+            .restore_imported_execution_events(&reordered)
+            .unwrap_err();
+
+        assert!(error.message().contains("ordinals must be contiguous"));
+        assert_eq!(context, original);
+
+        let mismatched_owner = ProviderContinuityOwner::new(
+            ProviderApiCompatibility::DeepSeekChatCompletions,
+            "configured-openai",
+        )
+        .unwrap();
+        assert!(ImportedExecutionEvent::new(block, group, 2, Some(mismatched_owner)).is_err());
+    }
+
+    /// Verifies exact continuity owners reject identities whose byte-exact
+    /// representation is empty, padded, whitespace-only, or control-bearing.
+    #[test]
+    fn provider_continuity_owner_rejects_invalid_provider_ids() {
+        for provider_id in [
+            "", " ", "\t", " padded", "padded ", "a\nb", "a\0b", "a\u{85}b",
+        ] {
+            assert!(
+                ProviderContinuityOwner::new(
+                    ProviderApiCompatibility::OpenAiResponses,
+                    provider_id,
+                )
+                .is_none(),
+                "provider id should be rejected: {provider_id:?}"
+            );
+        }
+        assert!(
+            ProviderContinuityOwner::new(
+                ProviderApiCompatibility::OpenAiResponses,
+                "configured openai",
+            )
+            .is_some()
+        );
     }
 
     /// Required context validation accepts substantive values and rejects

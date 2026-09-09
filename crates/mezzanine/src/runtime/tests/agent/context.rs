@@ -635,6 +635,7 @@ fn runtime_project_guidance_refresh_defers_changes_during_active_cache_epoch() {
         .unwrap();
     let request = crate::integrations::agent::context::assemble_model_request(
         &runtime_model_profile("openai", "gpt-test"),
+        mez_agent::ProviderApiCompatibility::OpenAiResponses,
         &turn,
         &original,
     )
@@ -1035,6 +1036,7 @@ fn runtime_agent_context_keeps_cache_identity_out_of_model_text() {
     };
     let request = crate::integrations::agent::context::assemble_model_request(
         &runtime_model_profile("openai", "gpt-test"),
+        mez_agent::ProviderApiCompatibility::OpenAiResponses,
         &turn,
         &context,
     )
@@ -1296,9 +1298,14 @@ fn runtime_status_reports_provider_context_continuity_diagnostics() {
         status.contains("| Common immutable prefix | blocks=1 tokens~"),
         "{status}"
     );
-    let request =
-        crate::integrations::agent::context::assemble_model_request(&profile, &turn, &appended)
-            .unwrap();
+    let request = crate::integrations::agent::context::assemble_model_request(
+        &profile,
+        mez_agent::ProviderApiCompatibility::default_for_kind(&profile.provider)
+            .expect("runtime test profile must use a known provider API"),
+        &turn,
+        &appended,
+    )
+    .unwrap();
     service
         .append_agent_trace_maap_request(&turn, &request)
         .unwrap();

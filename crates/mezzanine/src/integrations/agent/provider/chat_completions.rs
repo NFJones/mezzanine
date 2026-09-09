@@ -45,6 +45,9 @@ pub trait ChatCompletionsDialect: Clone + Send + Sync + Default + 'static {
     /// Returns the provider id used before configuration overrides are applied.
     fn default_provider_id(&self) -> &'static str;
 
+    /// Returns the exact wire API implemented by this dialect.
+    fn api_compatibility(&self) -> mez_agent::ProviderApiCompatibility;
+
     /// Returns the default Chat Completions endpoint for this dialect.
     fn default_chat_endpoint(&self) -> &'static str;
 
@@ -331,6 +334,10 @@ where
         self.provider_id()
     }
 
+    fn api_compatibility(&self) -> mez_agent::ProviderApiCompatibility {
+        self.dialect.api_compatibility()
+    }
+
     fn list_models(&self) -> Result<ProviderModelCatalog> {
         let http_request = self.dialect.build_models_request(
             self.api_key_secret(),
@@ -396,6 +403,10 @@ where
 {
     fn provider_id(&self) -> &str {
         self.provider_id()
+    }
+
+    fn api_compatibility(&self) -> mez_agent::ProviderApiCompatibility {
+        self.dialect.api_compatibility()
     }
 
     fn cache_namespace(&self) -> String {

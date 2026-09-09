@@ -364,6 +364,8 @@ pub enum AgentProviderEvent {
         agent_id: AgentId,
         /// Routed turn identity.
         turn_id: String,
+        /// Exact provider claim generation that produced the selection.
+        claim_generation: u64,
         /// Provider-independent routing selection.
         selection: Box<mez_agent::AutoSizingRoutingSelection>,
     },
@@ -374,6 +376,8 @@ pub enum AgentProviderEvent {
         agent_id: AgentId,
         /// Turn identity.
         turn_id: String,
+        /// Exact provider claim generation that produced the execution.
+        claim_generation: u64,
         /// Provider-produced turn execution to apply through actor-owned state
         /// transition logic.
         execution: Box<AgentTurnExecution>,
@@ -406,6 +410,8 @@ pub enum AgentProviderEvent {
         turn_id: String,
         /// Pane that owns the visible agent log.
         pane_id: String,
+        /// Exact provider claim generation that produced the stream event.
+        claim_generation: u64,
         /// Extractor-validated action lifecycle or newly decoded source text.
         event: mez_agent::StreamingSayEvent,
     },
@@ -415,6 +421,8 @@ pub enum AgentProviderEvent {
         agent_id: AgentId,
         /// Turn identity.
         turn_id: String,
+        /// Exact provider claim generation that produced the failure.
+        claim_generation: u64,
         /// Stable failure kind for diagnostics.
         kind: String,
         /// Human-readable failure.

@@ -5102,11 +5102,25 @@ work was captured. Any unrelated pane write revokes that authority, and later
 projection publication, mismatch handling, cancellation, or rollback MUST NOT
 restore an older baseline over the unrelated write.
 
-Request assembly for the owning provider MUST emit only the native
-assistant/tool-call projection;
-assembly for every other provider MUST emit only the neutral assistant/action-
-result projection. Persistence and restoration MUST reconstruct the same
-complete owner before making that selection. For stateless OpenAI Responses
+Provider-native continuity ownership MUST be the exact pair of the selected
+wire API compatibility and configured provider ID. Request assembly MUST emit
+the native assistant/tool-call projection only when both the selected API and
+configured provider ID exactly match that durable owner; matching an API family,
+provider implementation kind, built-in alias, endpoint, or model alone is not
+sufficient. Assembly for every other provider, or whenever the API or complete
+owner is unknown, malformed, partial, or unsupported, MUST fail closed to only
+the neutral assistant/action-result projection. That fallback MUST NOT expose,
+serialize, summarize, or otherwise leak opaque provider-native fields.
+
+New durable provider-continuity owners MUST use a structured, explicitly
+versioned encoding containing both the API compatibility ID and exact configured
+provider ID, and the execution-block integrity hash MUST commit to that complete
+encoding. Readers MUST retain compatibility with historical scalar `openai` and
+`deepseek` owner encodings and their historical hash material, interpreting them
+only as their legacy exact built-in API/provider pairs. Writers MUST NOT use the
+legacy scalar or legacy hash form for newly configured exact owners. Persistence
+and restoration MUST reconstruct the same complete owner before native replay
+selection. For stateless OpenAI Responses
 requests with `store: false`, the native projection MUST retain the complete
 ordered validated response `output` sequence, including opaque reasoning
 fields, item identifiers, assistant-message `phase`, function-call identifiers,

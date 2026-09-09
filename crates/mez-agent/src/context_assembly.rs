@@ -13,9 +13,10 @@ use crate::ProviderTranscriptEvent;
 use crate::{
     AgentContext, AgentPromptAssetSource, AgentPromptProfile, AgentRequestAssemblyResult,
     AllowedActionSet, ContextBlock, ContextPlacement, ContextSourceKind, ModelInteractionKind,
-    ModelMessage, ModelMessageRole, ModelProfile, ModelRequest, assemble_agent_system_prompt,
-    constrain_skill_actions_for_loaded_context, model_context_block_header,
-    validate_context_placement_order, validate_context_semantics, validate_model_profile_request,
+    ModelMessage, ModelMessageRole, ModelProfile, ModelRequest, ProviderApiCompatibility,
+    assemble_agent_system_prompt, constrain_skill_actions_for_loaded_context,
+    model_context_block_header, validate_context_placement_order, validate_context_semantics,
+    validate_model_profile_request,
 };
 
 /// Stable product identity required to assemble one provider request.
@@ -36,6 +37,56 @@ pub fn assemble_model_request_from_context(
     context: &AgentContext,
     prompt_assets: &impl AgentPromptAssetSource,
 ) -> AgentRequestAssemblyResult<ModelRequest> {
+    assemble_model_request_from_context_for_api(
+        profile,
+        ProviderApiCompatibility::default_for_kind(&profile.provider),
+        identity,
+        context,
+        prompt_assets,
+    )
+}
+
+/// Assembles one provider request with explicit wire API compatibility.
+///
+/// Provider-native continuity is replayed only when both this API and the
+/// configured provider id exactly match its durable owner.
+pub fn assemble_model_request_from_context_with_api(
+    profile: &ModelProfile,
+    api: ProviderApiCompatibility,
+    identity: ModelRequestIdentity<'_>,
+    context: &AgentContext,
+    prompt_assets: &impl AgentPromptAssetSource,
+) -> AgentRequestAssemblyResult<ModelRequest> {
+    assemble_model_request_from_context_for_api(
+        profile,
+        Some(api),
+        identity,
+        context,
+        prompt_assets,
+    )
+}
+
+/// Assembles one provider request when no wire API compatibility is known.
+///
+/// Native continuity is never replayed through this entry point, even when a
+/// configured provider id happens to equal a built-in provider kind.
+pub fn assemble_model_request_from_context_api_unknown(
+    profile: &ModelProfile,
+    identity: ModelRequestIdentity<'_>,
+    context: &AgentContext,
+    prompt_assets: &impl AgentPromptAssetSource,
+) -> AgentRequestAssemblyResult<ModelRequest> {
+    assemble_model_request_from_context_for_api(profile, None, identity, context, prompt_assets)
+}
+
+/// Implements request assembly with an optional proven API compatibility.
+fn assemble_model_request_from_context_for_api(
+    profile: &ModelProfile,
+    api: Option<ProviderApiCompatibility>,
+    identity: ModelRequestIdentity<'_>,
+    context: &AgentContext,
+    prompt_assets: &impl AgentPromptAssetSource,
+) -> AgentRequestAssemblyResult<ModelRequest> {
     validate_model_profile_request(profile, identity.turn_id)?;
     validate_context_placement_order(context.blocks())?;
     validate_context_semantics(context.blocks())?;
@@ -47,9 +98,9 @@ pub fn assemble_model_request_from_context(
         .enumerate()
         .filter_map(|(index, _)| context.metadata_for_block(index))
         .filter(|metadata| {
-            metadata
-                .provider_owner()
-                .is_some_and(|owner| owner.matches_provider(&profile.provider))
+            metadata.provider_owner().is_some_and(|owner| {
+                api.is_some_and(|api| owner.matches_provider(api, &profile.provider))
+            })
         })
         .filter_map(|metadata| metadata.execution_group_id().cloned())
         .collect::<BTreeSet<_>>();
@@ -68,7 +119,7 @@ pub fn assemble_model_request_from_context(
             ))
         })?;
         if let Some(owner) = metadata.provider_owner() {
-            if !owner.matches_provider(&profile.provider) {
+            if !api.is_some_and(|api| owner.matches_provider(api, &profile.provider)) {
                 continue;
             }
             messages.push(ModelMessage {
@@ -312,7 +363,13 @@ mod tests {
                 "native assistant",
                 assistant_native.clone(),
                 group.clone(),
-                Some(crate::ProviderContinuityOwner::DeepSeek),
+                Some(
+                    crate::ProviderContinuityOwner::new(
+                        ProviderApiCompatibility::DeepSeekChatCompletions,
+                        "deepseek",
+                    )
+                    .unwrap(),
+                ),
                 true,
             )
             .unwrap();
@@ -337,7 +394,13 @@ mod tests {
                 "native tool result",
                 tool_native.clone(),
                 group,
-                Some(crate::ProviderContinuityOwner::DeepSeek),
+                Some(
+                    crate::ProviderContinuityOwner::new(
+                        ProviderApiCompatibility::DeepSeekChatCompletions,
+                        "deepseek",
+                    )
+                    .unwrap(),
+                ),
                 true,
             )
             .unwrap();
@@ -402,6 +465,187 @@ mod tests {
                 .content
                 .starts_with(crate::PROVIDER_TRANSCRIPT_EVENT_MARKER)
         }));
+    }
+
+    /// Verifies exact continuity ownership selects native replay only when the
+    /// configured provider id and API compatibility both match.
+    #[test]
+    fn model_request_assembly_requires_both_exact_owner_dimensions() {
+        let native = ProviderTranscriptEvent::validated_openai_response_output(vec![
+            serde_json::json!({"type":"reasoning","id":"reasoning-1"}),
+        ])
+        .unwrap()
+        .to_transcript_content();
+        let mut context = AgentContext::new(vec![ContextBlock::user_event(
+            "user",
+            "continue the exact provider execution",
+        )])
+        .unwrap();
+        let group = crate::ContextExecutionGroupId::new("provider-execution-exact").unwrap();
+        context
+            .append_assistant_event("assistant", "neutral assistant fallback", group.clone())
+            .unwrap();
+        context
+            .append_evidence_event(
+                ContextSourceKind::TranscriptTool,
+                "native response",
+                native.clone(),
+                group.clone(),
+                Some(
+                    crate::ProviderContinuityOwner::new(
+                        ProviderApiCompatibility::OpenAiResponses,
+                        "configured-openai",
+                    )
+                    .unwrap(),
+                ),
+                true,
+            )
+            .unwrap();
+        context
+            .append_evidence_event(
+                ContextSourceKind::ActionResult,
+                "action result",
+                "neutral result fallback",
+                group,
+                None,
+                true,
+            )
+            .unwrap();
+
+        for (api, provider, expects_native) in [
+            (
+                ProviderApiCompatibility::OpenAiResponses,
+                "configured-openai",
+                true,
+            ),
+            (
+                ProviderApiCompatibility::OpenAiResponses,
+                "other-openai",
+                false,
+            ),
+            (
+                ProviderApiCompatibility::OpenAiChatCompletions,
+                "configured-openai",
+                false,
+            ),
+        ] {
+            let request = assemble_model_request_from_context_with_api(
+                &model_profile(provider),
+                api,
+                ModelRequestIdentity {
+                    turn_id: "turn-1",
+                    agent_id: "agent-1",
+                    pane_id: "%1",
+                },
+                &context,
+                &TestPromptAssets,
+            )
+            .unwrap();
+            assert_eq!(
+                request
+                    .messages
+                    .iter()
+                    .any(|message| message.content == native),
+                expects_native
+            );
+            assert_eq!(
+                request
+                    .messages
+                    .iter()
+                    .any(|message| message.content.contains("neutral assistant fallback")),
+                !expects_native
+            );
+            assert_eq!(
+                request
+                    .messages
+                    .iter()
+                    .any(|message| message.content.contains("neutral result fallback")),
+                !expects_native
+            );
+            assert!(request.messages.iter().all(|message| {
+                expects_native
+                    || !message
+                        .content
+                        .starts_with(crate::PROVIDER_TRANSCRIPT_EVENT_MARKER)
+            }));
+        }
+    }
+
+    /// Verifies API-unknown assembly stays neutral even when the configured
+    /// provider id is literally the built-in `openai` identifier.
+    #[test]
+    fn model_request_api_unknown_keeps_literal_openai_projection_neutral() {
+        let native = ProviderTranscriptEvent::validated_openai_response_output(vec![
+            serde_json::json!({"type":"reasoning","id":"reasoning-unknown-api"}),
+        ])
+        .unwrap()
+        .to_transcript_content();
+        let mut context = AgentContext::new(vec![ContextBlock::user_event(
+            "user",
+            "continue without a proven API",
+        )])
+        .unwrap();
+        let group = crate::ContextExecutionGroupId::new("provider-execution-unknown-api").unwrap();
+        context
+            .append_assistant_event("assistant", "neutral assistant fallback", group.clone())
+            .unwrap();
+        context
+            .append_evidence_event(
+                ContextSourceKind::TranscriptTool,
+                "native response",
+                native.clone(),
+                group.clone(),
+                Some(
+                    crate::ProviderContinuityOwner::new(
+                        ProviderApiCompatibility::OpenAiResponses,
+                        "openai",
+                    )
+                    .unwrap(),
+                ),
+                true,
+            )
+            .unwrap();
+        context
+            .append_evidence_event(
+                ContextSourceKind::ActionResult,
+                "action result",
+                "neutral result fallback",
+                group,
+                None,
+                true,
+            )
+            .unwrap();
+
+        let request = assemble_model_request_from_context_api_unknown(
+            &model_profile("openai"),
+            ModelRequestIdentity {
+                turn_id: "turn-1",
+                agent_id: "agent-1",
+                pane_id: "%1",
+            },
+            &context,
+            &TestPromptAssets,
+        )
+        .unwrap();
+
+        assert!(
+            request
+                .messages
+                .iter()
+                .all(|message| message.content != native)
+        );
+        assert!(
+            request
+                .messages
+                .iter()
+                .any(|message| message.content.contains("neutral assistant fallback"))
+        );
+        assert!(
+            request
+                .messages
+                .iter()
+                .any(|message| message.content.contains("neutral result fallback"))
+        );
     }
 
     /// Verifies durable transcript import reconstructs one provider execution

@@ -1270,7 +1270,7 @@ impl AsyncRuntimeSessionActor {
                             .claim_configured_agent_provider_task(&agent_id, &turn_id)
                     });
                 let result = result.and_then(|dispatch| {
-                    if let Some(dispatch) = dispatch {
+                    if let Some(mut dispatch) = dispatch {
                         self.timers.next_provider_claim_generation =
                             self.timers.next_provider_claim_generation.saturating_add(1);
                         let generation = self.timers.next_provider_claim_generation;
@@ -1288,6 +1288,7 @@ impl AsyncRuntimeSessionActor {
                                 return Ok(None);
                             }
                         };
+                        dispatch.claim_generation = generation;
                         self.queue_runtime_side_effects(transition.side_effects)?;
                         self.queue_deferred_pane_io_side_effects_from_service()?;
                         Ok(Some(dispatch))
@@ -1302,6 +1303,18 @@ impl AsyncRuntimeSessionActor {
                 if should_notify {
                     self.notify_event_delivery();
                 }
+                false
+            }
+            #[cfg(test)]
+            AsyncRuntimeRequest::RecordClaimedAgentProviderTaskForTests {
+                turn_id,
+                generation,
+                reply,
+            } => {
+                let result = self
+                    .service
+                    .record_claimed_agent_provider_generation_for_tests(&turn_id, generation);
+                let _ = reply.send(result);
                 false
             }
             AsyncRuntimeRequest::ClaimApprovedExternalAction {

@@ -56,6 +56,7 @@ fn runtime_openai_dispatch_request_shape(
     } else {
         assemble_model_request(
             &dispatch.model_profile,
+            ProviderApiCompatibility::OpenAiResponses,
             &dispatch.turn,
             &dispatch.context.to_agent_context(),
         )?
@@ -147,6 +148,7 @@ impl RuntimeSessionService {
                 turn_id: turn_id.to_string(),
                 conversation_id: turn.conversation_id,
                 agent_id: turn.agent_id,
+                provider_owner: None,
                 generation: 1,
                 claimed_at_unix_ms: current_unix_millis(),
                 timeout_ms: DEFAULT_PROVIDER_TIMEOUT_MS,
@@ -156,6 +158,28 @@ impl RuntimeSessionService {
             },
         );
         self.agent.pending_agent_provider_tasks.remove(turn_id);
+        Ok(())
+    }
+
+    /// Installs a deterministic provider claim with an explicit generation.
+    #[cfg(test)]
+    pub(crate) fn record_claimed_agent_provider_generation_for_tests(
+        &mut self,
+        turn_id: &str,
+        generation: u64,
+    ) -> Result<()> {
+        let context_event_high_water_mark = self
+            .agent_turn_contexts()
+            .get(turn_id)
+            .map(|context| context.event_sequence_high_water_mark())
+            .ok_or_else(|| MezError::invalid_state("provider claim test context is unavailable"))?;
+        self.record_claimed_agent_provider_context_for_tests(
+            turn_id,
+            context_event_high_water_mark,
+        )?;
+        if let Some(claim) = self.agent.claimed_agent_provider_tasks.get_mut(turn_id) {
+            claim.generation = generation;
+        }
         Ok(())
     }
 
@@ -883,6 +907,7 @@ impl RuntimeSessionService {
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
+        let api = resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())?;
         if let Some(max_input_tokens) = model_profile.max_input_tokens() {
             let mut estimated_request = if let Some(request) = macro_judge_request
                 .as_ref()
@@ -890,7 +915,7 @@ impl RuntimeSessionService {
             {
                 request.clone()
             } else {
-                assemble_model_request(&model_profile, &turn, &provider_context)?
+                assemble_model_request(&model_profile, api, &turn, &provider_context)?
             };
             mez_agent::apply_model_request_control(
                 &mut estimated_request,
@@ -903,7 +928,6 @@ impl RuntimeSessionService {
                 self.runtime_persistent_memory_enabled(),
                 super::issues::runtime_issues_enabled(self),
             );
-            let api = resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())?;
             let estimate = mez_agent::provider_request_input_estimate(
                 &estimated_request,
                 api,
@@ -953,7 +977,7 @@ impl RuntimeSessionService {
             super::issues::runtime_issues_enabled(self),
         );
         if self.agent_debug_enabled(&turn.pane_id) {
-            match assemble_model_request(&model_profile, &turn, &provider_context) {
+            match assemble_model_request(&model_profile, api, &turn, &provider_context) {
                 Ok(mut request) => {
                     mez_agent::apply_model_request_control(
                         &mut request,
@@ -1014,6 +1038,7 @@ impl RuntimeSessionService {
             "provider_task claimed reason=async_provider_worker",
         )?;
         Ok(Some(RuntimeAgentProviderDispatch {
+            claim_generation: 0,
             turn,
             context,
             allowed_actions,
@@ -1637,6 +1662,10 @@ impl RuntimeSessionService {
                 turn_id: turn.turn_id.clone(),
                 conversation_id: turn.conversation_id.clone(),
                 agent_id: turn.agent_id.clone(),
+                provider_owner: mez_agent::ProviderContinuityOwner::new(
+                    dispatch.provider.api_compatibility(),
+                    dispatch.provider.provider_id(),
+                ),
                 generation,
                 claimed_at_unix_ms: current_unix_millis(),
                 timeout_ms,
@@ -1671,6 +1700,23 @@ impl RuntimeSessionService {
     /// Clears the provider-worker claim lease for a settled turn.
     pub(crate) fn clear_claimed_agent_provider_task(&mut self, turn_id: &str) {
         self.agent.claimed_agent_provider_tasks.remove(turn_id);
+    }
+
+    /// Reports whether an event belongs to the exact active provider claim.
+    pub(crate) fn agent_provider_claim_matches(
+        &self,
+        agent_id: &AgentId,
+        turn_id: &str,
+        generation: u64,
+    ) -> bool {
+        self.agent
+            .claimed_agent_provider_tasks
+            .get(turn_id)
+            .is_some_and(|claim| {
+                claim.turn_id == turn_id
+                    && claim.agent_id == agent_id.as_str()
+                    && claim.generation == generation
+            })
     }
 
     /// Fails a running turn when its claimed provider worker lease expires.

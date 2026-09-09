@@ -772,6 +772,23 @@ impl AsyncRuntimeSessionHandle {
         .await?
     }
 
+    /// Installs a deterministic provider claim for actor-level regression tests.
+    #[cfg(test)]
+    pub(crate) async fn record_claimed_agent_provider_task_for_tests(
+        &self,
+        turn_id: String,
+        generation: u64,
+    ) -> Result<()> {
+        self.request(
+            |reply| AsyncRuntimeRequest::RecordClaimedAgentProviderTaskForTests {
+                turn_id,
+                generation,
+                reply,
+            },
+        )
+        .await?
+    }
+
     /// Claims one approved network or MCP action for worker execution.
     pub async fn claim_approved_external_action(
         &self,

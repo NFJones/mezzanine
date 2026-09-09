@@ -232,10 +232,15 @@ async fn async_actor_schedules_provider_retry_timer_for_retryable_failure() {
         .unwrap();
 
     let client = async {
+        handle
+            .record_claimed_agent_provider_task_for_tests(expected_turn.clone(), 1)
+            .await
+            .unwrap();
         let mut failure = RuntimeEventBatch::new();
         failure.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
             agent_id: expected_agent.clone(),
             turn_id: expected_turn.clone(),
+            claim_generation: 1,
             kind: "invalid_state".to_string(),
             message: "provider HTTP request failed: rate limited".to_string(),
             provider_failure_json: Some(r#"{"status_code":429}"#.to_string()),
@@ -362,6 +367,7 @@ async fn async_actor_discards_streaming_output_before_retrying_premature_sse_eof
                     agent_id: expected_agent.clone(),
                     turn_id: expected_turn.clone(),
                     pane_id: "%1".to_string(),
+                    claim_generation: 1,
                     event,
                 },
             ));
@@ -391,6 +397,7 @@ async fn async_actor_discards_streaming_output_before_retrying_premature_sse_eof
         failure.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
             agent_id: expected_agent,
             turn_id: expected_turn.clone(),
+            claim_generation: 1,
             kind: "io".to_string(),
             message: "provider SSE stream ended before a terminal event".to_string(),
             provider_failure_json: None,
@@ -459,10 +466,19 @@ async fn async_actor_retries_rate_limits_five_times_with_exponential_backoff() {
         let maximum_delays = [1_000, 2_000, 4_000, 8_000, 16_000];
         for (index, maximum_delay_ms) in maximum_delays.into_iter().enumerate() {
             let attempt = index + 1;
+            let claim_generation = attempt as u64;
+            handle
+                .record_claimed_agent_provider_task_for_tests(
+                    expected_turn.clone(),
+                    claim_generation,
+                )
+                .await
+                .unwrap();
             let mut failure = RuntimeEventBatch::new();
             failure.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
                 agent_id: expected_agent.clone(),
                 turn_id: expected_turn.clone(),
+                claim_generation,
                 kind: "invalid_state".to_string(),
                 message: "provider HTTP request failed: rate limited".to_string(),
                 provider_failure_json: Some(r#"{"status_code":429}"#.to_string()),
@@ -514,10 +530,15 @@ async fn async_actor_retries_rate_limits_five_times_with_exponential_backoff() {
             );
         }
 
+        handle
+            .record_claimed_agent_provider_task_for_tests(expected_turn.clone(), 6)
+            .await
+            .unwrap();
         let mut exhausted = RuntimeEventBatch::new();
         exhausted.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
             agent_id: expected_agent,
             turn_id: expected_turn,
+            claim_generation: 6,
             kind: "invalid_state".to_string(),
             message: "provider HTTP request failed: rate limited".to_string(),
             provider_failure_json: Some(r#"{"status_code":429}"#.to_string()),
@@ -595,10 +616,15 @@ max_output_tokens = 4096
         .unwrap();
 
     let client = async {
+        handle
+            .record_claimed_agent_provider_task_for_tests(expected_turn.clone(), 1)
+            .await
+            .unwrap();
         let mut failure = RuntimeEventBatch::new();
         failure.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
             agent_id: expected_agent.clone(),
             turn_id: expected_turn.clone(),
+            claim_generation: 1,
             kind: "invalid_state".to_string(),
             message: "OpenAI stream returned an incomplete response: max_output_tokens".to_string(),
             provider_failure_json: Some(
@@ -751,10 +777,19 @@ context_window_tokens = 128000
 
     let client = async {
         for stage in 1..=2 {
+            let claim_generation = stage as u64;
+            handle
+                .record_claimed_agent_provider_task_for_tests(
+                    expected_turn.clone(),
+                    claim_generation,
+                )
+                .await
+                .unwrap();
             let mut failure = RuntimeEventBatch::new();
             failure.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
                 agent_id: expected_agent.clone(),
                 turn_id: expected_turn.clone(),
+                claim_generation,
                 kind: "invalid_state".to_string(),
                 message: "OpenAI stream returned an incomplete response: max_output_tokens"
                     .to_string(),
@@ -791,10 +826,15 @@ context_window_tokens = 128000
             )));
         }
 
+        handle
+            .record_claimed_agent_provider_task_for_tests(expected_turn.clone(), 3)
+            .await
+            .unwrap();
         let mut exhausted = RuntimeEventBatch::new();
         exhausted.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
             agent_id: expected_agent,
             turn_id: expected_turn.clone(),
+            claim_generation: 3,
             kind: "invalid_state".to_string(),
             message: "OpenAI stream returned an incomplete response: max_output_tokens".to_string(),
             provider_failure_json: Some(
@@ -892,10 +932,15 @@ async fn async_actor_idle_cleanup_preserves_turn_waiting_for_provider_retry_time
         .unwrap();
 
     let client = async {
+        handle
+            .record_claimed_agent_provider_task_for_tests(expected_turn.clone(), 1)
+            .await
+            .unwrap();
         let mut failure = RuntimeEventBatch::new();
         failure.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
             agent_id: expected_agent.clone(),
             turn_id: expected_turn.clone(),
+            claim_generation: 1,
             kind: "invalid_state".to_string(),
             message: "provider HTTP request failed: rate limited".to_string(),
             provider_failure_json: Some(r#"{"status_code":429}"#.to_string()),
@@ -1032,10 +1077,15 @@ async fn async_actor_schedules_provider_retry_timer_for_controller_retry_hint() 
 
     let client = async {
         let retry_message = "An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID b331baf5-b254-46d7-8d3f-58b563ce7ee8 in your message.";
+        handle
+            .record_claimed_agent_provider_task_for_tests(expected_turn.clone(), 1)
+            .await
+            .unwrap();
         let mut failure = RuntimeEventBatch::new();
         failure.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
             agent_id: expected_agent,
             turn_id: expected_turn.clone(),
+            claim_generation: 1,
             kind: "invalid_state".to_string(),
             message: retry_message.to_string(),
             provider_failure_json: Some(
@@ -1109,10 +1159,15 @@ async fn async_actor_fails_non_retryable_provider_failures_without_retry_timer()
         .unwrap();
 
     let client = async {
+        handle
+            .record_claimed_agent_provider_task_for_tests(expected_turn.clone(), 1)
+            .await
+            .unwrap();
         let mut failure = RuntimeEventBatch::new();
         failure.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
             agent_id: expected_agent,
             turn_id: expected_turn,
+            claim_generation: 1,
             kind: "invalid_state".to_string(),
             message: "OpenAI provider returned 401 Unauthorized: invalid token".to_string(),
             provider_failure_json: Some(r#"{"status_code":401}"#.to_string()),
@@ -1311,10 +1366,15 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
         .unwrap();
 
     let client = async {
+        handle
+            .record_claimed_agent_provider_task_for_tests(task.turn_id.clone(), 1)
+            .await
+            .unwrap();
         let mut provider_batch = RuntimeEventBatch::new();
         provider_batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Completed {
             agent_id: AgentId::opaque(task.agent_id.clone()).unwrap(),
             turn_id: task.turn_id.clone(),
+            claim_generation: 1,
             execution: Box::new(execution),
         }));
         let report = handle.submit_runtime_events(provider_batch).await.unwrap();
@@ -1389,10 +1449,15 @@ async fn async_actor_retries_provider_overload_message_without_rate_limit_status
         .unwrap();
 
     let client = async {
+        handle
+            .record_claimed_agent_provider_task_for_tests(expected_turn.clone(), 1)
+            .await
+            .unwrap();
         let mut failure = RuntimeEventBatch::new();
         failure.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
             agent_id: expected_agent.clone(),
             turn_id: expected_turn.clone(),
+            claim_generation: 1,
             kind: "invalid_state".to_string(),
             message:
                 "OpenAI Responses API returned status 400: API overloaded, please try again later."

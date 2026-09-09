@@ -299,7 +299,16 @@ impl RuntimeSessionService {
             .agent_context_continuity_snapshot_by_conversation
             .get(&conversation_id)
             .cloned();
-        let Ok(mut request) = assemble_model_request(model_profile, turn, context) else {
+        let Some(provider_config) = self.provider_registry().provider(&model_profile.provider)
+        else {
+            return;
+        };
+        let Ok(api) =
+            mez_agent::resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())
+        else {
+            return;
+        };
+        let Ok(mut request) = assemble_model_request(model_profile, api, turn, context) else {
             return;
         };
         let (allowed_actions, interaction_kind) =

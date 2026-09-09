@@ -33,6 +33,10 @@ impl ChatCompletionsDialect for DeepSeekChatCompletionsDialect {
         "deepseek"
     }
 
+    fn api_compatibility(&self) -> mez_agent::ProviderApiCompatibility {
+        mez_agent::ProviderApiCompatibility::DeepSeekChatCompletions
+    }
+
     fn default_chat_endpoint(&self) -> &'static str {
         DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT
     }

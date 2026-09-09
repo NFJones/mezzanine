@@ -21,6 +21,7 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         model_profile: &ModelProfile,
         provider_id: &str,
+        provider_owner: Option<mez_agent::ProviderContinuityOwner>,
         mut execution: AgentTurnExecution,
         defer_external_actions: bool,
     ) -> Result<AgentTurnExecution> {
@@ -87,7 +88,11 @@ impl RuntimeSessionService {
             execution.latest_response_usage,
         )?;
         self.present_agent_response_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
-        self.append_agent_execution_chronology(turn, &execution)?;
+        self.append_agent_execution_chronology_for_provider(
+            turn,
+            &execution,
+            provider_owner.as_ref(),
+        )?;
         self.record_agent_copy_output(turn, &execution);
         let mut terminal_observations = RuntimeTerminalActionObservations::default();
         terminal_observations.observe(&execution);

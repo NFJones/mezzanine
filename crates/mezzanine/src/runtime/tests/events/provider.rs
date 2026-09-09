@@ -793,8 +793,10 @@ fn runtime_late_result_retains_original_provider_execution_group() {
             refresh: false,
         },
     };
+    let mut first_request = runtime_model_request_fixture(&turn.turn_id);
+    first_request.provider = "deepseek".to_string();
     let first = mez_agent::AgentTurnExecution {
-        request: runtime_model_request_fixture(&turn.turn_id),
+        request: first_request,
         response: mez_agent::ModelResponse {
             provider: "deepseek".to_string(),
             model: "test".to_string(),
@@ -829,7 +831,17 @@ fn runtime_late_result_retains_original_provider_execution_group() {
         terminal_state: AgentTurnState::Running,
     };
     service
-        .append_agent_execution_chronology(&turn, &first)
+        .append_agent_execution_chronology_for_provider(
+            &turn,
+            &first,
+            Some(
+                &mez_agent::ProviderContinuityOwner::new(
+                    mez_agent::ProviderApiCompatibility::DeepSeekChatCompletions,
+                    "deepseek",
+                )
+                .unwrap(),
+            ),
+        )
         .unwrap();
 
     service
@@ -941,6 +953,14 @@ fn runtime_late_result_retains_original_provider_execution_group() {
             .iter()
             .all(|event| { event.execution_group_id() == original_assistant.execution_group_id() })
     );
+    assert!(provider_events.iter().all(|event| {
+        event.provider_owner().is_some_and(|owner| {
+            owner.matches_provider(
+                mez_agent::ProviderApiCompatibility::DeepSeekChatCompletions,
+                "deepseek",
+            )
+        })
+    }));
     assert!(
         context
             .chronology()

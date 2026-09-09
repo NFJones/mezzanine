@@ -1793,9 +1793,14 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
         cooperation_mode: None,
         initial_capability: None,
     };
-    let request =
-        crate::integrations::agent::context::assemble_model_request(&profile, &turn, &context)
-            .unwrap();
+    let request = crate::integrations::agent::context::assemble_model_request(
+        &profile,
+        mez_agent::ProviderApiCompatibility::default_for_kind(&profile.provider)
+            .expect("runtime test profile must use a known provider API"),
+        &turn,
+        &context,
+    )
+    .unwrap();
     let replayed_user_messages = request
         .messages
         .iter()

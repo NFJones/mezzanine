@@ -583,6 +583,20 @@ pub trait ModelProvider {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn provider_id(&self) -> &str;
+
+    /// Returns the wire API selected by this concrete provider or test fixture.
+    ///
+    /// Synthetic provider ids are allowlisted so an unknown fixture cannot
+    /// silently acquire provider-native continuity compatibility.
+    fn api_compatibility(&self) -> mez_agent::ProviderApiCompatibility {
+        match self.provider_id() {
+            "echo" | "batch" | "runtime-echo" | "runtime-fail" | "runtime-raw-fail"
+            | "runtime-batch" => mez_agent::ProviderApiCompatibility::OpenAiResponses,
+            provider => mez_agent::ProviderApiCompatibility::default_for_kind(provider)
+                .unwrap_or_else(|| panic!("test provider `{provider}` has no explicit API")),
+        }
+    }
+
     /// Runs the send request operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -614,6 +628,9 @@ pub trait AsyncModelProvider: Send + Sync {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn provider_id(&self) -> &str;
+
+    /// Returns the wire API selected by this concrete provider adapter.
+    fn api_compatibility(&self) -> mez_agent::ProviderApiCompatibility;
 
     /// Returns a non-secret identity for the provider's cache-routing namespace.
     fn cache_namespace(&self) -> String {
@@ -693,6 +710,10 @@ pub trait AsyncModelProvider: Send + Sync {
 impl<P: AsyncModelProvider> AsyncModelProvider for ObservedAsyncModelProvider<'_, P> {
     fn provider_id(&self) -> &str {
         self.provider.provider_id()
+    }
+
+    fn api_compatibility(&self) -> mez_agent::ProviderApiCompatibility {
+        self.provider.api_compatibility()
     }
 
     fn cache_namespace(&self) -> String {
@@ -1286,6 +1307,10 @@ impl<T: ProviderHttpTransport> ModelProvider for OpenAiResponsesProvider<T> {
         self.provider_id()
     }
 
+    fn api_compatibility(&self) -> mez_agent::ProviderApiCompatibility {
+        mez_agent::ProviderApiCompatibility::OpenAiResponses
+    }
+
     /// Runs the list models operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -1396,6 +1421,10 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
     /// on duplicated control-flow logic.
     fn provider_id(&self) -> &str {
         self.provider_id()
+    }
+
+    fn api_compatibility(&self) -> mez_agent::ProviderApiCompatibility {
+        mez_agent::ProviderApiCompatibility::OpenAiResponses
     }
 
     fn cache_namespace(&self) -> String {

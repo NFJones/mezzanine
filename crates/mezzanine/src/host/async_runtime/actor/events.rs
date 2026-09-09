@@ -1096,8 +1096,15 @@ impl AsyncRuntimeSessionActor {
             AgentProviderEvent::RoutingSelected {
                 agent_id,
                 turn_id,
+                claim_generation,
                 selection,
             } => {
+                if !self
+                    .service
+                    .agent_provider_claim_matches(&agent_id, &turn_id, claim_generation)
+                {
+                    return Ok(RuntimeTransition::default());
+                }
                 let claim_cancellations = self.provider_claim_cancel_timer_side_effects(&turn_id);
                 self.service.clear_claimed_agent_provider_task(&turn_id);
                 self.service
@@ -1117,12 +1124,19 @@ impl AsyncRuntimeSessionActor {
             AgentProviderEvent::Failed {
                 agent_id,
                 turn_id,
+                claim_generation,
                 kind,
                 message,
                 provider_failure_json,
                 provider_raw_text,
                 provider_output_limit_state,
             } => {
+                if !self
+                    .service
+                    .agent_provider_claim_matches(&agent_id, &turn_id, claim_generation)
+                {
+                    return Ok(RuntimeTransition::default());
+                }
                 let claim_cancellations = self.provider_claim_cancel_timer_side_effects(&turn_id);
                 self.service.clear_claimed_agent_provider_task(&turn_id);
                 self.service
@@ -1212,17 +1226,32 @@ impl AsyncRuntimeSessionActor {
                 agent_id,
                 turn_id,
                 pane_id,
+                claim_generation,
                 event,
-            } => Ok(self.service.apply_agent_provider_streaming_say_transition(
-                &agent_id, &turn_id, &pane_id, &event,
-            )),
+            } => {
+                if !self
+                    .service
+                    .agent_provider_claim_matches(&agent_id, &turn_id, claim_generation)
+                {
+                    return Ok(RuntimeTransition::default());
+                }
+                Ok(self.service.apply_agent_provider_streaming_say_transition(
+                    &agent_id, &turn_id, &pane_id, &event,
+                ))
+            }
             AgentProviderEvent::Completed {
                 agent_id,
                 turn_id,
+                claim_generation,
                 execution,
             } => {
+                if !self
+                    .service
+                    .agent_provider_claim_matches(&agent_id, &turn_id, claim_generation)
+                {
+                    return Ok(RuntimeTransition::default());
+                }
                 let claim_cancellations = self.provider_claim_cancel_timer_side_effects(&turn_id);
-                self.service.clear_claimed_agent_provider_task(&turn_id);
                 self.service
                     .clear_agent_provider_retry_attempt(turn_id.as_str());
                 self.timers.provider_retry.remove(turn_id.as_str());

@@ -205,9 +205,15 @@ impl TranscriptContextEvent {
         if !valid_execution_block(source, &label, &content) || ordinal == 0 {
             return None;
         }
-        if let Some(owner) = provider_owner
+        if provider_owner
+            .as_ref()
+            .is_some_and(ProviderContinuityOwner::is_legacy)
+        {
+            return None;
+        }
+        if let Some(owner) = provider_owner.as_ref()
             && ProviderTranscriptEvent::from_transcript_content(&content)
-                .is_none_or(|event| event.provider_id() != owner.as_str())
+                .is_none_or(|event| !owner.accepts_transcript_event(&event))
         {
             return None;
         }
@@ -217,7 +223,7 @@ impl TranscriptContextEvent {
             &content,
             Some(execution_group_id.as_str()),
             Some(ordinal),
-            provider_owner,
+            provider_owner.as_ref(),
         );
         Some(Self::ExecutionBlock {
             source,
@@ -290,7 +296,7 @@ impl TranscriptContextEvent {
                 "projection_sha256": projection_sha256,
                 "execution_group_id": execution_group_id.as_ref().map(ContextExecutionGroupId::as_str),
                 "ordinal": ordinal,
-                "provider_owner": provider_owner.map(ProviderContinuityOwner::as_str),
+                "provider_owner": provider_owner.as_ref().map(provider_owner_json),
                 "label": label,
                 "content": content,
             }),
@@ -398,16 +404,14 @@ impl TranscriptContextEvent {
                 }
                 let provider_owner = match value.get("provider_owner") {
                     None | Some(Value::Null) => None,
-                    Some(value) => {
-                        Some(ProviderContinuityOwner::from_provider_id(value.as_str()?)?)
-                    }
+                    Some(value) => Some(provider_owner_from_json(value)?),
                 };
                 if provider_owner.is_some() && execution_group_id.is_none() {
                     return None;
                 }
-                if let Some(owner) = provider_owner
+                if let Some(owner) = provider_owner.as_ref()
                     && ProviderTranscriptEvent::from_transcript_content(content)
-                        .is_none_or(|event| event.provider_id() != owner.as_str())
+                        .is_none_or(|event| !owner.accepts_transcript_event(&event))
                 {
                     return None;
                 }
@@ -420,7 +424,7 @@ impl TranscriptContextEvent {
                         .as_ref()
                         .map(ContextExecutionGroupId::as_str),
                     ordinal,
-                    provider_owner,
+                    provider_owner.as_ref(),
                 );
                 if (execution_group_id.is_some() && projection_sha256.is_none())
                     || projection_sha256.is_some_and(|digest| digest != expected)
@@ -596,7 +600,7 @@ fn execution_block_sha256(
     content: &str,
     execution_group_id: Option<&str>,
     ordinal: Option<u64>,
-    provider_owner: Option<ProviderContinuityOwner>,
+    provider_owner: Option<&ProviderContinuityOwner>,
 ) -> String {
     let material = if execution_group_id.is_none() && ordinal.is_none() && provider_owner.is_none()
     {
@@ -614,13 +618,63 @@ fn execution_block_sha256(
             content,
             execution_group_id.unwrap_or_default(),
             ordinal.map_or_else(String::new, |value| value.to_string()),
-            provider_owner.map_or("", ProviderContinuityOwner::as_str),
+            provider_owner.map_or_else(String::new, provider_owner_hash_material),
         )
     };
     Sha256::digest(material.as_bytes())
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+/// Structured owner format emitted for exact configured-provider ownership.
+const PROVIDER_CONTINUITY_OWNER_VERSION: &str = "mez-provider-continuity-owner/v1";
+
+/// Projects one owner into its durable scalar or structured representation.
+fn provider_owner_json(owner: &ProviderContinuityOwner) -> Value {
+    if let Some(provider_id) = owner.legacy_provider_id() {
+        return Value::String(provider_id.to_string());
+    }
+    serde_json::json!({
+        "version": PROVIDER_CONTINUITY_OWNER_VERSION,
+        "api": owner.api().as_str(),
+        "provider_id": owner.provider_id(),
+    })
+}
+
+/// Decodes legacy scalar owners and current structured exact owners.
+fn provider_owner_from_json(value: &Value) -> Option<ProviderContinuityOwner> {
+    if let Some(provider_id) = value.as_str() {
+        return ProviderContinuityOwner::from_legacy_provider_id(provider_id);
+    }
+    let value = value.as_object()?;
+    if value.len() != 3
+        || !value.contains_key("version")
+        || !value.contains_key("api")
+        || !value.contains_key("provider_id")
+    {
+        return None;
+    }
+    if value.get("version")?.as_str()? != PROVIDER_CONTINUITY_OWNER_VERSION {
+        return None;
+    }
+    let api = crate::ProviderApiCompatibility::from_id(value.get("api")?.as_str()?)?;
+    ProviderContinuityOwner::new(api, value.get("provider_id")?.as_str()?)
+}
+
+/// Returns stable hash material while preserving historical scalar digests.
+fn provider_owner_hash_material(owner: &ProviderContinuityOwner) -> String {
+    owner.legacy_provider_id().map_or_else(
+        || {
+            format!(
+                "{}\0{}\0{}",
+                PROVIDER_CONTINUITY_OWNER_VERSION,
+                owner.api().as_str(),
+                owner.provider_id()
+            )
+        },
+        str::to_string,
+    )
 }
 
 #[cfg(test)]
@@ -770,6 +824,132 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    /// Verifies historical scalar OpenAI and DeepSeek owners still decode and
+    /// validate against the digest material emitted before exact ownership.
+    #[test]
+    fn execution_block_accepts_legacy_provider_owner_encoding_and_hashes() {
+        for (provider_id, content, expected_digest) in [
+            (
+                "openai",
+                concat!(
+                    "[mez-provider-transcript-event/v1]\n",
+                    r#"{"version":"mez-provider-transcript-event/v1","provider":"openai","kind":"response_output","items":[{"type":"reasoning","id":"reasoning-1"}]}"#,
+                ),
+                "4a3b0997056ce5a280a049cda41c4e41d7818400d2d2a08e535cb4882bca12c9",
+            ),
+            (
+                "deepseek",
+                concat!(
+                    "[mez-provider-transcript-event/v1]\n",
+                    r#"{"version":"mez-provider-transcript-event/v1","provider":"deepseek","kind":"tool_result","tool_call_id":"call-1","content":"exact output"}"#,
+                ),
+                "f0173280fcfb6ea6abc4d64951ef048477c1f07590b41e21d184cd7ab12ef305",
+            ),
+        ] {
+            let encoded = format!(
+                "{TRANSCRIPT_CONTEXT_EVENT_MARKER}{}",
+                serde_json::json!({
+                    "version": TRANSCRIPT_CONTEXT_EVENT_VERSION,
+                    "kind": EXECUTION_BLOCK_KIND,
+                    "source": "transcript_tool",
+                    "projection_sha256": expected_digest,
+                    "execution_group_id": "execution-group-legacy",
+                    "ordinal": 1,
+                    "provider_owner": provider_id,
+                    "label": "legacy native event",
+                    "content": content,
+                })
+            );
+            let event = TranscriptContextEvent::from_transcript_content(&encoded).unwrap();
+            let restored = event.to_transcript_content();
+
+            assert!(restored.contains("\"provider_owner\":\""));
+            assert!(restored.contains(expected_digest));
+            let TranscriptContextEvent::ExecutionBlock {
+                source,
+                execution_group_id: Some(group),
+                ordinal: Some(ordinal),
+                provider_owner: Some(owner),
+                label,
+                content,
+                ..
+            } = &event
+            else {
+                panic!("legacy fixture should decode as a complete execution block");
+            };
+            assert!(
+                TranscriptContextEvent::execution_block_with_metadata(
+                    *source,
+                    label.clone(),
+                    content.clone(),
+                    group.clone(),
+                    *ordinal,
+                    Some(owner.clone()),
+                )
+                .is_none()
+            );
+            assert_eq!(
+                TranscriptContextEvent::from_transcript_content(&restored),
+                Some(event)
+            );
+            let tampered = encoded.replace(expected_digest, &"0".repeat(64));
+            assert!(TranscriptContextEvent::from_transcript_content(&tampered).is_none());
+        }
+    }
+
+    /// Verifies current exact owners use a versioned structured encoding whose
+    /// API and provider-id dimensions are both protected by the block digest.
+    #[test]
+    fn execution_block_exact_provider_owner_round_trips_and_rejects_tampering() {
+        let content = ProviderTranscriptEvent::validated_openai_response_output(vec![
+            serde_json::json!({"type":"reasoning","id":"reasoning-1"}),
+        ])
+        .unwrap()
+        .to_transcript_content();
+        let owner = ProviderContinuityOwner::new(
+            crate::ProviderApiCompatibility::OpenAiResponses,
+            "configured-openai",
+        )
+        .unwrap();
+        let event = TranscriptContextEvent::execution_block_with_metadata(
+            ContextSourceKind::TranscriptTool,
+            "native response",
+            content,
+            ContextExecutionGroupId::new("execution-group-exact").unwrap(),
+            1,
+            Some(owner),
+        )
+        .unwrap();
+        let encoded = event.to_transcript_content();
+
+        assert!(encoded.contains("mez-provider-continuity-owner/v1"));
+        assert!(encoded.contains("openai-responses"));
+        assert!(encoded.contains("configured-openai"));
+        assert_eq!(
+            TranscriptContextEvent::from_transcript_content(&encoded),
+            Some(event)
+        );
+        let provider_tamper = encoded.replace("configured-openai", "other-openai");
+        assert!(TranscriptContextEvent::from_transcript_content(&provider_tamper).is_none());
+        let api_tamper = encoded.replace("openai-responses", "openai-chat-completions");
+        assert!(TranscriptContextEvent::from_transcript_content(&api_tamper).is_none());
+        let version_tamper = encoded.replace(
+            "mez-provider-continuity-owner/v1",
+            "mez-provider-continuity-owner/v2",
+        );
+        assert!(TranscriptContextEvent::from_transcript_content(&version_tamper).is_none());
+        let extra_field = encoded.replace("\"api\":", "\"unexpected\":true,\"api\":");
+        assert!(TranscriptContextEvent::from_transcript_content(&extra_field).is_none());
+
+        let chat_owner = ProviderContinuityOwner::new(
+            crate::ProviderApiCompatibility::OpenAiChatCompletions,
+            "configured-chat",
+        )
+        .unwrap();
+        let chat_json = provider_owner_json(&chat_owner);
+        assert_eq!(provider_owner_from_json(&chat_json), Some(chat_owner));
     }
 
     /// Verifies durable MCP reference and search evidence retain their typed

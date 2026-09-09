@@ -747,7 +747,7 @@ impl RuntimeSessionService {
                     block.content.clone(),
                     group.clone(),
                     *ordinal,
-                    event.provider_owner(),
+                    event.provider_owner().cloned(),
                 )
             } else {
                 TranscriptContextEvent::execution_block(

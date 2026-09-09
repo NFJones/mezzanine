@@ -198,10 +198,15 @@ async fn async_zsh_large_semantic_patch_completes_and_releases_input() {
             final_turn: false,
             terminal_state: mez_agent::AgentTurnState::Running,
         };
+        client_handle
+            .record_claimed_agent_provider_task_for_tests(task.turn_id.clone(), 1)
+            .await
+            .unwrap();
         let mut provider_batch = RuntimeEventBatch::new();
         provider_batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Completed {
             agent_id: AgentId::opaque(task.agent_id).unwrap(),
             turn_id: task.turn_id.clone(),
+            claim_generation: 1,
             execution: Box::new(execution),
         }));
         let provider_report = client_handle

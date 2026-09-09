@@ -153,7 +153,20 @@ impl RuntimeSessionService {
             .get(&turn.turn_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
-        let request = assemble_model_request(model_profile, turn, &context)?;
+        let request = match self.provider_registry().provider(&model_profile.provider) {
+            Some(provider_config) => {
+                let api = mez_agent::resolve_provider_api(
+                    &provider_config.kind,
+                    provider_config.api.as_deref(),
+                )?;
+                assemble_model_request(model_profile, api, turn, &context)?
+            }
+            None => crate::integrations::agent::context::assemble_model_request_fail_closed(
+                model_profile,
+                turn,
+                &context,
+            )?,
+        };
         let mut raw_text = match error.provider_raw_text() {
             Some(raw_text) => format!("{raw_text}\nprovider_error: {error}"),
             None => format!("provider_error: {error}"),
@@ -617,7 +630,20 @@ impl RuntimeSessionService {
             .get(&turn.turn_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
-        let request = assemble_model_request(model_profile, turn, &context)?;
+        let request = match self.provider_registry().provider(&model_profile.provider) {
+            Some(provider_config) => {
+                let api = mez_agent::resolve_provider_api(
+                    &provider_config.kind,
+                    provider_config.api.as_deref(),
+                )?;
+                assemble_model_request(model_profile, api, turn, &context)?
+            }
+            None => crate::integrations::agent::context::assemble_model_request_fail_closed(
+                model_profile,
+                turn,
+                &context,
+            )?,
+        };
         let execution = AgentTurnExecution {
             request,
             response: ModelResponse {
