@@ -92,6 +92,60 @@ fn runtime_native_subagent_startup_bypasses_pane_bootstrap() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies a subagent spawn publishes its own bounded objective derived from
+/// the spawn task prompt through the same identity registry discovery reads.
+#[test]
+fn runtime_subagent_spawn_publishes_bounded_task_objective() {
+    let mut service = test_runtime_service();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let spawned = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: mez_agent::SubagentSessionMode::New,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
+                task_prompt: "  inspect   the subagent objective  ".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: false,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap();
+    let spawned = serde_json::from_str::<serde_json::Value>(&spawned).unwrap();
+    let pane_id = spawned["pane"]["pane_id"].as_str().unwrap();
+    let child_agent_id = AgentId::opaque(format!("agent-{pane_id}")).unwrap();
+    assert_eq!(
+        service
+            .message_service()
+            .registered_identity(&child_agent_id)
+            .and_then(|identity| identity.objective.as_deref()),
+        Some("inspect the subagent objective")
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies a terminal profile is snapshotted when its child is spawned while
 /// retaining the configured provider action set for execution-time validation.
 #[test]

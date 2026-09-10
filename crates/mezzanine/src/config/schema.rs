@@ -157,6 +157,13 @@ pub fn config_change_setting_path_annotations() -> Vec<ConfigChangePathAnnotatio
             operations: CONFIG_CHANGE_OPERATION_NAMES,
         },
         ConfigChangePathAnnotation {
+            pattern: "providers.<name>.models.<entry>.<key>",
+            purpose: "Create or adjust one provider model record field.",
+            value_type: "string, integer, boolean, or string array",
+            format: "`<name>` is the provider identifier and `<entry>` is the model record key; supported keys are id, display_name, aliases, context_window_tokens, max_input_tokens, max_output_tokens, reasoning_levels, and capabilities.",
+            operations: CONFIG_CHANGE_OPERATION_NAMES,
+        },
+        ConfigChangePathAnnotation {
             pattern: "mcp_servers.<name>.<key>",
             purpose: "Enable, disable, or retarget a named MCP server without editing config files manually.",
             value_type: "string, integer, boolean, or string array",
@@ -722,6 +729,8 @@ pub(super) const AGENT_KEYS: &[&str] = &[
     "turn_timeout_ms",
     "native_shell_timeout_ms",
     "loop_limit",
+    "peer_message_loop_limit",
+    "session_title_policy",
     "custom_system_prompt",
     "default_personality",
     "always_exposed_mcp_servers",
@@ -763,6 +772,7 @@ pub(super) const PROVIDER_KEYS: &[&str] = &[
     "models",
     "default_model",
     "options",
+    "unknown_model_policy",
 ];
 
 /// Supported fields in one reusable provider-scoped model metadata record.
@@ -794,6 +804,8 @@ pub(super) const MODEL_PROFILE_KEYS: &[&str] = &[
     "context_limit_tokens",
     "max_input_tokens",
     "max_output_tokens",
+    "reasoning_levels",
+    "capabilities",
     "provider_options",
     "safety_tier",
     "privacy_tier",

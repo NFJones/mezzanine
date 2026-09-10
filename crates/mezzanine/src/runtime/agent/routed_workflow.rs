@@ -1504,6 +1504,17 @@ impl RuntimeSessionService {
             initial_capability,
             reason,
         } = request;
+        let _ = self.ensure_runtime_message_identity(
+            child_agent_id,
+            None,
+            "agent",
+            &["agent-harness"],
+            current_unix_seconds().saturating_mul(1000),
+        );
+        self.publish_runtime_agent_objective(
+            child_agent_id,
+            Self::runtime_agent_objective_from_prompt(prompt).as_deref(),
+        );
         let mut context = match seed_context {
             Some(mut context) => {
                 context.append_reference_event(

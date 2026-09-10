@@ -1264,6 +1264,7 @@ async fn execute_runtime_agent_provider_dispatch(
         available_mcp_tools,
         memory_actions_enabled,
         issue_actions_enabled,
+        macro_bridge_recipients,
         loop_turn: _,
     } = dispatch;
     let previous_request = context.previous_request().cloned();
@@ -1334,7 +1335,8 @@ async fn execute_runtime_agent_provider_dispatch(
                     path_scopes.as_ref(),
                 )
                 .with_shell_classification(&shell_classification)
-                .with_sandbox_first_local_prompts(sandbox_first_local_prompts),
+                .with_sandbox_first_local_prompts(sandbox_first_local_prompts)
+                .with_macro_bridge_recipients(macro_bridge_recipients.clone()),
                 subagent_scope: subagent_scope.as_ref(),
                 subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
                 available_mcp_servers,
@@ -1375,7 +1377,8 @@ async fn execute_runtime_agent_provider_dispatch(
                     path_scopes.as_ref(),
                 )
                 .with_shell_classification(&shell_classification)
-                .with_sandbox_first_local_prompts(sandbox_first_local_prompts),
+                .with_sandbox_first_local_prompts(sandbox_first_local_prompts)
+                .with_macro_bridge_recipients(macro_bridge_recipients.clone()),
                 subagent_scope: subagent_scope.as_ref(),
                 subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
                 available_mcp_servers,
@@ -1415,7 +1418,8 @@ async fn execute_runtime_agent_provider_dispatch(
                     path_scopes.as_ref(),
                 )
                 .with_shell_classification(&shell_classification)
-                .with_sandbox_first_local_prompts(sandbox_first_local_prompts),
+                .with_sandbox_first_local_prompts(sandbox_first_local_prompts)
+                .with_macro_bridge_recipients(macro_bridge_recipients.clone()),
                 subagent_scope: subagent_scope.as_ref(),
                 subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
                 available_mcp_servers,
@@ -1455,7 +1459,8 @@ async fn execute_runtime_agent_provider_dispatch(
                     path_scopes.as_ref(),
                 )
                 .with_shell_classification(&shell_classification)
-                .with_sandbox_first_local_prompts(sandbox_first_local_prompts),
+                .with_sandbox_first_local_prompts(sandbox_first_local_prompts)
+                .with_macro_bridge_recipients(macro_bridge_recipients.clone()),
                 subagent_scope: subagent_scope.as_ref(),
                 subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
                 available_mcp_servers,

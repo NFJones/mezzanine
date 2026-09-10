@@ -445,7 +445,7 @@ active_turn_sleep_inhibition = "disabled"
 # Restrict agent terminal work to the shell-mediated action surface.
 shell_only = true
 # Static MAAP actions permitted on every ordinary provider request.
-enabled_actions = ["say", "shell_command", "apply_patch", "web_search", "fetch_url", "send_message", "spawn_agent", "config_change", "mcp_server_search", "mcp_server_get", "mcp_call", "memory_search", "memory_store", "issue_add", "issue_update", "issue_query", "issue_delete"]
+enabled_actions = ["say", "shell_command", "apply_patch", "web_search", "fetch_url", "send_message", "spawn_agent", "config_change", "mcp_server_search", "mcp_server_get", "mcp_call", "memory_search", "memory_store", "list_agents", "issue_add", "issue_update", "issue_query", "issue_delete"]
 # Percentage of the raw conversation tail retained after compaction.
 compaction_raw_retention_percent = 10
 # Disable automatic model sizing until explicitly enabled.
@@ -468,6 +468,12 @@ native_shell_timeout_ms = 600000
 shell_mode = "native"
 # Default bounded iteration count used by /loop.
 loop_limit = 8
+# Default bounded peer-message-triggered turn count per agent.
+peer_message_loop_limit = 1000
+# Saved-session title source: `generated` derives a bounded display title from
+# the agent objective, else the first prompt; `objective`, `last_prompt`, and
+# `first_prompt` mirror that source. A manual `/name-session` name always wins.
+session_title_policy = "generated"
 # User-owned system prompt text appended to the built-in prompt.
 custom_system_prompt = ""
 # Empty selects no personality profile.
@@ -490,10 +496,11 @@ max_depth = 2
 # Model profiles are materialized by authentication/catalog setup. When a
 # profile sets max_input_tokens, Mez treats it as a hard estimated cap on the
 # complete wire request and proactively compacts before provider I/O.
-# Authenticated DeepSeek Pro and Flash model records declare reasoning levels
-# ["high", "max"] and capability tags ["native_thinking", "function_tools",
-# "forced_tool_choice", "streaming", "max_output_tokens"]. Omit either list to
-# inherit lower-precedence metadata, or set it to [] to clear that metadata.
+# Authenticated DeepSeek model records (V4.1 Flash and the retained V4 Pro
+# tier) declare reasoning levels ["low", "high", "max"] and capability tags
+# ["native_thinking", "function_tools", "forced_tool_choice", "streaming",
+# "max_output_tokens"]. Omit either list to inherit lower-precedence metadata,
+# or set it to [] to clear that metadata.
 
 # Automatic model-size routing. First launch uses the synthesized default profile;
 # auth login replaces these references with provider-specific profiles.

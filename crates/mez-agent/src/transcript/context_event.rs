@@ -512,6 +512,7 @@ fn prompt_boundary_source_name(source: ContextSourceKind) -> &'static str {
     match source {
         ContextSourceKind::SkillInstruction => "skill_instruction",
         ContextSourceKind::LocalMessage => "local_message",
+        ContextSourceKind::PeerMessage => "peer_message",
         ContextSourceKind::Policy => "policy",
         ContextSourceKind::Configuration => "configuration",
         _ => "unsupported",
@@ -523,6 +524,7 @@ fn prompt_boundary_source(source: &str) -> Option<ContextSourceKind> {
     match source {
         "skill_instruction" => Some(ContextSourceKind::SkillInstruction),
         "local_message" => Some(ContextSourceKind::LocalMessage),
+        "peer_message" => Some(ContextSourceKind::PeerMessage),
         "policy" => Some(ContextSourceKind::Policy),
         "configuration" => Some(ContextSourceKind::Configuration),
         _ => None,

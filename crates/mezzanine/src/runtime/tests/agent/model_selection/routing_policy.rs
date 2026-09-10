@@ -54,6 +54,79 @@ fn runtime_subagent_auto_sizing_inherits_parent_pane_setting() {
     );
 }
 
+/// Verifies the `spawn_agent` schema contract matches the explicit-pair policy.
+///
+/// Recent model-config changes narrowed the DeepSeek preset to `low`, `high`,
+/// and `xhigh`, but the static schema still offered `medium`, so a schema-led
+/// spawn was rejected as a disallowed reasoning effort. Advertised sizes and
+/// reasoning levels must come from the same policy data the runtime validates
+/// against, and a level the policy rejects must not appear in the schema.
+#[test]
+fn runtime_spawn_agent_sizing_reflects_explicit_pair_policy() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "deepseek-sizing-policy".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_provider = \"deepseek\"\ndefault_model_profile = \"deepseek-default\"\n[agents.auto_sizing]\nrouter_model_profile = \"deepseek-fast\"\nsmall_model_profile = \"deepseek-fast\"\nmedium_model_profile = \"deepseek-default\"\nlarge_model_profile = \"deepseek-default\"\nallowed_reasoning_efforts = [\"low\", \"high\", \"xhigh\"]\n[providers.deepseek]\nkind = \"deepseek\"\ndefault_model = \"deepseek-v4-pro\"\n[providers.deepseek.models.deepseek-v4-pro]\nid = \"deepseek-v4-pro\"\nreasoning_levels = [\"low\", \"high\", \"max\"]\n[model_profiles.deepseek-default]\nprovider = \"deepseek\"\nmodel = \"deepseek-v4-pro\"\nreasoning_profile = \"high\"\n[model_profiles.deepseek-fast]\nprovider = \"deepseek\"\nmodel = \"deepseek-v4-pro\"\nreasoning_profile = \"high\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+
+    let sizing = service
+        .runtime_spawn_agent_sizing_for_pane("%1")
+        .expect("configured deepseek routing profiles should resolve");
+    assert_eq!(sizing.sizes.len(), 3);
+    for option in &sizing.sizes {
+        assert!(
+            !option
+                .allowed_reasoning_efforts
+                .contains(&"medium".to_string()),
+            "medium is not configured for `{}`: {:?}",
+            option.size,
+            option.allowed_reasoning_efforts
+        );
+        for effort in &option.allowed_reasoning_efforts {
+            service
+                .runtime_explicit_auto_sizing_selection_for_pane("%1", &option.size, effort)
+                .expect("advertised reasoning level should resolve for its size");
+        }
+    }
+    assert!(
+        service
+            .runtime_explicit_auto_sizing_selection_for_pane("%1", "medium", "medium")
+            .is_err()
+    );
+
+    let schema = mez_agent::maap_action_batch_schema(
+        &mez_agent::AllowedActionSet::all_enabled().with_spawn_agent_sizing(sizing),
+        &[],
+    );
+    let spawn = schema["properties"]["actions"]["items"]["anyOf"]
+        .as_array()
+        .and_then(|variants| {
+            variants.iter().find(|variant| {
+                variant["properties"]["type"]["enum"] == serde_json::json!(["spawn_agent"])
+            })
+        })
+        .expect("spawn_agent schema variant");
+    let enum_values = spawn["properties"]["reasoning_effort"]["enum"]
+        .as_array()
+        .expect("reasoning enum");
+    assert!(!enum_values.contains(&serde_json::json!("medium")));
+    assert!(enum_values.contains(&serde_json::json!("high")));
+    let description = spawn["properties"]["reasoning_effort"]["description"]
+        .as_str()
+        .expect("reasoning description");
+    assert!(
+        description.contains("Configured allowed reasoning efforts by size"),
+        "{description}"
+    );
+}
+
 /// Verifies that configured named model profiles populate the full
 /// specification-facing profile fields and that configured fallback profiles
 /// are filtered through safety, privacy, residency, and approval

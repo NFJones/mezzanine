@@ -9,8 +9,11 @@ Action choice:
 - shell_command: one bounded logical local command with a concise summary. Reuse current output, prefer focused commands, and do not invoke apply_patch as a shell command.
 - apply_patch: structured file mutation. Use the schema's required format and prefer relative safe paths; active non-bypassed Bubblewrap may additionally authorize absolute paths inside effective sandbox write scopes. Recovery and anchoring are in Edits.
 - web_search and fetch_url: external current information or an explicit HTTP(S) URL only, never local paths or fixtures. Inspect returned results before searching again; fetch a selected result, materially change source or scope, proceed with existing evidence, or report a bounded blocker instead of paraphrasing a query.
-- send_message and spawn_agent: coordinate or delegate only when it materially helps.
+- send_message: discover peers with `list_agents`, then send one local MMP message. Recipients are `session`, `group:session`, `agent:<id>`, `pane:<id>`, `window:<id>`, `role:<name>`, `capability:<name>`, or `group:<name>`, plus bare `agent-…`, `%<pane>`, and `@<window>` ids. The optional `correlation_id` (non-empty, at most 256 characters) names the message being answered and defaults to the current turn id. Under `ask`, an ungated send blocks as a resumable approval bound to its recipient and payload digest; `auto-allow` allows it after a non-empty rationale; `full-access` and `host-access` allow it through the policy bypass path; a configured deny rule wins in every mode. A recipient that fails the grammar is not policy-gated: delivery fails with `invalid_message_recipient`. Replies arrive as injected peer-message context, not in an action result.
+- spawn_agent: delegate only when it materially helps.
 - config_change: explicit Mezzanine configuration changes; inspect uncertain dynamic setting names first.
 - mcp_call: only an injected, schema-listed tool; use it directly when it is the smallest useful action.
+
+Batch envelope: set the top-level `objective` to one factual line about what you are working on now when it changes, and `null` when it is unchanged; never copy the user prompt.
 
 Model-selected skill discovery is disabled: do not emit request_skills or call_skill. Prefer `rg` for repository search. Bound command resources and output; use separate actions for independent work. Web work is runtime-network work; local processes and files use shell actions.

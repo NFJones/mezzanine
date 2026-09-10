@@ -4,7 +4,9 @@
 //! terminal wrapping policy. The store handle owns configured filesystem state;
 //! canonical transcript and session records live in `mez_agent::transcript`.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use mez_agent::AgentConversationKind;
 use mez_agent::transcript::ConversationSummary;
@@ -58,6 +60,31 @@ pub struct NamedAgentSession {
     pub directory: Option<String>,
 }
 
+/// Bounded persisted mirror of one conversation's published agent objective.
+///
+/// The mirror is a display cache written only from the published objective so
+/// archived and offline conversations can still resolve a policy-derived title.
+/// The published discovery objective remains the source of truth, and a missing
+/// mirror degrades to prompt-based rendering instead of failing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionObjectiveMirror {
+    /// Durable conversation identity.
+    pub conversation_id: String,
+    /// Bounded single-line objective title.
+    pub objective: String,
+    /// Time at which the mirror was most recently refreshed.
+    pub updated_at_unix_seconds: u64,
+}
+
+/// One write-path objective title mirror index read and its recovery outcome.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct SessionObjectiveMirrorWriteRead {
+    /// Mirrors read from the index, empty when the index was unreadable.
+    pub(super) records: BTreeMap<String, SessionObjectiveMirror>,
+    /// Whether the unreadable index was quarantined and must be rewritten.
+    pub(super) recovered: bool,
+}
+
 /// Saved-session record merged from transcript summary and name metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SavedAgentSession {
@@ -65,6 +92,12 @@ pub struct SavedAgentSession {
     pub summary: ConversationSummary,
     /// User-assigned display name, when present.
     pub name: Option<String>,
+    /// Bounded persisted mirror of the published agent objective, when cached.
+    ///
+    /// This is display-only state used to resolve a policy-derived title for
+    /// archived and offline conversations. A missing mirror degrades to the
+    /// prompt-based rendering rather than failing.
+    pub objective_title: Option<String>,
     /// Durable origin classification used by resume discovery filters.
     pub conversation_kind: AgentConversationKind,
     /// Time at which the active payload was archived, when archived.
@@ -182,7 +215,7 @@ pub struct AgentPresentationEntry {
 }
 
 /// Filesystem-backed transcript store.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct AgentTranscriptStore {
     /// Stores the root value for this data structure.
     ///
@@ -193,6 +226,60 @@ pub struct AgentTranscriptStore {
     pub(super) saved_session_retention: SavedSessionRetentionPolicy,
     /// Cleartext presentation bytes retained before compaction.
     pub(super) presentation_compaction_threshold: u64,
+    /// Shared objective title mirror throttle and diagnostics for this handle.
+    ///
+    /// Store clones share this state so the unchanged-value throttle and its
+    /// bounded diagnostics follow one logical store. It is deliberately not part
+    /// of store equality: it holds only transient mirror index state.
+    pub(super) session_objective_mirrors: Arc<Mutex<SessionObjectiveMirrorHandleState>>,
+}
+
+impl PartialEq for AgentTranscriptStore {
+    fn eq(&self, other: &Self) -> bool {
+        self.root == other.root
+            && self.saved_session_retention == other.saved_session_retention
+            && self.presentation_compaction_threshold == other.presentation_compaction_threshold
+    }
+}
+
+impl Eq for AgentTranscriptStore {}
+
+/// Transient mirror throttle and bounded diagnostics for one store handle.
+///
+/// The last persisted `(conversation_id, objective)` pair lets an unchanged
+/// refresh skip reading the bounded index, and the counters make mirror index
+/// reads, writes, and recoveries observable without exposing mirror content.
+#[derive(Debug, Default)]
+pub(super) struct SessionObjectiveMirrorHandleState {
+    /// Last `(conversation_id, bounded objective)` this handle persisted.
+    pub(super) last_mirrored: Option<(String, String)>,
+    /// Count of mirror index reads performed by this handle.
+    pub(super) index_reads: u64,
+    /// Count of mirror index writes performed by this handle.
+    pub(super) index_writes: u64,
+    /// Count of unreadable mirror indices quarantined and rebuilt.
+    pub(super) recoveries: u64,
+    /// Bounded reason recorded for the most recent quarantine.
+    pub(super) last_recovery_reason: Option<String>,
+}
+
+/// Bounded diagnostics for one handle's persisted objective title mirror index.
+///
+/// The report carries counts and one bounded reason only: it never contains
+/// mirror content or conversation identifiers. The counters are per-process,
+/// while `quarantined_index` reports the durable artifact an operator can find.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct SessionObjectiveMirrorStatus {
+    /// Mirror index reads performed by this store handle.
+    pub index_reads: u64,
+    /// Mirror index writes performed by this store handle.
+    pub index_writes: u64,
+    /// Unreadable mirror indices quarantined and rebuilt by this handle.
+    pub recoveries: u64,
+    /// Bounded reason recorded for the most recent quarantine.
+    pub last_recovery_reason: Option<String>,
+    /// Whether one quarantined unreadable index file is retained on disk.
+    pub quarantined_index: bool,
 }
 
 /// Time-and-count retention policy for active saved conversations.

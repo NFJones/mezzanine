@@ -425,6 +425,7 @@ pub(super) fn runtime_context_source_kind_name(source: ContextSourceKind) -> &'s
         ContextSourceKind::Policy => "policy",
         ContextSourceKind::Configuration => "configuration",
         ContextSourceKind::LocalMessage => "local_message",
+        ContextSourceKind::PeerMessage => "peer_message",
         ContextSourceKind::RuntimeHint => "runtime_hint",
         ContextSourceKind::ProjectGuidance => "project_guidance",
         ContextSourceKind::Memory => "memory",
@@ -807,6 +808,16 @@ pub(super) fn runtime_maap_action_payload_trace_json(
                 serde_json::json!(expires_in_days),
             );
         }
+        AgentActionPayload::ListAgents { agent_type } => {
+            data.insert(
+                "agent_type".to_string(),
+                serde_json::json!(
+                    agent_type
+                        .as_deref()
+                        .unwrap_or(mez_agent::AgentListFilter::default_filter().as_str())
+                ),
+            );
+        }
         AgentActionPayload::IssueAdd {
             kind,
             priority,
@@ -897,9 +908,16 @@ pub(super) fn runtime_maap_action_payload_trace_json(
             recipient,
             content_type,
             payload,
+            correlation_id,
         } => {
             data.insert("recipient".to_string(), serde_json::json!(recipient));
             data.insert("content_type".to_string(), serde_json::json!(content_type));
+            if let Some(correlation_id) = correlation_id {
+                data.insert(
+                    "correlation_id".to_string(),
+                    serde_json::json!(correlation_id),
+                );
+            }
             data.insert(
                 "payload".to_string(),
                 runtime_bounded_trace_string_value(payload),

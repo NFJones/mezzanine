@@ -395,6 +395,8 @@ pub(super) struct RuntimeTimerTracker {
     pub(super) cursor_blink: HashMap<String, RuntimeTimerKey>,
     pub(super) status_refresh: HashMap<String, RuntimeTimerKey>,
     pub(super) provider_poll: Option<RuntimeTimerKey>,
+    pub(super) peer_message_delivery: Option<RuntimeTimerKey>,
+    pub(super) next_peer_message_delivery_generation: u64,
     pub(super) provider_retry: HashMap<String, RuntimeTimerKey>,
     pub(super) provider_claim: HashMap<String, RuntimeTimerKey>,
     pub(super) next_provider_claim_generation: u64,

@@ -20,7 +20,10 @@ use super::types::{
     MessageRecipientSnapshot, MessageSequence, MessageService, MessageServiceSnapshot,
     PresenceRecord, QueuedEnvelope, Recipient, SenderIdentity, SequencedEnvelope,
 };
-use super::validation::{validate_message_type, validate_protocol, validate_sender_identity};
+use super::validation::{
+    normalize_objective, normalize_optional_objective, validate_message_type, validate_protocol,
+    validate_sender_identity,
+};
 
 #[derive(Debug)]
 struct IndexedReceiveSelection {
@@ -84,7 +87,42 @@ impl MessageService {
             window_id,
             role: Some(role.into()),
             capabilities,
+            objective: None,
         };
+        self.insert_registered_identity(identity, 0)
+    }
+
+    /// Registers one agent identity carrying an initial bounded objective.
+    ///
+    /// The objective is optional and additive to mmp/1. An objective that is
+    /// empty, unbounded, or control-character bearing is rejected instead of
+    /// being published to discovery.
+    pub fn register_agent_with_objective(
+        &mut self,
+        pane_id: Option<PaneId>,
+        window_id: Option<WindowId>,
+        role: impl Into<String>,
+        capabilities: Vec<String>,
+        objective: Option<&str>,
+    ) -> Result<SenderIdentity> {
+        let identity = SenderIdentity {
+            agent_id: self.ids.agent(),
+            pane_id,
+            window_id,
+            role: Some(role.into()),
+            capabilities,
+            objective: normalize_optional_objective(objective)?,
+        };
+        validate_sender_identity(&identity)?;
+        Ok(self.insert_registered_identity(identity, 0))
+    }
+
+    /// Inserts one identity into registered-agent and presence state.
+    fn insert_registered_identity(
+        &mut self,
+        identity: SenderIdentity,
+        updated_at_ms: u64,
+    ) -> SenderIdentity {
         self.registered
             .insert(identity.agent_id.clone(), identity.clone());
         self.presence.insert(
@@ -92,7 +130,7 @@ impl MessageService {
             PresenceRecord {
                 identity: identity.clone(),
                 status: AgentPresenceStatus::Available,
-                updated_at_ms: 0,
+                updated_at_ms,
             },
         );
         identity
@@ -112,17 +150,46 @@ impl MessageService {
         if let Some(existing) = self.registered.get(&identity.agent_id) {
             return Ok(existing.clone());
         }
-        self.registered
-            .insert(identity.agent_id.clone(), identity.clone());
-        self.presence.insert(
-            identity.agent_id.clone(),
-            PresenceRecord {
-                identity: identity.clone(),
-                status: AgentPresenceStatus::Available,
-                updated_at_ms,
-            },
-        );
-        Ok(identity)
+        Ok(self.insert_registered_identity(identity, updated_at_ms))
+    }
+
+    /// Publishes one bounded agent objective with identical-value throttling.
+    ///
+    /// Returns `Ok(true)` only when the published value actually changed. A
+    /// refresh that carries no objective (`None`) is a no-op: it publishes
+    /// nothing and leaves the previous objective and presence timestamp in
+    /// place, so an objective-less or failed refresh never clears discovery
+    /// text and never churns discovery rows or resume views. An unchanged value
+    /// likewise publishes nothing. Callers keep the previous objective on
+    /// error, so a failed refresh never fails a turn.
+    pub fn update_agent_objective(
+        &mut self,
+        agent_id: &AgentId,
+        objective: Option<&str>,
+        updated_at_ms: u64,
+    ) -> Result<bool> {
+        let Some(objective) = normalize_optional_objective(objective)? else {
+            return Ok(false);
+        };
+        let current = self
+            .registered
+            .get(agent_id)
+            .ok_or_else(|| {
+                MessageError::not_found("agent objective update requires a registered agent")
+            })?
+            .objective
+            .clone();
+        if current.as_deref() == Some(objective.as_str()) {
+            return Ok(false);
+        }
+        if let Some(identity) = self.registered.get_mut(agent_id) {
+            identity.objective = Some(objective.clone());
+        }
+        if let Some(record) = self.presence.get_mut(agent_id) {
+            record.identity.objective = Some(objective);
+            record.updated_at_ms = updated_at_ms;
+        }
+        Ok(true)
     }
 
     /// Runs the accept operation for this subsystem.
@@ -1130,6 +1197,7 @@ fn identity_snapshot(identity: &SenderIdentity) -> MessageIdentitySnapshot {
         window_id: identity.window_id.as_ref().map(ToString::to_string),
         role: identity.role.clone(),
         capabilities: identity.capabilities.clone(),
+        objective: identity.objective.clone(),
     }
 }
 
@@ -1149,6 +1217,9 @@ fn sender_identity_from_snapshot(snapshot: &MessageIdentitySnapshot) -> Result<S
             "snapshot MMP sender identity fields must not be empty",
         ));
     }
+    if let Some(objective) = snapshot.objective.as_deref() {
+        normalize_objective(objective)?;
+    }
     Ok(SenderIdentity {
         agent_id: parse_opaque_id(&snapshot.agent_id, "MMP agent id")?,
         pane_id: snapshot
@@ -1163,6 +1234,7 @@ fn sender_identity_from_snapshot(snapshot: &MessageIdentitySnapshot) -> Result<S
             .transpose()?,
         role: snapshot.role.clone(),
         capabilities: snapshot.capabilities.clone(),
+        objective: snapshot.objective.clone(),
     })
 }
 
@@ -1446,5 +1518,194 @@ fn parse_delivery_status(value: &str) -> Result<DeliveryStatus> {
         _ => Err(MessageError::invalid_args(
             "snapshot MMP delivery status is invalid",
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Registering with an objective normalizes it and publishes it through the
+    /// same registry that discovery reads.
+    #[test]
+    fn registered_objective_is_published_normalized_to_discovery() {
+        let mut service = MessageService::default();
+        let identity = service
+            .register_agent_with_objective(
+                None,
+                None,
+                "agent",
+                vec!["agent-harness".to_string()],
+                Some("  Review   the discovery contract "),
+            )
+            .unwrap();
+        assert_eq!(
+            identity.objective.as_deref(),
+            Some("Review the discovery contract")
+        );
+        let discovered = service.discover_agents_filtered(None, None, None, None, None, &[]);
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(
+            discovered[0].objective.as_deref(),
+            Some("Review the discovery contract")
+        );
+        assert!(
+            service
+                .register_agent_with_objective(None, None, "agent", Vec::new(), Some("  "))
+                .is_err()
+        );
+    }
+
+    /// An unchanged objective publishes nothing and does not churn presence, so
+    /// discovery rows and resume views stay identical.
+    #[test]
+    fn unchanged_objective_update_is_throttled() {
+        let mut service = MessageService::default();
+        let identity = service
+            .register_agent_with_objective(
+                None,
+                None,
+                "agent",
+                Vec::new(),
+                Some("Inspect the backlog"),
+            )
+            .unwrap();
+        assert_eq!(service.presence()[0].updated_at_ms, 0);
+
+        assert!(
+            !service
+                .update_agent_objective(&identity.agent_id, Some("Inspect the backlog"), 500)
+                .unwrap()
+        );
+        assert_eq!(service.presence()[0].updated_at_ms, 0);
+
+        assert!(
+            service
+                .update_agent_objective(&identity.agent_id, Some("Review the backlog"), 900)
+                .unwrap()
+        );
+        assert_eq!(service.presence()[0].updated_at_ms, 900);
+        assert_eq!(
+            service
+                .registered_identity(&identity.agent_id)
+                .and_then(|identity| identity.objective.as_deref()),
+            Some("Review the backlog")
+        );
+        assert_eq!(
+            service.presence()[0].identity.objective.as_deref(),
+            Some("Review the backlog")
+        );
+    }
+
+    /// A failed objective refresh keeps the previous published objective and
+    /// leaves the presence timestamp untouched.
+    #[test]
+    fn failed_objective_update_keeps_previous_objective() {
+        let mut service = MessageService::default();
+        let identity = service
+            .register_agent_with_objective(
+                None,
+                None,
+                "agent",
+                Vec::new(),
+                Some("Inspect the backlog"),
+            )
+            .unwrap();
+        assert_eq!(
+            service
+                .update_agent_objective(&identity.agent_id, Some("inspect\u{7}the pane"), 700)
+                .unwrap_err()
+                .message(),
+            "MMP objective must not contain control characters"
+        );
+        assert!(
+            service
+                .update_agent_objective(&identity.agent_id, Some(String::new().as_str()), 700)
+                .is_err()
+        );
+        assert_eq!(
+            service
+                .registered_identity(&identity.agent_id)
+                .and_then(|identity| identity.objective.as_deref()),
+            Some("Inspect the backlog")
+        );
+        assert_eq!(service.presence()[0].updated_at_ms, 0);
+    }
+
+    /// An absent objective refresh is a no-op that keeps the previous published
+    /// objective and leaves the presence timestamp untouched.
+    #[test]
+    fn absent_objective_refresh_keeps_previous_objective_and_timestamp() {
+        let mut service = MessageService::default();
+        let identity = service
+            .register_agent_with_objective(
+                None,
+                None,
+                "agent",
+                Vec::new(),
+                Some("Inspect the backlog"),
+            )
+            .unwrap();
+        let published_at_ms = service.presence()[0].updated_at_ms;
+
+        assert!(
+            !service
+                .update_agent_objective(&identity.agent_id, None, published_at_ms + 900)
+                .unwrap()
+        );
+        assert_eq!(
+            service
+                .registered_identity(&identity.agent_id)
+                .and_then(|identity| identity.objective.as_deref()),
+            Some("Inspect the backlog")
+        );
+        assert_eq!(
+            service.presence()[0].identity.objective.as_deref(),
+            Some("Inspect the backlog")
+        );
+        assert_eq!(service.presence()[0].updated_at_ms, published_at_ms);
+    }
+
+    /// Snapshot round trips carry the objective, and a legacy snapshot payload
+    /// without the field restores to no objective instead of failing.
+    #[test]
+    fn snapshot_round_trip_carries_objective_and_legacy_payload_defaults_none() {
+        let mut service = MessageService::default();
+        let identity = service
+            .register_agent_with_objective(
+                None,
+                None,
+                "agent",
+                Vec::new(),
+                Some("Inspect the backlog"),
+            )
+            .unwrap();
+        let snapshot = service.snapshot_state();
+        assert_eq!(
+            snapshot.registered_agents[0].objective.as_deref(),
+            Some("Inspect the backlog")
+        );
+        let restored = MessageService::from_snapshot_state(&snapshot).unwrap();
+        assert_eq!(
+            restored
+                .registered_identity(&identity.agent_id)
+                .and_then(|identity| identity.objective.as_deref()),
+            Some("Inspect the backlog")
+        );
+
+        let legacy_payload = format!(
+            r#"{{"protocol":"{}","schema_version":{},"next_sequence":1,"retention_messages":1000,"retention_bytes":1048576,"registered_agents":[{{"agent_id":"{}","pane_id":null,"window_id":null,"role":"agent","capabilities":[]}}],"presence":[],"subscriptions":[],"retained_messages":[],"accepted_messages":[]}}"#,
+            MMP_PROTOCOL,
+            snapshot.schema_version,
+            identity.agent_id.as_str()
+        );
+        let legacy = serde_json::from_str::<MessageServiceSnapshot>(&legacy_payload).unwrap();
+        assert!(legacy.registered_agents[0].objective.is_none());
+        let restored = MessageService::from_snapshot_state(&legacy).unwrap();
+        assert!(
+            restored
+                .registered_identity(&identity.agent_id)
+                .is_some_and(|identity| identity.objective.is_none())
+        );
     }
 }

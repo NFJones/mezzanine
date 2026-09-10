@@ -713,6 +713,7 @@ fn runtime_capability_for_response(
             | mez_agent::AgentActionPayload::Complete
             | mez_agent::AgentActionPayload::Abort { .. }
             | mez_agent::AgentActionPayload::MemorySearch { .. }
+            | mez_agent::AgentActionPayload::ListAgents { .. }
             | mez_agent::AgentActionPayload::MemoryStore { .. } => None,
         })
 }
@@ -1412,6 +1413,7 @@ fn execute_runtime_send_message_to(
                 window_id: None,
                 role: Some("worker".to_string()),
                 capabilities: Vec::new(),
+                objective: None,
             },
             0,
         )
@@ -1425,6 +1427,9 @@ fn execute_runtime_send_message_to(
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
+    // Message delivery and validation scenarios exercise the delivery path, so
+    // they run under an approval policy that admits prompting recipients.
+    service.set_pane_approval_policy_override("%1", Some(mez_agent::ApprovalPolicy::AutoAllow));
     let start = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-message-turn","input":"send local message"}}"#,
         &primary,
@@ -1448,6 +1453,7 @@ fn execute_runtime_send_message_to(
                         recipient: recipient.to_string(),
                         content_type: content_type.to_string(),
                         payload: payload.to_string(),
+                        correlation_id: None,
                     },
                 }],
             }),

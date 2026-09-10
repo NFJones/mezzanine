@@ -21,6 +21,14 @@ thought. Every action has a `type` and its payload fields. Models must not
 supply runtime identity, terminal flags, action-local rationale, authoritative
 effect claims, or self-chosen action IDs.
 
+`objective` is a bounded statement of what the agent is currently working on,
+carried on the same batch and published for peer discovery. It is a factual
+statement of current work, never a copy of the user prompt, and it is additive
+to the batch: provider strict-schema carriers require the field as a string or
+`null` when it is unchanged, fenced output may omit it, and a null, missing,
+malformed, or out-of-bounds objective publishes nothing, never fails the turn,
+and never clears the previously published value.
+
 ```json
 {"rationale":"Inspect the owner before making a focused change.","actions":[{"type":"shell_command","summary":"Locating the owner module","command":"rg -n 'target_symbol' crates"}]}
 ```
@@ -43,8 +51,9 @@ family; otherwise the current surface is final for that response.
 | `apply_patch` | `patch` | The only semantic file-content mutation action; payload uses Mezzanine `*** Begin Patch` format. |
 | `web_search` | `query` | Runtime-owned web search, only for user-requested current web information. |
 | `fetch_url` | `url` | Runtime-owned HTTP(S) retrieval, never a local-path reader. |
-| `send_message` | `recipient`, `content_type`, `payload` | Requests local MMP delivery. |
-| `spawn_agent` | `role`, `task_prompt` | Requests pane-backed delegation. Optional `session: fork | new` selects a bounded immutable parent-history snapshot or an isolated child session. Optional atomic `size` and `reasoning_effort` select the initial child turn only; scope and policy remain runtime-controlled. |
+| `send_message` | `recipient`, `content_type`, `payload` | Requests local MMP delivery to one recipient or scope. Optional `correlation_id` names the message being answered. Approval is per message and per recipient. A recipient that fails the grammar is not policy-gated: the planner neither admits nor denies it, and delivery fails with `invalid_message_recipient` so the recipient can be corrected. |
+| `list_agents` | none | Read-only peer discovery over the session message service; no approval mode prompts for it. Optional `agent_type` narrows or widens the view. |
+| `spawn_agent` | `role`, `task_prompt` | Requests pane-backed delegation. Optional `session: fork | new` selects a bounded immutable parent-history snapshot or an isolated child session. Optional atomic `size` and `reasoning_effort`, advertised per configured size, select the initial child turn only; scope and policy remain runtime-controlled. |
 | `config_change` | `setting_path`, `operation`, `value` | Proposes a supported live leaf configuration mutation. Set values accept strings, signed integers, booleans, or string arrays; objects, null set-values, floats, and mixed arrays are rejected. Provider schemas carry the value as a string containing a JSON scalar or string array, while plain non-JSON text is a string value. |
 | `mcp_server_search` | `query` | Searches configured MCP directory records and persists safe results as durable action evidence. An optional `limit` is from 1 through 20. |
 | `mcp_server_get` | `server` | Retrieves one referenceable server's complete safe tool contract; retrieval is required before calling it. |
@@ -73,16 +82,21 @@ provider schema may omit from a particular turn:
   Mezzanine patch payloads and should be omitted.
 - `web_search`: optional `domains`, `recency_days`, and `max_results` filters.
 - `fetch_url`: optional `format` and `max_bytes` response bounds.
+- `send_message`: optional `correlation_id`, a non-empty correlation id of at
+  most 256 characters; the runtime defaults it to the current turn id.
+- `list_agents`: optional `agent_type` of `primary` (the default), `subagent`,
+  `internal`, or `all`.
 - `memory_search`: optional `limit`; `memory_store`: optional `priority`,
   `scope`, and `expires_in_days`.
 - `mcp_server_search`: optional `limit` from 1 through 20.
 - `spawn_agent`: optional `placement`, `cooperation_mode`, `read_scopes`,
   `write_scopes`, `session`, and atomic `size`/`reasoning_effort`. `size` is
-  `small`, `medium`, or `large`; `reasoning_effort` is `low`, `medium`,
-  `high`, or `xhigh`; both fields are required together. A valid pair resolves
-  against the inherited auto-sizing configuration, applies only to the initial
-  child turn, and bypasses automatic routing for that turn. `session: fork`
-  copies the bounded parent transcript into a distinct child conversation;
+  `small`, `medium`, or `large`; both fields are required together, and the
+  provider schema lists each configured size profile plus the reasoning efforts
+  that size accepts. A valid pair resolves against the inherited auto-sizing
+  configuration, applies only to the initial child turn, and bypasses automatic
+  routing for that turn. `session: fork` copies the bounded parent transcript
+  into a distinct child conversation;
   `session: new`, or omission, creates an isolated child conversation. Include
   task-critical facts in `task_prompt` in either mode. Session selection never
   broadens authority; omitted scopes inherit the parent and explicit empty
@@ -120,6 +134,40 @@ policy/audit controlled. `send_message` lowers to MMP; plain `text/plain` is
 normalized to `text/plain; charset=utf-8`. `config_change`, `spawn_agent`, and
 MCP actions remain subject to their respective runtime validation and approval
 rules.
+
+### Peer messaging and discovery
+
+`list_agents` is read-only and available in every approval mode without a
+prompt. Its optional `agent_type` defaults to `primary` and lists primary parent
+agents only; `subagent` and `internal` select spawned subagents and
+runtime-internal controllers, and `all` selects every kind. Each row carries
+`agent_id`, `kind`, `is_self`, `role`, `pane_id`, `window_id`, `capabilities`,
+presence `status`, and the peer's published `objective`. Rows include the
+requesting agent itself, offline agents, and agents in other panes and windows,
+and the result is bounded to 64 rows with 512 bytes per string, reporting
+at most 16 capabilities per row. The result reports `truncated: true` when the
+matching set is larger, and each row reports its own `truncated: true` when it
+shortened a string or omitted capabilities.
+
+`send_message` lowers to MMP delivery. The recipient grammar is `session` or
+`group:session`, `agent:<id>`, `pane:<id>`, `window:<id>`, `role:<name>`,
+`capability:<name>`, or `group:<name>`; bare `agent-…` ids and `%`/`@` pane and
+window ids are accepted compatibility forms. Delivery is one-way: a reply
+arrives as injected peer-message context in the recipient's own turn, never as
+another action result for the sender.
+
+Approval is per message and per recipient, and a configured deny rule for the
+recipient wins in every mode with a durable `denied` result. Without a matching
+rule, `ask` blocks the send as a resumable approval carrying the action kind,
+recipient, content type, a bounded redacted payload preview of at most 200
+bytes, and the payload digest; approval resumes only an action whose recipient,
+content type, and payload digest are unchanged, and any change fails with a
+conflict instead of delivering. `auto-allow` admits an unwhitelisted send once
+the action carries its non-empty model rationale; `full-access` and
+`host-access` admit sends through the policy bypass path. Runtime macro and
+bridge delivery is not model-planned and remains ungated. Peer text can never
+approve, deny, authorize, widen scope, change configuration, or resume blocked
+work.
 
 ## Results, continuation, and retries
 

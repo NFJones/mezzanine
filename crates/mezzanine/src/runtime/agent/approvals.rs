@@ -579,6 +579,16 @@ impl RuntimeSessionService {
                     action,
                     mez_agent::ActionPlanningInput::default(),
                 )),
+            AgentActionPayload::SendMessage { recipient, .. } => Ok(matches!(
+                crate::runtime::runtime_message_recipient_decision(&permission_policy, recipient),
+                RuleDecision::Allow
+            ) || (permission_policy
+                .approval_policy
+                == mez_agent::ApprovalPolicy::AutoAllow
+                && mez_agent::action_supports_auto_allow(
+                    action,
+                    mez_agent::ActionPlanningInput::default(),
+                ))),
             _ => Ok(false),
         }
     }
@@ -652,6 +662,7 @@ impl RuntimeSessionService {
                 | "config_change"
                 | "web_search"
                 | "fetch_url"
+                | "send_message"
         ) {
             return Ok(None);
         }
@@ -923,6 +934,61 @@ impl RuntimeSessionService {
                         ),
                     )?;
                 }
+                execution.action_results[result_index] = result;
+            }
+            AgentActionPayload::SendMessage { .. } => {
+                let AgentActionPayload::SendMessage {
+                    recipient,
+                    content_type,
+                    payload,
+                    ..
+                } = &action.payload
+                else {
+                    return Err(MezError::invalid_state(
+                        "approved send_message action payload changed",
+                    ));
+                };
+                let approved = execution.action_results[result_index]
+                    .structured_content_json
+                    .as_deref()
+                    .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+                    .and_then(|value| value.get("approval").cloned())
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "approved send_message result has no approval payload",
+                        )
+                    })?;
+                let approved_digest = mez_agent::message_payload_digest(content_type, payload);
+                let matches_approved_identity = approved
+                    .get("recipient")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(recipient.as_str())
+                    && approved
+                        .get("content_type")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(content_type.as_str())
+                    && approved
+                        .get("payload_sha256")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(approved_digest.as_str());
+                if !matches_approved_identity {
+                    return Err(MezError::conflict(
+                        "approved send_message no longer matches the approved recipient or payload",
+                    ));
+                }
+                if !self
+                    .append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, &action)?
+                {
+                    self.append_agent_status_text_to_terminal_buffer(
+                        &turn.pane_id,
+                        &format!(
+                            "agent: {}",
+                            runtime_agent_action_summary(&action)
+                                .unwrap_or_else(|| "message".to_string())
+                        ),
+                    )?;
+                }
+                let result = self.execute_message_action_for_turn(&turn, &action)?;
                 execution.action_results[result_index] = result;
             }
             _ => return Ok(None),

@@ -20,7 +20,7 @@ use mez_agent::{
 
 /// Reports whether a provider error came from malformed model MAAP output that
 /// can be repaired by asking the same model to re-emit the action batch.
-pub(super) fn maap_provider_error_is_repairable(error: &MezError) -> bool {
+pub(crate) fn maap_provider_error_is_repairable(error: &MezError) -> bool {
     error
         .message()
         .starts_with("provider MAAP output is malformed:")

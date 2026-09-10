@@ -55,7 +55,7 @@ fn model_profile_max_input_limit_constrains_context_budget() {
 #[test]
 /// Verifies known DeepSeek model names do not inject runtime token limits.
 fn model_profile_context_window_requires_deepseek_configuration() {
-    for model in ["deepseek-v4-pro", "deepseek-v4-flash"] {
+    for model in ["deepseek-flash", "deepseek-v4-pro"] {
         let profile = ModelProfile {
             provider: "deepseek".to_string(),
             model: model.to_string(),

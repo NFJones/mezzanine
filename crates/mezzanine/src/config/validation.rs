@@ -316,6 +316,7 @@ pub fn validate_config_text(
     diagnostics.extend(validate_iroh_transport_config(format, text));
     diagnostics.extend(validate_external_editor_config(format, text));
     diagnostics.extend(validate_provider_models_config(format, text));
+    diagnostics.extend(validate_model_profile_reasoning_config(format, text));
     diagnostics.extend(validate_group_whitelist_config(format, text));
     diagnostics.extend(validate_env_whitelist_config(format, text));
     diagnostics.extend(validate_agent_enabled_actions_config(format, text));
@@ -454,6 +455,7 @@ pub fn validate_config_text(
             || path == "agents.action_failure_retry_limit"
             || path == "agents.turn_timeout_ms"
             || path == "agents.loop_limit"
+            || path == "agents.peer_message_loop_limit"
         {
             if let Some(message) = validate_positive_usize_value(&value, &path) {
                 diagnostics.push(ConfigDiagnostic { path, message });
@@ -520,6 +522,14 @@ pub fn validate_config_text(
             diagnostics.push(ConfigDiagnostic {
                 path,
                 message: "agents.shell_mode must be pane or native".to_string(),
+            });
+        } else if path == "agents.session_title_policy"
+            && crate::session_title::SessionTitlePolicy::parse(value.as_str()).is_none()
+        {
+            diagnostics.push(ConfigDiagnostic {
+                path,
+                message: "agents.session_title_policy must be generated, objective, last_prompt, or first_prompt"
+                    .to_string(),
             });
         } else if path == "agents.subagent_wait_policy"
             && !matches!(
@@ -783,6 +793,17 @@ fn validate_provider_models_config(format: ConfigFormat, text: &str) -> Vec<Conf
         let Some(provider) = provider.as_object() else {
             continue;
         };
+        if provider.get("unknown_model_policy").is_some_and(|value| {
+            value
+                .as_str()
+                .is_none_or(|policy| !matches!(policy, "conservative" | "api-default"))
+        }) {
+            diagnostics.push(ConfigDiagnostic {
+                path: format!("providers.{provider_id}.unknown_model_policy"),
+                message: "provider unknown_model_policy must be conservative or api-default"
+                    .to_string(),
+            });
+        }
         let Some(models_value) = provider.get("models") else {
             continue;
         };
@@ -857,6 +878,41 @@ fn validate_provider_models_config(format: ConfigFormat, text: &str) -> Vec<Conf
                 }
             }
 
+            if let Some(levels) = model
+                .get("reasoning_levels")
+                .and_then(serde_json::Value::as_array)
+                && let Some(vocabulary) = provider_reasoning_level_vocabulary(provider_id, provider)
+            {
+                for level in levels.iter().filter_map(serde_json::Value::as_str) {
+                    let supported = vocabulary.contains(&level)
+                        || (vocabulary.contains(&"max") && level == "xhigh");
+                    if !supported {
+                        diagnostics.push(ConfigDiagnostic {
+                            path: format!("{entry_path}.reasoning_levels"),
+                            message: format!(
+                                "provider model reasoning level `{level}` is not supported by this provider"
+                            ),
+                        });
+                    }
+                }
+            }
+
+            if let Some(tags) = model
+                .get("capabilities")
+                .and_then(serde_json::Value::as_array)
+            {
+                for tag in tags.iter().filter_map(serde_json::Value::as_str) {
+                    if !is_supported_capability_tag(tag) {
+                        diagnostics.push(ConfigDiagnostic {
+                            path: format!("{entry_path}.capabilities"),
+                            message: format!(
+                                "provider model capability tag `{tag}` is not recognized"
+                            ),
+                        });
+                    }
+                }
+            }
+
             if let Some(aliases) = model.get("aliases").and_then(serde_json::Value::as_array) {
                 for alias in aliases.iter().filter_map(serde_json::Value::as_str) {
                     if !valid_provider_model_text(alias) {
@@ -922,6 +978,184 @@ fn validate_provider_models_config(format: ConfigFormat, text: &str) -> Vec<Conf
                     }),
                 }
             }
+        }
+    }
+    diagnostics
+}
+
+/// Returns the per-provider reasoning-level vocabulary for configured model
+/// records, keyed by provider kind and resolved API compatibility.
+///
+/// Unknown or permissive adapters return `None` so their level lists stay
+/// unconstrained.
+fn provider_reasoning_level_vocabulary(
+    provider_id: &str,
+    provider: &serde_json::Map<String, serde_json::Value>,
+) -> Option<&'static [&'static str]> {
+    let kind = provider
+        .get("kind")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(provider_id);
+    let api = mez_agent::resolve_provider_api(
+        kind,
+        provider.get("api").and_then(serde_json::Value::as_str),
+    )
+    .ok()?;
+    match (kind, api) {
+        ("deepseek", mez_agent::ProviderApiCompatibility::DeepSeekChatCompletions) => {
+            Some(&["low", "high", "max"])
+        }
+        ("openai", mez_agent::ProviderApiCompatibility::OpenAiResponses) => {
+            Some(&["low", "medium", "high", "xhigh"])
+        }
+        ("anthropic", mez_agent::ProviderApiCompatibility::AnthropicMessages) => {
+            Some(&["low", "medium", "high", "xhigh", "max"])
+        }
+        _ => None,
+    }
+}
+
+/// Reports whether a configured capability tag is part of the
+/// provider-neutral functional vocabulary or a tolerated informational tag.
+fn is_supported_capability_tag(tag: &str) -> bool {
+    matches!(
+        tag.trim(),
+        "native_thinking"
+            | "function_tools"
+            | "function_calling"
+            | "tool_use"
+            | "tools"
+            | "forced_tool_choice"
+            | "streaming"
+            | "max_output_tokens"
+            | "max_output_token_control"
+            | "vision"
+    )
+}
+
+/// Validates model-profile reasoning selections against the model metadata
+/// that materialization would resolve.
+///
+/// Profiles with explicit metadata are checked against their declared levels;
+/// DeepSeek profiles with a reasoning selection and no declared metadata are
+/// flagged because conservative unknown-model policy would reject them at
+/// materialization.
+fn validate_model_profile_reasoning_config(
+    format: ConfigFormat,
+    text: &str,
+) -> Vec<ConfigDiagnostic> {
+    let Ok(root) = parse_config_json_value(format, text) else {
+        return Vec::new();
+    };
+    let Some(providers) = root.get("providers").and_then(serde_json::Value::as_object) else {
+        return Vec::new();
+    };
+    let Some(profiles) = root
+        .get("model_profiles")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return Vec::new();
+    };
+    let mut diagnostics = Vec::new();
+    for (profile_name, profile) in profiles {
+        let Some(profile) = profile.as_object() else {
+            continue;
+        };
+        let Some(reasoning) = profile
+            .get("reasoning_profile")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| {
+                profile
+                    .get("reasoning_effort")
+                    .and_then(serde_json::Value::as_str)
+            })
+        else {
+            continue;
+        };
+        let Some(provider_id) = profile.get("provider").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let Some(model_name) = profile.get("model").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let path = format!("model_profiles.{profile_name}.reasoning_profile");
+        let profile_levels = profile
+            .get("reasoning_levels")
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            });
+        let provider = providers
+            .get(provider_id)
+            .and_then(serde_json::Value::as_object);
+        let record_levels = provider
+            .and_then(|provider| provider.get("models"))
+            .and_then(serde_json::Value::as_object)
+            .and_then(|models| {
+                models.values().find_map(|value| {
+                    let record = value.as_object()?;
+                    let id = record.get("id")?.as_str()?;
+                    let aliases = record
+                        .get("aliases")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    if id != model_name && !aliases.contains(&model_name) {
+                        return None;
+                    }
+                    Some(
+                        record
+                            .get("reasoning_levels")
+                            .and_then(serde_json::Value::as_array)
+                            .map(|items| {
+                                items
+                                    .iter()
+                                    .filter_map(serde_json::Value::as_str)
+                                    .map(str::to_string)
+                                    .collect::<Vec<_>>()
+                            }),
+                    )
+                })
+            })
+            .flatten();
+        let levels = profile_levels.or(record_levels);
+        if let Some(levels) = levels {
+            let supported = levels.iter().any(|level| {
+                level == reasoning
+                    || (level == "max" && reasoning == "xhigh")
+                    || (level == "xhigh" && reasoning == "max")
+            });
+            if !supported {
+                diagnostics.push(ConfigDiagnostic {
+                    path,
+                    message: format!(
+                        "model profile reasoning effort `{reasoning}` is not supported by model `{model_name}`"
+                    ),
+                });
+            }
+        } else if provider.is_some_and(|provider| {
+            provider.get("kind").and_then(serde_json::Value::as_str) == Some("deepseek")
+                && provider
+                    .get("unknown_model_policy")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("conservative")
+                    != "api-default"
+        }) {
+            diagnostics.push(ConfigDiagnostic {
+                path,
+                message: format!(
+                    "model profile reasoning effort `{reasoning}` requires explicit reasoning_levels metadata for model `{model_name}`"
+                ),
+            });
         }
     }
     diagnostics

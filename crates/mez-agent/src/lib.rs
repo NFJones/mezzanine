@@ -18,6 +18,8 @@ pub mod action_recovery;
 pub mod action_result;
 /// Provider-independent action-result context and transcript rendering.
 pub mod action_result_context;
+/// Agent discovery vocabulary and bounds for the `list_agents` action.
+pub mod agent_discovery;
 /// Provider-independent agent-shell session error contracts.
 pub mod agent_shell;
 /// Provider-independent agent-shell session state and display policy.
@@ -76,16 +78,15 @@ pub mod mcp;
 pub mod memory;
 /// Per-turn persistent-memory action guardrails.
 pub mod memory_guardrail;
+/// Product-independent MMP message action lowering and approval identity.
+pub mod message_action;
 /// Deterministic local-agent message protocol and delivery service state.
 pub mod messaging;
 /// Typed effective model-capability policy.
 pub mod model_capabilities;
 /// Provider-neutral model catalog construction and selection policy.
 pub mod model_catalog;
-pub use model_capabilities::{
-    ModelCapabilities, ModelCapabilityMetadataPolicy, deepseek_builtin_capability_tags,
-    deepseek_builtin_reasoning_efforts,
-};
+pub use model_capabilities::{ModelCapabilities, ModelCapabilityMetadataPolicy};
 /// Provider-independent model profile records and selection policy.
 pub mod model_profile;
 /// Provider-independent successful model response contract.
@@ -201,6 +202,10 @@ pub use action_result_context::{
     action_result_context_content, action_result_transcript_content,
     historical_tool_result_context_content,
 };
+pub use agent_discovery::{
+    AGENT_LIST_MAX_CAPABILITIES, AGENT_LIST_MAX_ROWS, AGENT_LIST_MAX_STRING_BYTES, AgentKind,
+    AgentListFilter, agent_list_bounded_text, agent_list_text_is_truncated,
+};
 pub use agent_shell::{
     AgentShellSessionError, AgentShellSessionErrorKind, AgentShellSessionResult,
     validate_agent_shell_required,
@@ -227,9 +232,10 @@ pub use auto_sizing::{
     DEFAULT_AUTO_SIZING_FALLBACK_POLICY, DEFAULT_AUTO_SIZING_LARGE_PROFILE,
     DEFAULT_AUTO_SIZING_MEDIUM_PROFILE, DEFAULT_AUTO_SIZING_ROUTER_PROFILE,
     DEFAULT_AUTO_SIZING_SMALL_PROFILE, apply_auto_sizing_execution_profile,
-    auto_sizing_fallback_selection, auto_sizing_minimum_context_profile,
-    auto_sizing_reasoning_levels_for_profile, auto_sizing_request,
-    auto_sizing_selection_for_explicit_pair, auto_sizing_selection_from_response,
+    auto_sizing_allowed_reasoning_efforts_for_target, auto_sizing_fallback_selection,
+    auto_sizing_minimum_context_profile, auto_sizing_reasoning_levels_for_profile,
+    auto_sizing_request, auto_sizing_selection_for_explicit_pair,
+    auto_sizing_selection_from_response,
 };
 pub use config_change::{
     CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_SETTING_PATH_DESCRIPTION,
@@ -344,7 +350,7 @@ pub use maap::{
     agent_output_content_type_is_diff, agent_output_content_type_is_markdown, is_valid_skill_name,
     normalize_agent_output_content_type, parse_fenced_maap_action_batch,
     parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json,
-    parse_maap_action_batch_json_for_turn, parse_maap_action_json,
+    parse_maap_action_batch_json_for_turn, parse_maap_action_json, parse_maap_batch_objective,
 };
 pub use macro_workflow::{
     MACRO_FILE_NAME, MACRO_STEPS_HEADING, MAX_MACRO_FILE_BYTES, MAX_MACRO_STEPS, MacroCatalog,
@@ -364,6 +370,10 @@ pub use mcp::{
 };
 pub use memory::{MemoryContextRecord, MemoryContextScope};
 pub use memory_guardrail::MemoryActionBudget;
+pub use message_action::{
+    MESSAGE_APPROVAL_PREVIEW_BYTES, MessageActionPlan, message_action_plan,
+    message_action_policy_command, message_payload_digest, message_payload_preview,
+};
 pub use model_catalog::{
     ModelAvailability, ModelCatalog, ModelCatalogCandidate, ModelCatalogEntry, ModelCatalogInput,
     ModelCatalogSelection, ModelCatalogSelectionError, ModelCatalogSelectionErrorKind,
@@ -453,7 +463,8 @@ pub use provider_diagnostics::{
 };
 pub use provider_error::{
     DEFAULT_PROVIDER_RETRY_POLICY, ProviderErrorKind, ProviderErrorRetryClass, ProviderRetryPolicy,
-    classify_provider_error_retry, provider_retry_after_delay_ms,
+    classify_provider_error_retry, provider_error_is_malformed_maap_output,
+    provider_retry_after_delay_ms,
 };
 pub use provider_transcript::{PROVIDER_TRANSCRIPT_EVENT_MARKER, ProviderTranscriptEvent};
 pub use quota::{ProviderQuotaUsage, provider_quota_usage_from_headers};
@@ -548,7 +559,10 @@ pub use subagent::{
     builtin_subagent_profiles, normalize_subagent_spawn_role, subagent_action_scope_violation,
 };
 pub use subagent_output::subagent_task_output_for_execution;
-pub use surface::{AgentCapability, AllowedAction, AllowedActionSet, ModelInteractionKind};
+pub use surface::{
+    AgentCapability, AllowedAction, AllowedActionSet, ModelInteractionKind, SpawnAgentSizeOption,
+    SpawnAgentSizing,
+};
 pub use transcript::{
     TRANSCRIPT_CONTEXT_EVENT_MARKER, TranscriptContextEvent, TranscriptContractError,
     TranscriptEntry, TranscriptPersistence, TranscriptRole,

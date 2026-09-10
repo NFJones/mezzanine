@@ -1167,6 +1167,7 @@ impl RuntimeSessionService {
                 window_id: None,
                 role: Some("agent".to_string()),
                 capabilities: Vec::new(),
+                objective: None,
             },
             now_ms,
         )?;
@@ -1495,6 +1496,7 @@ impl RuntimeSessionService {
                 window_id: None,
                 role: Some("agent".to_string()),
                 capabilities: Vec::new(),
+                objective: None,
             },
             now_ms,
         )?;

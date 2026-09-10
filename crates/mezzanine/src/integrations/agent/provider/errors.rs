@@ -41,10 +41,26 @@ pub(crate) fn provider_error_retry_class_from_parts(
 /// Async provider workers carry error kinds as strings across actor channels.
 /// Keeping this parser beside provider retry classification and error-envelope
 /// construction prevents runtime and async-runtime copies from drifting.
-pub(crate) fn provider_event_error_kind(kind: &str) -> crate::error::MezErrorKind {
-    ProviderErrorKind::from_event_name(kind)
-        .map(Into::into)
-        .unwrap_or(crate::error::MezErrorKind::InvalidState)
+/// Unknown identifiers return `None` so callers can apply their fail-closed
+/// error policy instead of silently relabeling the kind as `InvalidState`.
+pub(crate) fn provider_event_error_kind(kind: &str) -> Option<crate::error::MezErrorKind> {
+    ProviderErrorKind::from_event_name(kind).map(Into::into)
+}
+
+/// Returns a bounded char-boundary-safe copy of a provider event kind name.
+///
+/// Unknown kind names are worker-supplied strings; diagnostics keep a short
+/// bounded prefix so operator logs never retain long raw payload fragments.
+pub(crate) fn bounded_provider_event_kind(kind: &str) -> String {
+    const PROVIDER_EVENT_KIND_LIMIT_BYTES: usize = 64;
+    if kind.len() <= PROVIDER_EVENT_KIND_LIMIT_BYTES {
+        return kind.to_string();
+    }
+    let mut end = PROVIDER_EVENT_KIND_LIMIT_BYTES;
+    while !kind.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    format!("{}...", &kind[..end])
 }
 
 /// Builds a provider/runtime error envelope from serialized provider-event fields.
@@ -58,7 +74,17 @@ pub(crate) fn provider_event_error_from_parts(
     provider_failure_json: Option<&str>,
     provider_raw_text: Option<&str>,
 ) -> MezError {
-    let mut error = MezError::new(provider_event_error_kind(kind), message);
+    let (error_kind, message_text) = match provider_event_error_kind(kind) {
+        Some(parsed_kind) => (parsed_kind, message.to_string()),
+        None => (
+            crate::error::MezErrorKind::InvalidState,
+            format!(
+                "provider event kind unknown: `{}`: {message}",
+                bounded_provider_event_kind(kind)
+            ),
+        ),
+    };
+    let mut error = MezError::new(error_kind, &message_text);
     if let Some(raw_text) = provider_raw_text {
         error = error.with_provider_raw_text(raw_text.to_string());
     }
@@ -81,4 +107,52 @@ pub(crate) fn provider_event_error_from_parts(
 pub(super) fn provider_maap_parse_error(error: impl Into<MezError>, raw_text: &str) -> MezError {
     let error = error.into();
     provider_malformed_output_error(error.kind().into(), error.message(), raw_text).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Malformed-MAAP errors classify NonRetryable for the in-process kind and
+    /// for the async event-kind round-trip, regardless of incidental payload
+    /// text, so the model-repair path owns recovery instead of transport retry.
+    #[test]
+    fn malformed_maap_output_classifies_non_retryable_across_kind_round_trip() {
+        let message = "provider MAAP output is malformed: mezzanine-action-json block is invalid JSON: expected `,` or `}` at line 1 column 282";
+        let failure_json = Some(
+            r#"{"type":"malformed_model_output","error":{"kind":"invalid_state","message":"mezzanine-action-json block is invalid JSON"}}"#,
+        );
+        for kind in ["invalid_args", "invalid_state", "rate_limited"] {
+            let event_kind = provider_event_error_kind(kind).expect("known event kind");
+            let class = provider_error_retry_class_from_parts(event_kind, message, failure_json);
+            assert_eq!(class, ProviderErrorRetryClass::NonRetryable, "{kind}");
+        }
+    }
+
+    /// Unknown provider event kinds are marked unknown and fail closed
+    /// instead of being silently relabeled as InvalidState.
+    #[test]
+    fn unknown_provider_event_kinds_are_marked_and_never_relabeled() {
+        assert_eq!(provider_event_error_kind("bogus"), None);
+        assert_eq!(provider_event_error_kind("rate-limited"), None);
+        let envelope =
+            provider_event_error_from_parts("bogus", "provider failure detail", None, Some("raw"));
+        assert_eq!(envelope.kind(), crate::error::MezErrorKind::InvalidState);
+        assert_eq!(
+            envelope.message(),
+            "provider event kind unknown: `bogus`: provider failure detail"
+        );
+        assert_eq!(envelope.provider_raw_text(), Some("raw"));
+        let long_kind = "x".repeat(200);
+        let bounded = provider_event_error_from_parts(&long_kind, "detail", None, None);
+        assert!(
+            bounded.message().contains("provider event kind unknown"),
+            "{}",
+            bounded.message()
+        );
+        assert!(
+            !bounded.message().contains(&long_kind),
+            "kind must stay bounded"
+        );
+    }
 }

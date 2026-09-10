@@ -660,6 +660,7 @@ impl RuntimeSessionService {
                 block.source,
                 ContextSourceKind::SkillInstruction
                     | ContextSourceKind::LocalMessage
+                    | ContextSourceKind::PeerMessage
                     | ContextSourceKind::Policy
                     | ContextSourceKind::Configuration
             ) {

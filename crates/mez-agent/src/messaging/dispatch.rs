@@ -15,7 +15,9 @@ use super::types::{
     AgentPresenceStatus, DeliveryStatus, Envelope, MMP_PROTOCOL, MMP_UNSUPPORTED_PROTOCOL_MESSAGE,
     MessageConnection, MessageSequence, MessageService, Recipient, SenderIdentity,
 };
-use super::validation::{validate_message_type, validate_mmp_payload_metadata, validate_protocol};
+use super::validation::{
+    normalize_objective, validate_message_type, validate_mmp_payload_metadata, validate_protocol,
+};
 
 /// Runs the dispatch mmp body operation for this subsystem.
 ///
@@ -73,7 +75,14 @@ fn dispatch_mmp_body_result(
             let role = optional_message_label_field(body, "role")?
                 .unwrap_or_else(|| "default".to_string());
             let capabilities = optional_message_string_array_field(body, "capabilities")?;
-            let identity = service.register_agent(None, None, role, capabilities);
+            let objective = optional_message_objective_field(body)?;
+            let identity = service.register_agent_with_objective(
+                None,
+                None,
+                role,
+                capabilities,
+                objective.as_deref(),
+            )?;
             let cursor = service.subscribe(&identity.agent_id)?;
             connection.agent_id = Some(identity.agent_id.clone());
             connection.delivery_cursor = Some(cursor);
@@ -118,6 +127,9 @@ fn dispatch_mmp_body_result(
                 .transpose()?
                 .unwrap_or(AgentPresenceStatus::Available);
             service.update_presence(&agent_id, status, now_ms)?;
+            if let Some(objective) = optional_message_objective_field(body)? {
+                service.update_agent_objective(&agent_id, Some(&objective), now_ms)?;
+            }
             Ok(format!(
                 r#"{{"protocol":"mmp/1","type":"ack","message_id":{},"queued_recipients":0}}"#,
                 json_optional(json_string_field(body, "id").as_deref())
@@ -580,6 +592,29 @@ fn optional_message_label_field(body: &str, field: &str) -> Result<Option<String
     Ok(Some(value.to_string()))
 }
 
+/// Runs the optional message objective field operation for this subsystem.
+///
+/// The objective is additive to mmp/1: it is omitted when absent and is
+/// normalized with the shared objective bounds when present, so no unbounded or
+/// control-character bearing value can be published to discovery.
+fn optional_message_objective_field(body: &str) -> Result<Option<String>> {
+    let value = serde_json::from_str::<serde_json::Value>(body)
+        .map_err(|_| MessageError::invalid_args("MMP envelope must be a JSON object"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| MessageError::invalid_args("MMP envelope must be a JSON object"))?;
+    let Some(value) = object.get("objective") else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let value = value
+        .as_str()
+        .ok_or_else(|| MessageError::invalid_args("MMP objective must be a string"))?;
+    normalize_objective(value).map(Some)
+}
+
 /// Runs the optional message string array field operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -660,4 +695,122 @@ fn validate_message_label(field: &str, value: &str) -> Result<()> {
         return Err(MessageError::invalid_args(format!("{field} is invalid")));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MessageConnection, MessageService, dispatch_mmp_body};
+
+    /// Hello carries the additive objective into welcome, discovery results, and
+    /// envelope senders while leaving role and capability filters unchanged.
+    #[test]
+    fn hello_objective_round_trips_through_welcome_and_discovery() {
+        let mut service = MessageService::default();
+        let mut connection = MessageConnection::default();
+        let welcome = dispatch_mmp_body(
+            r#"{"protocol":"mmp/1","type":"hello","role":"reviewer","capabilities":["rust"],"objective":"Inspect the MMP discovery contract"}"#,
+            &mut service,
+            &mut connection,
+            10,
+        );
+        assert!(
+            welcome.contains(r#""objective":"Inspect the MMP discovery contract""#),
+            "{welcome}"
+        );
+
+        let discover = dispatch_mmp_body(
+            r#"{"protocol":"mmp/1","type":"discover","role":"reviewer","capabilities":["rust"]}"#,
+            &mut service,
+            &mut connection,
+            20,
+        );
+        assert!(
+            discover.contains(r#""type":"discover_result""#),
+            "{discover}"
+        );
+        assert!(
+            discover.contains(r#""objective":"Inspect the MMP discovery contract""#),
+            "{discover}"
+        );
+
+        let unmatched = dispatch_mmp_body(
+            r#"{"protocol":"mmp/1","type":"discover","role":"writer","capabilities":["docs"]}"#,
+            &mut service,
+            &mut connection,
+            20,
+        );
+        assert!(unmatched.ends_with(r#""agents":[]}"#), "{unmatched}");
+    }
+
+    /// A hello without an objective omits the additive field, so legacy
+    /// payloads deserialize to no objective.
+    #[test]
+    fn hello_without_objective_omits_the_additive_field() {
+        let mut service = MessageService::default();
+        let mut connection = MessageConnection::default();
+        let welcome = dispatch_mmp_body(
+            r#"{"protocol":"mmp/1","type":"hello"}"#,
+            &mut service,
+            &mut connection,
+            10,
+        );
+        assert!(welcome.contains(r#""type":"welcome""#), "{welcome}");
+        assert!(!welcome.contains("objective"), "{welcome}");
+        assert!(service.presence()[0].identity.objective.is_none());
+    }
+
+    /// An unbounded or control-character bearing hello objective is rejected
+    /// instead of being published to discovery.
+    #[test]
+    fn hello_rejects_invalid_objective() {
+        let mut service = MessageService::default();
+        let mut connection = MessageConnection::default();
+        let rejected = dispatch_mmp_body(
+            r#"{"protocol":"mmp/1","type":"hello","objective":"inspect\u0007the pane"}"#,
+            &mut service,
+            &mut connection,
+            10,
+        );
+        assert!(rejected.contains(r#""type":"error""#), "{rejected}");
+        assert!(rejected.contains("control characters"), "{rejected}");
+        assert!(service.presence().is_empty());
+    }
+
+    /// Presence publishes a changed objective and keeps an unchanged one, with
+    /// no additional objective write for the identical value.
+    #[test]
+    fn presence_objective_refresh_applies_changes_only() {
+        let mut service = MessageService::default();
+        let mut connection = MessageConnection::default();
+        dispatch_mmp_body(
+            r#"{"protocol":"mmp/1","type":"hello","objective":"Inspect the backlog"}"#,
+            &mut service,
+            &mut connection,
+            10,
+        );
+        dispatch_mmp_body(
+            r#"{"protocol":"mmp/1","type":"presence","status":"busy","objective":"Inspect the backlog"}"#,
+            &mut service,
+            &mut connection,
+            20,
+        );
+        assert_eq!(
+            service
+                .registered_identity(&connection.agent_id.clone().unwrap())
+                .and_then(|identity| identity.objective.as_deref()),
+            Some("Inspect the backlog")
+        );
+        dispatch_mmp_body(
+            r#"{"protocol":"mmp/1","type":"presence","status":"available","objective":"Review the backlog"}"#,
+            &mut service,
+            &mut connection,
+            30,
+        );
+        assert_eq!(
+            service
+                .registered_identity(&connection.agent_id.clone().unwrap())
+                .and_then(|identity| identity.objective.as_deref()),
+            Some("Review the backlog")
+        );
+    }
 }

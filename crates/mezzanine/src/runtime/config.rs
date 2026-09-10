@@ -7,15 +7,15 @@
 use super::{
     BTreeMap, DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT,
     DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT, DEFAULT_AGENT_LOOP_LIMIT,
-    DEFAULT_AGENT_ROUTING, DEFAULT_AUTO_SIZING_FALLBACK_POLICY, DEFAULT_MAX_CONCURRENT_AGENTS,
-    DEFAULT_MAX_QUEUED_BYTES, DEFAULT_MAX_QUEUED_TURNS, DEFAULT_MAX_ROOT_SUBAGENTS,
-    DEFAULT_MAX_SUBAGENT_DEPTH, DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW,
-    DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT, DEFAULT_SUBAGENT_WAIT_POLICY, MezError, Result,
-    RuntimeAgentPersonalityProfile, RuntimeAutoSizingConfig, RuntimeAutoSizingFallbackPolicy,
-    RuntimeConfigApplyReport, RuntimeSessionService, SubagentProfile, SubagentWaitPolicy, Value,
-    builtin_subagent_profiles, ensure_absolute, optional_path_json, optional_string_json,
-    runtime_cooperation_mode, runtime_cooperation_mode_name, runtime_json_string_field,
-    runtime_json_value,
+    DEFAULT_AGENT_PEER_MESSAGE_LOOP_LIMIT, DEFAULT_AGENT_ROUTING,
+    DEFAULT_AUTO_SIZING_FALLBACK_POLICY, DEFAULT_MAX_CONCURRENT_AGENTS, DEFAULT_MAX_QUEUED_BYTES,
+    DEFAULT_MAX_QUEUED_TURNS, DEFAULT_MAX_ROOT_SUBAGENTS, DEFAULT_MAX_SUBAGENT_DEPTH,
+    DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW, DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT,
+    DEFAULT_SUBAGENT_WAIT_POLICY, MezError, Result, RuntimeAgentPersonalityProfile,
+    RuntimeAutoSizingConfig, RuntimeAutoSizingFallbackPolicy, RuntimeConfigApplyReport,
+    RuntimeSessionService, SubagentProfile, SubagentWaitPolicy, Value, builtin_subagent_profiles,
+    ensure_absolute, optional_path_json, optional_string_json, runtime_cooperation_mode,
+    runtime_cooperation_mode_name, runtime_json_string_field, runtime_json_value,
 };
 
 mod agents;
@@ -40,12 +40,14 @@ pub(super) use agents::{
     runtime_agent_compaction_raw_retention_percent_from_config,
     runtime_agent_custom_system_prompt_from_config, runtime_agent_enabled_actions_from_config,
     runtime_agent_loop_limit_from_config, runtime_agent_native_shell_timeout_ms_from_config,
+    runtime_agent_peer_message_loop_limit_from_config,
     runtime_agent_personality_profiles_from_config, runtime_agent_root_routing_policy_from_config,
-    runtime_agent_routing_from_config, runtime_agent_turn_timeout_ms_from_config,
-    runtime_always_exposed_mcp_servers_from_config, runtime_default_agent_personality_from_config,
-    runtime_max_concurrent_agents_from_config, runtime_max_queued_agent_bytes_from_config,
-    runtime_max_queued_agent_turns_from_config, runtime_max_root_subagents_from_config,
-    runtime_max_subagent_depth_from_config, runtime_max_subagent_panes_per_window_from_config,
+    runtime_agent_routing_from_config, runtime_agent_session_title_policy_from_config,
+    runtime_agent_turn_timeout_ms_from_config, runtime_always_exposed_mcp_servers_from_config,
+    runtime_default_agent_personality_from_config, runtime_max_concurrent_agents_from_config,
+    runtime_max_queued_agent_bytes_from_config, runtime_max_queued_agent_turns_from_config,
+    runtime_max_root_subagents_from_config, runtime_max_subagent_depth_from_config,
+    runtime_max_subagent_panes_per_window_from_config,
     runtime_max_subagents_per_subagent_from_config,
     runtime_provider_error_retry_policy_from_config, runtime_shell_mode_from_config,
     runtime_subagent_profiles_from_config, runtime_subagent_wait_policy_from_config,
@@ -93,19 +95,19 @@ pub(crate) use permissions::{
     SandboxUnavailablePolicy, SeatbeltConfig, runtime_approval_decision_name_to_kind,
     runtime_blocked_approval_request, runtime_config_permission_preset,
     runtime_configured_permissions_from_config, runtime_message_recipient,
-    sandbox_applies_to_policy,
+    runtime_message_recipient_decision, sandbox_applies_to_policy,
 };
 #[cfg(test)]
 pub(crate) use permissions::{
     ConfiguredSandboxEnvironment, runtime_configured_permissions_from_config_for_platform,
 };
+pub(super) use providers::{
+    runtime_default_config_model_records, runtime_preset_registry_from_config,
+    runtime_provider_registry_from_config, runtime_recommended_model_for_provider,
+};
 pub(crate) use providers::{
     runtime_default_models_for_provider, runtime_effective_provider_options,
     runtime_provider_config_from_config,
-};
-pub(super) use providers::{
-    runtime_preset_registry_from_config, runtime_provider_registry_from_config,
-    runtime_recommended_model_for_provider,
 };
 pub(super) use terminal_options::{
     PaneSpawnDirectoryPolicy, PaneSpawnPolicy, PaneSpawnViewPolicy,
@@ -380,11 +382,46 @@ mod tests {
 
     use super::{
         ActiveTurnSleepInhibition, runtime_active_turn_sleep_inhibition_from_config,
-        runtime_agent_enabled_actions_from_config, runtime_fit_status_line,
-        runtime_provider_error_retry_policy_from_config,
+        runtime_agent_enabled_actions_from_config, runtime_agent_session_title_policy_from_config,
+        runtime_fit_status_line, runtime_provider_error_retry_policy_from_config,
         runtime_terminal_agent_wrap_column_cap_from_config,
         runtime_terminal_emoji_width_from_config, runtime_terminal_streaming_output_from_config,
     };
+
+    /// Verifies the saved-session title policy reader keeps the documented
+    /// default for an absent key and rejects undefined title sources.
+    #[test]
+    fn parses_agent_session_title_policy_from_config() {
+        use crate::session_title::SessionTitlePolicy;
+
+        assert_eq!(
+            runtime_agent_session_title_policy_from_config(&serde_json::json!({})).unwrap(),
+            SessionTitlePolicy::Generated
+        );
+        for (value, policy) in [
+            ("generated", SessionTitlePolicy::Generated),
+            ("objective", SessionTitlePolicy::Objective),
+            ("last_prompt", SessionTitlePolicy::LastPrompt),
+            ("first_prompt", SessionTitlePolicy::FirstPrompt),
+        ] {
+            assert_eq!(
+                runtime_agent_session_title_policy_from_config(&serde_json::json!({
+                    "agents": { "session_title_policy": value }
+                }))
+                .unwrap(),
+                policy,
+                "policy {value}"
+            );
+        }
+        for value in [serde_json::json!("model"), serde_json::json!(3)] {
+            assert!(
+                runtime_agent_session_title_policy_from_config(&serde_json::json!({
+                    "agents": { "session_title_policy": value }
+                }))
+                .is_err()
+            );
+        }
+    }
 
     /// Verifies the runtime defaults to all executable actions and preserves a
     /// configured static subset without introducing capability actions.

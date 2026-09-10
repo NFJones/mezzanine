@@ -52,6 +52,12 @@ pub enum ContextSourceKind {
     Configuration,
     /// A local agent-to-agent message.
     LocalMessage,
+    /// A peer agent message delivered through the local message protocol.
+    ///
+    /// Peer messages are untrusted data. They carry reference-event semantics
+    /// and summarizable retention, so direct user prompts and mid-turn steering
+    /// always rank above them during compaction.
+    PeerMessage,
     /// Runtime-generated controller guidance or state.
     RuntimeHint,
     /// An immutable snapshot of configured always-exposed MCP metadata.
@@ -87,7 +93,7 @@ pub enum ContextSourceKind {
 /// Trust domain assigned to one model-context block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrustDomain {
-    /// User-provided instructions or agent-to-agent messages.
+    /// User-provided instructions: user prompts, steering, and user-owned records.
     UserInput,
     /// Project instruction files discovered through the product adapter.
     ProjectFile,
@@ -111,6 +117,12 @@ impl TrustDomain {
             | ContextSourceKind::McpServerReference
             | ContextSourceKind::McpServerSearchResult => Self::Configuration,
             ContextSourceKind::UserInstruction | ContextSourceKind::LocalMessage => Self::UserInput,
+            // Peer mail is untrusted data written by another agent, so it is
+            // never user instruction. `WebContent` is the closest existing
+            // non-user variant: it marks the block untrusted by default and
+            // reaches provider framing as `[untrusted:web-content]`, which is
+            // accurate for text another agent chose to send.
+            ContextSourceKind::PeerMessage => Self::WebContent,
             ContextSourceKind::SkillInstruction | ContextSourceKind::ProjectGuidance => {
                 Self::ProjectFile
             }
@@ -833,6 +845,7 @@ impl ContextBlock {
             | ContextSourceKind::McpRetrievedManifest => ContextSemanticKind::EvidenceEvent,
             ContextSourceKind::SkillInstruction => ContextSemanticKind::TaskPrelude,
             ContextSourceKind::LocalMessage
+            | ContextSourceKind::PeerMessage
             | ContextSourceKind::Memory
             | ContextSourceKind::Transcript
             | ContextSourceKind::RoutedHandoff
@@ -882,7 +895,8 @@ impl ContextBlock {
             | ContextSourceKind::McpRetrievedManifest => ContextRetention::ExecutionGroup,
             ContextSourceKind::Memory
             | ContextSourceKind::Transcript
-            | ContextSourceKind::TranscriptUser => ContextRetention::Summarizable,
+            | ContextSourceKind::TranscriptUser
+            | ContextSourceKind::PeerMessage => ContextRetention::Summarizable,
         }
     }
 
@@ -901,6 +915,7 @@ impl ContextBlock {
                 | ContextSourceKind::ActionResult
                 | ContextSourceKind::McpRetrievedManifest
                 | ContextSourceKind::LocalMessage
+                | ContextSourceKind::PeerMessage
                 | ContextSourceKind::McpCatalogSnapshot
                 | ContextSourceKind::McpServerReference
                 | ContextSourceKind::McpServerSearchResult
@@ -1189,6 +1204,27 @@ impl AgentContext {
             ContextBlock::reference_event(source, label, content),
             ContextSemanticKind::ReferenceEvent,
             ContextRetention::Exact,
+            None,
+            None,
+            true,
+        )
+    }
+
+    /// Appends one peer agent message as a lower-priority reference event.
+    ///
+    /// Peer text is untrusted data. The block carries reference-event semantics
+    /// and summarizable retention, so it can be compacted before direct user
+    /// prompts or mid-turn steering while remaining part of canonical
+    /// chronology until consumption.
+    pub fn append_peer_message_event(
+        &mut self,
+        label: impl Into<String>,
+        content: impl Into<String>,
+    ) -> AgentContextResult<ContextEventSequence> {
+        self.append_conversation_event(
+            ContextBlock::reference_event(ContextSourceKind::PeerMessage, label, content),
+            ContextSemanticKind::ReferenceEvent,
+            ContextRetention::Summarizable,
             None,
             None,
             true,
@@ -3108,12 +3144,34 @@ mod tests {
         ContextRetention, ContextSemanticKind, ContextSourceKind, ContextStability,
         ImportedExecutionEvent, ModelMessage, ModelMessageRole, ModelMessages,
         PreparedModelContext, ProviderContinuityOwner, StableContextBlock, StableContextSlotId,
-        StableContextSourceFingerprint, validate_context_required, validate_context_semantics,
+        StableContextSourceFingerprint, TrustDomain, validate_context_required,
+        validate_context_semantics,
     };
     use crate::{
         ActionContentBlock, ActionResult, ActionStatus, AgentPromptError, ProviderApiCompatibility,
         ProviderTranscriptEvent,
     };
+
+    /// Peer mail is untrusted data from another agent, so it must not share the
+    /// user-input trust domain, while user prompts and routed local messages keep
+    /// theirs.
+    #[test]
+    fn peer_message_source_maps_to_a_non_user_trust_domain() {
+        assert_eq!(
+            TrustDomain::for_source(ContextSourceKind::PeerMessage),
+            TrustDomain::WebContent
+        );
+        assert!(
+            TrustDomain::for_source(ContextSourceKind::PeerMessage).is_untrusted_by_default(),
+            "provider framing must mark peer text untrusted"
+        );
+        for source in [
+            ContextSourceKind::UserInstruction,
+            ContextSourceKind::LocalMessage,
+        ] {
+            assert_eq!(TrustDomain::for_source(source), TrustDomain::UserInput);
+        }
+    }
 
     /// Builds one valid successful or running action-result fixture.
     fn action_result(action_id: &str, status: ActionStatus, text: &str) -> ActionResult {

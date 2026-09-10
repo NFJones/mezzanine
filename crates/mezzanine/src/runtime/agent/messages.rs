@@ -7,12 +7,28 @@
 
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentId, AgentTurnExecution,
-    AgentTurnRecord, AgentTurnState, Envelope, MezError, PaneId, Result, RuntimeSessionService,
-    SenderIdentity, current_unix_seconds, json_escape,
-    runtime_agent_turn_state_from_action_results,
+    AgentTurnRecord, AgentTurnState, Envelope, EventKind, MezError, PaneId, Result,
+    RuntimeSessionService, RuntimeSideEffect, ScheduledWork, SenderIdentity, current_unix_seconds,
+    json_escape, runtime_agent_turn_state_from_action_results,
     runtime_execution_ready_for_provider_continuation, runtime_maap_message_content_type,
     runtime_message_recipient, runtime_mezzanine_error_code, validate_mmp_payload_metadata,
 };
+use crate::runtime::{RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition};
+
+/// Cadence of the dedicated peer-message delivery and expiry sweep.
+///
+/// The interval matches the runtime's short status-refresh cadence so pending
+/// peer delivery and TTL expiry stay prompt without adding a permanent busy
+/// tick. This timer is independent of the runtime actor tick.
+pub(crate) const PEER_MESSAGE_DELIVERY_INTERVAL_MS: u64 = 1_000;
+
+/// Maximum characters carried by one prompt-derived fallback objective.
+///
+/// The fallback exists only for a turn whose response carried no
+/// model-authored objective. It summarizes the turn's own text into one bounded
+/// factual status line instead of republishing that text, and the shared
+/// objective bounds still apply to the result.
+pub(crate) const RUNTIME_AGENT_OBJECTIVE_FALLBACK_CHARS: usize = 160;
 
 impl RuntimeSessionService {
     /// Commits unread runtime-agent messages at the actor boundary in delivery
@@ -24,6 +40,11 @@ impl RuntimeSessionService {
     /// them before that task's prelude and prompt. Messages for an active turn
     /// append at arrival time; an older in-flight provider claim will therefore
     /// be rejected by the canonical event high-water check.
+    ///
+    /// Only model-originated peer mail starts a turn for an idle recipient.
+    /// Runtime-owned bridge and lifecycle notifications keep their
+    /// pre-idle-turn behavior: they wait behind the durable cursor and are
+    /// injected with the recipient's next turn.
     pub(crate) fn deliver_pending_runtime_agent_messages(&mut self, now_ms: u64) -> Result<usize> {
         let ready = self
             .control
@@ -35,22 +56,15 @@ impl RuntimeSessionService {
             if !recipient.as_str().starts_with("agent-") {
                 continue;
             }
-            let Some(turn) = self
-                .agent_turn_ledger()
-                .turns()
-                .iter()
-                .rev()
-                .find(|turn| {
-                    turn.agent_id == recipient.as_str()
-                        && matches!(
-                            turn.state,
-                            AgentTurnState::Queued
-                                | AgentTurnState::Running
-                                | AgentTurnState::Blocked
-                        )
-                })
-                .cloned()
-            else {
+            let Some(turn) = self.runtime_agent_active_turn(recipient.as_str()) else {
+                if fanout.batch.messages.iter().all(|message| {
+                    crate::runtime::control::runtime_owned_bridge_message(&message.envelope)
+                }) {
+                    continue;
+                }
+                let pane_id = recipient.as_str().trim_start_matches("agent-").to_string();
+                committed =
+                    committed.saturating_add(self.start_runtime_peer_message_turn(&pane_id)?);
                 continue;
             };
             if !self.agent_turn_contexts().contains_key(&turn.turn_id) {
@@ -58,21 +72,21 @@ impl RuntimeSessionService {
             }
 
             for message in fanout.batch.messages {
-                let label = format!(
-                    "local message sequence {} id {}",
-                    message.sequence, message.envelope.id
+                let label = crate::runtime::control::runtime_peer_message_block_label(
+                    message.sequence,
+                    message.envelope.id.as_str(),
                 );
                 let already_committed =
                     self.agent_turn_contexts()
                         .get(&turn.turn_id)
                         .is_some_and(|context| {
                             context.blocks().iter().any(|block| {
-                                block.source == mez_agent::ContextSourceKind::LocalMessage
+                                block.source == mez_agent::ContextSourceKind::PeerMessage
                                     && block.label == label
                             })
                         });
                 if !already_committed {
-                    let content = crate::runtime::control::runtime_local_message_context_content(
+                    let content = crate::runtime::control::runtime_peer_message_context_content(
                         &message.envelope,
                     );
                     self.agent_turn_contexts_mut()
@@ -80,18 +94,15 @@ impl RuntimeSessionService {
                         .ok_or_else(|| {
                             MezError::invalid_state("runtime agent turn context is unavailable")
                         })?
-                        .append_reference_event(
-                            mez_agent::ContextSourceKind::LocalMessage,
-                            label,
-                            content,
-                        )?;
+                        .append_peer_message_event(label, content)?;
                     committed = committed.saturating_add(1);
                     self.append_agent_trace_turn_event(
                         &turn.pane_id,
                         &turn.turn_id,
                         &format!(
-                            "local_message committed sequence={} event_high_water={}",
+                            "peer_message committed sequence={} message_id={} event_high_water={}",
                             message.sequence,
+                            message.envelope.id,
                             self.agent_turn_contexts()
                                 .get(&turn.turn_id)
                                 .map(mez_agent::AgentContext::event_sequence_high_water_mark)
@@ -120,6 +131,232 @@ impl RuntimeSessionService {
             }
         }
         Ok(committed)
+    }
+
+    /// Starts one peer-message-triggered turn for an idle agent.
+    ///
+    /// A peer message starts one turn for an idle agent, including in ask mode,
+    /// so agent pipelines can make progress. An agent that already has a queued,
+    /// running, or blocked turn keeps the arrival-time append path instead. The
+    /// configured peer-message loop limit bounds runaway message-triggered
+    /// iterations; it never caps injected message counts, payload bytes, or
+    /// per-window peer turns. The durable cursor advances only after the new turn
+    /// stores the canonical peer-message events.
+    fn start_runtime_peer_message_turn(&mut self, pane_id: &str) -> Result<usize> {
+        let agent_id = format!("agent-{pane_id}");
+        if self.agent_shell_store().get(pane_id).is_none() {
+            return Ok(0);
+        }
+        let loop_limit = self.agent_peer_message_loop_limit();
+        let started_turns = self.agent_peer_message_turn_count(&agent_id);
+        if started_turns >= loop_limit {
+            // The limit is a stable episode state rather than a per-tick event:
+            // report it once, and stay silent until direct user input resets the
+            // counter and clears the episode marker.
+            if !self.agent_peer_message_limit_reported(&agent_id) {
+                self.mark_agent_peer_message_limit_reported(&agent_id);
+                self.append_agent_status_text_to_terminal_buffer(
+                    pane_id,
+                    &format!(
+                        "agent: peer message loop limit {loop_limit} reached; leaving inbox mail pending"
+                    ),
+                )?;
+                let _ = self.append_lifecycle_event(
+                    EventKind::Diagnostic,
+                    format!(
+                        r#"{{"pane_id":"{}","kind":"peer_message_loop_limit","agent_id":"{}","started_turns":{},"loop_limit":{},"message":"peer-message loop limit reached; no new message-triggered turn was started"}}"#,
+                        json_escape(pane_id),
+                        json_escape(&agent_id),
+                        started_turns,
+                        loop_limit
+                    ),
+                );
+            }
+            return Ok(0);
+        }
+        let crate::runtime::control::RuntimePeerMessageTurnContext {
+            context,
+            delivered_message_sequence,
+            delivered_message_count,
+            imported_history_events,
+        } = self.peer_message_turn_context(pane_id)?;
+        let Some(delivered_message_sequence) = delivered_message_sequence else {
+            return Ok(0);
+        };
+        let context = self.apply_agent_shell_preference_context(pane_id, context)?;
+        let context = self.apply_persisted_context_documents(pane_id, context)?;
+        let conversation_id = self
+            .agent_shell_store()
+            .get(pane_id)
+            .map(|session| session.session_id.clone())
+            .ok_or_else(|| MezError::invalid_state("agent turn conversation is unavailable"))?;
+        let turn_id = self.next_agent_turn_id();
+        let context_blocks = context.blocks().len();
+        let (model_profile_name, model_profile) =
+            self.active_model_profile_for_pane(pane_id, &agent_id, None)?;
+        let turn = AgentTurnRecord {
+            turn_id: turn_id.clone(),
+            conversation_id: conversation_id.clone(),
+            agent_id: agent_id.clone(),
+            pane_id: pane_id.to_string(),
+            trigger: mez_agent::AgentTurnTrigger::LocalMessage,
+            started_at_unix_seconds: current_unix_seconds(),
+            deadline_at_unix_millis: crate::runtime::current_unix_millis()
+                .saturating_add(self.agent_turn_timeout_ms()),
+            policy_profile: "runtime".to_string(),
+            model_profile: model_profile_name.clone(),
+            parent_turn_id: None,
+            cooperation_mode: None,
+            state: AgentTurnState::Queued,
+            initial_capability: None,
+        };
+        self.agent_turn_ledger_mut().queue_turn(turn.clone())?;
+        self.snapshot_agent_native_shell_timeout_for_turn(&turn_id);
+        self.agent_turn_contexts_mut()
+            .insert(turn_id.clone(), context);
+        self.set_agent_turn_imported_history_events(turn_id.clone(), imported_history_events);
+        self.set_agent_turn_model_profile(turn_id.clone(), model_profile);
+        let recipient = AgentId::opaque(agent_id.clone())
+            .ok_or_else(|| MezError::invalid_state("runtime agent id is invalid for MMP"))?;
+        self.control
+            .message_service_mut()
+            .advance_subscription(&recipient, delivered_message_sequence)?;
+        self.set_agent_peer_message_turn_count(&agent_id, started_turns.saturating_add(1));
+        self.clear_agent_peer_message_limit_reported(&agent_id);
+        self.enqueue_agent_work(ScheduledWork {
+            turn_id: turn_id.clone(),
+            conversation_id,
+            agent_id: agent_id.clone(),
+            pane_id: Some(pane_id.to_string()),
+            kind: mez_agent::ScheduledWorkKind::ShellCapable,
+        })?;
+        self.append_agent_trace_turn_event(
+            pane_id,
+            &turn_id,
+            "created state=queued reason=peer_message_arrival",
+        )?;
+        self.append_agent_trace_turn_event(
+            pane_id,
+            &turn_id,
+            &format!(
+                "context prepared blocks={} model_profile={} delivered_messages={}",
+                context_blocks, model_profile_name, delivered_message_count
+            ),
+        )?;
+        self.append_agent_trace_turn_event(
+            pane_id,
+            &turn_id,
+            "scheduler enqueue kind=shell_capable reason=peer_message_arrival",
+        )?;
+        self.append_agent_status_text_to_terminal_buffer(
+            pane_id,
+            &format!("agent: started turn {turn_id} from pending peer mail"),
+        )?;
+        self.start_ready_agent_turns()?;
+        Ok(delivered_message_count)
+    }
+
+    /// Returns whether any recipient currently has deliverable peer mail.
+    ///
+    /// Mail that is waiting only on the peer-message loop limit is not
+    /// deliverable: the limit is a stable terminal state for that agent until
+    /// direct user input resets the counter, so it must not keep re-arming the
+    /// delivery timer (and re-reporting the limit) once per tick. Runtime-owned
+    /// bridge traffic never starts a turn, so it keeps the ordinary pending
+    /// behavior that also drives TTL expiry.
+    pub(crate) fn has_pending_peer_messages(&mut self, now_ms: u64) -> bool {
+        let loop_limit = self.agent_peer_message_loop_limit();
+        let ready = self.control.message_service_mut().fanout_ready(now_ms, 1);
+        ready.into_iter().any(|fanout| {
+            let recipient = fanout.recipient.as_str().to_string();
+            if !recipient.starts_with("agent-") {
+                return true;
+            }
+            if fanout.batch.messages.iter().all(|message| {
+                crate::runtime::control::runtime_owned_bridge_message(&message.envelope)
+            }) {
+                return true;
+            }
+            if self.runtime_agent_active_turn(&recipient).is_some() {
+                return true;
+            }
+            self.agent_peer_message_turn_count(&recipient) < loop_limit
+        })
+    }
+
+    /// Returns the queued, running, or blocked turn owned by one agent.
+    ///
+    /// Delivery treats an agent with such a turn as active: peer mail appends at
+    /// arrival time instead of starting a new message-triggered turn.
+    fn runtime_agent_active_turn(&self, agent_id: &str) -> Option<AgentTurnRecord> {
+        self.agent_turn_ledger()
+            .turns()
+            .iter()
+            .rev()
+            .find(|turn| {
+                turn.agent_id == agent_id
+                    && matches!(
+                        turn.state,
+                        AgentTurnState::Queued | AgentTurnState::Running | AgentTurnState::Blocked
+                    )
+            })
+            .cloned()
+    }
+
+    /// Builds the desired dedicated peer-message delivery timer transition.
+    ///
+    /// The dedicated timer is armed only while deliverable peer mail exists and
+    /// no delivery timer is already active, so it stays an event-driven wakeup
+    /// rather than a permanent tick.
+    pub(crate) fn peer_message_delivery_timer_transition(
+        &mut self,
+        timer_active: bool,
+        generation: u64,
+        now_ms: u64,
+    ) -> RuntimeTransition {
+        if timer_active || !self.has_pending_peer_messages(now_ms) {
+            return RuntimeTransition::default();
+        }
+        RuntimeTransition {
+            applied: false,
+            side_effects: vec![RuntimeSideEffect::ScheduleTimer {
+                key: RuntimeTimerKey::new(
+                    RuntimeTimerKind::PeerMessageDelivery,
+                    "peer-message-delivery",
+                    generation,
+                ),
+                delay_ms: PEER_MESSAGE_DELIVERY_INTERVAL_MS,
+            }],
+        }
+    }
+
+    /// Applies one dedicated peer-message delivery and expiry pass.
+    ///
+    /// Returns the transition for the actor so it can re-arm the periodic sweep
+    /// while deliverable mail remains. Expired or undeliverable envelopes keep
+    /// their existing sender-visible message-service semantics.
+    pub(crate) fn apply_peer_message_delivery_timer(
+        &mut self,
+        now_ms: u64,
+        generation: u64,
+    ) -> Result<RuntimeTransition> {
+        let committed = self.deliver_pending_runtime_agent_messages(now_ms)?;
+        let side_effects = if self.has_pending_peer_messages(now_ms) {
+            vec![RuntimeSideEffect::ScheduleTimer {
+                key: RuntimeTimerKey::new(
+                    RuntimeTimerKind::PeerMessageDelivery,
+                    "peer-message-delivery",
+                    generation,
+                ),
+                delay_ms: PEER_MESSAGE_DELIVERY_INTERVAL_MS,
+            }]
+        } else {
+            Vec::new()
+        };
+        Ok(RuntimeTransition {
+            applied: committed > 0,
+            side_effects,
+        })
     }
 
     /// Runs the execute running message actions for turn operation for this subsystem.
@@ -178,6 +415,7 @@ impl RuntimeSessionService {
             recipient,
             content_type,
             payload,
+            correlation_id,
         } = &action.payload
         else {
             return Err(MezError::invalid_args(
@@ -244,7 +482,9 @@ impl RuntimeSessionService {
             time: format!("runtime:{now_ms}"),
             sender: sender.clone(),
             recipient: recipient_target,
-            correlation_id: Some(turn.turn_id.clone()),
+            correlation_id: correlation_id
+                .clone()
+                .or_else(|| Some(turn.turn_id.clone())),
             ttl_ms: None,
             content_type: content_type.clone(),
             payload: payload.clone(),
@@ -307,15 +547,167 @@ impl RuntimeSessionService {
         let window_id = self
             .find_pane_descriptor(&turn.pane_id)
             .map(|descriptor| descriptor.window_id);
-        Ok(self.control.message_service_mut().ensure_agent_identity(
+        let objective = self.runtime_agent_turn_objective(turn);
+        let identity = self.control.message_service_mut().ensure_agent_identity(
             SenderIdentity {
                 agent_id,
                 pane_id,
                 window_id,
                 role: Some("agent".to_string()),
                 capabilities: vec!["agent-harness".to_string()],
+                objective: objective.clone(),
             },
             current_unix_seconds().saturating_mul(1000),
-        )?)
+        )?;
+        self.publish_runtime_agent_objective(&turn.agent_id, objective.as_deref());
+        self.mirror_runtime_agent_objective(&turn.conversation_id, objective.as_deref());
+        Ok(identity)
+    }
+
+    /// Publishes one bounded agent objective for peer discovery.
+    ///
+    /// Returns true only when the published value changed. The objective is
+    /// untrusted discovery data: it is normalized through the shared objective
+    /// bounds, is never logged raw, and never authorizes anything. A failed
+    /// refresh keeps the previous objective and never fails a turn.
+    pub(crate) fn publish_runtime_agent_objective(
+        &mut self,
+        agent_id: &str,
+        objective: Option<&str>,
+    ) -> bool {
+        let Some(agent_id) = AgentId::opaque(agent_id.to_string()) else {
+            return false;
+        };
+        let now_ms = current_unix_seconds().saturating_mul(1000);
+        self.control
+            .message_service_mut()
+            .update_agent_objective(&agent_id, objective, now_ms)
+            .unwrap_or(false)
+    }
+
+    /// Persists one bounded display mirror of a published agent objective.
+    ///
+    /// The mirror exists so archived and offline conversations can still resolve
+    /// a policy-derived title. It is written only from the published objective
+    /// value, is bounded by the shared title rules, and never authorizes
+    /// anything. The mirror is a cache: a missing, unchanged, or unreadable
+    /// mirror is not an error and never fails a turn. A title change also
+    /// refreshes the cached prompt-selector candidates and any open saved-session
+    /// browser so every surface renders the same row title.
+    ///
+    /// Ephemeral conversations (routed workers) never persist a transcript and
+    /// never enter the saved-session catalog, so they are skipped entirely rather
+    /// than growing the bounded mirror index. A published objective that bounds
+    /// to nothing retires any retained mirror so the row resolves its title from
+    /// the first prompt again.
+    pub(crate) fn mirror_runtime_agent_objective(
+        &mut self,
+        conversation_id: &str,
+        objective: Option<&str>,
+    ) -> bool {
+        if self.runtime_agent_conversation_is_ephemeral(conversation_id) {
+            return false;
+        }
+        let Some(store) = self.persistence.cloned_transcript_store() else {
+            return false;
+        };
+        let changed = store
+            .mirror_session_objective(
+                conversation_id,
+                objective.unwrap_or_default(),
+                current_unix_seconds(),
+            )
+            .unwrap_or(false);
+        if changed {
+            self.invalidate_agent_prompt_selector_extra_candidates();
+            let _ = self.refresh_saved_session_overlay_after_title_change();
+        }
+        changed
+    }
+
+    /// Reports whether one conversation belongs to an ephemeral agent session.
+    ///
+    /// Routed workers bind fresh runtime-only conversation ids such as
+    /// `routed-<parent>-<turn>-worker`. They never persist a transcript, never
+    /// enter the saved-session catalog, and can never resolve a mirrored title,
+    /// so mirroring them would only grow the bounded index.
+    fn runtime_agent_conversation_is_ephemeral(&self, conversation_id: &str) -> bool {
+        self.agent_shell_store()
+            .sessions()
+            .any(|session| session.ephemeral && session.session_id == conversation_id)
+    }
+
+    /// Publishes the objective implied by one provider response for a turn.
+    ///
+    /// A model-authored objective carried in the turn response envelope wins; a
+    /// turn that yields none falls back to the bounded, non-verbatim derivation
+    /// in [`Self::runtime_agent_objective_from_prompt`] so the objective still
+    /// refreshes at least once per turn. Identical values publish nothing, and a
+    /// turn that produces neither stays a no-op that keeps the previously
+    /// published objective.
+    pub(crate) fn publish_runtime_agent_objective_for_response(
+        &mut self,
+        turn: &AgentTurnRecord,
+        execution: &AgentTurnExecution,
+    ) -> bool {
+        let objective = mez_agent::parse_maap_batch_objective(&execution.response.raw_text)
+            .or_else(|| self.runtime_agent_turn_objective(turn));
+        let changed = self.publish_runtime_agent_objective(&turn.agent_id, objective.as_deref());
+        self.mirror_runtime_agent_objective(&turn.conversation_id, objective.as_deref());
+        changed
+    }
+
+    /// Returns the bounded fallback objective implied by one turn's own prompt.
+    pub(crate) fn runtime_agent_turn_objective(&self, turn: &AgentTurnRecord) -> Option<String> {
+        let context = self.agent_turn_contexts().get(&turn.turn_id)?;
+        let prompt = context
+            .blocks()
+            .iter()
+            .rev()
+            .find(|block| block.source == mez_agent::ContextSourceKind::UserInstruction)
+            .or_else(|| context.blocks().last())?
+            .content
+            .as_str();
+        Self::runtime_agent_objective_from_prompt(prompt)
+    }
+
+    /// Derives one bounded fallback objective from turn prompt or task text.
+    ///
+    /// This is the bounded last-resort source for a turn whose response carried
+    /// no model-authored objective: the model-generated `objective` turn field is
+    /// the primary source (see `maap_action_batch_schema` and the peer-messaging
+    /// prompt section). The derivation is deliberately non-verbatim, because a
+    /// published objective is a factual statement of the agent's current work and
+    /// never raw prompt text: it keeps the first task-bearing line, drops leading
+    /// heading, quote, and list markers, collapses whitespace, and truncates at
+    /// [`RUNTIME_AGENT_OBJECTIVE_FALLBACK_CHARS`] on a word boundary. Prompt
+    /// ingestion rejects nothing for spanning lines, so an ordinary multi-line
+    /// prompt still yields a value; text that still cannot satisfy the shared
+    /// objective bounds yields nothing and the previous objective stays in place.
+    pub(crate) fn runtime_agent_objective_from_prompt(prompt: &str) -> Option<String> {
+        let first_line = prompt.lines().find(|line| !line.trim().is_empty())?;
+        let stripped = first_line.trim().trim_start_matches(|character: char| {
+            character.is_ascii_digit()
+                || matches!(
+                    character,
+                    '#' | '*' | '-' | '>' | '`' | '|' | '.' | ')' | ' '
+                )
+        });
+        let collapsed = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
+        if collapsed.is_empty() {
+            return None;
+        }
+        let bounded = match collapsed
+            .char_indices()
+            .nth(RUNTIME_AGENT_OBJECTIVE_FALLBACK_CHARS)
+        {
+            None => collapsed,
+            Some((cut, _)) => {
+                let head = &collapsed[..cut];
+                let word_end = head.rfind(' ').unwrap_or(head.len());
+                format!("{}...", head[..word_end].trim_end())
+            }
+        };
+        mez_agent::messaging::normalize_objective(&bounded).ok()
     }
 }

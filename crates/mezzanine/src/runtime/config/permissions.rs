@@ -469,6 +469,33 @@ pub(crate) fn runtime_message_recipient(value: &str) -> Result<Recipient> {
     ))
 }
 
+/// Returns the product permission decision for one model-planned recipient.
+///
+/// The recipient grammar is the same one the delivery path uses, so an
+/// unparseable recipient is never gated here: no rule admits or denies it, the
+/// planner leaves it ungated, and the message executor owns the durable
+/// `invalid_message_recipient` feedback that lets the model correct the
+/// recipient. Returning `RuleDecision::Forbid` for a grammar failure would
+/// report a misleading policy denial instead, so that is deliberately avoided.
+/// Explicit message rules are evaluated through the canonical message pseudo
+/// command: a configured deny rule wins in every approval mode, a configured
+/// allow rule admits the recipient without a prompt, and otherwise the effective
+/// approval policy decides whether the message is allowed or must prompt.
+pub(crate) fn runtime_message_recipient_decision(
+    policy: &PermissionPolicy,
+    recipient: &str,
+) -> RuleDecision {
+    if runtime_message_recipient(recipient).is_err() {
+        return RuleDecision::Allow;
+    }
+    let policy_command = mez_agent::message_action_policy_command(recipient);
+    match policy.evaluate_policy_command_rules(&policy_command) {
+        RuleDecision::Forbid => RuleDecision::Forbid,
+        RuleDecision::Allow => RuleDecision::Allow,
+        RuleDecision::Prompt => policy.evaluate_shell_command(&policy_command),
+    }
+}
+
 /// Runs the runtime blocked approval request operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -539,6 +566,9 @@ pub(super) fn runtime_blocked_approval_summary(
             approval.get("tool").and_then(Value::as_str),
         ) {
             return format!("{server}/{tool}");
+        }
+        if let Some(recipient) = approval.get("recipient").and_then(Value::as_str) {
+            return format!("send_message to {recipient}");
         }
         if let Some(path) = approval.get("path").and_then(Value::as_str) {
             let operation = approval

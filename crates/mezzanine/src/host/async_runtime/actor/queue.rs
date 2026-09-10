@@ -85,6 +85,13 @@ impl AsyncRuntimeSessionActor {
                     self.timers.provider_poll = None;
                 }
             }
+            RuntimeTimerKind::PeerMessageDelivery => {
+                if scheduled {
+                    self.timers.peer_message_delivery = Some(key.clone());
+                } else if self.timers.peer_message_delivery.as_ref() == Some(key) {
+                    self.timers.peer_message_delivery = None;
+                }
+            }
             RuntimeTimerKind::ProviderRetry => {
                 Self::track_owned_timer_key(&mut self.timers.provider_retry, key, scheduled);
             }

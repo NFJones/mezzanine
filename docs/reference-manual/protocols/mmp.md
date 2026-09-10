@@ -38,7 +38,7 @@ The normative versioned message envelope is an object with these fields:
 | `id` | Globally unique message ID in the session. Recipients treat it as an idempotency key. |
 | `type` | One of the message types accepted by the endpoint below. |
 | `time` | RFC 3339 or documented monotonic time. |
-| `sender` | Authenticated sender identity. Registered agents include `agent_id`; pane, window, role, and capabilities may be present. |
+| `sender` | Authenticated sender identity. Registered agents include `agent_id`; pane, window, role, capabilities, and the bounded generated `objective` may be present. |
 | `recipient` | Agent, pane, window, session, role, capability query, or group target. |
 | `correlation_id` | Related request ID, or `null`. |
 | `ttl_ms` | Time-to-live in milliseconds, or `null`. |
@@ -66,21 +66,36 @@ non-reserved extension fields at the top level, as required for forwarding by
 the MMP contract; this is an explicit exception to the shared
 `extensions`-object convention.
 
+The `sender` object may carry an optional `objective`: the agent's bounded,
+model-generated statement of what it is currently working on, published for peer
+discovery. The field is additive to `mmp/1`; the protocol version does not
+change, and top-level unknown-field preservation is unchanged. When present it
+must be non-empty, at most 2097152 bytes (the agent-shell prompt ingestion byte
+bound), whitespace-collapsed to a single line, and free of control characters.
+Prompt ingestion rejects nothing for spanning lines, so a multi-line objective is
+accepted and collapsed instead of refused. An absent or `null` objective means
+no objective is published yet; an objective-less refresh is a no-op that leaves
+the previously published value and presence timestamp untouched, and snapshots
+or envelopes written before the field existed parse as absent. `welcome`,
+`discover_result`, and `presence`
+project the same field for the assigned identity, the matched discovery rows,
+and the announced status.
+
 ## Message types
 
 | Type | Direction and meaning |
 | --- | --- |
 | `hello` | Client registers with the service. |
-| `welcome` | Service confirms registration and assigned identity. |
+| `welcome` | Service confirms registration and assigned identity, including the registered `objective` when published. |
 | `discover` | Query agents by identity, pane, window, role, status, or capabilities. |
-| `discover_result` | Discovery response. |
+| `discover_result` | Discovery response carrying matched sender identities with their published `objective` values. |
 | `send` | Submit application payload for a recipient or scope. |
 | `mmp.receive` | Poll a subscribed recipient for a delivery batch; optional `limit` defaults to 100. |
 | `transport/receive` | Compatibility alias for `mmp.receive`. |
 | `deliver` | Service delivers a batch containing `cursor` and sequenced `messages`. |
 | `ack` | Service response acknowledging sender-side acceptance, or recipient request advancing a subscription through `sequence` (or compatibility field `last_sequence`). |
 | `error` | Structured protocol or delivery failure. |
-| `presence` | Announce status or capability changes. |
+| `presence` | Announce status or capability changes, including the current `objective` when published. |
 | `heartbeat` | Prove connection liveness. |
 | `task_status` | Report task state. |
 | `task_result` | Report task completion. |

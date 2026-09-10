@@ -1083,6 +1083,7 @@ pub(crate) fn runtime_option_live_mutable(path: &str) -> bool {
                 | "agents.provider_error_retry_unlimited"
                 | "agents.turn_timeout_ms"
                 | "agents.loop_limit"
+                | "agents.peer_message_loop_limit"
                 | "agents.shell_only"
                 | "agents.subagent_placement"
                 | "agents.subagent_wait_policy"

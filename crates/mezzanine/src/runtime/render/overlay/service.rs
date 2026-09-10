@@ -1793,6 +1793,21 @@ impl RuntimeSessionService {
             .cloned()
     }
 
+    /// Returns the focused saved-session record id while that browser is open.
+    ///
+    /// A derived-title refresh rebuilds the current page in place, so this keeps
+    /// the operator's focused row without changing the active page anchor.
+    pub(crate) fn active_saved_session_browser_record_id(&self) -> Option<String> {
+        self.presentation
+            .primary_display_overlay
+            .as_ref()?
+            .record_browser
+            .as_ref()?
+            .browser
+            .active_record_id()
+            .map(str::to_string)
+    }
+
     /// Replaces the active saved-session browser after backend settlement.
     pub(crate) fn replace_active_saved_session_browser(
         &mut self,

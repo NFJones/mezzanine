@@ -24,7 +24,7 @@ impl From<MezErrorKind> for mez_agent::ProviderErrorKind {
             MezErrorKind::Conflict => Self::Conflict,
             MezErrorKind::NotFound => Self::NotFound,
             MezErrorKind::Forbidden => Self::Forbidden,
-            MezErrorKind::RateLimited => Self::InvalidState,
+            MezErrorKind::RateLimited => Self::RateLimited,
             MezErrorKind::NotImplemented => Self::NotImplemented,
         }
     }
@@ -40,6 +40,7 @@ impl From<mez_agent::ProviderErrorKind> for MezErrorKind {
             mez_agent::ProviderErrorKind::Conflict => Self::Conflict,
             mez_agent::ProviderErrorKind::NotFound => Self::NotFound,
             mez_agent::ProviderErrorKind::Forbidden => Self::Forbidden,
+            mez_agent::ProviderErrorKind::RateLimited => Self::RateLimited,
             mez_agent::ProviderErrorKind::NotImplemented => Self::NotImplemented,
         }
     }

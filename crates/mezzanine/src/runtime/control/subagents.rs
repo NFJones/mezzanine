@@ -1313,6 +1313,10 @@ impl RuntimeSessionService {
             &["agent-harness", "subagent", initial_status.cooperation_mode],
             now_ms,
         )?;
+        self.publish_runtime_agent_objective(
+            initial_status.child_agent_id,
+            Self::runtime_agent_objective_from_prompt(initial_status.task_prompt).as_deref(),
+        );
         let state = self
             .agent_turn_ledger()
             .turns()

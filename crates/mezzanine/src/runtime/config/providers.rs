@@ -11,7 +11,8 @@ use mez_agent::resolve_provider_api;
 use mez_agent::{
     ModelPreset as RuntimeModelPreset, ModelProfile, ModelProfileDefinition,
     PresetRegistry as RuntimePresetRegistry, ProviderConfig as RuntimeProviderConfig,
-    ProviderModelConfig as RuntimeProviderModelConfig, ProviderRegistry as RuntimeProviderRegistry,
+    ProviderModelConfig as RuntimeProviderModelConfig, ProviderModelInfo,
+    ProviderRegistry as RuntimeProviderRegistry,
 };
 use serde_json::Value;
 
@@ -56,10 +57,11 @@ pub(crate) fn runtime_provider_registry_from_config(
                 base_url: None,
                 models: runtime_default_models_for_provider("openai")?
                     .iter()
-                    .map(|model| RuntimeProviderModelConfig::named(*model))
+                    .map(|model| RuntimeProviderModelConfig::named(model.as_str()))
                     .collect(),
-                default_model: Some(runtime_recommended_model_for_provider("openai")?.to_string()),
+                default_model: Some(runtime_recommended_model_for_provider("openai")?),
                 options: BTreeMap::new(),
+                unknown_model_policy: "conservative".to_string(),
             },
         );
     }
@@ -77,7 +79,7 @@ pub(crate) fn runtime_provider_registry_from_config(
             .unwrap_or_default()
     });
     let default_model = if default_model.is_empty() {
-        runtime_recommended_model_for_provider(&default_config.kind)?.to_string()
+        runtime_recommended_model_for_provider(&default_config.kind)?
     } else {
         default_model
     };
@@ -306,6 +308,8 @@ fn runtime_model_profile_from_config(
         )));
     }
     let fallbacks = runtime_json_string_array(object.get("fallback_profiles"))?.unwrap_or_default();
+    let reasoning_levels = runtime_json_string_array(object.get("reasoning_levels"))?;
+    let capabilities = runtime_json_string_array(object.get("capabilities"))?;
     Ok((
         ModelProfileDefinition {
             provider: provider.to_string(),
@@ -325,9 +329,10 @@ fn runtime_model_profile_from_config(
             context_window_tokens,
             max_input_tokens,
             max_output_tokens,
+            reasoning_levels,
+            capabilities,
             provider_options,
             safety_tier,
-            ..ModelProfileDefinition::default()
         },
         fallbacks,
     ))
@@ -434,6 +439,9 @@ pub(crate) fn runtime_provider_config_from_config(
         models,
         default_model,
         options,
+        unknown_model_policy: runtime_json_string(object.get("unknown_model_policy"))
+            .unwrap_or("conservative")
+            .to_string(),
     };
     config
         .validate_models()
@@ -542,33 +550,84 @@ fn runtime_provider_model_token_limit(value: Option<&Value>, path: &str) -> Resu
     Ok(Some(tokens))
 }
 
-/// Returns the built-in model catalog for a provider kind.
+/// Returns shipped default-config model records for one provider kind.
 ///
-/// The returned slice is used when a provider's configured `models` list is
-/// empty, keeping local model selection useful without requiring a live
-/// provider catalog request.
-pub(crate) fn runtime_default_models_for_provider(kind: &str) -> Result<&'static [&'static str]> {
-    match kind {
-        "openai" => Ok(&[
-            "gpt-5.6-terra",
-            "gpt-6-astra",
-            "gpt-5.6-sol",
-            "gpt-5.6-luna",
-            "gpt-5.5",
-            "gpt-5.4",
-            "gpt-5.4-mini",
-        ]),
-        "anthropic" => Ok(&[
-            "claude-sonnet-5",
-            "claude-opus-5",
-            "claude-fable-5",
-            "claude-haiku-4-5",
-        ]),
-        "deepseek" => Ok(&["deepseek-v4-pro", "deepseek-v4-flash"]),
-        _ => Err(MezError::config(format!(
+/// Default model metadata is configuration, not code. The shipped default
+/// config records are the single source of fallback model ids, reasoning
+/// levels, capability tags, and token limits for providers whose configured
+/// `models` table is empty.
+pub(crate) fn runtime_default_config_model_records(kind: &str) -> Vec<ProviderModelInfo> {
+    let Ok(root) = crate::config::parse_config_json_value(
+        crate::config::ConfigFormat::Toml,
+        crate::config::DEFAULT_CONFIG_TOML,
+    ) else {
+        return Vec::new();
+    };
+    let Some(models) = root
+        .get("providers")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|providers| providers.get(kind))
+        .and_then(serde_json::Value::as_object)
+        .and_then(|provider| provider.get("models"))
+        .and_then(serde_json::Value::as_object)
+    else {
+        return Vec::new();
+    };
+    models
+        .values()
+        .filter_map(|value| {
+            let record = value.as_object()?;
+            Some(ProviderModelInfo {
+                id: record.get("id")?.as_str()?.to_string(),
+                display_name: record
+                    .get("display_name")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
+                reasoning_levels: runtime_default_config_string_list(record, "reasoning_levels"),
+                context_window_tokens: record
+                    .get("context_window_tokens")
+                    .and_then(serde_json::Value::as_u64)
+                    .map(|tokens| tokens as usize),
+                max_input_tokens: record
+                    .get("max_input_tokens")
+                    .and_then(serde_json::Value::as_u64)
+                    .map(|tokens| tokens as usize),
+                max_output_tokens: record
+                    .get("max_output_tokens")
+                    .and_then(serde_json::Value::as_u64)
+                    .map(|tokens| tokens as usize),
+                capabilities: runtime_default_config_string_list(record, "capabilities"),
+            })
+        })
+        .collect()
+}
+
+/// Reads one optional string-list field from a default-config model record.
+fn runtime_default_config_string_list(
+    record: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Option<Vec<String>> {
+    record.get(key)?.as_array().map(|items| {
+        items
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::to_string)
+            .collect()
+    })
+}
+
+/// Returns the built-in model catalog ids for a provider kind.
+///
+/// Ids are read from the shipped default-config model records so configured
+/// fallbacks and generated defaults share one source of truth.
+pub(crate) fn runtime_default_models_for_provider(kind: &str) -> Result<Vec<String>> {
+    let records = runtime_default_config_model_records(kind);
+    if records.is_empty() {
+        return Err(MezError::config(format!(
             "providers.{kind}.models is required for provider kind `{kind}`"
-        ))),
+        )));
     }
+    Ok(records.into_iter().map(|record| record.id).collect())
 }
 
 /// Runs the runtime recommended model for provider operation for this subsystem.
@@ -576,11 +635,33 @@ pub(crate) fn runtime_default_models_for_provider(kind: &str) -> Result<&'static
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(crate) fn runtime_recommended_model_for_provider(kind: &str) -> Result<&'static str> {
+///
+/// The shipped default-config `default_model` wins so fallback selection
+/// matches the configured defaults rather than record iteration order.
+pub(crate) fn runtime_recommended_model_for_provider(kind: &str) -> Result<String> {
+    if let Some(default_model) = runtime_default_config_provider_default_model(kind) {
+        return Ok(default_model);
+    }
     runtime_default_models_for_provider(kind)?
-        .first()
-        .copied()
+        .into_iter()
+        .next()
         .ok_or_else(|| MezError::config(format!("providers.{kind}.default_model is required")))
+}
+
+/// Returns the shipped default-config `default_model` for one provider kind.
+fn runtime_default_config_provider_default_model(kind: &str) -> Option<String> {
+    let Ok(document) = toml::from_str::<toml::Table>(crate::config::DEFAULT_CONFIG_TOML) else {
+        return None;
+    };
+    document
+        .get("providers")
+        .and_then(toml::Value::as_table)
+        .and_then(|providers| providers.get(kind))
+        .and_then(toml::Value::as_table)
+        .and_then(|provider| provider.get("default_model"))
+        .and_then(toml::Value::as_str)
+        .filter(|model| !model.is_empty())
+        .map(str::to_string)
 }
 
 /// Returns the non-secret options effective for one selected model profile.

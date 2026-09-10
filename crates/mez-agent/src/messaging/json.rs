@@ -55,7 +55,7 @@ impl TaskResultPayload {
 /// on duplicated control-flow logic.
 pub(super) fn sender_identity_json(identity: &SenderIdentity) -> String {
     format!(
-        r#"{{"agent_id":"{}","pane_id":{},"window_id":{},"role":{},"capabilities":[{}]}}"#,
+        r#"{{"agent_id":"{}","pane_id":{},"window_id":{},"role":{},"capabilities":[{}]{}}}"#,
         json_escape(identity.agent_id.as_str()),
         json_optional(identity.pane_id.as_ref().map(|id| id.as_str())),
         json_optional(identity.window_id.as_ref().map(|id| id.as_str())),
@@ -65,7 +65,12 @@ pub(super) fn sender_identity_json(identity: &SenderIdentity) -> String {
             .iter()
             .map(|capability| format!(r#""{}""#, json_escape(capability)))
             .collect::<Vec<_>>()
-            .join(",")
+            .join(","),
+        identity
+            .objective
+            .as_deref()
+            .map(|objective| format!(r#","objective":"{}""#, json_escape(objective)))
+            .unwrap_or_default()
     )
 }
 

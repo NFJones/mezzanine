@@ -13,6 +13,7 @@ use super::{
     provider_error_retry_class_from_parts, provider_event_error_from_parts,
     provider_event_error_kind,
 };
+use crate::integrations::agent::actions::recovery::maap_provider_error_is_repairable;
 use crate::runtime::PaneProcessEvent;
 
 impl AsyncRuntimeSessionActor {
@@ -574,6 +575,15 @@ impl AsyncRuntimeSessionActor {
                 self.timers.provider_poll = None;
                 self.apply_provider_poll_timer_event()
             }
+            RuntimeTimerKind::PeerMessageDelivery => {
+                if self.timers.peer_message_delivery.as_ref() != Some(&timer.key) {
+                    self.record_ignored_timer_event();
+                    return Ok(RuntimeTransition::default());
+                }
+                self.timers.peer_message_delivery = None;
+                self.service
+                    .apply_peer_message_delivery_timer(timer.now_ms, timer.key.generation)
+            }
             RuntimeTimerKind::ProviderRetry => {
                 if self.timers.provider_retry.get(timer.key.owner_id.as_str()) != Some(&timer.key) {
                     self.record_ignored_timer_event();
@@ -889,6 +899,25 @@ impl AsyncRuntimeSessionActor {
         Ok(queued)
     }
 
+    /// Queues the dedicated peer-message delivery timer when pending mail exists.
+    pub(super) fn queue_peer_message_delivery_timer_if_needed(
+        &mut self,
+        now_ms: u64,
+    ) -> Result<bool> {
+        let generation = self.timers.next_peer_message_delivery_generation;
+        let transition = self.service.peer_message_delivery_timer_transition(
+            self.timers.peer_message_delivery.is_some(),
+            generation,
+            now_ms,
+        );
+        let queued = !transition.side_effects.is_empty();
+        if queued {
+            self.timers.next_peer_message_delivery_generation = generation.saturating_add(1);
+        }
+        self.queue_runtime_side_effects(transition.side_effects)?;
+        Ok(queued)
+    }
+
     /// Runs the provider dispatch is already queued operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -1141,11 +1170,14 @@ impl AsyncRuntimeSessionActor {
                 self.service.clear_claimed_agent_provider_task(&turn_id);
                 self.service
                     .discard_agent_streaming_say_presentations_for_turn(&turn_id)?;
-                let retry_class = provider_error_retry_class_from_parts(
-                    provider_event_error_kind(&kind),
-                    &message,
-                    provider_failure_json.as_deref(),
-                );
+                let retry_class = match provider_event_error_kind(&kind) {
+                    Some(parsed_kind) => provider_error_retry_class_from_parts(
+                        parsed_kind,
+                        &message,
+                        provider_failure_json.as_deref(),
+                    ),
+                    None => ProviderErrorRetryClass::NonRetryable,
+                };
                 let mut error = provider_event_error_from_parts(
                     &kind,
                     &message,
@@ -1154,6 +1186,22 @@ impl AsyncRuntimeSessionActor {
                 );
                 if let Some(state) = provider_output_limit_state {
                     error = error.with_provider_output_limit_state(*state);
+                }
+                if maap_provider_error_is_repairable(&error)
+                    && let Some(mut application) = self
+                        .service
+                        .schedule_agent_provider_repair_transition(&agent_id, &turn_id, &error)?
+                {
+                    if application.applied {
+                        application
+                            .side_effects
+                            .extend(self.render_side_effects(RenderInvalidationReason::FullRedraw));
+                        application
+                            .side_effects
+                            .extend(self.pending_provider_dispatch_side_effects()?);
+                    }
+                    application.side_effects.extend(claim_cancellations);
+                    return Ok(application);
                 }
                 if matches!(retry_class, ProviderErrorRetryClass::OutputLimit) {
                     let attempt = self

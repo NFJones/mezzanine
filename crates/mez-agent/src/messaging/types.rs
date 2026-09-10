@@ -79,6 +79,13 @@ pub struct SenderIdentity {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub capabilities: Vec<String>,
+    /// Stores the bounded generated objective value for this data structure.
+    ///
+    /// The objective is the agent's current factual objective published for
+    /// peer discovery. It is additive to mmp/1 with no version bump, is absent
+    /// when the agent has no generated objective yet, and is always normalized
+    /// through the shared objective bounds when present.
+    pub objective: Option<String>,
 }
 
 /// Carries Recipient state for this subsystem.
@@ -714,6 +721,12 @@ pub struct MessageIdentitySnapshot {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub capabilities: Vec<String>,
+    /// Stores the bounded generated objective value for this data structure.
+    ///
+    /// The field is additive to the identity snapshot schema: legacy snapshots
+    /// without it deserialize to `None` and it is omitted again when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub objective: Option<String>,
 }
 
 /// Serializable MMP presence record.

@@ -24,7 +24,11 @@ pub use types::{
     MessageSequence, MessageService, MessageServiceSnapshot, PresenceRecord, Recipient,
     SenderIdentity, SequencedEnvelope, TaskResultPayload, TaskState, TaskStatusPayload,
 };
-pub use validation::{task_state_name, validate_mmp_payload_metadata};
+pub use validation::{
+    MMP_OBJECTIVE_MAX_BYTES, MMP_OBJECTIVE_PROMPT_BLOCK_BYTES, MMP_OBJECTIVE_PROMPT_BLOCK_LINES,
+    normalize_objective, normalize_optional_objective, objective_spans_prompt_block,
+    task_state_name, validate_mmp_payload_metadata,
+};
 
 #[doc(hidden)]
 pub use json::mmp_error_code;

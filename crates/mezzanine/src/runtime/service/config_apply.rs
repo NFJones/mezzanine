@@ -14,17 +14,18 @@ use super::{
     runtime_agent_compaction_raw_retention_percent_from_config,
     runtime_agent_custom_system_prompt_from_config, runtime_agent_enabled_actions_from_config,
     runtime_agent_loop_limit_from_config, runtime_agent_native_shell_timeout_ms_from_config,
+    runtime_agent_peer_message_loop_limit_from_config,
     runtime_agent_personality_profiles_from_config, runtime_agent_root_routing_policy_from_config,
-    runtime_agent_routing_from_config, runtime_agent_turn_timeout_ms_from_config,
-    runtime_always_exposed_mcp_servers_from_config, runtime_audit_config_present,
-    runtime_audit_log_from_config, runtime_configured_permissions_from_config,
-    runtime_default_agent_personality_from_config, runtime_default_models_for_provider,
-    runtime_effective_config_value, runtime_history_limit_from_config,
-    runtime_history_rotate_lines_from_config, runtime_hook_definitions_from_config,
-    runtime_host_clipboard_from_config, runtime_max_concurrent_agents_from_config,
-    runtime_max_queued_agent_bytes_from_config, runtime_max_queued_agent_turns_from_config,
-    runtime_max_root_subagents_from_config, runtime_max_subagent_depth_from_config,
-    runtime_max_subagent_panes_per_window_from_config,
+    runtime_agent_routing_from_config, runtime_agent_session_title_policy_from_config,
+    runtime_agent_turn_timeout_ms_from_config, runtime_always_exposed_mcp_servers_from_config,
+    runtime_audit_config_present, runtime_audit_log_from_config,
+    runtime_configured_permissions_from_config, runtime_default_agent_personality_from_config,
+    runtime_default_models_for_provider, runtime_effective_config_value,
+    runtime_history_limit_from_config, runtime_history_rotate_lines_from_config,
+    runtime_hook_definitions_from_config, runtime_host_clipboard_from_config,
+    runtime_max_concurrent_agents_from_config, runtime_max_queued_agent_bytes_from_config,
+    runtime_max_queued_agent_turns_from_config, runtime_max_root_subagents_from_config,
+    runtime_max_subagent_depth_from_config, runtime_max_subagent_panes_per_window_from_config,
     runtime_max_subagents_per_subagent_from_config, runtime_mcp_registry_from_config,
     runtime_preset_registry_from_config, runtime_provider_auth_refresh_leeway_seconds_from_config,
     runtime_provider_error_retry_policy_from_config, runtime_provider_registry_from_config,
@@ -475,6 +476,12 @@ impl RuntimeSessionService {
                 runtime_agent_native_shell_timeout_ms_from_config(&structured)?,
             );
             self.set_agent_loop_limit(runtime_agent_loop_limit_from_config(&structured)?);
+            self.set_agent_peer_message_loop_limit(
+                runtime_agent_peer_message_loop_limit_from_config(&structured)?,
+            );
+            self.set_agent_session_title_policy(runtime_agent_session_title_policy_from_config(
+                &structured,
+            )?);
             self.set_agent_auto_sizing(runtime_agent_auto_sizing_from_config(&structured)?);
             self.set_agent_root_routing_policy(runtime_agent_root_routing_policy_from_config(
                 &structured,
@@ -589,15 +596,15 @@ impl RuntimeSessionService {
                                 base_url: None,
                                 models: default_models
                                     .iter()
-                                    .map(|model| mez_agent::ProviderModelConfig::named(*model))
+                                    .map(|model| {
+                                        mez_agent::ProviderModelConfig::named(model.as_str())
+                                    })
                                     .collect(),
                                 default_model: Some(
-                                    default_models
-                                        .first()
-                                        .map(|m| (*m).to_string())
-                                        .unwrap_or_default(),
+                                    default_models.first().cloned().unwrap_or_default(),
                                 ),
                                 options: BTreeMap::new(),
+                                unknown_model_policy: "conservative".to_string(),
                             },
                         );
                     }

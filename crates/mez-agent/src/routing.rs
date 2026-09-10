@@ -12,7 +12,6 @@ use std::fmt;
 use crate::{
     ModelCapabilities, ModelCatalog, ModelProfile, ProviderApiCompatibility, resolve_provider_api,
 };
-use crate::{deepseek_builtin_capability_tags, deepseek_builtin_reasoning_efforts};
 
 /// Reusable provider-scoped base metadata for one canonical model.
 ///
@@ -185,9 +184,23 @@ pub struct ProviderConfig {
     pub default_model: Option<String>,
     /// Secret-free provider options used by request policy.
     pub options: BTreeMap<String, String>,
+    /// Unknown-model capability policy: "conservative" or "api-default".
+    pub unknown_model_policy: String,
 }
 
 impl ProviderConfig {
+    /// Returns whether models without declared metadata resolve to the
+    /// conservative unknown-model compatibility floor.
+    ///
+    /// Any value other than "api-default" is treated as conservative so a
+    /// missing or misspelled setting keeps the safe default.
+    pub fn unknown_model_policy_is_conservative(&self) -> bool {
+        !self
+            .unknown_model_policy
+            .trim()
+            .eq_ignore_ascii_case("api-default")
+    }
+
     /// Validates canonical model identifiers and aliases within this provider.
     pub fn validate_models(&self) -> Result<(), ProviderModelConfigError> {
         let mut identities = BTreeMap::<String, &'static str>::new();
@@ -388,14 +401,6 @@ impl ProviderRegistry {
                     definition.provider
                 ))
             })?;
-        let built_in_reasoning_levels = (provider.kind == "deepseek"
-            && api == ProviderApiCompatibility::DeepSeekChatCompletions)
-            .then(|| deepseek_builtin_reasoning_efforts(&model))
-            .flatten();
-        let built_in_capabilities = (provider.kind == "deepseek"
-            && api == ProviderApiCompatibility::DeepSeekChatCompletions)
-            .then(|| deepseek_builtin_capability_tags(&model))
-            .flatten();
 
         let mut provider_options = provider.options.clone();
         if let Some(catalog_model) = catalog_model {
@@ -434,15 +439,13 @@ impl ProviderRegistry {
             .as_ref()
             .or_else(|| configured_model.and_then(|model| model.reasoning_levels.as_ref()))
             .map(Vec::as_slice)
-            .or_else(|| catalog_model.and_then(|model| model.reasoning_levels_metadata()))
-            .or(built_in_reasoning_levels.as_deref());
+            .or_else(|| catalog_model.and_then(|model| model.reasoning_levels_metadata()));
         let capabilities = definition
             .capabilities
             .as_ref()
             .or_else(|| configured_model.and_then(|model| model.capabilities.as_ref()))
             .map(Vec::as_slice)
-            .or_else(|| catalog_model.and_then(|model| model.capabilities_metadata()))
-            .or(built_in_capabilities.as_deref());
+            .or_else(|| catalog_model.and_then(|model| model.capabilities_metadata()));
         if let Some(reasoning_levels) = reasoning_levels {
             provider_options.insert(
                 "model_reasoning_levels".to_string(),
@@ -455,7 +458,12 @@ impl ProviderRegistry {
         provider_options.extend(definition.provider_options.clone());
 
         let model_capabilities = if api == ProviderApiCompatibility::DeepSeekChatCompletions {
-            ModelCapabilities::from_metadata(api, capabilities, reasoning_levels, true)
+            ModelCapabilities::from_metadata(
+                api,
+                capabilities,
+                reasoning_levels,
+                provider.unknown_model_policy_is_conservative(),
+            )
         } else {
             ModelCapabilities::for_api(api)
         };

@@ -598,7 +598,7 @@ active_turn_sleep_inhibition = "disabled"
 # Restrict agent terminal work to the shell-mediated action surface.
 shell_only = true
 # Static MAAP actions permitted on every ordinary provider request.
-enabled_actions = ["say", "shell_command", "apply_patch", "web_search", "fetch_url", "send_message", "spawn_agent", "config_change", "mcp_server_search", "mcp_server_get", "mcp_call", "memory_search", "memory_store", "issue_add", "issue_update", "issue_query", "issue_delete"]
+enabled_actions = ["say", "shell_command", "apply_patch", "web_search", "fetch_url", "send_message", "spawn_agent", "config_change", "mcp_server_search", "mcp_server_get", "mcp_call", "memory_search", "memory_store", "list_agents", "issue_add", "issue_update", "issue_query", "issue_delete"]
 # Percentage of the raw conversation tail retained after compaction.
 compaction_raw_retention_percent = 10
 # Disable automatic model sizing until explicitly enabled.
@@ -621,6 +621,12 @@ native_shell_timeout_ms = 600000
 shell_mode = "native"
 # Default bounded iteration count used by /loop.
 loop_limit = 8
+# Default bounded peer-message-triggered turn count per agent.
+peer_message_loop_limit = 1000
+# Saved-session title source: `generated` derives a bounded display title from
+# the agent objective, else the first prompt; `objective`, `last_prompt`, and
+# `first_prompt` mirror that source. A manual `/name-session` name always wins.
+session_title_policy = "generated"
 # User-owned system prompt text appended to the built-in prompt.
 custom_system_prompt = ""
 # Empty selects no personality profile.
@@ -669,6 +675,7 @@ auth_profile = "default"
 # Authorization header instead of requiring a placeholder key.
 base_url = ""
 default_model = "gpt-5.6-terra"
+unknown_model_policy = "conservative"
 
 # Reusable provider-scoped model facts. Model profiles may override these
 # values for one usage policy without duplicating the base model identity.
@@ -686,30 +693,36 @@ id = "gpt-5.6-sol"
 context_window_tokens = 1000000
 max_input_tokens = 800000
 max_output_tokens = 60000
+reasoning_levels = ["low", "medium", "high", "xhigh"]
 
 [providers.openai.models.gpt-5-6-terra]
 id = "gpt-5.6-terra"
 context_window_tokens = 500000
 max_input_tokens = 400000
 max_output_tokens = 30000
+reasoning_levels = ["low", "medium", "high", "xhigh"]
 
 [providers.openai.models.gpt-5-6-luna]
 id = "gpt-5.6-luna"
 context_window_tokens = 250000
 max_input_tokens = 200000
 max_output_tokens = 15000
+reasoning_levels = ["low", "medium", "high", "xhigh"]
 
 [providers.openai.models.gpt-5-5]
 id = "gpt-5.5"
 context_window_tokens = 1050000
+reasoning_levels = ["low", "medium", "high", "xhigh"]
 
 [providers.openai.models.gpt-5-4]
 id = "gpt-5.4"
 context_window_tokens = 400000
+reasoning_levels = ["low", "medium", "high", "xhigh"]
 
 [providers.openai.models.gpt-5-4-mini]
 id = "gpt-5.4-mini"
 context_window_tokens = 400000
+reasoning_levels = ["low", "medium", "high", "xhigh"]
 
 [providers.openai.options]
 # Optional documented OpenAI routing headers for multi-organization/project API keys.
@@ -724,30 +737,35 @@ auth_profile = "default"
 # Mezzanine derives the Anthropic Messages endpoint from this base.
 base_url = ""
 default_model = "claude-sonnet-5"
+unknown_model_policy = "conservative"
 
 [providers.anthropic.models.claude-fable-5]
 id = "claude-fable-5"
 context_window_tokens = 1000000
 max_input_tokens = 800000
 max_output_tokens = 128000
+reasoning_levels = ["low", "medium", "high", "xhigh", "max"]
 
 [providers.anthropic.models.claude-opus-5]
 id = "claude-opus-5"
 context_window_tokens = 500000
 max_input_tokens = 400000
 max_output_tokens = 64000
+reasoning_levels = ["low", "medium", "high", "xhigh", "max"]
 
 [providers.anthropic.models.claude-sonnet-5]
 id = "claude-sonnet-5"
 context_window_tokens = 250000
 max_input_tokens = 200000
 max_output_tokens = 32000
+reasoning_levels = ["low", "medium", "high", "xhigh", "max"]
 
 [providers.anthropic.models.claude-haiku-4-5]
 id = "claude-haiku-4-5"
 context_window_tokens = 125000
 max_input_tokens = 100000
 max_output_tokens = 16000
+reasoning_levels = ["low", "medium", "high", "xhigh", "max"]
 
 [providers.anthropic.options]
 #? anthropic_version = "2023-06-01"
@@ -786,22 +804,23 @@ auth_profile = "default"
 # Optional API base URL, such as "https://api.deepseek.com".
 # Mezzanine derives /chat/completions and /models endpoints from this base.
 base_url = ""
-default_model = "deepseek-v4-pro"
+default_model = "deepseek-flash"
+unknown_model_policy = "conservative"
 
 [providers.deepseek.models.deepseek-v4-pro]
 id = "deepseek-v4-pro"
 context_window_tokens = 1000000
-max_input_tokens = 800000
-max_output_tokens = 60000
-reasoning_levels = ["high", "max"]
+max_input_tokens = 616000
+max_output_tokens = 384000
+reasoning_levels = ["low", "high", "max"]
 capabilities = ["native_thinking", "function_tools", "forced_tool_choice", "streaming", "max_output_tokens"]
 
-[providers.deepseek.models.deepseek-v4-flash]
-id = "deepseek-v4-flash"
-context_window_tokens = 500000
-max_input_tokens = 400000
-max_output_tokens = 30000
-reasoning_levels = ["high", "max"]
+[providers.deepseek.models.deepseek-flash]
+id = "deepseek-flash"
+context_window_tokens = 1000000
+max_input_tokens = 616000
+max_output_tokens = 384000
+reasoning_levels = ["low", "high", "max"]
 capabilities = ["native_thinking", "function_tools", "forced_tool_choice", "streaming", "max_output_tokens"]
 
 [model_profiles.anthropic-default]
@@ -901,7 +920,7 @@ fallback_profiles = []
 
 [model_profiles.deepseek-default]
 provider = "deepseek"
-model = "deepseek-v4-pro"
+model = "deepseek-flash"
 reasoning_profile = "high"
 latency_preference = "default"
 multimodal_required = false
@@ -916,7 +935,7 @@ thinking = "enabled"
 
 [model_profiles.deepseek-fast]
 provider = "deepseek"
-model = "deepseek-v4-flash"
+model = "deepseek-flash"
 reasoning_profile = "high"
 latency_preference = "fast"
 multimodal_required = false
@@ -943,7 +962,7 @@ auto_sizing_router_model_profile = "deepseek-fast"
 auto_sizing_small_model_profile = "deepseek-fast"
 auto_sizing_medium_model_profile = "deepseek-default"
 auto_sizing_large_model_profile = "deepseek-default"
-allowed_reasoning_efforts = ["high", "xhigh"]
+allowed_reasoning_efforts = ["low", "high", "xhigh"]
 
 [model_presets.anthropic]
 default_model_profile = "anthropic-fast"

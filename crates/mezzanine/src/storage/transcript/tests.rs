@@ -15,7 +15,10 @@ use super::encoding::{
     decode_structured_prompt_history_entry, decode_transcript_entry, encode_prompt_history_entry,
     encode_structured_prompt_history_entry, encode_transcript_entry,
 };
-use super::store::{PRESENTATION_CLEAR_TAIL_COMPACT_BYTES, PROMPT_HISTORY_COMPACTION_BYTES};
+use super::store::{
+    PRESENTATION_CLEAR_TAIL_COMPACT_BYTES, PROMPT_HISTORY_COMPACTION_BYTES,
+    SESSION_OBJECTIVE_MIRRORS_MAX_BYTES, SESSION_OBJECTIVE_MIRRORS_MAX_ENTRIES,
+};
 use super::{
     AgentPresentationEntry, AgentTranscriptStore, CompareAndSwapTranscriptEntryResult,
     SavedSessionCursor, SavedSessionLifecycleFilter, SavedSessionPageAnchor, SavedSessionQuery,
@@ -2772,5 +2775,400 @@ fn transcript_store_catalog_rebuild_reports_bounded_lock_contention() {
     assert!(error.message().contains("migration lock is busy"));
     assert!(!root.join(".catalog.sqlite3.rebuild").exists());
     assert!(store.catalog_status().integrity_ok);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies the persisted objective mirror tracks published refreshes and that
+/// archived rows still render a title from the mirrored cache.
+#[test]
+fn objective_title_mirror_tracks_published_objective_refreshes() {
+    let root = temp_root("objective-title-mirror");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let mut prompt = entry("mirror-session", 1, TranscriptRole::User);
+    prompt.content = "Inspect the saved-session backlog".to_string();
+    store.append(&prompt).unwrap();
+
+    assert!(
+        store
+            .mirror_session_objective("mirror-session", "  Inspect\tthe\nbacklog  ", 30)
+            .unwrap()
+    );
+    assert_eq!(
+        store
+            .session_objective_mirror("mirror-session")
+            .unwrap()
+            .map(|mirror| mirror.objective),
+        Some("Inspect the backlog".to_string())
+    );
+    assert!(
+        !store
+            .mirror_session_objective("mirror-session", "Inspect the backlog", 31)
+            .unwrap(),
+        "an unchanged bounded objective must not rewrite the mirror"
+    );
+    assert!(
+        store
+            .mirror_session_objective("mirror-session", "Review the merged backlog", 32)
+            .unwrap()
+    );
+
+    let session = store.saved_session("mirror-session").unwrap().unwrap();
+    assert_eq!(
+        session.objective_title.as_deref(),
+        Some("Review the merged backlog")
+    );
+
+    store.archive_session("mirror-session", 40).unwrap();
+    let archived = store
+        .query_saved_sessions(&SavedSessionQuery {
+            lifecycle: SavedSessionLifecycleFilter::Archived,
+            directory: None,
+            include_subagents: true,
+            require_latest_user_prompt: false,
+            search: None,
+            anchor: None,
+            limit: 10,
+        })
+        .unwrap()
+        .sessions;
+    let archived_row = archived
+        .iter()
+        .find(|session| session.summary.conversation_id == "mirror-session")
+        .expect("archived session row");
+    assert_eq!(
+        archived_row.objective_title.as_deref(),
+        Some("Review the merged backlog")
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies mirror writes reuse the shared title bounds and that an objective
+/// that bounds to nothing retires the retained mirror.
+#[test]
+fn objective_title_mirror_bounds_published_values() {
+    let root = temp_root("objective-title-bounds");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+
+    assert!(
+        store
+            .mirror_session_objective("bounded-mirror", &"alpha ".repeat(40), 10)
+            .unwrap()
+    );
+    let stored = store
+        .session_objective_mirror("bounded-mirror")
+        .unwrap()
+        .expect("bounded mirror")
+        .objective;
+    assert!(stored.chars().count() <= 80, "{stored}");
+    assert!(!stored.ends_with(' '), "{stored}");
+
+    assert!(
+        store
+            .mirror_session_objective("bounded-mirror", "\u{7}\n", 11)
+            .unwrap(),
+        "an unboundable objective retires the retained mirror"
+    );
+    assert_eq!(
+        store
+            .session_objective_mirror("bounded-mirror")
+            .unwrap()
+            .map(|mirror| mirror.objective),
+        None
+    );
+    assert!(
+        !store
+            .mirror_session_objective("bounded-mirror", "   ", 12)
+            .unwrap(),
+        "retiring an absent mirror changes nothing"
+    );
+    assert!(
+        store
+            .mirror_session_objective("bounded-mirror", "Reusable objective", 13)
+            .unwrap(),
+        "a retired mirror can be rebuilt"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies an unreadable mirror index degrades row rendering while the next
+/// mirror write quarantines the bad file and rebuilds the index.
+#[test]
+fn unreadable_objective_title_mirror_index_recovers_on_the_next_write() {
+    let root = temp_root("objective-title-recover");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("plain-session", 1, TranscriptRole::User))
+        .unwrap();
+    assert!(
+        store
+            .saved_session("plain-session")
+            .unwrap()
+            .unwrap()
+            .objective_title
+            .is_none()
+    );
+
+    fs::write(root.join("session-objectives.json"), "{ not json").unwrap();
+    let session = store.saved_session("plain-session").unwrap().unwrap();
+    assert!(session.objective_title.is_none());
+    assert!(store.session_objective_mirror("plain-session").is_err());
+    assert!(
+        !store
+            .mirror_session_objective("plain-session", "\u{7}", 12)
+            .unwrap(),
+        "retiring from an unreadable index changes no mirror"
+    );
+    assert!(
+        store
+            .mirror_session_objective("plain-session", "Recovered objective", 13)
+            .unwrap(),
+        "the next mirror write rebuilds an unreadable index"
+    );
+    assert_eq!(
+        store
+            .session_objective_mirror("plain-session")
+            .unwrap()
+            .map(|mirror| mirror.objective),
+        Some("Recovered objective".to_string())
+    );
+    assert_eq!(
+        store
+            .saved_session("plain-session")
+            .unwrap()
+            .unwrap()
+            .objective_title
+            .as_deref(),
+        Some("Recovered objective")
+    );
+    let status = store.session_objective_mirror_status();
+    assert_eq!(status.recoveries, 1);
+    assert!(status.quarantined_index);
+    assert!(
+        status
+            .last_recovery_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("decode failed")),
+        "{status:?}"
+    );
+
+    assert!(store.delete("plain-session").unwrap());
+    assert!(
+        store
+            .session_objective_mirror("plain-session")
+            .unwrap()
+            .is_none(),
+        "a delete prunes the recovered index"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a version-mismatched mirror index recovers on the next write.
+#[test]
+fn version_mismatched_objective_title_mirror_index_recovers_on_the_next_write() {
+    let root = temp_root("objective-title-version");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("session-objectives.json"),
+        "{\"version\":9,\"objectives\":[]}",
+    )
+    .unwrap();
+
+    assert!(
+        store
+            .mirror_session_objective("versioned-mirror", "Recovered objective", 10)
+            .unwrap()
+    );
+    assert_eq!(
+        store
+            .session_objective_mirror("versioned-mirror")
+            .unwrap()
+            .map(|mirror| mirror.objective),
+        Some("Recovered objective".to_string())
+    );
+    assert_eq!(store.session_objective_mirror_status().recoveries, 1);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies an over-budget mirror index recovers on the next write.
+#[test]
+fn over_budget_objective_title_mirror_index_recovers_on_the_next_write() {
+    let root = temp_root("objective-title-over-budget");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    fs::create_dir_all(&root).unwrap();
+    let over_budget = usize::try_from(SESSION_OBJECTIVE_MIRRORS_MAX_BYTES)
+        .expect("mirror byte bound fits usize")
+        + 1;
+    fs::write(
+        root.join("session-objectives.json"),
+        " ".repeat(over_budget),
+    )
+    .unwrap();
+
+    assert!(
+        store
+            .mirror_session_objective("over-budget-mirror", "Rebuilt objective", 10)
+            .unwrap(),
+        "an over-budget index is rebuilt from the incoming value"
+    );
+    assert_eq!(
+        store
+            .session_objective_mirror("over-budget-mirror")
+            .unwrap()
+            .map(|mirror| mirror.objective),
+        Some("Rebuilt objective".to_string())
+    );
+    assert_eq!(store.session_objective_mirror_status().recoveries, 1);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies an over-cap mirror index compacts to its bounded entry count.
+#[test]
+fn over_cap_objective_title_mirror_index_compacts_on_write() {
+    let root = temp_root("objective-title-over-cap");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    fs::create_dir_all(&root).unwrap();
+    let objectives = (0..SESSION_OBJECTIVE_MIRRORS_MAX_ENTRIES + 40)
+        .map(|index| super::types::SessionObjectiveMirror {
+            conversation_id: format!("mirrored-{index:04}"),
+            objective: format!("Bounded objective {index}"),
+            updated_at_unix_seconds: index as u64,
+        })
+        .collect::<Vec<_>>();
+    fs::write(
+        root.join("session-objectives.json"),
+        serde_json::to_vec(&serde_json::json!({ "version": 1, "objectives": objectives })).unwrap(),
+    )
+    .unwrap();
+
+    assert!(
+        store
+            .mirror_session_objective("newest-mirror", "Newest objective", 10_000)
+            .unwrap()
+    );
+
+    let raw = fs::read_to_string(root.join("session-objectives.json")).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let retained = value["objectives"].as_array().unwrap();
+    assert_eq!(retained.len(), SESSION_OBJECTIVE_MIRRORS_MAX_ENTRIES);
+    assert!(
+        retained
+            .iter()
+            .any(|record| record["conversation_id"] == "newest-mirror")
+    );
+    assert!(
+        !retained
+            .iter()
+            .any(|record| record["conversation_id"] == "mirrored-0000"),
+        "the oldest mirrors are evicted first"
+    );
+    assert_eq!(
+        store
+            .session_objective_mirror("newest-mirror")
+            .unwrap()
+            .map(|mirror| mirror.objective),
+        Some("Newest objective".to_string())
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies an unchanged mirror refresh performs no index read or write.
+#[test]
+fn unchanged_objective_title_mirror_refresh_skips_the_index() {
+    let root = temp_root("objective-title-throttle");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+
+    assert!(
+        store
+            .mirror_session_objective("throttled-mirror", "Stable objective", 10)
+            .unwrap()
+    );
+    let before = store.session_objective_mirror_status();
+    assert!(before.index_reads > 0, "{before:?}");
+    assert!(before.index_writes > 0, "{before:?}");
+
+    assert!(
+        !store
+            .mirror_session_objective("throttled-mirror", "  Stable   objective ", 11)
+            .unwrap(),
+        "an unchanged bounded objective must not rewrite the mirror"
+    );
+    let unchanged = store.session_objective_mirror_status();
+    assert_eq!(unchanged.index_reads, before.index_reads);
+    assert_eq!(unchanged.index_writes, before.index_writes);
+
+    assert!(
+        store
+            .mirror_session_objective("throttled-mirror", "Changed objective", 12)
+            .unwrap()
+    );
+    assert!(
+        store.session_objective_mirror_status().index_writes > unchanged.index_writes,
+        "a changed objective still writes"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies session-name validation rejects control and format characters.
+#[test]
+fn session_name_validation_rejects_format_characters() {
+    let root = temp_root("session-name-format");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("format-name-session", 1, TranscriptRole::User))
+        .unwrap();
+
+    for name in [
+        "Bidi\u{202e}name",
+        "Zero\u{200b}width",
+        "Isolate\u{2066}name",
+        "Control\u{7}name",
+    ] {
+        let error = store
+            .name_session("format-name-session", name, 10, None)
+            .unwrap_err();
+        assert!(
+            error.message().contains("control or format"),
+            "{name:?}: {}",
+            error.message()
+        );
+    }
+    assert!(
+        store
+            .name_session("format-name-session", "Plain name", 10, None)
+            .is_ok()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies deleting a conversation prunes its persisted objective mirror.
+#[test]
+fn deleting_a_conversation_prunes_its_objective_title_mirror() {
+    let root = temp_root("objective-title-prune");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("pruned-mirror", 1, TranscriptRole::User))
+        .unwrap();
+    store
+        .mirror_session_objective("pruned-mirror", "Ship the pruned title", 10)
+        .unwrap();
+
+    assert!(store.delete("pruned-mirror").unwrap());
+
+    assert!(
+        store
+            .session_objective_mirror("pruned-mirror")
+            .unwrap()
+            .is_none()
+    );
     let _ = fs::remove_dir_all(root);
 }

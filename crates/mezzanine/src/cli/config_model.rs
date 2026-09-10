@@ -17,9 +17,10 @@ use super::{
 };
 use crate::config::{
     ConfigLayer, ConfigScope, ProviderModelSyncAddition, ProviderModelSyncBlocker,
-    ProviderModelSyncConflict, ProviderModelSyncUpdate, load_primary_config_layers,
-    parse_config_json_value, persist_config_text, plan_config_mutations, plan_provider_model_sync,
-    plan_provider_model_sync_for_target, provider_model_reference_paths, unique_model_entry_key,
+    ProviderModelSyncConflict, ProviderModelSyncUpdate, format_diagnostics,
+    load_primary_config_layers, parse_config_json_value, persist_config_text,
+    plan_config_mutations, plan_provider_model_sync, plan_provider_model_sync_for_target,
+    provider_model_reference_paths, unique_model_entry_key, validate_config_text,
 };
 use crate::runtime::{
     fetch_raw_provider_model_catalog, runtime_effective_config_value,
@@ -362,6 +363,16 @@ async fn run_model_sync<W: Write>(
     let persisted = args.apply && changed && !blocked;
     if persisted {
         *sync_provider_models_mut(&mut document.root, &provider)? = plan.result_models.clone();
+        if target.scope != ConfigScope::ProjectOverlay {
+            let rendered = render_model_document(&document, &provider)?;
+            let validation = validate_config_text(ConfigFormat::Toml, &rendered, target.scope);
+            if !validation.valid {
+                return Err(MezError::config(format!(
+                    "provider model sync rejected; proposed config is invalid: {}",
+                    format_diagnostics(&validation.diagnostics)
+                )));
+            }
+        }
         persist_model_document(&target, &document, &provider)?;
     }
     let guidance = if blocked {
@@ -660,6 +671,37 @@ fn apply_optional_list(
 ) -> Result<()> {
     if let Some(value) = value {
         let values = parse_unique_text_list(key, value)?;
+        for entry in &values {
+            match key {
+                "reasoning_levels"
+                    if !matches!(entry.as_str(), "low" | "medium" | "high" | "xhigh" | "max") =>
+                {
+                    return Err(MezError::invalid_args(format!(
+                        "--reasoning-levels contains unsupported level `{entry}`"
+                    )));
+                }
+                "capabilities"
+                    if !matches!(
+                        entry.trim(),
+                        "native_thinking"
+                            | "function_tools"
+                            | "function_calling"
+                            | "tool_use"
+                            | "tools"
+                            | "forced_tool_choice"
+                            | "streaming"
+                            | "max_output_tokens"
+                            | "max_output_token_control"
+                            | "vision"
+                    ) =>
+                {
+                    return Err(MezError::invalid_args(format!(
+                        "--capabilities contains unrecognized capability tag `{entry}`"
+                    )));
+                }
+                _ => {}
+            }
+        }
         record.insert(
             key.to_string(),
             serde_json::Value::Array(values.into_iter().map(serde_json::Value::String).collect()),

@@ -116,6 +116,7 @@ fn runtime_mcp_context_uses_resolved_api_for_aliased_openai_provider() {
                 models: vec![mez_agent::ProviderModelConfig::named("test")],
                 default_model: Some("test".to_string()),
                 options: std::collections::BTreeMap::new(),
+                unknown_model_policy: "conservative".to_string(),
             },
         );
     let primary = service

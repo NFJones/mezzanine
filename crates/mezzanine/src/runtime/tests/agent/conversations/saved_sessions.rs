@@ -3,6 +3,19 @@
 use super::*;
 use crate::runtime::{PersistenceEvent, SessionArchiveOperation};
 
+/// Returns one record-browser metadata value by key.
+fn record_metadata_value(
+    record: &mez_mux::record_browser::RecordBrowserRecord,
+    key: &str,
+) -> String {
+    record
+        .metadata
+        .iter()
+        .find(|(metadata_key, _)| metadata_key == key)
+        .map(|(_, value)| value.clone())
+        .unwrap_or_default()
+}
+
 /// Verifies retention work is duplicate-suppressed while pending, deferred
 /// requests rerun after total failure, and partial reports settle without an
 /// overlay render when no conversation was deleted.
@@ -664,6 +677,330 @@ fn runtime_resume_browser_orders_session_columns() {
         ],
         "{row}"
     );
+}
+
+/// Verifies the resume browser shows the derived title for an unnamed
+/// conversation, the manual name once `/name-session` sets one, and the derived
+/// title again after `/name-session --clear`.
+#[test]
+fn runtime_resume_browser_renders_derived_and_manual_session_titles() {
+    let root = temp_root("runtime-resume-derived-title");
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(root.clone());
+    service.set_agent_transcript_store(transcript_store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: conversation_id.clone(),
+            sequence: 1,
+            created_at_unix_seconds: 20,
+            role: TranscriptRole::User,
+            turn_id: "turn-derived-title".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "derived first prompt".to_string(),
+        })
+        .unwrap();
+    transcript_store
+        .mirror_session_objective(&conversation_id, "Mirror objective title", 21)
+        .unwrap();
+
+    let browser = service.saved_sessions_record_browser().unwrap();
+    let derived = browser.records().first().expect("derived row");
+    assert_eq!(derived.id, conversation_id);
+    assert_eq!(
+        derived.title,
+        format!("{conversation_id} - Mirror objective title")
+    );
+    assert_eq!(
+        record_metadata_value(derived, "name"),
+        "Mirror objective title"
+    );
+    assert_eq!(
+        record_metadata_value(derived, "title"),
+        "Mirror objective title"
+    );
+
+    let named = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"name","method":"agent/shell/command","params":{"idempotency_key":"name","input":"/name-session Operator name"}}"#,
+        &primary,
+    );
+    assert!(named.contains("named=true"), "{named}");
+    let browser = service.saved_sessions_record_browser().unwrap();
+    let named = browser.records().first().expect("named row");
+    assert_eq!(named.title, format!("{conversation_id} - Operator name"));
+    assert_eq!(record_metadata_value(named, "name"), "Operator name");
+    assert_eq!(
+        record_metadata_value(named, "title"),
+        "Mirror objective title"
+    );
+
+    let cleared = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"clear","method":"agent/shell/command","params":{"idempotency_key":"clear","input":"/name-session --clear"}}"#,
+        &primary,
+    );
+    assert!(cleared.contains("cleared=true"), "{cleared}");
+    let browser = service.saved_sessions_record_browser().unwrap();
+    let cleared = browser.records().first().expect("cleared row");
+    assert_eq!(
+        cleared.title,
+        format!("{conversation_id} - Mirror objective title")
+    );
+    assert_eq!(
+        record_metadata_value(cleared, "name"),
+        "Mirror objective title"
+    );
+    assert_eq!(
+        record_metadata_value(cleared, "title"),
+        "Mirror objective title"
+    );
+    service.terminate_all_pane_processes().unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Returns the open resume picker's scope toggle state and rendered page.
+fn open_resume_scope_state(service: &crate::runtime::RuntimeSessionService) -> (bool, String) {
+    let browser = &service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .expect("resume picker should stay open")
+        .browser;
+    (
+        browser.scope_toggle_enabled(),
+        browser.render_page().markdown,
+    )
+}
+
+/// Verifies an unfiltered picker keeps its all-directories scope line and stays
+/// toggle-free when a derived-title refresh rebuilds the open browser.
+#[test]
+fn runtime_title_refresh_keeps_unfiltered_resume_scope() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-title-refresh-scope"));
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: "refresh-scope".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 10,
+            role: TranscriptRole::User,
+            turn_id: "turn-refresh-scope".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "refresh prompt".to_string(),
+        })
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let response = service
+        .execute_agent_shell_command(&primary, "/resume")
+        .unwrap();
+    service
+        .set_agent_prompt_response_display_output_for_tests("%1", &response)
+        .unwrap();
+    let (toggle, rendered) = open_resume_scope_state(&service);
+    assert!(!toggle, "an unfiltered picker has no scope toggle");
+    assert!(
+        rendered.contains("**Scope:** all directories"),
+        "{rendered}"
+    );
+
+    assert!(service.mirror_runtime_agent_objective("refresh-scope", Some("Refreshed objective")));
+    let (toggle, rendered) = open_resume_scope_state(&service);
+    assert!(
+        !toggle,
+        "a title refresh must not enable the scope toggle for an unfiltered picker"
+    );
+    assert!(
+        rendered.contains("**Scope:** all directories"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("Refreshed objective"),
+        "the refreshed row renders the new derived title: {rendered}"
+    );
+    let _ = std::fs::remove_dir_all(transcript_store.root());
+}
+
+/// Verifies a cleared published objective retires the mirror so resolution
+/// falls through to the first prompt.
+#[test]
+fn runtime_cleared_objective_retires_the_mirrored_title() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-cleared-objective"));
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: "cleared-objective".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 10,
+            role: TranscriptRole::User,
+            turn_id: "turn-cleared-objective".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "first prompt fallback".to_string(),
+        })
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
+
+    assert!(
+        service.mirror_runtime_agent_objective("cleared-objective", Some("Objective to clear"))
+    );
+    let browser = service.saved_sessions_record_browser().unwrap();
+    assert_eq!(
+        browser.records()[0].title,
+        "cleared-objective - Objective to clear"
+    );
+
+    assert!(
+        service.mirror_runtime_agent_objective("cleared-objective", None),
+        "a cleared objective retires the retained mirror"
+    );
+    assert!(
+        transcript_store
+            .session_objective_mirror("cleared-objective")
+            .unwrap()
+            .is_none()
+    );
+    let browser = service.saved_sessions_record_browser().unwrap();
+    assert_eq!(
+        browser.records()[0].title,
+        "cleared-objective - first prompt fallback",
+        "resolution falls through to the first prompt"
+    );
+    let _ = std::fs::remove_dir_all(transcript_store.root());
+}
+
+/// Verifies ephemeral routed conversations never grow the objective mirror
+/// index while a durable conversation still mirrors its objective.
+#[test]
+fn runtime_ephemeral_conversation_does_not_mirror_an_objective() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-ephemeral-mirror"));
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let durable_conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%2")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_ephemeral_conversation_with_lineage("%2", "routed-parent-1-worker", 0, None)
+        .unwrap();
+
+    assert!(
+        !service.mirror_runtime_agent_objective("routed-parent-1-worker", Some("Worker objective")),
+        "an ephemeral routed conversation must not mirror an objective"
+    );
+    assert!(
+        transcript_store
+            .session_objective_mirror("routed-parent-1-worker")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        transcript_store
+            .session_objective_mirror_status()
+            .index_writes,
+        0,
+        "an ephemeral conversation must not write the mirror index"
+    );
+
+    assert!(
+        service.mirror_runtime_agent_objective(&durable_conversation_id, Some("Durable objective"))
+    );
+    assert_eq!(
+        transcript_store
+            .session_objective_mirror(&durable_conversation_id)
+            .unwrap()
+            .map(|mirror| mirror.objective),
+        Some("Durable objective".to_string())
+    );
+    let _ = std::fs::remove_dir_all(transcript_store.root());
+}
+
+/// Verifies a named row keeps its manual name and id column while the derived
+/// title stays exposed on the detail path without a new table column.
+#[test]
+fn runtime_named_saved_session_exposes_derived_title_in_detail() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-named-title-detail"));
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: "named-detail-session".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 10,
+            role: TranscriptRole::User,
+            turn_id: "turn-named-detail".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "named detail prompt".to_string(),
+        })
+        .unwrap();
+    transcript_store
+        .mirror_session_objective("named-detail-session", "Mirror objective title", 20)
+        .unwrap();
+    transcript_store
+        .name_session("named-detail-session", "Operator name", 21, None)
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
+
+    let mut browser = service.saved_sessions_record_browser().unwrap();
+    let list = browser.render_page().markdown;
+    assert!(
+        list.contains(
+            "| Conversation | Name | Latest prompt | Last active | Directory | Entries |"
+        ),
+        "the picker keeps its existing column set: {list}"
+    );
+    let row = &browser.records()[0];
+    assert_eq!(row.id, "named-detail-session");
+    assert_eq!(row.title, "named-detail-session - Operator name");
+    assert_eq!(record_metadata_value(row, "name"), "Operator name");
+    assert_eq!(
+        record_metadata_value(row, "title"),
+        "Mirror objective title"
+    );
+    assert!(list.contains("Operator name"), "{list}");
+
+    browser.show_first_record_detail();
+    let detail = browser.render_page().markdown;
+    assert!(
+        detail.contains("# named-detail-session - Operator name"),
+        "{detail}"
+    );
+    assert!(
+        detail.contains("| title | Mirror objective title |"),
+        "a named row still exposes its derived title on the detail path: {detail}"
+    );
+    let _ = std::fs::remove_dir_all(transcript_store.root());
 }
 
 /// Verifies bare `/resume` initially limits conversations to the active pane

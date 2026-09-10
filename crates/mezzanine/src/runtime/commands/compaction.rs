@@ -23,7 +23,7 @@ use super::{
 };
 use crate::integrations::agent::context::assemble_model_request;
 use crate::integrations::agent::provider::{
-    anthropic_provider_from_auth_store_with_provider_options,
+    anthropic_provider_from_auth_store_with_provider_options, bounded_provider_event_kind,
     provider_error_retry_class_from_parts, provider_event_error_kind,
 };
 use crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger;
@@ -861,12 +861,29 @@ impl RuntimeSessionService {
         message: &str,
         provider_failure_json: Option<&str>,
     ) -> Result<bool> {
-        if let Some(mut task) = self.finish_agent_compaction_task(pane_id) {
-            let retry_class = provider_error_retry_class_from_parts(
-                provider_event_error_kind(kind),
-                message,
-                provider_failure_json,
+        let Some(parsed_kind) = provider_event_error_kind(kind) else {
+            let diagnostic = format!(
+                "provider event kind unknown: `{}`: {message}",
+                bounded_provider_event_kind(kind)
             );
+            let mut failed = self.fail_agent_compaction_task(pane_id);
+            if failed.had_task() {
+                self.append_agent_status_text_to_terminal_buffer(
+                    pane_id,
+                    &format!("agent: compact failed during provider request: {diagnostic}"),
+                )?;
+            }
+            if let Some(resume_turn_id) = failed.take_resume_turn_id() {
+                self.fail_running_turn_after_output_limit_compaction_failure(
+                    &resume_turn_id,
+                    &diagnostic,
+                )?;
+            }
+            return Ok(failed.had_task());
+        };
+        if let Some(mut task) = self.finish_agent_compaction_task(pane_id) {
+            let retry_class =
+                provider_error_retry_class_from_parts(parsed_kind, message, provider_failure_json);
             if retry_class == ProviderErrorRetryClass::ContextLimit
                 && matches!(task.target, RuntimeAgentCompactionTarget::ActiveTurn { .. })
             {
@@ -1248,6 +1265,7 @@ pub(super) fn runtime_context_source_kind_name(source: ContextSourceKind) -> &'s
         ContextSourceKind::Policy => "policy",
         ContextSourceKind::Configuration => "configuration",
         ContextSourceKind::LocalMessage => "local-message",
+        ContextSourceKind::PeerMessage => "peer-message",
         ContextSourceKind::RuntimeHint => "runtime-hint",
         ContextSourceKind::ProjectGuidance => "project-guidance",
         ContextSourceKind::Memory => "memory",

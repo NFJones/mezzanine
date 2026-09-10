@@ -3,9 +3,10 @@
 use super::{
     BTreeMap, ControlIdempotencyCache, DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT,
     DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT, DEFAULT_AGENT_LOOP_LIMIT,
-    DEFAULT_AGENT_ROUTING, EventLog, MessageService, MezError, PaneProcessManager, PathBuf, Result,
-    RuntimeLifecycleState, RuntimeSessionService, Session, Value, builtin_subagent_profiles,
-    ensure_absolute, ensure_no_mez_separator, runtime_provider_registry_from_config,
+    DEFAULT_AGENT_PEER_MESSAGE_LOOP_LIMIT, DEFAULT_AGENT_ROUTING, EventLog, MessageService,
+    MezError, PaneProcessManager, PathBuf, Result, RuntimeLifecycleState, RuntimeSessionService,
+    Session, Value, builtin_subagent_profiles, ensure_absolute, ensure_no_mez_separator,
+    runtime_provider_registry_from_config,
 };
 #[cfg(test)]
 use crate::host::terminal::HostClipboard;
@@ -200,6 +201,7 @@ impl RuntimeSessionService {
                 RuntimeAutoSizingConfig::default(),
                 DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
                 DEFAULT_AGENT_LOOP_LIMIT,
+                DEFAULT_AGENT_PEER_MESSAGE_LOOP_LIMIT,
                 DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT,
                 mez_agent::DEFAULT_AGENT_TURN_TIMEOUT_MS,
             ),

@@ -1521,3 +1521,326 @@ async fn async_actor_retries_provider_overload_message_without_rate_limit_status
     assert!(exit.metrics.runtime_side_effects_queued >= 2);
     exit.service.terminate_all_pane_processes().unwrap();
 }
+
+/// Verifies malformed MAAP model output is repaired with bounded immediate
+/// model re-requests instead of a transport retry, and that the chronology
+/// never records a retryable-transport schedule for the repair.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_repairs_malformed_maap_output_without_transport_retry() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service
+        .execute_agent_shell_command(&primary, "summarize the pane")
+        .unwrap();
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let pending = service.pending_agent_provider_tasks();
+    assert_eq!(pending.len(), 1);
+    let expected_agent = AgentId::opaque(pending[0].agent_id.clone()).unwrap();
+    let expected_turn = pending[0].turn_id.clone();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let failure_batch = || {
+            let mut batch = RuntimeEventBatch::new();
+            batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
+                agent_id: expected_agent.clone(),
+                turn_id: expected_turn.clone(),
+                claim_generation: 1,
+                kind: "invalid_state".to_string(),
+                message: "provider MAAP output is malformed: mezzanine-action-json block is invalid JSON: expected `,` or `}` at line 1 column 282".to_string(),
+                provider_failure_json: Some(r#"{"type":"malformed_model_output","error":{"kind":"invalid_state","message":"mezzanine-action-json block is invalid JSON"}}"#.to_string()),
+                provider_raw_text: Some(r#"{"rationale":"x","actions":[{"type":"shell_command","summary":"check","command":"rg -n "oops" crates/"}]}"#.to_string()),
+                provider_output_limit_state: None,
+            }));
+            batch
+        };
+        for attempt in 1..=2 {
+            handle
+                .record_claimed_agent_provider_task_for_tests(expected_turn.clone(), 1)
+                .await
+                .unwrap();
+            let report = handle.submit_runtime_events(failure_batch()).await.unwrap();
+            assert_eq!(report.accepted, 1, "attempt {attempt}");
+            assert_eq!(report.applied, 1, "attempt {attempt}");
+            let dispatches = handle
+                .drain_agent_provider_dispatch_side_effects(8)
+                .await
+                .unwrap();
+            assert_eq!(
+                dispatches,
+                vec![RuntimeSideEffect::DispatchAgentProvider {
+                    agent_id: expected_agent.clone(),
+                    turn_id: expected_turn.clone(),
+                }],
+                "attempt {attempt}"
+            );
+            assert!(
+                handle.drain_timer_side_effects(8).await.unwrap().is_empty(),
+                "repair must not schedule a provider retry backoff timer (attempt {attempt})"
+            );
+        }
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert!(exit.service.agent_turn_is_running(&expected_turn));
+    let contexts = exit.service.agent_turn_contexts();
+    let context = contexts.get(&expected_turn).unwrap();
+    let repair_events = context
+        .chronology()
+        .iter()
+        .filter(|event| {
+            event.block().source == mez_agent::ContextSourceKind::RuntimeHint
+                && event.block().label == "MAAP repair scheduled"
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(repair_events.len(), 2);
+    assert!(
+        repair_events[0]
+            .block()
+            .content
+            .contains("validation_error=provider MAAP output is malformed")
+    );
+    assert!(
+        repair_events[0]
+            .block()
+            .content
+            .contains(r#"rg -n "oops" crates/"#)
+    );
+    assert!(!context.chronology().iter().any(|event| {
+        event.block().source == mez_agent::ContextSourceKind::RuntimeHint
+            && (event.block().label == "provider retry scheduled"
+                || event
+                    .block()
+                    .content
+                    .contains("retry_class=retryable_transport"))
+    }));
+
+    let (terminal_handle, terminal_actor) = AsyncRuntimeActorFixture::from_service(exit.service)
+        .build()
+        .unwrap();
+    let terminal_client = async {
+        terminal_handle
+            .record_claimed_agent_provider_task_for_tests(expected_turn.clone(), 1)
+            .await
+            .unwrap();
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
+            agent_id: expected_agent,
+            turn_id: expected_turn.clone(),
+            claim_generation: 1,
+            kind: "invalid_state".to_string(),
+            message:
+                "provider MAAP output is malformed: mezzanine-action-json block is invalid JSON"
+                    .to_string(),
+            provider_failure_json: None,
+            provider_raw_text: Some(r#"{"actions":[]}"#.to_string()),
+            provider_output_limit_state: None,
+        }));
+        let terminal = terminal_handle.submit_runtime_events(batch).await.unwrap();
+        assert_eq!(terminal.accepted, 1);
+        assert_eq!(terminal.applied, 1);
+        assert!(
+            terminal_handle
+                .drain_agent_provider_dispatch_side_effects(8)
+                .await
+                .unwrap()
+                .is_empty(),
+            "exhausted repair budget must not re-dispatch provider work"
+        );
+        terminal_handle.shutdown().await.unwrap();
+    };
+    let ((), mut terminal_exit) = tokio::join!(terminal_client, terminal_actor.run());
+    assert!(!terminal_exit.service.agent_turn_is_running(&expected_turn));
+    terminal_exit
+        .service
+        .terminate_all_pane_processes()
+        .unwrap();
+}
+
+/// Verifies a corrected second response after a malformed-MAAP repair request
+/// completes the same turn.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_completes_turn_after_corrected_maap_response() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service
+        .execute_agent_shell_command(&primary, "summarize the pane")
+        .unwrap();
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let pending = service.pending_agent_provider_tasks();
+    assert_eq!(pending.len(), 1);
+    let task = pending[0].clone();
+    let expected_agent = AgentId::opaque(task.agent_id.clone()).unwrap();
+    let expected_turn = task.turn_id.clone();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .record_claimed_agent_provider_task_for_tests(expected_turn.clone(), 1)
+            .await
+            .unwrap();
+        let mut failure = RuntimeEventBatch::new();
+        failure.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
+            agent_id: expected_agent.clone(),
+            turn_id: expected_turn.clone(),
+            claim_generation: 1,
+            kind: "invalid_state".to_string(),
+            message:
+                "provider MAAP output is malformed: mezzanine-action-json block is invalid JSON"
+                    .to_string(),
+            provider_failure_json: None,
+            provider_raw_text: Some(r#"{"actions":[]}"#.to_string()),
+            provider_output_limit_state: None,
+        }));
+        let report = handle.submit_runtime_events(failure).await.unwrap();
+        assert_eq!(report.accepted, 1);
+        assert_eq!(report.applied, 1);
+        let dispatches = handle
+            .drain_agent_provider_dispatch_side_effects(8)
+            .await
+            .unwrap();
+        assert_eq!(
+            dispatches,
+            vec![RuntimeSideEffect::DispatchAgentProvider {
+                agent_id: expected_agent.clone(),
+                turn_id: expected_turn.clone(),
+            }]
+        );
+
+        let turn = mez_agent::AgentTurnRecord {
+            turn_id: task.turn_id.clone(),
+            conversation_id: "conversation-1".to_string(),
+            agent_id: task.agent_id.clone(),
+            pane_id: task.pane_id.clone(),
+            trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: 1,
+            deadline_at_unix_millis: 0,
+            policy_profile: "default".to_string(),
+            model_profile: "default".to_string(),
+            parent_turn_id: None,
+            state: mez_agent::AgentTurnState::Running,
+            cooperation_mode: None,
+            initial_capability: None,
+        };
+        let action = mez_agent::AgentAction {
+            id: "say-1".to_string(),
+            payload: mez_agent::AgentActionPayload::Say {
+                status: mez_agent::SayStatus::Final,
+                text: "Typed completion applied.".to_string(),
+                content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+            },
+        };
+        let response_batch = mez_agent::MaapBatch {
+            rationale: "test action batch rationale".to_string(),
+            actions: vec![action.clone()],
+        };
+        let execution = mez_agent::AgentTurnExecution {
+            request: mez_agent::ModelRequest {
+                provider: task.model_profile.provider.clone(),
+                model: task.model_profile.model.clone(),
+                model_capabilities: Default::default(),
+                max_input_tokens: None,
+                reasoning_effort: task
+                    .model_profile
+                    .provider_options
+                    .get("reasoning_effort")
+                    .cloned()
+                    .or_else(|| task.model_profile.reasoning_profile.clone()),
+                thinking_enabled: task.model_profile.thinking_enabled(),
+                latency_preference: task.model_profile.latency_preference.clone(),
+                prompt_cache_retention: task
+                    .model_profile
+                    .provider_options
+                    .get("prompt_cache_retention")
+                    .cloned(),
+                max_output_tokens: task.model_profile.max_output_tokens(),
+                temperature: None,
+                stop: None,
+                prompt_cache_session_id: None,
+                prompt_cache_lineage_id: None,
+                turn_id: task.turn_id.clone(),
+                agent_id: task.agent_id.clone(),
+                available_mcp_tools: Vec::new(),
+                memory_actions_enabled: false,
+                issue_actions_enabled: true,
+                interaction_kind: mez_agent::ModelInteractionKind::MaapRepair,
+                allowed_actions: mez_agent::AllowedActionSet::for_capability(
+                    mez_agent::AgentCapability::RespondOnly,
+                ),
+                messages: vec![mez_agent::ModelMessage {
+                    role: mez_agent::ModelMessageRole::User,
+                    source: mez_agent::ContextSourceKind::UserInstruction,
+                    placement: mez_agent::ContextPlacement::ConversationAppend,
+                    content: "summarize the pane".to_string(),
+                }]
+                .into(),
+            },
+            response: mez_agent::ModelResponse {
+                provider: task.model_profile.provider.clone(),
+                model: task.model_profile.model.clone(),
+                raw_text: "Typed completion applied.".to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: Some(response_batch),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results: vec![mez_agent::ActionResult::succeeded(
+                &turn,
+                &action,
+                vec!["Typed completion applied.".to_string()],
+                Some(
+                    r#"{"kind":"say","status":"final","content_type":"text/plain; charset=utf-8","text":"Typed completion applied."}"#
+                        .to_string(),
+                ),
+            )],
+            final_turn: true,
+            terminal_state: mez_agent::AgentTurnState::Completed,
+        };
+        handle
+            .record_claimed_agent_provider_task_for_tests(expected_turn.clone(), 1)
+            .await
+            .unwrap();
+        let mut completion = RuntimeEventBatch::new();
+        completion.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Completed {
+            agent_id: expected_agent,
+            turn_id: expected_turn.clone(),
+            claim_generation: 1,
+            execution: Box::new(execution),
+        }));
+        let completed = handle.submit_runtime_events(completion).await.unwrap();
+        assert_eq!(completed.accepted, 1);
+        assert_eq!(completed.applied, 1);
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    assert!(!exit.service.agent_turn_is_running(&expected_turn));
+    assert!(exit.service.pending_agent_provider_tasks().is_empty());
+    exit.service.terminate_all_pane_processes().unwrap();
+}

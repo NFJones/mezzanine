@@ -835,7 +835,7 @@ description.
 | `agents.default_model_profile` | string | `"default"` | Model profile used by default. |
 | `agents.active_turn_sleep_inhibition` | string | `"disabled"` | Primary-user-only host power policy: `disabled`, `system` (best-effort prevention of automatic idle system sleep), or `system-and-display` (also request display wakefulness where supported; higher battery use). It is held only while at least one canonical agent turn is `Running`, including a detached session, and releases when the final turn settles or the runtime stops or fails. Native Linux uses systemd-logind's `idle` inhibitor and the desktop `org.freedesktop.ScreenSaver` service; WSL is unsupported. macOS uses IOKit assertions. Unsupported platforms and failed requests are nonfatal, and unavailable display inhibition may leave system-only protection. Neither mode overrides explicit sleep, lid-close, thermal, or critical-battery safeguards, and model-authored config changes cannot alter it. See [Power inhibition](../operations/power-inhibition.md). |
 | `agents.shell_only` | boolean | `true` | Require local system actions to use shell-backed execution rather than an unmediated local executor; `agents.shell_mode` selects native or pane transport. |
-| `agents.enabled_actions` | string array | all executable MAAP actions | Authoritative action allowlist applied to every ordinary provider request and runtime validation. Provider schemas expose exactly this configured subset, which remains constant across continuations, terminal profiles, and subagent depth limits until configuration changes. Valid values are `say`, `shell_command`, `apply_patch`, `web_search`, `fetch_url`, `send_message`, `spawn_agent`, `config_change`, `mcp_server_search`, `mcp_server_get`, `mcp_call`, `memory_search`, `memory_store`, `issue_add`, `issue_update`, `issue_query`, and `issue_delete`; controller-only capability and skill actions are not configurable. Integration availability, permission, subagent depth and terminal-profile policy, and argument checks still run when an enabled action is selected and return explicit action results when it cannot run. |
+| `agents.enabled_actions` | string array | all executable MAAP actions | Authoritative action allowlist applied to every ordinary provider request and runtime validation. Provider schemas expose exactly this configured subset, which remains constant across continuations, terminal profiles, and subagent depth limits until configuration changes. Valid values are `say`, `shell_command`, `apply_patch`, `web_search`, `fetch_url`, `send_message`, `spawn_agent`, `config_change`, `mcp_server_search`, `mcp_server_get`, `mcp_call`, `memory_search`, `memory_store`, `list_agents`, `issue_add`, `issue_update`, `issue_query`, and `issue_delete`; controller-only capability and skill actions are not configurable. Integration availability, permission, subagent depth and terminal-profile policy, and argument checks still run when an enabled action is selected and return explicit action results when it cannot run. |
 | `agents.shell_mode` | string | `"native"` | Default agent shell execution transport: `native` runs each action in a freshly spawned shell inferred from the pane root process without sending pane input; `pane` sends shell-backed actions through the pane shell. Use `/shell-mode status` to view the effective pane mode, configured global mode, and override provenance in the pager. Use `/shell-mode pane` or `/shell-mode native` for an active-pane override, or append `--global` to persist the default for panes without an override. |
 | `agents.compaction_raw_retention_percent` | integer | `10` | Initial percent of complete raw groups retained outside model-authored summary input; provider context-limit backoff may grow the exact tail one complete group at a time; 1 to 100. |
 | `agents.routing` | boolean | `false` | Enable pane-local routing selection by default. |
@@ -845,6 +845,8 @@ description.
 | `agents.turn_timeout_ms` | integer | `1800000` | Total wall-clock deadline, in milliseconds, snapshotted for each new agent turn; must be positive. |
 | `agents.native_shell_timeout_ms` | integer | `600000` | Default maximum, in milliseconds, for native-mode `shell_command` actions; 1 to 86400000. Each turn snapshots the value at creation. The effective native timeout is the earliest of this value, any explicit per-action timeout, and the remaining turn budget. Pane-shell actions do not use this setting. |
 | `agents.loop_limit` | integer | `8` | Maximum iterations for a `/loop`; must be positive. |
+| `agents.peer_message_loop_limit` | integer | `1000` | Maximum peer-message-triggered turns started for one agent before further inbox mail stays pending; must be positive. Direct user input resets the count. |
+| `agents.session_title_policy` | string | `"generated"` | Source of the derived saved-session title shown in `/resume` rows and prompt completions. `generated` (default) is the deterministic bounded derivation from the agent objective, else the first prompt, and is currently identical to `objective` because no model-generated display titles exist yet; `objective`, `last_prompt`, and `first_prompt` mirror that single source. A manual `/name-session` name always wins, and `/name-session --clear` restores the derived title. |
 | `agents.custom_system_prompt` | string | `""` | User-owned system prompt appended after built-in prompt content. |
 | `agents.default_personality` | string | `""` | Default personality profile id; empty means none. |
 | `agents.always_exposed_mcp_servers` | string array | `[]` | MCP server ids whose complete model-safe metadata and callable tool schemas are exposed through append-only catalog snapshots on every applicable model turn. Unchanged catalogs are reused; configuration, discovery, schema, or availability changes append an authoritative transition. Availability alone does not instruct the model to use a server, and the live registry still controls callability. |
@@ -892,6 +894,7 @@ rewrite YAML or JSON primary configurations.
 | `providers.<name>.base_url` | string | `providers.openai.base_url = ""` | Optional API base URL. Empty uses provider default. |
 | `providers.<name>.models` | table | see below | Reusable provider-scoped model records. Empty may use provider built-ins. |
 | `providers.<name>.default_model` | string | `providers.openai.default_model = "gpt-5.6-terra"` | Default model for the provider. |
+| `providers.<name>.unknown_model_policy` | string | `"conservative"` | Policy for models without resolvable metadata: `conservative` (default) keeps only the required compatibility floor, `api-default` applies the provider's API-wide defaults. |
 | `providers.<name>.options` | table | `{}` | Provider-specific non-secret options. |
 | `providers.anthropic.options.anthropic_version` | string | omitted | Optional Anthropic Messages API version header; defaults to `2023-06-01`. |
 | `providers.anthropic.options.default_max_tokens` | integer | omitted | Fallback Anthropic `max_tokens` budget when the selected model profile omits `max_output_tokens`; `max_tokens` is accepted as an alias. |
@@ -937,20 +940,37 @@ included in output.
 
 Each metadata field resolves independently in this order: explicit
 `model_profiles.<name>` override, configured provider-model record, discovered
-provider catalog, built-in provider/model metadata, then conservative runtime
-fallback. Omitted token limits remain unknown unless a built-in model record
-documents them; a generic runtime fallback does not invent limits. Configured
-`reasoning_levels` and `capabilities` replace lower lists even when explicitly
-empty. Provider option maps merge per key in this order: provider root,
-discovered model, configured model, profile. The last value for a key wins.
+provider catalog, shipped default-config model records, then the
+`unknown_model_policy` fallback. Omitted token limits remain unknown unless a
+shipped default-config record documents them; a generic runtime fallback does
+not invent limits. Configured `reasoning_levels` and `capabilities` replace
+lower lists even when explicitly empty. Provider option maps merge per key in
+this order: provider root, discovered model, configured model, profile. The
+last value for a key wins.
 
-The generated `deepseek-v4-pro` and `deepseek-v4-flash` records, and the
-code-defined fallback candidates used when their configured model table is
-empty, declare reasoning levels `high` and `max`. They also declare capability
-tags `native_thinking`, `function_tools`, `forced_tool_choice`, `streaming`, and
-`max_output_tokens`. Omitting either list allows this lower-precedence metadata
-to fill the gap; an explicitly empty list clears it. These declarations use
-existing fields and do not change the configuration schema version.
+`reasoning_levels` and `capabilities` are vocabulary-validated at config load
+and before persistence. Capability tags use one provider-neutral vocabulary
+(`native_thinking`, `function_tools` with `function_calling`/`tool_use`/`tools`
+aliases, `forced_tool_choice`, `streaming`, `max_output_tokens` with
+`max_output_token_control` alias, and the informational `vision` tag).
+Reasoning-level vocabularies are per provider: DeepSeek accepts `low`, `high`,
+and `max` (the `xhigh` alias maps to `max`); OpenAI Responses accepts `low`,
+`medium`, `high`, and `xhigh`; Anthropic Messages accepts `low`, `medium`,
+`high`, `xhigh`, and `max`. Unknown adapter kinds stay permissive. A model
+profile whose `reasoning_profile` cannot be matched against resolvable
+metadata is rejected at validation time; renaming or deleting a model record
+therefore requires re-declaring its `reasoning_levels` and `capabilities`.
+
+The shipped default-config records for `deepseek-flash` (DeepSeek-V4.1-Flash)
+and the retained `deepseek-v4-pro` tier declare reasoning levels `low`, `high`,
+and `max`. They also declare capability tags `native_thinking`,
+`function_tools`, `forced_tool_choice`, `streaming`, and `max_output_tokens`.
+Omitting either list allows this lower-precedence metadata to fill the gap; an
+explicitly empty list clears it. The built-in DeepSeek records use a `1000000`
+token context window with `384000` maximum output tokens and `616000` maximum
+input tokens, so reserved output still fits inside the documented window.
+These declarations use existing fields and do not change the configuration
+schema version.
 
 A profile may use a configured alias; Mez stores and displays the canonical
 model `id`. Profiles may also name unlisted custom models. A provider catalog
@@ -1158,7 +1178,7 @@ Built-in model-profile catalog:
 | `anthropic-fast` | `fallback_profiles` | `[]` |
 | `anthropic-fast.provider_options` | `prompt_caching` | `"enabled"` |
 | `deepseek-default` | `provider` | `"deepseek"` |
-| `deepseek-default` | `model` | `"deepseek-v4-pro"` |
+| `deepseek-default` | `model` | `"deepseek-flash"` |
 | `deepseek-default` | `reasoning_profile` | `"high"` |
 | `deepseek-default` | `latency_preference` | `"default"` |
 | `deepseek-default` | `multimodal_required` | `false` |
@@ -1169,7 +1189,7 @@ Built-in model-profile catalog:
 | `deepseek-default` | `fallback_profiles` | `[]` |
 | `deepseek-default.provider_options` | `thinking` | `"enabled"` |
 | `deepseek-fast` | `provider` | `"deepseek"` |
-| `deepseek-fast` | `model` | `"deepseek-v4-flash"` |
+| `deepseek-fast` | `model` | `"deepseek-flash"` |
 | `deepseek-fast` | `reasoning_profile` | `"high"` |
 | `deepseek-fast` | `latency_preference` | `"fast"` |
 | `deepseek-fast` | `multimodal_required` | `false` |

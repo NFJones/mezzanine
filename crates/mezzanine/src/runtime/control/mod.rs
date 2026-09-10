@@ -73,7 +73,10 @@ use crate::control::{
 use crate::integrations::skills::{BUILTIN_MEZ_REFERENCE_SKILL_NAME, load_skill_document};
 pub(crate) use component::RuntimeControlComponent;
 use context::runtime_agent_transcript_context;
-pub(crate) use context::runtime_local_message_context_content;
+pub(crate) use context::{
+    PEER_MESSAGE_TURN_CONTEXT_HINT, PEER_MESSAGE_TURN_CONTEXT_LABEL, runtime_owned_bridge_message,
+    runtime_peer_message_block_label, runtime_peer_message_context_content,
+};
 use mez_agent::{
     SkillDocument, insert_context_block_by_placement, is_valid_skill_name, memory_context_blocks,
     parse_skill_prompt_invocation, project_guidance_context_block, skill_context_text,
@@ -110,6 +113,18 @@ pub(super) struct RuntimeAgentPromptContext {
     pub(super) current_environment_snapshot: Option<String>,
     /// Environment transition newly appended for durable persistence, when any.
     pub(super) new_environment_snapshot: Option<String>,
+}
+
+/// Prompt-boundary context for one peer-message-triggered turn.
+pub(super) struct RuntimePeerMessageTurnContext {
+    /// Complete durable context carrying the unread peer-message blocks.
+    pub(super) context: AgentContext,
+    /// Highest unread peer-message sequence included in the context.
+    pub(super) delivered_message_sequence: Option<mez_agent::messaging::MessageSequence>,
+    /// Number of unread peer messages included in the context.
+    pub(super) delivered_message_count: usize,
+    /// Number of replayed history events at the front of the context.
+    pub(super) imported_history_events: usize,
 }
 
 impl RuntimeSessionService {
@@ -180,12 +195,12 @@ impl RuntimeSessionService {
                 insert_context_block_by_placement(
                     &mut blocks,
                     ContextBlock::reference_event(
-                        ContextSourceKind::LocalMessage,
-                        format!(
-                            "local message sequence {} id {}",
-                            message.sequence, message.envelope.id
+                        ContextSourceKind::PeerMessage,
+                        runtime_peer_message_block_label(
+                            message.sequence,
+                            message.envelope.id.as_str(),
                         ),
-                        runtime_local_message_context_content(&message.envelope),
+                        runtime_peer_message_context_content(&message.envelope),
                     ),
                 );
                 delivered_message_sequence = Some(message.sequence);
@@ -368,6 +383,93 @@ impl RuntimeSessionService {
             imported_history_events,
             current_environment_snapshot,
             new_environment_snapshot,
+        })
+    }
+
+    /// Builds the context for one turn started by pending peer mail.
+    ///
+    /// The context carries unread peer messages as lower-priority reference
+    /// events followed by runtime-authored turn framing. No synthetic user
+    /// instruction is created, so peer text never enters the conversation at
+    /// user-input priority. The caller stores this context on the new turn
+    /// before acknowledging delivered messages.
+    pub(super) fn peer_message_turn_context(
+        &mut self,
+        pane_id: &str,
+    ) -> Result<RuntimePeerMessageTurnContext> {
+        self.refresh_project_config_layers_for_pane(pane_id)?;
+        self.settle_recoverable_pane_readiness_for_agent_prompt(pane_id)?;
+        let history = self.runtime_agent_history_epoch_context(pane_id)?;
+        let mut blocks = history.blocks;
+        let imported_execution_events = history.execution_events;
+        let imported_history_events = blocks.len();
+        let now_ms = super::current_unix_seconds().saturating_mul(1000);
+        let identity = self.ensure_runtime_message_identity(
+            &format!("agent-{pane_id}"),
+            PaneId::opaque(pane_id.to_string()),
+            "agent",
+            &[],
+            now_ms,
+        )?;
+        if self
+            .control
+            .message_service()
+            .subscription(&identity.agent_id)
+            .is_none()
+        {
+            self.control
+                .message_service_mut()
+                .subscribe_from_retained_start(&identity.agent_id)?;
+        }
+        let pending_messages = self.control.message_service().receive_subscribed(
+            &identity.agent_id,
+            now_ms,
+            usize::MAX,
+        )?;
+        let mut delivered_message_sequence = None;
+        let mut delivered_message_count = 0usize;
+        for message in pending_messages.messages {
+            insert_context_block_by_placement(
+                &mut blocks,
+                ContextBlock::reference_event(
+                    ContextSourceKind::PeerMessage,
+                    runtime_peer_message_block_label(
+                        message.sequence,
+                        message.envelope.id.as_str(),
+                    ),
+                    runtime_peer_message_context_content(&message.envelope),
+                ),
+            );
+            delivered_message_sequence = Some(message.sequence);
+            delivered_message_count = delivered_message_count.saturating_add(1);
+        }
+        insert_context_block_by_placement(
+            &mut blocks,
+            ContextBlock::reference_event(
+                ContextSourceKind::RuntimeHint,
+                PEER_MESSAGE_TURN_CONTEXT_LABEL,
+                PEER_MESSAGE_TURN_CONTEXT_HINT,
+            ),
+        );
+        let metadata = self
+            .agent_shell_store()
+            .get(pane_id)
+            .map(|session| {
+                mez_agent::ModelContextMetadata::new(
+                    Some(session.session_id.clone()),
+                    Some(session.prompt_cache_lineage_id.clone()),
+                )
+            })
+            .unwrap_or_default();
+        let mut context = AgentContext::import_durable_blocks(blocks)?.with_metadata(metadata);
+        context
+            .restore_imported_execution_events(&imported_execution_events)
+            .map_err(|error| MezError::invalid_state(error.to_string()))?;
+        Ok(RuntimePeerMessageTurnContext {
+            context,
+            delivered_message_sequence,
+            delivered_message_count,
+            imported_history_events,
         })
     }
 

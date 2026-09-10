@@ -686,7 +686,7 @@ async fn sync_parent_directory_async(path: &Path) {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn format_diagnostics(diagnostics: &[ConfigDiagnostic]) -> String {
+pub(crate) fn format_diagnostics(diagnostics: &[ConfigDiagnostic]) -> String {
     diagnostics
         .iter()
         .map(|diagnostic| format!("{}: {}", diagnostic.path, diagnostic.message))

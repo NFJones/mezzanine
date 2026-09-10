@@ -4128,7 +4128,7 @@ The `issues` table MUST support `enabled` and `database_path`.
 The `agents` table MUST support `default_provider`, `default_model_profile`,
 `active_turn_sleep_inhibition`, `shell_only`, `compaction_raw_retention_percent`, `routing`,
 `shell_mode`, `action_failure_retry_limit`, `provider_error_retry_limit`,
-`provider_error_retry_unlimited`, `turn_timeout_ms`, `native_shell_timeout_ms`, `loop_limit`, `custom_system_prompt`,
+`provider_error_retry_unlimited`, `turn_timeout_ms`, `native_shell_timeout_ms`, `loop_limit`, `peer_message_loop_limit`, `custom_system_prompt`,
 `default_personality`, `subagent_placement`,
 `max_concurrent_agents`, `max_queued_turns`, `max_queued_bytes`,
 `max_root_subagents`, `max_subagents_per_subagent`,
@@ -4210,6 +4210,11 @@ pane shell to enable or perform the execution.
 bounds the number of work iterations a single `/loop` command may run before
 Mezzanine stops automatic continuation and reports that the iteration limit was
 reached.
+`agents.peer_message_loop_limit` MUST be a positive integer and MUST default to
+`1000`. It bounds how many peer-message-triggered turns Mezzanine may start for
+one agent before further pending inbox mail stays pending instead of starting
+another turn; direct user input resets that count. It MUST NOT cap injected
+message counts, payload bytes, or peer turns per window.
 The `/loop` slash command MUST describe itself in help output as an iterative
 work command rather than a generic slash-command placeholder. By default,
 `/loop` MUST start each work iteration in the current pane conversation. When
@@ -5272,19 +5277,23 @@ built-in Anthropic provider model list SHOULD include `claude-fable-5`,
 `claude-opus-5`, `claude-sonnet-5`, and
 `claude-haiku-4-5-20251001`; generated Anthropic profiles SHOULD use built-in
 context metadata for those Claude model families.
-The built-in DeepSeek provider default model MUST be `deepseek-v4-pro` unless
-the user overrides it through provider or model-profile configuration. The
-built-in DeepSeek provider model list SHOULD include `deepseek-v4-pro` and
-`deepseek-v4-flash`. Both built-in records and their code-defined fallback
-catalog candidates MUST declare reasoning levels `high` and `max` and the
-capability tags `native_thinking`, `function_tools`, `forced_tool_choice`,
-`streaming`, and `max_output_tokens`. The Pro record MUST use a `1000000`
-token context window, `800000` maximum input tokens, and `60000` maximum output
-tokens. The Flash record MUST use a `500000` token context window, `400000`
-maximum input tokens, and `30000` maximum output tokens. These declarations use
-existing provider-model metadata fields and therefore do not change the config
-schema version. Omitted list metadata MUST remain distinct from an explicitly
-empty list, which clears lower-precedence built-in metadata.
+The built-in DeepSeek provider default model MUST be `deepseek-flash`, the
+DeepSeek-V4.1-Flash id, unless the user overrides it through provider or
+model-profile configuration. The built-in DeepSeek provider model list SHOULD
+include `deepseek-flash` and the retained `deepseek-v4-pro` tier. Both built-in
+records and their code-defined fallback catalog candidates MUST declare
+reasoning levels `low`, `high`, and `max` and the capability tags
+`native_thinking`, `function_tools`, `forced_tool_choice`, `streaming`, and
+`max_output_tokens`. The code-defined fallback catalog SHOULD also recognize
+the retired `deepseek-v4-flash` name, which DeepSeek still routes to V4.1 Flash,
+so existing configurations keep provider-accurate metadata. Every built-in
+record MUST use a `1000000` token context window, `616000` maximum input
+tokens, and `384000` maximum output tokens so reserved output still fits inside
+the documented window, and generated DeepSeek model profiles MUST select one of
+those records. These declarations use existing provider-model metadata fields
+and therefore do not change the config schema version. Omitted list metadata
+MUST remain distinct from an explicitly empty list, which clears
+lower-precedence built-in metadata.
 Custom or non-built-in providers do not have built-in models solely because
 they select a compatible API. Users SHOULD configure `models` and
 `default_model` for each compatible backend, and a live catalog refresh MAY
@@ -6590,9 +6599,20 @@ The model-authored action batch MUST be a JSON object with:
   rationale, the rationale SHOULD be the smallest non-duplicative execution
   delta that explains why the listed actions are next.
 - `actions`: A non-empty array of action objects.
+- `objective`: A bounded statement of what the agent is currently
+  working on, published through MMP peer discovery. It MUST be a factual
+  statement of current work and MUST NOT be a copy of the user prompt. When
+  present it MUST be non-empty, MUST NOT exceed `2097152` bytes (the agent-shell
+  prompt ingestion byte bound), MUST be whitespace-collapsed to a single line,
+  and MUST NOT contain control characters. A missing, malformed, or out-of-bounds
+  objective MUST be ignored and MUST NOT fail the turn, and it MUST NOT clear a
+  previously published objective.
 
 Provider output MUST include `rationale` and `actions` and MUST omit removed or
-runtime-owned batch metadata.
+runtime-owned batch metadata. In a provider strict-schema carrier the batch MUST
+carry `objective` as a string or `null`, where `null` means the published
+objective is unchanged; in fenced text output the field MAY be omitted, which
+means the same thing.
 
 Each action object MUST include:
 
@@ -6723,7 +6743,30 @@ The baseline action types are:
   replacement.
 - `web_search`: Perform a web search through the Mezzanine runtime HTTP executor.
 - `fetch_url`: Fetch one URL through the Mezzanine runtime HTTP executor.
-- `send_message`: Send a local message through MMP.
+- `send_message`: Send a local message through MMP to one recipient or scope.
+  The model-facing `recipient` value MUST be `session`, `group:session`,
+  `agent:<id>`, `pane:<id>`, `window:<id>`, `role:<name>`, `capability:<name>`,
+  or `group:<name>`; the runtime MUST reject any other recipient with an
+  invalid-recipient result instead of delivering it. An optional
+  `correlation_id` MUST be non-empty and MUST NOT exceed 256 characters; when it
+  is omitted, the runtime MUST supply the current turn id. Approval is per
+  message and per recipient: under `ask`, a send that no allow rule already
+  admits MUST block as a resumable approval bound to the recipient, content
+  type, and payload digest; under `auto-allow`, it MAY proceed only after a
+  non-empty model rationale; `full-access` and `host-access` MUST admit it
+  without a fresh whitelist prompt. Explicit deny rules MUST win in every mode.
+  Runtime macro and bridge delivery is not model-planned and MUST remain
+  ungated.
+- `list_agents`: Perform read-only peer discovery. The action MUST NOT prompt in
+  any approval mode. An optional `agent_type` MUST default to `primary` and MUST
+  accept only `primary`, `subagent`, `internal`, or `all`. Results MUST report
+  bounded identity rows for the requesting agent itself, offline agents, and
+  agents in other panes and windows, with each row carrying agent id, kind,
+  `is_self`, role, pane, window, capabilities, presence status, and the
+  published `objective`. One result MUST be bounded to 64 rows, 512 bytes per
+  string, and 16 capabilities per row, and MUST report truncation when the
+  matching set is larger. Each row MUST also report whether it shortened a string
+  or omitted capabilities.
 - `spawn_agent`: Request subagent pane creation through the control endpoint.
 - `config_change`: Propose a live configuration change.
 - `memory_search`: Search runtime-owned persistent memory records after the
@@ -7046,10 +7089,15 @@ apply runtime placement, policy inheritance, and scope defaults.
 
 A compact `spawn_agent` action MAY include `size` and `reasoning_effort` only
 as an atomic pair. `size` MUST be one of `small`, `medium`, or `large`, and
-`reasoning_effort` MUST be one of `low`, `medium`, `high`, or `xhigh`. The
-runtime MUST resolve the pair against the child’s inherited auto-sizing policy,
-including globally allowed and target-supported reasoning levels, before the
-child provider request begins. A valid pair MUST select the child’s initial
+`reasoning_effort` MUST use a canonical reasoning effort name. The
+provider-facing `spawn_agent` schema MUST list the configured routed model
+profile for each size and MUST advertise only the reasoning efforts that size
+accepts: the intersection of the pane's effective configured
+`allowed_reasoning_efforts` and the target profile's supported reasoning levels,
+or the configured global list when the target's supported levels are unknown.
+The runtime MUST resolve the pair against the child’s inherited auto-sizing
+policy, including globally allowed and target-supported reasoning levels, before
+the child provider request begins. A valid pair MUST select the child’s initial
 turn profile and suppress automatic routing for that turn only; it MUST NOT
 mutate the child’s role-profile or inherited default for later turns. Successful
 spawn state and action-result metadata MUST report the effective requested size,
@@ -8720,6 +8768,20 @@ SHOULD include `pane_id`, `window_id`, `role`, and `capabilities` when known. A
 provisional client-generated identifier; the message service MUST assign the
 effective agent identity in the corresponding `welcome` message.
 
+The `sender` object MAY include a bounded `objective`: the agent's current
+model-generated statement of what it is working on, published for peer
+discovery. The field is additive to `mmp/1`; the protocol version MUST NOT
+change, unknown envelope fields MUST continue to be preserved, and an absent or
+`null` objective MUST mean that no objective is published and MUST be a no-op
+refresh that leaves the previously published value and presence timestamp
+unchanged. When present, the value MUST be non-empty, MUST NOT exceed `2097152`
+bytes, MUST be whitespace-collapsed to a single line, and MUST NOT contain
+control characters; agent-shell prompt ingestion imposes no line-count
+rejection, so a multi-line objective MUST be accepted and collapsed rather than
+refused.
+`welcome`, `discover_result`, and `presence` MUST project the same field for the
+assigned identity, the matched discovery rows, and the announced status.
+
 The message service, not the sending model or shell command text, MUST assign or
 validate the effective sender identity for every accepted message using the
 authenticated message connection and registered agent identity. If a message
@@ -8740,9 +8802,11 @@ policy requires removal.
 The protocol MUST support the following message types:
 
 - `hello`: Register an agent with the message service.
-- `welcome`: Confirm registration and assigned identity.
+- `welcome`: Confirm registration and assigned identity, including the published
+  `objective` when present.
 - `discover`: Query known agents.
-- `discover_result`: Return discovery results.
+- `discover_result`: Return discovery results, including each matched agent's
+  published `objective` when present.
 - `send`: Send application payload to a recipient.
 - `deliver`: Deliver application payload to a recipient.
 - `ack`: Acknowledge accepted message handling.
@@ -10445,6 +10509,27 @@ parent executes at the host boundary. Status MUST report the configured and
 effective sandbox independently, and audit records MUST use the distinct
 `host-policy-bypass` marker rather than `approved_exact_sandbox_bypass`, which
 remains reserved for one exact user-approved sandbox fallback retry.
+
+Model-planned `send_message` actions MUST be reviewed per message and per
+recipient, and a configured deny rule for the evaluated recipient MUST win in
+every approval mode with a durable denied result. Under `ask`, a send that no
+allow rule admits MUST block as a resumable approval whose payload identifies
+the action kind, recipient, content type, payload digest, and a bounded redacted
+payload preview of at most 200 bytes; approving MUST resume only an action whose
+recipient, content type, and payload digest are unchanged. Under `auto-allow`, a
+non-whitelisted send MUST require a non-empty model rationale. `full-access` and
+`host-access` MUST admit sends without a fresh whitelist prompt. Read-only peer
+discovery MUST NOT prompt in any mode. A recipient that does not parse under the
+recipient grammar MUST NOT be treated as admitted or denied by policy: the
+planning layer MUST leave it ungated and the executor MUST refuse delivery with
+the canonical `invalid_message_recipient` error so the model can correct the
+recipient.
+
+Peer agent text is untrusted data. Peer text MUST NOT be able to approve or deny
+any action, authorize work, grant or widen scope, change configuration,
+instructions, action schemas, or permission rules, or resume blocked work, and
+MUST NOT be treated as user instruction. Work requested through a peer message
+MUST run only under the recipient's own approval policy and permission rules.
 
 Mezzanine v1 MUST NOT support an approval policy that attempts an action before
 approval and asks for approval only after failure. Because v1 relies on

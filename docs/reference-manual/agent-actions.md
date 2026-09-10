@@ -12,7 +12,12 @@ Read [Agent overview](../agent/overview.md) and [Approvals and review](../safety
 ## Action batch model
 
 An agent response is a validated `maap/1` batch containing a concise rationale
-and one or more actions. Mezzanine assigns turn and action identities,
+and one or more actions, plus a bounded `objective` stating what the agent is
+currently working on (a string, or `null` when the published objective is
+unchanged). The objective is a factual statement of current work and never a copy
+of the user prompt; it is published for read-only peer discovery, and a null,
+missing, malformed, or out-of-bounds value publishes nothing and never fails a
+turn. Mezzanine assigns turn and action identities,
 validates actions against the current allowed set, independently classifies
 their effects, and records a result for every syntactically identifiable
 action. A result can be
@@ -38,7 +43,8 @@ external condition is required.
 | `shell_command` | Local shell inspection, commands, validation, and filesystem operations. | Uses the effective native or pane shell mode and can require approval. |
 | `apply_patch` | Semantic file-content add, update, move, or delete using `*** Begin Patch` format. | It is a MAAP action, never a shell executable; confirmed earlier file changes remain applied if a later file operation fails. |
 | `web_search`, `fetch_url` | User-requested current web search or HTTP(S) retrieval. | They are runtime network actions, not local-path readers. |
-| `send_message`, `spawn_agent` | Local coordination and pane-backed delegation. | `spawn_agent` may use `session: fork` for a bounded immutable parent-history snapshot or `session: new` for isolation; scope and policy inherit independently and cannot be broadened by that choice. |
+| `list_agents` | Read-only discovery of session peers and their published objectives. | It never prompts for approval and returns only bounded identity rows. |
+| `send_message`, `spawn_agent` | Local coordination and pane-backed delegation. | `send_message` is approved per message and recipient: `ask` blocks an ungated send as a resumable approval bound to the recipient and payload digest, `auto-allow` requires a non-empty rationale, `full-access` and `host-access` use the policy bypass path, and configured deny rules always win. `spawn_agent` may use `session: fork` for a bounded immutable parent-history snapshot or `session: new` for isolation; scope and policy inherit independently and cannot be broadened by that choice. |
 | `config_change` | Supported live leaf configuration mutation. | Set values accept strings, signed integers, booleans, or string arrays; execution-boundary settings remain direct-user-only. |
 | `mcp_server_search`, `mcp_server_get` | Discover configured MCP servers and retrieve one complete tool contract. | Retrieve the selected server before a later call; discovery does not invoke an external tool. |
 | `mcp_call` | Call a durably retrieved, currently available configured MCP tool. | The live registry revalidates server, tool, arguments, external capability, and approval policy. |

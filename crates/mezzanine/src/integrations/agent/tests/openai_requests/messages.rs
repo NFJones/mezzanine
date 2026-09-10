@@ -69,7 +69,7 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         .unwrap();
     assert_eq!(
         capability_tool["parameters"]["required"],
-        serde_json::json!(["rationale", "actions"])
+        serde_json::json!(["rationale", "objective", "actions"])
     );
     let capability_description = capability_tool["description"].as_str().unwrap();
     assert!(capability_description.contains("Return a function call, not prose"));
@@ -115,7 +115,7 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     );
     assert_eq!(
         openai_tool_action_schemas(capability_tool).len(),
-        17,
+        18,
         "the all-enabled fixture exposes every currently configured action"
     );
     assert_eq!(

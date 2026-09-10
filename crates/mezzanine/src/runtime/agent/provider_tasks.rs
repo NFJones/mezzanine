@@ -117,7 +117,7 @@ impl RuntimeSessionService {
         Option<mez_agent::ModelInteractionKind>,
     ) {
         let previous_execution = self.agent_turn_executions().get(&turn.turn_id);
-        let allowed_actions = Some(self.agent_enabled_actions().clone());
+        let allowed_actions = Some(self.agent_provider_request_allowed_actions_for_turn(turn));
         let interaction_kind = self
             .agent
             .agent_turn_interaction_kinds
@@ -125,6 +125,25 @@ impl RuntimeSessionService {
             .copied()
             .or_else(|| previous_execution.map(|execution| execution.request.interaction_kind));
         (allowed_actions, interaction_kind)
+    }
+
+    /// Builds the provider request action surface for one turn.
+    ///
+    /// The configured action set gains routed-size reasoning data when it
+    /// exposes `spawn_agent`, letting the provider schema advertise only the
+    /// size/reasoning pairs this pane's auto-sizing policy resolves. A sizing
+    /// lookup failure keeps the configured surface and never fails the turn.
+    fn agent_provider_request_allowed_actions_for_turn(
+        &self,
+        turn: &AgentTurnRecord,
+    ) -> mez_agent::AllowedActionSet {
+        let mut allowed_actions = self.agent_enabled_actions().clone();
+        if allowed_actions.contains(mez_agent::AllowedAction::SpawnAgent)
+            && let Ok(sizing) = self.runtime_spawn_agent_sizing_for_pane(&turn.pane_id)
+        {
+            allowed_actions = allowed_actions.with_spawn_agent_sizing(sizing);
+        }
+        allowed_actions
     }
 
     /// Installs a deterministic provider claim at a supplied context boundary
@@ -203,6 +222,139 @@ impl RuntimeSessionService {
             .copied()
             .unwrap_or_default()
             .saturating_add(1)
+    }
+
+    /// Returns the next bounded MAAP repair attempt for one turn.
+    ///
+    /// The counter is owned by the active turn, so duplicate or stale provider
+    /// failures cannot restart the repair sequence after settlement.
+    pub(crate) fn next_agent_maap_repair_attempt(&self, turn_id: &str) -> u32 {
+        self.agent
+            .agent_turn_maap_repair_attempts
+            .get(turn_id)
+            .copied()
+            .unwrap_or_default()
+            .saturating_add(1)
+    }
+
+    /// Applies bounded malformed-MAAP repair recovery and queues an immediate
+    /// provider re-dispatch carrying repair context for the same turn.
+    ///
+    /// Malformed model output is a model-correctable failure, not a transport
+    /// failure: the repair is a single bounded re-request with no backoff and
+    /// no replay of already-executed sibling actions. Returns `None` when the
+    /// repair budget is exhausted so the caller can continue with terminal
+    /// failure handling.
+    pub(crate) fn schedule_agent_provider_repair_transition(
+        &mut self,
+        agent_id: &AgentId,
+        turn_id: &str,
+        error: &MezError,
+    ) -> Result<Option<RuntimeTransition>> {
+        let attempt = self.next_agent_maap_repair_attempt(turn_id);
+        if attempt > u32::try_from(mez_agent::DEFAULT_MAAP_REPAIR_ATTEMPT_LIMIT).unwrap_or(u32::MAX)
+        {
+            return Ok(None);
+        }
+        let Some(turn) = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == turn_id)
+            .cloned()
+        else {
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
+            return Ok(None);
+        };
+        if turn.agent_id != agent_id.as_str() {
+            return Err(MezError::invalid_args(
+                "agent provider event agent id does not match turn",
+            ));
+        }
+        if turn.state != AgentTurnState::Running {
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
+            return Ok(None);
+        }
+        let Some(model_profile) = self.agent.agent_turn_model_profiles.get(turn_id).cloned() else {
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
+            return Err(MezError::invalid_state(
+                "runtime agent turn has no model profile",
+            ));
+        };
+        self.agent
+            .agent_turn_maap_repair_attempts
+            .insert(turn_id.to_string(), attempt);
+        self.agent.agent_turn_interaction_kinds.insert(
+            turn_id.to_string(),
+            mez_agent::ModelInteractionKind::MaapRepair,
+        );
+        const MAAP_REPAIR_CONTEXT_LIMIT_BYTES: usize = 4096;
+        let excerpt = |text: &str| {
+            if text.len() <= MAAP_REPAIR_CONTEXT_LIMIT_BYTES {
+                return text.to_string();
+            }
+            let mut end = MAAP_REPAIR_CONTEXT_LIMIT_BYTES;
+            while !text.is_char_boundary(end) {
+                end = end.saturating_sub(1);
+            }
+            format!(
+                "{}\n[truncated: original_bytes={}]",
+                &text[..end],
+                text.len()
+            )
+        };
+        self.agent_turn_contexts_mut()
+            .get_mut(turn_id)
+            .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?
+            .append_reference_event(
+                ContextSourceKind::RuntimeHint,
+                "MAAP repair scheduled",
+                format!(
+                    "[MAAP repair state]\nattempt={attempt}\nvalidation_error={}\nprevious_response_excerpt:\n{}",
+                    excerpt(error.message()),
+                    excerpt(error.provider_raw_text().unwrap_or("")),
+                ),
+            )
+            .map_err(|error| MezError::invalid_state(error.to_string()))?;
+        self.agent
+            .pending_agent_provider_tasks
+            .insert(turn_id.to_string());
+        self.append_provider_request_failure_audit(
+            &turn,
+            &model_profile,
+            &model_profile.provider,
+            error,
+        )?;
+        self.append_agent_trace_turn_event(
+            &turn.pane_id,
+            turn_id,
+            &format!(
+                "provider_task repair_scheduled provider={} attempt={attempt}",
+                model_profile.provider,
+            ),
+        )?;
+        self.append_agent_status_text_to_terminal_buffer(
+            &turn.pane_id,
+            &format!(
+                "agent: provider {} MAAP output malformed; asking model to repair (attempt {attempt}/{})",
+                model_profile.provider,
+                mez_agent::DEFAULT_MAAP_REPAIR_ATTEMPT_LIMIT,
+            ),
+        )?;
+        self.append_lifecycle_event(
+            EventKind::AgentStatus,
+            format!(
+                r#"{{"pane_id":"{}","agent_prompt_turn":"{}","state":"running","provider":"{}","provider_repair":"scheduled","attempt":{}}}"#,
+                json_escape(&turn.pane_id),
+                json_escape(turn_id),
+                json_escape(&model_profile.provider),
+                attempt,
+            ),
+        )?;
+        Ok(Some(RuntimeTransition {
+            applied: true,
+            side_effects: vec![],
+        }))
     }
 
     /// Returns provider turns whose progress is represented by retry policy state.
@@ -1038,6 +1190,7 @@ impl RuntimeSessionService {
             "provider_task claimed reason=async_provider_worker",
         )?;
         Ok(Some(RuntimeAgentProviderDispatch {
+            macro_bridge_recipients: self.macro_bridge_message_recipient_ids(&turn.turn_id),
             claim_generation: 0,
             turn,
             context,

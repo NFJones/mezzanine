@@ -71,6 +71,21 @@ pub(crate) fn runtime_mutating_method(method: &str) -> bool {
     )
 }
 
+/// Parses one `list_agents` agent-type parameter into its discovery filter.
+///
+/// The parameter is optional: an absent value selects the primary-agent-only
+/// default, and an unsupported value is rejected rather than widened.
+pub(crate) fn runtime_list_agents_agent_type(
+    value: Option<&str>,
+) -> Result<mez_agent::AgentListFilter> {
+    let Some(value) = value else {
+        return Ok(mez_agent::AgentListFilter::default_filter());
+    };
+    mez_agent::AgentListFilter::parse(value).ok_or_else(|| {
+        MezError::invalid_args("list_agents agent_type must be primary, subagent, internal, or all")
+    })
+}
+
 /// Runs the agent state control method operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

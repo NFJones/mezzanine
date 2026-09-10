@@ -220,6 +220,9 @@ impl AgentTranscriptStore {
     /// Removes retained naming metadata during archived-session deletion.
     fn remove_archived_session_name(&self, conversation_id: &str) -> Result<()> {
         let _ = self.remove_named_session(conversation_id)?;
+        // The objective title mirror is a display cache: an unreadable index
+        // must never fail an archived-session delete.
+        let _ = self.remove_session_objective_mirror(conversation_id);
         Ok(())
     }
 

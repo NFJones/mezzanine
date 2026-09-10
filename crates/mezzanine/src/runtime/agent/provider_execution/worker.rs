@@ -448,7 +448,10 @@ impl RuntimeSessionService {
                     path_scopes.as_ref(),
                 )
                 .with_shell_classification(shell_classification.as_str())
-                .with_sandbox_first_local_prompts(sandbox_first_local_prompts),
+                .with_sandbox_first_local_prompts(sandbox_first_local_prompts)
+                .with_macro_bridge_recipients(
+                    self.macro_bridge_message_recipient_ids(&turn.turn_id),
+                ),
                 subagent_scope: subagent_scope.as_ref(),
                 subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
                 available_mcp_servers: available_mcp_servers.clone(),
@@ -777,7 +780,10 @@ impl RuntimeSessionService {
                     path_scopes.as_ref(),
                 )
                 .with_shell_classification(shell_classification.as_str())
-                .with_sandbox_first_local_prompts(sandbox_first_local_prompts),
+                .with_sandbox_first_local_prompts(sandbox_first_local_prompts)
+                .with_macro_bridge_recipients(
+                    self.macro_bridge_message_recipient_ids(&turn.turn_id),
+                ),
                 subagent_scope: subagent_scope.as_ref(),
                 subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
                 available_mcp_servers: available_mcp_servers.clone(),

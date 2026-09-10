@@ -412,6 +412,9 @@ fn decode_record_offset(
                 latest_user_prompt: row.get(offset + 10)?,
             },
             name: row.get(offset + 1)?,
+            // The objective title mirror is a durable sidecar cache, not catalog
+            // state: it is attached by the store after this indexed page is read.
+            objective_title: None,
             conversation_kind: kind,
             archived_at_unix_seconds: row_optional_u64(row, offset + 14)?,
             archive_compressed_bytes: row_optional_u64(row, offset + 15)?,

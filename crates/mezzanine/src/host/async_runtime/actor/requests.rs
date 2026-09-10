@@ -736,6 +736,7 @@ impl AsyncRuntimeSessionActor {
                     .handle_message_input(&input, max_content_length, &mut connection, now_ms)
                     .and_then(|(output, consumed)| {
                         self.queue_deferred_pane_io_side_effects_from_service()?;
+                        self.queue_peer_message_delivery_timer_if_needed(now_ms)?;
                         Ok(AsyncMessageInputResult {
                             output,
                             consumed,

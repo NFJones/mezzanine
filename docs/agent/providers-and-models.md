@@ -22,12 +22,13 @@ The precedence is profile override, configured model, provider discovery,
 built-in metadata, then fallback. Configured lists replace lower lists; option
 maps merge per key. A model record's `reasoning_levels` lists supported choices,
 while a profile's `reasoning_profile` selects one choice.
-The built-in `deepseek-v4-pro` and `deepseek-v4-flash` records advertise
-provider-facing reasoning levels `high` and `max`, plus `native_thinking`,
-`function_tools`, `forced_tool_choice`, `streaming`, and `max_output_tokens`.
-The same declarations are retained when the runtime falls back to its
-code-defined DeepSeek catalog. Omitting either list inherits lower-precedence
-metadata; configuring an empty list deliberately clears it.
+The built-in `deepseek-flash` record for DeepSeek-V4.1-Flash, the retained
+`deepseek-v4-pro` record, and the retired `deepseek-v4-flash` name all advertise
+provider-facing reasoning levels `low`, `high`, and `max`, plus
+`native_thinking`, `function_tools`, `forced_tool_choice`, `streaming`, and
+`max_output_tokens`. The same declarations are retained when the runtime falls
+back to its code-defined DeepSeek catalog. Omitting either list inherits
+lower-precedence metadata; configuring an empty list deliberately clears it.
 Use `mez config model list PROVIDER` to inspect these configured base records.
 `mez config model add`, `update`, and `remove` address records by the opaque
 provider-facing id and generate path-safe local keys automatically. Updates are

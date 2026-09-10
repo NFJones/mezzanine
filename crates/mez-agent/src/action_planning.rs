@@ -14,8 +14,9 @@ use crate::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentTurnExecution,
     AgentTurnResultIdentity, AgentTurnState, ApprovalPolicy, LocalActionPlan, MaapBatch,
     MemoryActionBudget, ModelRequest, ModelResponse, ModelTokenUsage, NetworkActionPlan,
-    PermissionEvaluation, RuleDecision, SayStatus, network_action_structured_content_json,
-    shell_read_observations_for_command, turn_state_from_action_results,
+    PermissionEvaluation, RuleDecision, SayStatus, message_payload_digest, message_payload_preview,
+    network_action_structured_content_json, shell_read_observations_for_command,
+    turn_state_from_action_results,
 };
 
 const APPROVAL_BROWSER_GUIDANCE: &str =
@@ -51,6 +52,13 @@ pub struct ActionPlanningInput<'a> {
     /// Whether a prompting local action may attempt sandboxed execution before
     /// requesting user approval.
     pub sandbox_first_local_prompts: bool,
+    /// Product permission decision for the message recipient.
+    ///
+    /// Products apply explicit deny and allow rules before the effective
+    /// approval policy, so this is the authoritative message decision.
+    pub message_rule_decision: Option<RuleDecision>,
+    /// Structured product permission evaluation for the message recipient.
+    pub message_permission_evaluation: Option<&'a PermissionEvaluation>,
 }
 
 impl Default for ActionPlanningInput<'_> {
@@ -67,6 +75,8 @@ impl Default for ActionPlanningInput<'_> {
             mcp_approval_required: true,
             subagent_scope_risk: None,
             sandbox_first_local_prompts: false,
+            message_rule_decision: None,
+            message_permission_evaluation: None,
         }
     }
 }
@@ -163,67 +173,122 @@ pub fn plan_action_result(
     input: ActionPlanningInput<'_>,
 ) -> ActionPlanningResult<ActionResult> {
     match &action.payload {
-        AgentActionPayload::Say { status, text, content_type } => Ok(ActionResult::succeeded(
+        AgentActionPayload::Say {
+            status,
+            text,
+            content_type,
+        } => Ok(ActionResult::succeeded(
             turn,
             action,
             vec![text.clone()],
-            Some(say_action_structured_content_json(*status, content_type, text)),
+            Some(say_action_structured_content_json(
+                *status,
+                content_type,
+                text,
+            )),
         )),
         AgentActionPayload::RequestCapability { .. } => Err(ActionPlanningError::new(
             "request_capability reached executable action planning",
         )),
         AgentActionPayload::RequestSkills => Ok(ActionResult::running(
-            turn, action, vec!["skill catalog accepted for runtime lookup".to_string()],
+            turn,
+            action,
+            vec!["skill catalog accepted for runtime lookup".to_string()],
             Some(r#"{"state":"pending_runtime_skill_lookup"}"#.to_string()),
         )),
         AgentActionPayload::CallSkill { name, .. } => Ok(ActionResult::running(
-            turn, action, vec![format!("skill {name} accepted for runtime loading")],
+            turn,
+            action,
+            vec![format!("skill {name} accepted for runtime loading")],
             Some(serde_json::json!({"state":"pending_runtime_skill_load","name":name}).to_string()),
         )),
         _ if input.local_plan.is_some() => plan_local_action(turn, action, input),
         _ if input.network_plan.is_some() => plan_network_action(turn, action, input),
-        AgentActionPayload::SendMessage { recipient, content_type, payload } => Ok(ActionResult::running(
-            turn, action, vec!["message accepted for local delivery".to_string()],
-            Some(serde_json::json!({
-                "recipient":recipient,"content_type":content_type,"bytes":payload.len(),
-                "message_id":serde_json::Value::Null,"delivery_status":"pending_runtime_delivery",
-                "protocol_error":serde_json::Value::Null
-            }).to_string()),
+        AgentActionPayload::SendMessage {
+            recipient,
+            content_type,
+            payload,
+            ..
+        } => plan_message_action(turn, action, recipient, content_type, payload, input),
+        AgentActionPayload::SpawnAgent {
+            role,
+            placement,
+            cooperation_mode,
+            read_scopes,
+            write_scopes,
+            session_mode,
+            size,
+            reasoning_effort,
+            task_prompt,
+        } => Ok(ActionResult::running(
+            turn,
+            action,
+            vec!["subagent spawn accepted for control endpoint placement".to_string()],
+            Some(
+                serde_json::json!({
+                    "role":role,"placement":placement,"cooperation_mode":cooperation_mode,
+                    "read_scopes":read_scopes,"write_scopes":write_scopes,
+                    "session":session_mode.map(|mode| mode.as_str()),
+                    "size":size,"reasoning_effort":reasoning_effort,"prompt_bytes":task_prompt.len()
+                })
+                .to_string(),
+            ),
         )),
-        AgentActionPayload::SpawnAgent { role, placement, cooperation_mode, read_scopes, write_scopes, session_mode, size, reasoning_effort, task_prompt } => Ok(ActionResult::running(
-            turn, action, vec!["subagent spawn accepted for control endpoint placement".to_string()],
-            Some(serde_json::json!({
-                "role":role,"placement":placement,"cooperation_mode":cooperation_mode,
-                "read_scopes":read_scopes,"write_scopes":write_scopes,
-                "session":session_mode.map(|mode| mode.as_str()),
-                "size":size,"reasoning_effort":reasoning_effort,"prompt_bytes":task_prompt.len()
-            }).to_string()),
-        )),
-        AgentActionPayload::MemorySearch { .. } | AgentActionPayload::MemoryStore { .. } => Ok(ActionResult::running(
-            turn, action, vec!["memory action accepted for runtime execution".to_string()],
-            Some(r#"{"state":"pending_runtime_memory"}"#.to_string()),
-        )),
-        AgentActionPayload::IssueAdd { .. } | AgentActionPayload::IssueUpdate { .. }
-        | AgentActionPayload::IssueQuery { .. } | AgentActionPayload::IssueDelete { .. } => Ok(ActionResult::running(
-            turn, action, vec!["issue action accepted for runtime execution".to_string()],
+        AgentActionPayload::MemorySearch { .. } | AgentActionPayload::MemoryStore { .. } => {
+            Ok(ActionResult::running(
+                turn,
+                action,
+                vec!["memory action accepted for runtime execution".to_string()],
+                Some(r#"{"state":"pending_runtime_memory"}"#.to_string()),
+            ))
+        }
+        AgentActionPayload::IssueAdd { .. }
+        | AgentActionPayload::IssueUpdate { .. }
+        | AgentActionPayload::IssueQuery { .. }
+        | AgentActionPayload::IssueDelete { .. } => Ok(ActionResult::running(
+            turn,
+            action,
+            vec!["issue action accepted for runtime execution".to_string()],
             Some(r#"{"state":"pending_runtime_issue"}"#.to_string()),
         )),
-        AgentActionPayload::McpServerSearch { .. } | AgentActionPayload::McpServerGet { .. } => Ok(ActionResult::running(
-            turn, action, vec!["MCP server discovery accepted for runtime execution".to_string()],
-            Some(r#"{"state":"pending_runtime_mcp_discovery"}"#.to_string()),
+        AgentActionPayload::McpServerSearch { .. } | AgentActionPayload::McpServerGet { .. } => {
+            Ok(ActionResult::running(
+                turn,
+                action,
+                vec!["MCP server discovery accepted for runtime execution".to_string()],
+                Some(r#"{"state":"pending_runtime_mcp_discovery"}"#.to_string()),
+            ))
+        }
+        AgentActionPayload::ListAgents { .. } => Ok(ActionResult::running(
+            turn,
+            action,
+            vec!["agent discovery accepted for runtime execution".to_string()],
+            Some(r#"{"state":"pending_runtime_agent_discovery"}"#.to_string()),
         )),
-        AgentActionPayload::ConfigChange { setting_path, operation, .. } => {
-            plan_config_change(turn, action, setting_path, operation, input)
-        }
-        AgentActionPayload::McpCall { server, tool, arguments_json } => {
-            plan_mcp_call(turn, action, server, tool, arguments_json, input)
-        }
+        AgentActionPayload::ConfigChange {
+            setting_path,
+            operation,
+            ..
+        } => plan_config_change(turn, action, setting_path, operation, input),
+        AgentActionPayload::McpCall {
+            server,
+            tool,
+            arguments_json,
+        } => plan_mcp_call(turn, action, server, tool, arguments_json, input),
         AgentActionPayload::Complete => Ok(ActionResult::succeeded(
-            turn, action, vec!["turn complete".to_string()], Some(r#"{"complete":true}"#.to_string()),
+            turn,
+            action,
+            vec!["turn complete".to_string()],
+            Some(r#"{"complete":true}"#.to_string()),
         )),
         AgentActionPayload::Abort { reason } => ActionResult::failed(
-            turn, action, ActionStatus::Cancelled, "agent_aborted", reason,
-        ).map_err(ActionPlanningError::from_contract),
+            turn,
+            action,
+            ActionStatus::Cancelled,
+            "agent_aborted",
+            reason,
+        )
+        .map_err(ActionPlanningError::from_contract),
         _ => Err(ActionPlanningError::new(
             "shell-backed action was not planned before action-result planning",
         )),
@@ -360,6 +425,141 @@ fn plan_network_action(
     .with_permission_evaluation(permission_evaluation.cloned()))
 }
 
+/// Plans one model-planned MMP `send_message` action against approval facts.
+///
+/// The product supplies the message-recipient rule decision, which already
+/// applies explicit deny and allow rules ahead of the effective approval
+/// policy. Explicit deny rules therefore win in every mode, bypassing policies
+/// admit the message, auto-allow admits a prompting recipient only when the
+/// action carries a non-empty model-authored reason, and ask mode returns a
+/// blocked result whose approval payload binds the recipient and payload
+/// identity while exposing only a bounded, redacted payload preview.
+fn plan_message_action(
+    turn: &(impl AgentTurnResultIdentity + ?Sized),
+    action: &AgentAction,
+    recipient: &str,
+    content_type: &str,
+    payload: &str,
+    input: ActionPlanningInput<'_>,
+) -> ActionPlanningResult<ActionResult> {
+    let decision = input.message_rule_decision.unwrap_or(RuleDecision::Prompt);
+    let permission_evaluation = input.message_permission_evaluation.cloned();
+    let result = match decision {
+        RuleDecision::Forbid => {
+            return ActionResult::failed(
+                turn,
+                action,
+                ActionStatus::Denied,
+                "message_recipient_forbidden",
+                "message recipient is denied by permission policy",
+            )
+            .map_err(ActionPlanningError::from_contract);
+        }
+        RuleDecision::Allow => ActionResult::running(
+            turn,
+            action,
+            vec![format!(
+                "message to {recipient} accepted by permission policy"
+            )],
+            Some(message_action_structured_content_json(
+                recipient,
+                content_type,
+                payload,
+                message_allowed_approval_json(action, input),
+                "pending_runtime_delivery",
+            )),
+        ),
+        RuleDecision::Prompt
+            if input.approval_policy == ApprovalPolicy::AutoAllow
+                && action_supports_auto_allow(action, input) =>
+        {
+            ActionResult::running(
+                turn,
+                action,
+                vec![
+                    "message auto-allowed by model assessment".to_string(),
+                    action_auto_allow_reason(action, input),
+                    APPROVAL_BROWSER_GUIDANCE.to_string(),
+                ],
+                Some(message_action_structured_content_json(
+                    recipient,
+                    content_type,
+                    payload,
+                    auto_allow_approval_json(action, action.action_type(), input),
+                    "pending_runtime_delivery",
+                )),
+            )
+        }
+        RuleDecision::Prompt => ActionResult::blocked(
+            turn,
+            action,
+            vec![format!(
+                "approval required before sending a message to {recipient}"
+            )],
+            message_action_structured_content_json(
+                recipient,
+                content_type,
+                payload,
+                message_blocked_approval_json(action, recipient, content_type, payload),
+                "pending_approval",
+            ),
+        ),
+    };
+    Ok(result.with_permission_evaluation(permission_evaluation))
+}
+
+/// Builds the structured content carried by one planned message result.
+fn message_action_structured_content_json(
+    recipient: &str,
+    content_type: &str,
+    payload: &str,
+    approval: serde_json::Value,
+    delivery_status: &str,
+) -> String {
+    serde_json::json!({
+        "recipient":recipient,"content_type":content_type,"bytes":payload.len(),
+        "message_id":serde_json::Value::Null,"delivery_status":delivery_status,
+        "protocol_error":serde_json::Value::Null,"approval":approval
+    })
+    .to_string()
+}
+
+/// Returns the approval metadata for one message admitted by policy.
+fn message_allowed_approval_json(
+    action: &AgentAction,
+    input: ActionPlanningInput<'_>,
+) -> serde_json::Value {
+    if prompt_gate_satisfied_by_policy(input) {
+        policy_approval_json(action, "send_message", input)
+    } else {
+        serde_json::json!({"state":"allowed","kind":"send_message","action_id":action.id})
+    }
+}
+
+/// Returns the resumable approval payload for one prompting message.
+///
+/// The payload binds the recipient and the payload identity so a resumed
+/// approval is rejected when either changes, and it carries only a bounded,
+/// redacted preview of the message text.
+fn message_blocked_approval_json(
+    action: &AgentAction,
+    recipient: &str,
+    content_type: &str,
+    payload: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "state":"pending",
+        "kind":"send_message",
+        "action_id":action.id,
+        "recipient":recipient,
+        "content_type":content_type,
+        "payload_bytes":payload.len(),
+        "payload_sha256":message_payload_digest(content_type, payload),
+        "payload_preview":message_payload_preview(payload),
+        "required_command":"/approve"
+    })
+}
+
 /// Plans one configuration mutation against approval policy facts.
 fn plan_config_change(
     turn: &(impl AgentTurnResultIdentity + ?Sized),
@@ -494,6 +694,11 @@ pub fn action_auto_allow_reason(action: &AgentAction, input: ActionPlanningInput
     match &action.payload {
         AgentActionPayload::Say { text, .. } => text.clone(),
         AgentActionPayload::Abort { reason } => reason.clone(),
+        AgentActionPayload::SendMessage {
+            recipient, payload, ..
+        } => {
+            format!("send message to {recipient} ({} bytes)", payload.len())
+        }
         AgentActionPayload::CallSkill { name, .. } => format!("load skill {name}"),
         AgentActionPayload::RequestSkills => "request available skills".to_string(),
         AgentActionPayload::ConfigChange { setting_path, .. } => {
@@ -1167,5 +1372,160 @@ mod tests {
                 .unwrap()
                 .contains("memory_wrapper_placeholder")
         );
+    }
+
+    /// Builds one `list_agents` discovery action for planning scenarios.
+    fn list_agents_action(agent_type: Option<&str>) -> AgentAction {
+        AgentAction {
+            id: "list-agents-1".to_string(),
+
+            payload: AgentActionPayload::ListAgents {
+                agent_type: agent_type.map(str::to_string),
+            },
+        }
+    }
+
+    /// Builds one `send_message` action for approval-mode scenarios.
+    fn send_message_action(recipient: &str, payload: &str) -> AgentAction {
+        AgentAction {
+            id: "message-1".to_string(),
+
+            payload: AgentActionPayload::SendMessage {
+                recipient: recipient.to_string(),
+                content_type: "text/plain; charset=utf-8".to_string(),
+                payload: payload.to_string(),
+                correlation_id: None,
+            },
+        }
+    }
+
+    /// Verifies read-only agent discovery never prompts in any approval mode and
+    /// stays unaffected by a prompting recipient rule decision.
+    #[test]
+    fn list_agents_never_prompts_in_any_approval_mode() {
+        for approval_policy in [
+            ApprovalPolicy::Ask,
+            ApprovalPolicy::AutoAllow,
+            ApprovalPolicy::FullAccess,
+            ApprovalPolicy::HostAccess,
+        ] {
+            for agent_type in [
+                None,
+                Some("primary"),
+                Some("subagent"),
+                Some("internal"),
+                Some("all"),
+            ] {
+                let result = plan_action_result(
+                    &TestTurn,
+                    &list_agents_action(agent_type),
+                    ActionPlanningInput {
+                        approval_policy,
+                        ..ActionPlanningInput::default()
+                    },
+                )
+                .unwrap();
+                assert_eq!(
+                    result.status,
+                    ActionStatus::Running,
+                    "{approval_policy:?} must not prompt for list_agents {agent_type:?}"
+                );
+            }
+        }
+    }
+
+    /// Verifies model-planned messages follow the four-mode approval matrix for
+    /// direct recipients and every fan-out recipient scope.
+    #[test]
+    fn send_message_follows_approval_mode_matrix() {
+        for recipient in [
+            "agent-7",
+            "agent:agent-7",
+            "session",
+            "role:reviewer",
+            "capability:search",
+            "group:session",
+        ] {
+            let action = send_message_action(recipient, "peer update");
+            let planning = |approval_policy, message_rule_decision| ActionPlanningInput {
+                approval_policy,
+                message_rule_decision: Some(message_rule_decision),
+                ..ActionPlanningInput::default()
+            };
+
+            let blocked = plan_action_result(
+                &TestTurn,
+                &action,
+                planning(ApprovalPolicy::Ask, RuleDecision::Prompt),
+            )
+            .unwrap();
+            assert_eq!(blocked.status, ActionStatus::Blocked, "{recipient}");
+
+            let allowed = plan_action_result(
+                &TestTurn,
+                &action,
+                planning(ApprovalPolicy::AutoAllow, RuleDecision::Prompt),
+            )
+            .unwrap();
+            assert_eq!(allowed.status, ActionStatus::Running, "{recipient}");
+            for approval_policy in [ApprovalPolicy::FullAccess, ApprovalPolicy::HostAccess] {
+                let bypassed = plan_action_result(
+                    &TestTurn,
+                    &action,
+                    planning(approval_policy, RuleDecision::Allow),
+                )
+                .unwrap();
+                assert_eq!(bypassed.status, ActionStatus::Running, "{recipient}");
+            }
+            for approval_policy in [
+                ApprovalPolicy::Ask,
+                ApprovalPolicy::AutoAllow,
+                ApprovalPolicy::FullAccess,
+                ApprovalPolicy::HostAccess,
+            ] {
+                let denied = plan_action_result(
+                    &TestTurn,
+                    &action,
+                    planning(approval_policy, RuleDecision::Forbid),
+                )
+                .unwrap();
+                assert_eq!(denied.status, ActionStatus::Denied, "{recipient}");
+            }
+        }
+    }
+
+    /// Verifies a blocked send approval binds the recipient and payload identity
+    /// while carrying only a bounded, redacted payload preview.
+    #[test]
+    fn blocked_send_approval_binds_recipient_and_payload() {
+        let payload = "first line\n".to_string() + &"x".repeat(400);
+        let action = send_message_action("role:reviewer", &payload);
+        let blocked = plan_action_result(
+            &TestTurn,
+            &action,
+            ActionPlanningInput {
+                approval_policy: ApprovalPolicy::Ask,
+                message_rule_decision: Some(RuleDecision::Prompt),
+                ..ActionPlanningInput::default()
+            },
+        )
+        .unwrap();
+
+        let structured: serde_json::Value =
+            serde_json::from_str(blocked.structured_content_json.as_deref().unwrap()).unwrap();
+        let approval = &structured["approval"];
+        assert_eq!(approval["kind"], "send_message");
+        assert_eq!(approval["recipient"], "role:reviewer");
+        assert_eq!(approval["content_type"], "text/plain; charset=utf-8");
+        assert_eq!(approval["payload_bytes"], payload.len());
+        assert_eq!(
+            approval["payload_sha256"],
+            crate::message_payload_digest("text/plain; charset=utf-8", &payload)
+        );
+        let preview = approval["payload_preview"].as_str().unwrap();
+        assert!(preview.len() <= crate::MESSAGE_APPROVAL_PREVIEW_BYTES);
+        assert!(preview.ends_with("..."));
+        assert!(!preview.contains('\n'));
+        assert!(!structured.to_string().contains(&payload));
     }
 }

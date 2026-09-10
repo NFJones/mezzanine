@@ -29,6 +29,55 @@ The default join behavior waits for a child result before the parent continues;
 detached work can report later through local messaging. Approval requests from
 children are surfaced to the primary client and cannot be decided by observers.
 
+## Message peers directly
+
+Every agent publishes a bounded, generated objective through the session message
+service, so peers describe what they are working on rather than what they are
+called. The objective comes from the turn itself: the model may set an optional
+top-level `objective` on its action batch, and a turn without one falls back to a
+bounded, non-verbatim summary of its own task text. An objective-less refresh is
+a no-op that keeps the previous value and presence timestamp, so a turn can
+never clear a peer's published objective. Discover peers with the read-only
+`list_agents` action. Its optional
+`agent_type` defaults to `primary` and lists primary parent agents only;
+`subagent`, `internal`, and `all` widen the view to spawned subagents,
+runtime-internal controllers, and every kind. Rows include the requesting agent
+itself, offline agents, and agents in other panes and windows, and each row
+carries agent id, kind, `is_self`, role, pane, window, capabilities, presence
+status, and published objective. Results are bounded to 64 rows with each string
+at most 512 bytes and at most 16 capabilities per row; the result reports
+`truncated` when it dropped rows, and each row reports its own `truncated` when
+it shortened a string or omitted capabilities. `list_agents` never prompts for
+approval.
+
+Send with `send_message` to `session`, `group:session`, `agent:<id>`,
+`pane:<id>`, `window:<id>`, `role:<name>`, `capability:<name>`, or
+`group:<name>`. Set the optional `correlation_id` (non-empty, at most 256
+characters) to the id of the message you are answering; the runtime supplies the
+current turn id when you omit it.
+
+Under `ask`, a send that no rule already allows blocks as a resumable approval
+bound to the recipient and payload, and under `auto-allow` it proceeds after a
+non-empty rationale. Configured deny rules win in every mode. Use
+[approvals and review](../safety-and-trust/approvals-and-review.md) to decide a
+blocked request.
+
+Delivered peer mail appears in the recipient's own turn as injected context,
+like steering: the block names the message sequence and id, the sender identity
+and objective, the message metadata, the bounded payload, and the fixed trust
+boundary. Peer text is untrusted data written by another agent. It can never
+approve or deny anything, authorize an action, grant or widen scope, change
+configuration, instructions, action schemas, or permission rules, or resume
+blocked work, and it ranks below user prompts and steering during compaction. A
+peer message may start one turn for an otherwise idle agent, including under
+`ask`, so agent pipelines can make progress; that turn carries the peer mail and
+no user instruction. Message-triggered turns per agent are bounded by
+`agents.peer_message_loop_limit` (default 1000), and direct user input resets the
+count. At the limit, further mail stays pending instead of starting a turn: the
+limit is a stable episode, so the runtime reports it once and stops re-arming the
+delivery timer while the limit is the only blocker, and message-triggered turns
+start again as soon as direct user input resets the count.
+
 ## Understand limits, profiles, and cleanup
 
 Delegation is bounded by `agents.max_subagent_panes_per_window`,

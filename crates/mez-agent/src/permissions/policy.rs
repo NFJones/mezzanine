@@ -753,6 +753,29 @@ impl PermissionPolicy {
         evaluation
     }
 
+    /// Evaluates one non-shell product policy command against configured rules.
+    ///
+    /// Approval bypass and the active approval policy are not applied here, so
+    /// explicit deny and allow rules stay authoritative for product policy
+    /// commands that no shell executes, such as MMP message recipients.
+    pub fn evaluate_policy_command_rules(&self, command: &str) -> RuleDecision {
+        let dialect =
+            CommandShellDialect::from_shell_classification(DEFAULT_COMMAND_SHELL_CLASSIFICATION);
+        let analysis = analyze_shell_for_dialect(command, dialect);
+        if analysis.candidates.is_empty() {
+            return RuleDecision::Prompt;
+        }
+        analysis
+            .candidates
+            .into_iter()
+            .map(|candidate| match tokenize_shell_words(&candidate) {
+                Some(tokens) => self.evaluate_tokens(&tokens, None),
+                None => RuleDecision::Prompt,
+            })
+            .min()
+            .unwrap_or(RuleDecision::Prompt)
+    }
+
     /// Runs the apply approval policy operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

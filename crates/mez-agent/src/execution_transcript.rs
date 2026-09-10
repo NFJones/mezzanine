@@ -390,6 +390,10 @@ fn assistant_transcript_action_summary(action: &AgentAction) -> String {
             content.len(),
             keywords.len()
         ),
+        AgentActionPayload::ListAgents { agent_type } => format!(
+            "list_agents agent_type={}",
+            agent_type.as_deref().unwrap_or("primary")
+        ),
         AgentActionPayload::IssueAdd {
             kind,
             state,

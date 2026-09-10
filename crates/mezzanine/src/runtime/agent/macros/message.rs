@@ -291,6 +291,18 @@ impl RuntimeSessionService {
             },
         );
         self.append_agent_user_prompt_to_terminal_buffer(child_pane_id, payload)?;
+        let now_ms = current_unix_seconds().saturating_mul(1000);
+        let _ = self.ensure_runtime_message_identity(
+            child_agent_id.as_str(),
+            None,
+            "agent",
+            &["agent-harness"],
+            now_ms,
+        );
+        self.publish_runtime_agent_objective(
+            child_agent_id.as_str(),
+            Self::runtime_agent_objective_from_prompt(payload).as_deref(),
+        );
         self.agent.agent_scheduler.enqueue(ScheduledWork {
             turn_id: turn_id.clone(),
             conversation_id,

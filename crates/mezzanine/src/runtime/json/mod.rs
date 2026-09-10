@@ -30,9 +30,9 @@ mod status;
 pub(super) use actions::{
     agent_state_control_method, mouse_action_name, mux_action_command_prompt_prefill,
     mux_action_name, pane_navigation_direction, runtime_cooperation_mode,
-    runtime_cooperation_mode_name, runtime_copy_position_for_view, runtime_mutating_method,
-    runtime_pane_by_id, runtime_split_direction, runtime_subagent_placement_mode,
-    runtime_subagent_spawn_request,
+    runtime_cooperation_mode_name, runtime_copy_position_for_view, runtime_list_agents_agent_type,
+    runtime_mutating_method, runtime_pane_by_id, runtime_split_direction,
+    runtime_subagent_placement_mode, runtime_subagent_spawn_request,
 };
 pub(super) use command::{optional_path_json, optional_string_json, runtime_command_outcomes_json};
 pub(crate) use parse::current_unix_millis;

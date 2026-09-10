@@ -21,6 +21,8 @@ pub enum ProviderErrorKind {
     NotFound,
     /// A forbidden provider operation.
     Forbidden,
+    /// A provider rate-limit rejection.
+    RateLimited,
     /// An unsupported provider operation.
     NotImplemented,
 }
@@ -37,6 +39,7 @@ impl ProviderErrorKind {
             Self::Conflict => "conflict",
             Self::NotFound => "not_found",
             Self::Forbidden => "forbidden",
+            Self::RateLimited => "rate_limited",
             Self::NotImplemented => "not_implemented",
         }
     }
@@ -55,6 +58,7 @@ impl ProviderErrorKind {
             "conflict" | "Conflict" => Some(Self::Conflict),
             "not_found" | "NotFound" => Some(Self::NotFound),
             "forbidden" | "Forbidden" => Some(Self::Forbidden),
+            "rate_limited" | "RateLimited" => Some(Self::RateLimited),
             "not_implemented" | "NotImplemented" => Some(Self::NotImplemented),
             _ => None,
         }
@@ -185,6 +189,9 @@ pub fn classify_provider_error_retry(
     message: &str,
     provider_failure_json: Option<&str>,
 ) -> ProviderErrorRetryClass {
+    if provider_error_is_malformed_maap_output(message) {
+        return ProviderErrorRetryClass::NonRetryable;
+    }
     if provider_error_is_context_limit_exceeded(message, provider_failure_json) {
         return ProviderErrorRetryClass::ContextLimit;
     }
@@ -225,6 +232,16 @@ pub fn classify_provider_error_retry(
     } else {
         ProviderErrorRetryClass::NonRetryable
     }
+}
+
+/// Reports whether a provider failure message describes malformed MAAP model
+/// output owned by the model-repair path.
+///
+/// Malformed model output is never a transport failure: retry classification
+/// must not promote it to a transport retry regardless of error kind or
+/// incidental substrings in the sanitized failure payload.
+pub fn provider_error_is_malformed_maap_output(message: &str) -> bool {
+    message.starts_with("provider MAAP output is malformed:")
 }
 
 fn provider_failure_status_code(provider_failure_json: Option<&str>) -> Option<u16> {
@@ -507,6 +524,11 @@ mod tests {
             (ProviderErrorKind::NotFound, "not_found", "NotFound"),
             (ProviderErrorKind::Forbidden, "forbidden", "Forbidden"),
             (
+                ProviderErrorKind::RateLimited,
+                "rate_limited",
+                "RateLimited",
+            ),
+            (
                 ProviderErrorKind::NotImplemented,
                 "not_implemented",
                 "NotImplemented",
@@ -518,6 +540,9 @@ mod tests {
             assert_eq!(ProviderErrorKind::from_event_name(legacy), Some(kind));
         }
         assert_eq!(ProviderErrorKind::from_event_name("unknown"), None);
+        assert_eq!(ProviderErrorKind::from_event_name("rate-limited"), None);
+        assert_eq!(ProviderErrorKind::from_event_name("invalid"), None);
+        assert_eq!(ProviderErrorKind::from_event_name(""), None);
     }
 
     /// Verifies transport stalls remain retryable after classification moves
@@ -622,6 +647,33 @@ mod tests {
                 expected,
                 "{status} {error_type}"
             );
+        }
+    }
+
+    /// Malformed MAAP model output is never a transport failure: the stable
+    /// malformed-output prefix short-circuits retry classification for every
+    /// error kind, even when transport-flavored text or an explicit retry
+    /// invitation appears in the sanitized failure payload.
+    #[test]
+    fn malformed_maap_output_never_classifies_as_transport_retry() {
+        let message = "provider MAAP output is malformed: mezzanine-action-json block is invalid JSON: expected `,` or `}` at line 1 column 282";
+        for kind in [
+            ProviderErrorKind::InvalidArgs,
+            ProviderErrorKind::InvalidState,
+            ProviderErrorKind::Io,
+        ] {
+            for payload in [
+                None,
+                Some(r#"{"error":{"message":"service temporarily unavailable"}}"#),
+                Some(r#"{"status_code":429,"retry_after":1}"#),
+                Some(r#"{"error":{"message":"you can retry your request"}}"#),
+            ] {
+                assert_eq!(
+                    classify_provider_error_retry(kind, message, payload),
+                    ProviderErrorRetryClass::NonRetryable,
+                    "{kind:?} payload={payload:?}"
+                );
+            }
         }
     }
 }

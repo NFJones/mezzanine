@@ -261,6 +261,7 @@ impl RuntimeSessionService {
                 recipient: format!("agent:{child_agent_id}"),
                 content_type: "text/plain; charset=utf-8".to_string(),
                 payload,
+                correlation_id: None,
             },
         };
         let result = self
@@ -344,6 +345,7 @@ impl RuntimeSessionService {
             recipient,
             content_type,
             payload,
+            ..
         } = &action.payload
         else {
             return Err(MezError::invalid_args(

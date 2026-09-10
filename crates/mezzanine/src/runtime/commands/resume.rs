@@ -16,6 +16,7 @@ use mez_mux::readline::ReadlineEdit;
 use mez_mux::record_browser::{RecordBrowser, RecordBrowserRecord};
 
 use crate::runtime::service_state::RuntimeRecordBrowserOverlaySource;
+use crate::session_title::{SessionTitle, SessionTitlePolicy, resolve_saved_session_title};
 use crate::storage::transcript::{
     SavedAgentSession, SavedSessionLifecycleFilter, SavedSessionPageAnchor, SavedSessionQuery,
 };
@@ -102,6 +103,29 @@ fn escape_session_name_for_markdown(name: &str) -> String {
             }
         })
         .collect()
+}
+
+/// Returns the policy-derived display title for one saved-session row.
+///
+/// A manual name never hides the policy-selected source, so this metadata stays
+/// populated for named rows too. An unnamed row reuses the already resolved row
+/// title, which keeps the row label and the `Name` column consistent.
+fn derived_session_title(
+    session: &SavedAgentSession,
+    resolved: Option<&SessionTitle>,
+    policy: SessionTitlePolicy,
+) -> Option<String> {
+    match session.name.as_deref().map(str::trim) {
+        Some(name) if !name.is_empty() => crate::session_title::resolve_session_title(
+            None,
+            policy,
+            session.objective_title.as_deref(),
+            session.summary.initial_prompt.as_deref(),
+            session.summary.latest_user_prompt.as_deref(),
+        )
+        .map(|title| title.text),
+        _ => resolved.map(|title| title.text.clone()),
+    }
 }
 
 impl RuntimeSessionService {
@@ -469,7 +493,13 @@ impl RuntimeSessionService {
             .clamp(20, 80);
         let records = sessions
             .into_iter()
-            .map(|session| Self::saved_session_browser_record(session, prompt_width))
+            .map(|session| {
+                Self::saved_session_browser_record(
+                    session,
+                    prompt_width,
+                    self.agent_session_title_policy(),
+                )
+            })
             .collect::<Result<Vec<_>>>()?;
         let archived = lifecycle == SavedSessionLifecycleFilter::Archived;
         let mut browser = RecordBrowser::new(
@@ -597,22 +627,36 @@ impl RuntimeSessionService {
     }
 
     /// Adapts one saved conversation to the shared record-browser contract.
+    ///
+    /// The conversation id stays the row identity and prefix. A resolved manual
+    /// name wins verbatim in both the row label and the `Name` column, so named
+    /// rows render exactly as before. An unnamed row renders the policy-derived
+    /// title in the `Name` column, and the derived title is always exposed
+    /// through the `title` metadata so a manual name never hides it.
     fn saved_session_browser_record(
         session: SavedAgentSession,
         prompt_width: usize,
+        policy: SessionTitlePolicy,
     ) -> Result<RecordBrowserRecord> {
         let archived = session.archived_at_unix_seconds.is_some();
+        let resolved_title = resolve_saved_session_title(&session, policy);
+        let derived_title = derived_session_title(&session, resolved_title.as_ref(), policy);
+        let escaped_row_title = resolved_title
+            .as_ref()
+            .map(|title| escape_session_name_for_markdown(&title.text));
+        let name_cell = session
+            .name
+            .clone()
+            .filter(|name| !name.trim().is_empty())
+            .or_else(|| derived_title.clone())
+            .unwrap_or_default();
         let summary = session.summary;
         let transcript_markdown = if summary.entries == 0 {
             "No saved transcript entries were found for this session.".to_string()
         } else {
             "Open this row to load its recent transcript entries.".to_string()
         };
-        let escaped_name = session
-            .name
-            .as_deref()
-            .map(escape_session_name_for_markdown);
-        let title = escaped_name
+        let title = escaped_row_title
             .as_deref()
             .map(|name| format!("{} - {name}", summary.conversation_id))
             .unwrap_or_else(|| summary.conversation_id.clone());
@@ -621,7 +665,11 @@ impl RuntimeSessionService {
             open_command: (!archived).then(|| format!("/resume {}", summary.conversation_id)),
             title,
             metadata: vec![
-                ("name".to_string(), session.name.unwrap_or_default()),
+                ("name".to_string(), name_cell),
+                (
+                    "title".to_string(),
+                    derived_title.unwrap_or_else(|| "-".to_string()),
+                ),
                 (
                     "last_active".to_string(),
                     unix_seconds_to_rfc3339(summary.last_created_at_unix_seconds),

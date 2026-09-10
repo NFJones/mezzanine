@@ -628,6 +628,7 @@ fn runtime_context_source_name(source: ContextSourceKind) -> &'static str {
         ContextSourceKind::Configuration => "configuration",
         ContextSourceKind::RuntimeHint => "runtime-hint",
         ContextSourceKind::LocalMessage => "local-message",
+        ContextSourceKind::PeerMessage => "peer-message",
         ContextSourceKind::ProjectGuidance => "project-guidance",
         ContextSourceKind::Memory => "memory",
         ContextSourceKind::PersistedContextDocument => "persisted-context-document",

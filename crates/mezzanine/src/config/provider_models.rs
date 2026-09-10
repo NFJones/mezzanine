@@ -21,6 +21,73 @@ const SYNC_METADATA_FIELDS: [&str; 6] = [
     "capabilities",
 ];
 
+/// Reports whether a reasoning level belongs to the canonical user-facing set.
+fn canonical_reasoning_level(level: &str) -> bool {
+    matches!(level, "low" | "medium" | "high" | "xhigh" | "max")
+}
+
+/// Reports whether a capability tag belongs to the provider-neutral vocabulary.
+fn canonical_capability_tag(tag: &str) -> bool {
+    matches!(
+        tag.trim(),
+        "native_thinking"
+            | "function_tools"
+            | "function_calling"
+            | "tool_use"
+            | "tools"
+            | "forced_tool_choice"
+            | "streaming"
+            | "max_output_tokens"
+            | "max_output_token_control"
+            | "vision"
+    )
+}
+
+/// Filters one live metadata list through the canonical vocabulary and records
+/// dropped values as conflicts so sync plans stay valid by construction.
+fn sanitize_live_model_metadata(
+    field: &str,
+    observed: &serde_json::Value,
+    entry_key: &str,
+    id: &str,
+    conflicts: &mut Vec<ProviderModelSyncConflict>,
+) -> serde_json::Value {
+    let Some(items) = observed.as_array() else {
+        return observed.clone();
+    };
+    let mut kept = Vec::new();
+    let mut dropped = Vec::new();
+    for value in items.iter().filter_map(serde_json::Value::as_str) {
+        let supported = match field {
+            "reasoning_levels" => canonical_reasoning_level(value),
+            _ => canonical_capability_tag(value),
+        };
+        if supported {
+            kept.push(value.to_string());
+        } else {
+            dropped.push(value.to_string());
+        }
+    }
+    if !dropped.is_empty() {
+        conflicts.push(ProviderModelSyncConflict {
+            entry_key: entry_key.to_string(),
+            id: id.to_string(),
+            field: field.to_string(),
+            configured: serde_json::Value::Array(
+                kept.iter()
+                    .map(|value| serde_json::Value::String(value.clone()))
+                    .collect(),
+            ),
+            observed: observed.clone(),
+        });
+    }
+    serde_json::Value::Array(
+        kept.iter()
+            .map(|value| serde_json::Value::String(value.clone()))
+            .collect(),
+    )
+}
+
 /// One model record proposed for addition by provider synchronization.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct ProviderModelSyncAddition {
@@ -243,6 +310,11 @@ pub(crate) fn plan_provider_model_sync_for_target(
                 let Some(observed) = live_model_field(live, field) else {
                     continue;
                 };
+                let observed = if matches!(field, "reasoning_levels" | "capabilities") {
+                    sanitize_live_model_metadata(field, &observed, entry_key, id, &mut conflicts)
+                } else {
+                    observed
+                };
                 match effective_record.get(field) {
                     None => {
                         record.insert(field.to_string(), observed);
@@ -275,6 +347,11 @@ pub(crate) fn plan_provider_model_sync_for_target(
                 let Some(observed) = live_model_field(live, field) else {
                     continue;
                 };
+                let observed = if matches!(field, "reasoning_levels" | "capabilities") {
+                    sanitize_live_model_metadata(field, &observed, entry_key, id, &mut conflicts)
+                } else {
+                    observed
+                };
                 match effective_record.get(field) {
                     None => {
                         record.insert(field.to_string(), observed);
@@ -305,6 +382,11 @@ pub(crate) fn plan_provider_model_sync_for_target(
             record.insert("id".to_string(), serde_json::Value::String(id.clone()));
             for field in SYNC_METADATA_FIELDS {
                 if let Some(value) = live_model_field(live, field) {
+                    let value = if matches!(field, "reasoning_levels" | "capabilities") {
+                        sanitize_live_model_metadata(field, &value, &entry_key, id, &mut conflicts)
+                    } else {
+                        value
+                    };
                     record.insert(field.to_string(), value);
                 }
             }

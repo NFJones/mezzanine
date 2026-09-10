@@ -35,6 +35,7 @@ fn discovery_filters_by_identity_presence_and_capability() {
         window_id: Some(WindowId::parse('@', "@3").unwrap()),
         role: Some("reviewer".to_string()),
         capabilities: vec!["rust".to_string(), "tests".to_string()],
+        objective: None,
     };
     let writer = SenderIdentity {
         agent_id: AgentId::parse('a', "a43").unwrap(),
@@ -42,6 +43,7 @@ fn discovery_filters_by_identity_presence_and_capability() {
         window_id: Some(WindowId::parse('@', "@3").unwrap()),
         role: Some("writer".to_string()),
         capabilities: vec!["docs".to_string()],
+        objective: None,
     };
     service.ensure_agent_identity(reviewer.clone(), 10).unwrap();
     service.ensure_agent_identity(writer, 10).unwrap();

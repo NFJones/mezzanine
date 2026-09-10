@@ -107,6 +107,15 @@ pub trait PermissionPlanning: Send + Sync {
     fn sandbox_first_local_prompts(&self) -> bool {
         false
     }
+
+    /// Returns the product decision for one model-planned message recipient.
+    ///
+    /// Products override this with their configured allow/prompt/forbid rules.
+    /// A product without message rules prompts for every recipient so message
+    /// delivery is never silently authorized.
+    fn evaluate_message_recipient(&self, _recipient: &str) -> RuleDecision {
+        RuleDecision::Prompt
+    }
 }
 
 /// Bounded permission state shown by agent-shell status commands.

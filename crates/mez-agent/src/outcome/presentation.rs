@@ -225,6 +225,10 @@ pub fn action_user_phrase(
         AgentActionPayload::MemoryStore { kind, .. } => {
             ("memory store", action_terminal_preview(kind))
         }
+        AgentActionPayload::ListAgents { agent_type } => (
+            "agent list",
+            action_terminal_preview(agent_type.as_deref().unwrap_or("primary")),
+        ),
         AgentActionPayload::IssueAdd { title, .. } => ("issue add", action_terminal_preview(title)),
         AgentActionPayload::IssueUpdate { id, .. } => ("issue update", action_terminal_preview(id)),
         AgentActionPayload::IssueQuery { text, .. } => (

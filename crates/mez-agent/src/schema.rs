@@ -7,6 +7,7 @@
 use crate::{
     AllowedAction, AllowedActionSet, CONFIG_CHANGE_OPERATION_NAMES,
     CONFIG_CHANGE_SETTING_PATH_DESCRIPTION, CONFIG_CHANGE_VALUE_DESCRIPTION, McpPromptTool,
+    SpawnAgentSizing,
 };
 
 /// Legacy OpenAI MAAP function-tool surfaces.
@@ -127,6 +128,10 @@ pub fn maap_action_batch_schema(
                 "minLength": 1,
                 "description": "Terse additive reason these actions are next. Name why the selected action directly advances the user task. Do not say you are complying with a required function call, tool call, current-actions call, schema wrapper, or action wrapper. Do not restate the user request, prior rationale, progress say, or action summaries."
             },
+            "objective": {
+                "type": ["string", "null"],
+                "description": "Bounded factual statement of what the agent is currently working on, published for peer discovery: a statement of current work, never a copy of the user prompt, at most 2097152 bytes, whitespace-collapsed to a single line, and free of control characters. Send `null` when the published objective is unchanged. A null, absent, malformed, or out-of-bounds objective publishes nothing and never fails the turn."
+            },
             "actions": {
                 "type": "array",
                 "minItems": 1,
@@ -134,7 +139,7 @@ pub fn maap_action_batch_schema(
                 "items": maap_action_schema(allowed_actions)
             }
         },
-        "required": ["rationale", "actions"],
+        "required": ["rationale", "objective", "actions"],
         "additionalProperties": false
     })
 }
@@ -164,12 +169,15 @@ fn maap_action_schema(allowed_actions: &AllowedActionSet) -> serde_json::Value {
             AllowedAction::WebSearch => action_schemas.push(maap_web_search_action_schema()),
             AllowedAction::FetchUrl => action_schemas.push(maap_fetch_url_action_schema()),
             AllowedAction::SendMessage => action_schemas.push(maap_send_message_action_schema()),
-            AllowedAction::SpawnAgent => action_schemas.push(maap_spawn_agent_action_schema()),
+            AllowedAction::SpawnAgent => action_schemas.push(maap_spawn_agent_action_schema(
+                allowed_actions.spawn_agent_sizing(),
+            )),
             AllowedAction::ConfigChange => action_schemas.push(maap_config_change_action_schema(
                 CONFIG_CHANGE_SETTING_PATH_DESCRIPTION,
             )),
             AllowedAction::MemorySearch => action_schemas.push(maap_memory_search_action_schema()),
             AllowedAction::MemoryStore => action_schemas.push(maap_memory_store_action_schema()),
+            AllowedAction::ListAgents => action_schemas.push(maap_list_agents_action_schema()),
             AllowedAction::IssueAdd => action_schemas.push(maap_issue_add_action_schema()),
             AllowedAction::IssueUpdate => action_schemas.push(maap_issue_update_action_schema()),
             AllowedAction::IssueQuery => action_schemas.push(maap_issue_query_action_schema()),
@@ -668,6 +676,30 @@ fn maap_memory_store_action_schema() -> serde_json::Value {
     )
 }
 
+/// Builds the provider-facing read-only `list_agents` discovery action schema.
+///
+/// `agent_type` defaults to primary parent agents only and widens to subagents
+/// and runtime-internal controllers. Result rows carry agent identity, pane,
+/// window, role, capabilities, presence, objective, `is_self`, and kind,
+/// including the requesting agent itself, offline agents, and agents in other
+/// panes and windows, bounded to at most 64 rows with each string bounded to
+/// 512 bytes and at most 16 capabilities per row. Each row reports its own
+/// `truncated: true` when it shortened a string or omitted capabilities.
+fn maap_list_agents_action_schema() -> serde_json::Value {
+    maap_action_object_schema(
+        "list_agents",
+        [(
+            "agent_type",
+            serde_json::json!({
+                "type": ["string", "null"],
+                "enum": ["primary", "subagent", "internal", "all", null],
+                "description": "Optional agent-type filter. `primary` is the default and lists primary parent agents only, `subagent` lists spawned subagents, `internal` lists runtime-internal controllers, and `all` lists every kind. Results include the requesting agent, offline agents, and agents in other panes and windows, bounded to 64 rows with each string bounded to 512 bytes and at most 16 capabilities per row. Each row reports `truncated: true` when it shortened a string or omitted capabilities."
+            }),
+        )],
+        &["agent_type"],
+    )
+}
+
 /// Runs the maap send message action schema operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -698,17 +730,25 @@ fn maap_send_message_action_schema() -> serde_json::Value {
                     "description": "Model-readable payload, with JSON payloads encoded as a compact JSON string."
                 }),
             ),
+            (
+                "correlation_id",
+                serde_json::json!({
+                    "type": ["string", "null"],
+                    "description": "Optional correlation id. Set this to the id of the message being answered so the original sender can match the reply; the runtime defaults it to the current turn id when omitted."
+                }),
+            ),
         ],
-        &["recipient", "content_type", "payload"],
+        &["recipient", "content_type", "payload", "correlation_id"],
     )
 }
 
-/// Runs the maap spawn agent action schema operation for this subsystem.
+/// Builds the provider-facing `spawn_agent` action schema.
 ///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn maap_spawn_agent_action_schema() -> serde_json::Value {
+/// When the product supplies routed-size reasoning offers, the schema lists
+/// each configured profile and the reasoning efforts its size accepts so the
+/// model can only select size/reasoning pairs the runtime resolves. Without
+/// routed-size data the schema keeps the static canonical guidance.
+fn maap_spawn_agent_action_schema(sizing: Option<&SpawnAgentSizing>) -> serde_json::Value {
     maap_action_object_schema(
         "spawn_agent",
         [
@@ -738,20 +778,99 @@ fn maap_spawn_agent_action_schema() -> serde_json::Value {
                 serde_json::json!({
                     "type": ["string", "null"],
                     "enum": ["small", "medium", "large", null],
-                    "description": "Optional initial child model size. Provide it together with reasoning_effort to override automatic routing for the initial child turn only. Bias toward a smaller size than your first estimate, choosing the smallest size adequate for task scope, uncertainty, blast radius, and validation burden; use validation to detect and correct an inadequate choice."
+                    "description": maap_spawn_agent_size_description(sizing),
                 }),
             ),
             (
                 "reasoning_effort",
-                serde_json::json!({
-                    "type": ["string", "null"],
-                    "enum": ["low", "medium", "high", "xhigh", null],
-                    "description": "Optional initial child reasoning effort. Provide it together with size. Choose the lowest adequate effort for diagnostic depth, ambiguity, and consequence; implementation, debugging, refactoring, test-writing, and repository exploration must not use low. Use validation to detect and correct an inadequate choice."
-                }),
+                maap_spawn_agent_reasoning_schema(sizing),
             ),
         ],
         &["role", "task_prompt", "session", "size", "reasoning_effort"],
     )
+}
+
+/// Builds the `spawn_agent` size description with configured routing facts.
+///
+/// The static selection discipline stays authoritative; the appended sentence
+/// tells the model which configured profile each size resolves to so it can
+/// reason about capability and cost before choosing.
+fn maap_spawn_agent_size_description(sizing: Option<&SpawnAgentSizing>) -> String {
+    const BASE: &str = "Optional initial child model size. Provide it together with reasoning_effort to override automatic routing for the initial child turn only. Bias toward a smaller size than your first estimate, choosing the smallest size adequate for task scope, uncertainty, blast radius, and validation burden; use validation to detect and correct an inadequate choice.";
+    let Some(sizing) = sizing.filter(|sizing| !sizing.sizes.is_empty()) else {
+        return BASE.to_string();
+    };
+    let profiles = sizing
+        .sizes
+        .iter()
+        .map(|option| format!("{}={}", option.size, option.profile_name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{BASE} Configured routed profiles: {profiles}.")
+}
+
+/// Builds the `spawn_agent` reasoning-effort schema field.
+///
+/// With routed-size offers, the enum advertises only levels the runtime
+/// accepts for those sizes and the description lists accepted levels per size.
+/// Without routed-size data the field keeps the static canonical guidance so
+/// non-routed contexts behave unchanged.
+fn maap_spawn_agent_reasoning_schema(sizing: Option<&SpawnAgentSizing>) -> serde_json::Value {
+    const BASE: &str = "Optional initial child reasoning effort. Provide it together with size. Choose the lowest adequate effort for diagnostic depth, ambiguity, and consequence; implementation, debugging, refactoring, test-writing, and repository exploration must not use low. Use validation to detect and correct an inadequate choice.";
+    let Some(sizing) = sizing.filter(|sizing| !sizing.sizes.is_empty()) else {
+        return serde_json::json!({
+            "type": ["string", "null"],
+            "enum": ["low", "medium", "high", "xhigh", null],
+            "description": BASE,
+        });
+    };
+    let allowed = maap_spawn_agent_allowed_reasoning_efforts(sizing);
+    let mut values = allowed
+        .iter()
+        .cloned()
+        .map(serde_json::Value::String)
+        .collect::<Vec<_>>();
+    values.push(serde_json::Value::Null);
+    let per_size = sizing
+        .sizes
+        .iter()
+        .map(|option| {
+            let levels = if option.allowed_reasoning_efforts.is_empty() {
+                "none".to_string()
+            } else {
+                option.allowed_reasoning_efforts.join(", ")
+            };
+            format!("{}: {levels}", option.size)
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let description = if allowed.is_empty() {
+        format!(
+            "{BASE} Configured sizing currently allows no explicit reasoning effort for any routed size; omit size and reasoning_effort together to keep automatic routing."
+        )
+    } else {
+        format!(
+            "{BASE} Configured allowed reasoning efforts by size: {per_size}. Select a level allowed for the chosen size; omit size and reasoning_effort together to keep automatic routing."
+        )
+    };
+    serde_json::json!({
+        "type": ["string", "null"],
+        "enum": values,
+        "description": description,
+    })
+}
+
+/// Returns the ordered union of routed-size allowed reasoning efforts.
+fn maap_spawn_agent_allowed_reasoning_efforts(sizing: &SpawnAgentSizing) -> Vec<String> {
+    let mut allowed = Vec::new();
+    for option in &sizing.sizes {
+        for effort in &option.allowed_reasoning_efforts {
+            if !allowed.iter().any(|existing| existing == effort) {
+                allowed.push(effort.clone());
+            }
+        }
+    }
+    allowed
 }
 
 /// Runs the maap config change action schema operation for this subsystem.
@@ -1041,6 +1160,83 @@ mod tests {
                 .is_some_and(
                     |description| description.contains("Use validation to detect and correct")
                 )
+        );
+    }
+
+    /// Verifies spawned-child guidance reflects the configured per-size
+    /// reasoning allow-lists instead of advertising levels the runtime rejects.
+    ///
+    /// The regression is a spawn rejection when the schema offered `medium`
+    /// while the configured auto-sizing policy allowed only `low`, `high`, and
+    /// `xhigh`, so the enum and per-size description must come from the
+    /// product-provided routed-size offers while unsupported levels disappear.
+    #[test]
+    fn spawn_agent_schema_reflects_configured_routed_reasoning_levels() {
+        let sizing = SpawnAgentSizing {
+            sizes: vec![
+                crate::SpawnAgentSizeOption {
+                    size: "small".to_string(),
+                    profile_name: "deepseek-fast".to_string(),
+                    allowed_reasoning_efforts: vec![
+                        "low".to_string(),
+                        "high".to_string(),
+                        "xhigh".to_string(),
+                    ],
+                },
+                crate::SpawnAgentSizeOption {
+                    size: "medium".to_string(),
+                    profile_name: "deepseek-default".to_string(),
+                    allowed_reasoning_efforts: vec![
+                        "low".to_string(),
+                        "high".to_string(),
+                        "xhigh".to_string(),
+                    ],
+                },
+                crate::SpawnAgentSizeOption {
+                    size: "large".to_string(),
+                    profile_name: "deepseek-default".to_string(),
+                    allowed_reasoning_efforts: vec![
+                        "low".to_string(),
+                        "high".to_string(),
+                        "xhigh".to_string(),
+                    ],
+                },
+            ],
+        };
+        let schema = maap_action_batch_schema(
+            &AllowedActionSet::all_enabled().with_spawn_agent_sizing(sizing),
+            &[],
+        );
+        let spawn = schema["properties"]["actions"]["items"]["anyOf"]
+            .as_array()
+            .and_then(|variants| {
+                variants.iter().find(|variant| {
+                    variant["properties"]["type"]["enum"] == serde_json::json!(["spawn_agent"])
+                })
+            })
+            .expect("spawn_agent schema variant");
+
+        assert_eq!(
+            spawn["properties"]["reasoning_effort"]["enum"],
+            serde_json::json!(["low", "high", "xhigh", null])
+        );
+        let reasoning_description = spawn["properties"]["reasoning_effort"]["description"]
+            .as_str()
+            .expect("reasoning description");
+        assert!(
+            reasoning_description.contains("medium: low, high, xhigh"),
+            "{reasoning_description}"
+        );
+        assert!(
+            reasoning_description.contains("omit size and reasoning_effort together"),
+            "{reasoning_description}"
+        );
+        let size_description = spawn["properties"]["size"]["description"]
+            .as_str()
+            .expect("size description");
+        assert!(
+            size_description.contains("medium=deepseek-default"),
+            "{size_description}"
         );
     }
 

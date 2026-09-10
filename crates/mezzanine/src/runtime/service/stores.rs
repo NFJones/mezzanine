@@ -391,6 +391,23 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Refreshes an open saved-session browser after a derived title changed.
+    ///
+    /// The current page anchor and the focused row are preserved, so a title
+    /// refresh never moves an operator who is browsing a later page.
+    pub(crate) fn refresh_saved_session_overlay_after_title_change(&mut self) -> Result<()> {
+        let Some(source) = self.active_saved_session_browser_source() else {
+            return Ok(());
+        };
+        let active_id = self.active_saved_session_browser_record_id();
+        let mut browser = self.refresh_record_browser_overlay_source(&source)?;
+        if let Some(active_id) = active_id {
+            browser.set_active_record_id(&active_id);
+        }
+        self.replace_active_saved_session_browser(source, browser);
+        Ok(())
+    }
+
     /// Runs the message service operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

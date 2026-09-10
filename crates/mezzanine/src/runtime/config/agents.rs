@@ -8,19 +8,22 @@
 use super::{
     BTreeMap, DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT,
     DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT, DEFAULT_AGENT_LOOP_LIMIT,
-    DEFAULT_AGENT_ROUTING, DEFAULT_AUTO_SIZING_FALLBACK_POLICY, DEFAULT_MAX_CONCURRENT_AGENTS,
-    DEFAULT_MAX_QUEUED_BYTES, DEFAULT_MAX_QUEUED_TURNS, DEFAULT_MAX_ROOT_SUBAGENTS,
-    DEFAULT_MAX_SUBAGENT_DEPTH, DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW,
-    DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT, DEFAULT_SUBAGENT_WAIT_POLICY, MezError, Result,
-    RuntimeAgentPersonalityProfile, RuntimeAutoSizingConfig, RuntimeAutoSizingFallbackPolicy,
-    SubagentProfile, SubagentWaitPolicy, Value, builtin_subagent_profiles,
-    runtime_config_permission_preset, runtime_cooperation_mode, runtime_json_bool,
-    runtime_json_object, runtime_json_string, runtime_json_string_array, runtime_json_string_map,
+    DEFAULT_AGENT_PEER_MESSAGE_LOOP_LIMIT, DEFAULT_AGENT_ROUTING,
+    DEFAULT_AUTO_SIZING_FALLBACK_POLICY, DEFAULT_MAX_CONCURRENT_AGENTS, DEFAULT_MAX_QUEUED_BYTES,
+    DEFAULT_MAX_QUEUED_TURNS, DEFAULT_MAX_ROOT_SUBAGENTS, DEFAULT_MAX_SUBAGENT_DEPTH,
+    DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW, DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT,
+    DEFAULT_SUBAGENT_WAIT_POLICY, MezError, Result, RuntimeAgentPersonalityProfile,
+    RuntimeAutoSizingConfig, RuntimeAutoSizingFallbackPolicy, SubagentProfile, SubagentWaitPolicy,
+    Value, builtin_subagent_profiles, runtime_config_permission_preset, runtime_cooperation_mode,
+    runtime_json_bool, runtime_json_object, runtime_json_string, runtime_json_string_array,
+    runtime_json_string_map,
 };
 use mez_agent::{
     AllowedAction, AllowedActionSet, AutoSizingRoutingPolicy, DEFAULT_AGENT_TURN_TIMEOUT_MS,
     DEFAULT_PROVIDER_RETRY_POLICY, ProviderRetryPolicy,
 };
+
+use crate::session_title::SessionTitlePolicy;
 
 /// Parses the static MAAP action set enabled for every ordinary provider request.
 pub(crate) fn runtime_agent_enabled_actions_from_config(root: &Value) -> Result<AllowedActionSet> {
@@ -294,6 +297,43 @@ pub(crate) fn runtime_agent_native_shell_timeout_ms_from_config(root: &Value) ->
 /// Parses the `/loop` work-iteration budget from `[agents]`.
 pub(crate) fn runtime_agent_loop_limit_from_config(root: &Value) -> Result<usize> {
     runtime_positive_agents_usize_from_config(root, "loop_limit", DEFAULT_AGENT_LOOP_LIMIT)
+}
+
+/// Parses the peer-message-triggered turn budget from `[agents]`.
+///
+/// The value is the runaway control for iterations started by peer messages. It
+/// does not cap injected message counts, payload bytes, or peer turns per window.
+pub(crate) fn runtime_agent_peer_message_loop_limit_from_config(root: &Value) -> Result<usize> {
+    runtime_positive_agents_usize_from_config(
+        root,
+        "peer_message_loop_limit",
+        DEFAULT_AGENT_PEER_MESSAGE_LOOP_LIMIT,
+    )
+}
+
+/// Parses the saved-session title source policy from `[agents]`.
+///
+/// An absent key keeps the documented `generated` default so existing configs
+/// keep working without a migration step. Unknown values are rejected here as
+/// well as by config validation so a programmatically built config cannot select
+/// an undefined title source.
+pub(crate) fn runtime_agent_session_title_policy_from_config(
+    root: &Value,
+) -> Result<SessionTitlePolicy> {
+    let Some(agents) = runtime_json_object(root, "agents") else {
+        return Ok(SessionTitlePolicy::default());
+    };
+    let Some(value) = agents.get("session_title_policy") else {
+        return Ok(SessionTitlePolicy::default());
+    };
+    let value = value
+        .as_str()
+        .ok_or_else(|| MezError::config("agents.session_title_policy must be a string"))?;
+    SessionTitlePolicy::parse(value).ok_or_else(|| {
+        MezError::config(
+            "agents.session_title_policy must be generated, objective, last_prompt, or first_prompt",
+        )
+    })
 }
 
 /// Parses automatic turn model-sizing configuration from `[agents.auto_sizing]`.

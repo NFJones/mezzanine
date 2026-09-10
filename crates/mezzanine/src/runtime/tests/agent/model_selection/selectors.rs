@@ -412,8 +412,17 @@ default_model = "gpt-5.5"
 
 [providers.deepseek]
 kind = "deepseek"
-models = ["deepseek-v4-flash", "deepseek-v4-pro"]
 default_model = "deepseek-v4-flash"
+
+[providers.deepseek.models.deepseek-v4-flash]
+id = "deepseek-v4-flash"
+reasoning_levels = ["low", "high", "max"]
+capabilities = ["native_thinking", "function_tools", "forced_tool_choice", "streaming", "max_output_tokens"]
+
+[providers.deepseek.models.deepseek-v4-pro]
+id = "deepseek-v4-pro"
+reasoning_levels = ["low", "high", "max"]
+capabilities = ["native_thinking", "function_tools", "forced_tool_choice", "streaming", "max_output_tokens"]
 
 [model_profiles.default]
 provider = "openai"

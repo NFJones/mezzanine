@@ -74,6 +74,7 @@ pub(crate) use defaults::{initial_config_toml, provider_default_config_toml};
 pub use migration::migrate_config_text;
 pub use migration::{CURRENT_CONFIG_SCHEMA_VERSION, migrate_config_file};
 pub use paths::ConfigPaths;
+pub(crate) use paths::format_diagnostics;
 pub use schema::{
     BASELINE_TOP_LEVEL_KEYS, PRIMARY_CONFIG_FILENAMES, config_change_option_reference_markdown,
     config_change_setting_path_annotations_markdown, config_change_setting_path_description,
@@ -112,9 +113,9 @@ pub(crate) use parsers::parse_config_json_value;
 use parsers::{
     JsonPathParser, JsonValueParser, parse_config_json_object, parse_config_json_value_best_effort,
 };
+use paths::write_private_config_file;
 #[cfg(test)]
 use paths::write_private_config_file_async;
-use paths::{format_diagnostics, write_private_config_file};
 pub(crate) use provider_models::{
     ProviderModelSyncAddition, ProviderModelSyncBlocker, ProviderModelSyncConflict,
     ProviderModelSyncUpdate, plan_provider_model_sync, plan_provider_model_sync_for_target,

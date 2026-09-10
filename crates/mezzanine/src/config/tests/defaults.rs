@@ -996,8 +996,8 @@ fn default_config_uses_configured_deepseek_model_metadata() {
         .unwrap();
 
     for (entry, expected) in [
-        ("deepseek-v4-pro", (1_000_000, 800_000, 60_000)),
-        ("deepseek-v4-flash", (500_000, 400_000, 30_000)),
+        ("deepseek-flash", (1_000_000, 616_000, 384_000)),
+        ("deepseek-v4-pro", (1_000_000, 616_000, 384_000)),
     ] {
         let model = models.get(entry).and_then(toml::Value::as_table).unwrap();
         let actual = (
@@ -1024,7 +1024,7 @@ fn default_config_uses_configured_deepseek_model_metadata() {
                 .iter()
                 .map(|value| value.as_str().unwrap())
                 .collect::<Vec<_>>(),
-            vec!["high", "max"],
+            vec!["low", "high", "max"],
             "{entry}"
         );
         assert_eq!(
@@ -1093,7 +1093,7 @@ fn authenticated_provider_defaults_preserve_deepseek_model_overrides() {
     assert_eq!(
         pro.get("max_output_tokens")
             .and_then(toml::Value::as_integer),
-        Some(60_000)
+        Some(384_000)
     );
     assert_eq!(
         pro.get("reasoning_levels").and_then(toml::Value::as_array),
@@ -1103,7 +1103,7 @@ fn authenticated_provider_defaults_preserve_deepseek_model_overrides() {
         pro.get("capabilities").and_then(toml::Value::as_array),
         Some(&Vec::new())
     );
-    assert!(models.contains_key("deepseek-v4-flash"));
+    assert!(models.contains_key("deepseek-flash"));
 
     let _ = fs::remove_dir_all(root);
 }
@@ -1128,6 +1128,6 @@ fn default_deepseek_preset_uses_canonical_auto_sizing_efforts() {
         .map(|value| value.as_str().unwrap())
         .collect::<Vec<_>>();
 
-    assert_eq!(efforts, vec!["high", "xhigh"]);
+    assert_eq!(efforts, vec!["low", "high", "xhigh"]);
     assert!(!efforts.contains(&"max"));
 }

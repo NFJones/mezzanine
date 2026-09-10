@@ -887,3 +887,143 @@ fn parser_synthesizes_runtime_action_ids() {
     assert_eq!(batch.actions[0].id, "action-1");
     assert_eq!(batch.actions[1].id, "action-2");
 }
+
+#[test]
+/// Verifies the optional objective carried in the turn response envelope is
+/// normalized through the shared bounds, remains additive to the canonical
+/// batch parse, and is dropped rather than failing a turn when it cannot be
+/// bounded.
+fn parser_extracts_optional_bounded_turn_objective() {
+    let fenced = r#"```mezzanine-action-json
+{
+  "rationale": "inspect the discovery contract",
+  "objective": "  Inspect   the   discovery  contract ",
+  "actions": [{"type":"say","status":"final","text":"hello"}]
+}
+```"#;
+    assert_eq!(
+        parse_maap_batch_objective(fenced).as_deref(),
+        Some("Inspect the discovery contract")
+    );
+    let batch = parse_fenced_maap_action_batch(fenced).unwrap().unwrap();
+    assert_eq!(batch.rationale, "inspect the discovery contract");
+
+    let bare = r#"{"rationale":"inspect","objective":"Review the backlog","actions":[{"type":"say","status":"final","text":"hello"}]}"#;
+    assert_eq!(
+        parse_maap_batch_objective(bare).as_deref(),
+        Some("Review the backlog")
+    );
+
+    let absent = r#"```mezzanine-action-json
+{"rationale":"inspect","actions":[{"type":"say","status":"final","text":"hello"}]}
+```"#;
+    assert!(parse_maap_batch_objective(absent).is_none());
+
+    let unbounded = format!(
+        "{{\"rationale\":\"inspect\",\"objective\":\"{}\",\"actions\":[{{\"type\":\"say\",\"status\":\"final\",\"text\":\"hello\"}}]}}",
+        "a".repeat(crate::messaging::MMP_OBJECTIVE_MAX_BYTES + 1)
+    );
+    assert!(parse_maap_batch_objective(&unbounded).is_none());
+    assert!(parse_maap_batch_objective("not json").is_none());
+}
+
+#[test]
+/// Verifies the read-only `list_agents` action round-trips through the canonical
+/// parser with its optional agent-type filter and the static action surface.
+fn list_agents_round_trips_with_agent_type_filter() {
+    assert_eq!(
+        AllowedAction::from_action_type("list_agents"),
+        Some(AllowedAction::ListAgents)
+    );
+    assert!(AllowedActionSet::all_enabled().contains(AllowedAction::ListAgents));
+
+    let explicit = parse_maap_action_json(r#"{"type":"list_agents","agent_type":"all"}"#)
+        .expect("explicit list_agents action");
+    assert_eq!(explicit.action_type(), "list_agents");
+    assert!(matches!(
+        explicit.payload,
+        AgentActionPayload::ListAgents { ref agent_type } if agent_type.as_deref() == Some("all")
+    ));
+
+    let defaulted =
+        parse_maap_action_json(r#"{"type":"list_agents"}"#).expect("default list_agents action");
+    assert!(matches!(
+        defaulted.payload,
+        AgentActionPayload::ListAgents { agent_type: None }
+    ));
+
+    for agent_type in ["primary", "subagent", "internal", "all"] {
+        assert_eq!(
+            AgentListFilter::parse(agent_type).map(AgentListFilter::as_str),
+            Some(agent_type)
+        );
+    }
+}
+
+#[test]
+/// Verifies `list_agents` rejects an unsupported agent-type filter and exposes
+/// the documented filter values plus result bounds in the provider schema.
+fn list_agents_validation_and_schema_cover_agent_types() {
+    let action = parse_maap_action_json(r#"{"type":"list_agents","agent_type":"peers"}"#)
+        .expect("parsed list_agents action");
+    let batch = MaapBatch {
+        rationale: "discover peers".to_string(),
+        actions: vec![action],
+    };
+    assert!(batch.validate(&turn(), &[], &[]).is_err());
+
+    let schema = maap_action_batch_schema(&AllowedActionSet::all_enabled(), &[]).to_string();
+    assert!(schema.contains("\"list_agents\""));
+    assert!(schema.contains("\"agent_type\""));
+    for agent_type in ["primary", "subagent", "internal", "all"] {
+        assert!(schema.contains(&format!("\"{agent_type}\"")));
+    }
+    assert!(schema.contains(&AGENT_LIST_MAX_ROWS.to_string()));
+    assert!(schema.contains(&AGENT_LIST_MAX_STRING_BYTES.to_string()));
+    assert!(schema.contains(&AGENT_LIST_MAX_CAPABILITIES.to_string()));
+}
+
+#[test]
+/// Verifies the turn envelope can carry a bounded objective: the provider schema
+/// exposes the optional field, the parse path reads it from a parsed batch, and a
+/// malformed objective never fails the turn.
+fn batch_schema_exposes_optional_objective_and_parse_stays_tolerant() {
+    let schema = maap_action_batch_schema(&AllowedActionSet::all_enabled(), &[]);
+    assert_eq!(
+        schema["properties"]["objective"]["type"],
+        serde_json::json!(["string", "null"])
+    );
+    assert_eq!(
+        schema["required"],
+        serde_json::json!(["rationale", "objective", "actions"])
+    );
+    assert!(
+        schema["properties"]["objective"]["description"]
+            .as_str()
+            .expect("objective description")
+            .contains("never a copy of the user prompt")
+    );
+    assert!(
+        schema["properties"]["objective"]["description"]
+            .as_str()
+            .expect("objective description")
+            .contains(&crate::messaging::MMP_OBJECTIVE_MAX_BYTES.to_string())
+    );
+    assert_eq!(schema["additionalProperties"], false);
+
+    let with_objective = r#"{"rationale":"inspect","objective":"Review the discovery contract","actions":[{"type":"say","status":"final","text":"hello"}]}"#;
+    let batch = parse_maap_action_batch_json(with_objective).expect("objective-carrying batch");
+    assert_eq!(batch.actions.len(), 1);
+    assert_eq!(
+        parse_maap_batch_objective(with_objective).as_deref(),
+        Some("Review the discovery contract")
+    );
+
+    let malformed = r#"{"rationale":"inspect","objective":42,"actions":[{"type":"say","status":"final","text":"hello"}]}"#;
+    assert!(parse_maap_action_batch_json(malformed).is_ok());
+    assert!(parse_maap_batch_objective(malformed).is_none());
+
+    let explicit_null = r#"{"rationale":"inspect","objective":null,"actions":[{"type":"say","status":"final","text":"hello"}]}"#;
+    assert!(parse_maap_action_batch_json(explicit_null).is_ok());
+    assert!(parse_maap_batch_objective(explicit_null).is_none());
+}

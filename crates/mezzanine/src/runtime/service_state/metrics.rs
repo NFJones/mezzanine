@@ -74,6 +74,9 @@ pub const DEFAULT_AGENT_ROUTING: bool = false;
 pub const DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT: usize = 5;
 /// Default maximum number of work iterations a `/loop` command may run.
 pub const DEFAULT_AGENT_LOOP_LIMIT: usize = 8;
+/// Default maximum number of peer-message-triggered turns one agent may run
+/// before the runtime stops starting new message-driven iterations.
+pub const DEFAULT_AGENT_PEER_MESSAGE_LOOP_LIMIT: usize = 1000;
 /// Runtime-owned diagnostics for provider, prompt-cache, turn, and shell work.
 ///
 /// The async runtime actor records serialized actor activity separately. This

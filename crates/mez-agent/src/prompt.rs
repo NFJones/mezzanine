@@ -76,7 +76,7 @@ pub fn validate_agent_prompt_required(field: &str, value: &str) -> AgentPromptRe
 pub const AGENT_PROMPT_PROFILE_NAME: &str = "default";
 
 /// Current version of the default agent prompt profile.
-pub const AGENT_PROMPT_PROFILE_VERSION: u32 = 33;
+pub const AGENT_PROMPT_PROFILE_VERSION: u32 = 34;
 
 /// Model identity used to assemble one agent system prompt.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -175,6 +175,11 @@ pub fn assemble_agent_system_prompt(
         assets.system_fragment("format.md")?,
     );
     push_section(&mut prompt, "14. MCP", assets.system_fragment("mcp.md")?);
+    push_section(
+        &mut prompt,
+        "15. Peer Messaging",
+        assets.system_fragment("peer_messaging.md")?,
+    );
     append_repository_instructions(&mut prompt, repository_instruction_blocks);
     Ok(prompt)
 }
@@ -266,7 +271,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(prompt.starts_with("1. Identity\nprofile default version 33 model test-model"));
+        assert!(prompt.starts_with("1. Identity\nprofile default version 34 model test-model"));
         assert!(prompt.contains("3. Repository Instructions\nrepository contract"));
         assert!(prompt.contains("Embedded active repository instruction contents:"));
         assert!(prompt.contains("first repository rule\n\nsecond rule"));
@@ -275,7 +280,7 @@ mod tests {
         let active_repository = prompt.find("Active Repository Instructions").unwrap();
         assert!(repository_contract < mcp_policy);
         assert!(mcp_policy < active_repository);
-        assert!(!prompt.contains("15. "));
+        assert!(!prompt.contains("16. "));
     }
 
     /// Verifies model identity is the only variable prompt-profile field and

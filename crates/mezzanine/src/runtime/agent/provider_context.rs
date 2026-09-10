@@ -683,6 +683,38 @@ impl RuntimeSessionService {
         .map_err(|error| MezError::invalid_args(error.message()))
     }
 
+    /// Builds the routed-size reasoning contract for `spawn_agent` schemas.
+    ///
+    /// Each size reports its configured profile and exactly the reasoning
+    /// efforts an explicit pair may use, so the provider-facing schema
+    /// advertises only selections this pane's effective policy resolves. The
+    /// manifest is descriptive: acceptance and rejection remain owned by
+    /// `runtime_explicit_auto_sizing_selection_for_pane`.
+    pub(crate) fn runtime_spawn_agent_sizing_for_pane(
+        &self,
+        pane_id: &str,
+    ) -> Result<mez_agent::SpawnAgentSizing> {
+        let config = self.runtime_auto_sizing_config_for_pane(pane_id).clone();
+        let mut sizes = Vec::with_capacity(3);
+        for (size, profile_name) in [
+            ("small", &config.small_model_profile),
+            ("medium", &config.medium_model_profile),
+            ("large", &config.large_model_profile),
+        ] {
+            let target = self.runtime_auto_sizing_target_profile(size, profile_name)?;
+            sizes.push(mez_agent::SpawnAgentSizeOption {
+                size: size.to_string(),
+                profile_name: profile_name.clone(),
+                allowed_reasoning_efforts:
+                    mez_agent::auto_sizing_allowed_reasoning_efforts_for_target(
+                        &config.allowed_reasoning_efforts,
+                        &target,
+                    ),
+            });
+        }
+        Ok(mez_agent::SpawnAgentSizing { sizes })
+    }
+
     /// Logs a bounded auto-sizing decision without placing router
     /// correspondence into model context or transcript content.
     #[cfg(test)]

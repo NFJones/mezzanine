@@ -159,28 +159,6 @@ fn has_capability(capabilities: &[String], expected: &str) -> bool {
         .any(|capability| capability.trim() == expected)
 }
 
-/// Returns built-in reasoning metadata for a known DeepSeek model.
-pub fn deepseek_builtin_reasoning_efforts(model: &str) -> Option<Vec<String>> {
-    matches!(model, "deepseek-v4-pro" | "deepseek-v4-flash")
-        .then(|| vec!["high".to_string(), "max".to_string()])
-}
-
-/// Returns built-in capability metadata for a known DeepSeek model.
-pub fn deepseek_builtin_capability_tags(model: &str) -> Option<Vec<String>> {
-    matches!(model, "deepseek-v4-pro" | "deepseek-v4-flash").then(|| {
-        [
-            "native_thinking",
-            "function_tools",
-            "forced_tool_choice",
-            "streaming",
-            "max_output_tokens",
-        ]
-        .into_iter()
-        .map(str::to_string)
-        .collect()
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -498,7 +498,7 @@ fn runtime_slash_command_thinking_displays_and_applies_deepseek_override() {
             format: ConfigFormat::Toml,
             scope: ConfigScope::Primary,
             trusted: true,
-            text: "[agents]\ndefault_provider = \"deepseek\"\ndefault_model_profile = \"default\"\n\n[providers.deepseek]\nkind = \"deepseek\"\nmodels = [\"deepseek-v4-pro\"]\ndefault_model = \"deepseek-v4-pro\"\n\n[model_profiles.default]\nprovider = \"deepseek\"\nmodel = \"deepseek-v4-pro\"\nreasoning_profile = \"high\"\n\n[model_profiles.default.provider_options]\nreasoning_effort = \"high\"\n"
+            text: "[agents]\ndefault_provider = \"deepseek\"\ndefault_model_profile = \"default\"\n\n[providers.deepseek]\nkind = \"deepseek\"\ndefault_model = \"deepseek-v4-pro\"\n\n[providers.deepseek.models.deepseek-v4-pro]\nid = \"deepseek-v4-pro\"\nreasoning_levels = [\"low\", \"high\", \"max\"]\ncapabilities = [\"native_thinking\", \"function_tools\", \"forced_tool_choice\", \"streaming\", \"max_output_tokens\"]\n\n[model_profiles.default]\nprovider = \"deepseek\"\nmodel = \"deepseek-v4-pro\"\nreasoning_profile = \"high\"\n\n[model_profiles.default.provider_options]\nreasoning_effort = \"high\"\n"
                 .to_string(),
         }])
         .unwrap();

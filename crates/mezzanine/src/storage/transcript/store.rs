@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self as std_fs, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use tokio::fs::{self as tokio_fs, OpenOptions as TokioOpenOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -15,6 +16,7 @@ use rustix::fs::{FlockOperation, flock};
 use sha2::{Digest, Sha256};
 
 use crate::error::{MezError, MezErrorKind, Result};
+use crate::session_title::{bound_session_title, is_display_format_character};
 
 use super::CompareAndSwapTranscriptEntryResult;
 use super::archive::{
@@ -32,7 +34,9 @@ use super::fs::{
 use super::types::{
     AgentPresentationEntry, AgentTranscriptStore, NamedAgentSession, SavedAgentSession,
     SavedSessionCatalogStatus, SavedSessionPage, SavedSessionQuery, SavedSessionRetentionFailure,
-    SavedSessionRetentionPolicy, SavedSessionRetentionReport,
+    SavedSessionRetentionPolicy, SavedSessionRetentionReport, SessionObjectiveMirror,
+    SessionObjectiveMirrorHandleState, SessionObjectiveMirrorStatus,
+    SessionObjectiveMirrorWriteRead,
 };
 use mez_agent::AgentConversationKind;
 use mez_agent::transcript::{
@@ -104,8 +108,31 @@ const NAMED_AGENT_SESSIONS_FILE_NAME: &str = "named-sessions.json";
 const NAMED_AGENT_SESSIONS_LOCK_FILE_NAME: &str = ".named-sessions.json.lock";
 /// Current durable named-session index schema version.
 const NAMED_AGENT_SESSIONS_VERSION: u64 = 1;
+/// Versioned root-level index containing bounded objective title mirrors.
+const SESSION_OBJECTIVE_MIRRORS_FILE_NAME: &str = "session-objectives.json";
+/// Advisory lock serializing objective title mirror index updates.
+const SESSION_OBJECTIVE_MIRRORS_LOCK_FILE_NAME: &str = ".session-objectives.json.lock";
+/// Atomic-replacement temporary file for the objective title mirror index.
+const SESSION_OBJECTIVE_MIRRORS_TEMP_FILE_NAME: &str = ".session-objectives.json.tmp";
+/// Current durable objective title mirror index schema version.
+const SESSION_OBJECTIVE_MIRRORS_VERSION: u64 = 1;
+/// Maximum accepted objective title mirror index size in bytes.
+pub(super) const SESSION_OBJECTIVE_MIRRORS_MAX_BYTES: u64 = 4 * 1024 * 1024;
+/// Bounded quarantine name for one unreadable objective title mirror index.
+const SESSION_OBJECTIVE_MIRRORS_QUARANTINE_FILE_NAME: &str = ".session-objectives.json.unreadable";
+/// Maximum number of objective title mirrors retained in the persisted index.
+///
+/// The index is a display cache: at this bound each new mirror write drops the
+/// oldest retained mirrors, so growth from conversations that never enter the
+/// catalog stays bounded. The bound comfortably covers a typical retained
+/// session set while keeping the encoded index far below the byte bound (about
+/// 600 KiB at this count for bounded objectives), so the byte bound stays a
+/// guard rather than the trigger that disables mirroring.
+pub(super) const SESSION_OBJECTIVE_MIRRORS_MAX_ENTRIES: usize = 4_096;
+/// Maximum accepted length of one bounded mirror recovery diagnostic.
+const SESSION_OBJECTIVE_MIRROR_RECOVERY_REASON_MAX_CHARS: usize = 160;
 /// Maximum accepted session-name length in Unicode scalar values.
-const MAX_AGENT_SESSION_NAME_CHARS: usize = 80;
+const MAX_AGENT_SESSION_NAME_CHARS: usize = crate::session_title::MAX_SESSION_TITLE_CHARS;
 /// Defines the DEFAULT AGENT PROMPT HISTORY LIMIT const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
@@ -154,6 +181,9 @@ impl AgentTranscriptStore {
             root: config_root.into().join("agent-sessions"),
             saved_session_retention: default_saved_session_retention_policy(),
             presentation_compaction_threshold: PRESENTATION_CLEAR_TAIL_COMPACT_BYTES,
+            session_objective_mirrors: Arc::new(Mutex::new(
+                SessionObjectiveMirrorHandleState::default(),
+            )),
         }
     }
 
@@ -164,6 +194,9 @@ impl AgentTranscriptStore {
             root: root.into(),
             saved_session_retention: default_saved_session_retention_policy(),
             presentation_compaction_threshold: PRESENTATION_CLEAR_TAIL_COMPACT_BYTES,
+            session_objective_mirrors: Arc::new(Mutex::new(
+                SessionObjectiveMirrorHandleState::default(),
+            )),
         }
     }
 
@@ -238,14 +271,21 @@ impl AgentTranscriptStore {
     /// Loads one exact saved session, repairing catalog divergence from its files.
     pub fn saved_session(&self, conversation_id: &str) -> Result<Option<SavedAgentSession>> {
         validate_conversation_id(conversation_id)?;
-        if let Some(record) = catalog::record(self, conversation_id)?
-            && self.catalog_record_payloads_exist(conversation_id, &record)?
-        {
-            return Ok(Some(record.session));
-        }
-        catalog::note_exact_repair();
-        self.upsert_catalog_from_files(conversation_id, None)?;
-        Ok(catalog::record(self, conversation_id)?.map(|record| record.session))
+        let mut session = match catalog::record(self, conversation_id)? {
+            Some(record) if self.catalog_record_payloads_exist(conversation_id, &record)? => {
+                record.session
+            }
+            _ => {
+                catalog::note_exact_repair();
+                self.upsert_catalog_from_files(conversation_id, None)?;
+                let Some(record) = catalog::record(self, conversation_id)? else {
+                    return Ok(None);
+                };
+                record.session
+            }
+        };
+        self.attach_session_objective_titles(std::slice::from_mut(&mut session));
+        Ok(Some(session))
     }
 
     /// Loads the most recently active root conversation through the catalog.
@@ -268,12 +308,20 @@ impl AgentTranscriptStore {
         prefix: &str,
         limit: usize,
     ) -> Result<Vec<SavedAgentSession>> {
-        catalog::root_session_completions(self, prefix, limit)
+        let mut sessions = catalog::root_session_completions(self, prefix, limit)?;
+        self.attach_session_objective_titles(&mut sessions);
+        Ok(sessions)
     }
 
     /// Returns one bounded keyset page for saved-session browsing.
+    ///
+    /// Persisted objective title mirrors are attached after the indexed page is
+    /// read: they are display metadata only, so ordering, filtering, and
+    /// pagination stay entirely catalog-defined.
     pub fn query_saved_sessions(&self, query: &SavedSessionQuery) -> Result<SavedSessionPage> {
-        catalog::query_saved_sessions(self, query)
+        let mut page = catalog::query_saved_sessions(self, query)?;
+        self.attach_session_objective_titles(&mut page.sessions);
+        Ok(page)
     }
 
     /// Loads one exact saved-session record from the catalog for focused tests.
@@ -1077,7 +1125,9 @@ impl AgentTranscriptStore {
     /// Lists transcript-backed and named zero-entry sessions as one durable view.
     #[cfg(test)]
     pub fn saved_sessions(&self) -> Result<Vec<SavedAgentSession>> {
-        catalog::saved_sessions(self)
+        let mut sessions = catalog::saved_sessions(self)?;
+        self.attach_session_objective_titles(&mut sessions);
+        Ok(sessions)
     }
 
     /// Builds one deterministic migration snapshot from retained session files.
@@ -1430,6 +1480,9 @@ impl AgentTranscriptStore {
             }
         };
         let removed_name = self.remove_named_session(conversation_id)?;
+        // The objective title mirror is a display cache: a missing or unreadable
+        // index must never fail a conversation delete.
+        let _ = self.remove_session_objective_mirror(conversation_id);
         catalog::delete(self, conversation_id)?;
         Ok(removed_payload || removed_name)
     }
@@ -2494,6 +2547,368 @@ impl AgentTranscriptStore {
         Ok(removed)
     }
 
+    /// Persists one bounded mirror of the published objective for a conversation.
+    ///
+    /// Returns true only when the stored mirror changed. The value is bounded by
+    /// the shared title rules before it is written, and the mirror is written
+    /// only from the published objective value: the published discovery
+    /// objective stays the source of truth. The mirror exists so archived and
+    /// offline conversations can still resolve a policy-derived title.
+    ///
+    /// An objective that bounds to nothing retires any retained mirror so
+    /// resolution falls through to the first prompt, an unchanged refresh is
+    /// answered from this handle's last persisted value without reading the
+    /// bounded index, and an unreadable index is treated as empty and rebuilt
+    /// from this value.
+    pub fn mirror_session_objective(
+        &self,
+        conversation_id: &str,
+        objective: &str,
+        updated_at_unix_seconds: u64,
+    ) -> Result<bool> {
+        validate_conversation_id(conversation_id)?;
+        let Some(objective) = bound_session_title(objective) else {
+            return self.remove_session_objective_mirror(conversation_id);
+        };
+        // Unchanged refreshes dominate on the serialized runtime thread, so they
+        // are answered from the last value this handle persisted and never read
+        // or write the bounded index.
+        if self.session_objective_mirror_is_unchanged(conversation_id, &objective) {
+            return Ok(false);
+        }
+        let _lock = self.acquire_session_objective_mirrors_lock()?;
+        let mut mirrors = self
+            .read_session_objective_mirror_records_for_write()?
+            .records;
+        mirrors.insert(
+            conversation_id.to_string(),
+            SessionObjectiveMirror {
+                conversation_id: conversation_id.to_string(),
+                objective: objective.clone(),
+                updated_at_unix_seconds,
+            },
+        );
+        self.compact_session_objective_mirror_records(&mut mirrors, conversation_id);
+        self.write_session_objective_mirror_records(&mirrors)?;
+        self.note_session_objective_mirror_written(conversation_id, &objective);
+        Ok(true)
+    }
+
+    /// Removes one conversation's mirror while holding the index lock.
+    ///
+    /// Returns true when a retained mirror was pruned. An unreadable index is
+    /// treated as empty and replaced with a valid empty index, so a delete can no
+    /// longer be blocked by a corrupt cache file.
+    pub(super) fn remove_session_objective_mirror(&self, conversation_id: &str) -> Result<bool> {
+        validate_conversation_id(conversation_id)?;
+        self.forget_session_objective_mirror(conversation_id);
+        if !self.root.join(SESSION_OBJECTIVE_MIRRORS_FILE_NAME).exists() {
+            return Ok(false);
+        }
+        let _lock = self.acquire_session_objective_mirrors_lock()?;
+        let write_read = self.read_session_objective_mirror_records_for_write()?;
+        let mut mirrors = write_read.records;
+        let removed = mirrors.remove(conversation_id).is_some();
+        if removed || write_read.recovered {
+            self.write_session_objective_mirror_records(&mirrors)?;
+        }
+        Ok(removed)
+    }
+
+    /// Loads one validated objective title mirror for focused tests.
+    #[cfg(test)]
+    pub fn session_objective_mirror(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<SessionObjectiveMirror>> {
+        validate_conversation_id(conversation_id)?;
+        Ok(self
+            .read_session_objective_mirror_records()?
+            .remove(conversation_id))
+    }
+
+    /// Attaches persisted objective title mirrors to one bounded row set.
+    ///
+    /// The index is a cache, so an unreadable or invalid file degrades to no
+    /// mirror and every row still renders from its summary and conversation id.
+    fn attach_session_objective_titles(&self, sessions: &mut [SavedAgentSession]) {
+        if sessions.is_empty() {
+            return;
+        }
+        let mirrors = self
+            .read_session_objective_mirror_records()
+            .unwrap_or_default();
+        for session in sessions {
+            session.objective_title = mirrors
+                .get(&session.summary.conversation_id)
+                .map(|record| record.objective.clone());
+        }
+    }
+
+    /// Acquires the exclusive advisory lock for objective mirror index mutation.
+    fn acquire_session_objective_mirrors_lock(&self) -> Result<std_fs::File> {
+        self.ensure_store_dir()?;
+        let path = self.root.join(SESSION_OBJECTIVE_MIRRORS_LOCK_FILE_NAME);
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)?;
+        set_private_file_permissions(&path)?;
+        flock(&file, FlockOperation::LockExclusive).map_err(std::io::Error::from)?;
+        Ok(file)
+    }
+
+    /// Reads and validates the complete objective title mirror index.
+    fn read_session_objective_mirror_records(
+        &self,
+    ) -> Result<BTreeMap<String, SessionObjectiveMirror>> {
+        self.note_session_objective_mirror_index_read();
+        let path = self.root.join(SESSION_OBJECTIVE_MIRRORS_FILE_NAME);
+        if !path.exists() {
+            return Ok(BTreeMap::new());
+        }
+        if std_fs::metadata(&path)?.len() > SESSION_OBJECTIVE_MIRRORS_MAX_BYTES {
+            return Err(MezError::invalid_args(
+                "objective title mirror index exceeds the bounded size",
+            ));
+        }
+        let mut data = String::new();
+        std_fs::File::open(path)?.read_to_string(&mut data)?;
+        let value: serde_json::Value = serde_json::from_str(&data).map_err(|error| {
+            MezError::invalid_args(format!("objective title mirror decode failed: {error}"))
+        })?;
+        if value.get("version").and_then(serde_json::Value::as_u64)
+            != Some(SESSION_OBJECTIVE_MIRRORS_VERSION)
+        {
+            return Err(MezError::invalid_args(
+                "objective title mirror index version is unsupported",
+            ));
+        }
+        let records: Vec<SessionObjectiveMirror> =
+            serde_json::from_value(value.get("objectives").cloned().ok_or_else(|| {
+                MezError::invalid_args("objective title mirror records are missing")
+            })?)
+            .map_err(|error| {
+                MezError::invalid_args(format!(
+                    "objective title mirror records are invalid: {error}"
+                ))
+            })?;
+        let mut indexed = BTreeMap::new();
+        for mut record in records {
+            validate_conversation_id(&record.conversation_id)?;
+            record.objective = bound_session_title(&record.objective).ok_or_else(|| {
+                MezError::invalid_args("objective title mirror objective is invalid")
+            })?;
+            if indexed
+                .insert(record.conversation_id.clone(), record)
+                .is_some()
+            {
+                return Err(MezError::invalid_args(
+                    "objective title mirror index contains duplicate conversations",
+                ));
+            }
+        }
+        Ok(indexed)
+    }
+
+    /// Atomically replaces the durable objective title mirror index.
+    fn write_session_objective_mirror_records(
+        &self,
+        mirrors: &BTreeMap<String, SessionObjectiveMirror>,
+    ) -> Result<()> {
+        self.ensure_store_dir()?;
+        let path = self.root.join(SESSION_OBJECTIVE_MIRRORS_FILE_NAME);
+        let temp_path = self.root.join(SESSION_OBJECTIVE_MIRRORS_TEMP_FILE_NAME);
+        let encoded = encode_session_objective_mirror_records(mirrors)?;
+        self.note_session_objective_mirror_index_write();
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&temp_path)?;
+        file.write_all(&encoded)?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+        set_private_file_permissions(&temp_path)?;
+        std_fs::rename(&temp_path, &path)?;
+        set_private_file_permissions(&path)?;
+        Ok(())
+    }
+
+    /// Returns bounded diagnostics for this handle's objective title mirrors.
+    ///
+    /// The report follows the catalog status pattern: counts plus one bounded
+    /// reason, and never mirror content or conversation identifiers.
+    ///
+    /// The counters are per store handle, while `quarantined_index` reports the
+    /// durable quarantined file an operator can inspect on disk.
+    pub fn session_objective_mirror_status(&self) -> SessionObjectiveMirrorStatus {
+        let quarantined_index = self
+            .root
+            .join(SESSION_OBJECTIVE_MIRRORS_QUARANTINE_FILE_NAME)
+            .is_file();
+        self.session_objective_mirror_handle_state()
+            .lock()
+            .map(|state| SessionObjectiveMirrorStatus {
+                index_reads: state.index_reads,
+                index_writes: state.index_writes,
+                recoveries: state.recoveries,
+                last_recovery_reason: state.last_recovery_reason.clone(),
+                quarantined_index,
+            })
+            .unwrap_or(SessionObjectiveMirrorStatus {
+                quarantined_index,
+                ..SessionObjectiveMirrorStatus::default()
+            })
+    }
+
+    /// Returns the shared throttle and diagnostic state for this handle.
+    fn session_objective_mirror_handle_state(&self) -> &Mutex<SessionObjectiveMirrorHandleState> {
+        &self.session_objective_mirrors
+    }
+
+    /// Reports whether this handle already persisted the same bounded objective.
+    ///
+    /// The throttle is per handle, so a value written by another process can be
+    /// skipped until the published objective changes. That is acceptable for a
+    /// display cache and is what keeps an unchanged refresh off the index.
+    fn session_objective_mirror_is_unchanged(
+        &self,
+        conversation_id: &str,
+        objective: &str,
+    ) -> bool {
+        self.session_objective_mirror_handle_state()
+            .lock()
+            .map(|state| {
+                state.last_mirrored.as_ref()
+                    == Some(&(conversation_id.to_string(), objective.to_string()))
+            })
+            .unwrap_or(false)
+    }
+
+    /// Records the mirror value this handle most recently persisted.
+    fn note_session_objective_mirror_written(&self, conversation_id: &str, objective: &str) {
+        if let Ok(mut state) = self.session_objective_mirror_handle_state().lock() {
+            state.last_mirrored = Some((conversation_id.to_string(), objective.to_string()));
+        }
+    }
+
+    /// Clears this handle's throttle entry for one pruned conversation.
+    fn forget_session_objective_mirror(&self, conversation_id: &str) {
+        let Ok(mut state) = self.session_objective_mirror_handle_state().lock() else {
+            return;
+        };
+        if state
+            .last_mirrored
+            .as_ref()
+            .is_some_and(|(id, _)| id == conversation_id)
+        {
+            state.last_mirrored = None;
+        }
+    }
+
+    /// Counts one objective title mirror index read attempt.
+    fn note_session_objective_mirror_index_read(&self) {
+        if let Ok(mut state) = self.session_objective_mirror_handle_state().lock() {
+            state.index_reads = state.index_reads.saturating_add(1);
+        }
+    }
+
+    /// Counts one objective title mirror index write.
+    fn note_session_objective_mirror_index_write(&self) {
+        if let Ok(mut state) = self.session_objective_mirror_handle_state().lock() {
+            state.index_writes = state.index_writes.saturating_add(1);
+        }
+    }
+
+    /// Records one bounded objective title mirror recovery diagnostic.
+    fn note_session_objective_mirror_recovery(&self, reason: &str) {
+        let bounded = reason
+            .chars()
+            .filter(|character| !is_display_format_character(*character))
+            .take(SESSION_OBJECTIVE_MIRROR_RECOVERY_REASON_MAX_CHARS)
+            .collect::<String>();
+        if let Ok(mut state) = self.session_objective_mirror_handle_state().lock() {
+            state.recoveries = state.recoveries.saturating_add(1);
+            state.last_recovery_reason = Some(bounded);
+        }
+    }
+
+    /// Reads the mirror index for a write, treating an unreadable index as empty.
+    ///
+    /// The index is a display cache, never the source of truth, so a corrupt,
+    /// version-mismatched, or over-budget file must not permanently disable
+    /// mirroring. The unreadable file is moved aside under one bounded quarantine
+    /// name, one bounded diagnostic is recorded, and the caller rebuilds the
+    /// index from the value it is writing. Row rendering still degrades to no
+    /// mirror for an unreadable index.
+    fn read_session_objective_mirror_records_for_write(
+        &self,
+    ) -> Result<SessionObjectiveMirrorWriteRead> {
+        match self.read_session_objective_mirror_records() {
+            Ok(records) => Ok(SessionObjectiveMirrorWriteRead {
+                records,
+                recovered: false,
+            }),
+            Err(error) => {
+                self.quarantine_session_objective_mirror_index();
+                self.note_session_objective_mirror_recovery(error.message());
+                Ok(SessionObjectiveMirrorWriteRead {
+                    records: BTreeMap::new(),
+                    recovered: true,
+                })
+            }
+        }
+    }
+
+    /// Moves one unreadable mirror index aside under a bounded quarantine name.
+    ///
+    /// Quarantine is best effort: a failed move never fails the write, because
+    /// the atomic rebuild replaces the index anyway, and only one bounded
+    /// quarantine copy is ever retained.
+    fn quarantine_session_objective_mirror_index(&self) {
+        let path = self.root.join(SESSION_OBJECTIVE_MIRRORS_FILE_NAME);
+        let quarantine = self
+            .root
+            .join(SESSION_OBJECTIVE_MIRRORS_QUARANTINE_FILE_NAME);
+        let _ = std_fs::remove_file(&quarantine);
+        let _ = std_fs::rename(&path, &quarantine);
+    }
+
+    /// Drops the oldest mirrors so the persisted index stays within its bounds.
+    ///
+    /// The incoming conversation is always retained, so a mirror write can never
+    /// be refused: oldest-`updated_at` mirrors are dropped until the index holds
+    /// at most `SESSION_OBJECTIVE_MIRRORS_MAX_ENTRIES` entries. The 4 MiB byte
+    /// bound stays a guard on the read side, where an over-budget index is
+    /// quarantined and rebuilt from the incoming value instead of permanently
+    /// disabling mirroring.
+    fn compact_session_objective_mirror_records(
+        &self,
+        mirrors: &mut BTreeMap<String, SessionObjectiveMirror>,
+        keep_conversation_id: &str,
+    ) {
+        let excess = mirrors
+            .len()
+            .saturating_sub(SESSION_OBJECTIVE_MIRRORS_MAX_ENTRIES);
+        if excess == 0 {
+            return;
+        }
+        let mut evictable = mirrors
+            .iter()
+            .filter(|(conversation_id, _)| conversation_id.as_str() != keep_conversation_id)
+            .map(|(conversation_id, record)| {
+                (record.updated_at_unix_seconds, conversation_id.clone())
+            })
+            .collect::<Vec<_>>();
+        evictable.sort();
+        for (_, conversation_id) in evictable.into_iter().take(excess) {
+            mirrors.remove(&conversation_id);
+        }
+    }
+
     /// Returns the durable naming timestamp retained for archive rebuild metadata.
     pub(super) fn archive_named_at_unix_seconds(
         &self,
@@ -2519,6 +2934,19 @@ impl AgentTranscriptStore {
         }
         Ok(self.root.join(format!("{conversation_id}.tsv")))
     }
+}
+
+/// Encodes one complete objective title mirror index.
+fn encode_session_objective_mirror_records(
+    mirrors: &BTreeMap<String, SessionObjectiveMirror>,
+) -> Result<Vec<u8>> {
+    serde_json::to_vec(&serde_json::json!({
+        "version": SESSION_OBJECTIVE_MIRRORS_VERSION,
+        "objectives": mirrors.values().collect::<Vec<_>>(),
+    }))
+    .map_err(|error| {
+        MezError::invalid_args(format!("objective title mirror encode failed: {error}"))
+    })
 }
 
 /// Returns whether one root entry belongs to a shared non-transcript TSV store.
@@ -2620,9 +3048,9 @@ fn validate_agent_session_name(name: &str) -> Result<String> {
             "agent session name must not be empty",
         ));
     }
-    if name.chars().any(char::is_control) {
+    if name.chars().any(is_display_format_character) {
         return Err(MezError::invalid_args(
-            "agent session name must not contain control characters",
+            "agent session name must not contain control or format characters",
         ));
     }
     if name.chars().count() > MAX_AGENT_SESSION_NAME_CHARS {

@@ -14,6 +14,7 @@ mod integrations;
 mod protocol;
 mod runtime;
 mod security;
+mod session_title;
 mod storage;
 #[cfg(test)]
 mod test_support;

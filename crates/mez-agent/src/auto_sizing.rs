@@ -794,6 +794,33 @@ pub fn auto_sizing_selection_for_explicit_pair(
     })
 }
 
+/// Lists the reasoning efforts an explicit size/reasoning pair may use.
+///
+/// The returned order follows the configured global allow-list so provider
+/// schemas can advertise a stable, truthful set. A target with no known
+/// supported list accepts every globally allowed effort, matching
+/// `auto_sizing_selection_for_explicit_pair`.
+pub fn auto_sizing_allowed_reasoning_efforts_for_target(
+    allowed_reasoning_efforts: &[String],
+    target: &AutoSizingTargetProfile,
+) -> Vec<String> {
+    let mut allowed = Vec::new();
+    for effort in allowed_reasoning_efforts {
+        if !target.supported_reasoning_efforts.is_empty()
+            && !target
+                .supported_reasoning_efforts
+                .iter()
+                .any(|supported| supported == effort)
+        {
+            continue;
+        }
+        if !allowed.iter().any(|existing| existing == effort) {
+            allowed.push(effort.clone());
+        }
+    }
+    allowed
+}
+
 /// Selects an execution profile from a router response or applies fallback.
 pub fn auto_sizing_selection_from_response(
     auto_sizing: &AutoSizingDispatch,
@@ -927,6 +954,40 @@ mod tests {
             allowed_reasoning_efforts: vec!["medium".to_string(), "high".to_string()],
             fallback_policy: AutoSizingFallbackPolicy::UseDefaultProfile,
         }
+    }
+
+    /// Verifies advertised allowed reasoning efforts are exactly the globally
+    /// allowed levels a size target still supports.
+    ///
+    /// Provider schemas use this list, so it must mirror the explicit-pair
+    /// check: configured levels absent from a known target list are excluded,
+    /// duplicate configured levels collapse, and unknown target lists accept
+    /// every configured level.
+    #[test]
+    fn explicit_allowed_reasoning_efforts_intersect_configured_and_target_levels() {
+        let auto_sizing = dispatch();
+        let global = vec![
+            "low".to_string(),
+            "medium".to_string(),
+            "high".to_string(),
+            "xhigh".to_string(),
+            "medium".to_string(),
+        ];
+        assert_eq!(
+            auto_sizing_allowed_reasoning_efforts_for_target(&global, &auto_sizing.small),
+            vec!["medium".to_string(), "high".to_string()]
+        );
+        let mut unknown_target = auto_sizing.small.clone();
+        unknown_target.supported_reasoning_efforts.clear();
+        assert_eq!(
+            auto_sizing_allowed_reasoning_efforts_for_target(&global, &unknown_target),
+            vec![
+                "low".to_string(),
+                "medium".to_string(),
+                "high".to_string(),
+                "xhigh".to_string()
+            ]
+        );
     }
 
     /// Builds a provider response containing one router decision payload.
@@ -1095,6 +1156,7 @@ mod tests {
             models: vec![crate::ProviderModelConfig::named("deepseek-v4-pro")],
             default_model: Some("deepseek-v4-pro".to_string()),
             options,
+            unknown_model_policy: "conservative".to_string(),
         };
         let profile = ModelProfile {
             provider: "deepseek".to_string(),

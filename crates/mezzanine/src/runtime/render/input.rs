@@ -727,6 +727,7 @@ impl RuntimeSessionService {
             })
             .flatten();
         let transcript_store = self.persistence.cloned_transcript_store();
+        let session_title_policy = self.agent_session_title_policy();
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         self.presentation.agent_prompt_selector_refreshes.insert(
             refresh_key.clone(),
@@ -744,6 +745,7 @@ impl RuntimeSessionService {
                     project_root,
                     issue_database_path,
                     transcript_store,
+                    session_title_policy,
                 );
                 let _ = sender.send(candidates);
             });
@@ -855,6 +857,7 @@ fn runtime_agent_selector_extra_candidates_from_snapshot(
     project_root: Option<std::path::PathBuf>,
     issue_database_path: Option<crate::storage::issues::IssueDatabasePath>,
     transcript_store: Option<crate::storage::transcript::AgentTranscriptStore>,
+    session_title_policy: crate::session_title::SessionTitlePolicy,
 ) -> Vec<SelectorExtraCandidate> {
     let catalog = crate::integrations::skills::discover_skill_catalog(
         user_config_root.as_deref(),
@@ -927,16 +930,26 @@ fn runtime_agent_selector_extra_candidates_from_snapshot(
             .unwrap_or_default()
             .into_iter()
             .map(|session| {
+                let resolved_title = crate::session_title::resolve_saved_session_title(
+                    &session,
+                    session_title_policy,
+                );
                 let summary = session.summary;
                 let detail = match session.name {
                     Some(name) => format!(
                         "{name} — {} entries, pane {}, agent {}",
                         summary.entries, summary.pane_id, summary.agent_id
                     ),
-                    None => format!(
-                        "{} entries, pane {}, agent {}",
-                        summary.entries, summary.pane_id, summary.agent_id
-                    ),
+                    None => match resolved_title {
+                        Some(title) => format!(
+                            "{} — {} entries, pane {}, agent {}",
+                            title.text, summary.entries, summary.pane_id, summary.agent_id
+                        ),
+                        None => format!(
+                            "{} entries, pane {}, agent {}",
+                            summary.entries, summary.pane_id, summary.agent_id
+                        ),
+                    },
                 };
                 SelectorExtraCandidate::new(
                     SelectorSurface::AgentCommand,

@@ -419,6 +419,19 @@ fn runtime_agent_macro_judge_dispatches_next_step_after_child_result() {
         .find(|turn| turn.cooperation_mode.as_deref() == Some("macro-step"))
         .cloned()
         .expect("first runtime-owned macro step should create a child turn");
+    let child_agent = AgentId::opaque(first_child_turn.agent_id.clone()).unwrap();
+    let registered =
+        service
+            .message_service()
+            .discover_agents_filtered(None, None, None, None, None, &[]);
+    assert_eq!(
+        service
+            .message_service()
+            .registered_identity(&child_agent)
+            .and_then(|identity| identity.objective.as_deref()),
+        Some("Inspect release notes."),
+        "{registered:?}"
+    );
 
     service
         .agent_turn_ledger_mut()
@@ -1031,6 +1044,7 @@ fn runtime_joined_child_failure_without_shell_session_settles_parent() {
             recipient: format!("agent:{}", child.agent_id),
             content_type: "text/plain; charset=utf-8".to_string(),
             payload: "step one".to_string(),
+            correlation_id: None,
         },
     };
     service.agent_turn_executions_mut().insert(

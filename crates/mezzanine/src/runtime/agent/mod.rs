@@ -156,6 +156,7 @@ mod audit;
 mod bookkeeping;
 mod config_change;
 mod context_documents;
+mod discovery;
 mod failures;
 mod issues;
 mod lifecycle;
@@ -273,6 +274,19 @@ pub(crate) struct RuntimeAgentComponent {
     agent_root_routing_policy_overrides: BTreeMap<String, AutoSizingRoutingPolicy>,
     /// Maximum iterations accepted by one loop controller.
     agent_loop_limit: usize,
+    /// Maximum peer-message-triggered turns started for one agent.
+    agent_peer_message_loop_limit: usize,
+    /// Configured source used to derive saved-session display titles.
+    agent_session_title_policy: crate::session_title::SessionTitlePolicy,
+    /// Peer-message-triggered turns started since the last direct user input.
+    agent_peer_message_turns: BTreeMap<String, usize>,
+    /// Agents already told that the peer-message loop limit was reached.
+    ///
+    /// The limit is a stable episode state, so the pane status line and the
+    /// lifecycle diagnostic are emitted once per episode rather than once per
+    /// delivery tick. The marker clears with the counter on direct user input
+    /// (see `reset_agent_peer_message_turns`) and whenever a peer turn starts.
+    agent_peer_message_limit_reported: std::collections::BTreeSet<String>,
     /// Active loop controller state keyed by stable logical loop id.
     agent_loops_by_id: BTreeMap<String, RuntimeAgentLoopState>,
     /// Active logical loop id indexed by invoking or execution pane id.
@@ -294,6 +308,12 @@ pub(crate) struct RuntimeAgentComponent {
     /// The counter remains controller state. The corresponding safe
     /// continuation material commits to chronology when recovery begins.
     agent_turn_output_limit_recovery_attempts: BTreeMap<String, u32>,
+    /// MAAP repair attempts currently shaping each active turn.
+    ///
+    /// Malformed provider MAAP output is repaired with a bounded immediate
+    /// re-request instead of a transport retry; the counter keeps the repair
+    /// sequence bounded even when failures repeat.
+    agent_turn_maap_repair_attempts: BTreeMap<String, u32>,
     /// Exceptional provider interaction selected for each active turn.
     agent_turn_interaction_kinds: BTreeMap<String, ModelInteractionKind>,
     /// Causal execution group keyed by turn and execution-scoped action id.
@@ -607,6 +627,7 @@ impl RuntimeAgentComponent {
         agent_auto_sizing: RuntimeAutoSizingConfig,
         agent_compaction_raw_retention_percent: usize,
         agent_loop_limit: usize,
+        agent_peer_message_loop_limit: usize,
         agent_action_failure_retry_limit: usize,
         agent_turn_timeout_ms: u64,
     ) -> Self {
@@ -616,6 +637,7 @@ impl RuntimeAgentComponent {
             agent_auto_sizing,
             agent_compaction_raw_retention_percent,
             agent_loop_limit,
+            agent_peer_message_loop_limit,
             agent_action_failure_retry_limit,
             agent_turn_timeout_ms,
             agent_native_shell_timeout_ms: mez_agent::DEFAULT_NATIVE_SHELL_TIMEOUT_MS,
@@ -953,6 +975,19 @@ impl RuntimeSessionService {
         let identity = (turn_id.to_string(), action_id.to_string());
         self.agent.sandbox_bypass_after_approval.remove(&identity);
         self.agent.active_sandbox_bypasses.remove(&identity);
+    }
+
+    /// Returns macro and bridge child agent ids owned by one parent turn.
+    ///
+    /// Runtime macro and bridge sends stay ungated: only model-planned message
+    /// actions are subject to message-recipient approval.
+    pub(crate) fn macro_bridge_message_recipient_ids(&self, turn_id: &str) -> Vec<String> {
+        self.agent
+            .macro_managed_subagent_agents
+            .iter()
+            .filter(|(_, owner)| owner.parent_turn_id == turn_id)
+            .map(|(agent_id, _)| agent_id.clone())
+            .collect()
     }
 
     /// Reports whether one managed macro child is registered.
@@ -2172,6 +2207,7 @@ impl RuntimeSessionService {
     pub(crate) fn clear_all_agent_action_bookkeeping(&mut self) {
         self.agent.agent_turn_failure_feedback_attempts.clear();
         self.agent.agent_turn_output_limit_recovery_attempts.clear();
+        self.agent.agent_turn_maap_repair_attempts.clear();
         self.agent.agent_turn_interaction_kinds.clear();
         self.agent.sandbox_failure_assessments.clear();
         self.agent.sandbox_fallback_audits.clear();
@@ -2383,6 +2419,80 @@ impl RuntimeSessionService {
     /// Replaces the configured loop iteration limit.
     pub(crate) fn set_agent_loop_limit(&mut self, limit: usize) {
         self.agent.agent_loop_limit = limit;
+    }
+
+    /// Returns the configured peer-message-triggered turn limit.
+    pub(crate) fn agent_peer_message_loop_limit(&self) -> usize {
+        self.agent.agent_peer_message_loop_limit.max(1)
+    }
+
+    /// Replaces the configured peer-message-triggered turn limit.
+    pub(crate) fn set_agent_peer_message_loop_limit(&mut self, limit: usize) {
+        self.agent.agent_peer_message_loop_limit = limit;
+    }
+
+    /// Returns the configured saved-session title source policy.
+    pub(crate) fn agent_session_title_policy(&self) -> crate::session_title::SessionTitlePolicy {
+        self.agent.agent_session_title_policy
+    }
+
+    /// Replaces the configured saved-session title source policy.
+    pub(crate) fn set_agent_session_title_policy(
+        &mut self,
+        policy: crate::session_title::SessionTitlePolicy,
+    ) {
+        self.agent.agent_session_title_policy = policy;
+    }
+
+    /// Returns how many peer-message turns one agent has started.
+    pub(crate) fn agent_peer_message_turn_count(&self, agent_id: &str) -> usize {
+        self.agent
+            .agent_peer_message_turns
+            .get(agent_id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Records the peer-message turn count observed for one agent.
+    pub(crate) fn set_agent_peer_message_turn_count(&mut self, agent_id: &str, count: usize) {
+        self.agent
+            .agent_peer_message_turns
+            .insert(agent_id.to_string(), count);
+    }
+
+    /// Clears the peer-message turn count and limit episode after direct user
+    /// input.
+    ///
+    /// Direct user input is the defined reset trigger for message-triggered
+    /// turns: it clears the counter and the recorded limit episode so peer mail
+    /// can start turns again, and the same prompt turn commits pending peer mail
+    /// into that turn.
+    pub(crate) fn reset_agent_peer_message_turns(&mut self, agent_id: &str) {
+        self.agent.agent_peer_message_turns.remove(agent_id);
+        self.agent
+            .agent_peer_message_limit_reported
+            .remove(agent_id);
+    }
+
+    /// Returns whether the peer-message loop limit was already reported.
+    pub(crate) fn agent_peer_message_limit_reported(&self, agent_id: &str) -> bool {
+        self.agent
+            .agent_peer_message_limit_reported
+            .contains(agent_id)
+    }
+
+    /// Records that the peer-message loop limit was reported for one agent.
+    pub(crate) fn mark_agent_peer_message_limit_reported(&mut self, agent_id: &str) {
+        self.agent
+            .agent_peer_message_limit_reported
+            .insert(agent_id.to_string());
+    }
+
+    /// Clears the recorded loop-limit episode for one agent.
+    pub(crate) fn clear_agent_peer_message_limit_reported(&mut self, agent_id: &str) {
+        self.agent
+            .agent_peer_message_limit_reported
+            .remove(agent_id);
     }
 
     /// Returns loop controller state for one pane.

@@ -39,6 +39,8 @@ fn session_catalog_cli_reports_status_and_rebuilds_retained_sessions() {
     let status: serde_json::Value = serde_json::from_slice(&status_stdout).unwrap();
     assert_eq!(status["integrity_ok"], true);
     assert_eq!(status["indexed_conversations"], 1);
+    assert_eq!(status["objective_mirrors"]["quarantined_index"], false);
+    assert_eq!(status["objective_mirrors"]["recoveries"], 0);
     let scans_before_rebuild = status["full_scans"].as_u64().unwrap();
     assert!(scans_before_rebuild >= 1);
 

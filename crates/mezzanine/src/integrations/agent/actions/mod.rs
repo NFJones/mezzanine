@@ -6,7 +6,7 @@
 
 mod execution;
 mod planning;
-mod recovery;
+pub(crate) mod recovery;
 mod runner;
 mod transcript;
 

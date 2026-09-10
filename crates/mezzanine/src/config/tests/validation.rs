@@ -797,6 +797,40 @@ fn rejects_invalid_agent_shell_mode_values() {
     }
 }
 
+/// Verifies the saved-session title policy accepts only defined title sources.
+///
+/// Otherwise an operator could select a source with no derivation rule and the
+/// resume browser would silently fall back to a different title.
+#[test]
+fn validates_agent_session_title_policy_values() {
+    for value in ["generated", "objective", "last_prompt", "first_prompt"] {
+        let validation = validate_config_text(
+            ConfigFormat::Toml,
+            &format!("[agents]\nsession_title_policy = \"{value}\"\n"),
+            ConfigScope::Primary,
+        );
+
+        assert!(
+            validation.valid,
+            "rejected title policy {value}: {:?}",
+            validation.diagnostics
+        );
+    }
+    for value in ["\"model\"", "\"Generated\"", "3", "\"\""] {
+        let validation = validate_config_text(
+            ConfigFormat::Toml,
+            &format!("[agents]\nsession_title_policy = {value}\n"),
+            ConfigScope::Primary,
+        );
+
+        assert!(!validation.valid, "accepted title policy {value}");
+        assert!(validation.diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == "agents.session_title_policy"
+                && diagnostic.message.contains("generated, objective")
+        }));
+    }
+}
+
 /// Verifies the static action allowlist accepts executable actions and rejects
 /// empty, duplicate, unknown, non-string, and controller-only entries.
 #[test]
@@ -1785,5 +1819,84 @@ fn rejects_window_status_pill_style_but_accepts_pane_pill_style() {
             .diagnostics
             .iter()
             .all(|diagnostic| { diagnostic.path != "frames.pane.pills.model.style" })
+    );
+}
+
+/// Vocabulary validation constrains capability tags and per-provider
+/// reasoning levels while keeping unknown adapters permissive.
+#[test]
+fn provider_model_metadata_vocabulary_validation() {
+    let deepseek_invalid = validate_config_text(
+        ConfigFormat::Toml,
+        "[providers.deepseek]\nkind = \"deepseek\"\napi = \"deepseek-chat-completions\"\n[providers.deepseek.models.flash]\nid = \"deepseek-flash\"\nreasoning_levels = [\"minimal\"]\ncapabilities = [\"bogus\"]\n",
+        ConfigScope::Primary,
+    );
+    assert!(!deepseek_invalid.valid);
+    assert!(
+        deepseek_invalid
+            .diagnostics
+            .iter()
+            .any(|d| d.path == "providers.deepseek.models.flash.reasoning_levels")
+    );
+    assert!(
+        deepseek_invalid
+            .diagnostics
+            .iter()
+            .any(|d| d.path == "providers.deepseek.models.flash.capabilities")
+    );
+
+    let deepseek_valid = validate_config_text(
+        ConfigFormat::Toml,
+        "[providers.deepseek]\nkind = \"deepseek\"\napi = \"deepseek-chat-completions\"\n[providers.deepseek.models.flash]\nid = \"deepseek-flash\"\nreasoning_levels = [\"low\", \"high\", \"max\"]\ncapabilities = [\"tool_use\", \"vision\"]\n",
+        ConfigScope::Primary,
+    );
+    assert!(deepseek_valid.valid, "{:?}", deepseek_valid.diagnostics);
+
+    let permissive = validate_config_text(
+        ConfigFormat::Toml,
+        "[providers.custom]\nkind = \"openai-compatible\"\n[providers.custom.models.m]\nid = \"m\"\nreasoning_levels = [\"custom-level\"]\n",
+        ConfigScope::Primary,
+    );
+    assert!(permissive.valid, "{:?}", permissive.diagnostics);
+}
+
+/// Reasoning selections are validated against resolvable model metadata at
+/// config-load time instead of failing later at materialization.
+#[test]
+fn reasoning_profile_validated_against_model_metadata() {
+    let missing_metadata = validate_config_text(
+        ConfigFormat::Toml,
+        "[providers.deepseek]\nkind = \"deepseek\"\napi = \"deepseek-chat-completions\"\n[providers.deepseek.models.flash]\nid = \"deepseek-flash\"\n[model_profiles.work]\nprovider = \"deepseek\"\nmodel = \"deepseek-flash\"\nreasoning_profile = \"high\"\n",
+        ConfigScope::Primary,
+    );
+    assert!(!missing_metadata.valid);
+    assert!(missing_metadata.diagnostics.iter().any(|d| {
+        d.path == "model_profiles.work.reasoning_profile"
+            && d.message.contains("requires explicit reasoning_levels")
+    }));
+
+    let declared = validate_config_text(
+        ConfigFormat::Toml,
+        "[providers.deepseek]\nkind = \"deepseek\"\napi = \"deepseek-chat-completions\"\n[providers.deepseek.models.flash]\nid = \"deepseek-flash\"\nreasoning_levels = [\"high\", \"max\"]\n[model_profiles.work]\nprovider = \"deepseek\"\nmodel = \"deepseek-flash\"\nreasoning_profile = \"high\"\n",
+        ConfigScope::Primary,
+    );
+    assert!(declared.valid, "{:?}", declared.diagnostics);
+
+    let api_default = validate_config_text(
+        ConfigFormat::Toml,
+        "[providers.deepseek]\nkind = \"deepseek\"\napi = \"deepseek-chat-completions\"\nunknown_model_policy = \"api-default\"\n[providers.deepseek.models.flash]\nid = \"deepseek-flash\"\n[model_profiles.work]\nprovider = \"deepseek\"\nmodel = \"deepseek-flash\"\nreasoning_profile = \"high\"\n",
+        ConfigScope::Primary,
+    );
+    assert!(api_default.valid, "{:?}", api_default.diagnostics);
+
+    let profile_levels_override = validate_config_text(
+        ConfigFormat::Toml,
+        "[providers.deepseek]\nkind = \"deepseek\"\napi = \"deepseek-chat-completions\"\n[providers.deepseek.models.flash]\nid = \"deepseek-flash\"\nreasoning_levels = [\"high\"]\n[model_profiles.work]\nprovider = \"deepseek\"\nmodel = \"deepseek-flash\"\nreasoning_profile = \"xhigh\"\nreasoning_levels = [\"xhigh\"]\n",
+        ConfigScope::Primary,
+    );
+    assert!(
+        profile_levels_override.valid,
+        "{:?}",
+        profile_levels_override.diagnostics
     );
 }

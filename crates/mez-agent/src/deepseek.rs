@@ -566,7 +566,8 @@ fn deepseek_maap_tool_schema(
 /// Maps Mezzanine reasoning effort levels to DeepSeek-supported values.
 fn deepseek_reasoning_effort(effort: &str) -> &'static str {
     match effort {
-        "low" | "medium" | "high" => "high",
+        "low" => "low",
+        "medium" | "high" => "high",
         "xhigh" | "max" => "max",
         _ => "high",
     }
@@ -648,19 +649,21 @@ mod tests {
         ContextSourceKind, ModelCapabilities, ModelMessage, PROVIDER_TRANSCRIPT_EVENT_MARKER,
     };
 
-    /// Returns the complete model-declared DeepSeek capabilities shared by the
-    /// known Pro and Flash catalog records.
+    /// Returns model-declared DeepSeek capabilities built from the same
+    /// metadata lists a configured model record would carry.
     fn known_deepseek_capabilities() -> ModelCapabilities {
-        ModelCapabilities {
-            metadata_policy: ModelCapabilityMetadataPolicy::ModelMetadata,
-            native_thinking: true,
-            supported_reasoning_efforts: vec!["high".to_string(), "max".to_string()],
-            reasoning_efforts_explicit: true,
-            function_tools: true,
-            forced_tool_choice: true,
-            streaming: true,
-            max_output_tokens: true,
-        }
+        ModelCapabilities::from_metadata(
+            ProviderApiCompatibility::DeepSeekChatCompletions,
+            Some(&[
+                "native_thinking".to_string(),
+                "function_tools".to_string(),
+                "forced_tool_choice".to_string(),
+                "streaming".to_string(),
+                "max_output_tokens".to_string(),
+            ]),
+            Some(&["low".to_string(), "high".to_string(), "max".to_string()]),
+            false,
+        )
     }
 
     /// Builds a minimal DeepSeek model request for provider-shape tests.
@@ -700,7 +703,7 @@ mod tests {
     /// while thinking is active.
     #[test]
     fn known_deepseek_pro_and_flash_prepare_native_thinking_bodies() {
-        for model in ["deepseek-v4-pro", "deepseek-v4-flash"] {
+        for model in ["deepseek-flash", "deepseek-v4-pro", "deepseek-v4-flash"] {
             let mut request = deepseek_test_request(Vec::new());
             request.model = model.to_string();
             request.model_capabilities = known_deepseek_capabilities();
@@ -725,6 +728,19 @@ mod tests {
             assert!(body.get("tool_choice").is_none(), "{model}: {body}");
             assert_eq!(body["tools"].as_array().map(Vec::len), Some(1));
         }
+
+        // DeepSeek documents a low thinking effort, so the lowest Mezzanine
+        // reasoning level must reach the provider unchanged while this
+        // catalog still declares it explicitly.
+        let mut low_effort = deepseek_test_request(Vec::new());
+        low_effort.model = "deepseek-flash".to_string();
+        low_effort.model_capabilities = known_deepseek_capabilities();
+        low_effort.reasoning_effort = Some("low".to_string());
+        low_effort.thinking_enabled = Some(true);
+
+        let preparation = prepare_deepseek_chat_completions_request(&low_effort, true).unwrap();
+        let body: serde_json::Value = serde_json::from_str(&preparation.body).unwrap();
+        assert_eq!(body["reasoning_effort"], "low");
     }
 
     /// Verifies unknown DeepSeek models retain only the conservative MAAP and

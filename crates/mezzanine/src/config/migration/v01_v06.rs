@@ -474,6 +474,22 @@ pub(super) fn migrate_toml_v6_to_v7(text: &str) -> Result<String> {
         524_288,
         1_000_000,
     )?;
+    update_toml_model_profile_context_window_default(
+        &mut document,
+        "deepseek-default",
+        "deepseek",
+        "deepseek-flash",
+        524_288,
+        1_000_000,
+    )?;
+    update_toml_model_profile_context_window_default(
+        &mut document,
+        "deepseek-fast",
+        "deepseek",
+        "deepseek-flash",
+        524_288,
+        1_000_000,
+    )?;
     set_toml_path_item(&mut document, "version", toml_edit::value(7))?;
 
     Ok(document.to_string())
@@ -506,6 +522,22 @@ pub(super) fn migrate_json_compatible_v6_to_v7(format: ConfigFormat, text: &str)
         "deepseek-fast",
         "deepseek",
         "deepseek-v4-flash",
+        524_288,
+        1_000_000,
+    )?;
+    update_json_model_profile_context_window_default(
+        &mut document,
+        "deepseek-default",
+        "deepseek",
+        "deepseek-flash",
+        524_288,
+        1_000_000,
+    )?;
+    update_json_model_profile_context_window_default(
+        &mut document,
+        "deepseek-fast",
+        "deepseek",
+        "deepseek-flash",
         524_288,
         1_000_000,
     )?;

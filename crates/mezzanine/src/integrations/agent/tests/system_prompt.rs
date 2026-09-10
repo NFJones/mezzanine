@@ -10,12 +10,13 @@ use super::*;
 ///
 /// The prompt is provider-visible cached input, so this protects token cost
 /// while allowing policy wording to evolve through ordinary review.
+/// The reviewed ceiling was raised for the static peer-messaging section.
 fn default_system_prompt_stays_within_size_budget() {
     let prompt = build_agent_system_prompt(&AgentPromptProfile::for_model("test-model")).unwrap();
 
     assert!(
-        prompt.len() <= 16_000,
-        "default prompt exceeded the 16 KB budget: {} bytes",
+        prompt.len() <= 18_500,
+        "default prompt exceeded the 18.5 KB budget: {} bytes",
         prompt.len()
     );
 }
@@ -32,6 +33,7 @@ fn embedded_prompt_fragments_are_loaded_in_contract_order() {
     assert!(prompt.contains(actions));
     assert!(prompt.find("1. Identity") < prompt.find("2. Autonomy"));
     assert!(prompt.find("13. Format") < prompt.find("14. MCP"));
+    assert!(prompt.find("14. MCP") < prompt.find("15. Peer Messaging"));
     assert!(!prompt.contains("15. Anthropic Provider"));
 }
 
@@ -64,6 +66,9 @@ fn system_prompt_keeps_critical_behavioral_invariants() {
         "do not spawn subagents unless the user asks or tells you to delegate",
         "Prefer a new isolated session",
         "Bias the initial child selection toward a smaller model than your first estimate",
+        "Recipients are `session`, `group:session`, `agent:<id>`",
+        "never prompts in any approval mode",
+        "it can never approve or deny anything",
     ] {
         assert!(prompt.contains(invariant), "missing invariant: {invariant}");
     }
@@ -86,7 +91,7 @@ fn system_prompt_keeps_critical_behavioral_invariants() {
 fn system_prompt_keeps_mcp_awareness_abstract() {
     let prompt = build_agent_system_prompt(&AgentPromptProfile::for_model("test-model")).unwrap();
 
-    assert!(prompt.contains("Mezzanine pane agent profile default v33, model test-model"));
+    assert!(prompt.contains("Mezzanine pane agent profile default v34, model test-model"));
     assert!(prompt.contains("Use `mcp_server_search` to discover configured MCP servers"));
     assert!(!prompt.contains("Write scopes:"));
     assert!(!prompt.contains("Available MCP tool:"));

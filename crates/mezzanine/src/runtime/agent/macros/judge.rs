@@ -209,6 +209,7 @@ impl RuntimeSessionService {
                         recipient: format!("agent:{child_agent_id}"),
                         content_type: "text/plain; charset=utf-8".to_string(),
                         payload: prompt.clone(),
+                        correlation_id: None,
                     },
                 };
                 let result = self
@@ -289,6 +290,7 @@ impl RuntimeSessionService {
                         recipient: format!("agent:{child_agent_id}"),
                         content_type: "text/plain; charset=utf-8".to_string(),
                         payload: prompt.clone(),
+                        correlation_id: None,
                     },
                 };
                 let result = self

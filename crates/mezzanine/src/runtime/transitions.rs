@@ -717,6 +717,12 @@ pub enum RuntimeTimerKind {
     SavedSessionRetention,
     /// Ordinary provider dispatch wakeup for pending work.
     ProviderPoll,
+    /// Dedicated periodic peer-message delivery and expiry sweep.
+    ///
+    /// This timer is independent of the runtime actor tick: it keeps pending
+    /// peer delivery and TTL expiry progressing without a new protocol frame
+    /// or local send.
+    PeerMessageDelivery,
     /// Delayed provider retry after a transient provider failure.
     ProviderRetry,
     /// Timeout for a provider task claimed by an async worker.

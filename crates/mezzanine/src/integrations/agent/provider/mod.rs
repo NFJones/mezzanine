@@ -33,7 +33,7 @@ use deepseek::DeepSeekChatCompletionsDialect;
 pub use deepseek::build_deepseek_chat_completions_http_request;
 use errors::provider_maap_parse_error;
 pub(crate) use errors::{
-    provider_error_retry_class, provider_error_retry_class_from_parts,
+    bounded_provider_event_kind, provider_error_retry_class, provider_error_retry_class_from_parts,
     provider_event_error_from_parts, provider_event_error_kind,
 };
 #[cfg(test)]

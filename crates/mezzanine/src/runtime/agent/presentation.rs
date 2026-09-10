@@ -228,6 +228,7 @@ impl RuntimeSessionService {
                 | AgentActionPayload::ConfigChange { .. }
                 | AgentActionPayload::MemorySearch { .. }
                 | AgentActionPayload::MemoryStore { .. }
+                | AgentActionPayload::ListAgents { .. }
                 | AgentActionPayload::IssueAdd { .. }
                 | AgentActionPayload::IssueUpdate { .. }
                 | AgentActionPayload::IssueQuery { .. }

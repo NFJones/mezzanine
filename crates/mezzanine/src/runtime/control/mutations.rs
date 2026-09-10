@@ -1050,6 +1050,7 @@ impl RuntimeSessionService {
                     .iter()
                     .map(|capability| (*capability).to_string())
                     .collect(),
+                objective: None,
             },
             now_ms,
         )?)

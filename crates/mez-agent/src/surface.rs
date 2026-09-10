@@ -288,6 +288,8 @@ pub enum AllowedAction {
     MemorySearch,
     /// Store one persistent memory record.
     MemoryStore,
+    /// List discoverable session agents (read-only discovery).
+    ListAgents,
     /// Add one local project issue.
     IssueAdd,
     /// Update one local project issue.
@@ -318,6 +320,7 @@ impl AllowedAction {
             AllowedAction::McpCall => "mcp_call",
             AllowedAction::MemorySearch => "memory_search",
             AllowedAction::MemoryStore => "memory_store",
+            AllowedAction::ListAgents => "list_agents",
             AllowedAction::IssueAdd => "issue_add",
             AllowedAction::IssueUpdate => "issue_update",
             AllowedAction::IssueQuery => "issue_query",
@@ -344,6 +347,7 @@ impl AllowedAction {
             "mcp_call" => Some(AllowedAction::McpCall),
             "memory_search" => Some(AllowedAction::MemorySearch),
             "memory_store" => Some(AllowedAction::MemoryStore),
+            "list_agents" => Some(AllowedAction::ListAgents),
             "issue_add" => Some(AllowedAction::IssueAdd),
             "issue_update" => Some(AllowedAction::IssueUpdate),
             "issue_query" => Some(AllowedAction::IssueQuery),
@@ -353,6 +357,24 @@ impl AllowedAction {
     }
 }
 
+/// One configured routed model size offered to `spawn_agent` selections.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpawnAgentSizeOption {
+    /// Routed size bucket name: `small`, `medium`, or `large`.
+    pub size: String,
+    /// Configured model profile resolved for this bucket.
+    pub profile_name: String,
+    /// Reasoning efforts accepted for an explicit size/reasoning pair.
+    pub allowed_reasoning_efforts: Vec<String>,
+}
+
+/// Product-provided routed-size reasoning contract for `spawn_agent`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpawnAgentSizing {
+    /// Configured routed size offers in small, medium, large order.
+    pub sizes: Vec<SpawnAgentSizeOption>,
+}
+
 /// Controller-owned concrete action surface for one provider request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AllowedActionSet {
@@ -360,6 +382,8 @@ pub struct AllowedActionSet {
     pub actions: BTreeSet<AllowedAction>,
     /// Product-provided setting-path guidance for config-change actions.
     config_change_setting_path_description: Option<String>,
+    /// Product-provided routed-size reasoning offers for `spawn_agent`.
+    spawn_agent_sizing: Option<SpawnAgentSizing>,
 }
 
 impl AllowedActionSet {
@@ -383,6 +407,7 @@ impl AllowedActionSet {
             AllowedAction::McpCall,
             AllowedAction::MemorySearch,
             AllowedAction::MemoryStore,
+            AllowedAction::ListAgents,
             AllowedAction::IssueAdd,
             AllowedAction::IssueUpdate,
             AllowedAction::IssueQuery,
@@ -454,6 +479,7 @@ impl AllowedActionSet {
         Self {
             actions: actions.into_iter().collect(),
             config_change_setting_path_description: None,
+            spawn_agent_sizing: None,
         }
     }
 
@@ -471,6 +497,20 @@ impl AllowedActionSet {
         self.config_change_setting_path_description.as_deref()
     }
 
+    /// Attaches routed-size reasoning offers to spawned-child guidance.
+    ///
+    /// The product supplies one entry per configured routed size so provider
+    /// schemas can advertise only size/reasoning pairs the runtime accepts.
+    pub fn with_spawn_agent_sizing(mut self, sizing: SpawnAgentSizing) -> Self {
+        self.spawn_agent_sizing = Some(sizing);
+        self
+    }
+
+    /// Returns routed-size reasoning offers for `spawn_agent`, if set.
+    pub fn spawn_agent_sizing(&self) -> Option<&SpawnAgentSizing> {
+        self.spawn_agent_sizing.as_ref()
+    }
+
     /// Adds actions to the set.
     pub fn extend(&mut self, actions: impl IntoIterator<Item = AllowedAction>) {
         self.actions.extend(actions);
@@ -482,6 +522,9 @@ impl AllowedActionSet {
         if other.config_change_setting_path_description.is_some() {
             self.config_change_setting_path_description =
                 other.config_change_setting_path_description.clone();
+        }
+        if other.spawn_agent_sizing.is_some() {
+            self.spawn_agent_sizing = other.spawn_agent_sizing.clone();
         }
     }
 

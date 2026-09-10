@@ -92,6 +92,21 @@ pub(super) fn reject_unsupported_mutation_path(segments: &[String]) -> Result<()
         && segments.get(3).is_some_and(|segment| {
             MUTABLE_MCP_EXTERNAL_CAPABILITY_KEYS.contains(&segment.as_str())
         });
+    let allow_nested_provider_model_leaf = segments.len() == 5
+        && segments.first().map(String::as_str) == Some("providers")
+        && segments.get(2).map(String::as_str) == Some("models")
+        && segments.get(4).is_some_and(|segment| {
+            matches!(
+                segment.as_str(),
+                "id" | "display_name"
+                    | "aliases"
+                    | "context_window_tokens"
+                    | "max_input_tokens"
+                    | "max_output_tokens"
+                    | "reasoning_levels"
+                    | "capabilities"
+            )
+        });
     let allow_named_status_pill_leaf = segments.len() == 5
         && segments.first().map(String::as_str) == Some("frames")
         && segments.get(2).map(String::as_str) == Some("pills")
@@ -105,7 +120,10 @@ pub(super) fn reject_unsupported_mutation_path(segments: &[String]) -> Result<()
                 .is_some_and(|key| MUTABLE_PANE_STATUS_PILL_KEYS.contains(&key.as_str())),
             _ => false,
         };
-    if segments.len() > 3 && !allow_nested_mcp_external_capability && !allow_named_status_pill_leaf
+    if segments.len() > 3
+        && !allow_nested_mcp_external_capability
+        && !allow_named_status_pill_leaf
+        && !allow_nested_provider_model_leaf
     {
         if segments.first().map(String::as_str) == Some("frames") {
             return Err(MezError::config(

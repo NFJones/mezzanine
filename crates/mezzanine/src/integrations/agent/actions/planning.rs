@@ -46,6 +46,14 @@ impl<'a, P> AgentTurnRunner<'a, P> {
             }
             _ => false,
         };
+        let message_plan = mez_agent::message_action_plan(action);
+        let message_rule_decision = message_plan
+            .as_ref()
+            .map(|plan| self.permissions.evaluate_message_recipient(&plan.recipient));
+        let message_permission_evaluation = message_plan.as_ref().map(|plan| {
+            self.permissions
+                .evaluate_command_structured(&plan.policy_command)
+        });
 
         mez_agent::plan_action_result(
             turn,
@@ -62,6 +70,8 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                 mcp_approval_required,
                 subagent_scope_risk: subagent_scope_risk.as_deref(),
                 sandbox_first_local_prompts: self.permissions.sandbox_first_local_prompts(),
+                message_rule_decision,
+                message_permission_evaluation: message_permission_evaluation.as_ref(),
             },
         )
         .map_err(|error| MezError::invalid_state(error.message()))

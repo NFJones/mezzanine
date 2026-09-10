@@ -57,6 +57,7 @@ impl RuntimeSessionService {
                 execution.final_turn
             ),
         )?;
+        self.publish_runtime_agent_objective_for_response(turn, &execution);
         let token_usage_key =
             ModelTokenUsageKey::new(model_profile.provider.clone(), model_profile.model.clone());
         for (key, usage) in &execution.routing_token_usage_by_model {
@@ -111,6 +112,9 @@ impl RuntimeSessionService {
         terminal_observations.observe(&execution);
         let mcp_discovery_actions_executed =
             self.execute_running_mcp_discovery_actions_for_turn(turn, &mut execution)?;
+        terminal_observations.observe(&execution);
+        let _list_agents_actions_executed =
+            self.execute_running_list_agents_actions_for_turn(turn, &mut execution)?;
         terminal_observations.observe(&execution);
         let mcp_actions_executed = if defer_external_actions {
             self.queue_running_mcp_actions_for_turn(turn, &mut execution)?

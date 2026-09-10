@@ -6,6 +6,82 @@
 use super::error::{MessageError, Result};
 use super::types::{MMP_PROTOCOL, MMP_UNSUPPORTED_PROTOCOL_MESSAGE, SenderIdentity, TaskState};
 
+/// Maximum byte length accepted for one published agent objective.
+///
+/// The bound mirrors the agent-shell prompt ingestion limit for one submitted
+/// user prompt (`mez_mux::readline::MAX_READLINE_HISTORY_ENTRY_BYTES`, twice
+/// the bracketed-paste decoder bound), keeping an objective bounded exactly
+/// like a regular user prompt. The lower agent crate cannot depend on the
+/// multiplexer crate, so the prompt-equivalent value is restated here as the
+/// shared objective contract.
+pub const MMP_OBJECTIVE_MAX_BYTES: usize = 2 * 1024 * 1024;
+/// Prompt line count at which the agent shell collapses submitted text.
+///
+/// Agent-shell prompt ingestion imposes no line-count rejection: the only
+/// line-shaped constraint in the readline buffer is the height at which a
+/// submission stops rendering inline and collapses into one opaque prompt block
+/// (`mez_mux::readline::buffer::READLINE_PASTE_BLOCK_THRESHOLD_LINES`).
+/// Objectives reuse that threshold as a normalization signal, never as a
+/// rejection cap, so an ordinary multi-line prompt still yields an objective.
+pub const MMP_OBJECTIVE_PROMPT_BLOCK_LINES: usize = 6;
+/// Prompt byte count at which the agent shell collapses submitted text.
+///
+/// Mirrors `mez_mux::readline::buffer::READLINE_PASTE_BLOCK_THRESHOLD_BYTES`.
+/// See [`MMP_OBJECTIVE_PROMPT_BLOCK_LINES`]: published objectives stay
+/// byte-bounded by [`MMP_OBJECTIVE_MAX_BYTES`] and always collapse to one line.
+pub const MMP_OBJECTIVE_PROMPT_BLOCK_BYTES: usize = 1024;
+
+/// Reports whether one submitted prompt would collapse into a prompt block.
+///
+/// The agent shell renders a submission spanning this many lines, or this many
+/// bytes, as a single opaque block. Objective normalization uses the same
+/// thresholds to recognize prompt-scale text instead of rejecting it.
+pub fn objective_spans_prompt_block(objective: &str) -> bool {
+    objective.len() >= MMP_OBJECTIVE_PROMPT_BLOCK_BYTES
+        || objective
+            .lines()
+            .nth(MMP_OBJECTIVE_PROMPT_BLOCK_LINES)
+            .is_some()
+}
+
+/// Normalizes and validates one published agent objective.
+///
+/// The objective reuses the agent-shell prompt ingestion constraints: it must
+/// be non-empty, within the prompt byte bound, and free of control characters.
+/// Normalization first collapses whitespace runs, including the line breaks and
+/// tabs a regular submitted prompt may contain, so the published value is always
+/// one bounded line: prompt ingestion rejects nothing for spanning lines, so
+/// neither does this. Control characters that survive normalization are
+/// rejected. Objective text is untrusted peer-visible data: this validation
+/// never grants authority and must never be logged raw.
+pub fn normalize_objective(objective: &str) -> Result<String> {
+    if objective.trim().is_empty() {
+        return Err(MessageError::invalid_args(
+            "MMP objective must not be empty",
+        ));
+    }
+    if objective.len() > MMP_OBJECTIVE_MAX_BYTES {
+        return Err(MessageError::invalid_args(format!(
+            "MMP objective must not exceed {MMP_OBJECTIVE_MAX_BYTES} bytes"
+        )));
+    }
+    let normalized = objective.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().any(char::is_control) {
+        return Err(MessageError::invalid_args(
+            "MMP objective must not contain control characters",
+        ));
+    }
+    Ok(normalized)
+}
+
+/// Normalizes one optional agent objective.
+///
+/// Absent objectives stay absent so callers can distinguish `None` from an
+/// empty objective that must be rejected.
+pub fn normalize_optional_objective(objective: Option<&str>) -> Result<Option<String>> {
+    objective.map(normalize_objective).transpose()
+}
+
 /// Runs the validate sender identity operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -32,6 +108,9 @@ pub(super) fn validate_sender_identity(identity: &SenderIdentity) -> Result<()> 
         return Err(MessageError::invalid_args(
             "message sender capability is invalid",
         ));
+    }
+    if let Some(objective) = identity.objective.as_deref() {
+        normalize_objective(objective)?;
     }
     Ok(())
 }
@@ -343,5 +422,85 @@ pub fn task_state_name(state: TaskState) -> &'static str {
         TaskState::Succeeded => "succeeded",
         TaskState::Failed => "failed",
         TaskState::Cancelled => "cancelled",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        MMP_OBJECTIVE_MAX_BYTES, MMP_OBJECTIVE_PROMPT_BLOCK_LINES, normalize_objective,
+        objective_spans_prompt_block, validate_sender_identity,
+    };
+    use crate::messaging::types::SenderIdentity;
+    use mez_core::ids::AgentId;
+
+    /// A bounded single-line objective is accepted and whitespace-normalized.
+    #[test]
+    fn objective_normalization_accepts_bounded_single_line_text() {
+        assert_eq!(
+            normalize_objective("  Summarize\tthe   issue  backlog ").unwrap(),
+            "Summarize the issue backlog"
+        );
+    }
+
+    /// A multi-line, prompt-scale objective is accepted and collapsed to one
+    /// line: prompt ingestion has no line-count rejection to mirror.
+    #[test]
+    fn objective_normalization_accepts_prompt_scale_multi_line_text() {
+        let multi_line = format!(
+            "objective\n{}",
+            "line\n".repeat(MMP_OBJECTIVE_PROMPT_BLOCK_LINES)
+        );
+        assert!(objective_spans_prompt_block(&multi_line));
+        assert_eq!(
+            normalize_objective(&multi_line).unwrap(),
+            "objective line line line line line line"
+        );
+        assert!(!objective_spans_prompt_block("inspect the backlog"));
+    }
+
+    /// Objective bounds reject empty, over-byte, and control-character bearing
+    /// values so no unbounded text is published.
+    #[test]
+    fn objective_normalization_rejects_unbounded_and_control_text() {
+        assert_eq!(
+            normalize_objective("   ").unwrap_err().message(),
+            "MMP objective must not be empty"
+        );
+        assert_eq!(
+            normalize_objective("inspect\u{7}the pane")
+                .unwrap_err()
+                .message(),
+            "MMP objective must not contain control characters"
+        );
+        let over_bytes = "a".repeat(MMP_OBJECTIVE_MAX_BYTES + 1);
+        assert!(
+            normalize_objective(&over_bytes)
+                .unwrap_err()
+                .message()
+                .contains("bytes")
+        );
+    }
+
+    /// Sender identity validation accepts a bounded objective and rejects an
+    /// unbounded or control-character bearing one while leaving absence valid.
+    #[test]
+    fn sender_identity_validation_bounds_the_objective() {
+        let mut identity = SenderIdentity {
+            agent_id: AgentId::opaque("agent-%1").unwrap(),
+            pane_id: None,
+            window_id: None,
+            role: Some("agent".to_string()),
+            capabilities: vec!["agent-harness".to_string()],
+            objective: Some("Review the pending objective work".to_string()),
+        };
+        assert!(validate_sender_identity(&identity).is_ok());
+
+        identity.objective = Some(String::new());
+        assert!(validate_sender_identity(&identity).is_err());
+        identity.objective = Some("inspect\u{1b}[31m the pane".to_string());
+        assert!(validate_sender_identity(&identity).is_err());
+        identity.objective = None;
+        assert!(validate_sender_identity(&identity).is_ok());
     }
 }

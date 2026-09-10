@@ -15,9 +15,8 @@ use super::{
     deepseek_chat_completions_provider_from_auth_store_with_provider_options, json_escape,
     normalize_model_catalog_values,
     openai_compatible_provider_from_auth_store_with_provider_options,
-    openai_default_reasoning_levels_for_model,
     openai_responses_provider_from_auth_store_with_provider_options, parse_slash_command,
-    resolve_provider_api, runtime_default_models_for_provider,
+    resolve_provider_api, runtime_default_config_model_records,
     runtime_recommended_model_for_provider,
 };
 use futures_util::StreamExt;
@@ -667,7 +666,7 @@ fn runtime_effective_model_catalog(
             .flat_map(|catalog| catalog.catalog.reasoning_levels().iter().cloned())
             .collect(),
     );
-    let recommended_model = runtime_provider_recommended_model(provider_config);
+    let recommended_model = runtime_recommended_model_for_provider(&provider_config.kind).ok();
     RuntimeModelCatalog {
         provider: provider_id.to_string(),
         source: observed
@@ -677,7 +676,7 @@ fn runtime_effective_model_catalog(
         catalog: ModelCatalog::from_input(ModelCatalogInput {
             candidates,
             default_model: provider_config.default_model.clone(),
-            recommended_model: recommended_model.map(str::to_string),
+            recommended_model,
             reasoning_levels,
         }),
         quota_usage: observed
@@ -730,16 +729,16 @@ fn runtime_configured_model_catalog_candidates(
         ));
         candidates.push(ModelCatalogCandidate::configured(model));
     }
-    let default_models = if provider_config.models.is_empty() {
-        runtime_provider_default_models(provider_config)
+    let default_records = if provider_config.models.is_empty() {
+        runtime_default_config_model_records(&provider_config.kind)
     } else {
         Vec::new()
     };
-    for model in &default_models {
+    for record in &default_records {
         candidates.push(runtime_catalog_candidate(
             provider_config,
-            model,
-            runtime_configured_reasoning_levels_for_model(provider_config, model),
+            &record.id,
+            runtime_configured_reasoning_levels_for_model(provider_config, &record.id),
             ModelCatalogSource::Default,
         ));
     }
@@ -771,12 +770,13 @@ fn runtime_configured_model_catalog_candidates(
     if !candidates
         .iter()
         .any(|candidate: &ModelCatalogCandidate| !candidate.model.id.trim().is_empty())
-        && let Some(recommended_model) = runtime_provider_recommended_model(provider_config)
+        && let Some(recommended_model) =
+            runtime_recommended_model_for_provider(&provider_config.kind).ok()
     {
         candidates.push(runtime_catalog_candidate(
             provider_config,
-            recommended_model,
-            runtime_configured_reasoning_levels_for_model(provider_config, recommended_model),
+            &recommended_model,
+            runtime_configured_reasoning_levels_for_model(provider_config, &recommended_model),
             ModelCatalogSource::Recommended,
         ));
     }
@@ -793,71 +793,36 @@ fn runtime_catalog_candidate(
     reasoning_levels: Vec<String>,
     source: ModelCatalogSource,
 ) -> ModelCatalogCandidate {
-    let capabilities = runtime_builtin_capabilities_for_model(provider_config, model);
-    let token_limits = runtime_builtin_token_limits_for_model(provider_config, model);
+    let record = runtime_default_config_model_records(&provider_config.kind)
+        .into_iter()
+        .find(|record| record.id == model);
+    let (levels, context_window_tokens, max_input_tokens, max_output_tokens, capabilities) =
+        match record {
+            Some(record) => {
+                let mut levels = reasoning_levels.clone();
+                levels.extend(record.reasoning_levels.unwrap_or_default());
+                (
+                    levels,
+                    record.context_window_tokens,
+                    record.max_input_tokens,
+                    record.max_output_tokens,
+                    record.capabilities,
+                )
+            }
+            None => (reasoning_levels, None, None, None, None),
+        };
     ModelCatalogCandidate::available(
         source,
         ProviderModelInfo {
             id: model.to_string(),
             display_name: None,
-            reasoning_levels: (!reasoning_levels.is_empty()).then_some(reasoning_levels),
-            context_window_tokens: token_limits.map(|limits| limits.0),
-            max_input_tokens: token_limits.map(|limits| limits.1),
-            max_output_tokens: token_limits.map(|limits| limits.2),
+            reasoning_levels: (!levels.is_empty()).then_some(levels),
+            context_window_tokens,
+            max_input_tokens,
+            max_output_tokens,
             capabilities,
         },
     )
-}
-
-/// Returns capability metadata attached to code-defined fallback models.
-///
-/// These tags must match the generated provider-model records so an empty
-/// configured model table does not weaken a known DeepSeek model into the
-/// conservative unknown-model policy merely because live discovery is absent.
-fn runtime_builtin_capabilities_for_model(
-    provider_config: &crate::runtime::RuntimeProviderConfig,
-    model: &str,
-) -> Option<Vec<String>> {
-    match (
-        provider_config.kind.as_str(),
-        resolve_provider_api(&provider_config.kind, provider_config.api.as_deref()),
-        model,
-    ) {
-        (
-            "deepseek",
-            Ok(ProviderApiCompatibility::DeepSeekChatCompletions),
-            "deepseek-v4-pro" | "deepseek-v4-flash",
-        ) => [
-            "native_thinking",
-            "function_tools",
-            "forced_tool_choice",
-            "streaming",
-            "max_output_tokens",
-        ]
-        .into_iter()
-        .map(str::to_string)
-        .collect::<Vec<_>>()
-        .into(),
-        _ => None,
-    }
-}
-
-/// Returns documented token limits for code-defined DeepSeek fallback models.
-fn runtime_builtin_token_limits_for_model(
-    provider_config: &crate::runtime::RuntimeProviderConfig,
-    model: &str,
-) -> Option<(usize, usize, usize)> {
-    if provider_config.kind != "deepseek"
-        || resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())
-            != Ok(ProviderApiCompatibility::DeepSeekChatCompletions)
-    {
-        return None;
-    }
-    match model {
-        "deepseek-v4-pro" => Some((1_000_000, 800_000, 60_000)),
-        "deepseek-v4-flash" => Some((500_000, 400_000, 30_000)),
-        _ => None,
-    }
 }
 
 /// Runs the runtime configured reasoning levels for model operation for this subsystem.
@@ -876,88 +841,13 @@ pub(super) fn runtime_configured_reasoning_levels_for_model(
         .into_iter()
         .map(ToOwned::to_owned)
         .collect::<Vec<_>>();
-    if let Ok(provider_api) =
-        resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())
+    if let Some(record) = runtime_default_config_model_records(&provider_config.kind)
+        .into_iter()
+        .find(|record| record.id == model)
     {
-        match provider_api {
-            ProviderApiCompatibility::OpenAiResponses => {
-                levels.extend(openai_default_reasoning_levels_for_model(model));
-            }
-            ProviderApiCompatibility::DeepSeekChatCompletions
-                if provider_config.kind == "deepseek"
-                    && matches!(model, "deepseek-v4-pro" | "deepseek-v4-flash") =>
-            {
-                levels.extend(deepseek_default_reasoning_effort_levels());
-            }
-            ProviderApiCompatibility::DeepSeekChatCompletions => {}
-            ProviderApiCompatibility::AnthropicMessages => {
-                levels.extend(anthropic_default_reasoning_effort_levels());
-            }
-            ProviderApiCompatibility::OpenAiChatCompletions => {}
-        }
+        levels.extend(record.reasoning_levels.unwrap_or_default());
     }
     normalize_model_catalog_values(levels)
-}
-
-/// Returns built-in default models only when the provider's selected API keeps
-/// the provider's built-in model catalog semantics.
-pub(super) fn runtime_provider_default_models(
-    provider_config: &crate::runtime::RuntimeProviderConfig,
-) -> Vec<String> {
-    match resolve_provider_api(&provider_config.kind, provider_config.api.as_deref()) {
-        Ok(ProviderApiCompatibility::OpenAiResponses) if provider_config.kind == "openai" => {
-            runtime_default_models_for_provider(&provider_config.kind)
-                .map(|models| models.iter().map(|model| (*model).to_string()).collect())
-                .unwrap_or_default()
-        }
-        Ok(ProviderApiCompatibility::AnthropicMessages) if provider_config.kind == "anthropic" => {
-            runtime_default_models_for_provider(&provider_config.kind)
-                .map(|models| models.iter().map(|model| (*model).to_string()).collect())
-                .unwrap_or_default()
-        }
-        Ok(ProviderApiCompatibility::DeepSeekChatCompletions)
-            if provider_config.kind == "deepseek" =>
-        {
-            runtime_default_models_for_provider(&provider_config.kind)
-                .map(|models| models.iter().map(|model| (*model).to_string()).collect())
-                .unwrap_or_default()
-        }
-        _ => Vec::new(),
-    }
-}
-
-/// Returns a built-in recommended model only when the provider and API share
-/// the built-in provider's catalog contract.
-fn runtime_provider_recommended_model(
-    provider_config: &crate::runtime::RuntimeProviderConfig,
-) -> Option<&'static str> {
-    match resolve_provider_api(&provider_config.kind, provider_config.api.as_deref()) {
-        Ok(ProviderApiCompatibility::OpenAiResponses) if provider_config.kind == "openai" => {
-            runtime_recommended_model_for_provider(&provider_config.kind).ok()
-        }
-        Ok(ProviderApiCompatibility::AnthropicMessages) if provider_config.kind == "anthropic" => {
-            runtime_recommended_model_for_provider(&provider_config.kind).ok()
-        }
-        Ok(ProviderApiCompatibility::DeepSeekChatCompletions)
-            if provider_config.kind == "deepseek" =>
-        {
-            runtime_recommended_model_for_provider(&provider_config.kind).ok()
-        }
-        _ => None,
-    }
-}
-
-/// Returns the reasoning effort levels supported by DeepSeek providers.
-fn deepseek_default_reasoning_effort_levels() -> Vec<String> {
-    vec!["high".to_string(), "max".to_string()]
-}
-
-/// Returns the reasoning effort levels supported by Anthropic Messages.
-fn anthropic_default_reasoning_effort_levels() -> Vec<String> {
-    ["low", "medium", "high", "xhigh", "max"]
-        .into_iter()
-        .map(str::to_string)
-        .collect()
 }
 
 /// Formats the current routing auto-sizing model profile.
@@ -1155,10 +1045,7 @@ pub(super) fn runtime_model_catalog_unavailable_reason(error: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        runtime_builtin_capabilities_for_model, runtime_configured_model_catalog,
-        runtime_configured_reasoning_levels_for_model,
-    };
+    use super::{runtime_configured_model_catalog, runtime_configured_reasoning_levels_for_model};
     use std::collections::BTreeMap;
 
     /// Verifies omitted unknown-DeepSeek metadata survives the complete
@@ -1310,7 +1197,7 @@ mod tests {
                     "kind": "deepseek",
                     "api": "deepseek-chat-completions",
                     "models": [],
-                    "default_model": "deepseek-v4-pro"
+                    "default_model": "deepseek-flash"
                 }
             }
         });
@@ -1318,9 +1205,13 @@ mod tests {
         let provider = registry.providers().get("deepseek").unwrap();
         let catalog = runtime_configured_model_catalog("deepseek", provider, &registry);
 
-        for model_id in ["deepseek-v4-pro", "deepseek-v4-flash"] {
+        for model_id in ["deepseek-flash", "deepseek-v4-pro"] {
             let model = catalog.catalog.resolve(model_id).unwrap();
-            assert_eq!(model.reasoning_levels, vec!["high", "max"], "{model_id}");
+            assert_eq!(
+                model.reasoning_levels,
+                vec!["low", "high", "max"],
+                "{model_id}"
+            );
             assert_eq!(
                 model.capabilities,
                 vec![
@@ -1332,11 +1223,7 @@ mod tests {
                 ],
                 "{model_id}"
             );
-            let expected_limits = match model_id {
-                "deepseek-v4-pro" => (1_000_000, 800_000, 60_000),
-                "deepseek-v4-flash" => (500_000, 400_000, 30_000),
-                _ => unreachable!(),
-            };
+            let expected_limits = (1_000_000, 616_000, 384_000);
             assert_eq!(
                 (
                     model.context_window_tokens,
@@ -1351,17 +1238,6 @@ mod tests {
                 "{model_id}"
             );
         }
-
-        let compatible_provider = crate::runtime::RuntimeProviderConfig {
-            provider_id: "custom".to_string(),
-            kind: "openai-compatible".to_string(),
-            api: Some("openai-chat-completions".to_string()),
-            ..crate::runtime::RuntimeProviderConfig::default()
-        };
-        assert_eq!(
-            runtime_builtin_capabilities_for_model(&compatible_provider, "deepseek-v4-pro"),
-            None
-        );
     }
 
     /// Verifies configured Anthropic providers expose documented Messages API
@@ -1383,6 +1259,7 @@ mod tests {
             models: vec![mez_agent::ProviderModelConfig::named("claude-fable-5")],
             default_model: Some("claude-fable-5".to_string()),
             options: BTreeMap::from([("reasoning_effort".to_string(), "high".to_string())]),
+            unknown_model_policy: "conservative".to_string(),
         };
 
         assert_eq!(

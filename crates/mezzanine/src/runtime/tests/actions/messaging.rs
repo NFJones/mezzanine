@@ -202,15 +202,15 @@ async fn runtime_local_message_discards_older_provider_generation() {
     );
 }
 
-/// Verifies an unread message with no active turn remains behind the cursor
-/// and is committed before the next task's direct user prompt.
+/// Verifies a peer message for an idle agent starts one LocalMessage-triggered
+/// turn carrying the message as lower-priority peer context.
 ///
-/// This distinguishes offline delivery from an active-turn arrival: the
-/// message must not be acknowledged merely because it is retained, and prompt
-/// construction must advance the cursor only after the new turn context is
-/// stored.
+/// Peer text must never enter the conversation as a user instruction, the block
+/// must carry the untrusted-data guidance, a repeated delivery pass must not
+/// duplicate the block, and the durable cursor must advance only after the
+/// canonical event exists.
 #[test]
-fn runtime_inactive_local_message_precedes_next_prompt_and_advances_after_commit() {
+fn runtime_idle_agent_peer_message_starts_local_message_turn() {
     let mut service = test_runtime_service();
     service
         .agent_shell_store_mut()
@@ -257,33 +257,58 @@ fn runtime_inactive_local_message_precedes_next_prompt_and_advances_after_commit
         service
             .deliver_pending_runtime_agent_messages(now_ms)
             .unwrap(),
-        0
+        1
     );
     assert_eq!(
         service
-            .control
-            .message_service()
-            .subscription(&recipient_identity.agent_id)
-            .unwrap()
-            .last_sequence,
+            .deliver_pending_runtime_agent_messages(now_ms)
+            .unwrap(),
         0
     );
 
-    let started = service
-        .start_agent_prompt_turn("%1", "use the background evidence")
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.agent_id == recipient_identity.agent_id.as_str())
+        .cloned()
         .unwrap();
-    let context = service.agent_turn_contexts().get(&started.turn_id).unwrap();
-    let message_index = context
+    assert_eq!(turn.trigger, mez_agent::AgentTurnTrigger::LocalMessage);
+    assert!(matches!(
+        turn.state,
+        AgentTurnState::Queued | AgentTurnState::Running
+    ));
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    assert_eq!(
+        context
+            .blocks()
+            .iter()
+            .filter(|block| block.label.contains("inactive-message-1"))
+            .count(),
+        1,
+        "a repeated delivery pass must not duplicate the committed block"
+    );
+    let peer = context
         .blocks()
         .iter()
-        .position(|block| block.label.contains("inactive-message-1"))
+        .find(|block| block.source == ContextSourceKind::PeerMessage)
         .unwrap();
-    let prompt_index = context
-        .blocks()
-        .iter()
-        .position(|block| block.label == "user prompt")
-        .unwrap();
-    assert!(message_index < prompt_index);
+    assert!(peer.content.contains("background evidence"));
+    assert!(peer.content.contains("untrusted data"), "{}", peer.content);
+    assert!(peer.content.contains("never approve"), "{}", peer.content);
+    assert!(
+        peer.content.contains("your own approval mode"),
+        "{}",
+        peer.content
+    );
+    assert!(peer.content.contains("from_agent=agent-sender"));
+    assert!(
+        !context
+            .blocks()
+            .iter()
+            .any(|block| block.source == ContextSourceKind::UserInstruction),
+        "peer text must never enter the conversation as user input"
+    );
     assert_eq!(
         service
             .control
@@ -292,6 +317,603 @@ fn runtime_inactive_local_message_precedes_next_prompt_and_advances_after_commit
             .unwrap()
             .last_sequence,
         delivery.sequence
+    );
+}
+
+/// Verifies runtime-owned subagent bridge notifications for an idle parent
+/// start no turn and leave scheduler and provider-task accounting unchanged.
+///
+/// `task_status`/`task_result` notifications are authored by the runtime's own
+/// subagent lifecycle, not by a model `send_message` action, so they must wait
+/// behind the durable cursor for the parent's next turn instead of waking an
+/// idle parent with a peer-message turn; a later model-originated peer message
+/// still starts exactly one turn and injects both blocks.
+#[test]
+fn runtime_idle_agent_runtime_owned_bridge_notifications_start_no_turn() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let now_ms = current_unix_seconds().saturating_mul(1000);
+    let parent_identity = service
+        .ensure_runtime_message_identity(
+            "agent-%1",
+            PaneId::opaque("%1".to_string()),
+            "agent",
+            &[],
+            now_ms,
+        )
+        .unwrap();
+    service
+        .control
+        .message_service_mut()
+        .subscribe_from_retained_start(&parent_identity.agent_id)
+        .unwrap();
+    let child_identity = service
+        .ensure_runtime_message_identity("agent-%2", None, "agent", &["agent-harness"], now_ms)
+        .unwrap();
+    let status_envelope = Envelope {
+        protocol: "mmp/1",
+        id: "turn-child:task_status:started".to_string(),
+        message_type: "task_status".to_string(),
+        time: format!("runtime:{now_ms}"),
+        sender: child_identity.clone(),
+        recipient: mez_agent::messaging::Recipient::Agent(parent_identity.agent_id.clone()),
+        correlation_id: Some("turn-child".to_string()),
+        ttl_ms: None,
+        content_type: "application/json".to_string(),
+        payload: mez_agent::messaging::TaskStatusPayload {
+            task_id: "turn-child".to_string(),
+            state: mez_agent::messaging::TaskState::Running,
+            progress_percent: Some(0),
+            summary: "subagent task started".to_string(),
+        }
+        .to_json(),
+        extension_fields: Vec::new(),
+    };
+    service
+        .control
+        .message_service_mut()
+        .accept_at(&child_identity.agent_id, status_envelope, now_ms)
+        .unwrap();
+
+    assert_eq!(
+        service
+            .deliver_pending_runtime_agent_messages(now_ms)
+            .unwrap(),
+        0
+    );
+    assert!(
+        service.agent_turn_ledger().turns().is_empty(),
+        "runtime-owned bridge traffic must not start a turn for an idle parent"
+    );
+    assert_eq!(service.agent_scheduler().snapshot().queued, 0);
+    assert_eq!(service.agent_scheduler().snapshot().running, 0);
+    assert!(service.pending_agent_provider_tasks().is_empty());
+    assert_eq!(
+        service
+            .control
+            .message_service()
+            .subscription(&parent_identity.agent_id)
+            .unwrap()
+            .last_sequence,
+        0
+    );
+
+    let peer_envelope = Envelope {
+        protocol: "mmp/1",
+        id: "model-peer-message-1".to_string(),
+        message_type: "send".to_string(),
+        time: format!("runtime:{now_ms}"),
+        sender: child_identity.clone(),
+        recipient: mez_agent::messaging::Recipient::Agent(parent_identity.agent_id.clone()),
+        correlation_id: None,
+        ttl_ms: None,
+        content_type: "text/plain; charset=utf-8".to_string(),
+        payload: "model-originated peer request".to_string(),
+        extension_fields: Vec::new(),
+    };
+    service
+        .control
+        .message_service_mut()
+        .accept_at(&child_identity.agent_id, peer_envelope, now_ms)
+        .unwrap();
+
+    assert_eq!(
+        service
+            .deliver_pending_runtime_agent_messages(now_ms)
+            .unwrap(),
+        2,
+        "the model-originated turn carries the pending runtime-owned notification"
+    );
+    let parent_turns: Vec<_> = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .filter(|turn| turn.agent_id == parent_identity.agent_id.as_str())
+        .cloned()
+        .collect();
+    assert_eq!(
+        parent_turns.len(),
+        1,
+        "a model-originated peer message starts exactly one turn"
+    );
+    let context = service
+        .agent_turn_contexts()
+        .get(&parent_turns[0].turn_id)
+        .unwrap();
+    assert!(
+        context.blocks().iter().any(|block| {
+            block.source == ContextSourceKind::PeerMessage
+                && block.label.contains("task_status")
+                && block.content.contains("subagent task started")
+        }),
+        "pending runtime-owned notifications are still injected"
+    );
+    assert!(context.blocks().iter().any(|block| {
+        block.source == ContextSourceKind::PeerMessage
+            && block.content.contains("model-originated peer request")
+    }));
+}
+
+/// Verifies a peer message that expires before delivery starts no turn, is not
+/// injected, and stays behind the durable cursor.
+///
+/// Expiry keeps the existing message-service semantics: an envelope already
+/// expired at accept time is rejected for the sender, and an envelope that
+/// expires while waiting is never acknowledged as delivered.
+#[test]
+fn runtime_expired_peer_message_is_not_injected_or_acknowledged() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let now_ms = current_unix_seconds().saturating_mul(1000);
+    let recipient_identity = service
+        .ensure_runtime_message_identity(
+            "agent-%1",
+            PaneId::opaque("%1".to_string()),
+            "agent",
+            &[],
+            now_ms,
+        )
+        .unwrap();
+    service
+        .control
+        .message_service_mut()
+        .subscribe_from_retained_start(&recipient_identity.agent_id)
+        .unwrap();
+    let sender = service
+        .ensure_runtime_message_identity("agent-sender", None, "agent", &[], now_ms)
+        .unwrap();
+    let envelope = Envelope {
+        protocol: "mmp/1",
+        id: "expired-message-1".to_string(),
+        message_type: "send".to_string(),
+        time: format!("runtime:{now_ms}"),
+        sender: sender.clone(),
+        recipient: mez_agent::messaging::Recipient::Agent(recipient_identity.agent_id.clone()),
+        correlation_id: None,
+        ttl_ms: Some(1),
+        content_type: "text/plain; charset=utf-8".to_string(),
+        payload: "expired peer evidence".to_string(),
+        extension_fields: Vec::new(),
+    };
+    service
+        .control
+        .message_service_mut()
+        .accept_at(&sender.agent_id, envelope, now_ms)
+        .unwrap();
+
+    let after_expiry = now_ms.saturating_add(5_000);
+    assert_eq!(
+        service
+            .deliver_pending_runtime_agent_messages(after_expiry)
+            .unwrap(),
+        0
+    );
+    assert!(service.agent_turn_ledger().turns().is_empty());
+    assert_eq!(
+        service
+            .control
+            .message_service()
+            .subscription(&recipient_identity.agent_id)
+            .unwrap()
+            .last_sequence,
+        0
+    );
+}
+
+/// Verifies the dedicated peer-message delivery timer arms only while
+/// deliverable mail exists, delivers pending mail when it fires, and stops
+/// re-arming once the inbox drains.
+#[test]
+fn runtime_peer_message_delivery_timer_arms_delivers_and_stops() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let now_ms = current_unix_seconds().saturating_mul(1000);
+    let recipient_identity = service
+        .ensure_runtime_message_identity(
+            "agent-%1",
+            PaneId::opaque("%1".to_string()),
+            "agent",
+            &[],
+            now_ms,
+        )
+        .unwrap();
+    service
+        .control
+        .message_service_mut()
+        .subscribe_from_retained_start(&recipient_identity.agent_id)
+        .unwrap();
+    let sender = service
+        .ensure_runtime_message_identity("agent-sender", None, "agent", &[], now_ms)
+        .unwrap();
+    service
+        .control
+        .message_service_mut()
+        .accept_at(
+            &sender.agent_id,
+            Envelope {
+                protocol: "mmp/1",
+                id: "timed-message-1".to_string(),
+                message_type: "send".to_string(),
+                time: format!("runtime:{now_ms}"),
+                sender: sender.clone(),
+                recipient: mez_agent::messaging::Recipient::Agent(
+                    recipient_identity.agent_id.clone(),
+                ),
+                correlation_id: None,
+                ttl_ms: None,
+                content_type: "text/plain; charset=utf-8".to_string(),
+                payload: "timer-driven peer evidence".to_string(),
+                extension_fields: Vec::new(),
+            },
+            now_ms,
+        )
+        .unwrap();
+
+    let armed = service.peer_message_delivery_timer_transition(false, 7, now_ms);
+    assert_eq!(armed.side_effects.len(), 1);
+    match &armed.side_effects[0] {
+        crate::runtime::RuntimeSideEffect::ScheduleTimer { key, delay_ms } => {
+            assert_eq!(
+                key.kind,
+                crate::runtime::RuntimeTimerKind::PeerMessageDelivery
+            );
+            assert_eq!(key.generation, 7);
+            assert!(*delay_ms > 0);
+        }
+        other => panic!("unexpected peer-message timer side effect: {other:?}"),
+    }
+    assert!(
+        service
+            .peer_message_delivery_timer_transition(true, 8, now_ms)
+            .side_effects
+            .is_empty(),
+        "an active delivery timer must not be armed twice"
+    );
+
+    let applied = service
+        .apply_peer_message_delivery_timer(now_ms, 7)
+        .unwrap();
+    assert!(applied.applied);
+    assert!(
+        applied.side_effects.is_empty(),
+        "a drained inbox must not keep the delivery timer armed"
+    );
+    assert!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .any(|turn| turn.trigger == mez_agent::AgentTurnTrigger::LocalMessage),
+        "timer delivery must start the idle agent's message-triggered turn"
+    );
+}
+
+/// Verifies the configured peer-message loop limit stops further
+/// message-triggered turns while leaving inbox mail pending behind the durable
+/// cursor.
+#[test]
+fn runtime_peer_message_loop_limit_stops_message_turns() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_agent_peer_message_loop_limit(1);
+    service.set_agent_peer_message_turn_count("agent-%1", 1);
+    let now_ms = current_unix_seconds().saturating_mul(1000);
+    let recipient_identity = service
+        .ensure_runtime_message_identity(
+            "agent-%1",
+            PaneId::opaque("%1".to_string()),
+            "agent",
+            &[],
+            now_ms,
+        )
+        .unwrap();
+    service
+        .control
+        .message_service_mut()
+        .subscribe_from_retained_start(&recipient_identity.agent_id)
+        .unwrap();
+    let sender = service
+        .ensure_runtime_message_identity("agent-sender", None, "agent", &[], now_ms)
+        .unwrap();
+    service
+        .control
+        .message_service_mut()
+        .accept_at(
+            &sender.agent_id,
+            Envelope {
+                protocol: "mmp/1",
+                id: "limited-message-1".to_string(),
+                message_type: "send".to_string(),
+                time: format!("runtime:{now_ms}"),
+                sender: sender.clone(),
+                recipient: mez_agent::messaging::Recipient::Agent(
+                    recipient_identity.agent_id.clone(),
+                ),
+                correlation_id: None,
+                ttl_ms: None,
+                content_type: "text/plain; charset=utf-8".to_string(),
+                payload: "loop-limited peer evidence".to_string(),
+                extension_fields: Vec::new(),
+            },
+            now_ms,
+        )
+        .unwrap();
+
+    assert_eq!(
+        service
+            .deliver_pending_runtime_agent_messages(now_ms)
+            .unwrap(),
+        0
+    );
+    assert!(service.agent_turn_ledger().turns().is_empty());
+    assert_eq!(
+        service
+            .control
+            .message_service()
+            .subscription(&recipient_identity.agent_id)
+            .unwrap()
+            .last_sequence,
+        0,
+        "loop-limited mail stays behind the durable cursor"
+    );
+}
+
+/// Verifies an objective refresh that carries no objective is a no-op: the
+/// published value and the presence timestamp survive it unchanged.
+#[test]
+fn runtime_absent_objective_refresh_keeps_published_value() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "inspect the objective contract")
+        .unwrap();
+    let agent_id = AgentId::opaque(started.agent_id.clone()).unwrap();
+    let published = service
+        .message_service()
+        .registered_identity(&agent_id)
+        .and_then(|identity| identity.objective.clone());
+    assert_eq!(published.as_deref(), Some("inspect the objective contract"));
+    let published_at_ms = service
+        .message_service()
+        .presence()
+        .into_iter()
+        .find(|record| record.identity.agent_id == agent_id)
+        .map(|record| record.updated_at_ms)
+        .expect("published presence record");
+
+    assert!(!service.publish_runtime_agent_objective(started.agent_id.as_str(), None));
+
+    assert_eq!(
+        service
+            .message_service()
+            .registered_identity(&agent_id)
+            .and_then(|identity| identity.objective.clone()),
+        published
+    );
+    assert_eq!(
+        service
+            .message_service()
+            .presence()
+            .into_iter()
+            .find(|record| record.identity.agent_id == agent_id)
+            .map(|record| record.updated_at_ms),
+        Some(published_at_ms),
+        "an absent objective refresh must not churn presence"
+    );
+}
+
+/// Verifies the model-generated objective path is live: an objective carried by
+/// the turn envelope is published and wins over the prompt-derived fallback.
+#[test]
+fn runtime_model_authored_objective_wins_over_prompt_fallback() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "inspect the fallback objective")
+        .unwrap();
+    let turn = messaging_test_turn(&service, &started.turn_id);
+    let action = mez_agent::AgentAction {
+        id: "list-agents-objective".to_string(),
+        payload: mez_agent::AgentActionPayload::ListAgents { agent_type: None },
+    };
+    let planned =
+        mez_agent::plan_action_result(&turn, &action, mez_agent::ActionPlanningInput::default())
+            .expect("list_agents plan");
+    let mut execution =
+        messaging_test_execution(&turn, &action, planned, mez_agent::AgentTurnState::Running);
+    execution.response.raw_text = r#"{"rationale":"inspect","objective":"Review the peer discovery bounds","actions":[{"type":"list_agents"}]}"#.to_string();
+
+    assert!(service.publish_runtime_agent_objective_for_response(&turn, &execution));
+
+    let agent_id = AgentId::opaque(started.agent_id.clone()).unwrap();
+    assert_eq!(
+        service
+            .message_service()
+            .registered_identity(&agent_id)
+            .and_then(|identity| identity.objective.as_deref()),
+        Some("Review the peer discovery bounds"),
+        "the model-authored objective must win over the prompt fallback"
+    );
+}
+
+/// Builds one pending model-originated peer message for the loop-limit tests.
+fn limited_peer_message(service: &mut crate::runtime::RuntimeSessionService, now_ms: u64) {
+    let recipient_identity = service
+        .ensure_runtime_message_identity(
+            "agent-%1",
+            PaneId::opaque("%1".to_string()),
+            "agent",
+            &[],
+            now_ms,
+        )
+        .unwrap();
+    service
+        .control
+        .message_service_mut()
+        .subscribe_from_retained_start(&recipient_identity.agent_id)
+        .unwrap();
+    let sender = service
+        .ensure_runtime_message_identity("agent-sender", None, "agent", &[], now_ms)
+        .unwrap();
+    service
+        .control
+        .message_service_mut()
+        .accept_at(
+            &sender.agent_id,
+            Envelope {
+                protocol: "mmp/1",
+                id: "loop-limit-episode-message".to_string(),
+                message_type: "send".to_string(),
+                time: format!("runtime:{now_ms}"),
+                sender: sender.clone(),
+                recipient: mez_agent::messaging::Recipient::Agent(
+                    recipient_identity.agent_id.clone(),
+                ),
+                correlation_id: None,
+                ttl_ms: None,
+                content_type: "text/plain; charset=utf-8".to_string(),
+                payload: "loop-limit episode evidence".to_string(),
+                extension_fields: Vec::new(),
+            },
+            now_ms,
+        )
+        .unwrap();
+}
+
+/// Verifies the peer-message loop limit is a stable episode: no turn starts, the
+/// delivery timer stops re-arming, and the limit diagnostic is emitted once
+/// rather than once per tick.
+#[test]
+fn runtime_peer_message_loop_limit_is_a_stable_episode() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_agent_peer_message_loop_limit(1);
+    service.set_agent_peer_message_turn_count("agent-%1", 1);
+    let now_ms = current_unix_seconds().saturating_mul(1000);
+    limited_peer_message(&mut service, now_ms);
+
+    for _ in 0..2 {
+        assert_eq!(
+            service
+                .deliver_pending_runtime_agent_messages(now_ms)
+                .unwrap(),
+            0
+        );
+    }
+    assert!(service.agent_turn_ledger().turns().is_empty());
+    assert!(service.agent_peer_message_limit_reported("agent-%1"));
+    assert!(
+        service
+            .peer_message_delivery_timer_transition(false, 11, now_ms)
+            .side_effects
+            .is_empty(),
+        "limit-blocked mail must not keep re-arming the delivery timer"
+    );
+    let diagnostics = service
+        .event_log()
+        .expect("event log")
+        .replay_for(&crate::protocol::event::EventAudience::AllPrimaries)
+        .into_iter()
+        .filter(|event| event.payload.contains("peer_message_loop_limit"))
+        .count();
+    assert_eq!(
+        diagnostics, 1,
+        "the limit diagnostic must be emitted once per episode"
+    );
+}
+
+/// Verifies peer mail flows again after the defined reset trigger: direct user
+/// input clears the counter and the limit episode, so delivery re-arms and a
+/// message-triggered turn starts.
+#[test]
+fn runtime_peer_mail_flows_again_after_direct_user_input_reset() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_agent_peer_message_loop_limit(1);
+    service.set_agent_peer_message_turn_count("agent-%1", 1);
+    let now_ms = current_unix_seconds().saturating_mul(1000);
+    limited_peer_message(&mut service, now_ms);
+    assert_eq!(
+        service
+            .deliver_pending_runtime_agent_messages(now_ms)
+            .unwrap(),
+        0
+    );
+    assert!(
+        service
+            .peer_message_delivery_timer_transition(false, 12, now_ms)
+            .side_effects
+            .is_empty()
+    );
+
+    service.reset_agent_peer_message_turns("agent-%1");
+
+    assert!(!service.agent_peer_message_limit_reported("agent-%1"));
+    assert_eq!(
+        service
+            .peer_message_delivery_timer_transition(false, 12, now_ms)
+            .side_effects
+            .len(),
+        1,
+        "pending peer mail must re-arm delivery once the limit episode ends"
+    );
+    assert_eq!(
+        service
+            .deliver_pending_runtime_agent_messages(now_ms)
+            .unwrap(),
+        1
+    );
+    assert!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .any(|turn| turn.trigger == mez_agent::AgentTurnTrigger::LocalMessage),
+        "peer mail must start a message-triggered turn after the reset"
     );
 }
 
@@ -706,6 +1328,7 @@ fn runtime_spawned_child_corrects_parent_recipient_without_replaying_sibling() {
                 window_id: None,
                 role: Some("worker".to_string()),
                 capabilities: Vec::new(),
+                objective: None,
             },
             0,
         )
@@ -748,6 +1371,12 @@ fn runtime_spawned_child_corrects_parent_recipient_without_replaying_sibling() {
         .cloned()
         .expect("spawned child turn");
     assert_eq!(child.state, AgentTurnState::Running);
+    // The child uses its own effective approval policy; this scenario exercises
+    // sibling-then-parent delivery ordering rather than the approval gate.
+    service.set_pane_approval_policy_override(
+        &child.pane_id,
+        Some(mez_agent::ApprovalPolicy::AutoAllow),
+    );
 
     let send_action = |id: &str, recipient: String, payload: &str| mez_agent::AgentAction {
         id: id.to_string(),
@@ -756,6 +1385,7 @@ fn runtime_spawned_child_corrects_parent_recipient_without_replaying_sibling() {
             recipient,
             content_type: "text/plain".to_string(),
             payload: payload.to_string(),
+            correlation_id: None,
         },
     };
     let first_provider = RuntimeBatchProvider {
@@ -893,7 +1523,7 @@ fn runtime_spawned_child_corrects_parent_recipient_without_replaying_sibling() {
             .blocks()
             .iter()
             .filter(|block| {
-                block.source == ContextSourceKind::LocalMessage
+                block.source == ContextSourceKind::PeerMessage
                     && block.content.contains("child handoff")
             })
             .count(),
@@ -1022,4 +1652,679 @@ fn runtime_accepts_send_message_action_with_valid_json_payload() {
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].content_type, "application/json");
     assert_eq!(messages[0].payload, r#"{"status":"ok"}"#);
+}
+
+/// Verifies the per-agent objective refreshes from the turn prompt through the
+/// same identity registry discovery reads, that an unchanged republish performs
+/// no write, and that a changed value republishes once.
+#[test]
+fn runtime_agent_objective_refresh_is_bounded_and_throttled() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "  inspect   the   discovery contract ")
+        .unwrap();
+    let agent_id = AgentId::opaque(started.agent_id.clone()).unwrap();
+    assert_eq!(
+        service
+            .message_service()
+            .registered_identity(&agent_id)
+            .and_then(|identity| identity.objective.as_deref()),
+        Some("inspect the discovery contract")
+    );
+    let published_at_ms = service
+        .message_service()
+        .presence()
+        .into_iter()
+        .find(|record| record.identity.agent_id == agent_id)
+        .map(|record| record.updated_at_ms)
+        .unwrap();
+
+    assert!(!service.publish_runtime_agent_objective(
+        started.agent_id.as_str(),
+        Some("inspect the discovery contract")
+    ));
+    assert_eq!(
+        service
+            .message_service()
+            .presence()
+            .into_iter()
+            .find(|record| record.identity.agent_id == agent_id)
+            .map(|record| record.updated_at_ms),
+        Some(published_at_ms)
+    );
+
+    assert!(service.publish_runtime_agent_objective(
+        started.agent_id.as_str(),
+        Some("Review the discovery contract")
+    ));
+    assert_eq!(
+        service
+            .message_service()
+            .registered_identity(&agent_id)
+            .and_then(|identity| identity.objective.as_deref()),
+        Some("Review the discovery contract")
+    );
+}
+
+/// Verifies the prompt-derived fallback objective reuses the shared bounds and
+/// publishes nothing when the prompt text cannot satisfy them.
+#[test]
+fn runtime_agent_objective_fallback_honors_shared_bounds() {
+    assert_eq!(
+        RuntimeSessionService::runtime_agent_objective_from_prompt("  Inspect\t the   backlog ")
+            .as_deref(),
+        Some("Inspect the backlog")
+    );
+    assert!(RuntimeSessionService::runtime_agent_objective_from_prompt("   ").is_none());
+    assert!(
+        RuntimeSessionService::runtime_agent_objective_from_prompt("inspect\u{7}the pane")
+            .is_none()
+    );
+}
+
+/// Verifies a turn without a model-authored objective still derives one from
+/// its own prompt context, and keeps the previous published objective when a
+/// refresh cannot be bounded.
+#[test]
+fn runtime_agent_turn_objective_uses_turn_prompt_context() {
+    let mut service = test_runtime_service();
+    let turn = AgentTurnRecord {
+        turn_id: "turn-objective".to_string(),
+        conversation_id: "conversation-objective".to_string(),
+        agent_id: "agent-%9".to_string(),
+        pane_id: "%9".to_string(),
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 1,
+        deadline_at_unix_millis: 2,
+        policy_profile: "runtime".to_string(),
+        model_profile: "test".to_string(),
+        parent_turn_id: None,
+        cooperation_mode: None,
+        state: AgentTurnState::Queued,
+        initial_capability: None,
+    };
+    service.agent_turn_contexts_mut().insert(
+        turn.turn_id.clone(),
+        mez_agent::AgentContext::new(vec![ContextBlock::user_event(
+            "user prompt",
+            "  inspect   the turn context ",
+        )])
+        .unwrap(),
+    );
+    assert_eq!(
+        service.runtime_agent_turn_objective(&turn).as_deref(),
+        Some("inspect the turn context")
+    );
+
+    service.agent_turn_contexts_mut().insert(
+        turn.turn_id.clone(),
+        mez_agent::AgentContext::new(vec![ContextBlock::user_event(
+            "user prompt",
+            "inspect\u{7}the turn context",
+        )])
+        .unwrap(),
+    );
+    assert!(service.runtime_agent_turn_objective(&turn).is_none());
+}
+
+/// Returns the ledger turn with the supplied identity.
+fn messaging_test_turn(
+    service: &crate::runtime::RuntimeSessionService,
+    turn_id: &str,
+) -> mez_agent::AgentTurnRecord {
+    service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .expect("messaging test turn")
+}
+
+/// Builds a running execution carrying one planned action result.
+fn messaging_test_execution(
+    turn: &mez_agent::AgentTurnRecord,
+    action: &mez_agent::AgentAction,
+    result: mez_agent::ActionResult,
+    terminal_state: mez_agent::AgentTurnState,
+) -> mez_agent::AgentTurnExecution {
+    mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "messaging test batch".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "messaging test batch".to_string(),
+
+                actions: vec![action.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: vec![result],
+        final_turn: false,
+        terminal_state,
+    }
+}
+
+/// Executes one read-only `list_agents` action and returns its structured result.
+fn execute_list_agents_action(
+    service: &mut crate::runtime::RuntimeSessionService,
+    turn: &mez_agent::AgentTurnRecord,
+    agent_type: Option<&str>,
+) -> serde_json::Value {
+    let action = mez_agent::AgentAction {
+        id: "list-agents-1".to_string(),
+
+        payload: mez_agent::AgentActionPayload::ListAgents {
+            agent_type: agent_type.map(str::to_string),
+        },
+    };
+    let planned =
+        mez_agent::plan_action_result(turn, &action, mez_agent::ActionPlanningInput::default())
+            .expect("list_agents plan");
+    let mut execution =
+        messaging_test_execution(turn, &action, planned, mez_agent::AgentTurnState::Running);
+    assert_eq!(
+        service
+            .execute_running_list_agents_actions_for_turn(turn, &mut execution)
+            .unwrap(),
+        1
+    );
+    serde_json::from_str(
+        execution.action_results[0]
+            .structured_content_json
+            .as_deref()
+            .expect("agent discovery structured content"),
+    )
+    .expect("agent discovery result json")
+}
+
+/// Verifies read-only agent discovery always includes the requesting agent,
+/// defaults to primary agents only, and widens to internal controllers.
+#[test]
+fn runtime_list_agents_defaults_to_primary_and_includes_self() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "discover session peers")
+        .unwrap();
+    let turn = messaging_test_turn(&service, &started.turn_id);
+    let now_ms = current_unix_seconds().saturating_mul(1000);
+    service
+        .ensure_runtime_message_identity("agent-peer", None, "reviewer", &[], now_ms)
+        .unwrap();
+    service
+        .ensure_runtime_message_identity("agent-internal", None, "worker", &[], now_ms)
+        .unwrap();
+    service.register_macro_managed_subagent(
+        "agent-internal",
+        &turn.turn_id,
+        &turn.agent_id,
+        "review",
+    );
+
+    let primary = execute_list_agents_action(&mut service, &turn, None);
+    assert_eq!(primary["agent_type"], "primary");
+    assert_eq!(primary["truncated"], false);
+    let rows = primary["agents"].as_array().unwrap();
+    assert!(rows.iter().all(|row| row["kind"] == "primary"));
+    let self_row = rows
+        .iter()
+        .find(|row| row["is_self"] == true)
+        .expect("requesting agent row");
+    assert_eq!(self_row["agent_id"], turn.agent_id);
+    assert!(rows.iter().any(|row| row["agent_id"] == "agent-peer"));
+    assert!(!rows.iter().any(|row| row["agent_id"] == "agent-internal"));
+
+    let internal = execute_list_agents_action(&mut service, &turn, Some("internal"));
+    let internal_ids = internal["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["agent_id"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(internal_ids, vec!["agent-internal".to_string()]);
+    assert!(
+        internal["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["kind"] == "internal")
+    );
+
+    let all = execute_list_agents_action(&mut service, &turn, Some("all"));
+    let all_ids = all["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["agent_id"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    for agent_id in ["agent-peer", "agent-internal", turn.agent_id.as_str()] {
+        assert!(all_ids.contains(&agent_id.to_string()), "{agent_id}");
+    }
+
+    let subagents = execute_list_agents_action(&mut service, &turn, Some("subagent"));
+    assert_eq!(subagents["count"], 0);
+    assert!(subagents["agents"].as_array().unwrap().is_empty());
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies discovery rows honor the documented row and string bounds and that
+/// an unsupported agent-type filter is rejected instead of widened.
+#[test]
+fn runtime_list_agents_bounds_rows_and_rejects_unknown_agent_type() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "discover many peers")
+        .unwrap();
+    let turn = messaging_test_turn(&service, &started.turn_id);
+    let now_ms = current_unix_seconds().saturating_mul(1000);
+    for index in 0..(mez_agent::AGENT_LIST_MAX_ROWS + 3) {
+        service
+            .ensure_runtime_message_identity(
+                &format!("agent-peer-{index:03}"),
+                None,
+                "worker",
+                &[],
+                now_ms,
+            )
+            .unwrap();
+    }
+
+    let all = execute_list_agents_action(&mut service, &turn, Some("all"));
+    let rows = all["agents"].as_array().unwrap();
+    assert_eq!(rows.len(), mez_agent::AGENT_LIST_MAX_ROWS);
+    assert_eq!(all["truncated"], true);
+    for row in rows {
+        for field in ["agent_id", "role", "pane_id", "window_id", "objective"] {
+            if let Some(value) = row[field].as_str() {
+                assert!(
+                    value.len() <= mez_agent::AGENT_LIST_MAX_STRING_BYTES,
+                    "{field}"
+                );
+            }
+        }
+        for capability in row["capabilities"].as_array().unwrap() {
+            assert!(capability.as_str().unwrap().len() <= mez_agent::AGENT_LIST_MAX_STRING_BYTES);
+        }
+    }
+
+    let action = mez_agent::AgentAction {
+        id: "list-agents-1".to_string(),
+
+        payload: mez_agent::AgentActionPayload::ListAgents {
+            agent_type: Some("peers".to_string()),
+        },
+    };
+    let planned =
+        mez_agent::plan_action_result(&turn, &action, mez_agent::ActionPlanningInput::default())
+            .expect("list_agents plan");
+    let mut execution =
+        messaging_test_execution(&turn, &action, planned, mez_agent::AgentTurnState::Running);
+    assert!(
+        service
+            .execute_running_list_agents_actions_for_turn(&turn, &mut execution)
+            .is_err()
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Plans one ask-mode message action and queues its resumable blocked approval.
+fn block_runtime_send_message(
+    service: &mut crate::runtime::RuntimeSessionService,
+    turn: &mez_agent::AgentTurnRecord,
+    recipient: &str,
+    payload: &str,
+) -> (mez_agent::AgentAction, String) {
+    let action = mez_agent::AgentAction {
+        id: "message-1".to_string(),
+
+        payload: mez_agent::AgentActionPayload::SendMessage {
+            recipient: recipient.to_string(),
+            content_type: "text/plain; charset=utf-8".to_string(),
+            payload: payload.to_string(),
+            correlation_id: None,
+        },
+    };
+    let blocked = mez_agent::plan_action_result(
+        turn,
+        &action,
+        mez_agent::ActionPlanningInput {
+            approval_policy: mez_agent::ApprovalPolicy::Ask,
+            message_rule_decision: Some(mez_agent::permissions::RuleDecision::Prompt),
+            ..mez_agent::ActionPlanningInput::default()
+        },
+    )
+    .expect("message plan");
+    assert_eq!(blocked.status, ActionStatus::Blocked);
+    let execution =
+        messaging_test_execution(turn, &action, blocked, mez_agent::AgentTurnState::Blocked);
+    service
+        .agent_turn_executions_mut()
+        .insert(turn.turn_id.clone(), execution.clone());
+    // Register the owning assistant execution so the settled message evidence
+    // can be committed to the turn context on resumption.
+    service
+        .append_agent_execution_chronology(turn, &execution)
+        .unwrap();
+    let approval_ids = service
+        .queue_blocked_approvals_for_execution(turn, &execution)
+        .expect("queued message approval");
+    assert_eq!(approval_ids.len(), 1);
+    (action, approval_ids[0].clone())
+}
+
+/// Approves one queued blocked approval and returns its decided record.
+fn approve_blocked_runtime_action(
+    service: &mut crate::runtime::RuntimeSessionService,
+    approval_id: &str,
+) -> mez_agent::permissions::BlockedApprovalRequest {
+    service
+        .integration
+        .blocked_approvals_mut()
+        .decide_with_client_at(
+            approval_id,
+            mez_agent::permissions::ApprovalDecision::Approve,
+            None,
+            Some("client-1".to_string()),
+            current_unix_seconds(),
+        )
+        .expect("approve blocked action");
+    service
+        .blocked_approvals()
+        .get(approval_id)
+        .cloned()
+        .expect("decided approval")
+}
+
+/// Verifies an ask-mode message blocks with a bounded approval payload and
+/// delivers exactly once after `/approve` resumes it.
+#[test]
+fn runtime_send_message_approval_blocks_and_resumes_after_approve() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "message a peer agent")
+        .unwrap();
+    let turn = messaging_test_turn(&service, &started.turn_id);
+    let now_ms = current_unix_seconds().saturating_mul(1000);
+    let target = AgentId::opaque("agent-peer").unwrap();
+    service
+        .ensure_runtime_message_identity("agent-peer", None, "worker", &[], now_ms)
+        .unwrap();
+
+    let (_, approval_id) =
+        block_runtime_send_message(&mut service, &turn, "agent:agent-peer", "hello peer");
+    let approval = service
+        .blocked_approvals()
+        .get(&approval_id)
+        .cloned()
+        .expect("queued approval");
+    assert_eq!(approval.action_kind, "send_message");
+    assert_eq!(approval.action_summary, "send_message to agent:agent-peer");
+    assert!(
+        !approval
+            .declared_effects
+            .iter()
+            .any(|effect| effect.contains("hello peer"))
+    );
+
+    let decided = approve_blocked_runtime_action(&mut service, &approval_id);
+    let controller = mez_core::ids::ClientId::opaque("client-1".to_string()).unwrap();
+    assert_eq!(
+        service
+            .resume_approved_blocked_agent_action(&approval_id, &decided, &controller)
+            .unwrap(),
+        Some(1)
+    );
+
+    let stored = service
+        .agent_turn_executions()
+        .get(&turn.turn_id)
+        .cloned()
+        .expect("resumed execution");
+    assert_eq!(stored.action_results[0].status, ActionStatus::Succeeded);
+    let structured: serde_json::Value = serde_json::from_str(
+        stored.action_results[0]
+            .structured_content_json
+            .as_deref()
+            .expect("delivery structured content"),
+    )
+    .unwrap();
+    assert_eq!(structured["delivery_status"], "accepted");
+    let messages = service.message_service().receive_for(&target, u64::MAX);
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].payload, "hello peer");
+    // The approval record is retained for audit while its resumable reference
+    // is consumed by the resumed delivery.
+    assert_eq!(
+        service
+            .blocked_approvals()
+            .get(&approval_id)
+            .expect("retained approval record")
+            .state,
+        mez_agent::permissions::BlockedApprovalState::Approved
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies an approved send is re-validated against the recipient and payload
+/// identity it was approved for, and delivers nothing when either changed.
+#[test]
+fn runtime_send_message_approval_rejects_changed_recipient_or_payload() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "message a peer agent")
+        .unwrap();
+    let turn = messaging_test_turn(&service, &started.turn_id);
+    let now_ms = current_unix_seconds().saturating_mul(1000);
+    let target = AgentId::opaque("agent-peer").unwrap();
+    let other = AgentId::opaque("agent-other").unwrap();
+    for agent_id in ["agent-peer", "agent-other"] {
+        service
+            .ensure_runtime_message_identity(agent_id, None, "worker", &[], now_ms)
+            .unwrap();
+    }
+
+    let (_, approval_id) =
+        block_runtime_send_message(&mut service, &turn, "agent:agent-peer", "hello peer");
+    let decided = approve_blocked_runtime_action(&mut service, &approval_id);
+    let controller = mez_core::ids::ClientId::opaque("client-1".to_string()).unwrap();
+
+    let mut execution = service
+        .agent_turn_executions()
+        .get(&turn.turn_id)
+        .cloned()
+        .expect("blocked execution");
+    let mez_agent::AgentActionPayload::SendMessage { payload, .. } =
+        &mut execution.response.action_batch.as_mut().unwrap().actions[0].payload
+    else {
+        panic!("send_message action");
+    };
+    *payload = "changed payload".to_string();
+    service
+        .agent_turn_executions_mut()
+        .insert(turn.turn_id.clone(), execution.clone());
+    let error = service
+        .resume_approved_blocked_agent_action(&approval_id, &decided, &controller)
+        .expect_err("changed payload must not resume");
+    assert!(error.message().contains("no longer matches"), "{error:?}");
+
+    let mez_agent::AgentActionPayload::SendMessage { payload, .. } =
+        &mut execution.response.action_batch.as_mut().unwrap().actions[0].payload
+    else {
+        panic!("send_message action");
+    };
+    *payload = "hello peer".to_string();
+    let mez_agent::AgentActionPayload::SendMessage { recipient, .. } =
+        &mut execution.response.action_batch.as_mut().unwrap().actions[0].payload
+    else {
+        panic!("send_message action");
+    };
+    *recipient = format!("agent:{other}");
+    service
+        .agent_turn_executions_mut()
+        .insert(turn.turn_id.clone(), execution.clone());
+    let error = service
+        .resume_approved_blocked_agent_action(&approval_id, &decided, &controller)
+        .expect_err("changed recipient must not resume");
+    assert!(error.message().contains("no longer matches"), "{error:?}");
+    assert!(
+        service
+            .message_service()
+            .receive_for(&target, u64::MAX)
+            .is_empty()
+    );
+
+    let mez_agent::AgentActionPayload::SendMessage { recipient, .. } =
+        &mut execution.response.action_batch.as_mut().unwrap().actions[0].payload
+    else {
+        panic!("send_message action");
+    };
+    *recipient = "agent:agent-peer".to_string();
+    service
+        .agent_turn_executions_mut()
+        .insert(turn.turn_id.clone(), execution);
+    assert_eq!(
+        service
+            .resume_approved_blocked_agent_action(&approval_id, &decided, &controller)
+            .unwrap(),
+        Some(1)
+    );
+    assert_eq!(
+        service
+            .message_service()
+            .receive_for(&target, u64::MAX)
+            .len(),
+        1
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies discovery rows enforce the documented capability bound and signal
+/// shortened text instead of silently dropping it.
+#[test]
+fn runtime_list_agents_bounds_capabilities_and_signals_row_truncation() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "discover an oversized peer")
+        .unwrap();
+    let turn = messaging_test_turn(&service, &started.turn_id);
+    let now_ms = current_unix_seconds().saturating_mul(1000);
+    let oversized = "c".repeat(mez_agent::AGENT_LIST_MAX_STRING_BYTES + 64);
+    let capabilities = (0..(mez_agent::AGENT_LIST_MAX_CAPABILITIES + 5))
+        .map(|_| oversized.as_str())
+        .collect::<Vec<_>>();
+    service
+        .ensure_runtime_message_identity("agent-oversized", None, "worker", &capabilities, now_ms)
+        .unwrap();
+
+    let all = execute_list_agents_action(&mut service, &turn, Some("all"));
+    let rows = all["agents"].as_array().unwrap();
+    let row = rows
+        .iter()
+        .find(|row| row["agent_id"] == "agent-oversized")
+        .expect("oversized peer row");
+    let row_capabilities = row["capabilities"].as_array().unwrap();
+    assert_eq!(
+        row_capabilities.len(),
+        mez_agent::AGENT_LIST_MAX_CAPABILITIES,
+        "one row must carry at most the documented capability bound"
+    );
+    for capability in row_capabilities {
+        assert!(capability.as_str().unwrap().len() <= mez_agent::AGENT_LIST_MAX_STRING_BYTES);
+    }
+    assert_eq!(
+        row["truncated"], true,
+        "a shortened row must signal its bounded text"
+    );
+    let self_row = rows
+        .iter()
+        .find(|row| row["is_self"] == true)
+        .expect("self row");
+    assert_eq!(self_row["truncated"], false);
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies the injected peer block and its provider label bound and sanitize
+/// peer-supplied sender fields, so an oversized or evil identity cannot shape
+/// framing text or the block label.
+#[test]
+fn runtime_peer_message_context_bounds_evil_sender_identity() {
+    let oversized = "x".repeat(mez_agent::AGENT_LIST_MAX_STRING_BYTES * 2);
+    let evil_capability = format!(
+        "caps {}",
+        "y".repeat(mez_agent::AGENT_LIST_MAX_STRING_BYTES)
+    );
+    let envelope = Envelope {
+        protocol: "mmp/1",
+        id: oversized.clone(),
+        message_type: "send".to_string(),
+        time: "runtime:1".to_string(),
+        sender: mez_agent::messaging::SenderIdentity {
+            agent_id: AgentId::opaque(oversized.clone()).unwrap(),
+            pane_id: None,
+            window_id: None,
+            role: Some(oversized.clone()),
+            capabilities: vec![evil_capability.clone(); mez_agent::AGENT_LIST_MAX_CAPABILITIES + 2],
+            objective: Some(oversized.clone()),
+        },
+        recipient: mez_agent::messaging::Recipient::Session,
+        correlation_id: Some(oversized.clone()),
+        ttl_ms: None,
+        content_type: "text/plain; charset=utf-8".to_string(),
+        payload: "bounded payload".to_string(),
+        extension_fields: Vec::new(),
+    };
+
+    let content = crate::runtime::control::runtime_peer_message_context_content(&envelope);
+    assert!(
+        !content.contains(&oversized),
+        "peer-supplied identity text must be bounded at render time"
+    );
+    assert!(!content.contains(&evil_capability));
+    let bounded_capability = mez_agent::agent_list_bounded_text(&evil_capability);
+    assert_eq!(
+        content.matches(&bounded_capability).count(),
+        mez_agent::AGENT_LIST_MAX_CAPABILITIES,
+        "the injected block must carry at most the documented capability bound"
+    );
+    assert!(
+        content.len()
+            <= mez_agent::AGENT_LIST_MAX_STRING_BYTES
+                * (mez_agent::AGENT_LIST_MAX_CAPABILITIES + 8)
+    );
+
+    let label = crate::runtime::control::runtime_peer_message_block_label(7, &oversized);
+    assert!(label.starts_with("peer message sequence 7 id "));
+    assert!(!label.contains(&oversized));
+    assert!(label.len() <= mez_agent::AGENT_LIST_MAX_STRING_BYTES + 32);
 }

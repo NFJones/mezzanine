@@ -2960,6 +2960,7 @@ fn migrates_schema_81_static_enabled_actions() {
                 "mcp_call",
                 "memory_search",
                 "memory_store",
+                "list_agents",
                 "issue_add",
                 "issue_update",
                 "issue_query",

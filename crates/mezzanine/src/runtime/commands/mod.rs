@@ -45,7 +45,8 @@ use crate::integrations::agent::provider::{
     openai_responses_provider_from_auth_store_with_provider_options,
 };
 use crate::runtime::config::{
-    runtime_default_models_for_provider, runtime_recommended_model_for_provider,
+    runtime_default_config_model_records, runtime_default_models_for_provider,
+    runtime_recommended_model_for_provider,
 };
 use crate::security::auth::AuthCredentialKind;
 use mez_agent::ModelResponse;
@@ -56,8 +57,7 @@ use mez_agent::{
     ModelCatalogSelectionErrorKind, ModelCatalogSource, ModelInteractionKind, ModelMessage,
     ModelMessageRole, ModelRequest, ModelTokenUsage, ModelTokenUsageKey, ProviderApiCompatibility,
     ProviderCapabilities, ProviderModelCatalog, ProviderModelInfo, ProviderQuotaUsage,
-    append_mcp_context, normalize_model_catalog_values, openai_default_reasoning_levels_for_model,
-    resolve_provider_api,
+    append_mcp_context, normalize_model_catalog_values, resolve_provider_api,
 };
 
 mod approval;
@@ -1275,11 +1275,15 @@ impl RuntimeSessionService {
         let context = self.apply_agent_shell_preference_context(pane_id, context)?;
         let fresh_context = self.apply_persisted_context_documents(pane_id, context)?;
         let agent_id = format!("agent-{pane_id}");
+        self.reset_agent_peer_message_turns(&agent_id);
+        let objective = Self::runtime_agent_objective_from_prompt(prompt);
+        self.publish_runtime_agent_objective(&agent_id, objective.as_deref());
         let conversation_id = self
             .agent_shell_store()
             .get(pane_id)
             .map(|session| session.session_id.clone())
             .ok_or_else(|| MezError::invalid_state("agent turn conversation is unavailable"))?;
+        self.mirror_runtime_agent_objective(&conversation_id, objective.as_deref());
         let (context, continued_interrupted_turn, active_imported_history_events) = self
             .prepare_interrupted_agent_continuation_context(
                 &agent_id,

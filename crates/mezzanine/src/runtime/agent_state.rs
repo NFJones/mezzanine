@@ -346,6 +346,12 @@ pub struct RuntimeAgentProviderDispatch {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub subagent_scope: Option<SubagentScopeDeclaration>,
+    /// Macro and bridge child agent ids owned by this provider turn.
+    ///
+    /// Runtime macro and bridge sends stay ungated, so the planning adapter must
+    /// know which recipients are runtime-owned orchestration targets rather than
+    /// model-chosen peers.
+    pub macro_bridge_recipients: Vec<String>,
     /// Stores the available mcp servers value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

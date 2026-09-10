@@ -287,6 +287,13 @@ pub enum AgentActionPayload {
         /// Optional retention period in days.
         expires_in_days: Option<u64>,
     },
+    /// Lists discoverable session agents through runtime-owned discovery.
+    ListAgents {
+        /// Optional agent-type filter: primary, subagent, internal, or all.
+        ///
+        /// Absent means the primary-agent-only default.
+        agent_type: Option<String>,
+    },
     /// Adds one local project issue through the runtime-owned issue store.
     IssueAdd {
         /// Issue kind: defect or task.
@@ -368,6 +375,11 @@ pub enum AgentActionPayload {
         /// The field is part of structured state exchanged across this module
         /// boundary and should remain aligned with the owning type invariant.
         payload: String,
+        /// Optional correlation id set by the sender.
+        ///
+        /// Replies are expected to set this to the id of the message they
+        /// answer; the runtime defaults it to the sending turn when omitted.
+        correlation_id: Option<String>,
     },
     /// Represents the Spawn Agent case for this enumeration.
     ///
@@ -634,6 +646,7 @@ impl AgentAction {
             AgentActionPayload::FetchUrl { .. } => "fetch_url",
             AgentActionPayload::MemorySearch { .. } => "memory_search",
             AgentActionPayload::MemoryStore { .. } => "memory_store",
+            AgentActionPayload::ListAgents { .. } => "list_agents",
             AgentActionPayload::IssueAdd { .. } => "issue_add",
             AgentActionPayload::IssueUpdate { .. } => "issue_update",
             AgentActionPayload::IssueQuery { .. } => "issue_query",
@@ -741,6 +754,16 @@ impl AgentAction {
                 }
                 Ok(())
             }
+            AgentActionPayload::ListAgents { agent_type } => {
+                if let Some(agent_type) = agent_type.as_deref()
+                    && !matches!(agent_type, "primary" | "subagent" | "internal" | "all")
+                {
+                    return Err(MaapContractError::invalid_args(
+                        "list_agents agent_type must be primary, subagent, internal, or all",
+                    ));
+                }
+                Ok(())
+            }
             AgentActionPayload::IssueAdd {
                 kind,
                 state,
@@ -807,10 +830,20 @@ impl AgentAction {
                 recipient,
                 content_type,
                 payload,
+                correlation_id,
             } => {
                 validate_non_empty("message recipient", recipient)?;
                 validate_non_empty("message content type", content_type)?;
-                validate_non_empty("message payload", payload)
+                validate_non_empty("message payload", payload)?;
+                if let Some(correlation_id) = correlation_id.as_deref() {
+                    validate_non_empty("message correlation id", correlation_id)?;
+                    if correlation_id.chars().count() > 256 {
+                        return Err(MaapContractError::invalid_args(
+                            "message correlation id must be at most 256 characters",
+                        ));
+                    }
+                }
+                Ok(())
             }
             AgentActionPayload::SpawnAgent {
                 role,
@@ -1050,6 +1083,17 @@ fn parse_fenced_maap_action_batch_inner(
     raw_text: &str,
     identity: Option<(&str, &str)>,
 ) -> MaapContractResult<Option<MaapBatch>> {
+    match fenced_maap_action_blocks(raw_text)?.as_slice() {
+        [] => Ok(None),
+        [block] => Ok(Some(parse_maap_action_batch_json_inner(block, identity)?)),
+        _ => Err(MaapContractError::invalid_args(
+            "model response must contain exactly one mezzanine-action-json block",
+        )),
+    }
+}
+
+/// Collects the exact fenced `mezzanine-action-json` blocks from model text.
+fn fenced_maap_action_blocks(raw_text: &str) -> MaapContractResult<Vec<String>> {
     let mut blocks = Vec::new();
     let mut active_block: Option<Vec<String>> = None;
     for line in raw_text.lines() {
@@ -1077,13 +1121,29 @@ fn parse_fenced_maap_action_batch_inner(
             "mezzanine-action-json block is unterminated",
         ));
     }
-    match blocks.as_slice() {
-        [] => Ok(None),
-        [block] => Ok(Some(parse_maap_action_batch_json_inner(block, identity)?)),
-        _ => Err(MaapContractError::invalid_args(
-            "model response must contain exactly one mezzanine-action-json block",
-        )),
-    }
+    Ok(blocks)
+}
+
+/// Extracts the optional bounded objective carried by one MAAP response envelope.
+///
+/// The objective is the smallest additive extension of the turn response
+/// envelope: the model may state its current factual objective during the turn
+/// instead of a separate provider round trip. The value reuses the shared agent
+/// objective bounds, so an absent, malformed, or out-of-bounds objective yields
+/// `None`; a failed objective refresh therefore never fails a turn, never
+/// publishes unbounded text, and keeps the previous published objective.
+pub fn parse_maap_batch_objective(raw_text: &str) -> Option<String> {
+    let value = serde_json::from_str::<serde_json::Value>(raw_text.trim())
+        .ok()
+        .or_else(|| {
+            let blocks = fenced_maap_action_blocks(raw_text).ok()?;
+            let [block] = blocks.as_slice() else {
+                return None;
+            };
+            serde_json::from_str::<serde_json::Value>(block).ok()
+        })?;
+    let objective = value.as_object()?.get("objective")?.as_str()?;
+    crate::messaging::normalize_objective(objective).ok()
 }
 
 /// Parses one `maap/1` action batch JSON object.
@@ -1276,6 +1336,9 @@ fn parse_maap_action_value(
             content: required_string(object, "content")?.to_string(),
             expires_in_days: optional_nullable_u64(object, "expires_in_days")?,
         },
+        "list_agents" => AgentActionPayload::ListAgents {
+            agent_type: optional_string(object, "agent_type")?.map(str::to_string),
+        },
         "issue_add" => AgentActionPayload::IssueAdd {
             kind: required_string(object, "kind")?.to_string(),
             state: optional_string(object, "state")?.map(str::to_string),
@@ -1312,6 +1375,7 @@ fn parse_maap_action_value(
             recipient: required_string(object, "recipient")?.to_string(),
             content_type: required_string(object, "content_type")?.to_string(),
             payload: required_json_or_string(object, "payload")?,
+            correlation_id: optional_string(object, "correlation_id")?.map(str::to_string),
         },
         "spawn_agent" => {
             let size = optional_string(object, "size")?.map(str::to_string);
