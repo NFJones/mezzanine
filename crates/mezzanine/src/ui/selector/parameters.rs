@@ -76,7 +76,7 @@ pub(super) fn agent_parameter_hint(command: &str) -> Option<&'static str> {
         "copy-patches" => Some(" <pane|buffer [name]|clipboard>"),
         "personality" => Some(" <profile|style|list|status|show|clear|default>"),
         "remember" => Some(" [statement]"),
-        "name-session" => Some(" <name>|--clear"),
+        "name-session" => Some(" [--ephemeral] <name>|--clear"),
         "resume" => Some(" <session-uuid|--latest>"),
         "fork" => Some(" [conversation-id]"),
         "list-mcp" => Some(" [server-name]"),

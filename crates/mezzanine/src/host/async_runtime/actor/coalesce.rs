@@ -272,6 +272,7 @@ pub(super) fn runtime_event_requires_registry_persistence(event: &RuntimeEvent) 
         | RuntimeEvent::NativeShell(_)
         | RuntimeEvent::AgentCompaction(_)
         | RuntimeEvent::AgentRemember(_)
+        | RuntimeEvent::AgentSessionTitle(_)
         | RuntimeEvent::Shutdown(_) => true,
     }
 }
@@ -406,6 +407,7 @@ pub(super) fn runtime_side_effect_kind(effect: &RuntimeSideEffect) -> &'static s
         RuntimeSideEffect::DispatchNativeShellAction { .. } => "dispatch-native-shell-action",
         RuntimeSideEffect::DispatchAgentCompaction { .. } => "dispatch-agent-compaction",
         RuntimeSideEffect::DispatchAgentRemember { .. } => "dispatch-agent-remember",
+        RuntimeSideEffect::DispatchAgentSessionTitle { .. } => "dispatch-agent-session-title",
         RuntimeSideEffect::DispatchAgentPresentationResize { .. } => {
             "dispatch-agent-presentation-resize"
         }

@@ -384,11 +384,14 @@ mod status_pills;
 mod transitions;
 
 pub(crate) use agent::execute_agent_provider_persistence_work;
+#[cfg(test)]
+pub(crate) use agent::{SessionTitleDenial, session_title_task_id};
 pub use agent_state::{
     RuntimeAgentCompactionDispatch, RuntimeAgentCompactionTask, RuntimeAgentLoopState,
     RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind, RuntimeAgentProviderDispatch,
     RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask,
     RuntimeAgentProviderWorkerOutcome, RuntimeAgentRememberDispatch, RuntimeAgentRememberTask,
+    RuntimeAgentSessionTitleClaim, RuntimeAgentSessionTitleDispatch, RuntimeAgentSessionTitleTask,
 };
 pub(crate) use agent_state::{
     RuntimeAgentProviderPersistenceOutcome, RuntimeAgentProviderPersistenceWork,
@@ -471,13 +474,13 @@ pub use status_pills::{
 #[cfg(test)]
 pub(crate) use transitions::MAX_CLIENT_CLIPBOARD_BYTES;
 pub use transitions::{
-    AgentCompactionEvent, AgentProviderEvent, AgentRememberEvent, AsyncHookEvent,
-    ClientClipboardWrite, ClientEvent, HostClipboardEvent, HostClipboardPasteTarget, PaneEvent,
-    PaneForegroundProcessObservation, PaneProcessEvent, PaneProcessInstance, PaneProcessIoEffect,
-    PersistenceEvent, PersistenceTarget, PersistenceWriteMode, ProcessEvent,
-    RenderInvalidationReason, RuntimeEvent, RuntimeEventBatch, RuntimeEventIngressReport,
-    RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition,
-    SessionArchiveOperation, ShutdownEvent, TimerEvent,
+    AgentCompactionEvent, AgentProviderEvent, AgentRememberEvent, AgentSessionTitleEvent,
+    AgentSessionTitleOutcome, AsyncHookEvent, ClientClipboardWrite, ClientEvent,
+    HostClipboardEvent, HostClipboardPasteTarget, PaneEvent, PaneForegroundProcessObservation,
+    PaneProcessEvent, PaneProcessInstance, PaneProcessIoEffect, PersistenceEvent,
+    PersistenceTarget, PersistenceWriteMode, ProcessEvent, RenderInvalidationReason, RuntimeEvent,
+    RuntimeEventBatch, RuntimeEventIngressReport, RuntimeSideEffect, RuntimeTimerKey,
+    RuntimeTimerKind, RuntimeTransition, SessionArchiveOperation, ShutdownEvent, TimerEvent,
 };
 
 pub(crate) use auto_sizing::runtime_execute_auto_sizing_with_async_provider;
@@ -498,10 +501,11 @@ use commands_support::{
 pub(crate) use config::ActiveTurnSleepInhibition;
 pub(crate) use config::runtime_message_recipient_decision;
 pub(crate) use config::{
-    EXTERNAL_EDITOR_MAX_CANDIDATES, RuntimeExternalEditorConfig, RuntimeIrohAddressLookupPolicy,
-    RuntimeIrohCompressionCodec, RuntimeIrohIdentityPolicy, RuntimeIrohRelayPolicy,
-    RuntimeIrohTransportPolicy, RuntimeIrohX11Policy,
-    external_editor_argument_contains_ascii_control, runtime_audit_log_from_config,
+    EXTERNAL_EDITOR_MAX_CANDIDATES, PeerMessageLogMode, RuntimeExternalEditorConfig,
+    RuntimeIrohAddressLookupPolicy, RuntimeIrohCompressionCodec, RuntimeIrohIdentityPolicy,
+    RuntimeIrohRelayPolicy, RuntimeIrohTransportPolicy, RuntimeIrohX11Policy,
+    external_editor_argument_contains_ascii_control,
+    runtime_agent_peer_message_log_mode_from_config, runtime_audit_log_from_config,
     runtime_external_editor_config_from_config, runtime_iroh_transport_policy_from_config,
     runtime_pane_status_config_from_config, runtime_validate_key_binding_collisions,
 };

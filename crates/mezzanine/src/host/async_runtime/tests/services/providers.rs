@@ -1801,3 +1801,447 @@ executable = "{bubblewrap_executable}"
     exit.service.terminate_all_pane_processes().unwrap();
     let _ = std::fs::remove_dir_all(auth_root);
 }
+
+/// Verifies the async provider service executes one turn-less generated-title
+/// task end to end: it claims the queued title, sends the bounded request,
+/// sanitizes the reply, and settles the row title without creating a turn.
+#[tokio::test(flavor = "current_thread")]
+async fn async_agent_provider_service_settles_a_generated_session_title() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    // The mock provider answers the bounded title request. It tolerates one
+    // retry so a failed first attempt cannot hang on an unaccepted connection.
+    let server = tokio::spawn(async move {
+        let mut requests = Vec::new();
+        for _ in 0..2 {
+            let accepted =
+                tokio::time::timeout(Duration::from_millis(500), listener.accept()).await;
+            let Ok(Ok((mut stream, _))) = accepted else {
+                break;
+            };
+            requests.push(async_provider_concurrency_read_http_request(&mut stream).await);
+            // A title reply is plain assistant text, not a structured MAAP batch:
+            // a payload-shaped reply is rejected as a malformed generation.
+            async_provider_concurrency_write_chat_content_response(
+                &mut stream,
+                "local-chat-model",
+                "Inspect the backlog",
+            )
+            .await;
+        }
+        requests
+    });
+    let root = std::env::temp_dir().join(format!(
+        "mez-async-title-dispatch-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let transcript_store = crate::storage::transcript::AgentTranscriptStore::new(root.clone());
+    let mut service = test_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service.set_auth_store(crate::security::auth::AuthStore::new(
+        crate::security::auth::AuthPaths::under_config_root(&root),
+    ));
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "title-dispatch".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: format!(
+                "[agents]\n\
+                 default_provider = \"local-chat\"\n\
+                 default_model_profile = \"default\"\n\
+                 max_concurrent_agents = 4\n\
+                 \n\
+                 [providers.local-chat]\n\
+                 kind = \"openai-compatible\"\n\
+                 base_url = \"http://{address}/v1\"\n\
+                 models = [\"local-chat-model\"]\n\
+                 default_model = \"local-chat-model\"\n\
+                 \n\
+                 [model_profiles.default]\n\
+                 provider = \"local-chat\"\n\
+                 model = \"local-chat-model\"\n"
+            ),
+        }])
+        .unwrap();
+    service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 10)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    assert!(
+        service
+            .schedule_runtime_agent_session_title(&conversation_id, Some("summarize the backlog"))
+            .is_ok()
+    );
+    assert_eq!(
+        service.pending_agent_session_title_tasks(),
+        vec![conversation_id.clone()]
+    );
+    assert!(service.agent_turn_ledger().turns().is_empty());
+
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let provider_handle = handle.clone();
+    let queued_conversation = conversation_id.clone();
+    let client = async move {
+        let queued = provider_handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::DispatchAgentSessionTitle {
+                conversation_id: queued_conversation,
+            }])
+            .await
+            .unwrap();
+        assert_eq!(queued, 1);
+        let report = tokio::time::timeout(
+            Duration::from_secs(5),
+            run_async_agent_provider_service(
+                &provider_handle,
+                AsyncAgentProviderServiceConfig::new(1)
+                    .unwrap()
+                    .with_idle_interval(Duration::from_millis(5))
+                    .unwrap(),
+                |polls, _| polls >= 200,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let _ = provider_handle.shutdown().await.unwrap();
+        report
+    };
+    let (report, mut exit) = tokio::join!(client, actor.run());
+    assert!(report.polls >= 1, "{report:?}");
+
+    let requests = server.await.unwrap();
+    assert!(
+        !requests.is_empty(),
+        "no title request reached the provider"
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.contains("session title")),
+        "{requests:?}"
+    );
+    assert!(exit.service.pending_agent_session_title_tasks().is_empty());
+    // Generating a title is a side channel: no turn exists for it at all.
+    assert!(exit.service.agent_turn_ledger().turns().is_empty());
+    let trace = exit
+        .service
+        .agent_pane_trace_log_text("%1")
+        .unwrap_or_default();
+    assert_eq!(
+        transcript_store
+            .session_generated_title(&conversation_id)
+            .unwrap()
+            .map(|mirror| mirror.title),
+        Some("Inspect the backlog".to_string()),
+        "{trace}"
+    );
+    exit.service.terminate_all_pane_processes().unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// One mock provider reply for a generated-title request.
+enum TitleReply {
+    /// Assistant content returned with HTTP 200.
+    Content(String),
+    /// Provider HTTP failure with one status code and JSON body.
+    Error { status: u16, body: String },
+}
+
+/// Runs one generated-title dispatch plan against a mock provider.
+///
+/// The plan answers each accepted provider request in order, so a test drives real
+/// reply shapes (a title, an empty reply, an oversize reply, a provider HTTP
+/// failure) through the worker path instead of injecting a settled outcome.
+/// Returns the service, the transcript store, the conversation id, and the raw
+/// request bodies the mock provider received.
+async fn run_session_title_reply_plan(
+    name: &str,
+    agent_config: &str,
+    plan: Vec<TitleReply>,
+) -> (
+    RuntimeSessionService,
+    AgentTranscriptStore,
+    String,
+    Vec<String>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let mut requests = Vec::new();
+        for reply in plan {
+            let accepted =
+                tokio::time::timeout(Duration::from_millis(500), listener.accept()).await;
+            let Ok(Ok((mut stream, _))) = accepted else {
+                break;
+            };
+            requests.push(async_provider_concurrency_read_http_request(&mut stream).await);
+            match reply {
+                TitleReply::Content(content) => {
+                    async_provider_concurrency_write_chat_content_response(
+                        &mut stream,
+                        "local-chat-model",
+                        &content,
+                    )
+                    .await;
+                }
+                TitleReply::Error { status, body } => {
+                    async_provider_concurrency_write_chat_error_response(
+                        &mut stream,
+                        status,
+                        &body,
+                    )
+                    .await;
+                }
+            }
+        }
+        requests
+    });
+    let root = std::env::temp_dir().join(format!(
+        "mez-async-title-plan-{name}-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let transcript_store = crate::storage::transcript::AgentTranscriptStore::new(root.clone());
+    let mut service = test_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service.set_auth_store(crate::security::auth::AuthStore::new(
+        crate::security::auth::AuthPaths::under_config_root(&root),
+    ));
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: format!("title-plan-{name}"),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: format!(
+                "[agents]\n\
+                 default_provider = \"local-chat\"\n\
+                 default_model_profile = \"default\"\n\
+                 max_concurrent_agents = 4\n\
+                 {agent_config}\n\
+                 [providers.local-chat]\n\
+                 kind = \"openai-compatible\"\n\
+                 base_url = \"http://{address}/v1\"\n\
+                 models = [\"local-chat-model\", \"title-model\"]\n\
+                 default_model = \"local-chat-model\"\n\
+                 \n\
+                 [model_profiles.default]\n\
+                 provider = \"local-chat\"\n\
+                 model = \"local-chat-model\"\n\
+                 \n\
+                 [model_profiles.title]\n\
+                 provider = \"local-chat\"\n\
+                 model = \"title-model\"\n"
+            ),
+        }])
+        .unwrap();
+    service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 10)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    assert!(
+        service
+            .schedule_runtime_agent_session_title(&conversation_id, Some("summarize the backlog"))
+            .is_ok()
+    );
+
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let provider_handle = handle.clone();
+    let queued_conversation = conversation_id.clone();
+    let client = async move {
+        let queued = provider_handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::DispatchAgentSessionTitle {
+                conversation_id: queued_conversation,
+            }])
+            .await
+            .unwrap();
+        assert_eq!(queued, 1);
+        let report = tokio::time::timeout(
+            Duration::from_secs(5),
+            run_async_agent_provider_service(
+                &provider_handle,
+                AsyncAgentProviderServiceConfig::new(1)
+                    .unwrap()
+                    .with_idle_interval(Duration::from_millis(5))
+                    .unwrap(),
+                |polls, _| polls >= 200,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let _ = provider_handle.shutdown().await.unwrap();
+        report
+    };
+    let (report, exit) = tokio::join!(client, actor.run());
+    assert!(report.polls >= 1, "{report:?}");
+    let requests = server.await.unwrap();
+    (exit.service, transcript_store, conversation_id, requests)
+}
+
+/// Verifies a real provider failure reply produces a bounded title reason and one
+/// bounded retry through the worker path.
+#[tokio::test(flavor = "current_thread")]
+async fn async_agent_provider_service_reports_a_bounded_reason_for_a_provider_failure() {
+    let failure = || TitleReply::Error {
+        status: 500,
+        body: r#"{"error":{"message":"upstream failed","type":"server_error"}}"#.to_string(),
+    };
+    let (mut service, transcript_store, conversation_id, requests) =
+        run_session_title_reply_plan("provider-failure", "", vec![failure(), failure()]).await;
+
+    assert!(
+        !requests.is_empty(),
+        "no title request reached the provider"
+    );
+    assert!(
+        transcript_store
+            .session_generated_title(&conversation_id)
+            .unwrap()
+            .is_none(),
+        "a provider failure must not store a title"
+    );
+    let trace = service.agent_pane_trace_log_text("%1").unwrap_or_default();
+    assert_eq!(trace.matches("retry scheduled").count(), 1, "{trace}");
+    assert!(trace.contains("reason: provider error"), "{trace}");
+    assert!(trace.contains("attempts exhausted"), "{trace}");
+    assert!(service.pending_agent_session_title_tasks().is_empty());
+    service.terminate_all_pane_processes().unwrap();
+    let _ = std::fs::remove_dir_all(transcript_store.root());
+}
+
+/// Verifies structured and empty provider replies are rejected end to end with
+/// their own bounded reasons.
+#[tokio::test(flavor = "current_thread")]
+async fn async_agent_provider_service_rejects_malformed_and_empty_title_replies() {
+    let (mut service, transcript_store, conversation_id, requests) = run_session_title_reply_plan(
+        "malformed-empty",
+        "",
+        vec![
+            // A structured payload the provider passes through to the sanitizer.
+            TitleReply::Content("mezzanine-action-json\n[]".to_string()),
+            TitleReply::Content("   ".to_string()),
+        ],
+    )
+    .await;
+
+    assert_eq!(requests.len(), 2, "one bounded retry only");
+    assert!(
+        transcript_store
+            .session_generated_title(&conversation_id)
+            .unwrap()
+            .is_none()
+    );
+    let trace = service.agent_pane_trace_log_text("%1").unwrap_or_default();
+    assert!(trace.contains("reason: malformed"), "{trace}");
+    assert!(trace.contains("reason: empty"), "{trace}");
+    service.terminate_all_pane_processes().unwrap();
+    let _ = std::fs::remove_dir_all(transcript_store.root());
+}
+
+/// Verifies a payload-shaped title reply is rejected end to end with a bounded
+/// reason instead of being stored as a title.
+#[tokio::test(flavor = "current_thread")]
+async fn async_agent_provider_service_rejects_a_payload_shaped_title_reply() {
+    let payload = || TitleReply::Content(r#"{"title":"Inspect the backlog"}"#.to_string());
+    let (mut service, transcript_store, conversation_id, requests) =
+        run_session_title_reply_plan("payload-shaped", "", vec![payload(), payload()]).await;
+
+    assert_eq!(requests.len(), 2, "one bounded retry only");
+    assert!(
+        transcript_store
+            .session_generated_title(&conversation_id)
+            .unwrap()
+            .is_none(),
+        "a payload-shaped reply must not become a title"
+    );
+    let trace = service.agent_pane_trace_log_text("%1").unwrap_or_default();
+    assert!(trace.contains("reason: provider error"), "{trace}");
+    assert!(trace.contains("attempts exhausted"), "{trace}");
+    service.terminate_all_pane_processes().unwrap();
+    let _ = std::fs::remove_dir_all(transcript_store.root());
+}
+
+/// Verifies an oversize provider reply is rejected end to end instead of being
+/// truncated into a plausible title.
+#[tokio::test(flavor = "current_thread")]
+async fn async_agent_provider_service_rejects_an_oversize_title_reply() {
+    let oversize = || TitleReply::Content("alpha ".repeat(200));
+    let (mut service, transcript_store, conversation_id, requests) =
+        run_session_title_reply_plan("oversize", "", vec![oversize(), oversize()]).await;
+
+    assert_eq!(requests.len(), 2, "one bounded retry only");
+    assert!(
+        transcript_store
+            .session_generated_title(&conversation_id)
+            .unwrap()
+            .is_none()
+    );
+    let trace = service.agent_pane_trace_log_text("%1").unwrap_or_default();
+    assert!(trace.contains("reason: oversize"), "{trace}");
+    service.terminate_all_pane_processes().unwrap();
+    let _ = std::fs::remove_dir_all(transcript_store.root());
+}
+
+/// Verifies the configured title model-profile override carries the title request
+/// end to end while the conversation keeps its own profile.
+#[tokio::test(flavor = "current_thread")]
+async fn async_agent_provider_service_uses_the_configured_title_profile() {
+    let (mut service, transcript_store, conversation_id, requests) = run_session_title_reply_plan(
+        "title-profile-override",
+        "session_title_model_profile = \"title\"\n",
+        vec![TitleReply::Content("Inspect the backlog".to_string())],
+    )
+    .await;
+
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.contains("title-model")),
+        "the title request must use the override profile: {requests:?}"
+    );
+    assert_eq!(
+        transcript_store
+            .session_generated_title(&conversation_id)
+            .unwrap()
+            .map(|mirror| mirror.title),
+        Some("Inspect the backlog".to_string())
+    );
+    service.terminate_all_pane_processes().unwrap();
+    let _ = std::fs::remove_dir_all(transcript_store.root());
+}

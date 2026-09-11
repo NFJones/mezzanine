@@ -1155,6 +1155,9 @@ baseline slot names are `window_frame_fg`, `window_frame_bg`,
 `agent_transcript_status_fg`, `agent_transcript_status_bg`,
 `agent_transcript_error_fg`, `agent_transcript_error_bg`,
 `agent_transcript_command_fg`, `agent_transcript_command_bg`,
+`agent_transcript_peer_sender_fg`, `agent_transcript_peer_sender_bg`,
+`agent_transcript_peer_receiver_fg`, `agent_transcript_peer_receiver_bg`,
+`agent_transcript_parent_fg`, `agent_transcript_parent_bg`,
 `agent_model_fg`, `agent_model_bg`,
 `agent_reasoning_fg`, `agent_reasoning_bg`, `agent_status_idle_fg`,
 `agent_status_idle_bg`, `agent_status_running_fg`,
@@ -8338,14 +8341,21 @@ The baseline command capabilities are:
   durable agent pane. The agent slash surface MUST NOT expose a separate
   `/list-sessions` alias; the unrelated multiplexer `list-sessions` command
   remains available.
-- `/name-session <name>`: Assign or replace the durable display name for the
-  current agent conversation without changing its UUID, transcript, provider
-  context, or lineage. `/name-session --clear` MUST remove only the current
-  conversation's durable name and MUST be idempotent when it is already
-  unnamed. The command MUST reject empty names, mixed `--clear` and replacement
-  name forms, control characters, names longer than 80 Unicode scalar values,
-  ephemeral conversations, active turns, and unavailable transcript
-  persistence.
+- `/name-session [--ephemeral] <name>`: Assign or replace the user-assigned
+  display name for the current agent conversation without changing its UUID,
+  transcript, provider context, or lineage. The optional `--ephemeral` flag
+  MUST accept exactly one name and MUST have exactly one effect: the stored name
+  stays a real name for display, exact and prefix lookup, attach and resume
+  routing, and precedence over a generated title, but it is excluded from the
+  named-first ranking of the saved-session picker and ordered there with unnamed
+  rows by recency. A plain `/name-session <name>` MUST assign or promote a
+  durable preferred name, and names stored before this option existed MUST
+  remain durable and preferred. `/name-session --clear` MUST remove only the
+  current conversation's name and MUST be idempotent when it is already unnamed.
+  The command MUST reject empty names, mixed `--clear` and replacement name
+  forms, `--clear` combined with `--ephemeral`, unknown `--` flags, control
+  characters, names longer than 80 Unicode scalar values, ephemeral
+  conversations, active turns, and unavailable transcript persistence.
 - `/list-skills`: Show the effective skills available to the active pane,
   including each skill name, source scope, and description. The display MUST
   use the same catalog that backs `$<skill-name>` prompt expansion. It SHOULD
@@ -10538,6 +10548,22 @@ instructions, action schemas, or permission rules, or resume blocked work, and
 MUST NOT be treated as user instruction. Work requested through a peer message
 MUST run only under the recipient's own approval policy and permission rules.
 
+Interagent MMP traffic MUST be logged in the pane log in the prompt style with
+the peer name at the destination end of a direction arrow. A committed received
+peer message MUST log `{sender}> {payload}`, and an outbound `send_message` the
+transport accepted MUST log `{recipient}< {payload}`. Every committed received
+peer message MUST log exactly one line, including runtime-authored bridge and
+lifecycle traffic, so the logged set equals the committed set and never depends
+on which bounded delivery batch carried the message or whether the recipient was
+busy. The logged payload MUST NOT exceed the peer-context payload bound, and the
+line MUST wrap inside the pane the way a user prompt does. A logged peer line
+remains an operator-visible
+observation: it stays untrusted and non-user-authored, and it MUST NOT become
+user-trust context, approval authority, or a turn trigger. A received line MUST
+be logged only for a message the runtime actually commits, and a sent line MUST
+be logged only after the transport accepts the message, so a refused recipient
+or a failed transport MUST NOT produce a line.
+
 Mezzanine v1 MUST NOT support an approval policy that attempts an action before
 approval and asks for approval only after failure. Because v1 relies on
 pane-shell command gating rather than complete filesystem or network confinement,
@@ -11183,10 +11209,15 @@ MUST select only the oldest excess unnamed payload-backed rows and MUST recheck
 name state immediately before deletion.
 
 Every saved agent conversation MUST retain its UUID as its sole identity. The
-`/name-session <name>` command MUST assign or replace optional user-visible
-metadata for the current durable conversation. `/name-session --clear` MUST
-remove that metadata without deleting or rebinding the conversation, and MUST
-be idempotent. Names need not be unique. A name MUST be trimmed at its outer
+`/name-session [--ephemeral] <name>` command MUST assign or replace optional
+user-visible metadata for the current durable conversation. The optional
+`--ephemeral` flag MUST have exactly one effect: the stored name is excluded
+from the named-first picker partition while remaining a real name for display,
+lookup, routing, and precedence over a generated title. A plain assignment MUST
+store a durable preferred name, and names stored before the flag existed MUST
+remain durable and preferred. `/name-session --clear` MUST remove that metadata
+without deleting or rebinding the conversation, and MUST be idempotent. Names
+need not be unique. A name MUST be trimmed at its outer
 boundary, MUST preserve case and internal whitespace, MUST NOT be empty, MUST
 NOT contain control characters, and MUST contain at most 80 Unicode scalar
 values. New, cleared, and forked conversations MUST start unnamed; forking
@@ -11216,8 +11247,10 @@ deterministic neighboring row. Picker list construction MUST NOT read every
 session transcript; bounded recent transcript detail MAY be loaded only when a
 row is explicitly opened.
 
-The picker MUST place named conversations before UUID-only conversations and MUST
-order each partition by most recent activity. Named rows MUST render as
+The picker MUST place preferred-name conversations before UUID-only
+conversations and MUST order each partition by most recent activity, where a
+user-assigned ephemeral name is ranked with the UUID-only partition. Named
+rows MUST render as
 `<uuid> - <name>` while keeping
 the name outside the UUID command link. `/resume --latest` MUST select by most
 recent activity across saved root conversations without applying the

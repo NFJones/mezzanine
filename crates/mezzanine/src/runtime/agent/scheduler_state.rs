@@ -57,8 +57,18 @@ impl RuntimeSessionService {
     }
 
     /// Enqueues one validated unit of agent work.
+    ///
+    /// One accepted inbound prompt turn is exactly one enqueue, so this is also
+    /// where the generated-title cadence counts a prompt turn. The tick only
+    /// re-arms a due title window: it never queues, fails, or delays the work, and
+    /// it runs after the scheduler accepted the work so a rejected enqueue is not
+    /// counted as a prompt turn.
     pub(crate) fn enqueue_agent_work(&mut self, work: ScheduledWork) -> Result<()> {
+        let conversation_id = work.conversation_id.clone();
         self.agent.agent_scheduler.enqueue(work)?;
+        self.agent
+            .session_title_tasks
+            .note_prompt_turn(&conversation_id);
         Ok(())
     }
 

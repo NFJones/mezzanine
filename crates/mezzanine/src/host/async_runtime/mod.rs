@@ -44,11 +44,12 @@ use crate::runtime::authorize_unix_peer_raw_fd;
 use crate::runtime::{
     AttachedClientStepApplication, RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch,
     RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAgentRememberDispatch,
-    RuntimeApprovedExternalActionDispatch, RuntimeApprovedExternalActionOutcome,
-    RuntimeEventWakeup, RuntimeLifecycleState, RuntimeNativeShellDispatch,
-    RuntimeNativeShellFailure, RuntimeNativeShellOutcome, RuntimeProviderInfoRefreshOutcome,
-    RuntimeSessionService, RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
-    RuntimeSnapshotControlAsyncWorkKind, authenticated_unix_peer_uid, current_effective_uid,
+    RuntimeAgentSessionTitleDispatch, RuntimeApprovedExternalActionDispatch,
+    RuntimeApprovedExternalActionOutcome, RuntimeEventWakeup, RuntimeLifecycleState,
+    RuntimeNativeShellDispatch, RuntimeNativeShellFailure, RuntimeNativeShellOutcome,
+    RuntimeProviderInfoRefreshOutcome, RuntimeSessionService, RuntimeSnapshotControlAsyncOutcome,
+    RuntimeSnapshotControlAsyncWork, RuntimeSnapshotControlAsyncWorkKind,
+    authenticated_unix_peer_uid, current_effective_uid,
 };
 use mez_agent::AgentTurnLedger;
 use mez_agent::messaging::{DeliveryCursor, FanoutBatch, MessageConnection, delivery_batch_json};

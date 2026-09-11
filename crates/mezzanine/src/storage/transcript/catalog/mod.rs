@@ -30,7 +30,7 @@ use super::types::{
 };
 
 /// Current saved-conversation catalog schema version.
-pub(super) const SCHEMA_VERSION: i64 = 2;
+pub(super) const SCHEMA_VERSION: i64 = 3;
 /// Private SQLite database stored beside saved-conversation directories.
 const CATALOG_FILE_NAME: &str = "catalog.sqlite3";
 /// Advisory lock serializing schema creation, migration, and rebuild.
@@ -85,6 +85,8 @@ pub(super) struct CatalogCandidate {
     pub(super) name: Option<String>,
     /// Timestamp of the latest naming operation, paired with `name`.
     pub(super) named_at_unix_seconds: Option<u64>,
+    /// Whether `name` is the durable preferred name used by picker ranking.
+    pub(super) name_preferred: bool,
     /// Durable root/subagent classification.
     pub(super) conversation_kind: AgentConversationKind,
     /// Whether a transcript payload exists.
@@ -329,10 +331,17 @@ pub(super) fn set_name(
     conversation_id: &str,
     name: &str,
     named_at_unix_seconds: u64,
+    name_preferred: bool,
 ) -> Result<()> {
     let _lock = acquire_shared_lock(store)?;
     let connection = schema::open(&catalog_path(store))?;
-    mutation::set_name(&connection, conversation_id, name, named_at_unix_seconds)?;
+    mutation::set_name(
+        &connection,
+        conversation_id,
+        name,
+        named_at_unix_seconds,
+        name_preferred,
+    )?;
     set_catalog_permissions(store)
 }
 

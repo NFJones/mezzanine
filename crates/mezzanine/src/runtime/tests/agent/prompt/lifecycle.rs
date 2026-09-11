@@ -92,6 +92,128 @@ fn runtime_native_subagent_startup_bypasses_pane_bootstrap() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies a real subagent spawn leaves the parent pane with only its
+/// structural `subagent ...` lines and no bridge echo row.
+///
+/// Every runtime-owned bridge notification already has one dedicated line in the
+/// parent pane, so the normal peer-message log mode must not add a second
+/// `{child-agent-id}> ` row for the spawn notice, the running update, or the
+/// terminal result, whose JSON payload does carry an `output` field.
+#[test]
+fn runtime_subagent_spawn_bridge_notifications_log_no_parent_pane_echo() {
+    let mut service = test_runtime_service();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_pane_screen(
+        "%1".to_string(),
+        mez_terminal::TerminalScreen::new(Size::new(100, 30).unwrap(), 120).unwrap(),
+    );
+    // The parent keeps an active turn, so each bridge notification commits at
+    // arrival and reaches the pane echo path instead of waiting for the cursor.
+    service
+        .start_agent_prompt_turn("%1", "supervise the spawned child")
+        .unwrap();
+
+    let spawned = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: mez_agent::SubagentSessionMode::New,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
+                task_prompt: "inspect the parent pane echo".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: false,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap();
+    let spawned = serde_json::from_str::<serde_json::Value>(&spawned).unwrap();
+    let child_pane_id = spawned["pane"]["pane_id"].as_str().unwrap().to_string();
+    let child_agent_id = format!("agent-{child_pane_id}");
+    let turn_id = spawned["turn"]["id"].as_str().unwrap().to_string();
+    let parent_pane_text = |service: &crate::runtime::RuntimeSessionService| {
+        service
+            .pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
+    };
+    let echo_marker = format!("{child_agent_id}> ");
+
+    let spawn_text = parent_pane_text(&service);
+    assert!(
+        spawn_text.contains("subagent ") && spawn_text.contains("started in pane"),
+        "the spawn notice keeps its structural `subagent ...` line: {spawn_text}"
+    );
+    assert!(
+        !spawn_text.contains(&echo_marker),
+        "the spawn notice logs no bridge echo: {spawn_text}"
+    );
+
+    let child_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .expect("spawned child turn");
+    service
+        .emit_subagent_task_status(
+            &child_turn,
+            mez_agent::messaging::TaskState::Running,
+            Some(50),
+            "subagent task running",
+        )
+        .unwrap();
+    let running_text = parent_pane_text(&service);
+    assert!(
+        running_text.contains("subagent task running"),
+        "the running update keeps its structural `subagent ...` line: {running_text}"
+    );
+    assert!(
+        !running_text.contains(&echo_marker),
+        "the running update logs no bridge echo: {running_text}"
+    );
+
+    service
+        .emit_subagent_task_result_for_state(&child_turn, AgentTurnState::Completed)
+        .unwrap();
+    let result_text = parent_pane_text(&service);
+    assert!(
+        result_text.contains("subagent "),
+        "the terminal result keeps its structural `subagent ...` line: {result_text}"
+    );
+    assert!(
+        !result_text.contains(&echo_marker),
+        "the terminal result logs no bridge echo: {result_text}"
+    );
+    assert!(
+        !result_text.contains("completed without provider output"),
+        "a bridge result payload is never projected into the parent pane: {result_text}"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies a subagent spawn publishes its own bounded objective derived from
 /// the spawn task prompt through the same identity registry discovery reads.
 #[test]

@@ -1382,6 +1382,20 @@ impl AsyncRuntimeSessionActor {
                 }
                 false
             }
+            AsyncRuntimeRequest::ClaimAgentSessionTitleTask {
+                conversation_id,
+                reply,
+            } => {
+                let result = self
+                    .service
+                    .claim_agent_session_title_task(&conversation_id);
+                let should_notify = result.is_ok();
+                let _ = reply.send(result);
+                if should_notify {
+                    self.notify_event_delivery();
+                }
+                false
+            }
             AsyncRuntimeRequest::TakeStreamingSayProjectionWork {
                 pane_id,
                 turn_id,

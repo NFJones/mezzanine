@@ -170,6 +170,18 @@ pub(crate) fn agent_text_foreground_rendition(pair: UiColorPair) -> GraphicRendi
     }
 }
 
+/// Returns a foreground-only rendition for one agent transcript name marker.
+///
+/// Peer and parent log lines name their speaker in the line prefix. The marker
+/// keeps the bold weight of the gutter label but takes a dedicated transcript
+/// slot, and it never sets a background: log text is injected into a pane buffer
+/// that the operator's terminal theme owns.
+pub(crate) fn agent_name_marker_rendition(pair: UiColorPair) -> GraphicRendition {
+    let mut rendition = agent_text_foreground_rendition(pair);
+    rendition.bold = true;
+    rendition
+}
+
 /// Converts a graphic rendition to an SGR sequence for pane-buffer injection.
 pub(crate) fn agent_terminal_sgr_sequence(rendition: GraphicRendition) -> String {
     if rendition == GraphicRendition::default() {

@@ -105,7 +105,7 @@ pub(super) fn sqlite_i64(value: u64, field: &str) -> Result<i64> {
     })
 }
 
-/// Creates schema v2, migrates v1 in place, or rejects unsupported versions.
+/// Creates schema v3, migrates v1 and v2 in place, or rejects unsupported versions.
 fn initialize_schema(connection: &Connection) -> std::result::Result<(), SchemaFailure> {
     connection
         .execute_batch("BEGIN IMMEDIATE;")
@@ -136,6 +136,8 @@ fn initialize_schema_locked(connection: &Connection) -> std::result::Result<(), 
                      CHECK (conversation_kind IN ('root', 'subagent')),
                  name TEXT,
                  named_at INTEGER CHECK (named_at >= 0),
+                 name_preferred INTEGER NOT NULL DEFAULT 1
+                     CHECK (name_preferred IN (0, 1)),
                  entry_count INTEGER NOT NULL DEFAULT 0 CHECK (entry_count >= 0),
                  first_created_at INTEGER NOT NULL CHECK (first_created_at >= 0),
                  last_created_at INTEGER NOT NULL CHECK (last_created_at >= 0),
@@ -181,7 +183,7 @@ fn initialize_schema_locked(connection: &Connection) -> std::result::Result<(), 
                  ON saved_conversations(
                      archived_at,
                      conversation_kind,
-                     (name IS NOT NULL) DESC,
+                     (name IS NOT NULL AND name_preferred = 1) DESC,
                      last_created_at DESC,
                      first_created_at DESC,
                      conversation_id
@@ -191,7 +193,7 @@ fn initialize_schema_locked(connection: &Connection) -> std::result::Result<(), 
                      archived_at,
                      directory,
                      conversation_kind,
-                     (name IS NOT NULL) DESC,
+                     (name IS NOT NULL AND name_preferred = 1) DESC,
                      last_created_at DESC,
                      first_created_at DESC,
                      conversation_id
@@ -206,10 +208,14 @@ fn initialize_schema_locked(connection: &Connection) -> std::result::Result<(), 
              CREATE INDEX saved_conversations_name_nocase
                  ON saved_conversations(name COLLATE NOCASE)
                  WHERE name IS NOT NULL;
-             PRAGMA user_version = 2;",
+             PRAGMA user_version = 3;",
             )
             .map_err(SchemaFailure::Sqlite)?,
-        1 => migrate_v1_to_v2(connection)?,
+        1 => {
+            migrate_v1_to_v2(connection)?;
+            migrate_v2_to_v3(connection)?;
+        }
+        2 => migrate_v2_to_v3(connection)?,
         SCHEMA_VERSION => {}
         future if future > SCHEMA_VERSION => {
             return Err(SchemaFailure::Semantic(MezError::invalid_state(format!(
@@ -307,6 +313,35 @@ fn migrate_v1_to_v2(connection: &Connection) -> std::result::Result<(), SchemaFa
                  ON saved_conversations(name COLLATE NOCASE)
                  WHERE name IS NOT NULL;
              PRAGMA user_version = 2;",
+        )
+        .map_err(SchemaFailure::Sqlite)
+}
+
+/// Adds the preferred-name column and rebuilds the picker indexes for schema v3.
+///
+/// Existing rows keep the preferred-name default, so every name stored before
+/// this version stays durable and keeps its named-first picker rank.
+fn migrate_v2_to_v3(connection: &Connection) -> std::result::Result<(), SchemaFailure> {
+    connection
+        .execute_batch(
+            "ALTER TABLE saved_conversations
+                 ADD COLUMN name_preferred INTEGER NOT NULL DEFAULT 1
+                     CHECK (name_preferred IN (0, 1));
+             DROP INDEX saved_conversations_picker;
+             DROP INDEX saved_conversations_directory_picker;
+             CREATE INDEX saved_conversations_picker
+                 ON saved_conversations(
+                     archived_at, conversation_kind,
+                     (name IS NOT NULL AND name_preferred = 1) DESC,
+                     last_created_at DESC, first_created_at DESC, conversation_id
+                 );
+             CREATE INDEX saved_conversations_directory_picker
+                 ON saved_conversations(
+                     archived_at, directory, conversation_kind,
+                     (name IS NOT NULL AND name_preferred = 1) DESC,
+                     last_created_at DESC, first_created_at DESC, conversation_id
+                 );
+             PRAGMA user_version = 3;",
         )
         .map_err(SchemaFailure::Sqlite)
 }

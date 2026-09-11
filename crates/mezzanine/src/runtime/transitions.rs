@@ -179,6 +179,9 @@ pub enum RuntimeEvent {
     /// A model-backed durable memory generation task completed or failed
     /// outside the runtime actor.
     AgentRemember(AgentRememberEvent),
+    /// A turn-less generated session-title request completed or failed outside
+    /// the runtime actor.
+    AgentSessionTitle(AgentSessionTitleEvent),
     /// A hook worker task completed or failed outside the runtime actor.
     Hook(AsyncHookEvent),
     /// A persistence worker completed or failed a write outside the runtime actor.
@@ -213,6 +216,7 @@ impl RuntimeEvent {
             Self::ApprovedExternalActionProgress(_) => "approved_external_action_progress",
             Self::AgentCompaction(_) => "agent_compaction",
             Self::AgentRemember(_) => "agent_remember",
+            Self::AgentSessionTitle(_) => "agent_session_title",
             Self::Hook(_) => "hook",
             Self::Persistence(_) => "persistence",
             Self::HostClipboard(_) => "host_clipboard",
@@ -483,6 +487,44 @@ pub enum AgentRememberEvent {
         provider_failure_json: Option<String>,
         /// Raw provider text when the provider produced malformed output.
         provider_raw_text: Option<String>,
+    },
+}
+
+/// Bounded result of one turn-less generated session-title request.
+///
+/// Provider output is untrusted display data. The worker sanitizes it under the
+/// shared title bounds before the runtime actor sees it, so this outcome never
+/// carries raw provider text: a rejected generation reports only a stable
+/// bounded reason name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentSessionTitleOutcome {
+    /// The provider returned one accepted, bounded, single-line display title.
+    Generated(String),
+    /// No usable title was produced; the value is a stable bounded reason name.
+    Rejected(String),
+}
+
+/// Event emitted by an async generated session-title worker.
+///
+/// Title generation is a side channel: it never creates, claims, or mutates a
+/// turn, and it never appends to the live transcript.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentSessionTitleEvent {
+    /// The worker produced a bounded sanitized outcome for one conversation.
+    Settled {
+        /// Conversation whose display title was requested.
+        conversation_id: String,
+        /// Sanitized bounded title or the bounded failure reason name.
+        outcome: AgentSessionTitleOutcome,
+    },
+    /// The worker failed before producing a bounded outcome.
+    Failed {
+        /// Conversation whose display title was requested.
+        conversation_id: String,
+        /// Stable failure kind for diagnostics.
+        kind: String,
+        /// Bounded human-readable failure.
+        message: String,
     },
 }
 
@@ -906,6 +948,11 @@ pub enum RuntimeSideEffect {
         /// Pane whose active context should be memorized.
         pane_id: String,
     },
+    /// Start one turn-less generated session-title request outside the actor.
+    DispatchAgentSessionTitle {
+        /// Conversation whose display title should be generated.
+        conversation_id: String,
+    },
     /// Rebuild one resized source-backed agent presentation outside the actor.
     DispatchAgentPresentationResize {
         /// Pane whose newest coalesced target geometry should be projected.
@@ -1215,6 +1262,7 @@ const fn runtime_event_application_priority(event: &RuntimeEvent) -> u8 {
         | RuntimeEvent::ApprovedExternalActionProgress(_)
         | RuntimeEvent::AgentCompaction(_)
         | RuntimeEvent::AgentRemember(_)
+        | RuntimeEvent::AgentSessionTitle(_)
         | RuntimeEvent::Hook(_)
         | RuntimeEvent::Persistence(_)
         | RuntimeEvent::HostClipboard(_)

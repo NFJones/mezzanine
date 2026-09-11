@@ -178,6 +178,42 @@ pub fn provider_retry_after_delay_ms(
     )
 }
 
+/// Stable failure code recorded for one typed provider HTTP phase timeout.
+///
+/// The code lives in the structured failure payload instead of a caller matching
+/// human-readable error text, so every consumer classifies the same typed
+/// transport failure the same way.
+pub const PROVIDER_HTTP_TIMEOUT_FAILURE_CODE: &str = "provider_http_timeout";
+
+/// Builds the structured failure payload for one typed provider HTTP timeout.
+pub fn provider_http_timeout_failure_json(timeout_phase: &str) -> String {
+    serde_json::json!({
+        "error": {
+            "code": PROVIDER_HTTP_TIMEOUT_FAILURE_CODE,
+            "timeout_phase": timeout_phase,
+        }
+    })
+    .to_string()
+}
+
+/// Reports whether one sanitized provider failure payload marks a typed timeout.
+///
+/// Only the structured failure payload is inspected, so an unrelated message that
+/// merely mentions a timeout never changes the classification.
+pub fn provider_failure_json_is_timeout(provider_failure_json: Option<&str>) -> bool {
+    let Some(value) = provider_failure_json
+        .and_then(|payload| serde_json::from_str::<serde_json::Value>(payload).ok())
+    else {
+        return false;
+    };
+    ["/error/code", "/code", "/body/error/code", "/body/code"]
+        .iter()
+        .any(|pointer| {
+            value.pointer(pointer).and_then(serde_json::Value::as_str)
+                == Some(PROVIDER_HTTP_TIMEOUT_FAILURE_CODE)
+        })
+}
+
 /// Classifies sanitized provider failure fields for recovery and retry policy.
 ///
 /// Context and output limits take precedence over generic transport retries.
@@ -408,9 +444,32 @@ fn provider_error_text_is_output_limit_exceeded(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_PROVIDER_RETRY_POLICY, ProviderErrorKind, ProviderErrorRetryClass,
-        ProviderRetryPolicy, classify_provider_error_retry, provider_retry_after_delay_ms,
+        DEFAULT_PROVIDER_RETRY_POLICY, PROVIDER_HTTP_TIMEOUT_FAILURE_CODE, ProviderErrorKind,
+        ProviderErrorRetryClass, ProviderRetryPolicy, classify_provider_error_retry,
+        provider_failure_json_is_timeout, provider_http_timeout_failure_json,
+        provider_retry_after_delay_ms,
     };
+    use crate::ProviderHttpTimeoutPhase;
+
+    /// Verifies only the structured typed-timeout marker classifies a timeout.
+    #[test]
+    fn provider_timeout_marker_classifies_only_typed_timeouts() {
+        let payload = provider_http_timeout_failure_json(ProviderHttpTimeoutPhase::Total.as_str());
+        assert!(
+            provider_failure_json_is_timeout(Some(&payload)),
+            "{payload}"
+        );
+        let nested = serde_json::json!({
+            "body": {"error": {"code": PROVIDER_HTTP_TIMEOUT_FAILURE_CODE}}
+        })
+        .to_string();
+        assert!(provider_failure_json_is_timeout(Some(&nested)), "{nested}");
+        assert!(!provider_failure_json_is_timeout(Some(
+            &serde_json::json!({"error": {"code": "rate_limited"}}).to_string()
+        )));
+        assert!(!provider_failure_json_is_timeout(Some("not json")));
+        assert!(!provider_failure_json_is_timeout(None));
+    }
 
     /// Verifies retry eligibility accepts recoverable classes only while the
     /// canonical budget remains available.

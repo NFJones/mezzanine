@@ -8,10 +8,11 @@ use super::{
     ClientViewRole, ControlConnectionState, DeliveryCursor, FanoutBatch, MessageConnection,
     PaneProcess, PaneResizeUpdate, RenderedClientView, Result, RuntimeAgentCompactionDispatch,
     RuntimeAgentProviderDispatch, RuntimeAgentProviderTask, RuntimeAgentRememberDispatch,
-    RuntimeApprovedExternalActionDispatch, RuntimeApprovedExternalActionOutcome, RuntimeEventBatch,
-    RuntimeEventIngressReport, RuntimeEventWakeup, RuntimeLifecycleState,
-    RuntimeProviderInfoRefreshOutcome, RuntimeSideEffect, RuntimeSnapshotControlAsyncOutcome,
-    RuntimeSnapshotControlAsyncWork, Size, SnapshotRepository, TerminalClientLoopConfig, oneshot,
+    RuntimeAgentSessionTitleDispatch, RuntimeApprovedExternalActionDispatch,
+    RuntimeApprovedExternalActionOutcome, RuntimeEventBatch, RuntimeEventIngressReport,
+    RuntimeEventWakeup, RuntimeLifecycleState, RuntimeProviderInfoRefreshOutcome,
+    RuntimeSideEffect, RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork, Size,
+    SnapshotRepository, TerminalClientLoopConfig, oneshot,
 };
 use crate::runtime::PaneProcessInstance;
 use crate::runtime::RuntimeAgentPromptProviderInfoRefresh;
@@ -865,6 +866,16 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<Option<RuntimeAgentRememberDispatch>>>,
     },
+    /// Claims a queued turn-less generated session-title task.
+    ClaimAgentSessionTitleTask {
+        /// Conversation whose queued title generation should be claimed.
+        conversation_id: String,
+        /// Stores the reply value for this data structure.
+        ///
+        /// The field is part of structured state exchanged across this module
+        /// boundary and should remain aligned with the owning type invariant.
+        reply: oneshot::Sender<Result<Option<RuntimeAgentSessionTitleDispatch>>>,
+    },
     /// Captures immutable cumulative streaming-say projection work.
     TakeStreamingSayProjectionWork {
         /// Pane whose newest cumulative source should be projected.
@@ -1234,6 +1245,7 @@ impl AsyncRuntimeRequest {
             | Self::CompleteApprovedExternalAction { .. }
             | Self::ClaimAgentCompactionTask { .. }
             | Self::ClaimAgentRememberTask { .. }
+            | Self::ClaimAgentSessionTitleTask { .. }
             | Self::TakeStreamingSayProjectionWork { .. }
             | Self::TakeAgentPresentationResizeWork { .. }
             | Self::ApplyStreamingSayProjection { .. }

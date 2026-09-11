@@ -21,13 +21,13 @@ pub(crate) const MAX_SESSION_TITLE_CHARS: usize = 80;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum SessionTitlePolicy {
     /// Derive the deterministic default display title from the objective, else
-    /// the first prompt.
+    /// the first prompt, unless a model-generated title is already stored.
     ///
-    /// This is the documented deterministic default, and it is currently
-    /// exact: the value is the bounded objective whenever an objective exists,
-    /// so a `generated` row and an `objective` row render identical text. A
-    /// distinct model-generated short title depends on the separate
-    /// generated-title work (c6166ea2) and is not implemented here.
+    /// Resolution under this policy is the stored generated title first, then the
+    /// bounded objective, then the bounded first prompt. The stored generated
+    /// title comes from the bounded side-channel request, so a conversation whose
+    /// generation failed renders exactly the objective-derived fallback while the
+    /// other policies never consult the stored title at all.
     #[default]
     Generated,
     /// Mirror the published agent objective under the title bounds.
@@ -172,15 +172,185 @@ fn truncate_title_on_word_boundary(value: &str) -> String {
     }
 }
 
+/// Stable bounded reason one generated title was rejected.
+///
+/// The reason is recorded for audit and diagnostics only. It never carries
+/// provider text, so a rejected generation cannot leak raw model output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionTitleRejection {
+    /// The provider returned nothing usable after normalization.
+    Empty,
+    /// The provider returned a control or format character outside whitespace.
+    ControlCharacters,
+    /// The provider returned far more text than a display title can use.
+    Oversize,
+    /// The provider returned structured payload text instead of a title.
+    Malformed,
+}
+
+/// Stable bounded reason one generated-title attempt produced no stored title.
+///
+/// The reason lives beside the sanitizer because every rejection maps here, and
+/// it is the only vocabulary the trace, status, and fallback paths record: no
+/// variant carries provider text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionTitleFailureReason {
+    /// The provider returned an error.
+    ProviderError,
+    /// The provider request timed out.
+    Timeout,
+    /// The provider returned nothing usable.
+    Empty,
+    /// The provider returned control or format characters outside whitespace.
+    ControlCharacters,
+    /// The provider returned far more text than a display title can use.
+    Oversize,
+    /// The provider returned structured payload text instead of a title.
+    Malformed,
+    /// The provider stopped because the request exhausted its output budget.
+    OutputLimit,
+    /// The bounded title sidecar could not be written.
+    StorageUnavailable,
+    /// Every allowed attempt failed, so the deterministic fallback is final.
+    AttemptsExhausted,
+}
+
+impl SessionTitleFailureReason {
+    /// Returns the stable bounded reason name.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::ProviderError => "provider_error",
+            Self::Timeout => "timeout",
+            Self::Empty => "empty",
+            Self::ControlCharacters => "control_characters",
+            Self::Oversize => "oversize",
+            Self::Malformed => "malformed",
+            Self::OutputLimit => "output_limit",
+            Self::StorageUnavailable => "storage_unavailable",
+            Self::AttemptsExhausted => "attempts_exhausted",
+        }
+    }
+
+    /// Maps one sanitizer rejection to its stable failure reason.
+    pub(crate) const fn from_rejection(rejection: SessionTitleRejection) -> Self {
+        match rejection {
+            SessionTitleRejection::Empty => Self::Empty,
+            SessionTitleRejection::ControlCharacters => Self::ControlCharacters,
+            SessionTitleRejection::Oversize => Self::Oversize,
+            SessionTitleRejection::Malformed => Self::Malformed,
+        }
+    }
+}
+
+/// Maximum generated-title characters accepted before the value is rejected.
+///
+/// The display bound is [`MAX_SESSION_TITLE_CHARS`]; this generous input bound
+/// exists so a model that answers with a paragraph is treated as a failed
+/// generation instead of being silently truncated into a plausible title.
+pub(crate) const MAX_GENERATED_SESSION_TITLE_INPUT_CHARS: usize = 512;
+
+/// Sanitizes one raw provider title into a bounded single-line display title.
+///
+/// Provider output is untrusted display data. One surrounding Markdown code
+/// decoration, whitespace is collapsed, control and format characters are
+/// rejected, and the value is held to the shared title bounds so a generated
+/// title can never exceed the rules already applied to a user-assigned session
+/// name.
+pub(crate) fn sanitize_generated_session_title(raw: &str) -> Result<String, SessionTitleRejection> {
+    let stripped = strip_title_decoration(raw);
+    if stripped
+        .chars()
+        .any(|character| is_display_format_character(character) && !character.is_whitespace())
+    {
+        return Err(SessionTitleRejection::ControlCharacters);
+    }
+    if stripped.chars().count() > MAX_GENERATED_SESSION_TITLE_INPUT_CHARS {
+        return Err(SessionTitleRejection::Oversize);
+    }
+    if looks_like_structured_payload(stripped) {
+        return Err(SessionTitleRejection::Malformed);
+    }
+    bound_session_title(stripped).ok_or(SessionTitleRejection::Empty)
+}
+
+/// Removes surrounding Markdown fences and wrapping quotes until nothing changes.
+///
+/// A model can wrap the same value twice, put a fence inside quotes, or answer in
+/// a fence and keep talking after the closing fence. Stripping to a fixed point
+/// instead of once keeps every such reply from rendering its decoration as part
+/// of the title.
+fn strip_title_decoration(raw: &str) -> &str {
+    let mut value = raw.trim();
+    loop {
+        let stripped = strip_wrapping_quotes(strip_code_fence(value));
+        if stripped == value {
+            return stripped;
+        }
+        value = stripped;
+    }
+}
+
+/// Removes one leading Markdown code fence and its optional closing fence.
+///
+/// The two markers are matched independently: a fenced reply followed by prose
+/// still loses both markers, a single-line ```` ```Title``` ```` is handled without
+/// a line break, and a value with no leading fence is returned unchanged.
+fn strip_code_fence(value: &str) -> &str {
+    let Some(rest) = value.strip_prefix("```") else {
+        return value;
+    };
+    // An opening fence may carry an info string, so its body starts after that line.
+    let body = match rest.find('\n') {
+        Some(index) => &rest[index + 1..],
+        None => rest,
+    };
+    match body.find("```") {
+        Some(index) => body[..index].trim(),
+        None => body.trim(),
+    }
+}
+
+/// Strips one pair of wrapping quotes, including typographic and backtick pairs.
+fn strip_wrapping_quotes(value: &str) -> &str {
+    const WRAPPERS: [(char, char); 5] = [
+        ('"', '"'),
+        ('\'', '\''),
+        ('`', '`'),
+        ('\u{201c}', '\u{201d}'),
+        ('\u{2018}', '\u{2019}'),
+    ];
+    for (open, close) in WRAPPERS {
+        if let Some(inner) = value.strip_prefix(open)
+            && let Some(inner) = inner.strip_suffix(close)
+        {
+            return inner.trim();
+        }
+    }
+    value
+}
+
+/// Reports whether one response is a structured payload rather than a title.
+fn looks_like_structured_payload(value: &str) -> bool {
+    (value.starts_with('{') && value.ends_with('}'))
+        || (value.starts_with('[') && value.ends_with(']'))
+        || value.starts_with("mezzanine-action-json")
+}
+
 /// Resolves one row title with the shared precedence order.
 ///
 /// A manual `name` always wins verbatim so existing named rows keep rendering
 /// exactly as before. Otherwise the configured policy supplies the title, the
 /// first prompt is the final fallback, and an unnamed row with no usable text
 /// resolves to no title at all.
+///
+/// Under `generated` the stored model-generated title wins over the
+/// objective-derived fallback, and that stored title is never consulted for any
+/// other policy: switching the policy away from `generated` stops using it
+/// immediately.
 pub(crate) fn resolve_session_title(
     name: Option<&str>,
     policy: SessionTitlePolicy,
+    generated: Option<&str>,
     objective: Option<&str>,
     initial_prompt: Option<&str>,
     latest_user_prompt: Option<&str>,
@@ -192,10 +362,16 @@ pub(crate) fn resolve_session_title(
         });
     }
     let policy_title = match policy {
-        SessionTitlePolicy::Generated => bound_session_title(objective.unwrap_or_default())
+        SessionTitlePolicy::Generated => bound_session_title(generated.unwrap_or_default())
             .map(|text| SessionTitle {
                 text,
                 source: SessionTitleSource::Generated,
+            })
+            .or_else(|| {
+                bound_session_title(objective.unwrap_or_default()).map(|text| SessionTitle {
+                    text,
+                    source: SessionTitleSource::Generated,
+                })
             })
             .or_else(|| {
                 bound_session_title(initial_prompt.unwrap_or_default()).map(|text| SessionTitle {
@@ -241,6 +417,7 @@ pub(crate) fn resolve_saved_session_title(
     resolve_session_title(
         session.name.as_deref(),
         policy,
+        session.generated_title.as_deref(),
         session.objective_title.as_deref(),
         session.summary.initial_prompt.as_deref(),
         session.summary.latest_user_prompt.as_deref(),
@@ -250,8 +427,9 @@ pub(crate) fn resolve_saved_session_title(
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_SESSION_TITLE_CHARS, SessionTitlePolicy, SessionTitleSource, bound_session_title,
-        is_display_format_character, resolve_session_title,
+        MAX_GENERATED_SESSION_TITLE_INPUT_CHARS, MAX_SESSION_TITLE_CHARS, SessionTitlePolicy,
+        SessionTitleRejection, SessionTitleSource, bound_session_title,
+        is_display_format_character, resolve_session_title, sanitize_generated_session_title,
     };
 
     /// Verifies the manual name wins for every policy and source combination.
@@ -261,6 +439,7 @@ mod tests {
             let resolved = resolve_session_title(
                 Some("  operator name  "),
                 policy,
+                None,
                 Some("Objective text"),
                 Some("first prompt"),
                 Some("latest prompt"),
@@ -300,6 +479,7 @@ mod tests {
             let resolved = resolve_session_title(
                 None,
                 policy,
+                None,
                 Some("Objective text"),
                 Some("first prompt"),
                 Some("latest prompt"),
@@ -318,8 +498,9 @@ mod tests {
             SessionTitlePolicy::Objective,
             SessionTitlePolicy::LastPrompt,
         ] {
-            let resolved = resolve_session_title(None, policy, None, Some("first prompt"), None)
-                .expect("first prompt is the final fallback");
+            let resolved =
+                resolve_session_title(None, policy, None, None, Some("first prompt"), None)
+                    .expect("first prompt is the final fallback");
             assert_eq!(resolved.text, "first prompt");
             assert_eq!(resolved.source, SessionTitleSource::FirstPrompt);
         }
@@ -329,9 +510,12 @@ mod tests {
     #[test]
     fn unnamed_row_without_text_has_no_title() {
         for policy in SessionTitlePolicy::ALL {
-            assert_eq!(resolve_session_title(None, policy, None, None, None), None);
             assert_eq!(
-                resolve_session_title(Some("   "), policy, None, None, None),
+                resolve_session_title(None, policy, None, None, None, None),
+                None
+            );
+            assert_eq!(
+                resolve_session_title(Some("   "), policy, None, None, None, None),
                 None
             );
         }
@@ -361,6 +545,20 @@ mod tests {
         let unbroken = "x".repeat(MAX_SESSION_TITLE_CHARS * 2);
         let bounded = bound_session_title(&unbroken).expect("unbroken title bounds");
         assert_eq!(bounded.chars().count(), MAX_SESSION_TITLE_CHARS);
+    }
+
+    /// Verifies a sentence-shaped title is preserved intact and an over-long
+    /// sentence truncates at a word boundary inside the bound.
+    #[test]
+    fn title_bounds_keep_a_sentence_and_truncate_an_over_long_sentence() {
+        let sentence = "Refactor the generated title path";
+        assert_eq!(bound_session_title(sentence), Some(sentence.to_string()));
+
+        let long_sentence = "Refactor the generated title path so every resolved row renders one complete sentence instead of a terse fragment";
+        let bounded = bound_session_title(long_sentence).expect("long sentence bounds");
+        assert!(bounded.chars().count() <= MAX_SESSION_TITLE_CHARS);
+        assert!(long_sentence.starts_with(&bounded));
+        assert!(!bounded.ends_with(' '));
     }
 
     /// Verifies format (Cf) characters cannot reach a rendered title.
@@ -396,6 +594,7 @@ mod tests {
             let generated = resolve_session_title(
                 None,
                 SessionTitlePolicy::Generated,
+                None,
                 Some(objective),
                 Some("first prompt"),
                 None,
@@ -404,6 +603,7 @@ mod tests {
             let mirrored = resolve_session_title(
                 None,
                 SessionTitlePolicy::Objective,
+                Some("Stored generated title"),
                 Some(objective),
                 Some("first prompt"),
                 None,
@@ -412,6 +612,165 @@ mod tests {
             assert_eq!(generated.text, mirrored.text);
             assert_eq!(generated.source, SessionTitleSource::Generated);
             assert_eq!(mirrored.source, SessionTitleSource::Objective);
+        }
+    }
+
+    /// Verifies the sanitizer strips decoration and collapses multiline output.
+    #[test]
+    fn sanitizer_strips_decoration_and_collapses_multiline_output() {
+        let cases = [
+            ("\"Inspect the backlog\"", "Inspect the backlog"),
+            ("'Inspect the backlog'", "Inspect the backlog"),
+            ("\u{201c}Inspect the backlog\u{201d}", "Inspect the backlog"),
+            ("\u{2018}Inspect the backlog\u{2019}", "Inspect the backlog"),
+            ("`Inspect the backlog`", "Inspect the backlog"),
+            ("```\nInspect the backlog\n```", "Inspect the backlog"),
+            ("```text\nInspect the backlog\n```", "Inspect the backlog"),
+            ("```Title```", "Title"),
+            (
+                "```\nInspect the backlog\n```\nHope that helps",
+                "Inspect the backlog",
+            ),
+            ("```Title``` and that is the whole answer", "Title"),
+            ("```\nInspect the backlog", "Inspect the backlog"),
+            ("\"```\nInspect the backlog\n```\"", "Inspect the backlog"),
+            ("\"\"Inspect the backlog\"\"", "Inspect the backlog"),
+            (
+                "\"\u{201c}Inspect the backlog\u{201d}\"",
+                "Inspect the backlog",
+            ),
+            ("Inspect\nthe\nbacklog", "Inspect the backlog"),
+            ("  Inspect   the  backlog  ", "Inspect the backlog"),
+        ];
+        for (raw, expected) in cases {
+            assert_eq!(
+                sanitize_generated_session_title(raw),
+                Ok(expected.to_string()),
+                "{raw:?}"
+            );
+        }
+    }
+
+    /// Verifies an over-long accepted title truncates at a word boundary.
+    #[test]
+    fn sanitizer_truncates_oversize_titles_on_a_word_boundary() {
+        let raw = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike";
+        let sanitized = sanitize_generated_session_title(raw).expect("bounded title");
+        assert!(sanitized.chars().count() <= MAX_SESSION_TITLE_CHARS);
+        assert!(raw.starts_with(&sanitized));
+        assert!(!sanitized.ends_with(' '));
+
+        let unbroken = "x".repeat(MAX_SESSION_TITLE_CHARS * 2);
+        let sanitized = sanitize_generated_session_title(&unbroken).expect("bounded title");
+        assert_eq!(sanitized.chars().count(), MAX_SESSION_TITLE_CHARS);
+    }
+
+    /// Verifies unusable provider output is rejected with a bounded reason.
+    #[test]
+    fn sanitizer_rejects_unusable_output_with_a_bounded_reason() {
+        let runaway = "alpha ".repeat(MAX_GENERATED_SESSION_TITLE_INPUT_CHARS);
+        let cases: Vec<(&str, SessionTitleRejection)> = vec![
+            ("", SessionTitleRejection::Empty),
+            ("   ", SessionTitleRejection::Empty),
+            ("\"\"", SessionTitleRejection::Empty),
+            ("```\n```", SessionTitleRejection::Empty),
+            ("\"```\"", SessionTitleRejection::Empty),
+            ("\u{7}\u{7}", SessionTitleRejection::ControlCharacters),
+            (
+                "Inspect\u{202e}the backlog",
+                SessionTitleRejection::ControlCharacters,
+            ),
+            (
+                "Inspect\nthe\u{200b} backlog",
+                SessionTitleRejection::ControlCharacters,
+            ),
+            (runaway.as_str(), SessionTitleRejection::Oversize),
+            ("{\"title\": \"Inspect\"}", SessionTitleRejection::Malformed),
+            (
+                "mezzanine-action-json\n[]",
+                SessionTitleRejection::Malformed,
+            ),
+        ];
+        for (raw, expected) in cases {
+            assert_eq!(
+                sanitize_generated_session_title(raw),
+                Err(expected),
+                "{raw:?}"
+            );
+        }
+    }
+
+    /// Verifies `generated` prefers a stored generated title over its fallbacks.
+    #[test]
+    fn generated_policy_prefers_the_stored_generated_title() {
+        let resolved = resolve_session_title(
+            None,
+            SessionTitlePolicy::Generated,
+            Some("Generated title"),
+            Some("Objective text"),
+            Some("first prompt"),
+            Some("latest prompt"),
+        )
+        .expect("stored generated title resolves");
+        assert_eq!(resolved.text, "Generated title");
+        assert_eq!(resolved.source, SessionTitleSource::Generated);
+
+        let objective_fallback = resolve_session_title(
+            None,
+            SessionTitlePolicy::Generated,
+            Some("\u{7}"),
+            Some("Objective text"),
+            Some("first prompt"),
+            None,
+        )
+        .expect("objective fallback resolves");
+        assert_eq!(objective_fallback.text, "Objective text");
+        assert_eq!(objective_fallback.source, SessionTitleSource::Generated);
+
+        let prompt_fallback = resolve_session_title(
+            None,
+            SessionTitlePolicy::Generated,
+            None,
+            None,
+            Some("first prompt"),
+            None,
+        )
+        .expect("first-prompt fallback resolves");
+        assert_eq!(prompt_fallback.text, "first prompt");
+        assert_eq!(prompt_fallback.source, SessionTitleSource::FirstPrompt);
+    }
+
+    /// Verifies a stored generated title never outranks a manual name and is
+    /// ignored by every policy other than `generated`.
+    #[test]
+    fn stored_generated_title_never_outranks_a_name_or_another_policy() {
+        let named = resolve_session_title(
+            Some("operator name"),
+            SessionTitlePolicy::Generated,
+            Some("Generated title"),
+            None,
+            None,
+            None,
+        )
+        .expect("manual name resolves");
+        assert_eq!(named.text, "operator name");
+        assert_eq!(named.source, SessionTitleSource::Name);
+
+        for (policy, expected) in [
+            (SessionTitlePolicy::Objective, "Objective text"),
+            (SessionTitlePolicy::LastPrompt, "latest prompt"),
+            (SessionTitlePolicy::FirstPrompt, "first prompt"),
+        ] {
+            let resolved = resolve_session_title(
+                None,
+                policy,
+                Some("Generated title"),
+                Some("Objective text"),
+                Some("first prompt"),
+                Some("latest prompt"),
+            )
+            .expect("policy resolves its own source");
+            assert_eq!(resolved.text, expected, "policy {}", policy.as_str());
         }
     }
 }

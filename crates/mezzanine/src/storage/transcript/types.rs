@@ -58,6 +58,15 @@ pub struct NamedAgentSession {
     pub named_at_unix_seconds: u64,
     /// Best known working directory when the name was assigned.
     pub directory: Option<String>,
+    /// Whether this user-assigned name is ephemeral in the picker ranking.
+    ///
+    /// An ephemeral name is still a real name: it renders, resolves, matches
+    /// lookups, and wins over a generated title exactly like a durable name.
+    /// The flag only removes the row from the named-first partition of the
+    /// saved-session picker. Records written before this field existed decode
+    /// with the default, so every stored name stays durable and preferred.
+    #[serde(default)]
+    pub ephemeral: bool,
 }
 
 /// Bounded persisted mirror of one conversation's published agent objective.
@@ -85,6 +94,31 @@ pub(super) struct SessionObjectiveMirrorWriteRead {
     pub(super) recovered: bool,
 }
 
+/// Bounded persisted mirror of one conversation's generated display title.
+///
+/// The mirror is stored in its own bounded sidecar rather than in the objective
+/// mirror, so the objective mirror keeps its single-writer invariant of being
+/// written only from the published objective. It is a display cache: a missing,
+/// unreadable, or over-cap index degrades to the prompt-based rendering.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionTitleMirror {
+    /// Durable conversation identity.
+    pub conversation_id: String,
+    /// Bounded single-line generated display title.
+    pub title: String,
+    /// Time at which the title was most recently refreshed.
+    pub updated_at_unix_seconds: u64,
+}
+
+/// One write-path generated-title mirror index read and its recovery outcome.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct SessionTitleMirrorWriteRead {
+    /// Mirrors read from the index, empty when the index was unreadable.
+    pub(super) records: BTreeMap<String, SessionTitleMirror>,
+    /// Whether the unreadable index was quarantined and must be rewritten.
+    pub(super) recovered: bool,
+}
+
 /// Saved-session record merged from transcript summary and name metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SavedAgentSession {
@@ -92,12 +126,25 @@ pub struct SavedAgentSession {
     pub summary: ConversationSummary,
     /// User-assigned display name, when present.
     pub name: Option<String>,
+    /// Whether the user-assigned name ranks in the picker's preferred partition.
+    ///
+    /// Catalog readers that do not project the preferred-name rank report the
+    /// durable default, and the picker page overwrites this from its own ranked
+    /// column so a keyset anchor built from a returned row matches the ordering
+    /// expression exactly.
+    pub name_preferred: bool,
     /// Bounded persisted mirror of the published agent objective, when cached.
     ///
     /// This is display-only state used to resolve a policy-derived title for
     /// archived and offline conversations. A missing mirror degrades to the
     /// prompt-based rendering rather than failing.
     pub objective_title: Option<String>,
+    /// Bounded persisted model-generated display title, when one exists.
+    ///
+    /// This is display-only state and is used only while the configured title
+    /// policy is `generated`. A missing value degrades to the objective-derived
+    /// title and then the first prompt, so the row always renders something.
+    pub generated_title: Option<String>,
     /// Durable origin classification used by resume discovery filters.
     pub conversation_kind: AgentConversationKind,
     /// Time at which the active payload was archived, when archived.
@@ -124,7 +171,11 @@ pub enum SavedSessionLifecycleFilter {
 /// Stable keyset cursor for saved-session catalog ordering.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SavedSessionCursor {
-    /// Whether the row belongs to the named-first picker partition.
+    /// Preferred-name rank for the named-first picker partition.
+    ///
+    /// This is the preferred-name rank rather than the presence of a name: a
+    /// user-assigned ephemeral name stays a real name but is ranked here with
+    /// unnamed rows. The field name and wire shape are unchanged.
     pub named: bool,
     /// Most recent durable activity timestamp.
     pub last_created_at_unix_seconds: u64,
@@ -138,7 +189,7 @@ impl SavedSessionCursor {
     /// Builds the cursor corresponding to one saved-session row.
     pub fn from_session(session: &SavedAgentSession) -> Self {
         Self {
-            named: session.name.is_some(),
+            named: session.name_preferred,
             last_created_at_unix_seconds: session.summary.last_created_at_unix_seconds,
             first_created_at_unix_seconds: session.summary.first_created_at_unix_seconds,
             conversation_id: session.summary.conversation_id.clone(),
@@ -232,6 +283,18 @@ pub struct AgentTranscriptStore {
     /// bounded diagnostics follow one logical store. It is deliberately not part
     /// of store equality: it holds only transient mirror index state.
     pub(super) session_objective_mirrors: Arc<Mutex<SessionObjectiveMirrorHandleState>>,
+    /// Shared generated-title mirror throttle and diagnostics for this handle.
+    ///
+    /// This mirrors the objective mirror state shape, but it tracks the separate
+    /// generated-title sidecar and additionally retains the bounded tombstones
+    /// that keep a late settle from re-inserting a deleted conversation. Like the
+    /// objective mirror it is deliberately not part of store equality.
+    pub(super) session_title_mirrors: Arc<Mutex<SessionTitleMirrorHandleState>>,
+    /// Maximum generated-title mirror entries retained before compaction.
+    ///
+    /// Production stores use `SESSION_TITLE_MIRRORS_MAX_ENTRIES`; focused tests
+    /// lower it so bounded compaction is observable without thousands of writes.
+    pub(super) session_title_mirror_max_entries: usize,
 }
 
 impl PartialEq for AgentTranscriptStore {
@@ -280,6 +343,64 @@ pub struct SessionObjectiveMirrorStatus {
     pub last_recovery_reason: Option<String>,
     /// Whether one quarantined unreadable index file is retained on disk.
     pub quarantined_index: bool,
+}
+
+/// Transient mirror throttle, delete tombstones, and diagnostics for one store handle.
+///
+/// The last persisted `(conversation_id, title)` pair lets an unchanged refresh
+/// skip reading the bounded index, `deleted_conversations` keeps a late settle
+/// from re-inserting a conversation that was deleted, and the counters make index
+/// reads, writes, and recoveries observable without exposing mirror content.
+#[derive(Debug, Default)]
+pub(super) struct SessionTitleMirrorHandleState {
+    /// Last `(conversation_id, bounded title)` this handle persisted.
+    pub(super) last_mirrored: Option<(String, String)>,
+    /// Count of title index reads performed by this handle.
+    pub(super) index_reads: u64,
+    /// Count of title index writes performed by this handle.
+    pub(super) index_writes: u64,
+    /// Count of unreadable title indices quarantined and rebuilt.
+    pub(super) recoveries: u64,
+    /// Bounded reason recorded for the most recent quarantine.
+    pub(super) last_recovery_reason: Option<String>,
+    /// Conversations deleted through this handle, newest last and bounded.
+    ///
+    /// A worker that started before a conversation was deleted can still settle
+    /// afterwards. Remembering the deletion keeps that late settle from writing a
+    /// title row for a conversation that no longer exists.
+    pub(super) deleted_conversations: Vec<String>,
+}
+
+/// Bounded diagnostics for one handle's persisted generated-title mirror index.
+///
+/// The report carries counts and one bounded reason only: it never contains
+/// mirror content or conversation identifiers. The counters are per-process,
+/// while `quarantined_index` reports the durable artifact an operator can find.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct SessionTitleMirrorStatus {
+    /// Title index reads performed by this store handle.
+    pub index_reads: u64,
+    /// Title index writes performed by this store handle.
+    pub index_writes: u64,
+    /// Unreadable title indices quarantined and rebuilt by this handle.
+    pub recoveries: u64,
+    /// Bounded reason recorded for the most recent quarantine.
+    pub last_recovery_reason: Option<String>,
+    /// Whether one quarantined unreadable index file is retained on disk.
+    pub quarantined_index: bool,
+}
+
+/// Bounded answer to whether one conversation still needs a generated title.
+///
+/// The probe reports only the two stored reasons a request is pointless. A failed
+/// probe is an error instead, so a read failure can never be mistaken for a manual
+/// name.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SessionTitleGenerationProbe {
+    /// Whether a durable user-assigned name already wins over any title.
+    pub has_manual_name: bool,
+    /// Whether a generated title is already stored for this conversation.
+    pub has_stored_generated_title: bool,
 }
 
 /// Time-and-count retention policy for active saved conversations.

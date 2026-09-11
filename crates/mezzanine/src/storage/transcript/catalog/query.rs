@@ -235,7 +235,7 @@ pub(super) fn query_saved_sessions(
                 agent_id, pane_id, directory, initial_prompt,
                 latest_user_prompt, has_transcript, has_presentation,
                 payload_layout, archived_at, archive_compressed_bytes,
-                archive_sha256
+                archive_sha256, (name IS NOT NULL AND name_preferred = 1)
          FROM saved_conversations WHERE 1 = 1",
     );
     let mut values = Vec::<Value>::new();
@@ -280,24 +280,24 @@ pub(super) fn query_saved_sessions(
         let named = i64::from(cursor.named);
         if comparison == "after" {
             sql.push_str(
-                " AND ((name IS NOT NULL) < ?
-                    OR ((name IS NOT NULL) = ? AND last_created_at < ?)
-                    OR ((name IS NOT NULL) = ? AND last_created_at = ? AND first_created_at < ?)
-                    OR ((name IS NOT NULL) = ? AND last_created_at = ? AND first_created_at = ? AND conversation_id > ?))",
+                " AND ((name IS NOT NULL AND name_preferred = 1) < ?
+                    OR ((name IS NOT NULL AND name_preferred = 1) = ? AND last_created_at < ?)
+                    OR ((name IS NOT NULL AND name_preferred = 1) = ? AND last_created_at = ? AND first_created_at < ?)
+                    OR ((name IS NOT NULL AND name_preferred = 1) = ? AND last_created_at = ? AND first_created_at = ? AND conversation_id > ?))",
             );
         } else if inclusive {
             sql.push_str(
-                " AND ((name IS NOT NULL) > ?
-                    OR ((name IS NOT NULL) = ? AND last_created_at > ?)
-                    OR ((name IS NOT NULL) = ? AND last_created_at = ? AND first_created_at > ?)
-                    OR ((name IS NOT NULL) = ? AND last_created_at = ? AND first_created_at = ? AND conversation_id <= ?))",
+                " AND ((name IS NOT NULL AND name_preferred = 1) > ?
+                    OR ((name IS NOT NULL AND name_preferred = 1) = ? AND last_created_at > ?)
+                    OR ((name IS NOT NULL AND name_preferred = 1) = ? AND last_created_at = ? AND first_created_at > ?)
+                    OR ((name IS NOT NULL AND name_preferred = 1) = ? AND last_created_at = ? AND first_created_at = ? AND conversation_id <= ?))",
             );
         } else {
             sql.push_str(
-                " AND ((name IS NOT NULL) > ?
-                    OR ((name IS NOT NULL) = ? AND last_created_at > ?)
-                    OR ((name IS NOT NULL) = ? AND last_created_at = ? AND first_created_at > ?)
-                    OR ((name IS NOT NULL) = ? AND last_created_at = ? AND first_created_at = ? AND conversation_id < ?))",
+                " AND ((name IS NOT NULL AND name_preferred = 1) > ?
+                    OR ((name IS NOT NULL AND name_preferred = 1) = ? AND last_created_at > ?)
+                    OR ((name IS NOT NULL AND name_preferred = 1) = ? AND last_created_at = ? AND first_created_at > ?)
+                    OR ((name IS NOT NULL AND name_preferred = 1) = ? AND last_created_at = ? AND first_created_at = ? AND conversation_id < ?))",
             );
         }
         values.extend([
@@ -330,12 +330,12 @@ pub(super) fn query_saved_sessions(
     }
     if backwards {
         sql.push_str(
-            " ORDER BY (name IS NOT NULL) ASC, last_created_at ASC,
+            " ORDER BY (name IS NOT NULL AND name_preferred = 1) ASC, last_created_at ASC,
                        first_created_at ASC, conversation_id DESC",
         );
     } else {
         sql.push_str(
-            " ORDER BY (name IS NOT NULL) DESC, last_created_at DESC,
+            " ORDER BY (name IS NOT NULL AND name_preferred = 1) DESC, last_created_at DESC,
                        first_created_at DESC, conversation_id ASC",
         );
     }
@@ -345,7 +345,11 @@ pub(super) fn query_saved_sessions(
     let mut sessions = statement
         .query_map(params_from_iter(values), |row| {
             let conversation_id: String = row.get(0)?;
-            Ok(decode_record_offset(row, &conversation_id, 1)?.session)
+            let mut session = decode_record_offset(row, &conversation_id, 1)?.session;
+            // The picker projects its own rank column so an anchor built from one
+            // returned row carries the same partition the page was ordered by.
+            session.name_preferred = row.get::<_, i64>(18)? != 0;
+            Ok(session)
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     if backwards {
@@ -397,6 +401,11 @@ fn decode_record_offset(
         "legacy-tsv" => CatalogPayloadLayout::LegacyTsv,
         _ => return Err(conversion_error(offset + 13, "invalid payload layout")),
     };
+    let name: Option<String> = row.get(offset + 1)?;
+    // Only the picker page projects the preferred-name rank. Every other reader
+    // falls back to name presence, so an anchor built from a row fetched by
+    // another query still matches the picker ordering it was selected from.
+    let name_preferred = name.is_some();
     Ok(CatalogRecord {
         session: SavedAgentSession {
             summary: ConversationSummary {
@@ -411,10 +420,14 @@ fn decode_record_offset(
                 initial_prompt: row.get(offset + 9)?,
                 latest_user_prompt: row.get(offset + 10)?,
             },
-            name: row.get(offset + 1)?,
+            name,
+            name_preferred,
             // The objective title mirror is a durable sidecar cache, not catalog
             // state: it is attached by the store after this indexed page is read.
             objective_title: None,
+            // The generated-title sidecar is the same kind of durable cache and
+            // is attached by the store alongside the objective mirror.
+            generated_title: None,
             conversation_kind: kind,
             archived_at_unix_seconds: row_optional_u64(row, offset + 14)?,
             archive_compressed_bytes: row_optional_u64(row, offset + 15)?,

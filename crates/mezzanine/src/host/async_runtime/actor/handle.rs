@@ -844,6 +844,18 @@ impl AsyncRuntimeSessionHandle {
             .await?
     }
 
+    /// Claims one queued turn-less generated session-title task for async execution.
+    pub async fn claim_agent_session_title_task(
+        &self,
+        conversation_id: String,
+    ) -> Result<Option<crate::runtime::RuntimeAgentSessionTitleDispatch>> {
+        self.request(|reply| AsyncRuntimeRequest::ClaimAgentSessionTitleTask {
+            conversation_id,
+            reply,
+        })
+        .await?
+    }
+
     /// Captures an immutable cumulative streaming generation for off-actor projection.
     pub async fn take_streaming_say_projection_work(
         &self,

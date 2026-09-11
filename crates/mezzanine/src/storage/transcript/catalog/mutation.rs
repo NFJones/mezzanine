@@ -25,15 +25,21 @@ pub(super) fn upsert(
              entry_count, first_created_at, last_created_at,
              last_turn_id, agent_id, pane_id, directory,
              initial_prompt, latest_user_prompt, has_transcript,
-             has_presentation, payload_layout, catalog_updated_at
+             has_presentation, payload_layout, catalog_updated_at,
+             name_preferred
          ) VALUES (
              ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
-             ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17
+             ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18
          )
          ON CONFLICT(conversation_id) DO UPDATE SET
              conversation_kind = excluded.conversation_kind,
              name = COALESCE(excluded.name, saved_conversations.name),
              named_at = COALESCE(excluded.named_at, saved_conversations.named_at),
+             name_preferred = CASE
+                 WHEN excluded.name IS NULL OR excluded.named_at IS NULL
+                     THEN saved_conversations.name_preferred
+                 ELSE excluded.name_preferred
+             END,
              entry_count = excluded.entry_count,
              first_created_at = excluded.first_created_at,
              last_created_at = excluded.last_created_at,
@@ -77,6 +83,7 @@ pub(super) fn upsert(
             i64::from(candidate.has_presentation),
             candidate.payload_layout.as_str(),
             sqlite_i64(now_unix_seconds, "catalog update timestamp")?,
+            i64::from(candidate.name_preferred),
         ],
     )?;
     if candidate.archived_at_unix_seconds.is_some() {
@@ -119,20 +126,22 @@ pub(super) fn mark_archived(
     Ok(())
 }
 
-/// Sets one name on an existing or freshly inserted catalog row.
+/// Sets one name and its picker preference on an existing catalog row.
 pub(super) fn set_name(
     connection: &Connection,
     conversation_id: &str,
     name: &str,
     named_at_unix_seconds: u64,
+    name_preferred: bool,
 ) -> Result<()> {
     let changed = connection.execute(
-        "UPDATE saved_conversations SET name = ?2, named_at = ?3
+        "UPDATE saved_conversations SET name = ?2, named_at = ?3, name_preferred = ?4
          WHERE conversation_id = ?1",
         params![
             conversation_id,
             name,
-            sqlite_i64(named_at_unix_seconds, "naming timestamp")?
+            sqlite_i64(named_at_unix_seconds, "naming timestamp")?,
+            i64::from(name_preferred),
         ],
     )?;
     if changed != 1 {
@@ -146,7 +155,8 @@ pub(super) fn set_name(
 /// Clears one optional name while preserving its payload metadata.
 pub(super) fn clear_name(connection: &Connection, conversation_id: &str) -> Result<()> {
     connection.execute(
-        "UPDATE saved_conversations SET name = NULL, named_at = NULL
+        "UPDATE saved_conversations SET name = NULL, named_at = NULL,
+             name_preferred = 1
          WHERE conversation_id = ?1",
         [conversation_id],
     )?;
@@ -177,10 +187,11 @@ pub(super) fn replace_all(
                  entry_count, first_created_at, last_created_at,
                  last_turn_id, agent_id, pane_id, directory,
                  initial_prompt, latest_user_prompt, has_transcript,
-                 has_presentation, payload_layout, catalog_updated_at
+                 has_presentation, payload_layout, catalog_updated_at,
+                 name_preferred
              ) VALUES (
                  ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
-                 ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17
+                 ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18
              )",
         )?;
         for candidate in candidates {
@@ -216,6 +227,7 @@ pub(super) fn replace_all(
                 i64::from(candidate.has_presentation),
                 candidate.payload_layout.as_str(),
                 sqlite_i64(now_unix_seconds, "catalog update timestamp")?,
+                i64::from(candidate.name_preferred),
             ])?;
             if candidate.archived_at_unix_seconds.is_some() {
                 mark_archived(

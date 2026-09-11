@@ -590,7 +590,7 @@ impl RuntimeSessionService {
     }
 
     /// Builds an async provider dispatch suitable for one runtime-owned model command.
-    pub(super) fn runtime_model_provider_for_profile(
+    pub(crate) fn runtime_model_provider_for_profile(
         &mut self,
         model_profile: &ModelProfile,
         audit_operation: &str,

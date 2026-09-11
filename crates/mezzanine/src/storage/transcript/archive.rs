@@ -472,7 +472,10 @@ impl AgentTranscriptStore {
                 let staged = staged_active_payload(self, conversation_id, layout)?;
                 if let Ok(sidecar) = validate_installed_archive_payload(self, conversation_id) {
                     remove_staged_payload(&staged)?;
-                    let candidate = candidate_from_sidecar(sidecar);
+                    let candidate = candidate_from_sidecar(
+                        sidecar,
+                        self.archive_name_preferred(conversation_id)?,
+                    );
                     catalog::upsert(
                         self,
                         &candidate,
@@ -591,7 +594,8 @@ pub(super) fn archived_catalog_candidates(
                 "session archive compressed size does not match its sidecar",
             ));
         }
-        candidates.push(candidate_from_sidecar(sidecar));
+        let name_preferred = store.archive_name_preferred(&sidecar.manifest.conversation_id)?;
+        candidates.push(candidate_from_sidecar(sidecar, name_preferred));
     }
     Ok(candidates)
 }
@@ -603,8 +607,9 @@ pub(super) fn archived_catalog_candidate(
     if !archived_payloads_exist(store, conversation_id)? {
         return Ok(None);
     }
+    let name_preferred = store.archive_name_preferred(conversation_id)?;
     validate_installed_archive_payload(store, conversation_id)
-        .map(candidate_from_sidecar)
+        .map(|sidecar| candidate_from_sidecar(sidecar, name_preferred))
         .map(Some)
 }
 
@@ -745,12 +750,13 @@ fn manifest_from_record(
     }
 }
 
-fn candidate_from_sidecar(sidecar: ArchiveSidecar) -> CatalogCandidate {
+fn candidate_from_sidecar(sidecar: ArchiveSidecar, name_preferred: bool) -> CatalogCandidate {
     let manifest = sidecar.manifest;
     CatalogCandidate {
         summary: summary_from_manifest(&manifest),
         name: manifest.name,
         named_at_unix_seconds: manifest.named_at_unix_seconds,
+        name_preferred,
         conversation_kind: conversation_kind_from_name(&manifest.conversation_kind)
             .unwrap_or(AgentConversationKind::Root),
         has_transcript: manifest.has_transcript,

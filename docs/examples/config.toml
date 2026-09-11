@@ -351,6 +351,12 @@ agent_transcript_error_fg = "danger_foreground"
 agent_transcript_error_bg = "surface"
 agent_transcript_command_fg = "tertiary_foreground"
 agent_transcript_command_bg = "surface"
+agent_transcript_peer_sender_fg = "tertiary_foreground"
+agent_transcript_peer_sender_bg = "surface"
+agent_transcript_peer_receiver_fg = "thinking"
+agent_transcript_peer_receiver_bg = "surface"
+agent_transcript_parent_fg = "danger_foreground"
+agent_transcript_parent_bg = "surface"
 agent_model_fg = "container_secondary_foreground"
 agent_model_bg = "container"
 agent_reasoning_fg = "container_tertiary_foreground"
@@ -470,10 +476,20 @@ shell_mode = "native"
 loop_limit = 8
 # Default bounded peer-message-triggered turn count per agent.
 peer_message_loop_limit = 1000
-# Saved-session title source: `generated` derives a bounded display title from
-# the agent objective, else the first prompt; `objective`, `last_prompt`, and
-# `first_prompt` mirror that source. A manual `/name-session` name always wins.
+# Pane echo of peer and runtime bridge MMP traffic: `normal` keeps the echo of
+# model-authored peer mail and suppresses the echo of runtime-owned subagent
+# bridge notifications, because each bridge notification already has its own
+# `subagent ...` status/result line; `verbose` logs the full bounded payload for
+# every peer echo, bridge traffic included.
+peer_message_log_mode = "normal"
+# Saved-session title source: `generated` stores one bounded model-authored
+# title per conversation, else falls back to the agent objective and then the
+# first prompt; `objective`, `last_prompt`, and `first_prompt` mirror that source
+# without a provider call. A manual `/name-session` name always wins.
 session_title_policy = "generated"
+# Optional cheaper model profile for generated session titles; empty uses the
+# conversation profile, and an unresolvable name also falls back to it.
+session_title_model_profile = ""
 # User-owned system prompt text appended to the built-in prompt.
 custom_system_prompt = ""
 # Empty selects no personality profile.

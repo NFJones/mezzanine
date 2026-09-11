@@ -33,7 +33,9 @@ mod providers;
 mod terminal_options;
 mod theme;
 mod trust;
-pub(crate) use agents::ActiveTurnSleepInhibition;
+pub(crate) use agents::{
+    ActiveTurnSleepInhibition, PeerMessageLogMode, runtime_agent_peer_message_log_mode_from_config,
+};
 pub(super) use agents::{
     ShellMode, runtime_active_turn_sleep_inhibition_from_config,
     runtime_agent_action_failure_retry_limit_from_config, runtime_agent_auto_sizing_from_config,
@@ -381,9 +383,11 @@ mod tests {
     use mez_terminal::{TerminalEmojiWidth, active_terminal_text_width};
 
     use super::{
-        ActiveTurnSleepInhibition, runtime_active_turn_sleep_inhibition_from_config,
-        runtime_agent_enabled_actions_from_config, runtime_agent_session_title_policy_from_config,
-        runtime_fit_status_line, runtime_provider_error_retry_policy_from_config,
+        ActiveTurnSleepInhibition, PeerMessageLogMode,
+        runtime_active_turn_sleep_inhibition_from_config,
+        runtime_agent_enabled_actions_from_config, runtime_agent_peer_message_log_mode_from_config,
+        runtime_agent_session_title_policy_from_config, runtime_fit_status_line,
+        runtime_provider_error_retry_policy_from_config,
         runtime_terminal_agent_wrap_column_cap_from_config,
         runtime_terminal_emoji_width_from_config, runtime_terminal_streaming_output_from_config,
     };
@@ -419,6 +423,37 @@ mod tests {
                     "agents": { "session_title_policy": value }
                 }))
                 .is_err()
+            );
+        }
+    }
+
+    /// Verifies the pane peer-message log mode reader keeps the documented
+    /// `normal` default for an absent or unknown key and parses both modes.
+    #[test]
+    fn parses_agent_peer_message_log_mode_from_config() {
+        assert_eq!(
+            runtime_agent_peer_message_log_mode_from_config(&serde_json::json!({})),
+            PeerMessageLogMode::Normal
+        );
+        for (value, mode) in [
+            ("normal", PeerMessageLogMode::Normal),
+            ("verbose", PeerMessageLogMode::Verbose),
+        ] {
+            assert_eq!(
+                runtime_agent_peer_message_log_mode_from_config(&serde_json::json!({
+                    "agents": { "peer_message_log_mode": value }
+                })),
+                mode,
+                "mode {value}"
+            );
+        }
+        for value in [serde_json::json!("quiet"), serde_json::json!(3)] {
+            assert_eq!(
+                runtime_agent_peer_message_log_mode_from_config(&serde_json::json!({
+                    "agents": { "peer_message_log_mode": value }
+                })),
+                PeerMessageLogMode::Normal,
+                "unreadable value {value}"
             );
         }
     }

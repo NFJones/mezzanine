@@ -406,6 +406,42 @@ pub(crate) fn runtime_owned_bridge_message(envelope: &Envelope) -> bool {
     RUNTIME_OWNED_BRIDGE_MESSAGE_TYPES.contains(&envelope.message_type.as_str())
 }
 
+/// Envelope extension field carrying runtime bridge provenance.
+///
+/// Every runtime-owned bridge envelope carries this field, so the pane echo can
+/// tell a runtime-authored subagent notification from model peer mail without
+/// inspecting payload text, sender identity, or delegation lineage.
+pub(crate) const RUNTIME_BRIDGE_EXTENSION_FIELD: &str = "runtime_bridge";
+
+/// JSON string literal the runtime writes into `runtime_bridge`.
+///
+/// The value is quoted exactly like the existing `subagent_display_name` values
+/// so both extension fields stay JSON scalars in the same style.
+pub(crate) const RUNTIME_BRIDGE_EXTENSION_VALUE: &str = "\"subagent\"";
+
+/// Returns the bridge provenance extension field for one runtime bridge envelope.
+pub(crate) fn runtime_bridge_extension_fields() -> Vec<(String, String)> {
+    vec![(
+        RUNTIME_BRIDGE_EXTENSION_FIELD.to_string(),
+        RUNTIME_BRIDGE_EXTENSION_VALUE.to_string(),
+    )]
+}
+
+/// Returns whether one envelope is a runtime-owned subagent bridge notification.
+///
+/// The predicate reads runtime-authored envelope metadata only: the always-present
+/// `runtime_bridge` provenance field plus a bridge message type. A model
+/// `send_message` action always emits `message_type = "send"` and never sets the
+/// provenance field, so model mail can never satisfy this predicate, and lineage or
+/// route-based detection is deliberately not used.
+pub(crate) fn runtime_bridge_peer_message(envelope: &Envelope) -> bool {
+    runtime_owned_bridge_message(envelope)
+        && envelope
+            .extension_fields
+            .iter()
+            .any(|(name, _)| name == RUNTIME_BRIDGE_EXTENSION_FIELD)
+}
+
 /// Returns bounded peer-message context including sender identity and
 /// objective, message metadata, payload, and salient per-message guidance.
 pub(crate) fn runtime_peer_message_context_content(envelope: &Envelope) -> String {
@@ -475,14 +511,23 @@ pub(crate) fn runtime_peer_message_context_content(envelope: &Envelope) -> Strin
                 .map_or("none".to_string(), agent_list_bounded_text)
         ),
         "payload:".to_string(),
-        truncate_runtime_context_text(
-            &envelope.payload,
-            AGENT_LOCAL_MESSAGE_CONTEXT_PAYLOAD_CHARS,
-            "peer message payload",
-        ),
+        runtime_peer_message_logged_payload(&envelope.payload),
         PEER_MESSAGE_TRUST_GUIDANCE.to_string(),
     ];
     lines.join("\n")
+}
+
+/// Returns one peer payload truncated to the peer-context payload bound.
+///
+/// The pane-visible echo of interagent traffic uses this same bound so a logged
+/// line can never carry more peer payload than the model-visible peer block,
+/// and both truncate at the identical limit with the identical marker text.
+pub(crate) fn runtime_peer_message_logged_payload(payload: &str) -> String {
+    truncate_runtime_context_text(
+        payload,
+        AGENT_LOCAL_MESSAGE_CONTEXT_PAYLOAD_CHARS,
+        "peer message payload",
+    )
 }
 
 #[cfg(test)]

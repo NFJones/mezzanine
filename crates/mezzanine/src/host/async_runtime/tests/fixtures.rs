@@ -995,3 +995,30 @@ pub(super) async fn async_provider_concurrency_write_chat_content_response(
     stream.write_all(response.as_bytes()).await.unwrap();
     stream.flush().await.unwrap();
 }
+
+/// Writes one raw provider HTTP failure through the local fixture socket.
+///
+/// Generated-title tests use this to drive a real provider failure (a status code
+/// and JSON error body) through the async worker instead of injecting an
+/// already-settled outcome, so the bounded failure reason is produced by the
+/// worker's own classification path.
+pub(super) async fn async_provider_concurrency_write_chat_error_response(
+    stream: &mut tokio::net::TcpStream,
+    status: u16,
+    body: &str,
+) {
+    use tokio::io::AsyncWriteExt;
+
+    let response = format!(
+        "HTTP/1.1 {status} Provider Error\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {}",
+        body.len(),
+        body
+    );
+    stream.write_all(response.as_bytes()).await.unwrap();
+    stream.flush().await.unwrap();
+}

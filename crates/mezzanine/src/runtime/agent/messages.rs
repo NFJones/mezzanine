@@ -45,6 +45,11 @@ impl RuntimeSessionService {
     /// Runtime-owned bridge and lifecycle notifications keep their
     /// pre-idle-turn behavior: they wait behind the durable cursor and are
     /// injected with the recipient's next turn.
+    ///
+    /// Every committed message is echoed once in the recipient pane log, and
+    /// nothing else is. The echo tracks the canonical peer-message blocks this
+    /// pass commits through either path, so it never describes a
+    /// budget-limited fanout batch and never filters by sender type.
     pub(crate) fn deliver_pending_runtime_agent_messages(&mut self, now_ms: u64) -> Result<usize> {
         let ready = self
             .control
@@ -63,8 +68,14 @@ impl RuntimeSessionService {
                     continue;
                 }
                 let pane_id = recipient.as_str().trim_start_matches("agent-").to_string();
-                committed =
-                    committed.saturating_add(self.start_runtime_peer_message_turn(&pane_id)?);
+                // The echo follows the commit rather than this batch. Starting
+                // the turn commits every unread message through
+                // `peer_message_turn_context`, which logs each committed
+                // message, so a message this budget-limited batch omitted is
+                // still operator-visible. The loop limit, a missing session,
+                // and any other refusal commit nothing and log nothing.
+                let started = self.start_runtime_peer_message_turn(&pane_id)?;
+                committed = committed.saturating_add(started);
                 continue;
             };
             if !self.agent_turn_contexts().contains_key(&turn.turn_id) {
@@ -95,6 +106,7 @@ impl RuntimeSessionService {
                             MezError::invalid_state("runtime agent turn context is unavailable")
                         })?
                         .append_peer_message_event(label, content)?;
+                    self.echo_received_peer_message_to_pane(&turn.pane_id, &message.envelope);
                     committed = committed.saturating_add(1);
                     self.append_agent_trace_turn_event(
                         &turn.pane_id,
@@ -131,6 +143,34 @@ impl RuntimeSessionService {
             }
         }
         Ok(committed)
+    }
+
+    /// Logs one committed received peer message in the recipient pane's log.
+    ///
+    /// Every path that commits a canonical peer-message block calls this once
+    /// per committed message, so the logged set equals the committed set rather
+    /// than a budget-limited fanout batch. Interagent traffic becomes
+    /// operator-visible the same way a user prompt does, with the originating
+    /// agent named at the destination end of the direction arrow, and
+    /// runtime-owned bridge traffic follows the same commit rule so the log
+    /// never depends on whether the recipient happened to be busy. The echo is
+    /// presentation-only: it reuses the peer payload bound, appends no context
+    /// block, and can never start a turn.
+    pub(crate) fn echo_received_peer_message_to_pane(
+        &mut self,
+        pane_id: &str,
+        envelope: &Envelope,
+    ) {
+        // Bridge provenance comes from runtime-authored envelope metadata, so a
+        // model `send_message` always passes `false` and keeps logging unchanged.
+        let runtime_bridge = crate::runtime::control::runtime_bridge_peer_message(envelope);
+        let _ = self.append_agent_received_peer_message_to_terminal_buffer(
+            pane_id,
+            envelope.sender.agent_id.as_str(),
+            envelope.content_type.as_str(),
+            envelope.payload.as_str(),
+            runtime_bridge,
+        );
     }
 
     /// Starts one peer-message-triggered turn for an idle agent.
@@ -514,6 +554,17 @@ impl RuntimeSessionService {
                 return Ok(result);
             }
         };
+        // The accepted delivery is operator-visible with the same recipient
+        // label the action result reports, so a pane log pairs the outbound
+        // request with the peer reply that follows it. A rejected recipient or
+        // failed transport returns before this point and logs nothing.
+        let _ = self.append_agent_sent_peer_message_to_terminal_buffer(
+            &turn.pane_id,
+            recipient.as_str(),
+            content_type.as_str(),
+            payload.as_str(),
+            false,
+        );
         self.deliver_pending_runtime_agent_messages(now_ms)?;
         Ok(ActionResult::succeeded(
             turn,
@@ -622,6 +673,10 @@ impl RuntimeSessionService {
             self.invalidate_agent_prompt_selector_extra_candidates();
             let _ = self.refresh_saved_session_overlay_after_title_change();
         }
+        // Publishing the objective is where a conversation becomes eligible for
+        // turn-less generated-title work. Admission is idempotent, never creates
+        // a turn, and never fails the objective refresh.
+        let _ = self.schedule_runtime_agent_session_title(conversation_id, objective);
         changed
     }
 
@@ -630,8 +685,10 @@ impl RuntimeSessionService {
     /// Routed workers bind fresh runtime-only conversation ids such as
     /// `routed-<parent>-<turn>-worker`. They never persist a transcript, never
     /// enter the saved-session catalog, and can never resolve a mirrored title,
-    /// so mirroring them would only grow the bounded index.
-    fn runtime_agent_conversation_is_ephemeral(&self, conversation_id: &str) -> bool {
+    /// so mirroring them would only grow the bounded index. Title scheduling
+    /// shares this guard, because a generated title for such a conversation would
+    /// spend a provider call and an index write that no surface can ever render.
+    pub(crate) fn runtime_agent_conversation_is_ephemeral(&self, conversation_id: &str) -> bool {
         self.agent_shell_store()
             .sessions()
             .any(|session| session.ephemeral && session.session_id == conversation_id)

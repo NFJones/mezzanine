@@ -119,6 +119,7 @@ fn derived_session_title(
         Some(name) if !name.is_empty() => crate::session_title::resolve_session_title(
             None,
             policy,
+            session.generated_title.as_deref(),
             session.objective_title.as_deref(),
             session.summary.initial_prompt.as_deref(),
             session.summary.latest_user_prompt.as_deref(),
@@ -129,7 +130,12 @@ fn derived_session_title(
 }
 
 impl RuntimeSessionService {
-    /// Assigns or replaces the durable display name for the current conversation.
+    /// Assigns or replaces the user-assigned display name for the current
+    /// conversation.
+    ///
+    /// `/name-session --ephemeral <name>` assigns a real name that is excluded
+    /// from the named-first picker ranking, while a plain
+    /// `/name-session <name>` assigns or promotes a durable preferred name.
     pub(super) fn execute_agent_shell_name_session_command(
         &mut self,
         pane_id: &str,
@@ -138,18 +144,26 @@ impl RuntimeSessionService {
         let invocation = parse_slash_command(input)?.ok_or_else(|| {
             MezError::invalid_args("name-session command must be a slash command")
         })?;
-        let name = invocation.args.trim();
-        if name.is_empty() {
+        let arguments = invocation.args.trim();
+        if arguments.is_empty() {
             return Err(MezError::invalid_args(
-                "usage: /name-session <name>|--clear",
+                "usage: /name-session [--ephemeral] <name>|--clear",
             ));
         }
-        let clear_requested = name
+        let ephemeral_prefix = arguments
+            .strip_prefix("--ephemeral")
+            .filter(|remainder| remainder.is_empty() || remainder.starts_with(char::is_whitespace));
+        let (ephemeral, name) = match ephemeral_prefix {
+            Some(remainder) => (true, remainder.trim()),
+            None => (false, arguments),
+        };
+        let clear_requested = name == "--clear";
+        let flag_requested = name
             .split_whitespace()
-            .any(|argument| argument == "--clear");
-        if clear_requested && name != "--clear" {
+            .any(|argument| argument.starts_with("--"));
+        if name.is_empty() || (flag_requested && (!clear_requested || ephemeral)) {
             return Err(MezError::invalid_args(
-                "usage: /name-session <name>|--clear",
+                "usage: /name-session [--ephemeral] <name>|--clear",
             ));
         }
         let session = self
@@ -178,21 +192,27 @@ impl RuntimeSessionService {
             return Ok(AgentShellCommandOutcome::Mutated {
                 command: "name-session".to_string(),
                 body: format!(
-                    "conversation_id={} named=false cleared={cleared}",
+                    "conversation_id={} named=false cleared={cleared} ephemeral=false",
                     conversation_id
                 ),
                 visibility,
             });
         }
-        let named =
-            store.name_session(&conversation_id, name, current_unix_seconds(), directory)?;
+        let named = store.name_session(
+            &conversation_id,
+            name,
+            current_unix_seconds(),
+            directory,
+            ephemeral,
+        )?;
         self.invalidate_agent_prompt_selector_extra_candidates();
         Ok(AgentShellCommandOutcome::Mutated {
             command: "name-session".to_string(),
             body: format!(
-                "conversation_id={} name={} named=true",
+                "conversation_id={} name={} named=true ephemeral={}",
                 conversation_id,
-                json_escape(&named.name)
+                json_escape(&named.name),
+                ephemeral
             ),
             visibility,
         })

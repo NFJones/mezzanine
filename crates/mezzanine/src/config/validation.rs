@@ -317,6 +317,7 @@ pub fn validate_config_text(
     diagnostics.extend(validate_external_editor_config(format, text));
     diagnostics.extend(validate_provider_models_config(format, text));
     diagnostics.extend(validate_model_profile_reasoning_config(format, text));
+    diagnostics.extend(validate_session_title_model_profile_config(format, text));
     diagnostics.extend(validate_group_whitelist_config(format, text));
     diagnostics.extend(validate_env_whitelist_config(format, text));
     diagnostics.extend(validate_agent_enabled_actions_config(format, text));
@@ -530,6 +531,13 @@ pub fn validate_config_text(
                 path,
                 message: "agents.session_title_policy must be generated, objective, last_prompt, or first_prompt"
                     .to_string(),
+            });
+        } else if path == "agents.peer_message_log_mode"
+            && !matches!(value.as_str(), "normal" | "verbose")
+        {
+            diagnostics.push(ConfigDiagnostic {
+                path,
+                message: "agents.peer_message_log_mode must be normal or verbose".to_string(),
             });
         } else if path == "agents.subagent_wait_policy"
             && !matches!(
@@ -1033,10 +1041,42 @@ fn is_supported_capability_tag(tag: &str) -> bool {
     )
 }
 
-/// Validates model-profile reasoning selections against the model metadata
-/// that materialization would resolve.
+/// Rejects a session-title model-profile override that names no profile.
 ///
-/// Profiles with explicit metadata are checked against their declared levels;
+/// The optional override exists so title generation can run on a cheaper
+/// model. An unknown profile name is a configuration error rather than a
+/// silent fallback to the conversation profile, because silently ignoring the
+/// override would spend the profile the operator explicitly redirected.
+fn validate_session_title_model_profile_config(
+    format: ConfigFormat,
+    text: &str,
+) -> Vec<ConfigDiagnostic> {
+    let Ok(root) = parse_config_json_value(format, text) else {
+        return Vec::new();
+    };
+    let Some(profile_name) = root
+        .pointer("/agents/session_title_model_profile")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Vec::new();
+    };
+    if root
+        .get("model_profiles")
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|profiles| profiles.contains_key(profile_name))
+    {
+        return Vec::new();
+    }
+    vec![ConfigDiagnostic {
+        path: "agents.session_title_model_profile".to_string(),
+        message: format!(
+            "agents.session_title_model_profile `{profile_name}` is not configured in model_profiles"
+        ),
+    }]
+}
+
 /// DeepSeek profiles with a reasoning selection and no declared metadata are
 /// flagged because conservative unknown-model policy would reject them at
 /// materialization.

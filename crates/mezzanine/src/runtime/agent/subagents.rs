@@ -23,6 +23,7 @@ use super::{
     runtime_subagent_placement_mode, runtime_subagent_result_status_label,
     runtime_subagent_spawn_request, runtime_task_state_suffix, subagent_task_output_for_execution,
 };
+use crate::runtime::control::runtime_bridge_extension_fields;
 
 /// Maximum routed result idempotency keys retained by the runtime actor.
 const SETTLED_ROUTED_PARENT_RESULT_LIMIT: usize = 4096;
@@ -1191,6 +1192,15 @@ impl RuntimeSessionService {
         let child_display_name = self
             .subagent_lineage(&turn.agent_id)
             .map(|lineage| lineage.display_name.clone());
+        // Bridge provenance travels on the envelope itself so the parent pane echo
+        // can suppress this notification behind its `subagent ...` status line.
+        let mut extension_fields = runtime_bridge_extension_fields();
+        if let Some(name) = child_display_name.as_deref() {
+            extension_fields.push((
+                "subagent_display_name".to_string(),
+                format!(r#""{}""#, json_escape(name)),
+            ));
+        }
         let envelope = Envelope {
             protocol: "mmp/1",
             id: format!(
@@ -1206,15 +1216,7 @@ impl RuntimeSessionService {
             ttl_ms: None,
             content_type: "application/json".to_string(),
             payload: payload.to_json(),
-            extension_fields: child_display_name
-                .as_deref()
-                .map(|name| {
-                    vec![(
-                        "subagent_display_name".to_string(),
-                        format!(r#""{}""#, json_escape(name)),
-                    )]
-                })
-                .unwrap_or_default(),
+            extension_fields,
         };
         let delivery = self.control.message_service_mut().accept_at(
             &child_identity.agent_id,
@@ -1520,6 +1522,15 @@ impl RuntimeSessionService {
             summary: summary.to_string(),
             output: output.to_string(),
         };
+        // Bridge provenance travels on the envelope itself so the parent pane echo
+        // can suppress this notification behind its `subagent ...` result line.
+        let mut extension_fields = runtime_bridge_extension_fields();
+        if let Some(name) = child_display_name.as_deref() {
+            extension_fields.push((
+                "subagent_display_name".to_string(),
+                format!(r#""{}""#, json_escape(name)),
+            ));
+        }
         let envelope = Envelope {
             protocol: "mmp/1",
             id: format!("{}:task_result:final", turn.turn_id),
@@ -1531,15 +1542,7 @@ impl RuntimeSessionService {
             ttl_ms: None,
             content_type: "application/json".to_string(),
             payload: payload.to_json(),
-            extension_fields: child_display_name
-                .as_deref()
-                .map(|name| {
-                    vec![(
-                        "subagent_display_name".to_string(),
-                        format!(r#""{}""#, json_escape(name)),
-                    )]
-                })
-                .unwrap_or_default(),
+            extension_fields,
         };
         self.control
             .message_service_mut()

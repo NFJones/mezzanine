@@ -335,6 +335,9 @@ impl AsyncRuntimeSessionActor {
             RuntimeEvent::AgentRemember(remember_event) => {
                 self.service.apply_agent_remember_transition(remember_event)
             }
+            RuntimeEvent::AgentSessionTitle(title_event) => self
+                .service
+                .apply_agent_session_title_transition(title_event),
             RuntimeEvent::Hook(hook_event) => self.apply_runtime_hook_event(hook_event),
             RuntimeEvent::Persistence(persistence_event) => {
                 self.apply_runtime_persistence_event(persistence_event)
@@ -573,7 +576,7 @@ impl AsyncRuntimeSessionActor {
                     return Ok(RuntimeTransition::default());
                 }
                 self.timers.provider_poll = None;
-                self.apply_provider_poll_timer_event()
+                self.apply_provider_poll_timer_event(timer.now_ms)
             }
             RuntimeTimerKind::PeerMessageDelivery => {
                 if self.timers.peer_message_delivery.as_ref() != Some(&timer.key) {
@@ -687,8 +690,19 @@ impl AsyncRuntimeSessionActor {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(super) fn apply_provider_poll_timer_event(&self) -> Result<RuntimeTransition> {
-        let side_effects = self.pending_provider_dispatch_side_effects()?;
+    /// Reaps expired title claims and queues every pending provider dispatch.
+    ///
+    /// This timer runs whenever any provider work is queued, including a queue
+    /// that only holds title tasks, so it is also where a title worker whose lease
+    /// expired is recovered instead of holding a concurrency slot forever.
+    pub(super) fn apply_provider_poll_timer_event(
+        &mut self,
+        now_ms: u64,
+    ) -> Result<RuntimeTransition> {
+        let mut side_effects = self
+            .service
+            .reap_expired_agent_session_title_claims(now_ms)?;
+        side_effects.extend(self.pending_provider_dispatch_side_effects()?);
         Ok(RuntimeTransition {
             applied: !side_effects.is_empty(),
             side_effects,
@@ -790,6 +804,12 @@ impl AsyncRuntimeSessionActor {
             }
             side_effects.push(RuntimeSideEffect::DispatchAgentRemember { pane_id });
         }
+        for conversation_id in self.service.pending_agent_session_title_tasks() {
+            if self.session_title_dispatch_is_already_queued(&conversation_id) {
+                continue;
+            }
+            side_effects.push(RuntimeSideEffect::DispatchAgentSessionTitle { conversation_id });
+        }
         Ok(side_effects)
     }
 
@@ -810,6 +830,20 @@ impl AsyncRuntimeSessionActor {
             matches!(
                 effect,
                 RuntimeSideEffect::DispatchAgentRemember { pane_id } if pane_id == target_pane_id
+            )
+        })
+    }
+
+    /// Returns true when a queued title dispatch already exists for a conversation.
+    pub(super) fn session_title_dispatch_is_already_queued(
+        &self,
+        target_conversation_id: &str,
+    ) -> bool {
+        self.side_effects.iter().any(|effect| {
+            matches!(
+                effect,
+                RuntimeSideEffect::DispatchAgentSessionTitle { conversation_id }
+                    if conversation_id == target_conversation_id
             )
         })
     }

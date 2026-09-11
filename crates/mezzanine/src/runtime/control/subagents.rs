@@ -14,8 +14,9 @@ use super::{
     RuntimeSubagentPlacement, SUBAGENT_FRIENDLY_NAMES, SplitDirection, SubagentScopeDeclaration,
     SubagentSpawnRequest, TaskState, TaskStatusPayload, compare_permission_preset_authority,
     current_unix_seconds, json_escape, pane_id_from_runtime_agent_id,
-    runtime_agent_turn_state_json, runtime_cooperation_mode_name, runtime_pane_by_id,
-    runtime_subagent_placement_mode, runtime_subagent_spawn_request, runtime_subagent_state_json,
+    runtime_agent_turn_state_json, runtime_bridge_extension_fields, runtime_cooperation_mode_name,
+    runtime_pane_by_id, runtime_subagent_placement_mode, runtime_subagent_spawn_request,
+    runtime_subagent_state_json,
 };
 use crate::runtime::{RuntimeAgentPromptTurnStart, SandboxConfig};
 
@@ -1337,6 +1338,14 @@ impl RuntimeSessionService {
                 "subagent task started".to_string()
             },
         };
+        // Bridge provenance travels on the envelope itself, so the pane echo can
+        // suppress this runtime-authored notification without touching its
+        // dedicated `subagent ...` status line.
+        let mut extension_fields = runtime_bridge_extension_fields();
+        extension_fields.push((
+            "subagent_display_name".to_string(),
+            format!(r#""{}""#, json_escape(initial_status.child_display_name)),
+        ));
         let envelope = Envelope {
             protocol: "mmp/1",
             id: format!(
@@ -1356,10 +1365,7 @@ impl RuntimeSessionService {
             ttl_ms: None,
             content_type: "application/json".to_string(),
             payload: task_status.to_json(),
-            extension_fields: vec![(
-                "subagent_display_name".to_string(),
-                format!(r#""{}""#, json_escape(initial_status.child_display_name)),
-            )],
+            extension_fields,
         };
         self.control
             .message_service_mut()

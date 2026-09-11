@@ -663,3 +663,50 @@ pub struct RuntimeAgentRememberDispatch {
     /// Provider used to execute the memory-generation request.
     pub provider: RuntimeAgentProviderDispatchProvider,
 }
+
+/// Provider-backed generated session-title task queued outside the actor.
+///
+/// Title generation is a side channel: the actor owns admission, the attempt
+/// limit, settlement, and cancellation while the bounded provider request runs
+/// in an async worker. The task never references a turn, action, or transcript
+/// entry, so generating a title cannot create or mutate turn machinery.
+#[derive(Debug, Clone)]
+pub struct RuntimeAgentSessionTitleTask {
+    /// Conversation whose display title is being generated.
+    pub conversation_id: String,
+    /// Pane that owns the conversation, retained for status and trace output.
+    pub pane_id: String,
+    /// Agent identity copied into the bounded title request.
+    pub agent_id: String,
+    /// Model profile name selected for the title request.
+    pub model_profile_name: String,
+    /// Model profile used to build and report the bounded title request.
+    pub model_profile: ModelProfile,
+    /// Bounded, tool-free title request built by the mez-agent title builder.
+    pub request: ModelRequest,
+}
+
+/// Claimed generated session-title dispatch owned by an async provider worker.
+#[derive(Debug, Clone)]
+pub struct RuntimeAgentSessionTitleDispatch {
+    /// Title task metadata and bounded provider request.
+    pub task: RuntimeAgentSessionTitleTask,
+    /// Provider used to execute the title request.
+    pub provider: RuntimeAgentProviderDispatchProvider,
+}
+
+/// One claimed generated session-title task together with its worker lease.
+///
+/// A claimed title task leaves the pending queue, so the lease is what makes a
+/// lost worker observable: the provider poll timer reaps an expired claim, and an
+/// expired claim would otherwise hold a concurrency slot for the life of the
+/// process.
+#[derive(Debug, Clone)]
+pub struct RuntimeAgentSessionTitleClaim {
+    /// Title task metadata and bounded provider request.
+    pub task: RuntimeAgentSessionTitleTask,
+    /// Unix milliseconds at which this claim was installed.
+    pub claimed_at_unix_ms: u64,
+    /// Worker lease applied to this claim.
+    pub timeout_ms: u64,
+}

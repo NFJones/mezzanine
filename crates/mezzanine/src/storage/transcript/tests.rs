@@ -721,7 +721,7 @@ fn transcript_store_enforces_age_then_count_retention() {
         store.append(&transcript_entry).unwrap();
     }
     store
-        .name_session("named-at-cutoff", "Named but expiring", cutoff, None)
+        .name_session("named-at-cutoff", "Named but expiring", cutoff, None, false)
         .unwrap();
     store.archive_session("archived-old", cutoff + 10).unwrap();
     let protected = ["protected-old".to_string()].into_iter().collect();
@@ -768,10 +768,11 @@ fn transcript_store_persists_and_merges_named_sessions() {
             "  Release investigation  ",
             20,
             Some("/repo".to_string()),
+            false,
         )
         .unwrap();
     store
-        .name_session("empty-session", "Empty but durable", 30, None)
+        .name_session("empty-session", "Empty but durable", 30, None, false)
         .unwrap();
 
     let reopened = AgentTranscriptStore::new(root.clone());
@@ -793,6 +794,147 @@ fn transcript_store_persists_and_merges_named_sessions() {
     assert!(reopened.delete("empty-session").unwrap());
     assert!(reopened.named_session("empty-session").unwrap().is_none());
     assert_eq!(reopened.saved_sessions().unwrap().len(), 1);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Reads one catalog row's preferred-name flag for test assertions.
+fn catalog_name_preferred(store: &AgentTranscriptStore, conversation_id: &str) -> i64 {
+    let connection = Connection::open(store.catalog_path()).unwrap();
+    connection
+        .query_row(
+            "SELECT name_preferred FROM saved_conversations WHERE conversation_id = ?1",
+            [conversation_id],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+/// Verifies ephemeral and durable names round-trip through the bounded naming
+/// index while only the durable name is preferred by picker ranking.
+#[test]
+fn transcript_store_round_trips_ephemeral_and_durable_names() {
+    let root = temp_root("ephemeral-named-sessions");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("durable-name", 1, TranscriptRole::User))
+        .unwrap();
+    store
+        .append(&entry("ephemeral-name", 1, TranscriptRole::User))
+        .unwrap();
+    store
+        .name_session("durable-name", "Durable title", 20, None, false)
+        .unwrap();
+    store
+        .name_session("ephemeral-name", "Ephemeral title", 21, None, true)
+        .unwrap();
+
+    let reopened = AgentTranscriptStore::new(root.clone());
+    let durable = reopened.named_session("durable-name").unwrap().unwrap();
+    assert!(!durable.ephemeral);
+    assert_eq!(durable.name, "Durable title");
+    let ephemeral = reopened.named_session("ephemeral-name").unwrap().unwrap();
+    assert!(ephemeral.ephemeral);
+    assert_eq!(ephemeral.name, "Ephemeral title");
+    let flags = reopened
+        .named_sessions()
+        .unwrap()
+        .into_iter()
+        .map(|session| (session.conversation_id, session.ephemeral))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        flags,
+        vec![
+            ("durable-name".to_string(), false),
+            ("ephemeral-name".to_string(), true)
+        ]
+    );
+    assert_eq!(catalog_name_preferred(&reopened, "durable-name"), 1);
+    assert_eq!(catalog_name_preferred(&reopened, "ephemeral-name"), 0);
+
+    // An ephemeral name is still a real name for display and lookup.
+    let rows = reopened.saved_sessions().unwrap();
+    let row = rows
+        .iter()
+        .find(|session| session.summary.conversation_id == "ephemeral-name")
+        .unwrap();
+    assert_eq!(row.name.as_deref(), Some("Ephemeral title"));
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies named-session records written before the ephemeral flag existed
+/// decode as durable preferred names on the import and rebuild paths.
+#[test]
+fn transcript_store_decodes_legacy_named_sessions_as_durable() {
+    let root = temp_root("legacy-named-sessions");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("legacy-name", 1, TranscriptRole::User))
+        .unwrap();
+    fs::write(
+        root.join("named-sessions.json"),
+        r#"{"version":1,"sessions":[{"conversation_id":"legacy-name","name":"Legacy title","named_at_unix_seconds":30,"directory":"/legacy"}]}"#,
+    )
+    .unwrap();
+
+    store.initialize(100).unwrap();
+
+    let session = store.named_session("legacy-name").unwrap().unwrap();
+    assert!(!session.ephemeral);
+    assert_eq!(session.name, "Legacy title");
+    assert_eq!(session.directory.as_deref(), Some("/legacy"));
+    assert_eq!(store.named_sessions().unwrap().len(), 1);
+    assert_eq!(catalog_name_preferred(&store, "legacy-name"), 1);
+
+    store.rebuild_catalog(101).unwrap();
+
+    assert_eq!(catalog_name_preferred(&store, "legacy-name"), 1);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a plain assignment promotes a previous ephemeral name back to the
+/// durable preferred partition and that clearing resets the preference.
+#[test]
+fn transcript_store_promotes_ephemeral_names_back_to_durable() {
+    let root = temp_root("ephemeral-name-promotion");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("promoted-name", 1, TranscriptRole::User))
+        .unwrap();
+    store
+        .name_session("promoted-name", "Ephemeral title", 20, None, true)
+        .unwrap();
+    assert!(
+        store
+            .named_session("promoted-name")
+            .unwrap()
+            .unwrap()
+            .ephemeral
+    );
+    assert_eq!(catalog_name_preferred(&store, "promoted-name"), 0);
+
+    store
+        .name_session("promoted-name", "Durable title", 21, None, false)
+        .unwrap();
+    let promoted = store.named_session("promoted-name").unwrap().unwrap();
+    assert!(!promoted.ephemeral);
+    assert_eq!(promoted.name, "Durable title");
+    assert_eq!(catalog_name_preferred(&store, "promoted-name"), 1);
+
+    assert!(store.clear_session_name("promoted-name").unwrap());
+    let connection = Connection::open(store.catalog_path()).unwrap();
+    let cleared: (Option<String>, Option<i64>, i64) = connection
+        .query_row(
+            "SELECT name, named_at, name_preferred FROM saved_conversations
+             WHERE conversation_id = 'promoted-name'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(cleared, (None, None, 1));
+    drop(connection);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -837,11 +979,15 @@ fn transcript_store_rejects_invalid_session_names() {
     let _ = fs::remove_dir_all(&root);
     let store = AgentTranscriptStore::new(root.clone());
 
-    assert!(store.name_session("conv", "   ", 1, None).is_err());
-    assert!(store.name_session("conv", "line\nbreak", 1, None).is_err());
+    assert!(store.name_session("conv", "   ", 1, None, false).is_err());
     assert!(
         store
-            .name_session("conv", &"x".repeat(81), 1, None)
+            .name_session("conv", "line\nbreak", 1, None, false)
+            .is_err()
+    );
+    assert!(
+        store
+            .name_session("conv", &"x".repeat(81), 1, None, false)
             .is_err()
     );
     assert!(store.named_sessions().unwrap().is_empty());
@@ -1446,7 +1592,7 @@ fn transcript_store_catalog_migrates_existing_session_metadata() {
         .save_conversation_kind("current", mez_agent::AgentConversationKind::Subagent)
         .unwrap();
     store
-        .name_session("current", "Current session", 40, None)
+        .name_session("current", "Current session", 40, None, false)
         .unwrap();
     store
         .append_presentation(&presentation("presentation-only", 1))
@@ -1457,10 +1603,11 @@ fn transcript_store_catalog_migrates_existing_session_metadata() {
             "Presentation only",
             41,
             Some("/workspace/presentation".to_string()),
+            false,
         )
         .unwrap();
     store
-        .name_session("named-empty", "No payload yet", 42, None)
+        .name_session("named-empty", "No payload yet", 42, None, false)
         .unwrap();
 
     let legacy = entry("legacy", 1, TranscriptRole::User);
@@ -1564,7 +1711,7 @@ fn transcript_store_catalog_restart_is_bounded_and_missing_database_recovers() {
     store.initialize(100).unwrap();
 
     store
-        .name_session("after-migration", "Not reimported", 101, None)
+        .name_session("after-migration", "Not reimported", 101, None, false)
         .unwrap();
     store.initialize(102).unwrap();
     assert_eq!(
@@ -1612,7 +1759,7 @@ fn transcript_store_catalog_initializes_private_indexed_schema() {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
     let quick_check: String = connection
         .query_row("PRAGMA quick_check", [], |row| row.get(0))
         .unwrap();
@@ -1716,7 +1863,7 @@ fn transcript_store_catalog_migrates_v1_rows_to_active_v2_rows() {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
     let lifecycle: (Option<i64>, Option<i64>, Option<String>) = connection
         .query_row(
             "SELECT archived_at, archive_compressed_bytes, archive_sha256
@@ -1738,18 +1885,18 @@ fn transcript_store_catalog_rejects_future_schema_versions() {
     fs::create_dir_all(&root).unwrap();
     let store = AgentTranscriptStore::new(root.clone());
     let connection = Connection::open(store.catalog_path()).unwrap();
-    connection.pragma_update(None, "user_version", 3).unwrap();
+    connection.pragma_update(None, "user_version", 4).unwrap();
     drop(connection);
 
     let error = store.initialize(100).unwrap_err();
 
     assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
-    assert!(error.message().contains("newer than supported version 2"));
+    assert!(error.message().contains("newer than supported version 3"));
     let connection = Connection::open(store.catalog_path()).unwrap();
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1840,7 +1987,13 @@ fn transcript_store_catalog_dual_writes_session_mutations() {
         .save_conversation_kind("conversation", mez_agent::AgentConversationKind::Subagent)
         .unwrap();
     store
-        .name_session("conversation", "Catalogued", 30, Some("/repo".to_string()))
+        .name_session(
+            "conversation",
+            "Catalogued",
+            30,
+            Some("/repo".to_string()),
+            false,
+        )
         .unwrap();
     store
         .append_presentation(&presentation("presentation-only", 1))
@@ -1884,7 +2037,7 @@ fn transcript_store_catalog_dual_writes_session_mutations() {
     );
 
     store
-        .name_session("conversation", "Keep empty", 31, None)
+        .name_session("conversation", "Keep empty", 31, None, false)
         .unwrap();
     assert!(store.delete_entry("conversation", 1).unwrap());
     let named_empty = store
@@ -1903,7 +2056,7 @@ fn transcript_store_catalog_dual_writes_session_mutations() {
     );
 
     store
-        .name_session("name-only", "Temporary", 32, None)
+        .name_session("name-only", "Temporary", 32, None, false)
         .unwrap();
     assert!(store.clear_session_name("name-only").unwrap());
     assert!(store.catalog_saved_session("name-only").unwrap().is_none());
@@ -1924,6 +2077,7 @@ fn transcript_store_catalog_presentation_repair_recovers_name_sidecar() {
             "Named presentation",
             31,
             Some("/repo".to_string()),
+            false,
         )
         .unwrap();
 
@@ -2044,10 +2198,14 @@ fn transcript_store_catalog_bounds_completion_and_keyset_pages() {
         transcript_entry.content = content.to_string();
         store.append(&transcript_entry).unwrap();
     }
-    store.name_session("named-a", "Named A", 20, None).unwrap();
-    store.name_session("named-b", "Named B", 20, None).unwrap();
     store
-        .name_session("root-zero", "Zero entry", 60, None)
+        .name_session("named-a", "Named A", 20, None, false)
+        .unwrap();
+    store
+        .name_session("named-b", "Named B", 20, None, false)
+        .unwrap();
+    store
+        .name_session("root-zero", "Zero entry", 60, None, false)
         .unwrap();
     store
         .save_conversation_kind("root-child", mez_agent::AgentConversationKind::Subagent)
@@ -2137,6 +2295,123 @@ fn transcript_store_catalog_bounds_completion_and_keyset_pages() {
             .map(|session| session.summary.conversation_id.as_str())
             .collect::<Vec<_>>(),
         vec!["named-a", "named-b"]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies picker keyset pages rank durable names first and order ephemeral
+/// names with unnamed rows by recency, without a gap or repeat at boundaries.
+#[test]
+fn transcript_store_picker_pages_exclude_ephemeral_names_from_the_named_rank() {
+    let root = temp_root("catalog-ephemeral-picker-order");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    for (conversation_id, created_at) in [
+        ("durable-new", 50),
+        ("durable-old", 40),
+        ("ephemeral-new", 30),
+        ("ephemeral-old", 20),
+        ("unnamed-new", 10),
+    ] {
+        let mut transcript_entry = entry(conversation_id, 1, TranscriptRole::User);
+        transcript_entry.created_at_unix_seconds = created_at;
+        store.append(&transcript_entry).unwrap();
+    }
+    for (conversation_id, name, ephemeral) in [
+        ("durable-new", "Durable new", false),
+        ("durable-old", "Durable old", false),
+        ("ephemeral-new", "Ephemeral new", true),
+        ("ephemeral-old", "Ephemeral old", true),
+    ] {
+        store
+            .name_session(conversation_id, name, 60, None, ephemeral)
+            .unwrap();
+    }
+
+    let query = SavedSessionQuery {
+        lifecycle: SavedSessionLifecycleFilter::Active,
+        directory: None,
+        include_subagents: false,
+        require_latest_user_prompt: false,
+        search: None,
+        anchor: None,
+        limit: 2,
+    };
+    let page = |anchor: Option<SavedSessionPageAnchor>| {
+        store
+            .query_saved_sessions(&SavedSessionQuery {
+                anchor,
+                ..query.clone()
+            })
+            .unwrap()
+            .sessions
+    };
+    let ids = |sessions: &[super::SavedAgentSession]| {
+        sessions
+            .iter()
+            .map(|session| session.summary.conversation_id.clone())
+            .collect::<Vec<_>>()
+    };
+    // An ephemeral name still carries a name, so its keyset rank comes from the
+    // preferred-name expression rather than from name presence.
+    let ephemeral_cursor = |session: &super::SavedAgentSession| SavedSessionCursor {
+        named: false,
+        last_created_at_unix_seconds: session.summary.last_created_at_unix_seconds,
+        first_created_at_unix_seconds: session.summary.first_created_at_unix_seconds,
+        conversation_id: session.summary.conversation_id.clone(),
+    };
+
+    let first = page(None);
+    assert_eq!(ids(&first), vec!["durable-new", "durable-old"]);
+
+    let second = page(Some(SavedSessionPageAnchor::After(
+        SavedSessionCursor::from_session(first.last().unwrap()),
+    )));
+    assert_eq!(ids(&second), vec!["ephemeral-new", "ephemeral-old"]);
+
+    let backwards = page(Some(SavedSessionPageAnchor::Before(ephemeral_cursor(
+        second.first().unwrap(),
+    ))));
+    assert_eq!(ids(&backwards), vec!["durable-new", "durable-old"]);
+
+    let third = page(Some(SavedSessionPageAnchor::After(ephemeral_cursor(
+        second.last().unwrap(),
+    ))));
+    assert_eq!(ids(&third), vec!["unnamed-new"]);
+
+    let third_backwards = page(Some(SavedSessionPageAnchor::Before(
+        SavedSessionCursor::from_session(third.first().unwrap()),
+    )));
+    assert_eq!(
+        ids(&third_backwards),
+        vec!["ephemeral-new", "ephemeral-old"]
+    );
+
+    let mut seen = Vec::new();
+    for sessions in [&first, &second, &third] {
+        seen.extend(ids(sessions));
+    }
+    assert_eq!(
+        seen,
+        vec![
+            "durable-new",
+            "durable-old",
+            "ephemeral-new",
+            "ephemeral-old",
+            "unnamed-new"
+        ]
+    );
+    assert!(
+        page(Some(SavedSessionPageAnchor::After(
+            SavedSessionCursor::from_session(third.last().unwrap())
+        )))
+        .is_empty()
+    );
+    assert!(
+        page(Some(SavedSessionPageAnchor::Before(
+            SavedSessionCursor::from_session(first.first().unwrap())
+        )))
+        .is_empty()
     );
     let _ = fs::remove_dir_all(root);
 }
@@ -2234,6 +2509,7 @@ fn transcript_store_archives_and_restores_session_round_trip() {
             "Archived work",
             30,
             Some("/repo".into()),
+            false,
         )
         .unwrap();
 
@@ -2358,7 +2634,7 @@ fn transcript_store_updates_archived_session_names() {
     store.archive_session("archive-name", 100).unwrap();
 
     store
-        .name_session("archive-name", "Retained archive", 110, None)
+        .name_session("archive-name", "Retained archive", 110, None, false)
         .unwrap();
     assert_eq!(
         store
@@ -2655,7 +2931,7 @@ fn transcript_store_catalog_status_reports_health_and_bounded_metrics() {
     assert!(before.database_exists);
     assert!(before.migration_complete);
     assert!(before.integrity_ok);
-    assert_eq!(before.schema_version, Some(2));
+    assert_eq!(before.schema_version, Some(3));
     assert_eq!(before.indexed_conversations, Some(1));
     assert!(before.lock_available);
 
@@ -2691,7 +2967,7 @@ fn transcript_store_catalog_rebuild_rejects_future_schema_and_cleans_temporary_f
     assert!(!root.join(".catalog.sqlite3.rebuild-wal").exists());
 
     let connection = Connection::open(store.catalog_path()).unwrap();
-    connection.pragma_update(None, "user_version", 3).unwrap();
+    connection.pragma_update(None, "user_version", 4).unwrap();
     drop(connection);
     let error = store.rebuild_catalog(102).unwrap_err();
     assert!(error.message().contains("refusing to rebuild or downgrade"));
@@ -2699,7 +2975,7 @@ fn transcript_store_catalog_rebuild_rejects_future_schema_and_cleans_temporary_f
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -2775,6 +3051,316 @@ fn transcript_store_catalog_rebuild_reports_bounded_lock_contention() {
     assert!(error.message().contains("migration lock is busy"));
     assert!(!root.join(".catalog.sqlite3.rebuild").exists());
     assert!(store.catalog_status().integrity_ok);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies the generated-title sidecar bounds, stores, and retires titles.
+#[test]
+fn generated_title_mirror_bounds_and_retires_stored_titles() {
+    let root = temp_root("generated-title-mirror");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+
+    assert!(
+        store
+            .mirror_session_generated_title("title-session", "  Inspect\tTHE\nbacklog  ", 30)
+            .unwrap()
+    );
+    assert_eq!(
+        store
+            .session_generated_title("title-session")
+            .unwrap()
+            .expect("stored title")
+            .title,
+        "Inspect THE backlog"
+    );
+    // An unchanged refresh is answered from this handle without touching the index.
+    assert!(
+        !store
+            .mirror_session_generated_title("title-session", "Inspect THE backlog", 31)
+            .unwrap()
+    );
+    // Oversize input is truncated to the shared title bound, not stored raw.
+    assert!(
+        store
+            .mirror_session_generated_title("title-session", &"alpha ".repeat(40), 32)
+            .unwrap()
+    );
+    let bounded = store
+        .session_generated_title("title-session")
+        .unwrap()
+        .expect("bounded title")
+        .title;
+    assert!(bounded.chars().count() <= crate::session_title::MAX_SESSION_TITLE_CHARS);
+    assert!(bounded.starts_with("alpha alpha"));
+    // A title that bounds to nothing retires the retained value.
+    assert!(
+        store
+            .mirror_session_generated_title("title-session", "\u{7}\n", 33)
+            .unwrap()
+    );
+    assert_eq!(
+        store.session_generated_title("title-session").unwrap(),
+        None
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies an unreadable generated-title index recovers on the next write.
+#[test]
+fn unreadable_generated_title_index_recovers_on_the_next_write() {
+    let root = temp_root("generated-title-recovery");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("session-titles.json"), "{ not a title index").unwrap();
+
+    assert!(
+        store
+            .mirror_session_generated_title("recovered-title", "Recovered title", 10)
+            .unwrap()
+    );
+    assert_eq!(
+        store
+            .session_generated_title("recovered-title")
+            .unwrap()
+            .expect("recovered title")
+            .title,
+        "Recovered title"
+    );
+    assert!(root.join(".session-titles.json.unreadable").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies an over-budget generated-title index is rebuilt, not left disabled.
+#[test]
+fn over_budget_generated_title_index_recovers_on_the_next_write() {
+    let root = temp_root("generated-title-over-budget");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("session-titles.json"),
+        "x".repeat(4 * 1024 * 1024 + 1),
+    )
+    .unwrap();
+
+    assert!(
+        store
+            .mirror_session_generated_title("rebuilt-title", "Rebuilt title", 10)
+            .unwrap()
+    );
+    assert_eq!(
+        store
+            .session_generated_title("rebuilt-title")
+            .unwrap()
+            .expect("rebuilt title")
+            .title,
+        "Rebuilt title"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies generated-title growth stays bounded by dropping the oldest rows.
+#[test]
+fn generated_title_mirror_compacts_to_its_entry_cap() {
+    let root = temp_root("generated-title-compaction");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone())
+        .with_session_title_mirror_max_entries(2)
+        .unwrap();
+
+    for (conversation, updated_at) in [
+        ("oldest-title", 1_u64),
+        ("middle-title", 2),
+        ("newest-title", 3),
+    ] {
+        assert!(
+            store
+                .mirror_session_generated_title(conversation, "Bounded title", updated_at)
+                .unwrap()
+        );
+    }
+    assert_eq!(store.session_generated_title("oldest-title").unwrap(), None);
+    assert!(
+        store
+            .session_generated_title("middle-title")
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        store
+            .session_generated_title("newest-title")
+            .unwrap()
+            .is_some()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a stored title is pruned when its conversation closes.
+#[test]
+fn removing_a_generated_title_prunes_only_that_conversation() {
+    let root = temp_root("generated-title-prune");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    assert!(
+        store
+            .mirror_session_generated_title("pruned-title", "Ship the pruned title", 10)
+            .unwrap()
+    );
+    assert!(
+        store
+            .mirror_session_generated_title("retained-title", "Ship the retained title", 11)
+            .unwrap()
+    );
+
+    assert!(store.remove_session_title_mirror("pruned-title").unwrap());
+    assert!(!store.remove_session_title_mirror("pruned-title").unwrap());
+    assert_eq!(store.session_generated_title("pruned-title").unwrap(), None);
+    assert!(
+        store
+            .session_generated_title("retained-title")
+            .unwrap()
+            .is_some()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies title generation is only considered before a title already exists.
+#[test]
+fn generated_title_generation_is_only_useful_without_a_stored_title() {
+    let root = temp_root("generated-title-useful");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+
+    assert!(
+        !store
+            .session_title_generation_probe("useful-session")
+            .unwrap()
+            .has_stored_generated_title
+    );
+    assert!(
+        store
+            .mirror_session_generated_title("useful-session", "Bounded title", 10)
+            .unwrap()
+    );
+    assert!(
+        store
+            .session_title_generation_probe("useful-session")
+            .unwrap()
+            .has_stored_generated_title
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a manual name, never a failed probe, refuses a title request.
+#[test]
+fn generated_title_generation_probe_reports_a_manual_name() {
+    let root = temp_root("generated-title-manual-name");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("named-title-session", 1, TranscriptRole::User))
+        .unwrap();
+    store
+        .name_session("named-title-session", "Operator name", 10, None, false)
+        .unwrap();
+
+    let probe = store
+        .session_title_generation_probe("named-title-session")
+        .unwrap();
+    assert!(probe.has_manual_name);
+    assert!(!probe.has_stored_generated_title);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies an unreadable, oversized, or version-mismatched title index is its
+/// own failed probe and that a later probe rebuilds generation.
+#[test]
+fn generated_title_generation_probe_recovers_from_an_unreadable_index() {
+    let cases = [
+        ("corrupt", "{ not a title index".to_string()),
+        ("oversized", "x".repeat(4 * 1024 * 1024 + 1)),
+        (
+            "version",
+            serde_json::json!({"version": 99_u64, "titles": []}).to_string(),
+        ),
+    ];
+    for (name, contents) in cases {
+        let root = temp_root(&format!("generated-title-probe-{name}"));
+        let _ = fs::remove_dir_all(&root);
+        let store = AgentTranscriptStore::new(root.clone());
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("session-titles.json"), contents).unwrap();
+
+        // A failed probe is an error, never a manual-name answer.
+        assert!(
+            store
+                .session_title_generation_probe("probe-session")
+                .is_err(),
+            "{name} probe must fail"
+        );
+        assert_eq!(store.session_title_mirror_status().recoveries, 1, "{name}");
+        assert!(
+            root.join(".session-titles.json.unreadable").exists(),
+            "{name}"
+        );
+
+        // The quarantined index reads as empty, so the next admission is admitted
+        // and the next write rebuilds the index.
+        let probe = store
+            .session_title_generation_probe("probe-session")
+            .unwrap();
+        assert!(!probe.has_manual_name, "{name}");
+        assert!(!probe.has_stored_generated_title, "{name}");
+        assert!(
+            store
+                .mirror_session_generated_title("probe-session", "Rebuilt title", 10)
+                .unwrap(),
+            "{name}"
+        );
+        assert_eq!(
+            store
+                .session_generated_title("probe-session")
+                .unwrap()
+                .expect("rebuilt title")
+                .title,
+            "Rebuilt title",
+            "{name}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+}
+
+/// Verifies a late settle cannot re-insert a title for a deleted conversation.
+#[test]
+fn deleting_a_conversation_keeps_a_late_generated_title_out_of_the_index() {
+    let root = temp_root("generated-title-deleted");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("deleted-title-session", 1, TranscriptRole::User))
+        .unwrap();
+    assert!(
+        store
+            .mirror_session_generated_title("deleted-title-session", "First title", 10)
+            .unwrap()
+    );
+    assert!(store.delete("deleted-title-session").unwrap());
+
+    // The worker that started before the delete settles afterwards.
+    assert!(
+        !store
+            .mirror_session_generated_title("deleted-title-session", "Late title", 11)
+            .unwrap(),
+        "a deleted conversation must not accept a late generated title"
+    );
+    assert_eq!(
+        store
+            .session_generated_title("deleted-title-session")
+            .unwrap(),
+        None
+    );
     let _ = fs::remove_dir_all(root);
 }
 
@@ -3133,7 +3719,7 @@ fn session_name_validation_rejects_format_characters() {
         "Control\u{7}name",
     ] {
         let error = store
-            .name_session("format-name-session", name, 10, None)
+            .name_session("format-name-session", name, 10, None, false)
             .unwrap_err();
         assert!(
             error.message().contains("control or format"),
@@ -3143,7 +3729,7 @@ fn session_name_validation_rejects_format_characters() {
     }
     assert!(
         store
-            .name_session("format-name-session", "Plain name", 10, None)
+            .name_session("format-name-session", "Plain name", 10, None, false)
             .is_ok()
     );
     let _ = fs::remove_dir_all(root);

@@ -831,6 +831,76 @@ fn validates_agent_session_title_policy_values() {
     }
 }
 
+/// Verifies the pane peer-message log mode accepts only defined modes.
+///
+/// Otherwise an operator could select a mode with no echo rule and the pane log
+/// would silently keep a different one, including for runtime bridge traffic.
+#[test]
+fn validates_agent_peer_message_log_mode_values() {
+    for value in ["normal", "verbose"] {
+        let validation = validate_config_text(
+            ConfigFormat::Toml,
+            &format!("[agents]\npeer_message_log_mode = \"{value}\"\n"),
+            ConfigScope::Primary,
+        );
+
+        assert!(
+            validation.valid,
+            "rejected peer message log mode {value}: {:?}",
+            validation.diagnostics
+        );
+    }
+    for value in ["\"quiet\"", "\"Normal\"", "3", "\"\""] {
+        let validation = validate_config_text(
+            ConfigFormat::Toml,
+            &format!("[agents]\npeer_message_log_mode = {value}\n"),
+            ConfigScope::Primary,
+        );
+
+        assert!(!validation.valid, "accepted peer message log mode {value}");
+        assert!(validation.diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == "agents.peer_message_log_mode"
+                && diagnostic.message.contains("normal or verbose")
+        }));
+    }
+}
+
+/// Verifies the optional title model-profile override names a real profile.
+///
+/// A bad name must be rejected rather than silently replaced by the
+/// conversation profile, which would spend the profile the operator
+/// redirected away from.
+#[test]
+fn validates_agent_session_title_model_profile_values() {
+    let named_profile = "[agents]\nsession_title_model_profile = \"title-tiny\"\n\n[model_profiles.title-tiny]\nprovider = \"openai\"\nmodel = \"gpt-5\"\n";
+    for text in [
+        "[agents]\nsession_title_policy = \"generated\"\n",
+        "[agents]\nsession_title_model_profile = \"\"\n",
+        named_profile,
+    ] {
+        let validation = validate_config_text(ConfigFormat::Toml, text, ConfigScope::Primary);
+        assert!(
+            !validation
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.path == "agents.session_title_model_profile"),
+            "rejected title model profile input {text:?}: {:?}",
+            validation.diagnostics
+        );
+    }
+
+    let validation = validate_config_text(
+        ConfigFormat::Toml,
+        "[agents]\nsession_title_model_profile = \"missing-profile\"\n",
+        ConfigScope::Primary,
+    );
+    assert!(!validation.valid, "accepted an unknown title model profile");
+    assert!(validation.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "agents.session_title_model_profile"
+            && diagnostic.message.contains("model_profiles")
+    }));
+}
+
 /// Verifies the static action allowlist accepts executable actions and rejects
 /// empty, duplicate, unknown, non-string, and controller-only entries.
 #[test]

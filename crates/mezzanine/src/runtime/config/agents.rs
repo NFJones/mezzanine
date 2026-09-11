@@ -311,6 +311,46 @@ pub(crate) fn runtime_agent_peer_message_loop_limit_from_config(root: &Value) ->
     )
 }
 
+/// Pane echo verbosity for peer and runtime bridge MMP traffic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum PeerMessageLogMode {
+    /// Runtime-owned bridge notifications stay silent; JSON traffic keeps its
+    /// `output` projection.
+    #[default]
+    Normal,
+    /// Every peer echo logs its full bounded payload, bridge traffic included.
+    Verbose,
+}
+
+impl PeerMessageLogMode {
+    /// Every accepted `agents.peer_message_log_mode` value.
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "normal" => Some(Self::Normal),
+            "verbose" => Some(Self::Verbose),
+            _ => None,
+        }
+    }
+}
+
+/// Parses the pane peer-message log mode from `[agents]`.
+///
+/// An absent, unreadable, or unknown key keeps the documented `normal` default,
+/// because the mode only ever suppresses the echo of a runtime bridge
+/// notification that already has its own `subagent ...` status/result line.
+pub(crate) fn runtime_agent_peer_message_log_mode_from_config(root: &Value) -> PeerMessageLogMode {
+    let Some(agents) = runtime_json_object(root, "agents") else {
+        return PeerMessageLogMode::Normal;
+    };
+    let Some(value) = agents.get("peer_message_log_mode") else {
+        return PeerMessageLogMode::Normal;
+    };
+    value
+        .as_str()
+        .and_then(PeerMessageLogMode::parse)
+        .unwrap_or(PeerMessageLogMode::Normal)
+}
+
 /// Parses the saved-session title source policy from `[agents]`.
 ///
 /// An absent key keeps the documented `generated` default so existing configs

@@ -145,6 +145,8 @@ pub mod semantic_patch;
 pub mod semantic_patch_planning;
 /// Secret screening for hidden model-authored continuation notes.
 pub mod sensitive_text;
+/// Bounded provider-backed session-title generation contracts.
+pub mod session_title;
 /// Provider-independent shell-source construction helpers.
 pub mod shell;
 /// Provider-independent shell-wrapper filtering and observation cleanup.
@@ -462,9 +464,10 @@ pub use provider_diagnostics::{
     sanitize_provider_failure_payload_json,
 };
 pub use provider_error::{
-    DEFAULT_PROVIDER_RETRY_POLICY, ProviderErrorKind, ProviderErrorRetryClass, ProviderRetryPolicy,
-    classify_provider_error_retry, provider_error_is_malformed_maap_output,
-    provider_retry_after_delay_ms,
+    DEFAULT_PROVIDER_RETRY_POLICY, PROVIDER_HTTP_TIMEOUT_FAILURE_CODE, ProviderErrorKind,
+    ProviderErrorRetryClass, ProviderRetryPolicy, classify_provider_error_retry,
+    provider_error_is_malformed_maap_output, provider_failure_json_is_timeout,
+    provider_http_timeout_failure_json, provider_retry_after_delay_ms,
 };
 pub use provider_transcript::{PROVIDER_TRANSCRIPT_EVENT_MARKER, ProviderTranscriptEvent};
 pub use quota::{ProviderQuotaUsage, provider_quota_usage_from_headers};

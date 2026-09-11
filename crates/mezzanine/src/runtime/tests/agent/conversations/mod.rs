@@ -6,4 +6,5 @@ mod lifecycle;
 mod metadata;
 mod resume_prompt;
 mod saved_sessions;
+mod session_titles;
 mod snapshots;

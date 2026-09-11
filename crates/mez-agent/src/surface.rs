@@ -56,6 +56,13 @@ pub enum ModelInteractionKind {
     /// The model is producing a bounded user-facing summary of a terminal
     /// provider or controller failure.
     FailureSummary,
+    /// The model is producing a bounded single-line display title for one
+    /// conversation from already-published, bounded inputs.
+    ///
+    /// The response is never replayed as conversation content: product code
+    /// sanitizes it under the shared title bounds and stores it as display
+    /// state only. It exposes no tools and never grants execution authority.
+    SessionTitle,
 }
 
 impl ModelInteractionKind {
@@ -75,6 +82,7 @@ impl ModelInteractionKind {
             ModelInteractionKind::RoutedPresentation => "routed_presentation",
             ModelInteractionKind::RoutedFailureExplanation => "routed_failure_explanation",
             ModelInteractionKind::FailureSummary => "failure_summary",
+            ModelInteractionKind::SessionTitle => "session_title",
         }
     }
 
@@ -140,7 +148,8 @@ impl ModelInteractionKind {
             | ModelInteractionKind::ActionExecution
             | ModelInteractionKind::AutoSizing
             | ModelInteractionKind::MacroJudge
-            | ModelInteractionKind::SandboxFailureAssessment => None,
+            | ModelInteractionKind::SandboxFailureAssessment
+            | ModelInteractionKind::SessionTitle => None,
         }
     }
 
@@ -160,7 +169,8 @@ impl ModelInteractionKind {
             | ModelInteractionKind::RoutedHandoffRepair
             | ModelInteractionKind::RoutedPresentation
             | ModelInteractionKind::RoutedFailureExplanation
-            | ModelInteractionKind::FailureSummary => Some(self.as_str()),
+            | ModelInteractionKind::FailureSummary
+            | ModelInteractionKind::SessionTitle => Some(self.as_str()),
         }
     }
 

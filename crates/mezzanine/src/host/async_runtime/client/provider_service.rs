@@ -19,7 +19,10 @@ use crate::integrations::agent::provider::{
     ObservedAsyncModelProvider, ProviderRequestPurpose, ProviderWireRequestObservation,
     ProviderWireRequestObserver, STREAMING_SAY_TEXT_CHUNK_LIMIT_BYTES,
 };
-use crate::runtime::{RuntimeAgentProviderWorkerOutcome, RuntimeApprovedExternalActionProgress};
+use crate::runtime::{
+    AgentSessionTitleEvent, AgentSessionTitleOutcome, RuntimeAgentProviderWorkerOutcome,
+    RuntimeAgentSessionTitleDispatch, RuntimeApprovedExternalActionProgress,
+};
 use std::time::{Duration, Instant};
 
 /// Maximum ordered streaming events buffered between a provider and the actor.
@@ -494,6 +497,23 @@ async fn dispatch_agent_provider_side_effects(
                 workers.spawn(monitor_runtime_agent_remember_dispatch(
                     handle.clone(),
                     pane_id,
+                    dispatch,
+                ));
+            }
+            RuntimeSideEffect::DispatchAgentSessionTitle { conversation_id } => {
+                // The service already retires the task with a bounded reason when
+                // the provider cannot be constructed, so a failed claim is not
+                // re-reported as a second failure event here.
+                let dispatch = match handle
+                    .claim_agent_session_title_task(conversation_id.clone())
+                    .await
+                {
+                    Ok(Some(dispatch)) => dispatch,
+                    Ok(None) => continue,
+                    Err(_) => continue,
+                };
+                workers.spawn(monitor_runtime_agent_session_title_dispatch(
+                    handle.clone(),
                     dispatch,
                 ));
             }
@@ -1083,6 +1103,51 @@ async fn monitor_runtime_agent_remember_dispatch(
     }
 }
 
+/// Runs one turn-less generated session-title request while honoring shutdown.
+///
+/// Title work is optional and never owns a turn, so the worker can be dropped at
+/// any point without leaving turn machinery behind.
+async fn monitor_runtime_agent_session_title_dispatch(
+    handle: AsyncRuntimeSessionHandle,
+    dispatch: RuntimeAgentSessionTitleDispatch,
+) -> Result<AsyncAgentProviderWorkerResult> {
+    let mut lifecycle = handle.lifecycle_state_watcher();
+    let mut side_effect_watcher = handle.side_effect_delivery_watcher();
+    let conversation_id = dispatch.task.conversation_id.clone();
+    let pane_id = dispatch.task.pane_id.clone();
+    let (observation_sender, mut observation_receiver) =
+        tokio::sync::mpsc::channel(STREAMING_SAY_PROGRESS_CHANNEL_CAPACITY);
+    let observer =
+        ProviderWireRequestObserver::new(conversation_id.clone(), pane_id, observation_sender);
+    let worker = execute_runtime_agent_session_title_dispatch(dispatch, &observer);
+    tokio::pin!(worker);
+    loop {
+        tokio::select! {
+            outcome = &mut worker => {
+                while let Ok(observation) = observation_receiver.try_recv() {
+                    submit_provider_wire_request_observation(&handle, observation).await?;
+                }
+                return Ok(Some(session_title_worker_event(conversation_id, Ok(outcome))));
+            }
+            Some(observation) = observation_receiver.recv() => {
+                submit_provider_wire_request_observation(&handle, observation).await?;
+            }
+            _ = handle.wait_for_event_delivery() => {}
+            changed = side_effect_watcher.changed() => {
+                let _ = changed;
+            }
+            changed = lifecycle.changed() => {
+                if changed.is_err() {
+                    return Ok(None);
+                }
+            }
+        }
+        if is_terminal_runtime_lifecycle_state(*lifecycle.borrow()) {
+            return Ok(None);
+        }
+    }
+}
+
 /// Delivers one content-free provider observation to actor-owned metrics.
 async fn submit_provider_wire_request_observation(
     handle: &AsyncRuntimeSessionHandle,
@@ -1226,6 +1291,30 @@ fn remember_worker_event(
                 message: format!("provider worker join failed: {error}"),
                 provider_failure_json: None,
                 provider_raw_text: None,
+            }),
+            false,
+        ),
+    }
+}
+
+/// Converts a generated session-title worker result into a runtime event.
+fn session_title_worker_event(
+    conversation_id: String,
+    result: std::result::Result<AgentSessionTitleOutcome, tokio::task::JoinError>,
+) -> (RuntimeEvent, bool) {
+    match result {
+        Ok(outcome) => (
+            RuntimeEvent::AgentSessionTitle(AgentSessionTitleEvent::Settled {
+                conversation_id,
+                outcome,
+            }),
+            false,
+        ),
+        Err(error) => (
+            RuntimeEvent::AgentSessionTitle(AgentSessionTitleEvent::Failed {
+                conversation_id,
+                kind: "invalid_state".to_string(),
+                message: format!("session title provider worker join failed: {error}"),
             }),
             false,
         ),
@@ -1595,6 +1684,57 @@ async fn execute_runtime_agent_remember_dispatch(
     }
 }
 
+/// Executes one turn-less generated session-title request.
+///
+/// The reply is sanitized here so only a bounded title or a stable bounded
+/// reason crosses the worker boundary; raw provider text never crosses it.
+async fn execute_runtime_agent_session_title_dispatch(
+    dispatch: RuntimeAgentSessionTitleDispatch,
+    observer: &ProviderWireRequestObserver,
+) -> AgentSessionTitleOutcome {
+    let RuntimeAgentSessionTitleDispatch { task, provider } = dispatch;
+    match observed_dispatch_provider_request(
+        &provider,
+        observer,
+        ProviderRequestPurpose::Auxiliary,
+        &task.request,
+    )
+    .await
+    {
+        Ok(response) => {
+            match crate::session_title::sanitize_generated_session_title(&response.raw_text) {
+                Ok(title) => AgentSessionTitleOutcome::Generated(title),
+                Err(rejection) => AgentSessionTitleOutcome::Rejected(
+                    crate::session_title::SessionTitleFailureReason::from_rejection(rejection)
+                        .as_str()
+                        .to_string(),
+                ),
+            }
+        }
+        Err(error) => {
+            AgentSessionTitleOutcome::Rejected(session_title_failure_reason(&error).to_string())
+        }
+    }
+}
+
+/// Returns the bounded failure reason for one provider title request error.
+///
+/// The reason is classified from the typed error: a typed HTTP phase timeout is
+/// read from the structured failure payload, and the retry class separates an
+/// exhausted output budget from a generic provider failure. Provider text is
+/// never inspected, and no transport failure is reported as a sanitizer result.
+fn session_title_failure_reason(error: &MezError) -> &'static str {
+    use crate::session_title::SessionTitleFailureReason;
+
+    if mez_agent::provider_failure_json_is_timeout(error.provider_failure_json()) {
+        return SessionTitleFailureReason::Timeout.as_str();
+    }
+    match provider_error_retry_class(error) {
+        ProviderErrorRetryClass::OutputLimit => SessionTitleFailureReason::OutputLimit.as_str(),
+        _ => SessionTitleFailureReason::ProviderError.as_str(),
+    }
+}
+
 /// Sends one provider request through the content-free observation wrapper.
 async fn observed_provider_request<P: AsyncModelProvider>(
     provider: &P,
@@ -1744,6 +1884,28 @@ fn provider_worker_error_kind(error: &MezError) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies title failure reasons come from the typed error, not its text.
+    #[test]
+    fn session_title_failure_reason_classifies_typed_provider_errors() {
+        let timeout = MezError::from(mez_agent::ProviderHttpError::timeout(
+            mez_agent::ProviderHttpTimeoutPhase::FirstByte,
+            100,
+            "waiting for provider response body progress",
+        ));
+        assert_eq!(session_title_failure_reason(&timeout), "timeout");
+
+        let output_limit = MezError::invalid_state("provider response stopped early")
+            .with_provider_failure_json(r#"{"error": {"code": "max_tokens"}}"#);
+        assert_eq!(session_title_failure_reason(&output_limit), "output_limit");
+
+        // A message that merely mentions a timeout is not a typed timeout, and no
+        // transport failure is reported with the sanitizer vocabulary.
+        let unrelated = MezError::invalid_state(
+            "provider HTTP request failed: connection reset while timeout=false",
+        );
+        assert_eq!(session_title_failure_reason(&unrelated), "provider_error");
+    }
 
     /// Verifies adjacent deltas for one action share a bounded actor sequence
     /// point without crossing action or completion lifecycle barriers.

@@ -1283,7 +1283,6 @@ impl RuntimeSessionService {
             .get(pane_id)
             .map(|session| session.session_id.clone())
             .ok_or_else(|| MezError::invalid_state("agent turn conversation is unavailable"))?;
-        self.mirror_runtime_agent_objective(&conversation_id, objective.as_deref());
         let (context, continued_interrupted_turn, active_imported_history_events) = self
             .prepare_interrupted_agent_continuation_context(
                 &agent_id,
@@ -1376,6 +1375,13 @@ impl RuntimeSessionService {
             pane_id: Some(pane_id.to_string()),
             kind: ScheduledWorkKind::ShellCapable,
         })?;
+        // The enqueue above counted this prompt turn, so the generated-title
+        // cadence sees the current prompt ordinal before admission runs here.
+        self.mirror_runtime_agent_objective(&conversation_id, objective.as_deref());
+        // Conversation start is the first point a generated title may be
+        // admitted. This is a cheap no-op when the shared objective mirror above
+        // already queued one.
+        let _ = self.schedule_runtime_agent_session_title(&conversation_id, objective.as_deref());
         self.consume_interrupted_agent_continuation(&agent_id);
         if continued_interrupted_turn {
             self.append_agent_trace_turn_event(

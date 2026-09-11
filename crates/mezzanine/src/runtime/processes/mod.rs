@@ -5189,6 +5189,15 @@ impl RuntimeSessionService {
         self.presentation.remove_completion_attention(pane_id);
         self.presentation.remove_agent_presentation_state(pane_id);
         self.discard_agent_loop_parent_projections_for_pane(pane_id);
+        if let Some(conversation_id) = self
+            .agent_shell_store()
+            .get(pane_id)
+            .map(|session| session.session_id.clone())
+        {
+            // A closed session must leave no pending title task and no orphaned
+            // claim behind, so title work is retired before the shell session is.
+            self.cancel_agent_session_title_task(&conversation_id);
+        }
         self.settle_dead_pane_managed_shell_ownership(pane_id);
         self.agent_shell_store_mut().remove_session(pane_id);
         self.integration.remove_pane_permission_override(pane_id);

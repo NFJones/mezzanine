@@ -496,6 +496,18 @@ fn builtin_themes_keep_text_bearing_pairs_readable() {
                 "agent_transcript_command",
                 theme.colors.agent_transcript_command,
             ),
+            (
+                "agent_transcript_peer_sender",
+                theme.colors.agent_transcript_peer_sender,
+            ),
+            (
+                "agent_transcript_peer_receiver",
+                theme.colors.agent_transcript_peer_receiver,
+            ),
+            (
+                "agent_transcript_parent",
+                theme.colors.agent_transcript_parent,
+            ),
             ("agent_model", theme.colors.agent_model),
             ("agent_reasoning", theme.colors.agent_reasoning),
             ("agent_status_idle", theme.colors.agent_status_idle),
@@ -524,6 +536,53 @@ fn builtin_themes_keep_text_bearing_pairs_readable() {
                 "{name} {slot} should have readable contrast: {:?} on {:?}",
                 pair.foreground,
                 pair.background
+            );
+        }
+    }
+}
+
+/// Verifies the peer-message and parent-prompt name markers keep distinct
+/// default accents instead of collapsing onto the user or assistant label.
+///
+/// These slots exist so an operator can separate a logged peer line from
+/// `user> ` and separate received from sent traffic by color. A derived palette
+/// that landed two markers on the same foreground, or reused a marker accent
+/// for the user or assistant label, would defeat the slot.
+#[test]
+fn builtin_themes_use_distinct_accents_for_agent_name_markers() {
+    for name in BUILTIN_UI_THEME_NAMES {
+        let definition =
+            builtin_ui_theme_definition(name).unwrap_or_else(|| panic!("missing theme {name}"));
+        let theme = resolve_ui_theme(name, definition).expect("built-in theme must resolve");
+        let markers = [
+            (
+                "agent_transcript_peer_sender",
+                theme.colors.agent_transcript_peer_sender.foreground,
+            ),
+            (
+                "agent_transcript_peer_receiver",
+                theme.colors.agent_transcript_peer_receiver.foreground,
+            ),
+            (
+                "agent_transcript_parent",
+                theme.colors.agent_transcript_parent.foreground,
+            ),
+        ];
+
+        for (index, (slot, color)) in markers.iter().enumerate() {
+            for (other_slot, other) in markers.iter().skip(index + 1) {
+                assert_ne!(
+                    color, other,
+                    "{name} {slot} and {other_slot} must not share a marker foreground"
+                );
+            }
+            assert_ne!(
+                *color, theme.colors.agent_transcript_user.foreground,
+                "{name} {slot} must differ from the user prompt accent"
+            );
+            assert_ne!(
+                *color, theme.colors.agent_transcript_assistant.foreground,
+                "{name} {slot} must differ from the assistant accent"
             );
         }
     }

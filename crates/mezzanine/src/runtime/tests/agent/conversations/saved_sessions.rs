@@ -558,6 +558,122 @@ fn runtime_agent_shell_clears_session_names_without_deleting_conversations() {
     }
 }
 
+/// Verifies `/name-session --ephemeral` assigns a real name that a plain
+/// assignment promotes back to durable, that the name still renders, and that
+/// `--clear` and flag misuse keep their meaning.
+#[test]
+fn runtime_agent_shell_assigns_ephemeral_names_without_picker_preference() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-ephemeral-session-name"));
+    service.set_agent_transcript_store(transcript_store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: conversation_id.clone(),
+            sequence: 1,
+            created_at_unix_seconds: 10,
+            role: TranscriptRole::User,
+            turn_id: "turn-ephemeral-name".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "preserve this transcript".to_string(),
+        })
+        .unwrap();
+
+    let named = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"ephemeral-name","method":"agent/shell/command","params":{"idempotency_key":"ephemeral-name","input":"/name-session --ephemeral Scoped investigation"}}"#,
+        &primary,
+    );
+    assert!(named.contains("named=true"), "{named}");
+    assert!(named.contains("ephemeral=true"), "{named}");
+    let stored = transcript_store
+        .named_session(&conversation_id)
+        .unwrap()
+        .unwrap();
+    assert!(stored.ephemeral);
+    assert_eq!(stored.name, "Scoped investigation");
+    let browser = service.saved_sessions_record_browser().unwrap();
+    let row = browser
+        .records()
+        .iter()
+        .find(|record| record.id == conversation_id)
+        .expect("an ephemeral named row should still be rendered");
+    assert_eq!(
+        row.title,
+        format!("{conversation_id} - Scoped investigation")
+    );
+
+    let promoted_response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"promote-name","method":"agent/shell/command","params":{"idempotency_key":"promote-name","input":"/name-session Durable investigation"}}"#,
+        &primary,
+    );
+    assert!(
+        promoted_response.contains("named=true"),
+        "{promoted_response}"
+    );
+    assert!(
+        promoted_response.contains("ephemeral=false"),
+        "{promoted_response}"
+    );
+    let promoted_session = transcript_store
+        .named_session(&conversation_id)
+        .unwrap()
+        .unwrap();
+    assert!(!promoted_session.ephemeral);
+    assert_eq!(promoted_session.name, "Durable investigation");
+
+    for (id, input) in [
+        ("ephemeral-without-name", "/name-session --ephemeral"),
+        (
+            "ephemeral-unknown-flag",
+            "/name-session --unknown investigation",
+        ),
+        ("ephemeral-with-clear", "/name-session --ephemeral --clear"),
+    ] {
+        let response = service.dispatch_runtime_control_body(
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":"{id}","method":"agent/shell/command","params":{{"idempotency_key":"{id}","input":"{input}"}}}}"#
+            ),
+            &primary,
+        );
+        assert!(response.contains("usage: /name-session"), "{response}");
+        assert!(
+            transcript_store
+                .named_session(&conversation_id)
+                .unwrap()
+                .is_some(),
+            "a rejected invocation must not change the name"
+        );
+    }
+
+    let cleared = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"clear-ephemeral-name","method":"agent/shell/command","params":{"idempotency_key":"clear-ephemeral-name","input":"/name-session --clear"}}"#,
+        &primary,
+    );
+    assert!(cleared.contains("named=false"), "{cleared}");
+    assert!(cleared.contains("cleared=true"), "{cleared}");
+    assert!(
+        transcript_store
+            .named_session(&conversation_id)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(transcript_store.inspect(&conversation_id).unwrap().len(), 1);
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies named conversations sort ahead of newer unnamed conversations in
 /// the picker while `/resume --latest` remains based only on session activity.
 #[test]
@@ -576,7 +692,7 @@ fn runtime_agent_shell_sorts_named_sessions_first_without_changing_latest() {
     };
     transcript_store.append(&named_old).unwrap();
     transcript_store
-        .name_session("named-old", "Pinned work", 10, None)
+        .name_session("named-old", "Pinned work", 10, None, false)
         .unwrap();
     named_old.conversation_id = "recent-unnamed".to_string();
     named_old.created_at_unix_seconds = 20;
@@ -640,6 +756,7 @@ fn runtime_resume_browser_orders_session_columns() {
             "Ordered investigation",
             20,
             Some("/tmp/resume-column-order".to_string()),
+            false,
         )
         .unwrap();
     service.set_agent_transcript_store(transcript_store);
@@ -968,7 +1085,7 @@ fn runtime_named_saved_session_exposes_derived_title_in_detail() {
         .mirror_session_objective("named-detail-session", "Mirror objective title", 20)
         .unwrap();
     transcript_store
-        .name_session("named-detail-session", "Operator name", 21, None)
+        .name_session("named-detail-session", "Operator name", 21, None, false)
         .unwrap();
     service.set_agent_transcript_store(transcript_store.clone());
 
@@ -1044,6 +1161,7 @@ fn runtime_resume_browser_filters_current_directory_and_toggles_all_sessions() {
                 conversation_id,
                 created_at,
                 Some(directory.to_string()),
+                false,
             )
             .unwrap();
     }
@@ -1351,7 +1469,7 @@ fn runtime_resume_browser_excludes_promptless_sessions() {
             .unwrap();
     }
     transcript_store
-        .name_session("named-empty", "Empty session", 10, None)
+        .name_session("named-empty", "Empty session", 10, None, false)
         .unwrap();
     service.set_agent_transcript_store(transcript_store);
 
@@ -1371,7 +1489,7 @@ fn runtime_resume_browser_omits_named_zero_entry_sessions() {
     let mut service = test_runtime_service();
     let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-delete-named"));
     transcript_store
-        .name_session("named-empty", "Pinned work", 10, None)
+        .name_session("named-empty", "Pinned work", 10, None, false)
         .unwrap();
     service.set_agent_transcript_store(transcript_store.clone());
 
@@ -1416,7 +1534,7 @@ fn runtime_resume_browser_clear_name_hotkey_preserves_session_and_selection() {
             .unwrap();
     }
     transcript_store
-        .name_session("named-old", "Pinned work", 10, None)
+        .name_session("named-old", "Pinned work", 10, None, false)
         .unwrap();
     service.set_agent_transcript_store(transcript_store.clone());
     let primary = service
@@ -1592,7 +1710,7 @@ fn runtime_resume_browser_omits_empty_named_session_transcript() {
     let mut service = test_runtime_service();
     let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-empty-detail"));
     transcript_store
-        .name_session("empty-session", "Empty investigation", 10, None)
+        .name_session("empty-session", "Empty investigation", 10, None, false)
         .unwrap();
     service.set_agent_transcript_store(transcript_store);
 

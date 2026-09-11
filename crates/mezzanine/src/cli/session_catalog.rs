@@ -66,6 +66,10 @@ fn session_catalog_status_json(store: &AgentTranscriptStore) -> Result<String> {
             &store.session_objective_mirror_status(),
         )?),
     );
+    status.insert(
+        "generated_titles".to_string(),
+        serde_json::Value::Object(catalog_status_object(&store.session_title_mirror_status())?),
+    );
     serialize_json(&serde_json::Value::Object(status))
 }
 

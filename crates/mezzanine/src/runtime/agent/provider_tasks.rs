@@ -372,6 +372,8 @@ impl RuntimeSessionService {
         if timer_active
             || self.pending_agent_provider_tasks().is_empty()
                 && self.pending_agent_compaction_tasks().is_empty()
+                && self.pending_agent_session_title_tasks().is_empty()
+                && !self.agent_session_title_claim_is_outstanding()
         {
             return RuntimeTransition::default();
         }

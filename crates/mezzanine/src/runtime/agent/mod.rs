@@ -31,13 +31,13 @@ use super::{
     RuntimeAgentLoopState, RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind,
     RuntimeAgentModifiedFileSummary, RuntimeAgentPreShellHookCompletion,
     RuntimeAgentProviderDispatch, RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask,
-    RuntimeAgentRememberTask, RuntimeApprovedExternalActionDispatch,
-    RuntimeApprovedExternalActionOutcome, RuntimeApprovedMcpActionDispatch,
-    RuntimeAutoSizingConfig, RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile,
-    RuntimeHookPipelineBlock, RuntimeHookPipelineDecision, RuntimeMcpActionExecutor,
-    RuntimeProviderConfig, RuntimeSandboxFailureAssessment, RuntimeSandboxFallbackAudit,
-    RuntimeSessionService, RuntimeShellTransactionActionFailure, RuntimeSideEffect,
-    RuntimeSubagentLineage, ScheduledWork, SenderIdentity, ShellTransaction,
+    RuntimeAgentRememberTask, RuntimeAgentSessionTitleClaim, RuntimeAgentSessionTitleTask,
+    RuntimeApprovedExternalActionDispatch, RuntimeApprovedExternalActionOutcome,
+    RuntimeApprovedMcpActionDispatch, RuntimeAutoSizingConfig, RuntimeAutoSizingDispatch,
+    RuntimeAutoSizingTargetProfile, RuntimeHookPipelineBlock, RuntimeHookPipelineDecision,
+    RuntimeMcpActionExecutor, RuntimeProviderConfig, RuntimeSandboxFailureAssessment,
+    RuntimeSandboxFallbackAudit, RuntimeSessionService, RuntimeShellTransactionActionFailure,
+    RuntimeSideEffect, RuntimeSubagentLineage, ScheduledWork, SenderIdentity, ShellTransaction,
     ShellTransactionOutputTransport, SubagentScopeDeclaration, SubagentSpawnRequest,
     SubagentWaitPolicy, TaskResultPayload, TaskState, TaskStatusPayload, TranscriptEntry,
     TranscriptRole, assemble_model_request, current_unix_millis, current_unix_seconds,
@@ -175,6 +175,11 @@ mod provider_tasks;
 mod routed_workflow;
 mod sandbox_assessment;
 mod scheduler_state;
+mod session_titles;
+
+/// Exposes bounded generated-title state for crate-level tests.
+#[cfg(test)]
+pub(crate) use session_titles::{SessionTitleDenial, session_title_task_id};
 mod shell_dispatch;
 mod shell_state;
 mod skills;
@@ -413,6 +418,15 @@ pub(crate) struct RuntimeAgentComponent {
     pending_agent_remember_tasks: BTreeMap<String, RuntimeAgentRememberTask>,
     /// Durable-memory generation tasks claimed by provider workers.
     claimed_agent_remember_tasks: BTreeMap<String, RuntimeAgentRememberTask>,
+    /// Turn-less generated-title tasks waiting for provider dispatch.
+    ///
+    /// The map is keyed by conversation id, so at most one title request can be
+    /// queued per conversation and a title task can never borrow a turn id.
+    pending_agent_session_title_tasks: BTreeMap<String, RuntimeAgentSessionTitleTask>,
+    /// Turn-less generated-title tasks claimed by provider workers.
+    claimed_agent_session_title_tasks: BTreeMap<String, RuntimeAgentSessionTitleClaim>,
+    /// Bounded per-conversation title attempts, in-flight marker, and retirement.
+    session_title_tasks: session_titles::RuntimeSessionTitleTasks,
     /// Cumulative provider token usage keyed by conversation and model.
     agent_token_usage_by_conversation:
         BTreeMap<String, BTreeMap<ModelTokenUsageKey, ModelTokenUsage>>,

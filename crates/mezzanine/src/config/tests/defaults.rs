@@ -644,6 +644,40 @@ fn initial_config_is_complete_annotated_and_provider_free() {
     );
 }
 
+/// Verifies the documented pane peer-message log mode default is `normal`, and
+/// that the runtime reader agrees with the documented literal.
+///
+/// The mode only ever suppresses a bridge echo that already has its own
+/// structural line, so an absent or unreadable setting must never silence model
+/// peer mail and must never diverge from the documented default.
+#[test]
+fn defaults_agent_peer_message_log_mode_to_normal() {
+    let documented = DEFAULT_CONFIG_TOML
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("peer_message_log_mode = "))
+        .expect("the default config documents agents.peer_message_log_mode");
+    assert_eq!(documented, "\"normal\"");
+
+    let absent_default =
+        crate::runtime::runtime_agent_peer_message_log_mode_from_config(&serde_json::json!({}));
+    assert_eq!(
+        absent_default,
+        crate::runtime::PeerMessageLogMode::parse("normal").unwrap(),
+        "an absent setting must resolve to the documented default"
+    );
+    assert_eq!(
+        crate::runtime::runtime_agent_peer_message_log_mode_from_config(&serde_json::json!({
+            "agents": { "peer_message_log_mode": "unreadable" }
+        })),
+        absent_default,
+        "an unrecognized setting must fall back to the documented default"
+    );
+    assert_eq!(
+        crate::runtime::PeerMessageLogMode::parse("verbose"),
+        Some(crate::runtime::PeerMessageLogMode::Verbose)
+    );
+}
+
 /// Verifies every accepted public field is represented by an active default,
 /// a directly activatable example, or an explicitly named alternative.
 #[test]

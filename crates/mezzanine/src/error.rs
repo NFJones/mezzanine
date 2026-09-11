@@ -184,7 +184,13 @@ impl From<mez_agent::ProviderHttpError> for MezError {
             mez_agent::ProviderHttpErrorKind::InvalidArgs => Self::invalid_args(error.message()),
             mez_agent::ProviderHttpErrorKind::InvalidState => Self::invalid_state(error.message()),
             mez_agent::ProviderHttpErrorKind::Io => Self::new(MezErrorKind::Io, error.message()),
-            mez_agent::ProviderHttpErrorKind::Timeout(_) => Self::invalid_state(error.message()),
+            // The typed phase-timeout marker is preserved in the structured failure
+            // payload so consumers classify a timeout without matching error text.
+            mez_agent::ProviderHttpErrorKind::Timeout(phase) => {
+                Self::invalid_state(error.message()).with_provider_failure_json(
+                    mez_agent::provider_http_timeout_failure_json(phase.as_str()),
+                )
+            }
         }
     }
 }

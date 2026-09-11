@@ -74,8 +74,10 @@ use crate::integrations::skills::{BUILTIN_MEZ_REFERENCE_SKILL_NAME, load_skill_d
 pub(crate) use component::RuntimeControlComponent;
 use context::runtime_agent_transcript_context;
 pub(crate) use context::{
-    PEER_MESSAGE_TURN_CONTEXT_HINT, PEER_MESSAGE_TURN_CONTEXT_LABEL, runtime_owned_bridge_message,
+    PEER_MESSAGE_TURN_CONTEXT_HINT, PEER_MESSAGE_TURN_CONTEXT_LABEL,
+    runtime_bridge_extension_fields, runtime_bridge_peer_message, runtime_owned_bridge_message,
     runtime_peer_message_block_label, runtime_peer_message_context_content,
+    runtime_peer_message_logged_payload,
 };
 use mez_agent::{
     SkillDocument, insert_context_block_by_placement, is_valid_skill_name, memory_context_blocks,
@@ -203,6 +205,10 @@ impl RuntimeSessionService {
                         runtime_peer_message_context_content(&message.envelope),
                     ),
                 );
+                // Committing the pending mail into this turn is what makes it
+                // operator-visible, so the echo lands here with the block
+                // instead of in the caller that acknowledges the sequence.
+                self.echo_received_peer_message_to_pane(pane_id, &message.envelope);
                 delivered_message_sequence = Some(message.sequence);
             }
         }
@@ -440,6 +446,9 @@ impl RuntimeSessionService {
                     runtime_peer_message_context_content(&message.envelope),
                 ),
             );
+            // This loop commits the full unread set, which is what the pane
+            // echo must track; a budget-limited fanout batch is not.
+            self.echo_received_peer_message_to_pane(pane_id, &message.envelope);
             delivered_message_sequence = Some(message.sequence);
             delivered_message_count = delivered_message_count.saturating_add(1);
         }
