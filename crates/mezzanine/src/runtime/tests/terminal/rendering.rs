@@ -210,6 +210,26 @@ fn runtime_structural_step_targets_affected_window_projections_only() {
     assert_eq!(rendered_client_ids, vec![source, observer, same_window]);
 }
 
+/// Pins a window status template without wall-clock fields for tests that
+/// compare renders taken at different moments.
+///
+/// The default template renders `#{system.uptime}` and `#{datetime.local}`,
+/// which change at every wall-clock second, so a row comparison between two
+/// renders would otherwise depend on where a second boundary falls.
+fn pin_time_independent_window_status(service: &mut RuntimeSessionService) {
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "time-independent-window-status".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\nshell_mode = \"pane\"\n[permissions]\napproval_policy = \"ask\"\nsandbox = \"policy-only\"\n[frames.window]\nright_status = \"divider fixture status\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+}
+
 /// Verifies a changed divider is projected only to its drag owner over a blank
 /// window body, then commits once to every client projecting the resized
 /// window. The owner's rendered divider and mouse hit cells must use the same
@@ -217,6 +237,7 @@ fn runtime_structural_step_targets_affected_window_projections_only() {
 #[test]
 fn runtime_divider_commit_targets_projecting_clients_after_debounce() {
     let mut service = test_runtime_service();
+    pin_time_independent_window_status(&mut service);
     let size = Size::new(80, 24).unwrap();
     let source = service.attach_primary("source", true, size, 120).unwrap();
     let observer = service
@@ -264,6 +285,13 @@ fn runtime_divider_commit_targets_projecting_clients_after_debounce() {
     )
     .expect("split window should have a presentation plan");
     let moved_column = border.column.saturating_add(3);
+    let window_frame_row = presentation_plan
+        .window_frame_row
+        .expect("window frame row should be visible");
+    assert!(
+        baseline.lines[usize::from(window_frame_row)].contains("divider fixture status"),
+        "the pinned window status template must reach the rendered window frame row"
+    );
     let drag = |column| AttachedTerminalClientStepPlan {
         actions: vec![TerminalClientLoopAction::HandleMouse(
             MouseAction::ResizePane {

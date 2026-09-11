@@ -57,3 +57,59 @@ fn assignment_restart_fences_live_state_and_retains_checkpoint() {
     assert_eq!(metadata.permissions().mode() & 0o077, 0);
     let _ = fs::remove_dir_all(root);
 }
+
+/// Reservation and activation are one logical write, so an assignment written
+/// under one injected instant records that instant for its creation and update
+/// fields, while an older callback instant is still rejected.
+#[test]
+fn assignment_reservation_and_activation_share_one_instant() {
+    let root = test_root("single-instant");
+    let repository = LocalSessionAssignmentRepository::new(root.clone());
+    let pending = repository
+        .reserve_pending(LocalAssignmentReservationRequest {
+            session_id: "$1".to_string(),
+            name: "one".to_string(),
+            default_for_host: true,
+            now_unix_seconds: 10,
+        })
+        .unwrap();
+    assert_eq!(pending.created_at_unix_seconds, 10);
+    assert_eq!(
+        pending.updated_at_unix_seconds,
+        pending.created_at_unix_seconds
+    );
+
+    let active = repository
+        .activate(
+            &pending.session_id,
+            pending.boot_generation,
+            pending.assignment_generation,
+            pending.updated_at_unix_seconds,
+        )
+        .unwrap();
+    assert_eq!(active.created_at_unix_seconds, 10);
+    assert_eq!(
+        active.updated_at_unix_seconds,
+        active.created_at_unix_seconds
+    );
+
+    // The staleness guard is unchanged: a callback carrying an instant older
+    // than the stored update time is still rejected.
+    let stale = repository
+        .update_checkpoint(
+            &active.session_id,
+            active.boot_generation,
+            active.assignment_generation,
+            LocalAssignmentCheckpoint {
+                snapshot_id: "local-stale".to_string(),
+                snapshot_version: 1,
+                session_id: active.session_id.clone(),
+                recorded_at_unix_seconds: 9,
+            },
+            active.updated_at_unix_seconds.saturating_sub(1),
+        )
+        .unwrap_err();
+    assert_eq!(stale.kind(), crate::error::MezErrorKind::Conflict);
+
+    let _ = fs::remove_dir_all(root);
+}

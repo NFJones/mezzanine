@@ -39,6 +39,61 @@ fn lease_reservation_is_idempotent_and_rejects_conflicting_reuse() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Reservation and activation are one logical write, so a lease written under
+/// one injected instant records that instant for its creation, update, and
+/// activation fields, while an older callback instant is still rejected.
+#[test]
+fn lease_reservation_and_activation_share_one_instant() {
+    let root = test_root("single-instant");
+    let repository = RemoteSessionLeaseRepository::new(root.clone());
+    let pending = repository
+        .reserve_pending(reservation(
+            "lease-1",
+            "$1",
+            "device-1",
+            "create-1",
+            "fingerprint-1",
+        ))
+        .unwrap()
+        .lease()
+        .clone();
+    assert_eq!(pending.created_at_unix_seconds, 10);
+    assert_eq!(
+        pending.updated_at_unix_seconds,
+        pending.created_at_unix_seconds
+    );
+
+    let active = repository
+        .activate(
+            &pending.lease_id,
+            pending.boot_generation,
+            pending.lease_generation,
+            pending.updated_at_unix_seconds,
+        )
+        .unwrap();
+    assert_eq!(active.created_at_unix_seconds, 10);
+    assert_eq!(
+        active.updated_at_unix_seconds,
+        active.created_at_unix_seconds
+    );
+    assert_eq!(active.activated_at_unix_seconds, Some(10));
+
+    // The staleness guard is unchanged: a callback carrying an instant older
+    // than the stored update time is still rejected.
+    let stale = repository
+        .mark_failed(
+            &active.lease_id,
+            active.boot_generation,
+            active.lease_generation,
+            active.updated_at_unix_seconds.saturating_sub(1),
+            "stale callback".to_string(),
+        )
+        .unwrap_err();
+    assert_eq!(stale.kind(), MezErrorKind::Conflict);
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Legal transitions advance the lease generation, reject stale callbacks,
 /// and accept only checkpoints belonging to the exact leased session.
 #[test]

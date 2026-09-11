@@ -100,7 +100,7 @@ pub(super) fn run_memory<W: Write>(
             if let Some(expires_at) = expires_at {
                 record.expires_at_unix_seconds = (expires_at != 0).then_some(expires_at);
             }
-            record.updated_at_unix_seconds = current_unix_seconds()?;
+            record.apply_updated_at_unix_seconds(current_unix_seconds()?);
             store.upsert(record.clone())?;
             let output = memory_record_json(&record)?;
             write_json_or_plain(stdout, output_format, &output)?;
