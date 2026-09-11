@@ -118,6 +118,11 @@ pub fn provider_malformed_output_hint(raw_text: &str) -> Option<&'static str> {
             "provider returned bare command objects inside actions; expected each action to include type and required action-specific fields such as shell_command summary inside a MAAP action batch",
         );
     }
+    if provider_output_contains_untyped_actions(object) {
+        return Some(
+            "provider returned action objects without a type discriminator; expected each action object to include type plus its required action-specific fields inside a MAAP action batch",
+        );
+    }
     if object.contains_key("command") {
         return Some(
             "provider returned a bare command object; expected a MAAP action batch with an actions array",
@@ -233,6 +238,24 @@ fn provider_output_contains_bare_command_actions(object: &Map<String, Value>) ->
                 action.as_object().is_some_and(|action_object| {
                     action_object.contains_key("command") && !action_object.contains_key("type")
                 })
+            })
+        })
+}
+
+/// Reports whether any action in the batch omits its `type` discriminator.
+///
+/// A malformed batch whose actions are neither bare commands nor bare action
+/// objects still needs corrective text that names the missing discriminator,
+/// because the repair prompt replays only this hint.
+fn provider_output_contains_untyped_actions(object: &Map<String, Value>) -> bool {
+    object
+        .get("actions")
+        .and_then(Value::as_array)
+        .is_some_and(|actions| {
+            actions.iter().any(|action| {
+                action
+                    .as_object()
+                    .is_some_and(|action_object| !action_object.contains_key("type"))
             })
         })
 }
@@ -478,6 +501,32 @@ mod tests {
         assert_eq!(value["error"]["kind"], "invalid_args");
         assert_eq!(value["output"]["format"], "json");
         assert_eq!(value["output"]["bare_command_actions"], true);
+    }
+
+    #[test]
+    /// Verifies malformed MAAP diagnostics name a missing action type
+    /// discriminator for actions that are neither bare commands nor bare action
+    /// objects.
+    ///
+    /// The repair prompt replays this corrective text, so it must state the
+    /// expected action shape rather than classify an untyped action as "none".
+    fn provider_malformed_output_diagnostics_classify_untyped_actions() {
+        let raw_text = r#"{"actions":[{"content_type":"text/plain; charset=utf-8","status":"final","text":"done"}]}"#;
+
+        assert!(
+            provider_malformed_output_hint(raw_text)
+                .unwrap()
+                .contains("without a type discriminator")
+        );
+        let output = provider_malformed_output_failure_json(
+            ProviderErrorKind::InvalidArgs,
+            "actions[0].type is required",
+            raw_text,
+        );
+        let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+
+        assert_eq!(value["error"]["message"], "actions[0].type is required");
+        assert_eq!(value["output"]["bare_command_actions"], false);
     }
 
     #[test]

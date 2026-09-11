@@ -5073,6 +5073,13 @@ every provider-worker, action-execution, approval, and provider-continuation
 boundary without capability negotiation. Live MCP, memory, and issue
 availability MUST be enforced when an action is validated or executed; it MUST
 NOT mutate the provider-visible static action catalog.
+Malformed model MAAP output MUST be repaired by asking the same model to
+re-emit the action batch within a bounded repair budget, and each corrective
+diagnostic MUST locate the offending batch position and field, for example
+`actions[0].type is required`, instead of reporting only the field name. When
+that budget is exhausted, the terminal failure MUST report the recorded provider
+diagnostic, including the malformed-output cause and location, and MUST NOT
+replace it with a generic controller failure message.
 Settled action evidence MUST use one bounded canonical model-visible projection
 before it first enters cache-eligible chronology. That exact projection,
 including captured shell, patch, MCP, web, fetch, skill, and other action output,

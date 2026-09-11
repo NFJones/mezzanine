@@ -98,6 +98,102 @@ fn turn_runner_retries_malformed_provider_maap_output() {
 }
 
 #[test]
+/// Verifies exhausted malformed-output repairs still report the provider cause.
+///
+/// The bounded MAAP repair budget accepts two corrective requests. When the
+/// model repeats the same malformed action batch, the terminal failure summary
+/// must still surface the recorded provider diagnostic, including the location
+/// of the malformed action, instead of collapsing to the generic missing-cause
+/// message that hides what the model had to correct.
+fn turn_runner_reports_provider_cause_after_exhausted_maap_repairs() {
+    let turn = turn();
+    let malformed = || {
+        crate::MezError::invalid_args(
+            "provider MAAP output is malformed: actions[0].type is required",
+        )
+        .with_provider_raw_text(
+            r#"{"rationale":"test action batch rationale","actions":[{"status":"final","text":"done"}]}"#,
+        )
+    };
+    let provider = SequencedProvider::new(vec![
+        Err(malformed()),
+        Err(malformed()),
+        Err(malformed()),
+        Ok(ModelResponse {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "summary after exhausted repairs".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(MaapBatch {
+                rationale: "test action batch rationale".to_string(),
+
+                actions: vec![say_action("say-1", "The provider output was malformed.")],
+            }),
+            provider_transcript_events: Vec::new(),
+        }),
+    ]);
+    let policy = PermissionPolicy::default();
+    let approvals = SessionApprovalStore::default();
+    let mut ledger = AgentTurnLedger::new(false);
+    let runner = AgentTurnRunner {
+        provider: &provider,
+        model_profile: ModelProfile {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            model_capabilities: Default::default(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        permissions: &crate::security::permissions::ProductPermissionPlanning::new(
+            &policy, &approvals, None,
+        ),
+        subagent_scope: None,
+        subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
+        available_mcp_servers: Vec::new(),
+        available_mcp_tools: &[],
+        memory_actions_enabled: false,
+        issue_actions_enabled: true,
+    };
+
+    let execution = runner
+        .run_turn(
+            &mut ledger,
+            turn,
+            AgentContext::new(vec![ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: "user".to_string(),
+                content: "reply".to_string(),
+            }])
+            .unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Failed);
+    assert_eq!(provider.requests().len(), 4);
+    assert!(
+        provider.requests()[1]
+            .messages
+            .iter()
+            .any(|message| message.content.contains("actions[0].type is required")),
+        "repair request must carry the located corrective diagnostic: {:?}",
+        provider.requests()[1].messages
+    );
+    let failure = mez_agent::outcome::classify_agent_execution_failure(&execution);
+    assert_eq!(failure.stage(), "provider_error");
+    assert!(
+        failure.message().contains("actions[0].type is required"),
+        "{}",
+        failure.message()
+    );
+}
+
+#[test]
 /// Verifies a provider rejection caused by incomplete native tool-call
 /// continuity enters the bounded MAAP repair flow rather than becoming a
 /// terminal provider failure.

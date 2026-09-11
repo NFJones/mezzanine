@@ -1212,7 +1212,10 @@ fn parse_maap_action_batch_value(
     let mut actions = required_array(object, "actions")?
         .iter()
         .enumerate()
-        .map(|(index, value)| parse_maap_action_value(index, value))
+        .map(|(index, value)| {
+            parse_maap_action_value(index, value)
+                .map_err(|error| qualify_action_error(index, error))
+        })
         .collect::<MaapContractResult<Vec<_>>>()?;
     for (index, action) in actions.iter().enumerate() {
         if let AgentActionPayload::Say { text, .. } = &action.payload
@@ -1239,6 +1242,23 @@ fn parse_maap_action_batch_value(
         ));
     }
     Ok(MaapBatch { rationale, actions })
+}
+
+/// Rewrites one action parse diagnostic as a JSON path inside its batch.
+///
+/// Action parse errors name the offending field but never which action carried
+/// it. Malformed provider output is repaired by asking the same model to
+/// re-emit the batch, and the repair prompt replays this diagnostic, so the
+/// batch position is prepended to keep the corrective text actionable: a
+/// location-free `maap field type is required` cannot tell the model which
+/// action to correct.
+fn qualify_action_error(index: usize, error: MaapContractError) -> MaapContractError {
+    let message = error.message();
+    let qualified = match message.strip_prefix("maap field ") {
+        Some(field_detail) => format!("actions[{index}].{field_detail}"),
+        None => format!("actions[{index}]: {message}"),
+    };
+    MaapContractError::invalid_args(qualified)
 }
 
 /// Runs the parse maap action value operation for this subsystem.
@@ -1841,6 +1861,42 @@ mod tests {
     }
 
     #[test]
+    /// Verifies action-level parse diagnostics name the offending batch position
+    /// and field.
+    ///
+    /// Malformed provider output is repaired by re-emitting the batch, and the
+    /// repair prompt replays this diagnostic. A location-free
+    /// `maap field type is required` cannot tell the model which action to
+    /// correct, so an otherwise recoverable turn fails out of its repair budget.
+    fn action_parse_diagnostics_name_batch_position_and_field() {
+        let error = parse_maap_action_batch_json_for_turn(
+            r#"{"rationale":"Report the directory","actions":[{"content_type":"text/plain; charset=utf-8","status":"final","text":"done"}]}"#,
+            "turn-1",
+            "agent-1",
+        )
+        .unwrap_err();
+
+        assert_eq!(error.message(), "actions[0].type is required");
+    }
+
+    #[test]
+    /// Verifies non-field action diagnostics also keep the offending batch
+    /// position so a malformed batch can be corrected in one repair attempt.
+    fn action_parse_diagnostics_name_batch_position_for_invalid_type() {
+        let error = parse_maap_action_batch_json_for_turn(
+            r#"{"rationale":"Report","actions":[{"type":"say","status":"final","text":"ok"},{"type":"bogus_action"}]}"#,
+            "turn-1",
+            "agent-1",
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error.message(),
+            "actions[1]: unknown maap action type bogus_action"
+        );
+    }
+
+    #[test]
     /// Verifies compact provider-native batches synthesize runtime-owned
     /// identity and action identifiers while preserving typed action payloads.
     fn compact_batch_parser_synthesizes_runtime_identity() {
@@ -1940,7 +1996,7 @@ mod tests {
         ));
         assert_eq!(
             invalid.message(),
-            "subagent session must be either fork or new"
+            "actions[0]: subagent session must be either fork or new"
         );
     }
 
@@ -1977,11 +2033,11 @@ mod tests {
         ));
         assert_eq!(
             partial.message(),
-            "subagent size and reasoning_effort must be provided together"
+            "actions[0]: subagent size and reasoning_effort must be provided together"
         );
         assert_eq!(
             unknown.message(),
-            "subagent size must be small, medium, or large"
+            "actions[0]: subagent size must be small, medium, or large"
         );
     }
 

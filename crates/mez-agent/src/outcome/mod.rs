@@ -126,7 +126,9 @@ impl AgentExecutionFailure {
 ///
 /// The priority order is intentional: provider boundary diagnostics precede a
 /// generic missing-batch failure, controller MAAP validation precedes action
-/// results, and the first failed action is the canonical concrete cause.
+/// results, the first failed action is the canonical concrete cause, and a
+/// controller failure summary that already applied its synthetic `say` batch
+/// still reports the provider diagnostic it was written to explain.
 pub fn classify_agent_execution_failure(execution: &AgentTurnExecution) -> AgentExecutionFailure {
     if execution.response.action_batch.is_none() {
         if let Some(provider_error) = embedded_provider_error(&execution.response.raw_text) {
@@ -184,6 +186,16 @@ pub fn classify_agent_execution_failure(execution: &AgentTurnExecution) -> Agent
             }),
         };
     }
+    if let Some(provider_error) =
+        controller_failure_summary_provider_error(&execution.response.raw_text)
+    {
+        return AgentExecutionFailure {
+            kind: AgentExecutionFailureKind::InvalidState,
+            stage: "provider_error",
+            message: provider_error.to_string(),
+            action: None,
+        };
+    }
     AgentExecutionFailure {
         kind: AgentExecutionFailureKind::InvalidState,
         stage: "agent_turn_failed",
@@ -201,6 +213,20 @@ fn embedded_provider_error(raw_text: &str) -> Option<&str> {
         .find_map(|line| line.strip_prefix("provider_error: "))
         .map(str::trim)
         .filter(|message| !message.is_empty())
+}
+
+/// Returns the provider diagnostic retained by one controller failure summary.
+///
+/// A failure summary replaces the failed provider response with a synthetic
+/// `say` batch, so a summary execution carries a parsed action batch even
+/// though the turn failed at the provider boundary. The summary prompt keeps
+/// the failed raw text as the only remaining record of that cause, so the
+/// generic missing-cause diagnostic must not hide it.
+fn controller_failure_summary_provider_error(raw_text: &str) -> Option<&str> {
+    if !raw_text.contains("controller_failure_summary:") {
+        return None;
+    }
+    embedded_provider_error(raw_text)
 }
 
 mod presentation;
@@ -1517,6 +1543,41 @@ mod tests {
         let action = failure.action().unwrap();
         assert_eq!(action.action_id(), "shell-1");
         assert_eq!(action.error_code(), "shell_failed");
+    }
+
+    /// Verifies a controller failure summary still reports the provider
+    /// diagnostic it was written to explain.
+    ///
+    /// The summary replaces the failed provider response with a synthetic `say`
+    /// batch, so a summary execution carries a parsed action batch even though
+    /// the turn failed at the provider boundary. Classification must surface the
+    /// retained provider error instead of the generic missing-cause fallback,
+    /// which previously hid the malformed-output cause from operators.
+    #[test]
+    fn controller_failure_summary_classification_preserves_provider_diagnostic() {
+        let mut summary_failure = execution();
+        summary_failure.response.action_batch = Some(
+            crate::maap::parse_maap_action_batch_json_for_turn(
+                r#"{"rationale":"Explain the provider failure","actions":[{"type":"say","status":"final","text":"The provider returned a malformed batch."}]}"#,
+                "turn-1",
+                "agent-1",
+            )
+            .unwrap(),
+        );
+        summary_failure.response.raw_text = "{\"actions\":[{\"status\":\"final\"}]}\n\
+             provider_error: provider MAAP output is malformed: actions[0].type is required\n\
+             controller_failure_summary:\n"
+            .to_string();
+        summary_failure.terminal_state = AgentTurnState::Failed;
+        summary_failure.final_turn = true;
+
+        let failure = classify_agent_execution_failure(&summary_failure);
+
+        assert_eq!(failure.stage(), "provider_error");
+        assert_eq!(
+            failure.message(),
+            "provider MAAP output is malformed: actions[0].type is required"
+        );
     }
 
     /// Verifies model-authored network failures remain eligible for feedback.

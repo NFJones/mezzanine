@@ -559,7 +559,7 @@ fn maap_parser_rejects_removed_action_metadata() {
 
         assert_eq!(
             error.message(),
-            format!("maap action contains unsupported field {field}")
+            format!("actions[0]: maap action contains unsupported field {field}")
         );
     }
 }
