@@ -672,7 +672,18 @@ mod tests {
             return;
         };
         let identity_marker = "00112233445566778899aabbccddeeff";
-        let loader_marker = "0123456789abcdef0123456789abcdef";
+        // The dependency-free loader stages under `$TMPDIR/.mez-<loader_marker>`
+        // and the fixture kills its pane process before the loader's EXIT trap
+        // can remove it, so a fixed marker would make every later run in the
+        // same tmp namespace fail at `mkdir` with "File exists". Derive the
+        // marker per run and remove the staging directory explicitly at the end.
+        let loader_marker = format!(
+            "{:032x}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after the Unix epoch")
+                .as_nanos()
+        );
         let bootstrap_marker = MarkerToken::new("11223344556677889900aabbccddeeff").unwrap();
         let child_token = MarkerToken::new("22334455667788990011aabbccddeeff").unwrap();
         let exit_marker = MarkerToken::new("33445566778899001122aabbccddeeff").unwrap();
@@ -700,7 +711,7 @@ mod tests {
             &fish,
             ShellClassification::Fish,
             Some(&child_token),
-            loader_marker,
+            &loader_marker,
         )
         .unwrap();
         let bootstrap = ShellTransaction::new(
@@ -803,6 +814,7 @@ mod tests {
             String::from_utf8_lossy(&output)
         );
 
+        let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!(".mez-{loader_marker}")));
         process.terminate(Duration::from_millis(100)).unwrap();
     }
 
