@@ -227,6 +227,135 @@ fn runtime_agent_prompt_refreshes_project_overlay_and_project_skills_from_pane_c
     let _ = fs::remove_dir_all(root);
 }
 
+/// Builds one project-trust store with an optional deeper nested decision.
+fn overlay_trust_store(
+    project_root: &Path,
+    nested_root: &Path,
+    nested_state: Option<TrustDecision>,
+) -> ProjectTrustStore {
+    let mut store = ProjectTrustStore::default();
+    store
+        .decide_at(project_root.to_path_buf(), TrustDecision::Trusted, None, 1)
+        .unwrap();
+    if let Some(state) = nested_state {
+        store
+            .decide_at(nested_root.to_path_buf(), state, None, 2)
+            .unwrap();
+    }
+    store
+}
+
+/// Returns whether the loaded layer for one overlay file is currently trusted.
+fn overlay_layer_is_trusted(service: &RuntimeSessionService, overlay_path: &Path) -> bool {
+    service
+        .config_layers()
+        .iter()
+        .find(|layer| layer.path.as_deref() == Some(overlay_path))
+        .expect("overlay layer should be loaded")
+        .trusted
+}
+
+/// Verifies an overlay under a marker-less nested root never applies while the
+/// deepest stored decision for that root is rejected or revoked.
+///
+/// Repository discovery walks past the marker-less nested directory up to the
+/// trusted ancestor, so the ancestor decision must not stamp the nested overlay
+/// as trusted. A nested root without its own decision keeps the recursive parent
+/// trust, and clearing or revoking that decision withdraws the overlay again.
+#[test]
+fn nested_overlay_trust_follows_the_deepest_decision_for_a_marker_less_root() {
+    let mut service = test_runtime_service();
+    let root = temp_root("runtime-overlay-nested-decision");
+    let config_root = root.join("config-root");
+    let project_root = root.join("repo");
+    let nested_root = project_root.join("vendor/nested");
+    let working_directory = nested_root.join("src");
+    let overlay_directory = nested_root.join(".mezzanine");
+    let overlay_path = overlay_directory.join("config.toml");
+    fs::create_dir_all(project_root.join(".git")).unwrap();
+    fs::create_dir_all(&working_directory).unwrap();
+    fs::create_dir_all(&overlay_directory).unwrap();
+    fs::write(
+        &overlay_path,
+        format!(
+            "version = {}\n[history]\nlines = 11\n",
+            crate::config::CURRENT_CONFIG_SCHEMA_VERSION
+        ),
+    )
+    .unwrap();
+    service.set_config_root(config_root);
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[history]\nlines = 3\n".to_string(),
+        }])
+        .unwrap();
+    service.set_pane_current_working_directory("%1".to_string(), working_directory);
+
+    // A marker-less nested root with no stored decision keeps parent trust.
+    service.set_project_trust_store(overlay_trust_store(&project_root, &nested_root, None), None);
+    service
+        .refresh_project_config_layers_for_pane("%1")
+        .unwrap();
+    assert!(overlay_layer_is_trusted(&service, &overlay_path));
+    assert_eq!(service.terminal_history_limit(), 11);
+
+    // A deeper rejection withdraws the nested overlay during the refresh that
+    // stamps every discovered overlay file.
+    service.set_project_trust_store(
+        overlay_trust_store(&project_root, &nested_root, Some(TrustDecision::Rejected)),
+        None,
+    );
+    service
+        .refresh_project_config_layers_for_pane("%1")
+        .unwrap();
+    assert!(!overlay_layer_is_trusted(&service, &overlay_path));
+    assert_eq!(service.terminal_history_limit(), 3);
+
+    // Reconciliation withdraws a newly rejected decision on an existing layer.
+    service.set_project_trust_store(overlay_trust_store(&project_root, &nested_root, None), None);
+    service
+        .refresh_project_config_layers_for_pane("%1")
+        .unwrap();
+    assert!(overlay_layer_is_trusted(&service, &overlay_path));
+    service.set_project_trust_store(
+        overlay_trust_store(&project_root, &nested_root, Some(TrustDecision::Rejected)),
+        None,
+    );
+    assert_eq!(
+        service.reconcile_project_overlay_trust(),
+        vec!["project".to_string()]
+    );
+    assert!(!overlay_layer_is_trusted(&service, &overlay_path));
+    // Trust refresh applies the recomposed layers right after reconciliation.
+    service.apply_runtime_config_layers().unwrap();
+    assert_eq!(service.terminal_history_limit(), 3);
+
+    // Revocation withdraws the overlay through the same reconciliation.
+    service.set_project_trust_store(overlay_trust_store(&project_root, &nested_root, None), None);
+    service
+        .refresh_project_config_layers_for_pane("%1")
+        .unwrap();
+    assert!(overlay_layer_is_trusted(&service, &overlay_path));
+    service.set_project_trust_store(
+        overlay_trust_store(&project_root, &nested_root, Some(TrustDecision::Revoked)),
+        None,
+    );
+    assert_eq!(
+        service.reconcile_project_overlay_trust(),
+        vec!["project".to_string()]
+    );
+    assert!(!overlay_layer_is_trusted(&service, &overlay_path));
+    service.apply_runtime_config_layers().unwrap();
+    assert_eq!(service.terminal_history_limit(), 3);
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies explicit `$skill` prompt syntax loads the selected skill into the
 /// next turn context and appends trailing prompt text as skill-specific
 /// semantic context. The raw prompt remains present so the user's latest input

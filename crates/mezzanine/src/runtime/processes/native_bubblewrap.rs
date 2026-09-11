@@ -1014,20 +1014,17 @@ impl crate::runtime::RuntimeSessionService {
     }
 
     /// Returns the deepest trusted project containing the root-process cwd.
+    ///
+    /// A deeper rejected or revoked stored decision withholds implicit native
+    /// authority, so a broader trusted ancestor cannot restore it.
     fn native_trusted_project_root(&self, context: &NativeShellContext) -> Option<PathBuf> {
-        self.integration.project_trust_store().and_then(|store| {
-            store
-                .records()
-                .filter(|record| record.state == crate::security::project::TrustDecision::Trusted)
-                .filter(|record| {
-                    crate::runtime::runtime_path_under_project_root(
-                        context.working_directory(),
-                        &record.project_root,
-                    )
-                })
-                .max_by_key(|record| record.project_root.components().count())
-                .map(|record| record.project_root.clone())
-        })
+        let store = self.integration.project_trust_store()?;
+        crate::security::project::resolve_project_trust_provenance(
+            store,
+            context.working_directory(),
+        )
+        .trusted_root()
+        .map(Path::to_path_buf)
     }
 }
 

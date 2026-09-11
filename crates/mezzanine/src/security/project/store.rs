@@ -16,6 +16,18 @@ use sha2::{Digest, Sha256};
 /// Current project trust record policy version.
 const PROJECT_TRUST_POLICY_VERSION: u32 = 1;
 
+/// Returns whether one stored record matches the trust policy and configuration
+/// schema versions implicit-authority callers accept.
+///
+/// A record written under an older trust policy or configuration schema is
+/// treated as no decision at all, so a stale trusted record can neither grant
+/// nor withhold implicit project authority that the stricter lookup already
+/// refuses to recognize.
+pub(super) fn record_matches_current_trust_versions(record: &ProjectTrustRecord) -> bool {
+    record.trust_policy_version == PROJECT_TRUST_POLICY_VERSION
+        && record.configuration_schema_version == CURRENT_CONFIG_SCHEMA_VERSION as u32
+}
+
 impl ProjectTrustStore {
     /// Runs the decide operation for this subsystem.
     ///
@@ -129,10 +141,7 @@ impl ProjectTrustStore {
         git_marker_path: Option<&Path>,
     ) -> Option<&ProjectTrustRecord> {
         let record = self.get(project_root)?;
-        if record.trust_policy_version != PROJECT_TRUST_POLICY_VERSION {
-            return None;
-        }
-        if record.configuration_schema_version != CURRENT_CONFIG_SCHEMA_VERSION as u32 {
+        if !record_matches_current_trust_versions(record) {
             return None;
         }
         let git_marker_path =
@@ -141,6 +150,19 @@ impl ProjectTrustStore {
             return None;
         }
         Some(record)
+    }
+
+    /// Returns stored records that match the current trust policy and
+    /// configuration schema versions.
+    ///
+    /// Deepest-decision resolution uses this stricter view rather than
+    /// [`Self::records`] so resolution and [`Self::get_for_project`] agree on
+    /// which records count as a stored decision.
+    pub(super) fn records_matching_current_versions(
+        &self,
+    ) -> impl Iterator<Item = &ProjectTrustRecord> {
+        self.records()
+            .filter(|record| record_matches_current_trust_versions(record))
     }
 
     /// Runs the records operation for this subsystem.

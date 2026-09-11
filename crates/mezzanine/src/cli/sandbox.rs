@@ -25,8 +25,9 @@ use crate::config::{
 };
 use crate::runtime::{runtime_configured_permissions_from_config, runtime_effective_config_value};
 use crate::security::project::{
-    ProjectRootInputSource, ProjectRootMarkerKind, ProjectTrustStore, TrustDecision,
-    default_trust_database_path, discover_existing_overlays, discover_project_root_with_metadata,
+    ProjectRootInputSource, ProjectRootMarkerKind, ProjectTrustProvenance, ProjectTrustStore,
+    TrustDecision, default_trust_database_path, discover_existing_overlays,
+    discover_project_root_with_metadata, resolve_project_trust_provenance,
 };
 use crate::security::sandbox::{
     BubblewrapManagedHomeMaintenance, SandboxDiagnosticSeverity, SandboxPlatformAvailability,
@@ -317,11 +318,13 @@ pub(super) fn run_sandbox<W: Write>(
     let trust_state = trust_store
         .get_for_project(&discovery.canonical_root, git_marker.as_deref())
         .map_or(TrustDecision::Pending, |record| record.state);
+    let implicit_project_trust =
+        resolve_project_trust_provenance(&trust_store, &discovery.canonical_start);
     let layers = load_read_only_config_layers(
         &paths,
         &discovery.canonical_root,
         &discovery.canonical_start,
-        trust_state == TrustDecision::Trusted,
+        &trust_store,
     )?;
     let effective = compose_effective_config(&layers)?;
     let structured = runtime_effective_config_value(&layers)?;
@@ -330,6 +333,7 @@ pub(super) fn run_sandbox<W: Write>(
         permissions: &permissions,
         discovery: &discovery,
         trust_state,
+        implicit_project_trust,
         config_root: paths.root(),
         sandbox_source: effective
             .source_for("permissions.sandbox")
@@ -503,7 +507,7 @@ fn load_read_only_config_layers(
     paths: &crate::config::ConfigPaths,
     project_root: &Path,
     current_dir: &Path,
-    trusted: bool,
+    trust_store: &ProjectTrustStore,
 ) -> Result<Vec<ConfigLayer>> {
     let mut layers = Vec::new();
     if let Some(path) = paths.select_primary_file()? {
@@ -528,6 +532,16 @@ fn load_read_only_config_layers(
     let overlays = discover_existing_overlays(project_root, current_dir)?;
     let overlay_count = overlays.len();
     for (index, path) in overlays.into_iter().enumerate() {
+        // A project overlay is applied only when the deepest stored decision
+        // governing its own directory is an explicit trust, so a nested
+        // rejection or revocation stops the overlay even when a broader
+        // ancestor is trusted.
+        let trusted = path.parent().is_some_and(|directory| {
+            matches!(
+                resolve_project_trust_provenance(trust_store, directory),
+                ProjectTrustProvenance::TrustedRoot(_)
+            )
+        });
         layers.push(ConfigLayer {
             name: if overlay_count == 1 {
                 "project".to_string()
@@ -562,7 +576,9 @@ fn run_sandbox_profile<W: Write>(
                 &paths,
                 &discovery.canonical_root,
                 &discovery.canonical_start,
-                false,
+                // Profile export never reads project overlays, so it projects an
+                // empty trust store rather than the persisted decisions.
+                &ProjectTrustStore::default(),
             )?;
             let structured = runtime_effective_config_value(&layers)?;
             let permissions = runtime_configured_permissions_from_config(&structured)?;
@@ -992,7 +1008,7 @@ fn write_setup_result<W: Write>(
 
 fn sandbox_plan_plain_text(plan: &SandboxWorkflowPlan, verbose: bool) -> String {
     let mut output = format!(
-        "project_root: {}\nproject_source: {}\nproject_marker: {}\ntrust_state: {}\nsandbox_configured: {}\nsandbox_effective: {}\napproval_policy: {}\nscope_provenance: {}\nsandbox_executable_state: {}\nruntime_profile_version: {}\ngroup_whitelist: {}\nenv_whitelist: {}\nenvironment_forwarding_state: {}\nsupplementary_group_state: {}\nsupplementary_group_count: {}\ncapability_state: {}\nmanaged_home_state: {}\nmanaged_home_bytes: {}\nmanaged_home_active: {}\nmanaged_home_path_semantics: {}\nnetwork_boundary: {}\nnamespace_boundary: {}\nreload_freshness: {}\n",
+        "project_root: {}\nproject_source: {}\nproject_marker: {}\ntrust_state: {}\nsandbox_configured: {}\nsandbox_effective: {}\napproval_policy: {}\nscope_provenance: {}\ndenied_project_root: {}\nsandbox_executable_state: {}\nruntime_profile_version: {}\ngroup_whitelist: {}\nenv_whitelist: {}\nenvironment_forwarding_state: {}\nsupplementary_group_state: {}\nsupplementary_group_count: {}\ncapability_state: {}\nmanaged_home_state: {}\nmanaged_home_bytes: {}\nmanaged_home_active: {}\nmanaged_home_path_semantics: {}\nnetwork_boundary: {}\nnamespace_boundary: {}\nreload_freshness: {}\n",
         plan.project.canonical_root.display(),
         plan.project.input_source,
         plan.project.marker_kind,
@@ -1001,6 +1017,10 @@ fn sandbox_plan_plain_text(plan: &SandboxWorkflowPlan, verbose: bool) -> String 
         plan.effective.sandbox,
         plan.configured.approval_policy,
         plan.effective.scope_provenance,
+        plan.effective
+            .denied_project_root
+            .as_deref()
+            .unwrap_or("none"),
         plan.effective.sandbox_executable_state,
         plan.effective
             .runtime_profile_version

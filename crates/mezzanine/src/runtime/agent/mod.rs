@@ -51,10 +51,9 @@ use super::{
     runtime_execution_ready_for_provider_continuation, runtime_hook_event_name,
     runtime_marker_for_action, runtime_mcp_error_code, runtime_message_recipient,
     runtime_mezzanine_error_code, runtime_pane_by_id, runtime_pane_readiness_state_name,
-    runtime_path_under_project_root, runtime_permission_preset_name,
-    runtime_permission_request_hook_payload, runtime_post_mcp_hook_payload,
-    runtime_pre_mcp_hook_payload, runtime_pre_shell_hook_payload, runtime_set_theme_command,
-    runtime_subagent_placement_mode, runtime_subagent_spawn_request,
+    runtime_permission_preset_name, runtime_permission_request_hook_payload,
+    runtime_post_mcp_hook_payload, runtime_pre_mcp_hook_payload, runtime_pre_shell_hook_payload,
+    runtime_set_theme_command, runtime_subagent_placement_mode, runtime_subagent_spawn_request,
     transcript_entries_for_execution, validate_mmp_payload_metadata,
 };
 use crate::config::{

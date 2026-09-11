@@ -41,7 +41,9 @@ Newly discovered project configuration under `.mezzanine/config.toml`,
 `.mezzanine/config.json` remains pending until the primary user explicitly
 trusts or rejects the project root. A previously trusted root applies overlays
 discovered under that canonical root unless trust was revoked or policy
-requires renewed approval. Inspect the overlay and applicable instructions
+requires renewed approval. A deeper rejected or revoked nested decision stops
+overlays under that nested root from applying even when a broader ancestor is
+trusted. Inspect the overlay and applicable instructions
 directly before deciding. The trust store records trusted, rejected, and
 revoked roots; inspect its persisted record before changing a decision:
 
@@ -59,6 +61,35 @@ and `revoke` removes the prior trust decision from effect. The agent-shell
 pane. Trust decisions persist in the user-private trust store. Trusting an
 overlay does not itself grant host access, disable approval, or override a
 sandbox boundary.
+
+### Overlay discovery versus implicit filesystem authority
+
+Project discovery finds the nearest repository marker and the overlay files it
+can reach. Discovery decides which overlay may apply and which root is prompted
+for review; it never grants or withholds filesystem authority by itself.
+Implicit trusted-project authority comes only from the deepest stored trust
+decision governing the working directory. A trusted parent with a deeper trusted
+nested repository keeps the nested root as the effective scope, while a deeper
+rejected or revoked decision withholds implicit authority for that nested root
+even though the parent stays trusted. A nested repository marker with no stored
+decision keeps the recursive parent trust, because Mezzanine never invents a
+rejection from the presence of `.git`. Overlay application uses the same
+resolution against each overlay file's own directory, so a nested directory
+without a repository marker of its own still stops applying overlays once the
+deepest stored decision for that directory is rejected or revoked. Decisions are
+read from the same trust-policy and configuration-schema versions as the strict
+project lookup: a record written under another version counts as no decision at
+all instead of granting or withholding authority. Rejection and revocation
+withhold only
+the implicit default: explicitly configured `permissions.read_scopes` and
+`permissions.write_scopes` keep working unchanged. The effective permission
+status reports the withheld provenance (`project-trust-rejected`,
+`project-trust-revoked`, or `project-trust-pending`) together with the governing
+root, so a withheld decision is distinguishable from an undecided project, and
+`mez sandbox status` reports the same withheld provenance and governing root.
+Admission of a shell command or semantic patch denies a withheld decision for
+both action types, and a pending decision is a blocking denial rather than a
+correctable action argument.
 
 The current `mez sandbox trust inspect` CLI output is limited to the persisted
 trust record: canonical root, decision, Git marker, decision time, schema and

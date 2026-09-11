@@ -9,10 +9,8 @@ use super::{
     ActionResult, ActionStatus, AgentAction, AgentTurnExecution, AgentTurnRecord, AgentTurnState,
     MezError, PathBuf, Result, RuntimeSessionService, runtime_agent_action_summary,
     runtime_agent_turn_state_from_action_results, runtime_mezzanine_error_code,
-    runtime_path_under_project_root,
 };
 use crate::integrations::skills::{discover_skill_catalog, load_skill_document};
-use crate::security::project::TrustDecision;
 use mez_agent::{
     SkillActionContext, SkillActionPlan, SkillCatalog, plan_skill_action,
     skill_action_context_from_blocks, skill_load_action_result,
@@ -33,18 +31,14 @@ impl RuntimeSessionService {
 
     /// Returns the trusted project root whose skills may apply to one pane.
     ///
+    /// A deeper rejected or revoked decision withholds project skills even when
+    /// a broader ancestor is trusted, because implicit authority comes from the
+    /// deepest stored project-trust decision.
+    ///
     /// # Parameters
     /// - `pane_id`: Pane whose working directory determines project scope.
     pub(crate) fn trusted_skill_project_root_for_pane(&self, pane_id: &str) -> Option<PathBuf> {
-        let working_directory = self.pane_current_working_directory(pane_id)?;
-        let store = self.integration.project_trust_store()?;
-        store
-            .records()
-            .filter(|record| record.state == TrustDecision::Trusted)
-            .find(|record| {
-                runtime_path_under_project_root(&working_directory, &record.project_root)
-            })
-            .map(|record| record.project_root.clone())
+        self.trusted_project_root_for_pane(pane_id)
     }
 
     /// Builds the currently loaded skill context state for one active turn.

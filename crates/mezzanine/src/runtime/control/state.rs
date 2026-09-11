@@ -364,6 +364,9 @@ impl RuntimeSessionService {
         let trusted_project_root = effective
             .as_ref()
             .and_then(|status| status.trusted_project_root.as_deref());
+        let denied_project_root = effective
+            .as_ref()
+            .and_then(|status| status.denied_project_root.as_deref());
         let sandbox_restrictions = if matches!(
             configured.sandbox,
             crate::runtime::SandboxConfig::Bubblewrap(_)
@@ -380,7 +383,7 @@ impl RuntimeSessionService {
             self.permission_policy().approval_policy,
         );
         format!(
-            r#"{{"preset":"{}","approval_policy":"{}","bypass_active":{},"sandbox":"{}","sandbox_effective":"{}","network_policy":"{}","trusted_project":{},"trusted_directories":{},"read_scopes":{},"write_scopes":{},"effective_scope_provenance":"{}","effective_read_scopes":{},"effective_write_scopes":{},"trusted_project_root":{},"sandbox_restrictions":{},"command_rule_generation":{}}}"#,
+            r#"{{"preset":"{}","approval_policy":"{}","bypass_active":{},"sandbox":"{}","sandbox_effective":"{}","network_policy":"{}","trusted_project":{},"trusted_directories":{},"read_scopes":{},"write_scopes":{},"effective_scope_provenance":"{}","effective_read_scopes":{},"effective_write_scopes":{},"trusted_project_root":{},"effective_scope_denied_root":{},"sandbox_restrictions":{},"command_rule_generation":{}}}"#,
             runtime_permission_preset_name(self.permission_policy().preset),
             runtime_approval_policy_name(self.permission_policy().approval_policy),
             self.permission_policy().approval_bypass(),
@@ -395,6 +398,7 @@ impl RuntimeSessionService {
             runtime_string_array_json(effective_read_scopes),
             runtime_string_array_json(effective_write_scopes),
             runtime_optional_string(trusted_project_root),
+            runtime_optional_string(denied_project_root),
             runtime_string_array_json(&sandbox_restrictions),
             self.permission_policy().rules().len()
         )

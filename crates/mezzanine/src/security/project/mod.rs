@@ -21,6 +21,11 @@ mod discovery;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod encoding;
+/// Exposes the resolution module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+mod resolution;
 /// Exposes the store module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -41,6 +46,7 @@ pub use discovery::{
 pub use discovery::{
     discover_project_trust_prompt, select_overlay_for_directory, summarize_overlay_capabilities,
 };
+pub use resolution::{ProjectTrustProvenance, resolve_project_trust_provenance};
 #[cfg(test)]
 pub use types::ProjectTrustPrompt;
 pub use types::{

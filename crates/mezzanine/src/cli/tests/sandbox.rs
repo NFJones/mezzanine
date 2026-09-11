@@ -75,6 +75,93 @@ fn sandbox_status_is_structured_and_strictly_read_only() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// Verifies sandbox status reports a withheld deepest decision instead of an
+/// inherited trusted-project default for a marker-less nested root.
+///
+/// The standalone status projection must resolve project authority through the
+/// same deepest-decision resolver the runtime uses at admission, so an overlay
+/// under a rejected nested directory can neither apply nor be reported as
+/// trusted project authority.
+#[test]
+fn sandbox_status_reports_withheld_project_trust_for_marker_less_nested_root() {
+    let (env, home) = test_env("sandbox-status-withheld-project-trust");
+    let config_root = home.join(".config/mezzanine");
+    fs::create_dir_all(&config_root).unwrap();
+    fs::write(
+        config_root.join("config.toml"),
+        "version = 25\n[permissions]\napproval_policy = \"ask\"\nsandbox = \"bubblewrap\"\nread_scopes = []\nwrite_scopes = []\n[permissions.bubblewrap]\nexecutable = \"/bin/sh\"\nunavailable = \"fail\"\nnetwork = \"isolated\"\nenvironment = \"minimal\"\n",
+    )
+    .unwrap();
+    let project = home.join("project");
+    let nested = project.join("vendor/nested");
+    let working_directory = nested.join("src");
+    let overlay_directory = nested.join(".mezzanine");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    fs::create_dir_all(&working_directory).unwrap();
+    fs::create_dir_all(&overlay_directory).unwrap();
+    fs::write(
+        overlay_directory.join("config.toml"),
+        format!(
+            "version = {}\n[history]\nlines = 11\n",
+            crate::config::CURRENT_CONFIG_SCHEMA_VERSION
+        ),
+    )
+    .unwrap();
+    let project_root = project.canonicalize().unwrap();
+    let nested_root = nested.canonicalize().unwrap();
+    ProjectTrustStore::update_file(&config_root.join("project-trust.tsv"), |store| {
+        store.decide_at(
+            project_root.clone(),
+            TrustDecision::Trusted,
+            Some(project_root.join(".git")),
+            1,
+        )?;
+        store.decide_at(nested_root.clone(), TrustDecision::Rejected, None, 2)
+    })
+    .unwrap();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let exit_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "status".to_string(),
+            working_directory.to_string_lossy().into_owned(),
+        ]),
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+
+    assert_eq!(exit_code, 0);
+    let output: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(output["project"]["trust_state"], "trusted");
+    assert_eq!(
+        output["effective"]["scope_provenance"],
+        "project-trust-rejected"
+    );
+    assert_eq!(
+        output["effective"]["denied_project_root"],
+        serde_json::json!(nested_root.to_string_lossy().into_owned())
+    );
+    assert_eq!(output["effective"]["read_scopes"], serde_json::json!([]));
+    assert_eq!(output["effective"]["write_scopes"], serde_json::json!([]));
+    assert!(
+        output["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|diagnostic| diagnostic["id"] == "sandbox.implicit-authority-withheld"),
+        "{output}"
+    );
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Verifies Seatbelt status reports operation-level confinement in the visible
 /// host namespace without describing its network policy or private home as a
 /// Bubblewrap namespace or mount.

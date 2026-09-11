@@ -841,6 +841,9 @@ fn runtime_malformed_external_project_trust_fails_closed() {
 
 /// Verifies an external revocation contracts Bubblewrap authority, advances
 /// the cache generation, and removes that project's managed sandbox home.
+///
+/// The effective projection must also name the revoked root as the withheld
+/// decision instead of reporting the mere absence of any decision.
 #[test]
 fn runtime_external_project_trust_revocation_contracts_authority() {
     let root = temp_root("runtime-external-project-trust-revocation");
@@ -868,7 +871,7 @@ fn runtime_external_project_trust_revocation_contracts_authority() {
     service.set_pane_current_working_directory("%1".to_string(), working_directory);
     let initial_generation = service.session.config_generation;
     ProjectTrustStore::update_file(&trust_path, |store| {
-        store.decide_at(project_root, TrustDecision::Revoked, None, 101)
+        store.decide_at(project_root.clone(), TrustDecision::Revoked, None, 101)
     })
     .unwrap();
 
@@ -878,7 +881,12 @@ fn runtime_external_project_trust_revocation_contracts_authority() {
             .unwrap()
     );
     assert_eq!(service.session.config_generation, initial_generation + 1);
-    assert_eq!(service.primary_path_scope_status("%1").provenance, "none");
+    let status = service.primary_path_scope_status("%1");
+    assert_eq!(status.provenance, "project-trust-revoked");
+    assert_eq!(
+        status.denied_project_root.as_deref(),
+        Some(project_root.to_string_lossy().as_ref())
+    );
     assert!(!managed_home.host_path.exists());
 
     fs::remove_dir_all(root).unwrap();
@@ -922,6 +930,499 @@ fn trusted_project_defaults_primary_authority_to_deepest_matching_root() {
 
     assert_eq!(read_scopes, vec![expected.clone()]);
     assert_eq!(write_scopes, vec![expected]);
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies the status projection reports the deepest stored trust decision for
+/// every nested repository state instead of a broad trusted ancestor.
+///
+/// A pane inside a trusted parent with a deeper trusted root keeps implicit
+/// authority, while a deeper rejected or revoked decision withholds it and is
+/// reported distinctly from a mere absence of any decision. An unrecorded
+/// nested repository keeps the recursive parent trust, and a sibling rejection
+/// never affects an unrelated path.
+#[test]
+fn nested_project_trust_decisions_govern_pane_implicit_authority() {
+    let root = temp_root("runtime-nested-trust-decisions");
+    let parent_root = root.join("project");
+    let trusted_root = parent_root.join("trusted");
+    let rejected_root = parent_root.join("rejected");
+    let revoked_root = parent_root.join("revoked");
+    let unrecorded_root = parent_root.join("unrecorded");
+    let sibling_root = root.join("sibling");
+    for project_root in [
+        &parent_root,
+        &trusted_root,
+        &rejected_root,
+        &revoked_root,
+        &unrecorded_root,
+        &sibling_root,
+    ] {
+        fs::create_dir_all(project_root.join(".git")).unwrap();
+    }
+    let mut trust_store = ProjectTrustStore::default();
+    for (project_root, state, decided_at) in [
+        (&parent_root, TrustDecision::Trusted, 1),
+        (&trusted_root, TrustDecision::Trusted, 2),
+        (&rejected_root, TrustDecision::Rejected, 3),
+        (&revoked_root, TrustDecision::Revoked, 4),
+        (&sibling_root, TrustDecision::Rejected, 5),
+    ] {
+        trust_store
+            .decide_at(project_root.clone(), state, None, decided_at)
+            .unwrap();
+    }
+    let mut service = test_runtime_service();
+    service.set_project_trust_store(trust_store, None);
+
+    fn provenance_for(
+        service: &mut RuntimeSessionService,
+        directory: &Path,
+    ) -> (String, Option<String>) {
+        service.set_pane_current_working_directory("%1".to_string(), directory.to_path_buf());
+        let status = service.primary_path_scope_status("%1");
+        (
+            status.provenance.to_string(),
+            status.denied_project_root.clone(),
+        )
+    }
+
+    assert_eq!(
+        provenance_for(&mut service, &trusted_root.join("src")),
+        ("trusted-project".to_string(), None)
+    );
+    assert_eq!(
+        provenance_for(&mut service, &rejected_root.join("src")),
+        (
+            "project-trust-rejected".to_string(),
+            Some(rejected_root.to_string_lossy().into_owned()),
+        )
+    );
+    assert_eq!(
+        provenance_for(&mut service, &revoked_root.join("src")),
+        (
+            "project-trust-revoked".to_string(),
+            Some(revoked_root.to_string_lossy().into_owned()),
+        )
+    );
+    assert_eq!(
+        provenance_for(&mut service, &unrecorded_root.join("src")),
+        ("trusted-project".to_string(), None)
+    );
+    assert_eq!(
+        provenance_for(&mut service, &root.join("unrelated")),
+        ("none".to_string(), None)
+    );
+
+    service.set_pane_current_working_directory("%1".to_string(), unrecorded_root.join("src"));
+    let unrecorded_status = service.primary_path_scope_status("%1");
+    assert_eq!(
+        unrecorded_status.trusted_project_root.as_deref(),
+        Some(parent_root.to_string_lossy().as_ref())
+    );
+
+    service.set_pane_current_working_directory("%1".to_string(), rejected_root.join("src"));
+    let withheld_status = service.primary_path_scope_status("%1");
+    assert!(withheld_status.read_scopes.is_empty());
+    assert!(withheld_status.write_scopes.is_empty());
+    assert!(withheld_status.trusted_project_root.is_none());
+    assert!(service.primary_path_scope_paths("%1").0.is_empty());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies a negative nested trust decision never subtracts explicit scopes.
+///
+/// Configured read and write scopes are an independent grant. A deeper rejected
+/// project root withholds only the implicit trusted-project default, so the
+/// effective projection keeps reporting the explicit scopes unchanged.
+#[test]
+fn negative_nested_trust_decision_preserves_explicit_scopes() {
+    let root = temp_root("runtime-negative-trust-explicit-scopes");
+    let project_root = root.join("project");
+    let rejected_root = project_root.join("vendor/rejected");
+    let configured_read = root.join("configured-read");
+    let configured_write = root.join("configured-write");
+    fs::create_dir_all(project_root.join(".git")).unwrap();
+    fs::create_dir_all(rejected_root.join(".git")).unwrap();
+    fs::create_dir_all(&configured_read).unwrap();
+    fs::create_dir_all(&configured_write).unwrap();
+    let configured =
+        crate::runtime::config::runtime_configured_permissions_from_config(&serde_json::json!({
+            "permissions": {
+                "sandbox": "bubblewrap",
+                "read_scopes": [configured_read],
+                "write_scopes": [configured_write]
+            }
+        }))
+        .unwrap();
+    let mut service = test_runtime_service();
+    service
+        .integration
+        .replace_configured_permissions(configured);
+    let mut trust_store = ProjectTrustStore::default();
+    trust_store
+        .decide_at(project_root.clone(), TrustDecision::Trusted, None, 1)
+        .unwrap();
+    trust_store
+        .decide_at(rejected_root.clone(), TrustDecision::Rejected, None, 2)
+        .unwrap();
+    service.set_project_trust_store(trust_store, None);
+    service.set_pane_current_working_directory("%1".to_string(), rejected_root.join("src"));
+
+    let status = service.primary_path_scope_status("%1");
+
+    assert_eq!(status.provenance, "explicit");
+    assert_eq!(status.read_scopes, vec![configured_read.to_string_lossy()]);
+    assert_eq!(
+        status.write_scopes,
+        vec![configured_write.to_string_lossy()]
+    );
+    assert!(status.denied_project_root.is_none());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies admission after a nested negative trust decision executes no
+/// payload and fails as a non-correctable policy denial.
+///
+/// A persistent rejected decision is a policy boundary, not a repaired action
+/// argument, so the runtime must refuse before any pane dispatch or path
+/// resolution transaction exists and must surface a `forbidden` code.
+#[test]
+fn nested_negative_trust_decision_denies_admission_without_dispatch() {
+    let root = temp_root("runtime-nested-negative-admission");
+    let project_root = root.join("project");
+    let rejected_root = project_root.join("vendor/rejected");
+    let working_directory = rejected_root.join("src");
+    fs::create_dir_all(project_root.join(".git")).unwrap();
+    fs::create_dir_all(rejected_root.join(".git")).unwrap();
+    fs::create_dir_all(&working_directory).unwrap();
+    let mut service = test_runtime_service();
+    configure_trusted_project_bubblewrap(&mut service);
+    let mut trust_store = ProjectTrustStore::default();
+    trust_store
+        .decide_at(project_root.clone(), TrustDecision::Trusted, None, 1)
+        .unwrap();
+    trust_store
+        .decide_at(rejected_root.clone(), TrustDecision::Rejected, None, 2)
+        .unwrap();
+    service.set_project_trust_store(trust_store, None);
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        path_resolution_environment(&working_directory),
+    );
+    service.set_pane_current_working_directory("%1".to_string(), working_directory);
+    let evaluation = path_resolution_evaluation(
+        mez_agent::permissions::EffectCompleteness::Unknown,
+        path_resolution_effects(),
+    );
+
+    let error = service
+        .ensure_bubblewrap_path_resolution_for_action(
+            &path_resolution_turn(),
+            "action-1",
+            Some(&evaluation),
+        )
+        .unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+    assert!(
+        error
+            .message()
+            .contains(&rejected_root.to_string_lossy().into_owned()),
+        "{error}"
+    );
+    assert!(mez_agent::outcome::runtime_error_code_is_non_correctable(
+        crate::runtime::runtime_mezzanine_error_code(error.kind())
+    ));
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies an external revocation of a nested trust decision invalidates the
+/// derived authority and denies the next admission.
+///
+/// The persisted nested decision is the only changed input. Reloading it must
+/// advance the cache generation, replace the granted trusted-project authority
+/// with the withheld provenance naming the revoked nested root, and reject the
+/// next action before any dispatch.
+#[test]
+fn external_nested_trust_revocation_invalidates_authority_before_admission() {
+    let root = temp_root("runtime-nested-external-revocation");
+    let project_root = root.join("project");
+    let nested_root = project_root.join("vendor/nested");
+    let working_directory = nested_root.join("src");
+    fs::create_dir_all(project_root.join(".git")).unwrap();
+    fs::create_dir_all(nested_root.join(".git")).unwrap();
+    fs::create_dir_all(&working_directory).unwrap();
+    let trust_path = root.join("project-trust.tsv");
+    let snapshot = ProjectTrustStore::update_file(&trust_path, |store| {
+        store.decide_at(project_root.clone(), TrustDecision::Trusted, None, 1)?;
+        store.decide_at(nested_root.clone(), TrustDecision::Trusted, None, 2)
+    })
+    .unwrap();
+    let mut service = test_runtime_service();
+    configure_trusted_project_bubblewrap(&mut service);
+    service.set_project_trust_store(snapshot.store, Some(trust_path.clone()));
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        path_resolution_environment(&working_directory),
+    );
+    service.set_pane_current_working_directory("%1".to_string(), working_directory);
+    assert_eq!(
+        service.primary_path_scope_status("%1").provenance,
+        "trusted-project"
+    );
+    let initial_generation = service.session.config_generation;
+    ProjectTrustStore::update_file(&trust_path, |store| {
+        store.decide_at(nested_root.clone(), TrustDecision::Revoked, None, 3)
+    })
+    .unwrap();
+
+    assert!(
+        service
+            .refresh_project_trust_store_from_disk_if_changed()
+            .unwrap()
+    );
+    assert_eq!(service.session.config_generation, initial_generation + 1);
+    let status = service.primary_path_scope_status("%1");
+    assert_eq!(status.provenance, "project-trust-revoked");
+    assert_eq!(
+        status.denied_project_root.as_deref(),
+        Some(nested_root.to_string_lossy().as_ref())
+    );
+    let evaluation = path_resolution_evaluation(
+        mez_agent::permissions::EffectCompleteness::Unknown,
+        path_resolution_effects(),
+    );
+
+    let error = service
+        .ensure_bubblewrap_path_resolution_for_action(
+            &path_resolution_turn(),
+            "action-1",
+            Some(&evaluation),
+        )
+        .unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies a pending nested trust decision blocks admission, resumes the exact
+/// action after an authenticated trust decision, and cannot auto-retry a
+/// denial.
+///
+/// A pending decision is a blocking, non-correctable policy denial, so no
+/// payload is dispatched and no shell transaction is opened. Once the primary
+/// user records an authenticated trust decision for that exact root, the same
+/// action proceeds to path resolution. A later revocation keeps the same
+/// forbidden policy denial instead of turning into a correctable retry target.
+#[test]
+fn pending_nested_trust_decision_blocks_then_resumes_after_decision() {
+    let root = temp_root("runtime-nested-pending-decision");
+    let project_root = root.join("project");
+    let nested_root = project_root.join("vendor/nested");
+    let working_directory = nested_root.join("src");
+    fs::create_dir_all(project_root.join(".git")).unwrap();
+    fs::create_dir_all(nested_root.join(".git")).unwrap();
+    fs::create_dir_all(&working_directory).unwrap();
+    let trust_path = root.join("project-trust.tsv");
+    ProjectTrustStore::update_file(&trust_path, |store| {
+        store.decide_at(project_root.clone(), TrustDecision::Trusted, None, 1)
+    })
+    .unwrap();
+    let pending_line = format!(
+        "{}\tpending\t\t0\t\t1\t{}\t\n",
+        nested_root.display(),
+        crate::config::CURRENT_CONFIG_SCHEMA_VERSION
+    );
+    let persisted = fs::read_to_string(&trust_path).unwrap();
+    fs::write(&trust_path, format!("{persisted}{pending_line}")).unwrap();
+    let snapshot = ProjectTrustStore::load_snapshot_from_file(&trust_path).unwrap();
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    configure_trusted_project_bubblewrap(&mut service);
+    service.set_project_trust_store(snapshot.store, Some(trust_path.clone()));
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        path_resolution_environment(&working_directory),
+    );
+    service.set_pane_current_working_directory("%1".to_string(), working_directory);
+    mark_test_pane_ready(&mut service, "%1");
+    let evaluation = path_resolution_evaluation(
+        mez_agent::permissions::EffectCompleteness::Unknown,
+        path_resolution_effects(),
+    );
+
+    let pending_status = service.primary_path_scope_status("%1");
+    assert_eq!(pending_status.provenance, "project-trust-pending");
+    assert_eq!(
+        pending_status.denied_project_root.as_deref(),
+        Some(nested_root.to_string_lossy().as_ref())
+    );
+    let blocked = service
+        .ensure_bubblewrap_path_resolution_for_action(
+            &path_resolution_turn(),
+            "action-1",
+            Some(&evaluation),
+        )
+        .unwrap_err();
+    assert_eq!(blocked.kind(), crate::error::MezErrorKind::Forbidden);
+    assert!(
+        blocked
+            .message()
+            .contains("the deepest stored project-trust decision is pending"),
+        "{}",
+        blocked.message()
+    );
+    assert!(
+        blocked
+            .message()
+            .contains(&nested_root.to_string_lossy().into_owned()),
+        "{}",
+        blocked.message()
+    );
+    assert!(mez_agent::outcome::runtime_error_code_is_non_correctable(
+        crate::runtime::runtime_mezzanine_error_code(blocked.kind())
+    ));
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+
+    ProjectTrustStore::update_file(&trust_path, |store| {
+        store.decide_at(nested_root.clone(), TrustDecision::Trusted, None, 2)
+    })
+    .unwrap();
+    assert!(
+        service
+            .refresh_project_trust_store_from_disk_if_changed()
+            .unwrap()
+    );
+    assert_eq!(
+        service.primary_path_scope_status("%1").provenance,
+        "trusted-project"
+    );
+
+    assert!(
+        !service
+            .ensure_bubblewrap_path_resolution_for_action(
+                &path_resolution_turn(),
+                "action-1",
+                Some(&evaluation),
+            )
+            .unwrap()
+    );
+    let transaction = service
+        .running_shell_transactions_for_tests()
+        .values()
+        .find(|transaction| {
+            matches!(
+                &transaction.kind,
+                RunningShellTransactionKind::PathResolution { waiters, .. }
+                    if waiters.contains(&(
+                        "path-resolution-turn".to_string(),
+                        "action-1".to_string()
+                    ))
+            )
+        })
+        .unwrap();
+    let RunningShellTransactionKind::PathResolution { cache_key, .. } = &transaction.kind else {
+        unreachable!();
+    };
+    let expected = nested_root.to_string_lossy().into_owned();
+    assert_eq!(cache_key.request.read_scopes, vec![expected.clone()]);
+    assert_eq!(cache_key.request.write_scopes, vec![expected]);
+
+    ProjectTrustStore::update_file(&trust_path, |store| {
+        store.decide_at(nested_root.clone(), TrustDecision::Revoked, None, 3)
+    })
+    .unwrap();
+    assert!(
+        service
+            .refresh_project_trust_store_from_disk_if_changed()
+            .unwrap()
+    );
+    let denied = service
+        .ensure_bubblewrap_path_resolution_for_action(
+            &path_resolution_turn(),
+            "action-1",
+            Some(&evaluation),
+        )
+        .unwrap_err();
+    assert_eq!(denied.kind(), crate::error::MezErrorKind::Forbidden);
+
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies withheld implicit authority is reported for both sandbox-applicable
+/// and policy-only configurations without claiming confinement.
+///
+/// The withheld provenance names the rejected nested root in both modes, while
+/// the effective sandbox boundary stays `policy-only` for a policy-only
+/// configuration so the status never claims operating-system confinement that
+/// is not active.
+#[test]
+fn withheld_implicit_authority_reports_policy_only_without_confinement_claim() {
+    let root = temp_root("runtime-withheld-authority-policy-only");
+    let project_root = root.join("project");
+    let rejected_root = project_root.join("vendor/rejected");
+    let working_directory = rejected_root.join("src");
+    fs::create_dir_all(project_root.join(".git")).unwrap();
+    fs::create_dir_all(rejected_root.join(".git")).unwrap();
+    fs::create_dir_all(&working_directory).unwrap();
+    let policy_only =
+        crate::runtime::config::runtime_configured_permissions_from_config(&serde_json::json!({
+            "permissions": {
+                "sandbox": "policy-only",
+                "approval_policy": "ask",
+                "network_policy": "prompt"
+            }
+        }))
+        .unwrap();
+    let mut service = test_runtime_service();
+    service
+        .integration
+        .replace_configured_permissions(policy_only);
+    let mut trust_store = ProjectTrustStore::default();
+    trust_store
+        .decide_at(project_root.clone(), TrustDecision::Trusted, None, 1)
+        .unwrap();
+    trust_store
+        .decide_at(rejected_root.clone(), TrustDecision::Rejected, None, 2)
+        .unwrap();
+    service.set_project_trust_store(trust_store, None);
+    service.set_pane_current_working_directory("%1".to_string(), working_directory);
+
+    assert_eq!(
+        service.primary_path_scope_status("%1").provenance,
+        "project-trust-rejected"
+    );
+    let configured = service.configured_permissions();
+    let policy_only_boundary = crate::security::sandbox::effective_sandbox_boundary(
+        &configured.sandbox,
+        service.permission_policy().approval_policy,
+    );
+    assert_eq!(policy_only_boundary, "policy-only");
+
+    configure_trusted_project_bubblewrap(&mut service);
+    let bubblewrap_boundary = crate::security::sandbox::effective_sandbox_boundary(
+        &service.configured_permissions().sandbox,
+        service.permission_policy().approval_policy,
+    );
+    assert_eq!(bubblewrap_boundary, "bubblewrap");
+    assert_eq!(
+        service.primary_path_scope_status("%1").provenance,
+        "project-trust-rejected"
+    );
+
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -4351,4 +4852,440 @@ fn runtime_frame_context_reports_visible_agent_shell_metadata() {
     assert_eq!(pane_context.agent_status.as_deref(), Some("idle"));
     assert_eq!(pane_context.agent_model.as_deref(), Some("gpt-work"));
     assert_eq!(pane_context.agent_reasoning.as_deref(), Some("high"));
+}
+
+/// Configures policy-only permissions without explicit filesystem scopes.
+fn configure_policy_only_permissions_without_scopes(service: &mut RuntimeSessionService) {
+    let configured =
+        crate::runtime::config::runtime_configured_permissions_from_config(&serde_json::json!({
+            "permissions": {
+                "sandbox": "policy-only",
+                "approval_policy": "ask",
+                "network_policy": "prompt"
+            }
+        }))
+        .unwrap();
+    service
+        .integration
+        .replace_configured_permissions(configured);
+}
+
+/// Builds one shell payload for project-trust admission-dispatch tests.
+fn admission_shell_payload(command: &str) -> mez_agent::AgentActionPayload {
+    mez_agent::AgentActionPayload::ShellCommand {
+        summary: "Inspect the project".to_string(),
+        command: command.to_string(),
+        interactive: false,
+        stateful: false,
+        timeout_ms: None,
+    }
+}
+
+/// Builds one semantic patch payload for admission-dispatch tests.
+fn admission_apply_patch_payload(path: &str) -> mez_agent::AgentActionPayload {
+    mez_agent::AgentActionPayload::ApplyPatch {
+        patch: format!("*** Begin Patch\n*** Add File: {path}\n+admission\n*** End Patch"),
+        strip: None,
+    }
+}
+
+/// Builds a live prompt turn whose sole shell-backed action awaits dispatch.
+///
+/// Both the shell and `apply_patch` admission paths share this fixture so a
+/// project-trust admission decision can be asserted through real dispatch.
+fn admission_action_execution_service(
+    action_id: &str,
+    payload: mez_agent::AgentActionPayload,
+) -> (RuntimeSessionService, String, String) {
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    let started = service
+        .start_agent_prompt_turn("%1", "inspect the project")
+        .unwrap();
+    service.remove_pending_agent_provider_task(&started.turn_id);
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let action = mez_agent::AgentAction {
+        id: action_id.to_string(),
+        payload,
+    };
+    let mut result = mez_agent::ActionResult::running(
+        &turn,
+        &action,
+        vec!["local action accepted for sandbox-first dispatch".to_string()],
+        None,
+    );
+    result.permission_evaluation = Some(Box::new(sandbox_fallback_allowed_evaluation()));
+    service.agent_turn_executions_mut().insert(
+        turn.turn_id.clone(),
+        mez_agent::AgentTurnExecution {
+            request: runtime_model_request_fixture(&turn.turn_id),
+            response: mez_agent::ModelResponse {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                raw_text: "run the retained action".to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: Some(mez_agent::MaapBatch {
+                    rationale: "exercise project-trust admission".to_string(),
+                    actions: vec![action],
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results: vec![result],
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        },
+    );
+    (service, turn.turn_id, action_id.to_string())
+}
+
+/// Installs a trusted project root with a deeper rejected nested decision.
+fn install_nested_rejection(
+    service: &mut RuntimeSessionService,
+    project_root: &Path,
+    nested_root: &Path,
+) {
+    let mut trust_store = ProjectTrustStore::default();
+    trust_store
+        .decide_at(project_root.to_path_buf(), TrustDecision::Trusted, None, 1)
+        .unwrap();
+    trust_store
+        .decide_at(nested_root.to_path_buf(), TrustDecision::Rejected, None, 2)
+        .unwrap();
+    service.set_project_trust_store(trust_store, None);
+}
+
+/// Installs a trusted project root plus a persisted nested pending decision.
+fn install_nested_pending_decision(
+    service: &mut RuntimeSessionService,
+    trust_path: &Path,
+    project_root: &Path,
+    nested_root: &Path,
+) {
+    ProjectTrustStore::update_file(trust_path, |store| {
+        store.decide_at(project_root.to_path_buf(), TrustDecision::Trusted, None, 1)
+    })
+    .unwrap();
+    let pending_line = format!(
+        "{}\tpending\t\t0\t\t1\t{}\t\n",
+        nested_root.display(),
+        crate::config::CURRENT_CONFIG_SCHEMA_VERSION
+    );
+    let persisted = fs::read_to_string(trust_path).unwrap();
+    fs::write(trust_path, format!("{persisted}{pending_line}")).unwrap();
+    let snapshot = ProjectTrustStore::load_snapshot_from_file(trust_path).unwrap();
+    service.set_project_trust_store(snapshot.store, Some(trust_path.to_path_buf()));
+}
+
+/// Runs the retained action through real dispatch and asserts a trust denial.
+///
+/// The denial must be a `forbidden` policy outcome the model cannot repair, with
+/// no shell transaction and therefore no dispatched payload.
+fn dispatch_retained_action_and_assert_trust_denial(
+    service: &mut RuntimeSessionService,
+    turn_id: &str,
+    action_type: &str,
+    expected_message: &str,
+) {
+    let execution = service
+        .dispatch_stored_running_shell_actions(turn_id)
+        .unwrap()
+        .expect("the retained action should resume dispatch");
+    let result = execution
+        .action_results
+        .first()
+        .expect("the dispatched action should have a result");
+    assert_eq!(result.action_type, action_type);
+    assert_eq!(result.status, ActionStatus::Failed);
+    let error = result
+        .error
+        .as_ref()
+        .expect("the denial should carry an error");
+    assert_eq!(error.code, "forbidden");
+    assert!(error.message.contains(expected_message), "{error:?}");
+    assert!(
+        !mez_agent::outcome::runtime_action_result_is_feedback_candidate(result),
+        "a project-trust denial must not become a model retry target"
+    );
+    assert!(
+        service.running_shell_transactions_for_tests().is_empty(),
+        "a project-trust denial must not open a shell transaction"
+    );
+}
+
+/// Writes one stale-schema trusted record and installs it as live trust.
+fn install_stale_schema_trusted_record(
+    service: &mut RuntimeSessionService,
+    trust_path: &Path,
+    project_root: &Path,
+) {
+    let line = format!(
+        "{}\ttrusted\t\t1\t\t1\t{}\t\n",
+        project_root.display(),
+        crate::config::CURRENT_CONFIG_SCHEMA_VERSION - 1
+    );
+    fs::write(trust_path, line).unwrap();
+    let snapshot = ProjectTrustStore::load_snapshot_from_file(trust_path).unwrap();
+    service.set_project_trust_store(snapshot.store, Some(trust_path.to_path_buf()));
+}
+
+/// Verifies a policy-only shell dispatch cannot run with withheld authority.
+///
+/// `policy-only` applies no operating-system confinement, so the implicit
+/// project-authority decision must still deny admission instead of dispatching
+/// with the withheld default authority.
+#[test]
+fn policy_only_shell_dispatch_denies_withheld_implicit_authority() {
+    let root = temp_root("runtime-implicit-authority-policy-only-shell");
+    let project_root = root.join("project");
+    let rejected_root = project_root.join("vendor/rejected");
+    let working_directory = rejected_root.join("src");
+    fs::create_dir_all(project_root.join(".git")).unwrap();
+    fs::create_dir_all(rejected_root.join(".git")).unwrap();
+    fs::create_dir_all(&working_directory).unwrap();
+    let (mut service, turn_id, _) = admission_action_execution_service(
+        "implicit-authority-policy-only",
+        admission_shell_payload("env"),
+    );
+    configure_policy_only_permissions_without_scopes(&mut service);
+    install_nested_rejection(&mut service, &project_root, &rejected_root);
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        path_resolution_environment(&working_directory),
+    );
+    service.set_pane_current_working_directory("%1".to_string(), working_directory);
+
+    dispatch_retained_action_and_assert_trust_denial(
+        &mut service,
+        &turn_id,
+        "shell_command",
+        "implicit project authority",
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies native shell mode cannot dispatch with withheld authority.
+///
+/// Native mode skips the Bubblewrap path-resolution admission, so the denial
+/// must be decided before any backend-specific work.
+#[test]
+fn native_shell_mode_dispatch_denies_withheld_implicit_authority() {
+    let root = temp_root("runtime-implicit-authority-native-shell");
+    let project_root = root.join("project");
+    let rejected_root = project_root.join("vendor/rejected");
+    let working_directory = rejected_root.join("src");
+    fs::create_dir_all(project_root.join(".git")).unwrap();
+    fs::create_dir_all(rejected_root.join(".git")).unwrap();
+    fs::create_dir_all(&working_directory).unwrap();
+    let (mut service, turn_id, _) = admission_action_execution_service(
+        "implicit-authority-native-shell",
+        admission_shell_payload("env"),
+    );
+    configure_trusted_project_bubblewrap(&mut service);
+    service.set_agent_native_shell_mode_for_tests("%1");
+    install_nested_rejection(&mut service, &project_root, &rejected_root);
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        path_resolution_environment(&working_directory),
+    );
+    service.set_pane_current_working_directory("%1".to_string(), working_directory);
+
+    dispatch_retained_action_and_assert_trust_denial(
+        &mut service,
+        &turn_id,
+        "shell_command",
+        "implicit project authority",
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies an approved sandbox bypass cannot dispatch a patch with withheld
+/// authority.
+///
+/// Host access executes local work outside the configured backend, so an
+/// `apply_patch` admission must still deny the withheld implicit authority
+/// instead of treating the bypass as permission to proceed.
+#[test]
+fn sandbox_bypass_dispatch_denies_withheld_implicit_authority_for_apply_patch() {
+    let root = temp_root("runtime-implicit-authority-sandbox-bypass");
+    let project_root = root.join("project");
+    let rejected_root = project_root.join("vendor/rejected");
+    let working_directory = rejected_root.join("src");
+    fs::create_dir_all(project_root.join(".git")).unwrap();
+    fs::create_dir_all(rejected_root.join(".git")).unwrap();
+    fs::create_dir_all(&working_directory).unwrap();
+    let (mut service, turn_id, _) = admission_action_execution_service(
+        "implicit-authority-sandbox-bypass",
+        admission_apply_patch_payload("admission.txt"),
+    );
+    configure_trusted_project_bubblewrap(&mut service);
+    service.permission_policy_mut().approval_policy = ApprovalPolicy::HostAccess;
+    install_nested_rejection(&mut service, &project_root, &rejected_root);
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        path_resolution_environment(&working_directory),
+    );
+    service.set_pane_current_working_directory("%1".to_string(), working_directory);
+
+    dispatch_retained_action_and_assert_trust_denial(
+        &mut service,
+        &turn_id,
+        "apply_patch",
+        "is withheld",
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies a pending nested decision blocks shell dispatch as a denial.
+#[test]
+fn pending_nested_decision_denies_shell_dispatch_without_payload() {
+    let root = temp_root("runtime-pending-decision-shell-dispatch");
+    let project_root = root.join("project");
+    let nested_root = project_root.join("vendor/nested");
+    let working_directory = nested_root.join("src");
+    let trust_path = root.join("project-trust.tsv");
+    fs::create_dir_all(project_root.join(".git")).unwrap();
+    fs::create_dir_all(nested_root.join(".git")).unwrap();
+    fs::create_dir_all(&working_directory).unwrap();
+    let (mut service, turn_id, _) = admission_action_execution_service(
+        "pending-decision-shell",
+        admission_shell_payload("env"),
+    );
+    configure_trusted_project_bubblewrap(&mut service);
+    install_nested_pending_decision(&mut service, &trust_path, &project_root, &nested_root);
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        path_resolution_environment(&working_directory),
+    );
+    service.set_pane_current_working_directory("%1".to_string(), working_directory);
+    assert_eq!(
+        service.primary_path_scope_status("%1").provenance,
+        "project-trust-pending"
+    );
+
+    dispatch_retained_action_and_assert_trust_denial(
+        &mut service,
+        &turn_id,
+        "shell_command",
+        "the deepest stored project-trust decision is pending",
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies a pending nested decision blocks `apply_patch` as a denial too.
+///
+/// A pending decision must classify identically for both shell-backed action
+/// types so `apply_patch` cannot treat it as a correctable self-correction
+/// target while `shell_command` blocks.
+#[test]
+fn pending_nested_decision_denies_apply_patch_dispatch_without_payload() {
+    let root = temp_root("runtime-pending-decision-patch-dispatch");
+    let project_root = root.join("project");
+    let nested_root = project_root.join("vendor/nested");
+    let working_directory = nested_root.join("src");
+    let trust_path = root.join("project-trust.tsv");
+    fs::create_dir_all(project_root.join(".git")).unwrap();
+    fs::create_dir_all(nested_root.join(".git")).unwrap();
+    fs::create_dir_all(&working_directory).unwrap();
+    let (mut service, turn_id, _) = admission_action_execution_service(
+        "pending-decision-patch",
+        admission_apply_patch_payload("pending.txt"),
+    );
+    configure_trusted_project_bubblewrap(&mut service);
+    install_nested_pending_decision(&mut service, &trust_path, &project_root, &nested_root);
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        path_resolution_environment(&working_directory),
+    );
+    service.set_pane_current_working_directory("%1".to_string(), working_directory);
+
+    dispatch_retained_action_and_assert_trust_denial(
+        &mut service,
+        &turn_id,
+        "apply_patch",
+        "the deepest stored project-trust decision is pending",
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies a stale-schema trusted record grants no implicit authority at
+/// dispatch.
+///
+/// The stricter project lookup already refuses a record written under another
+/// configuration schema, so dispatch must treat the same record as no decision
+/// and refuse to run the action without authority.
+#[test]
+fn stale_schema_trusted_record_grants_no_implicit_authority_at_dispatch() {
+    let root = temp_root("runtime-stale-schema-trusted-record");
+    let project_root = root.join("project");
+    let working_directory = project_root.join("src");
+    let trust_path = root.join("project-trust.tsv");
+    fs::create_dir_all(project_root.join(".git")).unwrap();
+    fs::create_dir_all(&working_directory).unwrap();
+    let (mut service, turn_id, _) = admission_action_execution_service(
+        "stale-schema-trusted-record",
+        admission_shell_payload("env"),
+    );
+    configure_trusted_project_bubblewrap(&mut service);
+    install_stale_schema_trusted_record(&mut service, &trust_path, &project_root);
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        path_resolution_environment(&working_directory),
+    );
+    service.set_pane_current_working_directory("%1".to_string(), working_directory);
+
+    assert_eq!(
+        service.primary_path_scope_status("%1").provenance,
+        "none",
+        "a stale-schema record must not grant trusted-project authority"
+    );
+    let execution = service
+        .dispatch_stored_running_shell_actions(&turn_id)
+        .unwrap()
+        .expect("the retained action should resume dispatch");
+    let result = execution.action_results.first().unwrap();
+    let error = result.error.as_ref().expect("dispatch should fail closed");
+    assert_eq!(error.code, "invalid_state");
+    assert!(
+        error
+            .message
+            .contains("filesystem authority is unavailable"),
+        "{error:?}"
+    );
+    assert!(
+        service.running_shell_transactions_for_tests().is_empty(),
+        "no payload may be dispatched without implicit authority"
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
 }

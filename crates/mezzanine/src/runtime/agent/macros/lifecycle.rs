@@ -3,12 +3,12 @@
 use super::super::{
     ActionResult, AgentAction, AgentActionPayload, AgentTurnExecution, AgentTurnRecord,
     AgentTurnState, MaapBatch, MacroManagedSubagent, MezError, ModelResponse, PathBuf, Result,
-    RuntimeSessionService, runtime_path_under_project_root, runtime_spawn_json_agent_and_turn,
-    runtime_subagent_placement_mode, runtime_subagent_spawn_request,
+    RuntimeSessionService, runtime_spawn_json_agent_and_turn, runtime_subagent_placement_mode,
+    runtime_subagent_spawn_request,
 };
 use super::{
     MacroCatalog, MacroDefinition, MacroRunPhase, MacroRunRegistration,
-    RuntimeAgentPromptTurnStart, TrustDecision, discover_macro_catalog, load_macro_definition,
+    RuntimeAgentPromptTurnStart, discover_macro_catalog, load_macro_definition,
     macro_initial_step_prompt, macro_parent_orchestration_prompt, macro_run_state,
     macro_step_model_request, parse_macro_prompt_invocation,
 };
@@ -28,18 +28,14 @@ impl RuntimeSessionService {
 
     /// Returns the trusted project root whose macros may apply to one pane.
     ///
+    /// A deeper rejected or revoked decision withholds project macros even when
+    /// a broader ancestor is trusted, because implicit authority comes from the
+    /// deepest stored project-trust decision.
+    ///
     /// # Parameters
     /// - `pane_id`: Pane whose working directory determines project scope.
     pub(super) fn trusted_macro_project_root_for_pane(&self, pane_id: &str) -> Option<PathBuf> {
-        let working_directory = self.pane_current_working_directory(pane_id)?;
-        let store = self.integration.project_trust_store()?;
-        store
-            .records()
-            .filter(|record| record.state == TrustDecision::Trusted)
-            .find(|record| {
-                runtime_path_under_project_root(&working_directory, &record.project_root)
-            })
-            .map(|record| record.project_root.clone())
+        self.trusted_project_root_for_pane(pane_id)
     }
 
     /// Registers one spawned subagent as macro-managed for one macro run.

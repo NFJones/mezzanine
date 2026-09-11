@@ -1,12 +1,38 @@
 //! Unit tests for project trust storage and discovery behavior.
 
 use super::{
-    PathBuf, ProjectRootInputSource, ProjectRootMarkerKind, ProjectTrustStore, TrustDecision,
-    default_trust_database_path, discover_project_root, discover_project_root_with_metadata,
-    discover_project_trust_prompt, select_overlay_for_directory, summarize_overlay_capabilities,
+    PathBuf, ProjectRootInputSource, ProjectRootMarkerKind, ProjectTrustProvenance,
+    ProjectTrustRecord, ProjectTrustStore, TrustDecision, default_trust_database_path,
+    discover_project_root, discover_project_root_with_metadata, discover_project_trust_prompt,
+    resolve_project_trust_provenance, select_overlay_for_directory, summarize_overlay_capabilities,
 };
 use std::fs;
 use std::path::Path;
+
+use crate::config::CURRENT_CONFIG_SCHEMA_VERSION;
+
+/// Builds one directly stored trust record for resolver-ranking regressions.
+///
+/// The helper bypasses [`ProjectTrustStore::decide_at`] so a test can store a
+/// non-canonical root or a superseded version exactly as an older database may
+/// still contain it.
+fn stored_record(
+    project_root: PathBuf,
+    state: TrustDecision,
+    trust_policy_version: u32,
+    configuration_schema_version: u32,
+) -> ProjectTrustRecord {
+    ProjectTrustRecord {
+        project_root,
+        state,
+        git_marker_path: None,
+        trusted_at_unix_seconds: 1,
+        decided_by_client_id: None,
+        trust_policy_version,
+        configuration_schema_version,
+        vcs_remote: None,
+    }
+}
 
 /// Returns true when a path or one of its ancestors contains a Git marker.
 ///
@@ -454,6 +480,317 @@ fn trust_database_serialized_updates_preserve_existing_records() {
     );
     let persisted = ProjectTrustStore::load_snapshot_from_file(&path).unwrap();
     assert_eq!(persisted, second_snapshot);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies the deepest stored trust decision governs every nested repository
+/// state instead of a broad trusted ancestor shadowing a deeper withholding
+/// decision.
+///
+/// Trust records are stored in path order regardless of depth, so filtering to
+/// trusted records before selecting the deepest match lets a trusted parent
+/// hide a nested rejection or revocation. This scenario walks a trusted parent
+/// with a deeper trusted, rejected, revoked, and unrecorded nested repository,
+/// adds a second nested level, and proves a sibling rejection cannot affect an
+/// unrelated path.
+#[test]
+fn deepest_stored_trust_decision_governs_nested_repository_states() {
+    let root = temp_root("resolver-nested-states");
+    let parent = root.join("parent");
+    let trusted_child = parent.join("trusted-child");
+    let rejected_child = parent.join("rejected-child");
+    let revoked_child = parent.join("revoked-child");
+    let unrecorded_child = parent.join("unrecorded-child");
+    let deeper_trusted = rejected_child.join("deeper");
+    let sibling = root.join("sibling");
+    for project in [
+        &parent,
+        &trusted_child,
+        &rejected_child,
+        &revoked_child,
+        &unrecorded_child,
+        &deeper_trusted,
+        &sibling,
+    ] {
+        fs::create_dir_all(project.join(".git")).unwrap();
+    }
+    let mut store = ProjectTrustStore::default();
+    store
+        .decide_at(parent.clone(), TrustDecision::Trusted, None, 1)
+        .unwrap();
+    store
+        .decide_at(trusted_child.clone(), TrustDecision::Trusted, None, 2)
+        .unwrap();
+    store
+        .decide_at(rejected_child.clone(), TrustDecision::Rejected, None, 3)
+        .unwrap();
+    store
+        .decide_at(revoked_child.clone(), TrustDecision::Revoked, None, 4)
+        .unwrap();
+    store
+        .decide_at(deeper_trusted.clone(), TrustDecision::Trusted, None, 5)
+        .unwrap();
+    store
+        .decide_at(sibling.clone(), TrustDecision::Rejected, None, 6)
+        .unwrap();
+
+    assert_eq!(
+        resolve_project_trust_provenance(&store, &trusted_child.join("src")),
+        ProjectTrustProvenance::TrustedRoot(fs::canonicalize(&trusted_child).unwrap())
+    );
+    assert_eq!(
+        resolve_project_trust_provenance(&store, &rejected_child.join("src")),
+        ProjectTrustProvenance::NegativeDecision {
+            root: fs::canonicalize(&rejected_child).unwrap(),
+            state: TrustDecision::Rejected,
+        }
+    );
+    assert_eq!(
+        resolve_project_trust_provenance(&store, &revoked_child.join("src")),
+        ProjectTrustProvenance::NegativeDecision {
+            root: fs::canonicalize(&revoked_child).unwrap(),
+            state: TrustDecision::Revoked,
+        }
+    );
+    assert_eq!(
+        resolve_project_trust_provenance(&store, &deeper_trusted.join("src")),
+        ProjectTrustProvenance::TrustedRoot(fs::canonicalize(&deeper_trusted).unwrap())
+    );
+    assert_eq!(
+        resolve_project_trust_provenance(&store, &unrecorded_child.join("src")),
+        ProjectTrustProvenance::TrustedRoot(fs::canonicalize(&parent).unwrap())
+    );
+    assert_eq!(
+        resolve_project_trust_provenance(&store, &sibling.join("src")),
+        ProjectTrustProvenance::NegativeDecision {
+            root: fs::canonicalize(&sibling).unwrap(),
+            state: TrustDecision::Rejected,
+        }
+    );
+    assert_eq!(
+        resolve_project_trust_provenance(&store, &root.join("unrelated")),
+        ProjectTrustProvenance::NoDecision
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies repository markers alone never invent a project-trust decision.
+///
+/// Project discovery finds the nearest repository, but only a stored decision
+/// can grant or withhold implicit authority. A nested `.git` marker without its
+/// own record must therefore keep the recursive parent trust instead of
+/// becoming a manufactured rejection.
+#[test]
+fn resolver_does_not_invent_a_decision_from_repository_markers() {
+    let root = temp_root("resolver-no-invented-decision");
+    let parent = root.join("parent");
+    let nested_repository = parent.join("nested-repository");
+    fs::create_dir_all(parent.join(".git")).unwrap();
+    fs::create_dir_all(nested_repository.join(".git")).unwrap();
+    let mut store = ProjectTrustStore::default();
+    store
+        .decide_at(parent.clone(), TrustDecision::Trusted, None, 1)
+        .unwrap();
+
+    assert_eq!(
+        resolve_project_trust_provenance(&store, &nested_repository.join("src")),
+        ProjectTrustProvenance::TrustedRoot(fs::canonicalize(&parent).unwrap())
+    );
+    let empty = ProjectTrustStore::default();
+    assert_eq!(
+        resolve_project_trust_provenance(&empty, &nested_repository.join("src")),
+        ProjectTrustProvenance::NoDecision
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies canonical symlink semantics preserve both the stored record
+/// identity and a nested withholding decision.
+///
+/// A working directory reached through a symlink must resolve against the
+/// canonical stored root, and a symlink that lands inside a rejected nested
+/// project must keep that rejection rather than degrading to an unknown path.
+#[test]
+fn resolver_preserves_canonical_symlink_semantics() {
+    let root = temp_root("resolver-symlinks");
+    let parent = root.join("parent");
+    let rejected_child = parent.join("rejected-child");
+    fs::create_dir_all(parent.join(".git")).unwrap();
+    fs::create_dir_all(rejected_child.join(".git")).unwrap();
+    fs::create_dir_all(rejected_child.join("src")).unwrap();
+    let mut store = ProjectTrustStore::default();
+    store
+        .decide_at(parent.clone(), TrustDecision::Trusted, None, 1)
+        .unwrap();
+    store
+        .decide_at(rejected_child.clone(), TrustDecision::Rejected, None, 2)
+        .unwrap();
+    let rejected_link = root.join("link-to-rejected");
+    std::os::unix::fs::symlink(&rejected_child, &rejected_link).unwrap();
+    let trusted_link = root.join("link-to-parent");
+    std::os::unix::fs::symlink(&parent, &trusted_link).unwrap();
+
+    assert_eq!(
+        resolve_project_trust_provenance(&store, &rejected_link.join("src")),
+        ProjectTrustProvenance::NegativeDecision {
+            root: fs::canonicalize(&rejected_child).unwrap(),
+            state: TrustDecision::Rejected,
+        }
+    );
+    assert_eq!(
+        resolve_project_trust_provenance(&store, &trusted_link),
+        ProjectTrustProvenance::TrustedRoot(fs::canonicalize(&parent).unwrap())
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies withheld provenance names distinguish a rejection, a revocation,
+/// and a pending decision from the absence of any stored decision.
+///
+/// Status projections use these names so an operator can see that authority
+/// was withheld by a nested decision rather than never decided at all.
+#[test]
+fn resolver_reports_withheld_provenance_names() {
+    let rejected = ProjectTrustProvenance::NegativeDecision {
+        root: PathBuf::from("/project/nested"),
+        state: TrustDecision::Rejected,
+    };
+    let revoked = ProjectTrustProvenance::NegativeDecision {
+        root: PathBuf::from("/project/nested"),
+        state: TrustDecision::Revoked,
+    };
+    let pending = ProjectTrustProvenance::PendingDecision {
+        root: PathBuf::from("/project/nested"),
+    };
+
+    assert_eq!(
+        rejected.withheld_provenance(),
+        Some("project-trust-rejected")
+    );
+    assert_eq!(revoked.withheld_provenance(), Some("project-trust-revoked"));
+    assert_eq!(pending.withheld_provenance(), Some("project-trust-pending"));
+    assert_eq!(
+        ProjectTrustProvenance::NoDecision.withheld_provenance(),
+        None
+    );
+    assert_eq!(
+        ProjectTrustProvenance::TrustedRoot(PathBuf::from("/project")).withheld_provenance(),
+        None
+    );
+    assert_eq!(pending.governing_root(), Some(Path::new("/project/nested")));
+    assert_eq!(ProjectTrustProvenance::NoDecision.governing_root(), None);
+    assert_eq!(
+        ProjectTrustProvenance::TrustedRoot(PathBuf::from("/project")).trusted_root(),
+        Some(Path::new("/project"))
+    );
+}
+
+/// Verifies ranking uses the same canonical depth used for filtering while the
+/// reported decision keeps the pristine stored record identity.
+///
+/// A symlink alias can be textually as shallow as the trusted ancestor it really
+/// sits under. Ranking by the stored path lets that ancestor win and silently
+/// grants implicit authority for a nested project that a deeper stored decision
+/// rejects.
+#[test]
+fn resolver_ranks_non_canonical_stored_root_by_canonical_depth() {
+    let root = temp_root("resolver-non-canonical-ranking");
+    let project = root.join("project");
+    let nested = project.join("vendor/nested");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    fs::create_dir_all(nested.join(".git")).unwrap();
+    fs::create_dir_all(nested.join("src")).unwrap();
+    let alias = root.join("alias");
+    std::os::unix::fs::symlink(&nested, &alias).unwrap();
+    assert_eq!(
+        alias.components().count(),
+        project.components().count(),
+        "the alias must not rank deeper than the trusted ancestor by stored path"
+    );
+    let mut store = ProjectTrustStore::default();
+    store
+        .decide_at(project.clone(), TrustDecision::Trusted, None, 1)
+        .unwrap();
+    store.records.insert(
+        alias.clone(),
+        stored_record(
+            alias.clone(),
+            TrustDecision::Rejected,
+            1,
+            CURRENT_CONFIG_SCHEMA_VERSION as u32,
+        ),
+    );
+
+    assert_eq!(
+        resolve_project_trust_provenance(&store, &nested.join("src")),
+        ProjectTrustProvenance::NegativeDecision {
+            root: alias.clone(),
+            state: TrustDecision::Rejected,
+        }
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies resolution ignores records written under another trust policy or
+/// configuration schema, matching the stricter project lookup.
+///
+/// A stale trusted record must not grant implicit authority, and a stale
+/// negative record must not withhold authority that the stricter lookup already
+/// refuses to recognize as a decision.
+#[test]
+fn resolver_ignores_records_from_other_trust_versions() {
+    let root = temp_root("resolver-stale-trust-versions");
+    let project = root.join("project");
+    let nested = project.join("vendor/nested");
+    let stale_trusted = root.join("stale-trusted");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    fs::create_dir_all(nested.join(".git")).unwrap();
+    fs::create_dir_all(nested.join("src")).unwrap();
+    fs::create_dir_all(stale_trusted.join("src")).unwrap();
+    let mut store = ProjectTrustStore::default();
+    store
+        .decide_at(project.clone(), TrustDecision::Trusted, None, 1)
+        .unwrap();
+    store.records.insert(
+        nested.clone(),
+        stored_record(
+            nested.clone(),
+            TrustDecision::Rejected,
+            1,
+            CURRENT_CONFIG_SCHEMA_VERSION as u32 - 1,
+        ),
+    );
+    store.records.insert(
+        stale_trusted.clone(),
+        stored_record(
+            stale_trusted.clone(),
+            TrustDecision::Trusted,
+            0,
+            CURRENT_CONFIG_SCHEMA_VERSION as u32,
+        ),
+    );
+
+    assert!(
+        store.get_for_project(&nested, None).is_none(),
+        "a stale configuration schema must not produce a stored decision"
+    );
+    assert!(
+        store.get_for_project(&stale_trusted, None).is_none(),
+        "a stale trust policy must not produce a stored decision"
+    );
+    assert_eq!(
+        resolve_project_trust_provenance(&store, &nested.join("src")),
+        ProjectTrustProvenance::TrustedRoot(fs::canonicalize(&project).unwrap())
+    );
+    assert_eq!(
+        resolve_project_trust_provenance(&store, &stale_trusted.join("src")),
+        ProjectTrustProvenance::NoDecision
+    );
 
     let _ = fs::remove_dir_all(root);
 }

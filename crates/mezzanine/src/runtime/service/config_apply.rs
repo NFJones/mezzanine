@@ -39,6 +39,7 @@ use crate::runtime::config::{
     runtime_pane_spawn_view_policy_from_config,
 };
 use crate::runtime::{RuntimeConfigAffectedSubsystems, RuntimePreparedConfigReload};
+use crate::security::project::{ProjectTrustProvenance, resolve_project_trust_provenance};
 use mez_agent::ModelProfileDefinition;
 
 impl RuntimeSessionService {
@@ -170,11 +171,22 @@ impl RuntimeSessionService {
             return self.remove_project_config_layers_for_root(&project_root);
         }
 
-        let trusted = self
-            .project_trust_store()
-            .as_ref()
-            .and_then(|store| store.get(&project_root))
-            .is_some_and(|record| record.state == TrustDecision::Trusted);
+        // Overlay trust is resolved against each overlay file's own directory
+        // rather than the discovered repository root. Repository discovery
+        // walks past a marker-less nested root up to a trusted ancestor, so the
+        // ancestor decision must not mark an overlay under a deeper rejected or
+        // revoked root as trusted.
+        let trust_store = self.project_trust_store().cloned();
+        let overlay_is_trusted = |path: &Path| {
+            path.parent().is_some_and(|directory| {
+                trust_store.as_ref().is_some_and(|store| {
+                    matches!(
+                        resolve_project_trust_provenance(store, directory),
+                        ProjectTrustProvenance::TrustedRoot(_)
+                    )
+                })
+            })
+        };
         let selected = overlay_files.iter().cloned().collect::<BTreeSet<_>>();
         let before = self.integration.config_layers().to_vec();
         self.integration.config_layers_mut().retain(|layer| {
@@ -197,7 +209,7 @@ impl RuntimeSessionService {
                 path: Some(overlay_path.clone()),
                 format: ConfigFormat::from_path(&overlay_path)?,
                 scope: ConfigScope::ProjectOverlay,
-                trusted,
+                trusted: overlay_is_trusted(&overlay_path),
                 text: fs::read_to_string(&overlay_path)?,
             };
             if let Some(existing) = self

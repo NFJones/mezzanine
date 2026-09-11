@@ -3101,6 +3101,15 @@ shown at approval time are diagnostic context only and MUST NOT be the only
 trusted paths. Future sessions MUST reload the trust record before applying
 project overlays.
 
+Each overlay file's trust MUST be resolved against the deepest stored decision
+governing that overlay file's own directory rather than against the discovered
+repository root. A deeper rejected or revoked decision for a nested directory
+MUST stop overlays under that directory from applying even when the directory
+has no repository marker of its own and a broader ancestor root stays trusted.
+A stored record written under another trust-policy version or configuration
+schema version MUST be treated as no decision, matching the stricter project
+record lookup, so a stale decision can neither grant nor withhold authority.
+
 Long-running services MUST observe persisted project-trust changes before the
 next trust-dependent configuration operation or agent action. A semantic trust
 change MUST invalidate generation-keyed path-resolution and sandbox capability
@@ -4496,8 +4505,21 @@ authoring workflows can manage user-scoped artifacts. These code-owned scopes
 MUST be additive and MUST NOT replace explicitly configured scopes. When both
 configured scope arrays are empty, a pane
 within an explicitly trusted project MUST receive that project root as its
-default read-write authority. When multiple trusted roots contain the pane
-working directory, Mezzanine MUST select the deepest matching root; no other
+default read-write authority. One resolver MUST select the deepest stored
+project-trust decision governing the pane working directory across trusted,
+rejected, and revoked records. Only a trusted root grants implicit
+trusted-project authority. A deeper rejected or revoked decision withholds that
+implicit authority even when a broader ancestor is trusted, and Mezzanine MUST
+NOT substitute the parent root, add a trust record, widen scope, or fall back to
+the host. The resolver MUST filter candidate decisions on the same trust-policy
+and configuration-schema versions as the stricter project record lookup, and
+MUST rank them by canonical depth even when a stored record holds a
+non-canonical root, while reporting the pristine stored root as the governing
+identity. Explicitly configured `read_scopes` and `write_scopes` remain an
+independent grant that a negative project-trust decision MUST NOT subtract. A
+directory that contains a nested repository marker but no deeper stored decision
+keeps the recursive parent trust; repository-marker discovery alone MUST NOT
+manufacture a decision, and no other
 working directory MAY infer authority. Aside from that trusted-project default,
 semantic `apply_patch` actions MUST retain every effective write scope in their
 Bubblewrap launch rather than narrowing mounts to classified patch effects or a
@@ -4660,8 +4682,25 @@ behavior and MUST NOT invent scopes, rule identities, or effects.
 
 Permission status MUST distinguish configured scopes from the active pane's
 effective scopes and MUST report effective scope provenance as `explicit`,
-`trusted-project`, or `none`. Trusted-project provenance MUST include the
-selected trusted root. Sandbox status and bounded failure-assessment evidence
+`trusted-project`, `none`, or a withheld project-trust decision
+(`project-trust-rejected`, `project-trust-revoked`, or `project-trust-pending`).
+Trusted-project provenance MUST include the selected trusted root. A withheld
+decision MUST name the governing root so an operator can distinguish a rejected
+or revoked nested decision from the mere absence of any decision. Status MUST
+NOT report operating-system confinement for a `policy-only` configuration.
+A withheld project-trust decision MUST deny `shell_command` and `apply_patch`
+admission regardless of the applied sandbox backend, including `policy-only`, a
+native shell mode, and an approved sandbox bypass, and MUST NOT dispatch a
+payload or open a shell transaction. Explicitly configured
+`permissions.read_scopes` and `permissions.write_scopes` MUST short-circuit that
+denial as an independent grant. A rejected or revoked decision and a pending
+decision MUST both surface as `forbidden` policy denials that are not
+model-correctable, while staying distinguishable by message and provenance, and
+a pending decision MUST NOT be reported as a correctable invalid state.
+`mez sandbox status` MUST resolve effective project authority through the same
+deepest-decision resolver and MUST report the withheld provenance together with
+the governing root instead of claiming `trusted-project`.
+Sandbox status and bounded failure-assessment evidence
 MUST use stable, non-sensitive restriction identifiers. Bubblewrap identifiers
 MUST cover authority-only mounts, the synthetic home, the minimal executable
 path, and enforced shell network policy. Seatbelt identifiers MUST cover

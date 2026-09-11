@@ -20,7 +20,9 @@ use crate::runtime::processes::{NativeLaunchEnvironmentRole, NativeShellContext}
 use crate::runtime::{
     RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES, RuntimeNativeShellDispatch, SandboxConfig,
 };
-use crate::security::project::TrustDecision;
+use crate::security::project::{
+    ProjectTrustProvenance, TrustDecision, resolve_project_trust_provenance,
+};
 use mez_agent::PermissionPreset;
 use mez_agent::permissions::{
     PermissionAuthorityChange, PermissionEvaluation, compare_permission_preset_authority,
@@ -42,6 +44,22 @@ pub(crate) struct RuntimePrimaryPathScopeStatus {
     pub(crate) provenance: &'static str,
     /// Selected trusted root when project trust supplied the authority.
     pub(crate) trusted_project_root: Option<String>,
+    /// Deepest negative project-trust root when a stored decision withheld
+    /// implicit authority, distinct from a mere absence of any decision.
+    pub(crate) denied_project_root: Option<String>,
+}
+
+impl RuntimePrimaryPathScopeStatus {
+    /// Builds the no-authority projection used when no decision applies.
+    fn none() -> Self {
+        Self {
+            read_scopes: Vec::new(),
+            write_scopes: Vec::new(),
+            provenance: "none",
+            trusted_project_root: None,
+            denied_project_root: None,
+        }
+    }
 }
 
 /// Identifies where one effective pane permission field was resolved.
@@ -1056,7 +1074,7 @@ impl RuntimeSessionService {
         if !crate::runtime::config::sandbox_applies_to_policy(&sandbox_config, &permission_policy) {
             return Ok(true);
         }
-        self.refresh_project_trust_store_from_disk_if_changed()?;
+        self.ensure_implicit_project_authority_for_action(turn)?;
         let evaluation = evaluation.ok_or_else(|| {
             MezError::invalid_state(
                 "Bubblewrap path resolution requires the retained permission evaluation",
@@ -1280,6 +1298,13 @@ impl RuntimeSessionService {
     }
 
     /// Returns effective primary authority together with its stable provenance.
+    ///
+    /// Explicit configured scopes are an independent grant and are reported
+    /// unchanged even when a nested project-trust decision is negative. With no
+    /// configured scope lists, the deepest stored project-trust decision for the
+    /// pane directory decides implicit authority: only a trusted root grants it,
+    /// while a rejected or revoked nested decision withholds it and is reported
+    /// distinctly from a mere absence of any decision.
     pub(crate) fn primary_path_scope_status(&self, pane_id: &str) -> RuntimePrimaryPathScopeStatus {
         let resources = &self.configured_permissions().resources;
         if !resources.read_scopes.is_empty() || !resources.write_scopes.is_empty() {
@@ -1288,41 +1313,110 @@ impl RuntimeSessionService {
                 write_scopes: resources.write_scopes.clone(),
                 provenance: "explicit",
                 trusted_project_root: None,
+                denied_project_root: None,
             };
         }
-        let Some(project_root) = self.trusted_project_root_for_pane(pane_id) else {
-            return RuntimePrimaryPathScopeStatus {
-                read_scopes: Vec::new(),
-                write_scopes: Vec::new(),
-                provenance: "none",
-                trusted_project_root: None,
-            };
+        let Some(provenance) = self.project_trust_provenance_for_pane(pane_id) else {
+            return RuntimePrimaryPathScopeStatus::none();
         };
-        let project_root = project_root.to_string_lossy().into_owned();
+        if let ProjectTrustProvenance::TrustedRoot(project_root) = &provenance {
+            let project_root = project_root.to_string_lossy().into_owned();
+            return RuntimePrimaryPathScopeStatus {
+                read_scopes: vec![project_root.clone()],
+                write_scopes: vec![project_root.clone()],
+                provenance: "trusted-project",
+                trusted_project_root: Some(project_root),
+                denied_project_root: None,
+            };
+        }
+        let Some(withheld_provenance) = provenance.withheld_provenance() else {
+            return RuntimePrimaryPathScopeStatus::none();
+        };
         RuntimePrimaryPathScopeStatus {
-            read_scopes: vec![project_root.clone()],
-            write_scopes: vec![project_root.clone()],
-            provenance: "trusted-project",
-            trusted_project_root: Some(project_root),
+            read_scopes: Vec::new(),
+            write_scopes: Vec::new(),
+            provenance: withheld_provenance,
+            trusted_project_root: None,
+            denied_project_root: provenance
+                .governing_root()
+                .map(|root| root.to_string_lossy().into_owned()),
         }
     }
 
-    /// Returns the deepest trusted project containing the pane directory.
-    pub(crate) fn trusted_project_root_for_pane(&self, pane_id: &str) -> Option<PathBuf> {
+    /// Returns the deepest stored project-trust decision for one pane directory.
+    pub(crate) fn project_trust_provenance_for_pane(
+        &self,
+        pane_id: &str,
+    ) -> Option<ProjectTrustProvenance> {
         let working_directory = self.pane_current_working_directory(pane_id)?;
-        self.integration.project_trust_store().and_then(|store| {
-            store
-                .records()
-                .filter(|record| record.state == TrustDecision::Trusted)
-                .filter(|record| {
-                    crate::runtime::runtime_path_under_project_root(
-                        &working_directory,
-                        &record.project_root,
-                    )
-                })
-                .max_by_key(|record| record.project_root.components().count())
-                .map(|record| record.project_root.clone())
-        })
+        let store = self.integration.project_trust_store()?;
+        Some(resolve_project_trust_provenance(store, &working_directory))
+    }
+
+    /// Returns the deepest trusted project containing the pane directory.
+    ///
+    /// A deeper rejected or revoked decision withholds implicit authority, so
+    /// this returns `None` even when a broader ancestor is trusted.
+    pub(crate) fn trusted_project_root_for_pane(&self, pane_id: &str) -> Option<PathBuf> {
+        self.project_trust_provenance_for_pane(pane_id)?
+            .trusted_root()
+            .map(Path::to_path_buf)
+    }
+
+    /// Rejects one action admission when the deepest stored project-trust
+    /// decision withholds implicit authority for the action's pane.
+    ///
+    /// Both the shell and `apply_patch` admission paths call this before any
+    /// backend-specific work, so a policy-only configuration, native shell mode,
+    /// or an approved sandbox bypass cannot dispatch with withheld implicit
+    /// authority. The denial is a `forbidden` policy outcome, so the runtime
+    /// reports no payload and opens no transaction.
+    pub(crate) fn ensure_implicit_project_authority_for_action(
+        &mut self,
+        turn: &AgentTurnRecord,
+    ) -> Result<()> {
+        self.refresh_project_trust_store_from_disk_if_changed()?;
+        match self.implicit_project_authority_denial_for_pane(&turn.pane_id) {
+            Some(denial) => Err(denial),
+            None => Ok(()),
+        }
+    }
+
+    /// Returns the policy denial for a withheld implicit project authority.
+    ///
+    /// Explicit configured scopes are a separate grant, so a withheld overlay
+    /// decision never subtracts them. When neither configured scope list exists
+    /// and the deepest stored decision for the pane directory is negative,
+    /// admission fails as a policy denial instead of a correctable argument
+    /// error. A pending decision is also blocking and non-correctable, but it is
+    /// reported with its own pending wording so an undecided nested project
+    /// stays distinguishable from a rejected or revoked one. Only the complete
+    /// absence of a stored decision keeps the existing authority-resolution
+    /// failure path.
+    fn implicit_project_authority_denial_for_pane(&self, pane_id: &str) -> Option<MezError> {
+        let resources = &self.configured_permissions().resources;
+        if !resources.read_scopes.is_empty() || !resources.write_scopes.is_empty() {
+            return None;
+        }
+        let provenance = self.project_trust_provenance_for_pane(pane_id)?;
+        if let Some((root, state)) = provenance.negative_decision() {
+            let state = match state {
+                TrustDecision::Revoked => "revoked",
+                _ => "rejected",
+            };
+            return Some(MezError::forbidden(format!(
+                "implicit project authority for {} is withheld because the deepest stored project-trust decision {state} this nested project; configure permissions.read_scopes/write_scopes for an explicit grant",
+                root.display()
+            )));
+        }
+        let ProjectTrustProvenance::PendingDecision { root } = &provenance else {
+            return None;
+        };
+        Some(MezError::forbidden(format!(
+            "implicit project authority for {} is blocked because the deepest stored project-trust decision is pending; record an explicit decision with /sandbox trust {} or configure permissions.read_scopes/write_scopes for an explicit grant",
+            root.display(),
+            root.display()
+        )))
     }
 
     /// Builds the best-available `PathScopes` for a pane.

@@ -123,6 +123,27 @@ warning is required when partial effects may already exist.
 runs local shell work outside the configured sandbox. It should be used only
 when the host boundary is explicitly required and understood.
 
+## Implicit project authority
+
+With `bubblewrap` or `seatbelt` active and both configured scope arrays empty,
+a pane inside a trusted project receives that project root as its default
+read/write authority. The authority comes from the deepest stored project-trust
+decision governing the pane working directory. A deeper rejected or revoked
+record withholds it even when a broader ancestor is trusted, a nested
+repository without its own record keeps the recursive parent trust, and a
+`.git` marker alone never manufactures a decision. Explicit
+`permissions.read_scopes` and `permissions.write_scopes` are a separate grant
+that a negative nested decision does not subtract. Under `policy-only` none of
+this is operating-system confinement: the effective status keeps reporting
+`policy-only` and must not be read as filesystem or shell-network isolation.
+The decision is enforced at admission for shell commands and semantic patches
+regardless of the active backend, so `policy-only`, native shell mode, and an
+approved sandbox bypass do not dispatch with withheld implicit authority. A
+rejected or revoked decision and a pending decision both fail as non-correctable
+policy denials without a dispatched payload or shell transaction. `mez sandbox
+status` resolves the same decision and reports the withheld provenance with its
+governing root instead of reporting `trusted-project`.
+
 ## Related pages
 
 - [Approvals and review](approvals-and-review.md)

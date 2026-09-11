@@ -10,7 +10,6 @@ use crate::runtime::{
     AgentShellCommandOutcome, AgentShellRuntimeContext, RuntimeAgentPromptTurnStart,
     execute_agent_shell_command_with_context,
 };
-use crate::security::project::TrustDecision;
 use mez_agent::ScheduledWorkKind;
 use mez_agent::{
     MacroCatalog, MacroDefinition, MacroJudgeDecision, MacroJudgeOutcome, MacroRunPhase,

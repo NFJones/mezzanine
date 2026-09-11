@@ -1340,6 +1340,22 @@ impl RuntimeSessionService {
                     }
                 }
             }
+            if is_apply_patch || matches!(action.payload, AgentActionPayload::ShellCommand { .. }) {
+                let admission_command = match &action.payload {
+                    AgentActionPayload::ShellCommand { command, .. } => command.as_str(),
+                    _ => "apply_patch",
+                };
+                if let Err(error) = self.ensure_implicit_project_authority_for_action(turn) {
+                    execution.action_results[index] = self.shell_action_runtime_error_result(
+                        turn,
+                        action,
+                        admission_command,
+                        "implicit_project_authority",
+                        &error,
+                    )?;
+                    continue;
+                }
+            }
             let path_boundary = if is_apply_patch {
                 self.apply_patch_path_boundary_for_action(turn, &action.id)?
             } else {

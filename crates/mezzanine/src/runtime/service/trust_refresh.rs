@@ -7,10 +7,11 @@
 
 use super::{
     ConfigScope, EventKind, MezError, Path, ProjectTrustStore, Result, RuntimeSessionService,
-    TrustDecision, discover_project_root, json_escape,
+    TrustDecision, json_escape,
 };
-use crate::runtime::runtime_path_under_project_root;
-use crate::security::project::ProjectTrustSnapshot;
+use crate::security::project::{
+    ProjectTrustProvenance, ProjectTrustSnapshot, resolve_project_trust_provenance,
+};
 
 impl RuntimeSessionService {
     /// Reloads the configured trust database when its exact content changed.
@@ -132,18 +133,14 @@ impl RuntimeSessionService {
     }
 
     /// Recomputes every loaded project overlay against the current trust store.
+    ///
+    /// A layer is trusted only when the deepest stored decision governing the
+    /// overlay file's own directory is an explicit trust, so a nested rejection
+    /// or revocation cannot leave a nested overlay applied behind a broader
+    /// trusted ancestor, even when the nested root has no repository marker of
+    /// its own.
     pub(crate) fn reconcile_project_overlay_trust(&mut self) -> Vec<String> {
-        let trusted_roots = self
-            .integration
-            .project_trust_store()
-            .map(|store| {
-                store
-                    .records()
-                    .filter(|record| record.state == TrustDecision::Trusted)
-                    .map(|record| record.project_root.clone())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let store = self.integration.project_trust_store().cloned();
         let mut changed = Vec::new();
         for layer in self.integration.config_layers_mut() {
             if layer.scope != ConfigScope::ProjectOverlay {
@@ -152,13 +149,14 @@ impl RuntimeSessionService {
             let Some(path) = layer.path.as_ref() else {
                 continue;
             };
-            let project_root = path
-                .parent()
-                .map(discover_project_root)
-                .unwrap_or_else(|| discover_project_root(path));
-            let trusted = trusted_roots
-                .iter()
-                .any(|root| runtime_path_under_project_root(&project_root, root));
+            let trusted = path.parent().is_some_and(|directory| {
+                store.as_ref().is_some_and(|store| {
+                    matches!(
+                        resolve_project_trust_provenance(store, directory),
+                        ProjectTrustProvenance::TrustedRoot(_)
+                    )
+                })
+            });
             if layer.trusted != trusted {
                 layer.trusted = trusted;
                 changed.push(layer.name.clone());

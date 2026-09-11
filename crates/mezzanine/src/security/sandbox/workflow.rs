@@ -14,7 +14,9 @@ use serde::Serialize;
 use mez_agent::ApprovalPolicy;
 
 use crate::runtime::{ConfiguredPermissions, SandboxBackend, SandboxConfig};
-use crate::security::project::{ProjectRootDiscovery, ProjectRootMarkerKind, TrustDecision};
+use crate::security::project::{
+    ProjectRootDiscovery, ProjectRootMarkerKind, ProjectTrustProvenance, TrustDecision,
+};
 
 use super::managed_home::inspect_seatbelt_managed_home;
 use super::seatbelt::SEATBELT_RUNTIME_PROFILE_VERSION;
@@ -31,6 +33,12 @@ pub(crate) struct SandboxWorkflowRequest<'a> {
     pub(crate) discovery: &'a ProjectRootDiscovery,
     /// Current trust decision for the discovered project identity.
     pub(crate) trust_state: TrustDecision,
+    /// Deepest stored project-trust decision governing the inspected directory.
+    ///
+    /// This is the same resolution the runtime applies before admitting an
+    /// action, so a deeper rejected, revoked, or pending decision is reported as
+    /// a withheld provenance instead of an inherited `trusted-project` default.
+    pub(crate) implicit_project_trust: ProjectTrustProvenance,
     /// Private configuration root inspected for managed-home readiness.
     pub(crate) config_root: &'a Path,
     /// Effective configuration source for the sandbox backend.
@@ -108,6 +116,8 @@ pub(crate) struct SandboxEffectiveState {
     pub(crate) sandbox: String,
     /// Provenance for effective filesystem authority.
     pub(crate) scope_provenance: String,
+    /// Governing root of a withheld project-trust decision, when one applies.
+    pub(crate) denied_project_root: Option<String>,
     /// Effective read scopes known outside a live pane.
     pub(crate) read_scopes: Vec<String>,
     /// Effective write scopes known outside a live pane.
@@ -204,7 +214,11 @@ pub(crate) fn effective_sandbox_boundary(
 pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> SandboxWorkflowPlan {
     let configured_sandbox = request.permissions.sandbox.as_str().to_string();
     let approval_policy = request.permissions.authorization.approval_policy;
-    let trusted = request.trust_state == TrustDecision::Trusted;
+    let trusted = matches!(
+        request.implicit_project_trust,
+        ProjectTrustProvenance::TrustedRoot(_)
+    );
+    let withheld_provenance = request.implicit_project_trust.withheld_provenance();
     let explicit_scopes = !request.permissions.resources.read_scopes.is_empty()
         || !request.permissions.resources.write_scopes.is_empty();
     let (scope_provenance, read_scopes, write_scopes) = if explicit_scopes {
@@ -213,15 +227,21 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             request.permissions.resources.read_scopes.clone(),
             request.permissions.resources.write_scopes.clone(),
         )
-    } else if trusted {
-        let root = request
-            .discovery
-            .canonical_root
-            .to_string_lossy()
-            .into_owned();
+    } else if let ProjectTrustProvenance::TrustedRoot(root) = &request.implicit_project_trust {
+        let root = root.to_string_lossy().into_owned();
         ("trusted-project", vec![root.clone()], vec![root])
+    } else if let Some(withheld) = withheld_provenance {
+        (withheld, Vec::new(), Vec::new())
     } else {
         ("none", Vec::new(), Vec::new())
+    };
+    let denied_project_root = if explicit_scopes || withheld_provenance.is_none() {
+        None
+    } else {
+        request
+            .implicit_project_trust
+            .governing_root()
+            .map(|root| root.to_string_lossy().into_owned())
     };
     let effective_sandbox =
         effective_sandbox_boundary(&request.permissions.sandbox, approval_policy).to_string();
@@ -327,6 +347,19 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             remedy: "Pass an explicit project path or initialize a repository before changing sandbox authority.".to_string(),
             affected_path: Some(request.discovery.canonical_root.clone()),
             source: "project-discovery",
+        });
+    }
+    if !explicit_scopes && let Some(withheld) = withheld_provenance {
+        diagnostics.push(SandboxWorkflowDiagnostic {
+            id: "sandbox.implicit-authority-withheld",
+            severity: SandboxDiagnosticSeverity::Warning,
+            summary: "Implicit trusted-project authority is withheld".to_string(),
+            details: format!(
+                "The deepest stored project-trust decision for the inspected directory is {withheld}, so no trusted-project filesystem authority is projected."
+            ),
+            remedy: "As the direct user, record an explicit decision for the governing root or configure narrow permissions.read_scopes/write_scopes.".to_string(),
+            affected_path: denied_project_root.clone().map(PathBuf::from),
+            source: "project-trust",
         });
     }
     if let Some(backend) = request.permissions.sandbox.backend() {
@@ -481,6 +514,7 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
         effective: SandboxEffectiveState {
             sandbox: effective_sandbox,
             scope_provenance: scope_provenance.to_string(),
+            denied_project_root,
             read_scopes,
             write_scopes,
             sandbox_executable,
@@ -595,6 +629,9 @@ mod tests {
             permissions: &permissions,
             discovery: &discovery,
             trust_state: TrustDecision::Trusted,
+            implicit_project_trust: ProjectTrustProvenance::TrustedRoot(
+                discovery.canonical_root.clone(),
+            ),
             config_root: &config_root,
             sandbox_source: "primary",
             approval_policy_source: "primary",
@@ -652,6 +689,9 @@ mod tests {
             permissions: &permissions,
             discovery: &discovery,
             trust_state: TrustDecision::Trusted,
+            implicit_project_trust: ProjectTrustProvenance::TrustedRoot(
+                discovery.canonical_root.clone(),
+            ),
             config_root: &config_root,
             sandbox_source: "primary",
             approval_policy_source: "primary",
@@ -697,6 +737,7 @@ mod tests {
             permissions: &permissions,
             discovery: &discovery,
             trust_state: TrustDecision::Pending,
+            implicit_project_trust: ProjectTrustProvenance::NoDecision,
             config_root: &root,
             sandbox_source: "primary",
             approval_policy_source: "primary",
@@ -710,6 +751,81 @@ mod tests {
             plan.diagnostics
                 .iter()
                 .any(|diagnostic| diagnostic.id == "sandbox.host-policy-bypass")
+        );
+    }
+
+    /// Verifies a deeper project-trust decision is reported as withheld
+    /// authority with its governing root instead of an inherited
+    /// `trusted-project` default.
+    ///
+    /// Standalone sandbox status resolves the same deepest decision the runtime
+    /// applies at admission, so a rejected or pending nested root must never be
+    /// presented as trusted project authority.
+    #[test]
+    fn withheld_project_trust_reports_governing_root_without_trusted_project() {
+        let root = std::env::temp_dir();
+        let project_root = root.join("workflow-withheld-project");
+        let nested_root = project_root.join("vendor/rejected");
+        let mut permissions = ConfiguredPermissions::default();
+        permissions.resources.read_scopes.clear();
+        permissions.resources.write_scopes.clear();
+        let discovery = ProjectRootDiscovery {
+            canonical_start: project_root.clone(),
+            canonical_root: project_root.clone(),
+            input_source: ProjectRootInputSource::ExplicitPath,
+            marker_kind: ProjectRootMarkerKind::GitDirectory,
+            nesting_depth: 0,
+        };
+        let rejected = plan_sandbox_workflow(SandboxWorkflowRequest {
+            permissions: &permissions,
+            discovery: &discovery,
+            trust_state: TrustDecision::Trusted,
+            implicit_project_trust: ProjectTrustProvenance::NegativeDecision {
+                root: nested_root.clone(),
+                state: TrustDecision::Rejected,
+            },
+            config_root: &root,
+            sandbox_source: "primary",
+            approval_policy_source: "primary",
+            read_scopes_source: "default",
+            write_scopes_source: "default",
+        });
+
+        assert_eq!(
+            rejected.effective.scope_provenance,
+            "project-trust-rejected"
+        );
+        assert_eq!(
+            rejected.effective.denied_project_root.as_deref(),
+            Some(nested_root.to_string_lossy().as_ref())
+        );
+        assert!(rejected.effective.read_scopes.is_empty());
+        assert!(rejected.effective.write_scopes.is_empty());
+        assert!(
+            rejected
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.id == "sandbox.implicit-authority-withheld")
+        );
+
+        let pending = plan_sandbox_workflow(SandboxWorkflowRequest {
+            permissions: &permissions,
+            discovery: &discovery,
+            trust_state: TrustDecision::Trusted,
+            implicit_project_trust: ProjectTrustProvenance::PendingDecision {
+                root: nested_root.clone(),
+            },
+            config_root: &root,
+            sandbox_source: "primary",
+            approval_policy_source: "primary",
+            read_scopes_source: "default",
+            write_scopes_source: "default",
+        });
+
+        assert_eq!(pending.effective.scope_provenance, "project-trust-pending");
+        assert_eq!(
+            pending.effective.denied_project_root.as_deref(),
+            Some(nested_root.to_string_lossy().as_ref())
         );
     }
 }

@@ -24,6 +24,7 @@ use super::{
     validate_control_method_params_schema,
 };
 use crate::runtime::RuntimePreparedConfigReload;
+use crate::security::project::{ProjectTrustProvenance, resolve_project_trust_provenance};
 use std::fs;
 
 impl RuntimeSessionService {
@@ -298,27 +299,22 @@ impl RuntimeSessionService {
                 "project config persistence is blocked until project trust is available",
             ));
         };
-        let Some(record) = store
-            .records()
-            .find(|record| runtime_path_under_project_root(path, &record.project_root))
-        else {
-            let project_root = path
-                .parent()
-                .map(discover_project_root)
-                .unwrap_or_else(|| discover_project_root(path));
-            return Err(MezError::conflict(format!(
-                "project config persistence for {} is blocked until project trust is decided",
-                project_root.display()
-            )));
-        };
-        match record.state {
-            TrustDecision::Trusted => Ok(()),
-            TrustDecision::Pending => Err(MezError::conflict(
-                "project config persistence is blocked until project trust is decided",
-            )),
-            TrustDecision::Rejected | TrustDecision::Revoked => Err(MezError::forbidden(
+        let target_directory = path.parent().unwrap_or(path.as_path());
+        match resolve_project_trust_provenance(store, target_directory) {
+            ProjectTrustProvenance::TrustedRoot(_) => Ok(()),
+            ProjectTrustProvenance::NegativeDecision { .. } => Err(MezError::forbidden(
                 "project config persistence requires a trusted project root",
             )),
+            ProjectTrustProvenance::PendingDecision { .. } | ProjectTrustProvenance::NoDecision => {
+                let project_root = path
+                    .parent()
+                    .map(discover_project_root)
+                    .unwrap_or_else(|| discover_project_root(path));
+                Err(MezError::conflict(format!(
+                    "project config persistence for {} is blocked until project trust is decided",
+                    project_root.display()
+                )))
+            }
         }
     }
 
@@ -794,10 +790,12 @@ impl RuntimeSessionService {
         text: &str,
     ) {
         let trusted = scope != ConfigScope::ProjectOverlay
-            || self.integration.project_trust_store().is_some_and(|store| {
-                store.records().any(|record| {
-                    record.state == TrustDecision::Trusted
-                        && runtime_path_under_project_root(&path, &record.project_root)
+            || path.parent().is_some_and(|directory| {
+                self.integration.project_trust_store().is_some_and(|store| {
+                    matches!(
+                        resolve_project_trust_provenance(store, directory),
+                        ProjectTrustProvenance::TrustedRoot(_)
+                    )
                 })
             });
         if let Some(layer) = self

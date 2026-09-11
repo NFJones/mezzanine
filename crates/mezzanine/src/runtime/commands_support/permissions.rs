@@ -300,6 +300,10 @@ pub(crate) fn runtime_permission_policy_display(
         .as_ref()
         .and_then(|status| status.trusted_project_root.as_deref())
         .unwrap_or("none");
+    let denied_project_root = effective
+        .as_ref()
+        .and_then(|status| status.denied_project_root.as_deref())
+        .unwrap_or("none");
     let sandbox_restrictions = if matches!(
         configured.sandbox,
         crate::runtime::SandboxConfig::Bubblewrap(_)
@@ -313,7 +317,7 @@ pub(crate) fn runtime_permission_policy_display(
         policy.approval_policy,
     );
     format!(
-        "preset={} preset_scope=pane-subtree preset_source={} preset_owner_pane={} approval_policy={} approval_scope=pane-subtree approval_source={} approval_owner_pane={} bypass={} bypass_scope=session rules={} rules_scope=session sandbox={} sandbox_effective={} network_policy={} read_scopes={} write_scopes={} effective_scope_provenance={} effective_read_scopes={} effective_write_scopes={} trusted_project_root={} sandbox_restrictions={} source=runtime-policy",
+        "preset={} preset_scope=pane-subtree preset_source={} preset_owner_pane={} approval_policy={} approval_scope=pane-subtree approval_source={} approval_owner_pane={} bypass={} bypass_scope=session rules={} rules_scope=session sandbox={} sandbox_effective={} network_policy={} read_scopes={} write_scopes={} effective_scope_provenance={} effective_read_scopes={} effective_write_scopes={} trusted_project_root={} effective_scope_denied_root={} sandbox_restrictions={} source=runtime-policy",
         runtime_permission_preset_name(policy.preset),
         policy_status.preset_source.source,
         preset_owner,
@@ -331,6 +335,7 @@ pub(crate) fn runtime_permission_policy_display(
         effective_read_scopes,
         effective_write_scopes,
         trusted_project_root,
+        denied_project_root,
         sandbox_restrictions
     )
 }
