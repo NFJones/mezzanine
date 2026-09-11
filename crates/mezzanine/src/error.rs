@@ -224,9 +224,9 @@ impl From<mez_agent::ProviderEndpointError> for MezError {
 impl From<mez_agent::ProviderResponseError> for MezError {
     fn from(error: mez_agent::ProviderResponseError) -> Self {
         let mut product_error = match error.kind() {
-            mez_agent::ProviderResponseErrorKind::InvalidState => {
-                Self::invalid_state(error.message())
-            }
+            mez_agent::ProviderResponseErrorKind::InvalidState => Self::invalid_state(
+                mez_agent::sanitize_provider_primary_error_text(error.message()),
+            ),
         };
         if let Some(failure_json) = error.provider_failure_json() {
             product_error = product_error.with_provider_failure_json(failure_json.to_string());
@@ -712,5 +712,50 @@ impl From<rusqlite::Error> for MezError {
     /// SQLite diagnostic message.
     fn from(error: rusqlite::Error) -> Self {
         Self::new(MezErrorKind::Io, error.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MezError, MezErrorKind};
+
+    /// Verifies the product conversion sanitizes a provider response error even
+    /// when a caller hands over an unsanitized primary message.
+    ///
+    /// The crate-level remote-message boundary sanitizes provider-authored text
+    /// first, and this defensive conversion guarantees a caller that hands over
+    /// an unsanitized `ProviderResponseError` still cannot leak a bearer token
+    /// or API-key shape into the product error message, trace log, audit
+    /// record, transcript replay, or any rendered projection. Structured retry
+    /// metadata such as the HTTP status and error type must survive.
+    #[test]
+    fn provider_response_error_conversion_sanitizes_unsanitized_message() {
+        const SENTINEL: &str = "sk-ant-api03-PRODUCTSENTINEL00000000";
+        let provider_error = mez_agent::ProviderResponseError::invalid_state(format!(
+            "invalid api key: Bearer {SENTINEL}"
+        ))
+        .with_provider_failure_json(
+            serde_json::json!({
+                "status_code": 401,
+                "request_id": "req_product_safe",
+                "error": {
+                    "type": "authentication_error",
+                    "message": format!("Bearer {SENTINEL}")
+                }
+            })
+            .to_string(),
+        );
+
+        let error = MezError::from(provider_error);
+
+        assert_eq!(error.kind(), MezErrorKind::InvalidState);
+        assert_eq!(error.message(), "[REDACTED]");
+        assert!(!error.to_string().contains(SENTINEL));
+        let failure = error.provider_failure_json().unwrap();
+        assert!(!failure.contains(SENTINEL), "{failure}");
+        let failure: serde_json::Value = serde_json::from_str(failure).unwrap();
+        assert_eq!(failure["status_code"], 401);
+        assert_eq!(failure["request_id"], "req_product_safe");
+        assert_eq!(failure["error"]["type"], "authentication_error");
     }
 }

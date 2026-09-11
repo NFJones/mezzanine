@@ -1429,4 +1429,60 @@ mod tests {
         assert_eq!(trace["provider_failure_json"]["error"]["code"], "bad_auth");
         assert_eq!(trace["provider_failure_json"]["request_id"], "req_123");
     }
+
+    #[test]
+    /// Verifies a provider-error trace built from an unsanitized provider error
+    /// still cannot leak credential-shaped provider text, while the safe
+    /// request id and typed error category remain available.
+    ///
+    /// The provider adapter sanitizes provider-authored text at the shared
+    /// boundary and the product conversion re-applies it defensively; this
+    /// trace regression documents that a rendered projection still hides a
+    /// bearer token or API-key shape while keeping the structured status, error
+    /// type, and request id for correlation.
+    fn provider_error_trace_sanitizes_unsanitized_provider_message() {
+        const SENTINEL: &str = "sk-ant-api03-TRACESENTINEL000000000";
+        let error = crate::error::MezError::from(
+            mez_agent::ProviderResponseError::invalid_state(format!(
+                "invalid api key: Bearer {SENTINEL}"
+            ))
+            .with_provider_failure_json(
+                serde_json::json!({
+                    "status_code": 401,
+                    "request_id": "req_trace_safe",
+                    "error": {
+                        "type": "authentication_error",
+                        "message": format!("Bearer {SENTINEL}")
+                    }
+                })
+                .to_string(),
+            ),
+        );
+        let profile = mez_agent::ModelProfile {
+            provider: "anthropic".to_string(),
+            model: "claude-3-7-sonnet".to_string(),
+            model_capabilities: Default::default(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        };
+
+        let trace = runtime_agent_provider_error_trace_json("anthropic", &profile, &error, true);
+        let serialized = trace.to_string();
+
+        assert!(!serialized.contains(SENTINEL), "{serialized}");
+        assert_eq!(trace["error"]["kind"], "invalid_state");
+        assert_eq!(trace["error"]["message"], "[REDACTED]");
+        assert_eq!(trace["provider_failure_json"]["status_code"], 401);
+        assert_eq!(
+            trace["provider_failure_json"]["request_id"],
+            "req_trace_safe"
+        );
+        assert_eq!(
+            trace["provider_failure_json"]["error"]["type"],
+            "authentication_error"
+        );
+    }
 }

@@ -760,3 +760,39 @@ impl RuntimeSessionService {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::output_limit_continuation_input;
+
+    /// Verifies a credential-shaped provider stop reason never reaches the
+    /// output-limit continuation prompt.
+    ///
+    /// The continuation prompt is provider-visible request text, so a stop
+    /// reason carrying a bearer-token or API-key shape must be replaced at the
+    /// shared diagnostics boundary before this injection point, while the
+    /// remaining structured continuation fields stay available.
+    #[test]
+    fn output_limit_continuation_prompt_excludes_credential_shaped_stop_reason() {
+        const SENTINEL: &str = "sk-ant-api03-CONTINUATIONSENTINEL000";
+        let state = mez_agent::ProviderOutputLimitState::new(
+            "anthropic",
+            "messages",
+            format!("stop_sequence Bearer {SENTINEL}"),
+            Some("resp_safe".to_string()),
+            "safe partial text",
+            1,
+            0,
+            mez_agent::ModelTokenUsage::default(),
+            mez_agent::ProviderOutputLimitContinuationDisposition::ContinueVisibleText,
+        );
+
+        let prompt = output_limit_continuation_input(&state);
+
+        assert!(!prompt.contains(SENTINEL), "{prompt}");
+        assert!(prompt.contains("stop_reason=[REDACTED]"), "{prompt}");
+        assert!(prompt.contains("response_id=resp_safe"), "{prompt}");
+        assert!(prompt.contains("safe partial text"), "{prompt}");
+        assert!(!format!("{state:?}").contains(SENTINEL));
+    }
+}

@@ -15,7 +15,10 @@ use crate::provider::{
     ProviderOutputLimitContinuationDisposition, ProviderOutputLimitState, ProviderResponseError,
     ProviderResponseResult,
 };
-use crate::provider_diagnostics::provider_failure_event_json as openai_provider_failure_event_json;
+use crate::provider_diagnostics::{
+    provider_failure_event_json as openai_provider_failure_event_json,
+    sanitize_provider_primary_error_text,
+};
 use crate::schema::OpenAiMaapToolSurface;
 use std::collections::BTreeMap;
 
@@ -58,6 +61,7 @@ pub fn parse_openai_responses_http_body(
             .get("message")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("OpenAI response contained an error");
+        let message = sanitize_provider_primary_error_text(message);
         return Err(ProviderResponseError::invalid_state(message)
             .with_provider_failure_json(openai_provider_failure_event_json(&value)));
     }
@@ -118,6 +122,7 @@ impl OpenAiResponsesStreamDecoder {
                 .get("message")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("OpenAI stream contained an error");
+            let message = sanitize_provider_primary_error_text(message);
             return Err(ProviderResponseError::invalid_state(message)
                 .with_provider_failure_json(openai_provider_failure_event_json(&value)));
         }
@@ -369,6 +374,7 @@ pub fn parse_openai_responses_stream_body(
                     .get("message")
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("OpenAI stream contained an error");
+                let message = sanitize_provider_primary_error_text(message);
                 return Err(ProviderResponseError::invalid_state(message)
                     .with_provider_failure_json(openai_provider_failure_event_json(&value)));
             }
@@ -612,7 +618,12 @@ fn openai_stream_event_error_detail(value: &serde_json::Value, fallback: &str) -
         .or_else(|| value.pointer("/error/message"))
         .or_else(|| value.get("message"))
         .and_then(serde_json::Value::as_str)
-        .map(|message| format!("{fallback}: {message}"))
+        .map(|message| {
+            format!(
+                "{fallback}: {}",
+                sanitize_provider_primary_error_text(message)
+            )
+        })
         .unwrap_or_else(|| fallback.to_string())
 }
 
@@ -1090,5 +1101,180 @@ mod tests {
             parse_openai_responses_http_body(r#"{"model":"gpt-test","output":[]}"#, "gpt-test")
                 .unwrap_err();
         assert_eq!(missing.kind(), ProviderResponseErrorKind::InvalidState);
+    }
+
+    /// Verifies the unary Responses error path withholds provider-authored
+    /// credential-shaped error text while retaining safe error identity.
+    ///
+    /// A provider error body is remote input. A bearer-token or API-key shape
+    /// embedded in its message must never reach the error message, `Display`,
+    /// `Debug`, or the structured failure payload, while the safe error type and
+    /// code must survive the same boundary so retry and auth handling stay
+    /// correct.
+    #[test]
+    fn openai_unary_provider_error_text_is_sanitized() {
+        const SENTINEL: &str = "sk-proj-OPENAIUNARYSENTINEL00000000";
+        let body = serde_json::json!({
+            "error": {
+                "type": "invalid_request_error",
+                "code": "invalid_api_key",
+                "message": format!("invalid api key: Bearer {SENTINEL}")
+            }
+        })
+        .to_string();
+
+        let error = parse_openai_responses_http_body(&body, "gpt-test").unwrap_err();
+
+        assert_eq!(error.kind(), ProviderResponseErrorKind::InvalidState);
+        assert_eq!(error.message(), "[REDACTED]");
+        assert!(!error.message().contains(SENTINEL));
+        assert!(!format!("{error:?}").contains(SENTINEL));
+        assert!(!error.to_string().contains(SENTINEL));
+        let failure: serde_json::Value =
+            serde_json::from_str(error.provider_failure_json().unwrap()).unwrap();
+        assert_eq!(failure["error"]["type"], "invalid_request_error");
+        assert_eq!(failure["error"]["code"], "invalid_api_key");
+        assert!(!failure.to_string().contains(SENTINEL), "{failure}");
+    }
+
+    /// Verifies the incremental Responses SSE decoder withholds
+    /// provider-authored credential-shaped error text from an `error` event.
+    ///
+    /// The decoder is the streaming counterpart of the unary parser, so the same
+    /// remote-message boundary must apply before the message can reach the error
+    /// envelope, trace, or audit surfaces.
+    #[test]
+    fn openai_stream_decoder_error_text_is_sanitized() {
+        const SENTINEL: &str = "sk-proj-OPENAIDECODERSENTINEL0000000";
+        let event = crate::SseEvent {
+            name: Some("error".to_string()),
+            data: serde_json::json!({
+                "error": {
+                    "type": "server_error",
+                    "code": "internal_error",
+                    "message": format!("upstream failure; api_key={SENTINEL}")
+                }
+            })
+            .to_string(),
+        };
+        let mut decoder = OpenAiResponsesStreamDecoder::default();
+
+        let error = decoder.push_event(&event).unwrap_err();
+
+        assert_eq!(error.kind(), ProviderResponseErrorKind::InvalidState);
+        assert!(!error.message().contains(SENTINEL), "{}", error.message());
+        assert!(!format!("{error:?}").contains(SENTINEL));
+        assert!(!error.to_string().contains(SENTINEL));
+        let failure: serde_json::Value =
+            serde_json::from_str(error.provider_failure_json().unwrap()).unwrap();
+        assert_eq!(failure["error"]["type"], "server_error");
+        assert_eq!(failure["error"]["code"], "internal_error");
+        assert!(!failure.to_string().contains(SENTINEL), "{failure}");
+    }
+
+    /// Verifies the whole-body Responses SSE parser withholds provider-authored
+    /// credential-shaped error text from an `error` event.
+    ///
+    /// The whole-body parser is a distinct SSE entry point from the incremental
+    /// decoder and the unary parser, so it must route provider-authored text
+    /// through the shared diagnostics boundary before it reaches any rendered
+    /// diagnostic.
+    #[test]
+    fn openai_stream_body_error_text_is_sanitized() {
+        const SENTINEL: &str = "sk-proj-OPENAIBODYSENTINEL0000000000";
+        let body = format!(
+            "event: error\ndata: {}\n\n",
+            serde_json::json!({
+                "error": {
+                    "type": "rate_limit_error",
+                    "code": "rate_limit_exceeded",
+                    "message": format!("rate limited: Authorization: Bearer {SENTINEL}")
+                }
+            })
+        );
+
+        let error = parse_openai_responses_stream_body(&body, "gpt-test").unwrap_err();
+
+        assert_eq!(error.kind(), ProviderResponseErrorKind::InvalidState);
+        assert_eq!(error.message(), "[REDACTED]");
+        assert!(!format!("{error:?}").contains(SENTINEL));
+        assert!(!error.to_string().contains(SENTINEL));
+        let failure: serde_json::Value =
+            serde_json::from_str(error.provider_failure_json().unwrap()).unwrap();
+        assert_eq!(failure["error"]["type"], "rate_limit_error");
+        assert!(!failure.to_string().contains(SENTINEL), "{failure}");
+    }
+
+    /// Verifies `response.failed` and `response.incomplete` events withhold
+    /// provider-authored credential-shaped text from the display message, the
+    /// structured failure payload, and retained continuation state.
+    #[test]
+    fn openai_stream_failed_and_incomplete_text_is_sanitized() {
+        const FAILED_SENTINEL: &str = "sk-proj-OPENAIFAILEDSENTINEL0000000";
+        let mut decoder = OpenAiResponsesStreamDecoder::default();
+        let failed_event = crate::SseEvent {
+            name: Some("response.failed".to_string()),
+            data: serde_json::json!({
+                "type": "response.failed",
+                "response": {
+                    "id": "resp_failed",
+                    "error": {
+                        "type": "server_error",
+                        "code": "server_error",
+                        "message": format!("server error; api_key={FAILED_SENTINEL}")
+                    }
+                }
+            })
+            .to_string(),
+        };
+
+        let failed = decoder.push_event(&failed_event).unwrap_err();
+
+        assert!(
+            !failed.message().contains(FAILED_SENTINEL),
+            "{}",
+            failed.message()
+        );
+        assert!(!format!("{failed:?}").contains(FAILED_SENTINEL));
+        assert!(!failed.to_string().contains(FAILED_SENTINEL));
+        let failure: serde_json::Value =
+            serde_json::from_str(failed.provider_failure_json().unwrap()).unwrap();
+        assert_eq!(failure["error"]["type"], "server_error");
+        assert_eq!(failure["response_id"], "resp_failed");
+        assert!(!failure.to_string().contains(FAILED_SENTINEL), "{failure}");
+
+        const INCOMPLETE_SENTINEL: &str = "sk-proj-OPENAIINCOMPLETESENTINEL000";
+        let incomplete_event = crate::SseEvent {
+            name: Some("response.incomplete".to_string()),
+            data: serde_json::json!({
+                "type": "response.incomplete",
+                "response": {
+                    "id": "resp_incomplete",
+                    "incomplete_details": {
+                        "reason": format!("cutoff Bearer {INCOMPLETE_SENTINEL}")
+                    }
+                }
+            })
+            .to_string(),
+        };
+
+        let incomplete = decoder.push_event(&incomplete_event).unwrap_err();
+
+        assert!(
+            !incomplete.message().contains(INCOMPLETE_SENTINEL),
+            "{}",
+            incomplete.message()
+        );
+        assert!(!format!("{incomplete:?}").contains(INCOMPLETE_SENTINEL));
+        assert!(!incomplete.to_string().contains(INCOMPLETE_SENTINEL));
+        let state = incomplete.output_limit_state().expect("output-limit state");
+        assert_eq!(state.stop_reason, "[REDACTED]");
+        assert_eq!(state.response_id.as_deref(), Some("resp_incomplete"));
+        let failure: serde_json::Value =
+            serde_json::from_str(incomplete.provider_failure_json().unwrap()).unwrap();
+        assert!(
+            !failure.to_string().contains(INCOMPLETE_SENTINEL),
+            "{failure}"
+        );
     }
 }

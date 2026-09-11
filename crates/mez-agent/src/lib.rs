@@ -469,7 +469,7 @@ pub use provider_diagnostics::{
     provider_failure_json, provider_failure_json_with_retry_headers,
     provider_malformed_output_error, provider_malformed_output_failure_json,
     provider_malformed_output_hint, sanitize_provider_diagnostic_text,
-    sanitize_provider_failure_payload_json,
+    sanitize_provider_failure_payload_json, sanitize_provider_primary_error_text,
 };
 pub use provider_error::{
     DEFAULT_PROVIDER_RETRY_POLICY, PROVIDER_HTTP_TIMEOUT_FAILURE_CODE, ProviderErrorKind,

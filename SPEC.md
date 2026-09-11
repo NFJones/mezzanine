@@ -11159,6 +11159,22 @@ provider returns a structured API failure object, Mezzanine SHOULD include that
 sanitized object in the audit record and SHOULD also include a digest for
 correlation.
 
+Provider-authored display text MUST be sanitized at the shared diagnostics
+boundary before it can appear in an error message, trace log, audit record,
+transcript replay, or rendered projection. Detection covers recognizable
+credential shapes -- bearer tokens, API-key shapes such as `sk-`, `sk-ant-`,
+and `sk-proj-`, Authorization headers, JWT-like tokens, `-----BEGIN` private
+key blocks, and `key=value` credential markers -- rather than arbitrary opaque
+secrets: when a shape is recognized, the whole message is replaced, and the
+remaining display text is bounded. Structured fields -- error kind, safe
+request id, error code and type, HTTP status, and retry advice -- MUST be
+preserved separately from that display text so retry classification,
+malformed-output repair, auth/permanent handling, and backoff never depend on
+redacted free text. Retry classification MUST read typed error kinds and
+sanitized structured failure fields; where it inspects sanitized display text
+it MUST read only that sanitized text and crate-owned label text, never raw
+provider text.
+
 ## 19. Detach, Reattach, Snapshots, and Persistence
 
 Mezzanine MUST support detaching a client from a running session.

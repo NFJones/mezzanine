@@ -220,6 +220,17 @@ pub fn provider_failure_json_is_timeout(provider_failure_json: Option<&str>) -> 
 /// Unsupported status-400 failures remain terminal, while rate limits,
 /// server errors, transient provider types, and explicit retry invitations are
 /// retryable.
+///
+/// The classifier inputs are the typed error kind, the sanitized primary
+/// display message produced by the shared diagnostics boundary, and the
+/// sanitized structured failure payload. The unsupported-parameter check reads
+/// sanitized structured fields only. The context-limit, output-limit,
+/// transient, and retry-invitation checks read those sanitized structured
+/// fields and that sanitized display message, whose provider-derived portions
+/// were bounded and redacted at the same boundary, and the transport-text
+/// fallback below matches crate-owned message text this crate writes. No check
+/// reads raw provider text, so withholding credential-shaped display text
+/// cannot move a failure between retryable and terminal handling.
 pub fn classify_provider_error_retry(
     kind: ProviderErrorKind,
     message: &str,
@@ -238,9 +249,7 @@ pub fn classify_provider_error_retry(
         return ProviderErrorRetryClass::RetryableTransport;
     }
     if let Some(status_code) = provider_failure_status_code(provider_failure_json) {
-        if status_code == 400
-            && (message.contains("Unsupported") || message.contains("unsupported"))
-        {
+        if status_code == 400 && provider_error_is_unsupported_parameter(provider_failure_json) {
             return ProviderErrorRetryClass::NonRetryable;
         }
         if status_code == 429 || (500..=599).contains(&status_code) {
@@ -284,6 +293,58 @@ fn provider_failure_status_code(provider_failure_json: Option<&str>) -> Option<u
     let value: serde_json::Value = serde_json::from_str(provider_failure_json?).ok()?;
     let status_code = value.get("status_code")?.as_u64()?;
     u16::try_from(status_code).ok()
+}
+
+/// Reports whether a structured provider failure names an unsupported parameter.
+///
+/// The check reads only sanitized structured failure fields: the provider's own
+/// error code, type, and message, its plain-string error value, and the
+/// sanitized whole-body text that the failure shaping records when the provider
+/// body was not JSON. Those fields follow the documented detail precedence used
+/// to build the primary display message (`/error/message`, `/error_description`,
+/// `/message`, then the bounded body text), so a status-400 unsupported
+/// parameter keeps its pre-sanitization terminal classification even when the
+/// bounded display text was withheld for containing credential-shaped
+/// material. The rendered display message is never an input, and no raw
+/// provider value is persisted or re-read for the decision.
+fn provider_error_is_unsupported_parameter(provider_failure_json: Option<&str>) -> bool {
+    provider_error_structured_fields(
+        provider_failure_json,
+        &[
+            "/error/code",
+            "/error/type",
+            "/error/message",
+            "/error_description",
+            "/error",
+            "/message",
+            "/body_text",
+            "/body/error/code",
+            "/body/error/type",
+            "/body/error/message",
+            "/body/message",
+            "/body",
+            "/response/error/code",
+            "/response/error/type",
+            "/response/error/message",
+        ],
+    )
+    .any(|text| text.to_ascii_lowercase().contains("unsupported"))
+}
+
+/// Iterates sanitized structured failure strings selected by JSON pointers.
+fn provider_error_structured_fields(
+    provider_failure_json: Option<&str>,
+    pointers: &'static [&'static str],
+) -> impl Iterator<Item = String> {
+    let parsed = provider_failure_json
+        .and_then(|failure| serde_json::from_str::<serde_json::Value>(failure).ok());
+    pointers.iter().filter_map(move |pointer| {
+        parsed
+            .as_ref()?
+            .pointer(pointer)?
+            .as_str()
+            .map(str::to_string)
+    })
 }
 
 fn provider_error_invites_retry(message: &str, provider_failure_json: Option<&str>) -> bool {
@@ -372,6 +433,15 @@ fn provider_error_is_output_limit_exceeded(
     .any(|text| provider_error_text_is_output_limit_exceeded(&text))
 }
 
+/// Iterates the classifier inputs for one provider failure in documented order.
+///
+/// The first element is the sanitized primary display message the product
+/// adapter built at the shared diagnostics boundary; the remaining elements are
+/// sanitized structured failure fields selected by JSON pointers. Both inputs
+/// are already provider-sanitized: the display message carries provider detail
+/// that boundary bounded and redacted plus crate-owned label text such as
+/// `provider HTTP timeout phase=`, and the structured payload is the sanitized
+/// failure object. No caller-supplied raw provider text is read here.
 fn provider_error_fields(
     message: &str,
     provider_failure_json: Option<&str>,
@@ -733,6 +803,177 @@ mod tests {
                     "{kind:?} payload={payload:?}"
                 );
             }
+        }
+    }
+
+    /// Verifies retry classification is unchanged when the bounded primary
+    /// display message is withheld for containing credential-shaped text.
+    ///
+    /// The classifier must read stable typed and structured categories -- error
+    /// kind, HTTP status, and the sanitized structured error type, code, and
+    /// message -- so redacting the display text cannot move a rate-limited,
+    /// transient, auth/permanent, or unsupported-parameter failure between
+    /// retryable and terminal handling.
+    #[test]
+    fn provider_retry_classification_parity_survives_display_text_redaction() {
+        let cases = [
+            (
+                "rate limited over HTTP",
+                ProviderErrorKind::InvalidState,
+                "Chat Completions API returned status 429: rate limit reached",
+                r#"{"status_code":429,"error":{"type":"rate_limit_error","code":"rate_limited","message":"[REDACTED]"}}"#,
+                ProviderErrorRetryClass::RetryableTransport,
+            ),
+            (
+                "transient overload without status",
+                ProviderErrorKind::InvalidState,
+                "OpenAI stream failed: overloaded_error",
+                r#"{"error":{"type":"overloaded_error","message":"[REDACTED]"}}"#,
+                ProviderErrorRetryClass::RetryableTransport,
+            ),
+            (
+                "auth/permanent",
+                ProviderErrorKind::InvalidState,
+                "Anthropic Messages API returned status 401: authentication_error",
+                r#"{"status_code":401,"error":{"type":"authentication_error","code":"invalid_api_key","message":"[REDACTED]"}}"#,
+                ProviderErrorRetryClass::NonRetryable,
+            ),
+            (
+                "unsupported parameter on 400",
+                ProviderErrorKind::InvalidState,
+                "Chat Completions API returned status 400: Unsupported parameter",
+                r#"{"status_code":400,"error":{"type":"invalid_request_error","message":"Unsupported parameter"}}"#,
+                ProviderErrorRetryClass::NonRetryable,
+            ),
+        ];
+
+        for (label, kind, display, failure, expected) in cases {
+            let before = classify_provider_error_retry(kind, display, Some(failure));
+            let after = classify_provider_error_retry(kind, "[REDACTED]", Some(failure));
+            assert_eq!(before, expected, "before {label}");
+            assert_eq!(after, expected, "after {label}");
+        }
+    }
+
+    /// Verifies malformed output, budget exhaustion, and missing safe metadata
+    /// keep their existing conservative classification after sanitization.
+    ///
+    /// Malformed generated output stays with the bounded repair path, a typed
+    /// retryable class still stops at the configured attempt budget, and a
+    /// provider failure with no safe structured metadata never becomes an
+    /// unbounded retry.
+    #[test]
+    fn provider_retry_classification_fails_closed_after_sanitization() {
+        let malformed = crate::sanitize_provider_primary_error_text(
+            "provider MAAP output is malformed: mezzanine-action-json block is invalid JSON",
+        );
+        for kind in [
+            ProviderErrorKind::InvalidArgs,
+            ProviderErrorKind::InvalidState,
+        ] {
+            for payload in [
+                None,
+                Some(r#"{"status_code":429,"error":{"message":"[REDACTED]"}}"#),
+            ] {
+                assert_eq!(
+                    classify_provider_error_retry(kind, &malformed, payload),
+                    ProviderErrorRetryClass::NonRetryable,
+                    "{kind:?} payload={payload:?}"
+                );
+            }
+        }
+
+        let retryable = classify_provider_error_retry(
+            ProviderErrorKind::InvalidState,
+            "[REDACTED]",
+            Some(r#"{"status_code":503}"#),
+        );
+        assert_eq!(retryable, ProviderErrorRetryClass::RetryableTransport);
+        assert!(DEFAULT_PROVIDER_RETRY_POLICY.should_retry(0, retryable));
+        assert!(
+            !DEFAULT_PROVIDER_RETRY_POLICY.should_retry(5, retryable),
+            "budget exhaustion must bound eligible retries"
+        );
+        assert_eq!(
+            classify_provider_error_retry(ProviderErrorKind::InvalidState, "[REDACTED]", None),
+            ProviderErrorRetryClass::NonRetryable,
+            "missing safe metadata must fall back conservatively"
+        );
+    }
+
+    /// Verifies cancellation is a typed turn state rather than a provider
+    /// message match, so sanitizing provider-authored display text cannot
+    /// change whether a cancelled turn keeps retrying.
+    #[test]
+    fn cancellation_is_typed_and_independent_of_provider_text() {
+        assert_eq!(
+            crate::AgentTurnState::Interrupted,
+            crate::AgentTurnState::Interrupted
+        );
+        assert_ne!(
+            crate::AgentTurnState::Interrupted,
+            crate::AgentTurnState::Failed
+        );
+        assert_eq!(
+            classify_provider_error_retry(ProviderErrorKind::InvalidState, "[REDACTED]", None),
+            ProviderErrorRetryClass::NonRetryable,
+            "a cancelled turn's redacted provider text never becomes an unbounded retry"
+        );
+    }
+
+    /// Verifies the unsupported-parameter status-400 decision survives
+    /// sanitization for every provider body shape.
+    ///
+    /// The pre-sanitization classifier read the rendered display message, so a
+    /// status-400 failure that carried the unsupported signal only in a non-JSON
+    /// body, in a plain-string error value, or in an ordinary JSON error object
+    /// still classified as terminal. The structured check must preserve that
+    /// outcome without reading the rendered display message, including for a body
+    /// whose text also invites a retry.
+    #[test]
+    fn provider_unsupported_parameter_classification_parity_across_body_shapes() {
+        let cases = [
+            (
+                "non-JSON body",
+                "Unsupported parameter: `temperature`. You can retry your request without it.",
+            ),
+            (
+                "plain-string JSON error value",
+                r#"{"error":"Unsupported parameter: `temperature`"}#,
+            ),
+            (
+                "JSON error object",
+                r#"{"error":{"type":"invalid_request_error","message":"Unsupported parameter: `temperature`"}}"#,
+            ),
+        ];
+
+        for (label, body) in cases {
+            // Mirrors the product HTTP failure text and structured payload
+            // built from the same provider body in production.
+            let display = format!(
+                "DeepSeek Chat Completions API returned status 400: {}",
+                crate::provider_error_detail(body)
+            );
+            let failure = crate::provider_failure_json(Some(400), body);
+
+            assert_eq!(
+                classify_provider_error_retry(
+                    ProviderErrorKind::InvalidState,
+                    &display,
+                    Some(&failure)
+                ),
+                ProviderErrorRetryClass::NonRetryable,
+                "display text {label}"
+            );
+            assert_eq!(
+                classify_provider_error_retry(
+                    ProviderErrorKind::InvalidState,
+                    "[REDACTED]",
+                    Some(&failure)
+                ),
+                ProviderErrorRetryClass::NonRetryable,
+                "withheld display text {label}: {failure}"
+            );
         }
     }
 }

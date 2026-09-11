@@ -13,6 +13,7 @@ mod mcp_schema;
 mod model_selection;
 mod presentation;
 mod prompt;
+mod provider_failure_audit;
 mod scheduling;
 mod shell;
 mod skills;

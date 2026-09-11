@@ -19,6 +19,7 @@ use crate::{
     maap_action_batch_schema, openai_maap_current_action_batch_description,
     parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json_for_turn,
     provider_failure_event_json, provider_failure_json, provider_malformed_output_error,
+    sanitize_provider_primary_error_text,
 };
 use std::collections::BTreeMap;
 
@@ -565,10 +566,12 @@ fn anthropic_malformed_output(error_message: &str, raw_text: &str) -> ProviderMa
 /// Builds a structured provider failure for one unsupported Anthropic content
 /// block.
 fn anthropic_unsupported_content_block_error(block: &serde_json::Value) -> ProviderResponseError {
-    let block_type = block
-        .get("type")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("unknown");
+    let block_type = sanitize_provider_primary_error_text(
+        block
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown"),
+    );
     ProviderResponseError::invalid_state(format!(
         "Anthropic response contained unsupported content block type `{block_type}`"
     ))
@@ -1003,6 +1006,7 @@ fn anthropic_provider_error_from_value(
         .or_else(|| value.get("message"))
         .and_then(serde_json::Value::as_str)
         .unwrap_or(fallback_message);
+    let message = sanitize_provider_primary_error_text(message);
     Some(
         ProviderResponseError::invalid_state(message)
             .with_provider_failure_json(anthropic_provider_failure_event_json(value)),
@@ -1090,7 +1094,8 @@ impl AnthropicStreamContentBlock {
                 Ok(())
             }
             _ => Err(ProviderResponseError::invalid_state(format!(
-                "Anthropic stream returned unsupported content block delta type `{delta_type}`"
+                "Anthropic stream returned unsupported content block delta type `{}`",
+                sanitize_provider_primary_error_text(delta_type)
             ))
             .with_provider_failure_json(anthropic_provider_failure_event_json(
                 &serde_json::json!({ "delta": delta }),
@@ -1141,9 +1146,13 @@ fn anthropic_stop_reason_response_error(
     requires_maap: bool,
 ) -> Option<ProviderResponseError> {
     let stop_reason = stop_reason?;
+    // Stop reasons are provider-authored remote text that reaches both the
+    // bounded display message and the structured failure payload, so the
+    // shared diagnostics boundary runs before either sink. Matching below still
+    // uses the raw value so known reasons keep their existing behavior.
     let base = serde_json::json!({
         "provider": "anthropic",
-        "stop_reason": stop_reason,
+        "stop_reason": sanitize_provider_primary_error_text(stop_reason),
         "raw_text_bytes": raw_text.len(),
     });
     match stop_reason {
@@ -1216,7 +1225,8 @@ fn anthropic_stop_reason_response_error(
         ),
         _ => Some(
             ProviderResponseError::invalid_state(format!(
-                "Anthropic Messages response ended with unrecognized stop_reason `{stop_reason}`"
+                "Anthropic Messages response ended with unrecognized stop_reason `{}`",
+                sanitize_provider_primary_error_text(stop_reason)
             ))
             .with_provider_failure_json(base.to_string())
             .with_provider_raw_text(raw_text),
@@ -1775,5 +1785,178 @@ mod tests {
                 .provider_failure_json()
                 .is_some_and(|failure| failure.contains("max_output_tokens"))
         );
+    }
+
+    /// Verifies the Anthropic unary parser withholds provider-authored
+    /// credential-shaped error text while retaining the safe provider request
+    /// id and the typed error category.
+    ///
+    /// A provider error body is remote input. A bearer-token or API-key shape
+    /// embedded in its message must never reach the error message, trace log,
+    /// audit record, transcript replay, or any rendered projection, while the
+    /// structured request id and error type must survive the same boundary so
+    /// retry and auth handling stay correct.
+    #[test]
+    fn anthropic_unary_provider_error_text_is_sanitized() {
+        const SENTINEL: &str = "sk-ant-api03-UNARYSENTINEL0000000000";
+        let body = serde_json::json!({
+            "type": "error",
+            "error": {
+                "type": "authentication_error",
+                "message": format!("invalid api key: Bearer {SENTINEL}")
+            },
+            "request_id": "req_unary_safe"
+        })
+        .to_string();
+
+        let error = parse_anthropic_messages_provider_body(
+            &body,
+            "fallback-model",
+            false,
+            "turn-1",
+            "agent-1",
+            true,
+        )
+        .unwrap_err();
+        let AnthropicResponseError::Provider(provider) = &error else {
+            panic!("expected provider response error");
+        };
+
+        assert_eq!(
+            provider.kind(),
+            crate::ProviderResponseErrorKind::InvalidState
+        );
+        assert!(
+            !provider.message().contains(SENTINEL),
+            "{}",
+            provider.message()
+        );
+        assert!(!format!("{error:?}").contains(SENTINEL));
+        assert!(!error.to_string().contains(SENTINEL));
+        let failure: serde_json::Value =
+            serde_json::from_str(provider.provider_failure_json().unwrap()).unwrap();
+        assert_eq!(failure["request_id"], "req_unary_safe");
+        assert_eq!(failure["error"]["type"], "authentication_error");
+        assert!(!failure.to_string().contains(SENTINEL));
+    }
+
+    /// Verifies the incremental Anthropic SSE decoder withholds
+    /// provider-authored credential-shaped error text from an `error` event.
+    ///
+    /// The decoder is the streaming counterpart of the unary parser, so the
+    /// same remote-message boundary must apply before the message can reach the
+    /// error envelope, trace, or audit surfaces.
+    #[test]
+    fn anthropic_stream_decoder_error_text_is_sanitized() {
+        const SENTINEL: &str = "sk-ant-api03-DECODERSENTINEL00000000";
+        let event = crate::SseEvent {
+            name: Some("error".to_string()),
+            data: serde_json::json!({
+                "type": "error",
+                "error": {
+                    "type": "overloaded_error",
+                    "message": format!("overloaded; api_key={SENTINEL}")
+                },
+                "request_id": "req_sse_decoder"
+            })
+            .to_string(),
+        };
+        let mut decoder = AnthropicMessagesStreamDecoder::default();
+
+        let error = decoder.push_event(&event).unwrap_err();
+        let AnthropicResponseError::Provider(provider) = &error else {
+            panic!("expected provider response error");
+        };
+
+        assert!(
+            !provider.message().contains(SENTINEL),
+            "{}",
+            provider.message()
+        );
+        assert!(!error.to_string().contains(SENTINEL));
+        assert!(!format!("{error:?}").contains(SENTINEL));
+        let failure: serde_json::Value =
+            serde_json::from_str(provider.provider_failure_json().unwrap()).unwrap();
+        assert_eq!(failure["request_id"], "req_sse_decoder");
+        assert_eq!(failure["error"]["type"], "overloaded_error");
+        assert!(!failure.to_string().contains(SENTINEL));
+    }
+
+    /// Verifies the whole-body Anthropic SSE parser withholds
+    /// provider-authored credential-shaped error text from an `error` event.
+    ///
+    /// The unary-style stream parser is a distinct SSE entry point from the
+    /// incremental decoder, so both must route provider-authored text through
+    /// the shared boundary before it reaches any rendered diagnostic.
+    #[test]
+    fn anthropic_stream_body_error_text_is_sanitized() {
+        const SENTINEL: &str = "sk-ant-api03-BODYSENTINEL0000000000";
+        let body = format!(
+            "event: error\ndata: {}\n\n",
+            serde_json::json!({
+                "type": "error",
+                "error": {
+                    "type": "rate_limit_error",
+                    "message": format!("rate limited: Authorization: Bearer {SENTINEL}")
+                },
+                "request_id": "req_sse_body"
+            })
+        );
+
+        let error = parse_anthropic_messages_provider_body(
+            &body,
+            "fallback-model",
+            true,
+            "turn-1",
+            "agent-1",
+            true,
+        )
+        .unwrap_err();
+        let AnthropicResponseError::Provider(provider) = &error else {
+            panic!("expected provider response error");
+        };
+
+        assert!(
+            !provider.message().contains(SENTINEL),
+            "{}",
+            provider.message()
+        );
+        assert!(!error.to_string().contains(SENTINEL));
+        let failure: serde_json::Value =
+            serde_json::from_str(provider.provider_failure_json().unwrap()).unwrap();
+        assert_eq!(failure["request_id"], "req_sse_body");
+        assert_eq!(failure["error"]["type"], "rate_limit_error");
+        assert!(!failure.to_string().contains(SENTINEL));
+    }
+
+    /// Verifies an unrecognized Anthropic stop reason is sanitized before it can
+    /// reach the display message or the structured failure payload.
+    ///
+    /// A stop reason is provider-authored remote text. The unrecognized arm
+    /// interpolates it into the display message, so a credential-shaped value
+    /// must be replaced at the shared diagnostics boundary while the failure
+    /// envelope and raw partial output stay available for recovery decisions.
+    #[test]
+    fn anthropic_unrecognized_stop_reason_text_is_sanitized() {
+        const SENTINEL: &str = "sk-ant-api03-STOPSENTINEL000000000";
+        let raw_stop_reason = format!("unknown_stop_reason Bearer {SENTINEL}");
+
+        let error =
+            anthropic_stop_reason_response_error(Some(&raw_stop_reason), "partial output", false)
+                .expect("unrecognized stop reason is a provider failure");
+
+        assert!(
+            error.message().contains("unrecognized stop_reason"),
+            "{}",
+            error.message()
+        );
+        assert!(!error.message().contains(SENTINEL), "{}", error.message());
+        assert!(!format!("{error:?}").contains(SENTINEL));
+        assert!(!error.to_string().contains(SENTINEL));
+        assert_eq!(error.provider_raw_text(), Some("partial output"));
+        let failure: serde_json::Value =
+            serde_json::from_str(error.provider_failure_json().unwrap()).unwrap();
+        assert_eq!(failure["stop_reason"], "[REDACTED]");
+        assert!(!failure.to_string().contains(SENTINEL), "{failure}");
     }
 }

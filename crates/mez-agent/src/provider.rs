@@ -725,7 +725,7 @@ impl ProviderOutputLimitState {
         Self {
             provider: provider.into(),
             api: api.into(),
-            stop_reason: stop_reason.into(),
+            stop_reason: bounded_sanitized_provider_stop_reason(stop_reason.into()),
             response_id,
             safe_partial_text: bounded_utf8_prefix(
                 safe_partial_text.into(),
@@ -737,6 +737,22 @@ impl ProviderOutputLimitState {
             continuation_disposition,
         }
     }
+}
+
+/// Maximum provider stop-reason bytes retained in continuation state.
+const MAX_PROVIDER_STOP_REASON_BYTES: usize = 128;
+
+/// Bounds and sanitizes one provider stop reason before storage.
+///
+/// A stop reason is remote provider text that continuation prompt text later
+/// repeats, so it passes the shared diagnostics boundary first: recognizable
+/// credential material replaces the whole value and any remaining value is
+/// truncated to a short bounded prefix.
+fn bounded_sanitized_provider_stop_reason(stop_reason: String) -> String {
+    bounded_utf8_prefix(
+        crate::sanitize_provider_primary_error_text(&stop_reason),
+        MAX_PROVIDER_STOP_REASON_BYTES,
+    )
 }
 
 /// Returns a UTF-8-safe bounded prefix without retaining excess provider text.
@@ -1890,6 +1906,10 @@ mod tests {
         ANTHROPIC_MESSAGES_API, ProviderApiCompatibility, ProviderApiCompatibilityError,
         ProviderCapabilities, ProviderModelCatalog, ProviderModelInfo, resolve_provider_api,
     };
+    use super::{
+        MAX_PROVIDER_STOP_REASON_BYTES, ModelTokenUsage,
+        ProviderOutputLimitContinuationDisposition, ProviderOutputLimitState,
+    };
 
     #[test]
     /// Verifies stable provider API identifiers parse and format through the
@@ -2085,5 +2105,49 @@ mod tests {
         let defaulted = models.iter().find(|model| model.id == "gpt-5.5").unwrap();
         assert_eq!(defaulted.reasoning_levels, None);
         assert_eq!(defaulted.context_window_tokens, Some(1_050_000));
+    }
+
+    /// Verifies output-limit continuation state bounds and sanitizes the
+    /// provider stop reason before it can be stored or injected into prompt text.
+    ///
+    /// A stop reason is remote provider text that continuation prompt text later
+    /// repeats, so a credential-shaped value must be replaced at the shared
+    /// diagnostics boundary and any remaining value bounded, while the safe
+    /// structured continuation fields stay intact.
+    #[test]
+    fn output_limit_state_bounds_and_sanitizes_stop_reason() {
+        const SENTINEL: &str = "sk-ant-api03-STOPREASONSENTINEL0000";
+        let state = ProviderOutputLimitState::new(
+            "anthropic",
+            "messages",
+            format!("stop_sequence Bearer {SENTINEL}"),
+            Some("resp_safe".to_string()),
+            "partial safe text",
+            1,
+            0,
+            ModelTokenUsage::default(),
+            ProviderOutputLimitContinuationDisposition::ContinueVisibleText,
+        );
+
+        assert_eq!(state.stop_reason, "[REDACTED]");
+        assert!(!format!("{state:?}").contains(SENTINEL));
+        assert_eq!(state.response_id.as_deref(), Some("resp_safe"));
+
+        let bounded = ProviderOutputLimitState::new(
+            "openai",
+            "responses",
+            "stop".repeat(1024),
+            None,
+            "partial safe text",
+            0,
+            0,
+            ModelTokenUsage::default(),
+            ProviderOutputLimitContinuationDisposition::ContinueVisibleText,
+        );
+        assert_eq!(bounded.stop_reason.len(), MAX_PROVIDER_STOP_REASON_BYTES);
+        assert_eq!(
+            bounded.stop_reason,
+            "stop".repeat(MAX_PROVIDER_STOP_REASON_BYTES / 4)
+        );
     }
 }

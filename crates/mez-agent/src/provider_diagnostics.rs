@@ -54,6 +54,23 @@ pub fn provider_error_detail(body: &str) -> String {
     redact_or_truncate_provider_failure_text(&detail)
 }
 
+/// Normalizes one provider-authored primary error message for display.
+///
+/// This is the single normalization boundary for provider-authored primary
+/// error text. Every remote-message constructor extracts provider text through
+/// here before it can become an error message, and the product error adapter
+/// re-applies the same policy defensively when an unsanitized provider error
+/// reaches it. Recognizable credential material is withheld and remaining text
+/// is bounded, so the error message, trace log, audit record, transcript
+/// replay, and rendered projections never observe raw provider text.
+///
+/// Functionally important facts such as the provider request id, error code and
+/// type, HTTP status, and retry advice travel separately in the sanitized
+/// structured failure payload rather than through this display text.
+pub fn sanitize_provider_primary_error_text(text: &str) -> String {
+    redact_or_truncate_provider_failure_text(text)
+}
+
 /// Builds bounded, secret-safe structured diagnostics from an HTTP failure.
 pub fn provider_failure_json(status_code: Option<u16>, body: &str) -> String {
     let trimmed = body.trim();
@@ -420,7 +437,7 @@ mod tests {
         provider_error_detail, provider_failure_event_json, provider_failure_json,
         provider_malformed_output_error, provider_malformed_output_failure_json,
         provider_malformed_output_hint, sanitize_provider_diagnostic_text,
-        sanitize_provider_failure_payload_json,
+        sanitize_provider_failure_payload_json, sanitize_provider_primary_error_text,
     };
     use crate::ProviderErrorKind;
 
@@ -552,5 +569,29 @@ mod tests {
             serde_json::from_str(error.provider_failure_json()).unwrap();
         assert_eq!(failure["error"]["message"], "actions is required");
         assert_eq!(failure["output"]["bare_command_object"], true);
+    }
+
+    #[test]
+    /// Verifies the shared primary-error boundary bounds provider-authored
+    /// display text and withholds recognizable credential shapes.
+    ///
+    /// Every remote-message constructor and the defensive product conversion
+    /// share this one policy, so the boundary must both omit a bearer-token or
+    /// API-key shape and leave ordinary corrective text intact.
+    fn primary_error_text_boundary_withholds_credentials() {
+        assert_eq!(
+            sanitize_provider_primary_error_text(
+                "invalid api key: Bearer sk-live-abcdef0123456789"
+            ),
+            "[REDACTED]"
+        );
+        assert_eq!(
+            sanitize_provider_primary_error_text("rate limited; retry later"),
+            "rate limited; retry later"
+        );
+        let long = "x".repeat(5_000);
+        let bounded = sanitize_provider_primary_error_text(&long);
+        assert!(bounded.len() < long.len(), "{}", bounded.len());
+        assert!(bounded.ends_with("..."));
     }
 }
