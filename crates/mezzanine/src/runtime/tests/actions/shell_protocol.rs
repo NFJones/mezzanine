@@ -2017,6 +2017,28 @@ fn runtime_managed_bash_admission_timeout_creates_no_shell_work() {
     process.terminate(Duration::from_millis(100)).unwrap();
 }
 
+/// Verifies a cancelled interrupt boundary cannot survive into a child session.
+///
+/// Admission is not gated on the cancelled marker, so a hide-then-show sequence
+/// can admit a child shell while the cancelled record is still outstanding. The
+/// new child's own prompt boundary must replace the stale record instead of the
+/// child's output settling it as if the cancelled admission were still current.
+#[test]
+fn cancelled_input_clear_boundary_does_not_survive_child_admission() {
+    let mut service = test_runtime_service();
+    service.begin_agent_subshell_input_clear("%1");
+    assert!(service.cancel_pending_agent_subshell_input_clear("%1"));
+    assert!(service.agent_subshell_input_clear_is_cancelled("%1"));
+
+    service.enter_agent_subshell("%1");
+
+    assert!(
+        !service.agent_subshell_input_clear_is_cancelled("%1"),
+        "a new child session must replace a stale cancelled boundary"
+    );
+    assert!(service.agent_subshell_is_active("%1"));
+}
+
 /// Verifies that a live POSIX shell discards an unsubmitted process draft
 /// before agent-shell admission instead of concatenating generated transport
 /// with the user's command.

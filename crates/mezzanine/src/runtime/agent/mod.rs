@@ -3019,6 +3019,13 @@ impl RuntimeSessionService {
         self.agent
             .deferred_agent_subshell_entry_panes
             .remove(&pane_id);
+        // A cancelled interrupt boundary belongs to the admission attempt that
+        // was cancelled. Once a child shell is admitted, its own session owns
+        // the prompt boundary, so the stale marker must not survive to be
+        // settled by the new child's output.
+        self.agent
+            .cancelled_agent_subshell_input_clear_panes
+            .remove(&pane_id);
         self.agent.agent_subshell_panes.insert(pane_id);
     }
 
