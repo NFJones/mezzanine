@@ -520,7 +520,12 @@ fn runtime_dependency_free_foreign_bash_loader_is_ready_gated() {
             )
             .unwrap(),
         1,
-        "identity settlement should launch one separately paced loader command"
+        "identity settlement should observe exactly one transaction end event"
+    );
+    assert_eq!(
+        service.maybe_bootstrap_ready_panes().unwrap(),
+        1,
+        "the reconciliation pump should launch the dependency-free child loader"
     );
 
     assert_eq!(
@@ -931,6 +936,11 @@ fn runtime_remote_certification_requires_authenticated_managed_install() {
             0,
         )
         .unwrap();
+    assert_eq!(
+        service.maybe_bootstrap_ready_panes().unwrap(),
+        1,
+        "the reconciliation pump should launch the dependency-free child loader"
+    );
 
     let loader_marker = service
         .foreign_shell_loader_marker_for_tests(&pane_id)
@@ -1106,6 +1116,11 @@ fn runtime_dependency_free_loader_write_failure_clears_staged_bootstrap() {
             0,
         )
         .unwrap();
+    assert_eq!(
+        service.maybe_bootstrap_ready_panes().unwrap(),
+        1,
+        "the reconciliation pump should launch the dependency-free child loader"
+    );
 
     assert_eq!(
         service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
@@ -1226,6 +1241,11 @@ fn runtime_dependency_free_foreign_bash_completion_preserves_loader_handoff() {
             0,
         )
         .unwrap();
+    assert_eq!(
+        service.maybe_bootstrap_ready_panes().unwrap(),
+        1,
+        "the reconciliation pump should launch the dependency-free child loader"
+    );
 
     let loader_marker = service
         .foreign_shell_loader_marker_for_tests(&pane_id)
@@ -1348,6 +1368,10 @@ bootstrap\tcomplete\t1714500000\n";
             )
             .unwrap(),
         1
+    );
+    assert!(
+        service.maybe_bootstrap_ready_panes().unwrap() >= 1,
+        "the reconciliation pump should settle the completed dependency-free bootstrap"
     );
     assert!(
         service
@@ -1524,6 +1548,377 @@ fn runtime_unmanaged_foreign_loader_exit_releases_parent_input() {
     assert_eq!(pane_inputs.len(), 1);
     assert_eq!(pane_inputs[0].pane_input_parts().0, pane_id);
     assert_eq!(pane_inputs[0].pane_input_parts().1, input);
+
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
+/// Settles one dependency-free foreign identity probe into the deferred
+/// child-launch phase.
+///
+/// Identity settlement records `child-launch-pending` instead of launching the
+/// child, so every regression that needs a staged boundary settles the probe the
+/// same way production does: through the grouped transaction-end event.
+fn settle_dependency_free_identity_probe(
+    service: &mut RuntimeSessionService,
+    pane_id: &str,
+    shell_path: &str,
+    shell_version: &str,
+) {
+    let (identity_marker, identity_turn_id) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::ShellIdentityProbe { .. }
+            )
+            .then(|| (marker.clone(), transaction.turn_id.clone()))
+        })
+        .expect("dependency-free identity probe should be registered");
+    service
+        .observe_agent_shell_transaction_start(
+            pane_id,
+            &identity_marker,
+            &identity_turn_id,
+            &format!("agent-{pane_id}"),
+            pane_id,
+        )
+        .unwrap();
+    let identity_output = format!(
+        "\u{1e}mez_shell_identity_begin={identity_marker}\n\
+         \u{1e}mez_shell_path={shell_path}\n\
+         \u{1e}mez_shell_version={shell_version}\n\
+         \u{1e}mez_shell_identity_end={identity_marker}\n"
+    );
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&identity_marker)
+        .unwrap();
+    transaction.observed_output_bytes = identity_output.len();
+    transaction.observed_output_preview = identity_output;
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_events(
+                pane_id,
+                &[TerminalOscEvent::ShellTransactionEnd {
+                    marker: identity_marker.clone(),
+                    turn_id: identity_turn_id.clone(),
+                    agent_id: format!("agent-{pane_id}"),
+                    pane_id: pane_id.to_string(),
+                    exit_code: 0,
+                }],
+            )
+            .unwrap(),
+        1,
+        "identity settlement should observe exactly one transaction end event"
+    );
+}
+
+/// Starts one pane whose live foreground process group is a foreign shell.
+fn start_foreign_shell_pane(
+    service: &mut RuntimeSessionService,
+) -> (String, mez_mux::process::PaneProcess) {
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    let primary_pid = service.pane_processes().primary_pid(&pane_id).unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&pane_id, None);
+    let process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+    service
+        .apply_pane_foreground_process_event(&pane_id, "ssh", primary_pid.saturating_add(1), None)
+        .unwrap();
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    (pane_id, process)
+}
+
+/// Verifies the managed-Fish prompt-end observation handler cannot run the
+/// deferred dependency-free child launch nested inside its own frame.
+///
+/// Fish admits prompt readiness from an observation handler, so a pane whose
+/// identity probe already settled must only observe that readiness there. The
+/// post-unwind application frame owns the child handoff; entering it from the
+/// handler is exactly the nesting shape that overflowed the observation stack.
+#[test]
+fn runtime_dependency_free_fish_prompt_end_defers_child_launch_off_observation_frame() {
+    let mut service = test_runtime_service();
+    let (pane_id, mut process) = start_foreign_shell_pane(&mut service);
+    settle_dependency_free_identity_probe(
+        &mut service,
+        &pane_id,
+        "/bin/bash",
+        "GNU bash, version 5.2",
+    );
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("child-launch-pending"),
+        "identity settlement must leave the child launch to the deferred pass"
+    );
+
+    service.mark_pane_fish_admission_awaiting_prompt_for_tests(&pane_id);
+    assert!(
+        service
+            .observe_agent_shell_transaction_events(&pane_id, &[TerminalOscEvent::ShellPromptEnd])
+            .unwrap()
+            >= 1,
+        "the Fish prompt-end handler must observe the admitted prompt"
+    );
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("child-launch-pending"),
+        "the prompt-end observation handler must not run the dependency-free child launch"
+    );
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .all(|transaction| transaction.kind != RunningShellTransactionKind::Bootstrap),
+        "the prompt-end observation handler must not register bootstrap ownership"
+    );
+    let nested_effects = service.drain_pane_io_transition().side_effects;
+    assert!(
+        pane_input_effects(&nested_effects)
+            .iter()
+            .all(
+                |effect| !String::from_utf8_lossy(effect.pane_input_parts().1).starts_with('\u{7}')
+            ),
+        "no managed child wrapper may be written from the observation handler"
+    );
+
+    assert_eq!(
+        service.settle_deferred_foreign_bootstrap_work().unwrap(),
+        1,
+        "the post-unwind apply frame owns the deferred child launch"
+    );
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("bootstrapping-child")
+    );
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .any(|transaction| transaction.kind == RunningShellTransactionKind::Bootstrap),
+        "the deferred pass must register bootstrap ownership outside the observation frame"
+    );
+
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
+/// Verifies a replayed receiver end cannot override the settlement that the
+/// deferral window already recorded.
+///
+/// Receiver completion removes the completion requirement and retains the
+/// original end until the deferred pass settles it. A duplicate end for the same
+/// marker inside that window must not settle the transaction with its own exit
+/// code and discard the recorded end.
+#[test]
+fn runtime_deferred_receiver_end_ignores_duplicate_end_exit_code() {
+    let mut service = test_runtime_service();
+    let (pane_id, mut process) = start_foreign_shell_pane(&mut service);
+    settle_dependency_free_identity_probe(
+        &mut service,
+        &pane_id,
+        "/bin/bash",
+        "GNU bash, version 5.2",
+    );
+    assert_eq!(service.settle_deferred_foreign_bootstrap_work().unwrap(), 1);
+
+    let (bootstrap_marker, bootstrap_turn_id) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            (transaction.kind == RunningShellTransactionKind::Bootstrap)
+                .then(|| (marker.clone(), transaction.turn_id.clone()))
+        })
+        .expect("dependency-free child bootstrap should be registered");
+    let agent_id = format!("agent-{pane_id}");
+    service
+        .observe_agent_shell_transaction_start(
+            &pane_id,
+            &bootstrap_marker,
+            &bootstrap_turn_id,
+            &agent_id,
+            &pane_id,
+        )
+        .unwrap();
+    let child_token = service
+        .foreign_child_token_for_tests(&pane_id)
+        .expect("the staged foreign child should retain its token")
+        .to_string();
+    service.register_shell_receiver_payload(
+        &bootstrap_marker,
+        mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+            b"managed foreign child source\n".to_vec(),
+            &bootstrap_marker,
+            true,
+        ),
+    );
+    let preview = "bootstrap\tcomplete\t1714500000\n".to_string();
+    {
+        let transaction = service
+            .running_shell_transactions_mut_for_tests()
+            .get_mut(&bootstrap_marker)
+            .unwrap();
+        transaction.observed_output_bytes = preview.len();
+        transaction.observed_output_preview = preview;
+    }
+
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_end(
+                &pane_id,
+                &bootstrap_marker,
+                &bootstrap_turn_id,
+                &agent_id,
+                &pane_id,
+                0,
+            )
+            .unwrap(),
+        1,
+        "the inner end marker must be retained until receiver completion"
+    );
+    assert_eq!(
+        service
+            .observe_shell_receiver_complete(&pane_id, &child_token, &bootstrap_marker, 0)
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        service.pending_receiver_end_exit_code_for_tests(&bootstrap_marker),
+        Some(0),
+        "receiver completion must retain the recorded end for the deferred pass"
+    );
+
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_end(
+                &pane_id,
+                &bootstrap_marker,
+                &bootstrap_turn_id,
+                &agent_id,
+                &pane_id,
+                99,
+            )
+            .unwrap(),
+        0,
+        "a duplicate end inside the deferral window must be ignored"
+    );
+    assert_eq!(
+        service.pending_receiver_end_exit_code_for_tests(&bootstrap_marker),
+        Some(0),
+        "a duplicate end must not override the recorded settlement exit code"
+    );
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .contains_key(&bootstrap_marker),
+        "a duplicate end must not settle the deferred transaction"
+    );
+
+    assert_eq!(service.settle_ready_receiver_ends().unwrap(), 1);
+    assert_eq!(
+        service.pending_receiver_end_exit_code_for_tests(&bootstrap_marker),
+        None
+    );
+    assert!(
+        !service
+            .running_shell_transactions_for_tests()
+            .contains_key(&bootstrap_marker)
+    );
+
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
+/// Verifies a failed deferred child launch clears the bounded handoff state that
+/// the launch had already recorded.
+///
+/// The launch records its child token and shell before its fallible staging
+/// steps. A failure there is terminal, so no bounded owner remains to expire the
+/// leaked state: a retained Zsh `child_shell` would keep advertising an EscapeM
+/// trigger for a failed boundary.
+#[test]
+fn runtime_deferred_child_launch_failure_clears_leaked_handoff_state() {
+    let mut service = test_runtime_service();
+    let (pane_id, mut process) = start_foreign_shell_pane(&mut service);
+    settle_dependency_free_identity_probe(&mut service, &pane_id, "/bin/zsh", "zsh 5.9");
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("child-launch-pending")
+    );
+    assert!(
+        service.active_zsh_trigger_for_pane(&pane_id).is_none(),
+        "a staged boundary must not advertise a Zsh trigger before its child is recorded"
+    );
+
+    // One unrelated transaction for the pane makes the staged launch fail after
+    // the child token and shell were already recorded on the boundary.
+    service.register_running_shell_transaction(
+        "blocker-1".to_string(),
+        RunningShellTransactionRef {
+            turn_id: "turn-1".to_string(),
+            kind: RunningShellTransactionKind::ReadinessProbe,
+            pane_id: pane_id.clone(),
+            command: "printf blocker".to_string(),
+            started_at_unix_ms: 0,
+            timeout_ms: None,
+            pending_input_payload: None,
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+        false,
+    );
+    assert_eq!(
+        service.dispatch_pending_foreign_child_launches().unwrap(),
+        0
+    );
+
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("failed")
+    );
+    assert!(
+        service.foreign_child_token_for_tests(&pane_id).is_none(),
+        "a failed deferred launch must not leak its child token"
+    );
+    assert!(
+        service.active_zsh_trigger_for_pane(&pane_id).is_none(),
+        "a failed boundary must not advertise a stale Zsh trigger"
+    );
+    assert!(
+        service
+            .foreign_shell_loader_marker_for_tests(&pane_id)
+            .is_none(),
+        "a failed deferred launch must not leak loader ownership"
+    );
+    assert!(
+        !service.pane_bootstrap_is_pending_for_tests(&pane_id),
+        "a failed deferred launch must not leave bootstrap pending"
+    );
+    assert!(
+        !service.pane_environment_authority_is_certified_for_tests(&pane_id),
+        "a failed deferred launch must not publish certifications"
+    );
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .contains_key("blocker-1"),
+        "the unrelated transaction that failed the launch must remain owned by its own settlement"
+    );
 
     let _ = process.terminate(Duration::from_millis(10));
 }

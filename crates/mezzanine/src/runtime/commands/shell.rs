@@ -1421,6 +1421,10 @@ impl RuntimeSessionService {
                 self.pane_readiness_state(pane_id),
                 PaneReadinessState::Ready | PaneReadinessState::PromptCandidate
             ) {
+                // This entry path cannot carry deferred settlement work: a
+                // retained receiver end still owns a running transaction and an
+                // uncertified foreign boundary returns earlier, so neither the
+                // child launch nor a receiver-completed end is pending here.
                 let _ = self.maybe_bootstrap_ready_panes()?;
             }
             return Ok(false);

@@ -358,6 +358,15 @@ enum RuntimeForeignShellBootstrapPhase {
     AwaitingPrompt,
     /// The boundary is ready for syntax-neutral identity discovery.
     IdentityProbing,
+    /// Identity discovery settled and the deferred settlement pass still owns
+    /// the dependency-free child launch.
+    ///
+    /// The settled probe is recorded as this explicit intermediate state so the
+    /// loader handoff runs from the pane-output application frame after its
+    /// observation handlers unwind, or from the actor reconciliation pass, and
+    /// never from the deep pane-output observation stack that first observed the
+    /// probe.
+    ChildLaunchPending,
     /// The boundary is staging and launching the managed child shell.
     #[allow(dead_code)]
     BootstrappingChild,
@@ -374,6 +383,7 @@ impl RuntimeForeignShellBootstrapPhase {
         match self {
             Self::AwaitingPrompt => "awaiting-prompt",
             Self::IdentityProbing => "identity-probing",
+            Self::ChildLaunchPending => "child-launch-pending",
             Self::BootstrappingChild => "bootstrapping-child",
             Self::Certified => "certified",
             Self::Failed => "failed",
@@ -381,6 +391,11 @@ impl RuntimeForeignShellBootstrapPhase {
     }
 
     /// Reports whether this phase still has a finite runtime deadline.
+    ///
+    /// `Failed` is terminal and owns no remaining deadline, so it is excluded
+    /// here; every path that records it must therefore clear the bounded child,
+    /// handoff, and loader state itself, as the deferred-launch failure branch in
+    /// `bootstrap.rs` and the pane-write failure branch do.
     fn has_bounded_owner(self) -> bool {
         !matches!(self, Self::Certified | Self::Failed)
     }
@@ -425,7 +440,8 @@ struct ManagedPaneStartup {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeForeignShellBoundary {
     /// Bootstrap ordering is `AwaitingPrompt -> IdentityProbing` (identity
-    /// command only) `-> BootstrappingChild` (loader dispatched) `->`
+    /// command only) `-> ChildLaunchPending` (deferred child launch dispatched)
+    /// `-> BootstrappingChild` (loader staged and dispatched) `->`
     /// `Certified | Failed`.
     /// Primary pane process that owns the PTY containing the foreign group.
     primary_process_id: u32,
@@ -2851,6 +2867,15 @@ impl RuntimeSessionService {
         )
     }
 
+    /// Returns the exit code retained for a receiver-completed end marker that
+    /// still awaits the deferred settlement pass.
+    pub(crate) fn pending_receiver_end_exit_code_for_tests(&self, marker: &str) -> Option<i32> {
+        self.process
+            .shell_receiver_pending_ends
+            .get(marker)
+            .map(|(_, _, _, exit_code)| *exit_code)
+    }
+
     /// Installs the remaining private-receiver acknowledgement count for a test transaction.
     pub(crate) fn set_shell_transaction_receiver_acknowledgements_for_tests(
         &mut self,
@@ -2902,6 +2927,23 @@ impl RuntimeSessionService {
     /// Reports authenticated managed-Fish receiver readiness to runtime tests.
     pub(crate) fn managed_fish_adapter_is_ready_for_tests(&self, pane_id: &str) -> bool {
         self.managed_fish_adapter_is_ready_for_pane(pane_id)
+    }
+
+    /// Installs the managed-Fish admission state that precedes prompt readiness.
+    ///
+    /// Fish readiness crosses `Pending -> AwaitingPrompt -> Ready` through the
+    /// live adapter, so the prompt-end path is only reachable from this state.
+    pub(crate) fn mark_pane_fish_admission_awaiting_prompt_for_tests(&mut self, pane_id: &str) {
+        let primary_process_id = self
+            .primary_pid_for_live_pane_process(pane_id)
+            .expect("the test pane must have a primary process");
+        self.process.pane_fish_admissions.insert(
+            pane_id.to_string(),
+            RuntimeManagedFishAdmission::AwaitingPrompt {
+                primary_process_id,
+                version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+            },
+        );
     }
 
     /// Returns the token authenticating managed POSIX startup admission.
@@ -4208,6 +4250,9 @@ impl RuntimeSessionService {
                 .get(&pane_id)
                 .and_then(|boundary| match boundary.phase {
                     RuntimeForeignShellBootstrapPhase::IdentityProbing => {
+                        boundary.identity_marker.as_deref()
+                    }
+                    RuntimeForeignShellBootstrapPhase::ChildLaunchPending => {
                         boundary.identity_marker.as_deref()
                     }
                     RuntimeForeignShellBootstrapPhase::BootstrappingChild => self

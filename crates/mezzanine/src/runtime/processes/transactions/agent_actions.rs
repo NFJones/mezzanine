@@ -1409,16 +1409,18 @@ impl RuntimeSessionService {
                 "managed receiver-complete metadata does not match runtime dispatch state",
             );
         }
-        let Some((turn_id, agent_id, pane_id, exit_code)) =
-            self.process.shell_receiver_pending_ends.remove(marker)
-        else {
+        if !self
+            .process
+            .shell_receiver_pending_ends
+            .contains_key(marker)
+        {
             return self.fail_shell_transaction_protocol_violation(
                 marker,
                 transaction,
                 "receiver-complete-before-end",
                 "managed receiver completed before the evaluated transaction emitted its end marker",
             );
-        };
+        }
         self.append_agent_trace_turn_event(
             output_pane_id,
             &transaction.turn_id,
@@ -1426,14 +1428,38 @@ impl RuntimeSessionService {
                 "shell_receiver completed marker={marker} receiver_exit_code={receiver_exit_code}"
             ),
         )?;
-        self.observe_agent_shell_transaction_end(
-            output_pane_id,
-            marker,
-            &turn_id,
-            &agent_id,
-            &pane_id,
-            exit_code,
-        )
+        // The inner end marker stays pending here; the reconciliation pump
+        // settles the transaction off this deep observation stack.
+        Ok(1)
+    }
+
+    /// Settles receiver-completed transactions whose end marker already arrived.
+    ///
+    /// The pane-output application frame calls this after the event handlers
+    /// unwind, so the large transaction-end frame never stacks on top of the
+    /// deep output-observation chain. The reconciliation pump uses the same
+    /// helper for adapter-driven events.
+    pub(crate) fn settle_ready_receiver_ends(&mut self) -> Result<usize> {
+        let ready_ends = self
+            .process
+            .shell_receiver_pending_ends
+            .iter()
+            .filter(|(marker, _)| {
+                !self
+                    .process
+                    .shell_receiver_completion_required
+                    .contains(*marker)
+            })
+            .map(|(marker, end)| (marker.clone(), end.clone()))
+            .collect::<Vec<_>>();
+        let mut settled = 0usize;
+        for (marker, (turn_id, agent_id, pane_id, exit_code)) in ready_ends {
+            self.process.shell_receiver_pending_ends.remove(&marker);
+            settled = settled.saturating_add(self.observe_agent_shell_transaction_end(
+                &pane_id, &marker, &turn_id, &agent_id, &pane_id, exit_code,
+            )?);
+        }
+        Ok(settled)
     }
 
     /// Settles managed-shell parent restoration independently from bootstrap completion.
@@ -1761,6 +1787,18 @@ impl RuntimeSessionService {
                 ),
             );
             return Ok(1);
+        }
+        if self
+            .process
+            .shell_receiver_pending_ends
+            .contains_key(marker)
+        {
+            // Receiver completion already removed its requirement and retained
+            // the original end for the deferred settlement pass. A replayed or
+            // duplicate end inside that window must not settle with its own exit
+            // code and discard the recorded end; before deferral the duplicate
+            // arrived with no running transaction left and was ignored.
+            return Ok(0);
         }
         let Some(mut transaction_ref) = self.remove_running_shell_transaction(marker) else {
             return Ok(0);

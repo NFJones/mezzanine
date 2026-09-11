@@ -86,6 +86,7 @@ bootstrap\tcomplete\t1714500000\n";
     service
         .observe_agent_shell_transaction_end("%1", &marker, &turn_id, "agent-%1", "%1", 0)
         .unwrap();
+    service.maybe_bootstrap_ready_panes().unwrap();
     let observation_id = service
         .drain_pane_io_transition()
         .side_effects

@@ -14,12 +14,10 @@
 //! obtain later agent commands. A silent foreground program must not be killed
 //! or interrupted merely because certification cannot complete.
 //!
-//! One further case reproduced here, and currently marked `#[ignore]`, aborts
-//! the whole runtime process; see `async_forged_identity_records_abort_runtime`
-//! for the minimal reproduction and scope.
-//!
-//! That abort is filed as mez issue `19043f17`, which owns the repair and the
-//! localization plan; reproducing it here stays ignored until that repair lands.
+//! One further case reproduces an adversarial replay that previously drove the
+//! runtime into a stack-overflow abort. The bounded-settlement regressions
+//! `async_forged_identity_records_settle_without_abort` and
+//! `async_replayed_forgery_settles_without_bootstrap_reentry` cover the repair.
 
 use super::super::*;
 
@@ -712,43 +710,91 @@ async fn async_spoofed_foreground_program_cannot_publish_authority_under_zsh() {
     assert_no_spoofed_authority(&outcome, true);
 }
 
-/// Documents a demonstrated adversarial regression that aborts the runtime.
+/// Verifies replayed in-band identity and bootstrap material cannot abort the
+/// runtime and settles to a terminal bounded bootstrap phase.
 ///
 /// Minimal reproduction: a foreground child of the pane's primary shell keeps
 /// the pane PTY foreground process group, observes the runtime's own identity
 /// probe text, and answers with well-formed OSC start/end frames that carry the
 /// observed marker, turn, agent, and pane metadata plus forged in-band
-/// `mez_shell_identity_*` records. Nothing in that material is secret: the
-/// runtime delivers the probe text to whatever owns the PTY, so any program that
-/// reads its own stdin can replay it. The runtime then overflows its stack and
-/// aborts, taking every pane in the session with it.
+/// `mez_shell_identity_*` records, bootstrap environment fields, and loader or
+/// receiver frames. Nothing in that material is secret: the runtime delivers
+/// the probe text to whatever owns the PTY, so any program that reads its own
+/// stdin can replay it. That input previously performed the dependency-free
+/// foreign child handoff on the deep pane-output observation stack and aborted
+/// the whole process with a stack overflow (SIGABRT).
 ///
-/// Scope, measured on this host with `SpoofMode` variants of the same fixture:
-/// forged in-band bootstrap evidence (shell-identity records, bootstrap
-/// environment fields, and loader or receiver frames) inside a completed
-/// identity-probe transaction aborts the process, while start and end frames
-/// alone, prompt text alone, identity records without frames, and silent
-/// operation all settle safely. Skipping the dependency-free foreign child
-/// bootstrap call suppresses the abort, and the last recorded bootstrap stage
-/// was that call's entry, so the recursion is entered from that stage.
-///
-/// This test is ignored because it terminates the test process instead of
-/// failing an assertion; run it explicitly with `--ignored` to reproduce. It
-/// remains as the regression baseline for a future repair, and it deliberately
-/// asserts nothing about the abort itself.
-///
-/// The confirmed abort is filed as mez issue `19043f17`, which owns the
-/// localization and repair; that work is out of scope for this suite.
+/// The identity settlement now records an explicit `child-launch-pending`
+/// boundary phase and the reconciliation stack dispatches the child launch and
+/// receiver-completed transactions, so the replayed forgery settles in bounded
+/// time instead of exhausting the output-observation stack. The admission
+/// provenance of in-band identity evidence is tracked separately; this
+/// regression owns the process-abort failure and the bounded settlement.
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "mez issue 19043f17: reproduces a runtime process abort; run explicitly with --ignored"]
-async fn async_forged_identity_records_abort_runtime() {
+async fn async_forged_identity_records_settle_without_abort() {
     let Some(bash) = available_shell(&["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"]) else {
         eprintln!("skipping forged identity regression because Bash is unavailable");
         return;
     };
     let outcome = run_foreground_spoof_case(bash, SpoofMode::ForgedIdentity, "bash-forged").await;
-    eprintln!(
-        "forged identity scenario survived without aborting the runtime: {:?}",
+    assert!(
+        outcome.log_text.contains("SPOOFED_MARKER:"),
+        "the fixture must have replayed forged identity and bootstrap frames: {}",
+        outcome.log_text
+    );
+    // Reaching this assertion proves the runtime did not abort the process; the
+    // scenario harness fails closed on a hang before its own bound instead.
+    assert!(
+        matches!(
+            outcome.snapshot.foreign_bootstrap_phase,
+            Some("certified") | Some("failed")
+        ) && !outcome.snapshot.bootstrap_pending,
+        "replayed forgery must settle to a terminal bounded bootstrap phase: {:?}",
         outcome.snapshot
+    );
+    eprintln!(
+        "forged identity scenario settled without aborting the runtime: {:?}",
+        outcome.snapshot
+    );
+}
+
+/// Verifies the replayed-forgery path settles once without re-entering the
+/// foreign identity and bootstrap transition.
+///
+/// The settled service state must be terminal for the pane: no running shell
+/// transaction (including a re-registered identity probe or bootstrap) and no
+/// pending bootstrap, so the replay cannot leave the runtime mid-transition
+/// where a later event re-enters the handoff.
+#[tokio::test(flavor = "current_thread")]
+async fn async_replayed_forgery_settles_without_bootstrap_reentry() {
+    let Some(bash) = available_shell(&["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"]) else {
+        eprintln!("skipping forged identity settlement regression because Bash is unavailable");
+        return;
+    };
+    let outcome =
+        run_foreground_spoof_case(bash, SpoofMode::ForgedIdentity, "bash-forged-settle").await;
+    assert!(
+        !outcome.service.pane_bootstrap_is_pending_for_tests("%1"),
+        "replayed forgery must not leave a pending bootstrap: {}",
+        outcome.log_text
+    );
+    assert!(
+        !outcome
+            .service
+            .running_shell_transactions_for_tests()
+            .values()
+            .any(|transaction| transaction.pane_id == "%1"),
+        "replayed forgery must settle without a running shell transaction: {}",
+        outcome.log_text
+    );
+    assert!(
+        matches!(
+            outcome
+                .service
+                .foreign_shell_bootstrap_phase_for_tests("%1"),
+            Some("certified") | Some("failed")
+        ),
+        "the settled foreign bootstrap phase must be terminal: {}",
+        outcome.log_text
     );
 }

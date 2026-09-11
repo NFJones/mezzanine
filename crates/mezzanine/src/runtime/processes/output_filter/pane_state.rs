@@ -288,6 +288,8 @@ impl RuntimeSessionService {
         }
         self.record_running_shell_transaction_output(output.pane_id.as_str(), &transaction_bytes);
         self.observe_agent_shell_transaction_events(output.pane_id.as_str(), &osc_events)?;
+        let _ = self.settle_ready_receiver_ends()?;
+        let _ = self.dispatch_pending_foreign_child_launches()?;
         let terminal_progress_changed_by_shell_event = terminal_progress_before_shell_events
             != self
                 .process

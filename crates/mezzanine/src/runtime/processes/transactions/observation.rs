@@ -2030,7 +2030,13 @@ impl RuntimeSessionService {
                         if self.begin_managed_agent_surface_bootstrap(output_pane_id)? {
                             observed = observed.saturating_add(1);
                         } else {
-                            observed = observed.saturating_add(self.maybe_bootstrap_ready_panes()?);
+                            // Prompt readiness must not settle deferred bootstrap
+                            // work here: this handler is the observation frame
+                            // that the child launch and receiver-completed end
+                            // must stay off. The pane-output application frame
+                            // settles them once these handlers unwind.
+                            observed = observed
+                                .saturating_add(self.dispatch_prompt_ready_bootstrap_wrappers()?);
                         }
                     }
                     if !observed_harness_transaction_end {

@@ -466,6 +466,7 @@ fn runtime_agent_shell_immediate_reentry_resumes_after_parent_bootstrap() {
             0,
         )
         .unwrap();
+    service.maybe_bootstrap_ready_panes().unwrap();
     service.drain_pane_io_transition();
 
     let (bootstrap_marker, bootstrap_turn_id) = service

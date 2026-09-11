@@ -289,6 +289,7 @@ impl RuntimeSessionService {
                 matches!(
                     boundary.phase,
                     RuntimeForeignShellBootstrapPhase::IdentityProbing
+                        | RuntimeForeignShellBootstrapPhase::ChildLaunchPending
                         | RuntimeForeignShellBootstrapPhase::BootstrappingChild
                 )
             });
