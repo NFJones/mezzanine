@@ -6495,7 +6495,9 @@ counts. Historical tool entries that do not have a bounded sanitized projection
 MUST be omitted rather than replaced with placeholder text. Where a provider
 protocol requires a tool-call/result envelope to preserve native pairing, that
 envelope MUST be preserved with safe empty or validated reduced output instead
-of legacy bytes. Pending local messages supplied to the model MUST include the
+of legacy bytes. A result whose corresponding call is not retained in the
+replay MUST be omitted rather than replayed as an unpaired output. Pending
+local messages supplied to the model MUST include the
 message metadata needed to identify sender, type, content type, and expiry
 together with a bounded copy of the message payload.
 

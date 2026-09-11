@@ -50,6 +50,10 @@ pub fn openai_render_messages(
         }
         openai_push_input_message(message, &mut input);
     }
+    // A legacy transcript can retain a tool result whose assistant function
+    // call was lost; the Responses protocol pairs one output with one call, so
+    // an unpaired result is omitted rather than replayed without its call.
+    openai_retain_paired_function_call_outputs(&mut input);
     if input.is_empty() {
         return Err(ProviderRequestAssemblyError::invalid_args(
             "OpenAI Responses request requires at least one user or tool input message",
@@ -71,6 +75,32 @@ fn openai_push_input_message(message: &ModelMessage, input: &mut Vec<serde_json:
 /// Adds one already native Responses item to input and cache diagnostics.
 fn openai_push_input_value(value: serde_json::Value, input: &mut Vec<serde_json::Value>) {
     input.push(value);
+}
+
+/// Drops function-call results whose function call is absent from the input.
+///
+/// A legacy transcript can retain a tool result whose assistant function call
+/// was lost. The Responses protocol pairs exactly one output with one call, so
+/// replaying an unpaired result is rejected by the provider; the result is
+/// omitted instead of replayed without its call or replaced with placeholder
+/// text.
+fn openai_retain_paired_function_call_outputs(input: &mut Vec<serde_json::Value>) {
+    let paired_call_ids: std::collections::HashSet<String> = input
+        .iter()
+        .filter(|item| {
+            item.get("type").and_then(serde_json::Value::as_str) == Some("function_call")
+        })
+        .filter_map(|item| item.get("call_id").and_then(serde_json::Value::as_str))
+        .map(str::to_string)
+        .collect();
+    input.retain(|item| {
+        if item.get("type").and_then(serde_json::Value::as_str) != Some("function_call_output") {
+            return true;
+        }
+        item.get("call_id")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|call_id| paired_call_ids.contains(call_id))
+    });
 }
 
 /// Renders one non-instruction message into OpenAI Responses input shape.
