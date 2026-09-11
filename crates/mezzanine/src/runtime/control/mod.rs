@@ -494,6 +494,11 @@ impl RuntimeSessionService {
         previous: Option<&str>,
     ) -> Option<String> {
         let Some(signature) = self.pane_environment_signature(pane_id) else {
+            // A deliberate dependency-free withholding is a settled production
+            // state, so report its explicit reason instead of emitting nothing.
+            if let Some(reason) = self.pane_withheld_environment_authority_reason(pane_id) {
+                return Some(format!("environment_state=unavailable\nreason={reason}"));
+            }
             return previous.map(|_| {
                 "environment_state=unavailable\nreason=pane_environment_signature_unavailable"
                     .to_string()

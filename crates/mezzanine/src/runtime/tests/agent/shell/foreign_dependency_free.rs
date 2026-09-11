@@ -573,6 +573,19 @@ fn runtime_dependency_free_foreign_bash_loader_is_ready_gated() {
             .unwrap(),
         1
     );
+    assert!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
+        "a replayed loader record must not release the staged payload before the pane worker observes the loader launch"
+    );
+    // The pane worker observes the launched loader in its own foreground group,
+    // which is the process-bound proof that releases the staged payload.
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&pane_id, Some(primary_pid.saturating_add(2)));
+    assert!(
+        service.settle_deferred_foreign_bootstrap_work().unwrap() >= 1,
+        "the deferred pass should release the staged loader payload once the loader launch is observed"
+    );
     let release_effects = service.drain_pane_io_transition().side_effects;
     let release_inputs = pane_input_effects(&release_effects);
     assert_eq!(
@@ -612,6 +625,9 @@ fn runtime_dependency_free_foreign_bash_loader_is_ready_gated() {
         let input = String::from_utf8_lossy(effect.pane_input_parts().1);
         !input.starts_with('\u{7}') && !input.contains("MEZ_BASH_RX1_BEGIN")
     }));
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&pane_id, None);
 
     let bootstrap_marker = service
         .running_shell_transactions_for_tests()
@@ -879,14 +895,17 @@ fn runtime_remote_certification_requires_authenticated_managed_install() {
         .id
         .to_string();
     let primary_pid = service.pane_processes().primary_pid(&pane_id).unwrap();
+    // A live non-default foreground group models the outer group an SSH-style
+    // transport reports for the remote pane instead of an unavailable one.
+    let foreign_group = primary_pid.saturating_add(1);
     service
         .pane_processes_mut()
-        .set_foreground_process_group_id_for_test(&pane_id, None);
+        .set_foreground_process_group_id_for_test(&pane_id, Some(foreign_group));
     let mut process = service
         .take_running_pane_process_for_adapter(&pane_id)
         .unwrap();
     service
-        .apply_pane_foreground_process_event(&pane_id, "ssh", primary_pid.saturating_add(1), None)
+        .apply_pane_foreground_process_event(&pane_id, "ssh", foreign_group, None)
         .unwrap();
     service
         .execute_terminal_command(&primary, "agent-shell")
@@ -1263,6 +1282,12 @@ fn runtime_dependency_free_foreign_bash_completion_preserves_loader_handoff() {
         .expect("dependency-free Bash child should have a fresh token")
         .to_string();
     service.drain_pane_io_transition();
+    // The pane worker observes the launched dependency-free loader in the pane
+    // before its correlated record arrives; that process-bound observation is what
+    // releases the staged payload.
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&pane_id, Some(primary_pid.saturating_add(2)));
     assert_eq!(
         service
             .observe_agent_shell_transaction_events(
@@ -1275,6 +1300,9 @@ fn runtime_dependency_free_foreign_bash_completion_preserves_loader_handoff() {
         1
     );
     service.drain_pane_io_transition();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&pane_id, None);
     assert_eq!(
         service
             .observe_agent_shell_transaction_events(
@@ -1394,13 +1422,41 @@ bootstrap\tcomplete\t1714500000\n";
     assert_eq!(
         service.pane_foreground_certified_shell_state(&pane_id),
         Some(true),
-        "the authenticated managed receiver must still certify a remote pane shell"
+        "the admitted dependency-free receiver still certifies pane shell identity"
     );
     assert!(
-        service.pane_environment_authority_is_certified_for_tests(&pane_id),
-        "a certified remote shell must still publish environment authority"
+        !service.pane_environment_authority_is_certified_for_tests(&pane_id),
+        "dependency-free in-band evidence must never publish environment authority"
     );
-    assert!(service.pane_environment_signature(&pane_id).is_some());
+    assert!(
+        service.pane_environment_signature(&pane_id).is_none(),
+        "dependency-free in-band evidence must never publish an environment signature"
+    );
+    assert_eq!(
+        service.pane_environment_authority_failure_for_tests(&pane_id),
+        Some(
+            crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::DependencyFreeShellUnattested
+        ),
+        "a correlation-only dependency-free certification must report the withheld reason"
+    );
+    assert_eq!(
+        service.pane_readiness_state(&pane_id),
+        PaneReadinessState::Degraded,
+        "a correlation-only dependency-free certification must settle degraded"
+    );
+    let path_request = mez_agent::shell::PanePathResolutionRequest::new(
+        vec![".".to_string()],
+        Vec::new(),
+        Vec::new(),
+    )
+    .unwrap();
+    assert!(
+        service
+            .path_scopes_for_pane_request(&pane_id, &path_request)
+            .map(|scopes| scopes.is_none())
+            .unwrap_or(true),
+        "dependency-free in-band evidence must never publish path authority"
+    );
 
     service
         .apply_pane_foreground_process_event(
@@ -1919,6 +1975,944 @@ fn runtime_deferred_child_launch_failure_clears_leaked_handoff_state() {
             .contains_key("blocker-1"),
         "the unrelated transaction that failed the launch must remain owned by its own settlement"
     );
+
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
+/// Replays the in-band bootstrap frame material one PTY-owning program can
+/// observe and echo back without ever authenticating a managed receiver.
+///
+/// The adversarial fixture in
+/// `host::async_runtime::tests::services::pane_certification_spoof` records only
+/// bytes production delivered on the pane's own input, so this helper replays
+/// exactly that reachable material: the correlated loader record, the bootstrap
+/// start frame, bootstrap environment fields, and the bootstrap end frame.
+fn replay_in_band_bootstrap_without_managed_receiver(
+    service: &mut RuntimeSessionService,
+    pane_id: &str,
+    foreground_process_group: u32,
+    replay_loader_record: bool,
+    settle_completion_observation: bool,
+) {
+    let loader_marker = service
+        .foreign_shell_loader_marker_for_tests(pane_id)
+        .expect("dependency-free loader should retain its nonce")
+        .to_string();
+    let bootstrap_marker = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            (transaction.kind == RunningShellTransactionKind::Bootstrap).then(|| marker.clone())
+        })
+        .expect("dependency-free child bootstrap should be registered");
+    service.drain_pane_io_transition();
+    if replay_loader_record {
+        assert_eq!(
+            service
+                .observe_agent_shell_transaction_events(
+                    pane_id,
+                    &[TerminalOscEvent::ForeignShellLoaderReady {
+                        marker: loader_marker,
+                    }],
+                )
+                .unwrap(),
+            1,
+            "the replayed loader record must be admitted for this pane"
+        );
+        service.drain_pane_io_transition();
+    }
+
+    let bootstrap_turn_id = service
+        .running_shell_transactions_for_tests()
+        .get(&bootstrap_marker)
+        .expect("dependency-free child bootstrap should remain registered")
+        .turn_id
+        .clone();
+    service
+        .observe_agent_shell_transaction_start(
+            pane_id,
+            &bootstrap_marker,
+            &bootstrap_turn_id,
+            &format!("agent-{pane_id}"),
+            pane_id,
+        )
+        .unwrap();
+    answer_pane_foreground_observations(service, foreground_process_group);
+    let bootstrap_output = "env\tos\tLinux\n\
+env\tarch\tx86_64\n\
+env\thost\tforged-host\n\
+env\tuser\tforged-user\n\
+env\tshell_path\t/bin/bash\n\
+env\tshell_class\tbash\n\
+env\tpath\t/tmp/mez-forged-bin:/usr/bin:/bin\n\
+env\tcwd\t/tmp/mez-forged-cwd\n\
+env\tgit_repo\t0\n\
+bootstrap\tcomplete\t1714500000\n";
+    {
+        let transaction = service
+            .running_shell_transactions_mut_for_tests()
+            .get_mut(&bootstrap_marker)
+            .expect("dependency-free child bootstrap should remain registered");
+        transaction.observed_output_bytes = bootstrap_output.len();
+        transaction.observed_output_preview = bootstrap_output.to_string();
+    }
+    service
+        .observe_agent_shell_transaction_end(
+            pane_id,
+            &bootstrap_marker,
+            &bootstrap_turn_id,
+            &format!("agent-{pane_id}"),
+            pane_id,
+            0,
+        )
+        .unwrap();
+    if settle_completion_observation {
+        answer_pane_foreground_observations(service, foreground_process_group);
+    }
+}
+
+/// Answers adapter-owned foreground observations with one live foreground
+/// group, the way a pane process that kept the PTY would answer them.
+fn answer_pane_foreground_observations(
+    service: &mut RuntimeSessionService,
+    foreground_process_group: u32,
+) -> usize {
+    let mut answered = 0;
+    for effect in service.drain_pane_io_transition().side_effects {
+        if let RuntimeSideEffect::PaneProcessIo {
+            instance,
+            effect:
+                crate::runtime::PaneProcessIoEffect::ObserveForegroundProcess { observation_id, .. },
+        } = effect
+        {
+            service
+                .apply_pane_foreground_process_observation_transition(
+                    instance,
+                    crate::runtime::PaneForegroundProcessObservation {
+                        observation_id,
+                        process_name: Some("sh".to_string()),
+                        process_group_id: Some(foreground_process_group),
+                        current_working_directory: None,
+                        error: None,
+                    },
+                )
+                .unwrap();
+            answered += 1;
+        }
+    }
+    answered
+}
+
+/// Verifies a replayed payload-receiver record cannot turn an identity marker
+/// into managed-handoff authority.
+///
+/// The identity marker is a correlation id that production itself delivers to the
+/// pane, so whatever owns the PTY can replay it. The live probe transaction owns
+/// no payload-receiver requirement, so the replayed record is a protocol
+/// violation that fails the probe instead of a capability that launches a loader.
+#[test]
+fn runtime_replayed_probe_receiver_record_launches_no_managed_handoff() {
+    let mut service = test_runtime_service();
+    let (pane_id, mut process) = start_foreign_shell_pane(&mut service);
+    let (identity_marker, identity_turn_id) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::ShellIdentityProbe { .. }
+            )
+            .then(|| (marker.clone(), transaction.turn_id.clone()))
+        })
+        .expect("dependency-free identity probe should be registered");
+    service
+        .observe_agent_shell_transaction_start(
+            &pane_id,
+            &identity_marker,
+            &identity_turn_id,
+            &format!("agent-{pane_id}"),
+            &pane_id,
+        )
+        .unwrap();
+    let observed = service
+        .observe_agent_shell_transaction_events(
+            &pane_id,
+            &[TerminalOscEvent::ShellTransactionPayloadReceiverReady {
+                marker: identity_marker.clone(),
+                turn_id: identity_turn_id.clone(),
+                agent_id: format!("agent-{pane_id}"),
+                pane_id: pane_id.clone(),
+            }],
+        )
+        .unwrap();
+    assert_eq!(
+        observed, 1,
+        "the replayed record must be admitted as protocol input"
+    );
+    assert!(
+        !service
+            .running_shell_transactions_for_tests()
+            .contains_key(&identity_marker),
+        "a record the probe transaction never required must fail that transaction"
+    );
+    assert!(
+        service
+            .foreign_shell_loader_marker_for_tests(&pane_id)
+            .is_none(),
+        "a replayed record must not allocate dependency-free loader ownership"
+    );
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .all(|transaction| transaction.kind != RunningShellTransactionKind::Bootstrap),
+        "a replayed record must not launch a managed handoff"
+    );
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("identity-probing"),
+        "the pane must stay in bounded identity discovery"
+    );
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
+/// Verifies replayed in-band bootstrap frames cannot certify a forged
+/// foreground shell whose managed child never authenticated its receiver.
+///
+/// A boundary whose `child_shell` is `Some` expects a token-authenticated
+/// managed child. When the dependency-free helper cannot authenticate that
+/// child it must reject the certification instead of falling through to the
+/// generic foreground-group comparison, which would compare the forger's own
+/// live group against the same group recorded at the replayed start frame and
+/// certify it. Every marker, field shape, and record replayed here is material
+/// production itself delivered on this pane's own input.
+#[test]
+fn runtime_replayed_in_band_bootstrap_cannot_certify_forged_foreground() {
+    let mut service = test_runtime_service();
+    let (pane_id, mut process) = start_foreign_shell_pane(&mut service);
+    settle_dependency_free_identity_probe(
+        &mut service,
+        &pane_id,
+        "/usr/bin/fish",
+        "fish, version 3.7.1",
+    );
+    assert_eq!(
+        service.maybe_bootstrap_ready_panes().unwrap(),
+        1,
+        "the reconciliation pump should launch the dependency-free child loader"
+    );
+    let foreign_group = service
+        .primary_pid_for_live_pane_process(&pane_id)
+        .expect("the pane primary process should be live")
+        .saturating_add(1);
+    replay_in_band_bootstrap_without_managed_receiver(
+        &mut service,
+        &pane_id,
+        foreign_group,
+        true,
+        true,
+    );
+
+    eprintln!(
+        "replayed in-band bootstrap settled: phase={:?} foreground_certified={:?} env={} authority={:?}",
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        service.pane_foreground_certified_shell_state(&pane_id),
+        service.pane_environment_signature(&pane_id).is_some(),
+        service.pane_environment_authority(&pane_id),
+    );
+    assert_ne!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("certified"),
+        "replayed frames without an authenticated managed child must not certify the boundary"
+    );
+    assert_ne!(
+        service.pane_foreground_certified_shell_state(&pane_id),
+        Some(true),
+        "a replayed foreground group must never become a certified shell"
+    );
+    assert!(
+        service.pane_environment_signature(&pane_id).is_none(),
+        "replayed bootstrap fields must not publish pane environment authority"
+    );
+    assert!(!service.pane_environment_authority_is_certified_for_tests(&pane_id));
+    assert!(
+        matches!(
+            service.pane_environment_authority(&pane_id),
+            crate::runtime::processes::RuntimePaneEnvironmentAuthority::Unavailable(
+                crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::AgentSubshellCertification(
+                    crate::runtime::processes::RuntimeAgentSubshellCertificationRejection::ReceiverNotAuthenticated
+                )
+            )
+        ),
+        "the settlement must be a receiver-authentication rejection"
+    );
+    let request = mez_agent::shell::PanePathResolutionRequest::new(
+        vec![".".to_string()],
+        Vec::new(),
+        Vec::new(),
+    )
+    .unwrap();
+    assert!(
+        service
+            .path_scopes_for_pane_request(&pane_id, &request)
+            .map(|scopes| scopes.is_none())
+            .unwrap_or(true),
+        "replayed frames must not publish pane path authority"
+    );
+
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
+/// Verifies a replayed child-installed record without the boundary's private
+/// receiver token never installs the expected managed child.
+///
+/// The record carries the correlated marker production delivered to the pane, so
+/// any PTY owner can replay it, but managed-child installation is authenticated by
+/// the fresh child token written only into the launched child's staging source.
+#[test]
+fn runtime_replayed_child_install_without_token_never_installs_managed_child() {
+    let mut service = test_runtime_service();
+    let (pane_id, mut process) = start_foreign_shell_pane(&mut service);
+    settle_dependency_free_identity_probe(
+        &mut service,
+        &pane_id,
+        "/bin/bash",
+        "GNU bash, version 5.2",
+    );
+    assert_eq!(
+        service.maybe_bootstrap_ready_panes().unwrap(),
+        1,
+        "the reconciliation pump should launch the dependency-free child loader"
+    );
+    let bootstrap_marker = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            (transaction.kind == RunningShellTransactionKind::Bootstrap).then(|| marker.clone())
+        })
+        .expect("dependency-free child bootstrap should be registered");
+    let primary_pid = service
+        .primary_pid_for_live_pane_process(&pane_id)
+        .expect("the pane primary process should be live");
+    assert!(
+        !service.managed_child_receiver_is_installed_for_tests(&pane_id),
+        "the expected managed child must start uninstalled"
+    );
+
+    service
+        .apply_pane_process_output(
+            mez_mux::process::PaneProcessOutput {
+                pane_id: pane_id.clone(),
+                primary_pid,
+                bytes: format!(
+                    "\u{1b}]133;R;mez_protocol=2;mez_shell=bash;mez_event=child-installed;mez_marker={bootstrap_marker}\u{1b}\\"
+                )
+                .into_bytes(),
+            },
+            &mut std::collections::BTreeSet::new(),
+        )
+        .unwrap();
+
+    assert!(
+        !service.managed_child_receiver_is_installed_for_tests(&pane_id),
+        "a child-installed record without the private receiver token must never install the managed child"
+    );
+    assert!(
+        !service.agent_subshell_is_active(&pane_id),
+        "an unauthenticated install record must not activate an agent subshell"
+    );
+    assert_ne!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("certified")
+    );
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
+/// Verifies an SSH-style dependency-free pane whose local foreground group cannot
+/// discriminate the remote child publishes no authority and reports the
+/// unattested reason.
+///
+/// Such a transport exposes only the pane shell's own outer group, so the
+/// correlated loader record stays the only available launch proof while no
+/// replayed managed child can ever authenticate. The pane must settle degraded
+/// with no shell identity, environment, or path authority, and the agent shell
+/// must remain usable by explicit user input.
+#[test]
+fn runtime_unattested_remote_dependency_free_shell_withholds_authority() {
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = "%1".to_string();
+    let primary_pid = service.pane_processes().primary_pid(&pane_id).unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&pane_id, None);
+    let mut process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+    assert!(
+        service.begin_agent_entry_shell_boundary_for_current_foreground(&pane_id),
+        "an SSH-style pane should start bounded dependency-free discovery from its own outer group"
+    );
+    assert!(
+        service.pane_local_foreground_group_is_aliased(&pane_id),
+        "the modeled transport must expose only the aliased outer group"
+    );
+    service
+        .begin_dependency_free_foreign_shell_bootstrap(&pane_id)
+        .unwrap();
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("identity-probing")
+    );
+    settle_dependency_free_identity_probe(
+        &mut service,
+        &pane_id,
+        "/usr/bin/fish",
+        "fish, version 3.7.1",
+    );
+    assert_eq!(service.maybe_bootstrap_ready_panes().unwrap(), 1);
+
+    let loader_marker = service
+        .foreign_shell_loader_marker_for_tests(&pane_id)
+        .expect("dependency-free loader should retain its nonce")
+        .to_string();
+    service.drain_pane_io_transition();
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_events(
+                &pane_id,
+                &[TerminalOscEvent::ForeignShellLoaderReady {
+                    marker: loader_marker,
+                }],
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).len(),
+        1,
+        "an aliased transport keeps the correlated loader release because no local observation can discriminate the loader"
+    );
+
+    replay_in_band_bootstrap_without_managed_receiver(
+        &mut service,
+        &pane_id,
+        primary_pid,
+        false,
+        true,
+    );
+
+    assert_ne!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("certified")
+    );
+    assert!(
+        service.pane_environment_signature(&pane_id).is_none(),
+        "an unattested dependency-free remote pane must not publish an environment signature"
+    );
+    assert!(!service.pane_environment_authority_is_certified_for_tests(&pane_id));
+    assert_eq!(
+        service.pane_agent_subshell_certification_rejection(&pane_id),
+        Some("receiver_not_authenticated"),
+        "the settlement must be a receiver-authentication rejection"
+    );
+    assert_eq!(
+        service.pane_environment_authority_failure_for_tests(&pane_id),
+        Some(
+            crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::DependencyFreeShellUnattested
+        ),
+        "the aliased transport must report the unattested authority reason"
+    );
+    assert_eq!(
+        service.pane_readiness_state(&pane_id),
+        PaneReadinessState::Degraded,
+        "an unattested dependency-free shell must keep the pane degraded"
+    );
+    let request = mez_agent::shell::PanePathResolutionRequest::new(
+        vec![".".to_string()],
+        Vec::new(),
+        Vec::new(),
+    )
+    .unwrap();
+    assert!(
+        service
+            .path_scopes_for_pane_request(&pane_id, &request)
+            .map(|scopes| scopes.is_none())
+            .unwrap_or(true),
+        "an unattested dependency-free remote pane must not publish path authority"
+    );
+
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
+/// Verifies a dependency-free child token read from the in-band loader payload
+/// cannot turn replayed frames into environment or path authority.
+///
+/// A PTY owner can fork into a fresh process group to satisfy the process-bound
+/// loader gate without executing the loader, read the released payload (which
+/// embeds the fresh child token), and replay the child-installed frame with that
+/// token, which admission accepts because the check is token equality. Nothing
+/// delivered through the pane PTY can attest the pane's own foreground process,
+/// so the admitted install must still withhold environment and path authority.
+#[test]
+fn runtime_leaked_dependency_free_child_token_install_withholds_authority() {
+    let mut service = test_runtime_service();
+    let (pane_id, mut process) = start_foreign_shell_pane(&mut service);
+    settle_dependency_free_identity_probe(
+        &mut service,
+        &pane_id,
+        "/bin/bash",
+        "GNU bash, version 5.2",
+    );
+    assert_eq!(
+        service.maybe_bootstrap_ready_panes().unwrap(),
+        1,
+        "the reconciliation pump should launch the dependency-free child loader"
+    );
+    let loader_marker = service
+        .foreign_shell_loader_marker_for_tests(&pane_id)
+        .expect("dependency-free loader should retain its nonce")
+        .to_string();
+    let bootstrap_marker = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            (transaction.kind == RunningShellTransactionKind::Bootstrap).then(|| marker.clone())
+        })
+        .expect("dependency-free child bootstrap should be registered");
+    let child_token = service
+        .foreign_child_token_for_tests(&pane_id)
+        .expect("dependency-free Bash child should retain its token")
+        .to_string();
+    let primary_pid = service
+        .primary_pid_for_live_pane_process(&pane_id)
+        .expect("the pane primary process should be live");
+    service.drain_pane_io_transition();
+
+    // The forger forks into a fresh foreground group, which satisfies the
+    // different-group launch gate, then replays the loader record it observed.
+    let forger_group = primary_pid.saturating_add(2);
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&pane_id, Some(forger_group));
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_events(
+                &pane_id,
+                &[TerminalOscEvent::ForeignShellLoaderReady {
+                    marker: loader_marker,
+                }],
+            )
+            .unwrap(),
+        1
+    );
+    assert!(
+        !pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
+        "the forged launch proof releases the in-band payload that carries the child token"
+    );
+
+    // The forger read the token from that payload and replays the install frame;
+    // admission accepts it because the token matches by equality.
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_events(
+                &pane_id,
+                &[TerminalOscEvent::ManagedShell {
+                    version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+                    shell: mez_terminal::ManagedShellAdapter::Bash,
+                    token: child_token.clone(),
+                    event: mez_terminal::ManagedShellProtocolEvent::ChildInstalled {
+                        marker: bootstrap_marker.clone(),
+                    },
+                }],
+            )
+            .unwrap(),
+        1
+    );
+    assert!(
+        service.managed_child_receiver_is_installed_for_tests(&pane_id),
+        "the leaked token admits the child-installed frame"
+    );
+    service.drain_pane_io_transition();
+
+    let bootstrap_turn_id = service
+        .running_shell_transactions_for_tests()
+        .get(&bootstrap_marker)
+        .expect("dependency-free Bash bootstrap should remain registered")
+        .turn_id
+        .clone();
+    service
+        .observe_agent_shell_transaction_start(
+            &pane_id,
+            &bootstrap_marker,
+            &bootstrap_turn_id,
+            &format!("agent-{pane_id}"),
+            &pane_id,
+        )
+        .unwrap();
+    answer_pane_foreground_observations(&mut service, forger_group);
+    let bootstrap_output = "env\tos\tLinux\n\
+env\tarch\tx86_64\n\
+env\thost\tleaked-token-host\n\
+env\tuser\tleaked-token-user\n\
+env\tshell_path\t/bin/bash\n\
+env\tshell_class\tbash\n\
+env\tpath\t/tmp/mez-leaked-token-bin:/usr/bin:/bin\n\
+env\tcwd\t/tmp/mez-leaked-token-cwd\n\
+env\tgit_repo\t0\n\
+bootstrap\tcomplete\t1714500000\n";
+    {
+        let transaction = service
+            .running_shell_transactions_mut_for_tests()
+            .get_mut(&bootstrap_marker)
+            .expect("dependency-free Bash bootstrap should remain registered");
+        transaction.observed_output_bytes = bootstrap_output.len();
+        transaction.observed_output_preview = bootstrap_output.to_string();
+    }
+    service
+        .observe_agent_shell_transaction_end(
+            &pane_id,
+            &bootstrap_marker,
+            &bootstrap_turn_id,
+            &format!("agent-{pane_id}"),
+            &pane_id,
+            0,
+        )
+        .unwrap();
+    answer_pane_foreground_observations(&mut service, forger_group);
+    // The forger also replays the parent-ready frame with the leaked token, so
+    // the settlement runs exactly as a fully replayed handoff would.
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_events(
+                &pane_id,
+                &[TerminalOscEvent::ManagedShell {
+                    version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+                    shell: mez_terminal::ManagedShellAdapter::Bash,
+                    token: child_token,
+                    event: mez_terminal::ManagedShellProtocolEvent::ParentReady {
+                        marker: bootstrap_marker,
+                        outcome: mez_terminal::ManagedShellParentOutcome::Completed,
+                        exit_code: 0,
+                        proof: None,
+                    },
+                }],
+            )
+            .unwrap(),
+        1
+    );
+    assert!(
+        service.maybe_bootstrap_ready_panes().unwrap() >= 1,
+        "the replayed dependency-free bootstrap should settle"
+    );
+
+    assert!(
+        service.pane_environment_signature(&pane_id).is_none(),
+        "a leaked in-band child token must never publish an environment signature"
+    );
+    assert!(
+        !service.pane_environment_authority_is_certified_for_tests(&pane_id),
+        "a leaked in-band child token must never publish environment authority"
+    );
+    assert_eq!(
+        service.pane_environment_authority_failure_for_tests(&pane_id),
+        Some(
+            crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::DependencyFreeShellUnattested
+        ),
+        "the withheld reason must stay visible after the admitted install"
+    );
+    assert_ne!(
+        service.pane_readiness_state(&pane_id),
+        PaneReadinessState::Ready,
+        "an unattested dependency-free receiver must not report ready"
+    );
+    let request = mez_agent::shell::PanePathResolutionRequest::new(
+        vec![".".to_string()],
+        Vec::new(),
+        Vec::new(),
+    )
+    .unwrap();
+    assert!(
+        service
+            .path_scopes_for_pane_request(&pane_id, &request)
+            .map(|scopes| scopes.is_none())
+            .unwrap_or(true),
+        "a leaked in-band child token must never publish path authority"
+    );
+
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
+/// Verifies a replayed loader record that never proved the loader launch cannot
+/// certify a local POSIX dependency-free pane.
+///
+/// A POSIX pane has no managed child token at all, so the earlier gate certified
+/// it from the correlated loader record alone. That record is delivered in-band,
+/// so it stays withheld until the pane worker observes the loader taking the
+/// pane; a replay can never satisfy that process-bound proof and must be refused
+/// with environment and path authority withheld.
+#[test]
+fn runtime_local_posix_dependency_free_loader_replay_withholds_authority() {
+    let mut service = test_runtime_service();
+    let (pane_id, mut process) = start_foreign_shell_pane(&mut service);
+    settle_dependency_free_identity_probe(&mut service, &pane_id, "/bin/sh", "");
+    assert_eq!(
+        service.maybe_bootstrap_ready_panes().unwrap(),
+        1,
+        "the reconciliation pump should launch the POSIX dependency-free loader"
+    );
+    assert!(
+        service.foreign_child_token_for_tests(&pane_id).is_some(),
+        "the dependency-free loader should retain its correlation token"
+    );
+    let foreign_group = service
+        .primary_pid_for_live_pane_process(&pane_id)
+        .expect("the pane primary process should be live")
+        .saturating_add(1);
+    replay_in_band_bootstrap_without_managed_receiver(
+        &mut service,
+        &pane_id,
+        foreign_group,
+        true,
+        true,
+    );
+
+    assert_ne!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("certified"),
+        "a withheld loader record must never certify a POSIX dependency-free pane"
+    );
+    assert_eq!(
+        service.pane_agent_subshell_certification_rejection(&pane_id),
+        Some("loader_launch_unproven"),
+        "the withheld launch proof must be refused with the explicit reason"
+    );
+    assert!(
+        service.pane_environment_signature(&pane_id).is_none(),
+        "a POSIX dependency-free replay must not publish an environment signature"
+    );
+    assert!(!service.pane_environment_authority_is_certified_for_tests(&pane_id));
+    assert_eq!(
+        service.pane_environment_authority_failure_for_tests(&pane_id),
+        Some(
+            crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::DependencyFreeShellUnattested
+        ),
+        "the local POSIX path must report the equally explicit withheld reason"
+    );
+    assert_eq!(
+        service.pane_readiness_state(&pane_id),
+        PaneReadinessState::Degraded,
+        "a refused POSIX dependency-free replay must settle degraded"
+    );
+    let request = mez_agent::shell::PanePathResolutionRequest::new(
+        vec![".".to_string()],
+        Vec::new(),
+        Vec::new(),
+    )
+    .unwrap();
+    assert!(
+        service
+            .path_scopes_for_pane_request(&pane_id, &request)
+            .map(|scopes| scopes.is_none())
+            .unwrap_or(true),
+        "a POSIX dependency-free replay must not publish path authority"
+    );
+
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
+/// Verifies an aliased remote POSIX dependency-free pane reports its withheld
+/// authority instead of silently certifying from replayed in-band frames.
+///
+/// The aliased outer group cannot discriminate the remote child, and a POSIX
+/// pane has no managed child installation at all, so the earlier receiver gate
+/// never applied to it. The dependency-free handoff is correlation only, so the
+/// pane must settle unattested with no environment or path authority and the
+/// explicit withheld reason.
+#[test]
+fn runtime_aliased_remote_posix_dependency_free_replay_withholds_authority() {
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = "%1".to_string();
+    let primary_pid = service.pane_processes().primary_pid(&pane_id).unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&pane_id, None);
+    let mut process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+    assert!(
+        service.begin_agent_entry_shell_boundary_for_current_foreground(&pane_id),
+        "an SSH-style pane should start bounded dependency-free discovery from its own outer group"
+    );
+    assert!(
+        service.pane_local_foreground_group_is_aliased(&pane_id),
+        "the modeled transport must expose only the aliased outer group"
+    );
+    service
+        .begin_dependency_free_foreign_shell_bootstrap(&pane_id)
+        .unwrap();
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("identity-probing")
+    );
+    settle_dependency_free_identity_probe(&mut service, &pane_id, "/bin/sh", "");
+    assert_eq!(service.maybe_bootstrap_ready_panes().unwrap(), 1);
+
+    let loader_marker = service
+        .foreign_shell_loader_marker_for_tests(&pane_id)
+        .expect("dependency-free loader should retain its nonce")
+        .to_string();
+    service.drain_pane_io_transition();
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_events(
+                &pane_id,
+                &[TerminalOscEvent::ForeignShellLoaderReady {
+                    marker: loader_marker,
+                }],
+            )
+            .unwrap(),
+        1
+    );
+    assert!(
+        !pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
+        "an aliased transport keeps the correlated loader release because no local observation can discriminate the loader"
+    );
+
+    replay_in_band_bootstrap_without_managed_receiver(
+        &mut service,
+        &pane_id,
+        primary_pid,
+        false,
+        true,
+    );
+
+    assert!(
+        service.pane_environment_signature(&pane_id).is_none(),
+        "an aliased POSIX dependency-free pane must not publish an environment signature"
+    );
+    assert!(!service.pane_environment_authority_is_certified_for_tests(&pane_id));
+    assert_eq!(
+        service.pane_environment_authority_failure_for_tests(&pane_id),
+        Some(
+            crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::DependencyFreeShellUnattested
+        ),
+        "the aliased POSIX pane must report the unattested reason"
+    );
+    assert_ne!(
+        service.pane_readiness_state(&pane_id),
+        PaneReadinessState::Ready,
+        "an unattested aliased POSIX pane must not report ready"
+    );
+    let request = mez_agent::shell::PanePathResolutionRequest::new(
+        vec![".".to_string()],
+        Vec::new(),
+        Vec::new(),
+    )
+    .unwrap();
+    assert!(
+        service
+            .path_scopes_for_pane_request(&pane_id, &request)
+            .map(|scopes| scopes.is_none())
+            .unwrap_or(true),
+        "an aliased POSIX dependency-free pane must not publish path authority"
+    );
+
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
+/// Verifies clearing a dependency-free boundary invalidates the certification it
+/// owns instead of leaving a pending promotion behind.
+///
+/// The dependency-free authority gate reads the live foreign boundary, and the
+/// boundary is cleared when the certified primary shell regains the PTY. A
+/// certification still waiting for its correlated observation across that clear
+/// could later promote a shell identity and publish the environment and path
+/// authority the gate withheld, so clearing must invalidate it. A local POSIX
+/// child has no managed receiver to authenticate, which is exactly the shape that
+/// leaves the certification pending under an adapter-owned process instance.
+#[test]
+fn runtime_cleared_dependency_free_boundary_invalidates_pending_certification() {
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = "%1".to_string();
+    let primary_pid = service.pane_processes().primary_pid(&pane_id).unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&pane_id, None);
+    let mut process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+    assert!(
+        service.begin_agent_entry_shell_boundary_for_current_foreground(&pane_id),
+        "an SSH-style pane should start bounded dependency-free discovery from its own outer group"
+    );
+    service
+        .begin_dependency_free_foreign_shell_bootstrap(&pane_id)
+        .unwrap();
+    settle_dependency_free_identity_probe(&mut service, &pane_id, "/bin/sh", "");
+    assert_eq!(service.maybe_bootstrap_ready_panes().unwrap(), 1);
+
+    let loader_marker = service
+        .foreign_shell_loader_marker_for_tests(&pane_id)
+        .expect("dependency-free loader should retain its nonce")
+        .to_string();
+    service.drain_pane_io_transition();
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_events(
+                &pane_id,
+                &[TerminalOscEvent::ForeignShellLoaderReady {
+                    marker: loader_marker,
+                }],
+            )
+            .unwrap(),
+        1
+    );
+    service.drain_pane_io_transition();
+
+    // The replayed bootstrap settles its start evidence but leaves the completion
+    // observation unanswered, so the certification is still pending when the
+    // boundary is cleared.
+    replay_in_band_bootstrap_without_managed_receiver(
+        &mut service,
+        &pane_id,
+        primary_pid,
+        false,
+        false,
+    );
+    assert!(
+        service.pane_agent_subshell_certification_is_pending(&pane_id),
+        "the replayed dependency-free bootstrap must leave a pending certification"
+    );
+
+    assert!(
+        service.clear_uncertified_foreign_shell_boundary(&pane_id),
+        "the certified primary shell regaining the PTY must clear the boundary"
+    );
+    assert!(
+        !service.pane_agent_subshell_certification_is_pending(&pane_id),
+        "clearing the boundary must invalidate the certification it owns"
+    );
+
+    // Answering the orphaned completion observation must not promote authority for
+    // the boundary that is gone.
+    answer_pane_foreground_observations(&mut service, primary_pid);
+    assert!(
+        service.pane_environment_signature(&pane_id).is_none(),
+        "a cleared dependency-free boundary must publish no environment authority"
+    );
+    assert!(!service.pane_environment_authority_is_certified_for_tests(&pane_id));
 
     let _ = process.terminate(Duration::from_millis(10));
 }

@@ -800,12 +800,15 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_live_parent_cursor() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies a managed Bash pane can leave agent mode, execute ordinary parent
-/// shell commands, and re-enter agent mode through a real identity probe.
+/// Verifies an unmanaged dependency-free Bash pane can leave agent mode,
+/// execute ordinary parent shell commands, and re-enter agent mode through a
+/// real identity probe.
 ///
-/// This exercises the PTY, private Bash receiver, transaction output parser,
-/// and deferred re-entry path together. State-only probe fixtures cannot catch
-/// a receiver or prompt-boundary failure that drops the identity frame.
+/// The dependency-free handoff is correlation only, so both entries certify the
+/// shell identity while withholding environment authority. This exercises the
+/// PTY, private Bash receiver, transaction output parser, and deferred re-entry
+/// path together. State-only probe fixtures cannot catch a receiver or
+/// prompt-boundary failure that drops the identity frame.
 #[test]
 fn runtime_agent_shell_reentry_after_parent_bash_commands_completes_identity_probe() {
     let shell_path = PathBuf::from("/bin/bash");
@@ -871,8 +874,13 @@ fn runtime_agent_shell_reentry_after_parent_bash_commands_completes_identity_pro
     let mut first_bootstrap_completed = false;
     for _ in 0..400 {
         let _ = service.poll_pane_outputs(8192).unwrap();
-        if service.pane_environment_signature("%1").is_some()
-            && !service.pane_bootstrap_is_pending_for_tests("%1")
+        if !service.pane_bootstrap_is_pending_for_tests("%1")
+            && matches!(
+                service.pane_environment_authority("%1"),
+                RuntimePaneEnvironmentAuthority::Unavailable(
+                    crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::DependencyFreeShellUnattested
+                )
+            )
         {
             first_bootstrap_completed = true;
             break;
@@ -881,8 +889,12 @@ fn runtime_agent_shell_reentry_after_parent_bash_commands_completes_identity_pro
     }
     assert!(
         first_bootstrap_completed,
-        "initial Bash agent-subshell bootstrap did not complete; authority={:?}",
+        "initial unmanaged Bash agent-subshell bootstrap did not settle with withheld authority; authority={:?}",
         service.pane_environment_authority("%1")
+    );
+    assert!(
+        service.pane_environment_signature("%1").is_none(),
+        "an unmanaged dependency-free bootstrap must not publish an environment signature"
     );
 
     let hide = service
@@ -988,16 +1000,22 @@ fn runtime_agent_shell_reentry_after_parent_bash_commands_completes_identity_pro
     while Instant::now() < reentry_deadline {
         let _ = service.poll_pane_outputs(8192).unwrap();
         if service.agent_subshell_is_active("%1")
-            && service.pane_environment_signature("%1").is_some()
             && !service.pane_bootstrap_is_pending_for_tests("%1")
+            && matches!(
+                service.pane_environment_authority("%1"),
+                RuntimePaneEnvironmentAuthority::Unavailable(
+                    crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::DependencyFreeShellUnattested
+                )
+            )
         {
             reentry_completed = true;
             break;
         }
-        if matches!(
-            service.pane_environment_authority("%1"),
-            RuntimePaneEnvironmentAuthority::Unavailable(_)
-        ) {
+        if let RuntimePaneEnvironmentAuthority::Unavailable(reason) =
+            service.pane_environment_authority("%1")
+            && reason
+                != crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::DependencyFreeShellUnattested
+        {
             break;
         }
         wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));

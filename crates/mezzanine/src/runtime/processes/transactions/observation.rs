@@ -11,6 +11,7 @@ use super::super::{
     RuntimePendingAgentSubshellCertification, RuntimePendingAgentSubshellStartObservation,
     RuntimePendingBootstrapEnvironment, RuntimePendingShellDispatchRecoveryObservation,
     RuntimeSideEffect, RuntimeTransition, reduce_managed_shell_handoff,
+    runtime_certified_identity_authority_is_current,
 };
 use super::{
     AgentTurnState, EventKind, MezError, PaneReadinessState,
@@ -116,8 +117,31 @@ impl RuntimePaneForegroundDiagnostic {
     }
 }
 
+/// Proof available for one dependency-free loader handoff.
+///
+/// The loader payload and receiver token travel in-band through the pane PTY, so
+/// even `Proven` evidence is correlation only: it can select the persistent shell
+/// identity but never publish environment or path authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DependencyFreeHandoffProof {
+    /// The boundary does not own an active dependency-free loader handoff.
+    NotActive,
+    /// The correlated loader record arrived without the process-bound launch
+    /// proof, so the handoff stayed withheld and cannot certify.
+    Withheld,
+    /// The loader launch and, when expected, the managed child install are proven.
+    Proven { process_group_id: u32 },
+}
+
 impl RuntimeSessionService {
     /// Releases dependency-free staging records after the correlated loader is ready.
+    ///
+    /// The in-band record is a correlation id, not a capability. When the local
+    /// foreground group can discriminate a real loader launch, the staged payload
+    /// stays withheld until the pane worker observes the loader taking the pane
+    /// after its command was written. SSH-style transports expose only an outer
+    /// group aliased to the pane shell, where no local observation can
+    /// discriminate the loader, so those panes keep the correlated-record release.
     fn observe_foreign_shell_loader_ready(&mut self, pane_id: &str, marker: &str) -> Result<usize> {
         let Some(boundary) = self
             .process
@@ -140,6 +164,57 @@ impl RuntimeSessionService {
         {
             return Ok(0);
         }
+        if !self.foreign_loader_launch_proof_observed(pane_id) {
+            // A PTY owner can replay this record, so it may not release source
+            // records that only a launched loader is allowed to receive. Keep the
+            // correlation and let the deferred pass release the payload once the
+            // pane worker reports the loader in the foreground.
+            let now_unix_ms = current_unix_millis();
+            if let Some(current) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) {
+                current.loader_ready = true;
+                current.loader_ready_awaits_launch_proof = true;
+                current.phase_started_at_unix_ms = now_unix_ms;
+            }
+            self.append_lifecycle_event(
+                EventKind::AgentStatus,
+                format!(
+                    r#"{{"pane_id":"{}","foreign_bootstrap":"loader_ready_withheld","marker":"{}","reason":"loader_launch_unobserved"}}"#,
+                    json_escape(pane_id),
+                    json_escape(marker)
+                ),
+            )?;
+            return Ok(1);
+        }
+        self.release_foreign_shell_loader_payload(pane_id, marker)
+    }
+
+    /// Releases the staged dependency-free loader payload exactly once.
+    fn release_foreign_shell_loader_payload(
+        &mut self,
+        pane_id: &str,
+        marker: &str,
+    ) -> Result<usize> {
+        let Some(boundary) = self
+            .process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .cloned()
+        else {
+            return Ok(0);
+        };
+        if boundary.phase != RuntimeForeignShellBootstrapPhase::BootstrappingChild
+            || boundary.loader_marker.as_deref() != Some(marker)
+            || self.primary_pid_for_live_pane_process(pane_id) != Some(boundary.primary_process_id)
+            || self
+                .process
+                .pane_shell_interaction_generations
+                .get(pane_id)
+                .copied()
+                != Some(boundary.interaction_generation)
+            || boundary.loader_payload.is_none()
+        {
+            return Ok(0);
+        }
         let now_unix_ms = current_unix_millis();
         let phase_elapsed_ms = now_unix_ms.saturating_sub(boundary.phase_started_at_unix_ms);
         let lifecycle_elapsed_ms =
@@ -150,6 +225,7 @@ impl RuntimeSessionService {
             .get_mut(pane_id)
             .and_then(|current| {
                 current.loader_ready = true;
+                current.loader_ready_awaits_launch_proof = false;
                 current.phase_started_at_unix_ms = now_unix_ms;
                 current.loader_payload.take()
             });
@@ -202,6 +278,52 @@ impl RuntimeSessionService {
             ),
         )?;
         Ok(1)
+    }
+
+    /// Reports whether the pane worker observed a foreground group that proves the
+    /// dependency-free loader took the pane after its command was written.
+    ///
+    /// Without a recorded write-time group no local observation can discriminate
+    /// the loader, so the correlated record stays the only available proof, which
+    /// is the documented behavior for SSH-style transports whose outer group is
+    /// aliased to the pane shell.
+    fn foreign_loader_launch_proof_observed(&self, pane_id: &str) -> bool {
+        let Some(boundary) = self.process.pane_foreign_shell_boundaries.get(pane_id) else {
+            return false;
+        };
+        let Some(recorded_process_group) = boundary.loader_launch_proof_group else {
+            return true;
+        };
+        matches!(
+            self.pane_foreground_process_group_observation(pane_id).0,
+            Some(process_group_id) if process_group_id != recorded_process_group
+        )
+    }
+
+    /// Releases loader payloads whose pane worker now proves the loader launch.
+    pub(super) fn settle_pending_foreign_loader_handoffs(&mut self) -> Result<usize> {
+        let awaiting = self
+            .process
+            .pane_foreign_shell_boundaries
+            .iter()
+            .filter(|(_, boundary)| {
+                boundary.loader_ready_awaits_launch_proof
+                    && boundary.phase == RuntimeForeignShellBootstrapPhase::BootstrappingChild
+            })
+            .map(|(pane_id, boundary)| (pane_id.clone(), boundary.loader_marker.clone()))
+            .collect::<Vec<_>>();
+        let mut settled = 0usize;
+        for (pane_id, marker) in awaiting {
+            let Some(marker) = marker else {
+                continue;
+            };
+            if !self.foreign_loader_launch_proof_observed(&pane_id) {
+                continue;
+            }
+            settled = settled
+                .saturating_add(self.release_foreign_shell_loader_payload(&pane_id, &marker)?);
+        }
+        Ok(settled)
     }
 
     /// Settles the correlated dependency-free loader after its child returns.
@@ -423,8 +545,10 @@ impl RuntimeSessionService {
                     .get(pane_id)
                     .copied()
                     == Some(identity.interaction_generation)
-                && self.process.pane_environment_signatures.get(pane_id)
-                    == Some(&identity.environment_signature)
+                && runtime_certified_identity_authority_is_current(
+                    self.process.pane_environment_signatures.get(pane_id),
+                    identity,
+                )
                 && identity.process_group_id == foreground_group
         }))
     }
@@ -638,6 +762,8 @@ impl RuntimeSessionService {
                 loader_marker: None,
                 loader_payload: None,
                 loader_ready: false,
+                loader_launch_proof_group: None,
+                loader_ready_awaits_launch_proof: false,
                 child_staging_source: None,
                 identity_marker: None,
             },
@@ -650,6 +776,13 @@ impl RuntimeSessionService {
     }
 
     /// Clears a foreign boundary after the certified primary shell regains the PTY.
+    ///
+    /// The cleared boundary owns any certification still awaiting its correlated
+    /// observation, and the dependency-free authority gate reads only the live
+    /// boundary. Invalidating that pending certification here removes the
+    /// two-condition invariant: without it, a correlated promotion after the clear
+    /// could publish the environment and path authority the gate withheld for a
+    /// boundary that no longer exists.
     pub(crate) fn clear_uncertified_foreign_shell_boundary(&mut self, pane_id: &str) -> bool {
         let cleared = self
             .process
@@ -658,6 +791,9 @@ impl RuntimeSessionService {
             .is_some();
         if cleared {
             self.process.pane_bootstrap_pending.remove(pane_id);
+            self.process
+                .pending_agent_subshell_certifications
+                .remove(pane_id);
         }
         cleared
     }
@@ -714,24 +850,34 @@ impl RuntimeSessionService {
             })
     }
 
-    /// Returns generation-fenced loader ownership usable as remote bootstrap proof.
+    /// Reports whether one pane currently owns a dependency-free loader handoff.
     ///
-    /// An SSH worker can observe only the outer SSH process group, so another
-    /// foreground query cannot distinguish the managed remote child from its
-    /// parent. A ready loader, matching bootstrap handoff, and authenticated
-    /// managed-child installation provide the stronger remote ownership proof.
-    fn dependency_free_foreign_bootstrap_process_group(
+    /// The loader staging payload and its receiver token are delivered through
+    /// the pane PTY, so any evidence gathered while this handoff is active is
+    /// correlation only and must never publish environment or path authority.
+    fn pane_has_dependency_free_handoff(&self, pane_id: &str) -> bool {
+        self.process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .is_some_and(|boundary| boundary.is_dependency_free_handoff())
+    }
+
+    /// Returns the proof available for one dependency-free loader handoff.
+    ///
+    /// An SSH worker can observe only an outer process group aliased to the pane
+    /// shell, so the local foreground group cannot discriminate a remote child.
+    /// Those boundaries fall back to the caller's generic observation path,
+    /// which still never publishes authority for dependency-free evidence.
+    fn dependency_free_handoff_proof(
         &self,
         pane_id: &str,
         marker: &str,
-    ) -> Option<u32> {
-        let boundary = self.process.pane_foreign_shell_boundaries.get(pane_id)?;
-        let primary_process_group =
-            self.pane_primary_process_group_id(pane_id, boundary.primary_process_id);
-        if boundary.process_group_id == boundary.primary_process_id
-            || boundary.process_group_id == primary_process_group
-        {
-            return None;
+    ) -> DependencyFreeHandoffProof {
+        let Some(boundary) = self.process.pane_foreign_shell_boundaries.get(pane_id) else {
+            return DependencyFreeHandoffProof::NotActive;
+        };
+        if self.pane_local_foreground_group_is_aliased(pane_id) {
+            return DependencyFreeHandoffProof::NotActive;
         }
         let handoff_matches =
             self.process
@@ -742,27 +888,108 @@ impl RuntimeSessionService {
                         && handoff.primary_process_id == boundary.primary_process_id
                         && handoff.interaction_generation == boundary.interaction_generation
                 });
-        let managed_child_owns_input = boundary.child_shell.is_none()
-            || self
-                .process
-                .pane_managed_shell_handoffs
-                .get(pane_id)
-                .is_some_and(|handoff| {
-                    handoff.identity().marker == marker && handoff.child_is_installed()
-                });
-        (boundary.phase == RuntimeForeignShellBootstrapPhase::BootstrappingChild
+        let handoff_active = boundary.phase
+            == RuntimeForeignShellBootstrapPhase::BootstrappingChild
             && boundary.loader_marker.is_some()
-            && boundary.loader_ready
             && handoff_matches
-            && managed_child_owns_input
             && self.primary_pid_for_live_pane_process(pane_id) == Some(boundary.primary_process_id)
             && self
                 .process
                 .pane_shell_interaction_generations
                 .get(pane_id)
                 .copied()
-                == Some(boundary.interaction_generation))
-        .then_some(boundary.process_group_id)
+                == Some(boundary.interaction_generation);
+        if !handoff_active || !boundary.loader_ready {
+            return DependencyFreeHandoffProof::NotActive;
+        }
+        if boundary.loader_ready_awaits_launch_proof
+            && !self.foreign_loader_launch_proof_observed(pane_id)
+        {
+            // The correlated record arrived before the pane worker proved the
+            // loader took the pane, so the handoff stays withheld. A replay can
+            // admit the record from the pane's own input, but it can never
+            // satisfy the process-bound launch proof, so it cannot certify.
+            return DependencyFreeHandoffProof::Withheld;
+        }
+        if boundary.child_shell.is_some()
+            && !self.managed_child_receiver_is_installed(pane_id, marker)
+        {
+            // The boundary expected a token-admitted managed child; the caller
+            // rejects through its receiver-authentication gate instead.
+            return DependencyFreeHandoffProof::NotActive;
+        }
+        DependencyFreeHandoffProof::Proven {
+            process_group_id: boundary.process_group_id,
+        }
+    }
+
+    /// Reports whether the active boundary expects a managed child whose install
+    /// frame carries the boundary's in-band child token.
+    ///
+    /// A boundary with `child_shell` set launches an ephemeral managed child
+    /// whose install frame carries the boundary's fresh child token. That token
+    /// travels in-band through the pane PTY, so it admits correlation only: a
+    /// matching foreground group proves nothing about who owns pane input.
+    fn boundary_expects_authenticated_managed_child(&self, pane_id: &str) -> bool {
+        self.process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .is_some_and(|boundary| {
+                boundary.child_shell.is_some()
+                    && boundary.phase == RuntimeForeignShellBootstrapPhase::BootstrappingChild
+            })
+    }
+
+    /// Reports whether the managed child for one bootstrap marker admitted its
+    /// receiver installation frame.
+    ///
+    /// Installation admits the correlated child for the active handoff, but it is
+    /// not attestation: the dependency-free staging payload delivers the token
+    /// through the pane PTY, so the pane's own foreground process can replay it.
+    fn managed_child_receiver_is_installed(&self, pane_id: &str, marker: &str) -> bool {
+        self.process
+            .pane_managed_shell_handoffs
+            .get(pane_id)
+            .is_some_and(|handoff| {
+                handoff.identity().marker == marker && handoff.child_is_installed()
+            })
+    }
+
+    /// Marks one bootstrapping foreign boundary as failed after a terminal proof
+    /// refusal, releasing every staged loader and child owner.
+    fn fail_bootstrapping_foreign_shell_boundary(&mut self, pane_id: &str) {
+        if let Some(current) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id)
+            && current.phase == RuntimeForeignShellBootstrapPhase::BootstrappingChild
+        {
+            current.phase = RuntimeForeignShellBootstrapPhase::Failed;
+            current.phase_started_at_unix_ms = current_unix_millis();
+            current.child_token = None;
+            current.child_shell = None;
+            current.loader_marker = None;
+            current.loader_payload = None;
+            current.loader_ready = false;
+            current.loader_launch_proof_group = None;
+            current.loader_ready_awaits_launch_proof = false;
+            current.child_staging_source = None;
+            current.identity_marker = None;
+        }
+    }
+
+    /// Reports whether the boundary's group is aliased to the pane's own primary
+    /// process group.
+    ///
+    /// SSH-style transports expose only that outer local group, so no local
+    /// foreground observation can distinguish the remote managed child from its
+    /// parent, and the local group is deliberately non-discriminating.
+    pub(crate) fn pane_local_foreground_group_is_aliased(&self, pane_id: &str) -> bool {
+        self.process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .is_some_and(|boundary| {
+                boundary.process_group_id == boundary.primary_process_id
+                    || boundary.process_group_id
+                        == self.pane_primary_process_group_id(pane_id, boundary.primary_process_id)
+            })
     }
 
     /// Starts a new runtime-owned agent-subshell handoff and invalidates state
@@ -849,8 +1076,8 @@ impl RuntimeSessionService {
     }
 
     /// Holds a registered bootstrap wrapper until the new child shell reports
-    /// its authenticated receiver installation or, for unmanaged shells,
-    /// prompt readiness.
+    /// its receiver installation frame or, for unmanaged shells, prompt
+    /// readiness.
     pub(crate) fn defer_agent_subshell_bootstrap_wrapper(
         &mut self,
         pane_id: &str,
@@ -870,6 +1097,11 @@ impl RuntimeSessionService {
     /// foreground group belongs to the persistent agent subshell rather than an
     /// isolated child launched later by the transaction body.
     ///
+    /// The captured group is correlation, not authentication. When the boundary
+    /// expects a managed child, certification additionally requires that child's
+    /// admitted installation, but that credential is delivered in-band through
+    /// the pane PTY, so it never publishes environment or path authority.
+    ///
     /// Returns `true` when an adapter-owned observation is pending and payload
     /// release must wait for its correlated result.
     pub(crate) fn observe_agent_subshell_bootstrap_start(
@@ -883,8 +1115,8 @@ impl RuntimeSessionService {
         if handoff.bootstrap_marker.as_deref() != Some(marker) {
             return false;
         }
-        if let Some(process_group_id) =
-            self.dependency_free_foreign_bootstrap_process_group(pane_id, marker)
+        if let DependencyFreeHandoffProof::Proven { process_group_id } =
+            self.dependency_free_handoff_proof(pane_id, marker)
         {
             self.record_agent_subshell_bootstrap_start_observation(
                 pane_id,
@@ -1011,15 +1243,35 @@ impl RuntimeSessionService {
             self.reject_agent_subshell_certification(pane_id, rejection);
             return RuntimeAgentSubshellCertificationOutcome::Rejected(rejection);
         };
-        if self
-            .dependency_free_foreign_bootstrap_process_group(pane_id, marker)
-            .is_some_and(|process_group_id| evidence.process_group_id == Some(process_group_id))
-        {
-            let Some(process_group_id) = evidence.process_group_id else {
-                return RuntimeAgentSubshellCertificationOutcome::Rejected(
-                    RuntimeAgentSubshellCertificationRejection::ForegroundProcessUnavailable,
-                );
+        let dependency_free_handoff = self.pane_has_dependency_free_handoff(pane_id);
+        let handoff_proof = self.dependency_free_handoff_proof(pane_id, marker);
+        if let DependencyFreeHandoffProof::Withheld = handoff_proof {
+            // The correlated loader record was admitted without the process-bound
+            // proof that the loader took the pane. A replay satisfies that record
+            // from the pane's own input, so the withheld handoff can never certify
+            // and its dependency-free evidence never publishes authority.
+            let rejection = if self.boundary_expects_authenticated_managed_child(pane_id) {
+                RuntimeAgentSubshellCertificationRejection::ReceiverNotAuthenticated
+            } else {
+                RuntimeAgentSubshellCertificationRejection::LoaderLaunchUnproven
             };
+            self.remove_agent_subshell_bootstrap_proof(pane_id, marker);
+            self.fail_bootstrapping_foreign_shell_boundary(pane_id);
+            self.reject_agent_subshell_certification(pane_id, rejection);
+            self.mark_pane_environment_authority_unavailable(
+                pane_id,
+                RuntimePaneEnvironmentAuthorityUnavailableReason::DependencyFreeShellUnattested,
+            );
+            return RuntimeAgentSubshellCertificationOutcome::Rejected(rejection);
+        }
+        // A boundary that expects a managed child can correlate only that child's
+        // admitted installation. The install credential travels in-band through
+        // the same PTY, so it is admission evidence, never authority.
+        let receiver_unauthenticated = self.boundary_expects_authenticated_managed_child(pane_id)
+            && !self.managed_child_receiver_is_installed(pane_id, marker);
+        if let DependencyFreeHandoffProof::Proven { process_group_id } = handoff_proof
+            && evidence.process_group_id == Some(process_group_id)
+        {
             self.remove_agent_subshell_bootstrap_proof(pane_id, marker);
             self.promote_agent_subshell_certification(
                 pane_id,
@@ -1028,6 +1280,25 @@ impl RuntimeSessionService {
                 process_group_id,
             );
             return RuntimeAgentSubshellCertificationOutcome::Certified;
+        }
+        if receiver_unauthenticated {
+            // A managed child was expected but never authenticated its receiver,
+            // so the recorded foreground group proves only that whichever program
+            // answered the replayed start frame is still foreground. Refuse that
+            // proof instead of falling through to the generic foreground-group
+            // comparison, which a replay satisfies with its own live group. No
+            // worker observation can add authentication, so refuse promptly.
+            let rejection = RuntimeAgentSubshellCertificationRejection::ReceiverNotAuthenticated;
+            self.remove_agent_subshell_bootstrap_proof(pane_id, marker);
+            self.fail_bootstrapping_foreign_shell_boundary(pane_id);
+            self.reject_agent_subshell_certification(pane_id, rejection);
+            if dependency_free_handoff {
+                self.mark_pane_environment_authority_unavailable(
+                    pane_id,
+                    RuntimePaneEnvironmentAuthorityUnavailableReason::DependencyFreeShellUnattested,
+                );
+            }
+            return RuntimeAgentSubshellCertificationOutcome::Rejected(rejection);
         }
         if let Some(instance) = self.adapter_owned_pane_process_instance(pane_id) {
             let Some(expected_process_group_id) = evidence.process_group_id else {
@@ -1049,6 +1320,8 @@ impl RuntimeSessionService {
                     environment,
                     started_at_unix_ms: current_unix_millis(),
                     timeout_ms: RUNTIME_AGENT_SUBSHELL_CERTIFICATION_TIMEOUT_MS,
+                    receiver_unauthenticated,
+                    dependency_free_handoff,
                 },
             );
             self.persistence
@@ -1374,6 +1647,8 @@ impl RuntimeSessionService {
             Some(RuntimeAgentSubshellCertificationRejection::PrimaryProcessChanged)
         } else if current_interaction_generation != Some(pending.evidence.interaction_generation) {
             Some(RuntimeAgentSubshellCertificationRejection::InteractionGenerationChanged)
+        } else if pending.receiver_unauthenticated {
+            Some(RuntimeAgentSubshellCertificationRejection::ReceiverNotAuthenticated)
         } else if observation.error.is_some() || observation.process_group_id.is_none() {
             Some(RuntimeAgentSubshellCertificationRejection::ForegroundProcessUnavailable)
         } else if observation.process_group_id != pending.evidence.process_group_id {
@@ -1383,6 +1658,15 @@ impl RuntimeSessionService {
         };
 
         let outcome = if let Some(rejection) = rejection {
+            if rejection == RuntimeAgentSubshellCertificationRejection::ReceiverNotAuthenticated {
+                self.fail_bootstrapping_foreign_shell_boundary(&instance.pane_id);
+                if pending.dependency_free_handoff {
+                    self.mark_pane_environment_authority_unavailable(
+                        &instance.pane_id,
+                        RuntimePaneEnvironmentAuthorityUnavailableReason::DependencyFreeShellUnattested,
+                    );
+                }
+            }
             self.reject_agent_subshell_certification(&instance.pane_id, rejection);
             RuntimeAgentSubshellCertificationOutcome::Rejected(rejection)
         } else if let Some(process_group_id) = observation.process_group_id {
@@ -1404,15 +1688,23 @@ impl RuntimeSessionService {
             .remove(&instance.pane_id);
         match outcome {
             RuntimeAgentSubshellCertificationOutcome::Certified => {
+                // Promotion publishes environment authority only for the
+                // runtime's own managed bootstrap handshake; dependency-free
+                // evidence certifies correlation but withholds authority.
+                let authority = if self.pane_environment_signature(&instance.pane_id).is_some() {
+                    "certified"
+                } else {
+                    "withheld"
+                };
                 self.append_lifecycle_event(
                     EventKind::AgentStatus,
                     format!(
-                        r#"{{"pane_id":"{}","bootstrap":"certified","marker":"{}","observation":"fresh_worker"}}"#,
+                        r#"{{"pane_id":"{}","bootstrap":"certified","marker":"{}","observation":"fresh_worker","authority":"{}"}}"#,
                         json_escape(&instance.pane_id),
-                        json_escape(&pending.marker)
+                        json_escape(&pending.marker),
+                        authority
                     ),
                 )?;
-                self.set_pane_readiness(&instance.pane_id, PaneReadinessState::Ready);
             }
             RuntimeAgentSubshellCertificationOutcome::Rejected(reason) => {
                 self.append_lifecycle_event(
@@ -1645,11 +1937,23 @@ impl RuntimeSessionService {
     }
 
     /// Publishes environment-derived context after certification succeeds.
+    ///
+    /// Returns `false` and records the withheld-authority reason when the pane's
+    /// certification evidence came from the dependency-free loader handoff,
+    /// whose in-band payload can be read and replayed by the pane's own
+    /// foreground process. Dependency-free evidence is correlation only.
     pub(crate) fn publish_bootstrap_environment(
         &mut self,
         pane_id: &str,
         environment: RuntimePendingBootstrapEnvironment,
-    ) {
+    ) -> bool {
+        if self.pane_has_dependency_free_handoff(pane_id) {
+            self.mark_pane_environment_authority_unavailable(
+                pane_id,
+                RuntimePaneEnvironmentAuthorityUnavailableReason::DependencyFreeShellUnattested,
+            );
+            return false;
+        }
         let RuntimePendingBootstrapEnvironment {
             signature,
             tool_inventory,
@@ -1674,6 +1978,7 @@ impl RuntimeSessionService {
         if !instruction_files.is_empty() {
             self.set_pane_agent_instruction_files(pane_id, instruction_files);
         }
+        true
     }
 
     /// Removes marker-bound handoff state after certification leaves phase one.
@@ -1685,6 +1990,10 @@ impl RuntimeSessionService {
     }
 
     /// Publishes context and records the certified persistent receiver.
+    ///
+    /// The shell identity is always certified for correlation, but environment
+    /// and path authority are published only when the publisher accepts the
+    /// evidence as attended by the runtime's own managed bootstrap handshake.
     fn promote_agent_subshell_certification(
         &mut self,
         pane_id: &str,
@@ -1693,7 +2002,10 @@ impl RuntimeSessionService {
         process_group_id: u32,
     ) {
         let environment_signature = environment.signature.clone();
-        self.publish_bootstrap_environment(pane_id, environment);
+        // Dependency-free handoffs never publish environment authority: their
+        // staging payload and receiver token are delivered in-band, so anything
+        // read back from the PTY is a replayable correlation record.
+        let authority_published = self.publish_bootstrap_environment(pane_id, environment);
         self.process.pane_certified_shell_identities.insert(
             pane_id.to_string(),
             RuntimePaneCertifiedShellIdentity {
@@ -1702,11 +2014,19 @@ impl RuntimeSessionService {
                 interaction_generation: evidence.interaction_generation,
                 environment_signature,
                 source: RuntimeCertifiedShellSource::AgentSubshellBootstrap,
+                authority_published,
             },
         );
         self.process
             .pane_agent_subshell_certification_rejections
             .remove(pane_id);
+        if authority_published {
+            self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
+        } else {
+            // The identity remains correlated, but the pane is degraded and
+            // unattested because no environment or path authority was published.
+            self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
+        }
         if let Some(boundary) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id)
             && boundary.phase == RuntimeForeignShellBootstrapPhase::BootstrappingChild
             && boundary.primary_process_id == evidence.primary_process_id

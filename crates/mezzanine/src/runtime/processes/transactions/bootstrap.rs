@@ -514,6 +514,11 @@ impl RuntimeSessionService {
     }
 
     /// Launches an ephemeral managed child through a dependency-free `/bin/sh` loader.
+    ///
+    /// The settled identity probe is discovery correlation only: it selects the
+    /// child shell dialect but never authenticates a managed handoff. The launched
+    /// child owns pane input only after it installs itself with the fresh private
+    /// token written into its own staging source.
     fn begin_dependency_free_foreign_child_bootstrap(&mut self, pane_id: &str) -> Result<()> {
         let boundary = self
             .process
@@ -667,6 +672,28 @@ impl RuntimeSessionService {
             self.fail_shell_transactions_for_pane_write_failure(pane_id, error.message())?;
             return Err(error);
         }
+        // Bind the handoff to the process that received the loader command. The
+        // correlated loader record is replayable by whatever owns the PTY, so the
+        // staged payload stays withheld until the pane worker reports a foreground
+        // group that differs from this write-time group. Aliased SSH-style
+        // transports expose only the pane shell's outer group, where no local
+        // observation can discriminate the loader, so they keep the correlated
+        // release.
+        let loader_launch_proof_group = (!self.pane_local_foreground_group_is_aliased(pane_id))
+            .then(|| self.pane_foreground_process_group_observation(pane_id).0)
+            .flatten();
+        if let Some(current) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) {
+            current.loader_launch_proof_group = loader_launch_proof_group;
+            current.loader_ready_awaits_launch_proof = false;
+        }
+        // The staging payload and its receiver token travel in-band through the
+        // pane PTY, so whatever owns the pane can read and replay them. This
+        // handoff is correlation only and can never publish environment or path
+        // authority; record the withholding before the payload is released.
+        self.mark_pane_environment_authority_unavailable(
+            pane_id,
+            RuntimePaneEnvironmentAuthorityUnavailableReason::DependencyFreeShellUnattested,
+        );
         if child_shell.is_none() {
             self.enter_agent_subshell(pane_id);
             self.take_agent_subshell_command_exit(pane_id);
@@ -675,7 +702,7 @@ impl RuntimeSessionService {
         self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(
-                r#"{{"pane_id":"{}","foreign_bootstrap":"loading_child","transport":"dependency-free","marker":"{}"}}"#,
+                r#"{{"pane_id":"{}","foreign_bootstrap":"loading_child","transport":"dependency-free","authority":"withheld","marker":"{}"}}"#,
                 json_escape(pane_id),
                 json_escape(&marker)
             ),
@@ -812,8 +839,11 @@ impl RuntimeSessionService {
             RuntimeAgentSubshellCertificationOutcome::NotApplicable => {
                 self.process.pane_bootstrap_pending.remove(pane_id);
                 if let Some(environment) = bootstrap_environment {
-                    self.publish_bootstrap_environment(pane_id, environment);
-                    self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
+                    if self.publish_bootstrap_environment(pane_id, environment) {
+                        self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
+                    } else {
+                        self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
+                    }
                 } else {
                     let reason = if observed_output_truncated {
                         RuntimePaneEnvironmentAuthorityUnavailableReason::BootstrapOutputTruncated
@@ -828,7 +858,10 @@ impl RuntimeSessionService {
             }
             RuntimeAgentSubshellCertificationOutcome::Certified => {
                 self.process.pane_bootstrap_pending.remove(pane_id);
-                self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
+                // Promotion publishes Ready only for the runtime's own managed
+                // bootstrap handshake; dependency-free evidence settles the
+                // pane degraded because its environment and path authority are
+                // withheld.
             }
         }
         if self.settle_managed_agent_surface_bootstrap(pane_id)? {
@@ -899,8 +932,11 @@ impl RuntimeSessionService {
     /// proof.
     pub(crate) fn settle_deferred_foreign_bootstrap_work(&mut self) -> Result<usize> {
         let settled_receiver_ends = self.settle_ready_receiver_ends()?;
+        let released_loader_handoffs = self.settle_pending_foreign_loader_handoffs()?;
         let pending_child_launch_dispatches = self.dispatch_pending_foreign_child_launches()?;
-        Ok(settled_receiver_ends.saturating_add(pending_child_launch_dispatches))
+        Ok(settled_receiver_ends
+            .saturating_add(released_loader_handoffs)
+            .saturating_add(pending_child_launch_dispatches))
     }
 
     /// Dispatches hidden bootstrap wrappers for pending panes that have reached

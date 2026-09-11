@@ -235,6 +235,9 @@ impl AsyncRuntimeSessionActor {
                         .service
                         .pane_environment_signature(&pane_id)
                         .is_some(),
+                    withheld_authority_reason: self
+                        .service
+                        .pane_withheld_environment_authority_reason(&pane_id),
                     readiness: self.service.pane_readiness_state(&pane_id),
                     certification_rejection: self
                         .service

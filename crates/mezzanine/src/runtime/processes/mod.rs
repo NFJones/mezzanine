@@ -183,6 +183,11 @@ pub(crate) enum RuntimeAgentSubshellCertificationRejection {
     ForegroundProcessUnavailable,
     /// Start and completion boundaries reported different foreground groups.
     ForegroundProcessGroupChanged,
+    /// A managed child was expected but never admitted its receiver installation.
+    ReceiverNotAuthenticated,
+    /// The dependency-free loader record was admitted without the process-bound
+    /// proof that the loader took the pane, so the handoff stayed withheld.
+    LoaderLaunchUnproven,
     /// The bootstrap transaction returned a non-zero status.
     TransactionFailed,
     /// Bootstrap output exceeded the bounded observation limit.
@@ -202,6 +207,8 @@ impl RuntimeAgentSubshellCertificationRejection {
             Self::InteractionGenerationChanged => "interaction_generation_changed",
             Self::ForegroundProcessUnavailable => "foreground_process_unavailable",
             Self::ForegroundProcessGroupChanged => "foreground_process_group_changed",
+            Self::ReceiverNotAuthenticated => "receiver_not_authenticated",
+            Self::LoaderLaunchUnproven => "loader_launch_unproven",
             Self::TransactionFailed => "transaction_failed",
             Self::OutputTruncated => "output_truncated",
             Self::EnvironmentSignatureMissing => "environment_signature_missing",
@@ -244,11 +251,32 @@ pub(crate) enum RuntimePaneEnvironmentAuthorityUnavailableReason {
     UnsupportedShell,
     /// A foreign environment did not complete managed adapter admission.
     ForeignBootstrapTimedOut,
+    /// The dependency-free loader handoff cannot attest a runtime-managed
+    /// receiver because its staging payload and child token are delivered
+    /// in-band through the pane PTY.
+    DependencyFreeShellUnattested,
     /// Agent-subshell certification rejected the discovered environment.
     AgentSubshellCertification(RuntimeAgentSubshellCertificationRejection),
 }
 
 impl RuntimePaneEnvironmentAuthorityUnavailableReason {
+    /// Returns the stable label used in diagnostics and test snapshots.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::EnvironmentSignatureMissing => "environment_signature_missing",
+            Self::BootstrapOutputTruncated => "bootstrap_output_truncated",
+            Self::BootstrapTransactionFailed => "bootstrap_transaction_failed",
+            Self::BootstrapTimedOut => "bootstrap_timed_out",
+            Self::BootstrapWriteFailed => "bootstrap_write_failed",
+            Self::BootstrapProtocolViolation => "bootstrap_protocol_violation",
+            Self::ShellIdentityProbeFailed => "shell_identity_probe_failed",
+            Self::UnsupportedShell => "unsupported_shell",
+            Self::ForeignBootstrapTimedOut => "foreign_bootstrap_timed_out",
+            Self::DependencyFreeShellUnattested => "dependency_free_shell_unattested",
+            Self::AgentSubshellCertification(reason) => reason.as_str(),
+        }
+    }
+
     /// Returns a stable diagnostic that identifies the failed authority boundary.
     pub(crate) fn diagnostic(self) -> String {
         match self {
@@ -281,6 +309,8 @@ impl RuntimePaneEnvironmentAuthorityUnavailableReason {
                 "foreign shell bootstrap timed out; return to an empty prompt in the foreign environment and retry"
                     .to_string()
             }
+            Self::DependencyFreeShellUnattested => "the dependency-free shell handoff delivers its loader payload and child token in-band, so it cannot attest a runtime-managed receiver; environment and path authority are withheld"
+                .to_string(),
             Self::AgentSubshellCertification(reason) => format!(
                 "pane agent-subshell bootstrap certification failed: {}",
                 reason.as_str()
@@ -329,6 +359,25 @@ struct RuntimePaneCertifiedShellIdentity {
     environment_signature: EnvironmentSignature,
     /// Runtime-owned provenance for the certification.
     source: RuntimeCertifiedShellSource,
+    /// Whether this certification published the environment signature and path
+    /// authority. Dependency-free loader certifications are correlation only.
+    authority_published: bool,
+}
+
+/// Reports whether one certified identity's environment authority is current.
+///
+/// Attested identities require the exact published environment signature.
+/// Correlation-only identities must still be unpublished, so clearing
+/// authority can never leave a stale certified identity behind.
+fn runtime_certified_identity_authority_is_current(
+    published: Option<&EnvironmentSignature>,
+    identity: &RuntimePaneCertifiedShellIdentity,
+) -> bool {
+    if identity.authority_published {
+        published == Some(&identity.environment_signature)
+    } else {
+        published.is_none()
+    }
 }
 
 /// Syntax-neutral shell evidence collected before dialect-specific bootstrap.
@@ -458,7 +507,11 @@ struct RuntimeForeignShellBoundary {
     lifecycle_started_at_unix_ms: u64,
     /// Start time of the current phase for runtime-owned expiry.
     phase_started_at_unix_ms: u64,
-    /// Fresh private receiver token installed only in the managed foreign child.
+    /// Fresh receiver token written into the in-band staging payload.
+    ///
+    /// The token is a correlation credential, not a capability: the pane's own
+    /// foreground process can read the released payload from the same PTY, so
+    /// an admitted install never proves a runtime-managed receiver.
     child_token: Option<String>,
     /// Managed adapter implemented by the ephemeral child, when supported.
     child_shell: Option<mez_terminal::ManagedShellAdapter>,
@@ -468,10 +521,34 @@ struct RuntimeForeignShellBoundary {
     loader_payload: Option<mez_mux::process::ShellInputDelivery>,
     /// Whether the correlated loader has proven terminal-input ownership.
     loader_ready: bool,
-    /// Authenticated RX2 source that stages, launches, and cleans up the child.
+    /// Local foreground group recorded when the loader command was written.
+    ///
+    /// `None` when the local group cannot discriminate a loader launch, as for
+    /// SSH-style transports whose outer group is aliased to the pane shell.
+    loader_launch_proof_group: Option<u32>,
+    /// Whether the correlated loader-ready record arrived before the pane worker
+    /// observed a foreground group proving the loader took the pane.
+    loader_ready_awaits_launch_proof: bool,
+    /// In-band staging source recorded for a dependency-free loader handoff.
+    ///
+    /// The staging command, its payload, and its receiver token all travel
+    /// through the pane PTY, so this record is correlation only: any boundary
+    /// carrying it is treated as dependency-free and can never publish
+    /// environment or path authority, whichever source is named.
     child_staging_source: Option<String>,
     /// Identity transaction currently owned by the admitted foreign adapter.
     identity_marker: Option<String>,
+}
+
+impl RuntimeForeignShellBoundary {
+    /// Reports whether this boundary uses the dependency-free loader handoff.
+    ///
+    /// Such a handoff delivers its staging payload and receiver token through
+    /// the pane PTY, so its evidence is correlation only and can never publish
+    /// environment or path authority.
+    fn is_dependency_free_handoff(&self) -> bool {
+        self.loader_marker.is_some() || self.child_staging_source.is_some()
+    }
 }
 
 /// Atomically validated shell identity used to render and execute one pane
@@ -568,6 +645,10 @@ struct RuntimePaneShellHandoff {
 ///
 /// Payload release occurs only after this evidence is captured, so isolated
 /// transaction children cannot be promoted as the persistent shell identity.
+///
+/// This record is correlation only. A boundary that expects a token-authenticated
+/// managed child cannot certify from it alone: without that child's installation
+/// the recorded group proves only which process answered the start frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeBootstrapShellCertificationEvidence {
     /// Pane that emitted the registered bootstrap marker.
@@ -619,6 +700,13 @@ struct RuntimePendingAgentSubshellCertification {
     started_at_unix_ms: u64,
     /// Maximum runtime wait for the exact correlated completion observation.
     timeout_ms: u64,
+    /// Whether the boundary expected a managed child that never authenticated its
+    /// receiver installation when the start evidence settled.
+    receiver_unauthenticated: bool,
+    /// Whether the certification evidence came from the dependency-free loader
+    /// handoff whose payload is delivered in-band, which never publishes
+    /// environment or path authority.
+    dependency_free_handoff: bool,
 }
 
 /// One recovery-owned foreground observation for a blocked shell dispatch.
@@ -1786,6 +1874,46 @@ impl RuntimeSessionService {
         self.process
             .pending_agent_subshell_certifications
             .contains_key(pane_id)
+    }
+
+    /// Reports whether an expected managed child authenticated its installation.
+    #[cfg(test)]
+    pub(crate) fn managed_child_receiver_is_installed_for_tests(&self, pane_id: &str) -> bool {
+        self.process
+            .pane_managed_shell_handoffs
+            .get(pane_id)
+            .is_some_and(|handoff| handoff.child_is_installed())
+    }
+
+    /// Returns the recorded pane environment authority failure reason for tests.
+    #[cfg(test)]
+    pub(crate) fn pane_environment_authority_failure_for_tests(
+        &self,
+        pane_id: &str,
+    ) -> Option<RuntimePaneEnvironmentAuthorityUnavailableReason> {
+        self.process
+            .pane_environment_authority_failures
+            .get(pane_id)
+            .copied()
+    }
+
+    /// Returns the stable label of a deliberately withheld authority reason.
+    ///
+    /// Only the dependency-free correlation-only withholding is reported here,
+    /// so callers can distinguish "authority withheld by policy" from unrelated
+    /// bootstrap failures.
+    pub(crate) fn pane_withheld_environment_authority_reason(
+        &self,
+        pane_id: &str,
+    ) -> Option<&'static str> {
+        self.process
+            .pane_environment_authority_failures
+            .get(pane_id)
+            .filter(|reason| {
+                **reason
+                    == RuntimePaneEnvironmentAuthorityUnavailableReason::DependencyFreeShellUnattested
+            })
+            .map(|reason| reason.as_str())
     }
 
     /// Returns one pane's current shell-interaction generation for tests.
@@ -3157,10 +3285,12 @@ impl RuntimeSessionService {
                 .pane_shell_interaction_generations
                 .get(pane_id)
                 .copied();
-            let published = self.process.pane_environment_signatures.get(pane_id);
             if primary_process_id != Some(certified.primary_process_id)
                 || interaction_generation != Some(certified.interaction_generation)
-                || published != Some(&certified.environment_signature)
+                || !runtime_certified_identity_authority_is_current(
+                    self.process.pane_environment_signatures.get(pane_id),
+                    certified,
+                )
             {
                 return Err(MezError::invalid_state(
                     "certified pane shell identity is stale for the current process or interaction epoch",

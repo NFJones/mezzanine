@@ -131,6 +131,11 @@ impl RuntimeSessionService {
                             .foreign_child_token_for_pane(output_pane_id)
                             .is_some_and(|expected| expected.as_str() == token) =>
                 {
+                    // Token equality is in-band admission, not attestation. The
+                    // dependency-free staging payload carrying this token is typed
+                    // into the same PTY, so whatever owns the pane can read and
+                    // replay it. Environment and path authority stay withheld for
+                    // every dependency-free handoff regardless of this admission.
                     self.observe_shell_receiver_installed(output_pane_id, token, marker)
                 }
                 mez_terminal::ManagedShellProtocolEvent::ChildPromptReady { marker }

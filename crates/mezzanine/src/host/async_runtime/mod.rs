@@ -78,6 +78,9 @@ pub(crate) struct AsyncPaneCertificationSnapshot {
     pub certification_pending: bool,
     /// Whether certified environment context has been published.
     pub environment_signature_present: bool,
+    /// Stable reason when environment and path authority are deliberately
+    /// withheld for in-band dependency-free bootstrap evidence.
+    pub withheld_authority_reason: Option<&'static str>,
     /// Current semantic readiness state for the pane.
     pub readiness: mez_agent::PaneReadinessState,
     /// Latest stable certification rejection, when certification failed.

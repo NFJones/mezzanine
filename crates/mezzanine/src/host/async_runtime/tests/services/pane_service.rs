@@ -2120,8 +2120,10 @@ async fn async_unmanaged_bash_first_prompt_completes_deferred_bootstrap() {
             if last_snapshot.child_active
                 && !last_snapshot.bootstrap_pending
                 && last_snapshot.foreign_bootstrap_phase == Some("certified")
-                && last_snapshot.environment_signature_present
-                && last_snapshot.readiness == mez_agent::PaneReadinessState::Ready
+                && !last_snapshot.environment_signature_present
+                && last_snapshot.withheld_authority_reason
+                    == Some("dependency_free_shell_unattested")
+                && last_snapshot.readiness != mez_agent::PaneReadinessState::Ready
             {
                 certified = true;
                 break;
@@ -2156,6 +2158,12 @@ async fn async_unmanaged_bash_first_prompt_completes_deferred_bootstrap() {
     })
     .await
     .expect("first-prompt bootstrap should not time out");
+    assert!(
+        !actor_exit
+            .service
+            .pane_environment_authority_is_certified_for_tests("%1"),
+        "an unmanaged dependency-free bootstrap must withhold environment authority"
+    );
     actor_exit.service.terminate_all_pane_processes().unwrap();
 }
 
@@ -2279,8 +2287,9 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
             if snapshot.child_active
                 && !snapshot.bootstrap_pending
                 && snapshot.foreign_bootstrap_phase == Some("certified")
-                && snapshot.environment_signature_present
-                && snapshot.readiness == mez_agent::PaneReadinessState::Ready
+                && !snapshot.environment_signature_present
+                && snapshot.withheld_authority_reason == Some("dependency_free_shell_unattested")
+                && snapshot.readiness != mez_agent::PaneReadinessState::Ready
                 && snapshot.certification_rejection.is_none()
             {
                 break snapshot;
@@ -2296,6 +2305,11 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         };
         assert_eq!(last_snapshot.foreign_bootstrap_phase, Some("certified"));
+        assert_eq!(
+            last_snapshot.withheld_authority_reason,
+            Some("dependency_free_shell_unattested"),
+            "dependency-free certification must report withheld authority: {last_snapshot:?}"
+        );
 
         let hidden = client_handle
             .execute_terminal_command(primary.clone(), "agent-shell".to_string())
@@ -2339,6 +2353,12 @@ async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
             .running_shell_transactions_for_tests()
             .is_empty(),
         "identity and bootstrap transactions must settle before acceptance"
+    );
+    assert!(
+        !actor_exit
+            .service
+            .pane_environment_authority_is_certified_for_tests("%1"),
+        "an unmanaged dependency-free bootstrap must withhold environment authority"
     );
     actor_exit.service.terminate_all_pane_processes().unwrap();
     std::fs::remove_file(sentinel).unwrap();
