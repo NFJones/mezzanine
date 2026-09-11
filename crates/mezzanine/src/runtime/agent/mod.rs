@@ -234,6 +234,8 @@ pub(crate) struct RuntimeAgentComponent {
     panes_with_unsubmitted_process_input: BTreeSet<String>,
     /// Live non-native shell panes awaiting an interrupt-confirmed prompt before entry.
     pending_agent_subshell_input_clear_panes: BTreeSet<String>,
+    /// Panes whose cancelled child-shell entry still awaits the interrupted prompt.
+    cancelled_agent_subshell_input_clear_panes: BTreeSet<String>,
     /// Panes whose child entry followed a live non-native input clear.
     completed_agent_subshell_input_clear_panes: BTreeSet<String>,
     /// Interrupted subshells that must exit with a line-oriented command.
@@ -3069,8 +3071,46 @@ impl RuntimeSessionService {
             .panes_with_unsubmitted_process_input
             .remove(&pane_id);
         self.agent
+            .cancelled_agent_subshell_input_clear_panes
+            .remove(&pane_id);
+        self.agent
             .pending_agent_subshell_input_clear_panes
             .insert(pane_id);
+    }
+
+    /// Cancels an unadmitted child-shell entry while retaining the interrupt
+    /// boundary that entry was waiting for.
+    ///
+    /// The interrupt has already been delivered, and a live POSIX shell repaints
+    /// its prompt only after it has handled that signal and discarded the draft.
+    /// Cancelling admission cannot therefore forget the boundary: the pending
+    /// record becomes a cancelled record, which keeps the pane from being
+    /// reported as an editable prompt until the shell emits a newline-bearing
+    /// transaction while it is the certified foreground process, so the pane's
+    /// own prompt-candidate evidence confirms the draft was discarded. Child
+    /// ownership is released because no child shell ever consumed the handoff.
+    pub(crate) fn cancel_pending_agent_subshell_input_clear(&mut self, pane_id: &str) -> bool {
+        let cancelled = self
+            .agent
+            .pending_agent_subshell_input_clear_panes
+            .remove(pane_id);
+        if cancelled {
+            self.agent
+                .cancelled_agent_subshell_input_clear_panes
+                .insert(pane_id.to_string());
+        }
+        self.agent.agent_subshell_panes.remove(pane_id);
+        self.agent
+            .deferred_agent_subshell_entry_panes
+            .remove(pane_id);
+        self.agent
+            .panes_with_unsubmitted_process_input
+            .remove(pane_id);
+        self.agent
+            .completed_agent_subshell_input_clear_panes
+            .remove(pane_id);
+        self.agent.agent_subshell_command_exit_panes.remove(pane_id);
+        cancelled
     }
 
     /// Reports whether a live non-native shell is waiting for an
@@ -3101,6 +3141,25 @@ impl RuntimeSessionService {
         self.agent
             .completed_agent_subshell_input_clear_panes
             .contains(pane_id)
+    }
+
+    /// Reports whether cancelled child-shell admission still awaits the parent
+    /// prompt that confirms the delivered interrupt was discarded.
+    pub(crate) fn agent_subshell_input_clear_is_cancelled(&self, pane_id: &str) -> bool {
+        self.agent
+            .cancelled_agent_subshell_input_clear_panes
+            .contains(pane_id)
+    }
+
+    /// Consumes the interrupt boundary retained by cancelled admission.
+    ///
+    /// Cancelled admission never installs a child shell, so the boundary is
+    /// released without the child-exit retention marker that
+    /// `finish_agent_subshell_input_clear` records.
+    pub(crate) fn settle_cancelled_agent_subshell_input_clear(&mut self, pane_id: &str) -> bool {
+        self.agent
+            .cancelled_agent_subshell_input_clear_panes
+            .remove(pane_id)
     }
 
     /// Clears the completed non-native input-clear marker once ordinary process
@@ -3153,6 +3212,9 @@ impl RuntimeSessionService {
             .remove(pane_id);
         self.agent
             .pending_agent_subshell_input_clear_panes
+            .remove(pane_id);
+        self.agent
+            .cancelled_agent_subshell_input_clear_panes
             .remove(pane_id);
         self.agent
             .completed_agent_subshell_input_clear_panes

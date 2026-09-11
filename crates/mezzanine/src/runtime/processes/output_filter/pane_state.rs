@@ -296,16 +296,34 @@ impl RuntimeSessionService {
                 .pane_terminal_progress
                 .get(output.pane_id.as_str())
                 .copied();
-        if self.agent_subshell_input_clear_is_pending(output.pane_id.as_str())
+        let input_clear_boundary_is_outstanding = self
+            .agent_subshell_input_clear_is_pending(output.pane_id.as_str())
+            || self.agent_subshell_input_clear_is_cancelled(output.pane_id.as_str());
+        if input_clear_boundary_is_outstanding
             && transaction_bytes
                 .iter()
                 .any(|byte| matches!(*byte, b'\r' | b'\n'))
             && self.pane_foreground_certified_shell_state(output.pane_id.as_str()) == Some(true)
         {
-            let _ = self.observe_passive_shell_prompt_candidate(
+            let prompt_candidate_observed = self.observe_passive_shell_prompt_candidate(
                 output.pane_id.as_str(),
                 "non-native-input-clear-output",
             )?;
+            // A cancelled entry never installs a child shell, so its retained
+            // boundary is released once this transaction carries the product's
+            // prompt-candidate evidence: the observation above either recovered
+            // the pane, or the pane already reports a prompt-ready state. A
+            // rejected observation keeps the boundary outstanding instead of
+            // letting an unrelated newline-bearing transaction release it.
+            if self.agent_subshell_input_clear_is_cancelled(output.pane_id.as_str())
+                && (prompt_candidate_observed > 0
+                    || matches!(
+                        self.pane_readiness_state(output.pane_id.as_str()),
+                        PaneReadinessState::Ready | PaneReadinessState::PromptCandidate
+                    ))
+            {
+                let _ = self.settle_cancelled_agent_subshell_input_clear(output.pane_id.as_str());
+            }
         }
         let resumes_non_native_entry = self
             .agent_subshell_input_clear_is_pending(output.pane_id.as_str())

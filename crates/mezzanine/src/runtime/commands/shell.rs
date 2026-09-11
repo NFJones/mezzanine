@@ -1703,7 +1703,11 @@ impl RuntimeSessionService {
                 return Ok(true);
             }
             if self.agent_subshell_input_clear_is_pending(pane_id) {
-                self.clear_agent_subshell_state(pane_id);
+                // The interrupt is delivered but its parent prompt is still
+                // unconfirmed. Cancel admission while retaining that boundary,
+                // so a later prompt observation restores the pane instead of
+                // leaving it reported as an interactive block.
+                let _ = self.cancel_pending_agent_subshell_input_clear(pane_id);
                 self.clear_shell_output_filters_for_foreground_input(pane_id);
                 return Ok(true);
             }

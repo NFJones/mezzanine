@@ -2088,6 +2088,31 @@ fn runtime_posix_dirty_prompt_is_interrupted_before_agent_admission() {
         .unwrap();
     assert!(hide.contains("visibility=hidden"), "{hide}");
     assert!(!service.agent_subshell_is_active("%1"));
+    assert!(
+        service.agent_subshell_input_clear_is_cancelled("%1"),
+        "cancelled admission must retain the delivered interrupt boundary"
+    );
+
+    // Hide cancels admission before any child exists, so the parent prompt is
+    // restored only by the interrupt the show command already wrote. A POSIX
+    // shell discards the draft and repaints its prompt only after it has handled
+    // that interrupt, so the cancelled admission keeps the boundary outstanding
+    // until the parent prompt is observed. Input written while the boundary is
+    // outstanding still belongs to the interrupted line and is discarded with
+    // the draft, so sequence on the product's own boundary evidence instead of
+    // assuming the hide command already settled the shell.
+    let boundary_deadline = Instant::now() + Duration::from_secs(15);
+    while service.agent_subshell_input_clear_is_cancelled("%1")
+        && Instant::now() < boundary_deadline
+    {
+        let _ = service.poll_pane_outputs(8192).unwrap();
+        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+    }
+    assert!(
+        !service.agent_subshell_input_clear_is_cancelled("%1"),
+        "the interrupted POSIX parent prompt was not confirmed before fresh input; readiness={:?}",
+        service.pane_readiness_state("%1")
+    );
 
     let responsive_side_effect = root.join("post-interrupt-parent-responsive");
     service
