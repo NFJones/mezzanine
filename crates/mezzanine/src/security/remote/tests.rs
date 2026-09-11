@@ -96,8 +96,14 @@ fn endpoint_identity_lock_acquisition_survives_transient_holder() {
 
     let holder = super::store::open_private_lock(&session_identity_lock_path(&root)).unwrap();
     flock(&holder, FlockOperation::NonBlockingLockExclusive).unwrap();
+    // Keep this hold as short as the assertion allows: while it is open, any
+    // sibling test thread that forks a PTY child inherits this descriptor and
+    // keeps the flock alive until the child execs, so a long hold widens a
+    // window this test would then have to wait out inside the production retry
+    // budget. The lock is already held before the acquisition starts, so a few
+    // milliseconds still guarantee that the acquisition observes a holder.
     let releasing = thread::spawn(move || {
-        thread::sleep(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(5));
         drop(holder);
     });
 
@@ -106,7 +112,7 @@ fn endpoint_identity_lock_acquisition_survives_transient_holder() {
     let waited = started.elapsed();
     assert_eq!(reacquired.endpoint_id(), endpoint_id);
     assert!(
-        waited >= Duration::from_millis(25),
+        waited >= Duration::from_millis(1),
         "acquisition returned after {waited:?} without waiting out the transient holder"
     );
     drop(reacquired);
