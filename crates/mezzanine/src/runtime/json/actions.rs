@@ -118,7 +118,7 @@ pub(crate) fn runtime_split_direction(value: &str) -> Result<SplitDirection> {
 /// on duplicated control-flow logic.
 pub(crate) fn runtime_subagent_spawn_request(
     params: &str,
-    caller_is_primary: bool,
+    approval_provenance: mez_agent::SubagentApprovalProvenance,
 ) -> Result<SubagentSpawnRequest> {
     let value = runtime_json_value(params)?;
     let object = value
@@ -196,7 +196,8 @@ pub(crate) fn runtime_subagent_spawn_request(
         initial_model_size,
         initial_reasoning_effort,
         task_prompt,
-        explicit_user_approval: caller_is_primary,
+        explicit_user_approval: approval_provenance
+            == mez_agent::SubagentApprovalProvenance::ExplicitUserApproval,
         skip_initial_turn: object
             .get("skip_initial_turn")
             .and_then(Value::as_bool)

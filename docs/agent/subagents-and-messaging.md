@@ -21,9 +21,20 @@ through local messaging and remains responsible for integrating the outcome.
 Use the `explorer` role for read-heavy investigation and `worker` for bounded
 implementation. A cooperation mode constrains the intended work: `explore-only`
 does not modify state; `owned-write`, `coordinated-write`, and `serial-write`
-support scoped change coordination; `unrestricted` requires explicit user
-approval unless the session policy already permits it. Child read and write
+support scoped change coordination; `unrestricted` always requires explicit user
+approval, and no session policy bypasses that gate. Child read and write
 authority inherits from, and can only narrow, the parent's effective authority.
+
+Asking for `unrestricted` in a spawn request is not approval. A sandboxed root
+parent contributes filesystem bounds only, so an unapproved unrestricted request
+is denied before any child pane, process, or lineage record exists. Unrestricted
+children come either from an authenticated primary approval or from an
+already-approved unrestricted parent, and only that genuine provenance is
+inherited by descendants. Unsupported approval fields in a spawn request are
+rejected as contract errors instead of being treated as authority, and a denied
+unrestricted spawn stays a nonrecoverable denial rather than a retryable
+argument error. Provider-native MAAP tool-call arguments pass through the same
+contract validation, so an authority field is rejected there as well.
 
 The default join behavior waits for a child result before the parent continues;
 detached work can report later through local messaging. Approval requests from

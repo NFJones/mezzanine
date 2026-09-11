@@ -6475,6 +6475,15 @@ guidance MUST be carried by the action result and MUST NOT be added as a
 `RuntimeHint` context block. Transient direct-child capacity may later become
 available as existing children settle; the current agent's depth cannot change
 within its delegation lineage.
+An unapproved unrestricted spawn authorization denial MUST remain Forbidden and
+nonrecoverable: it MUST NOT be relabelled as an argument-validation error to
+solicit retries, and it MUST be audited without allocating child state. A
+correctable spawn shape, profile, or scope validation failure MUST instead return
+an action result with a null spawn and explicit no-child-created evidence through
+the existing bounded MAAP repair or action-failure correction path, MUST retain
+successful siblings from the same batch, and MUST reconcile duplicate delivery to
+the already created child instead of allocating a second pane, turn, or lineage
+entry.
 Repair and internal structured-output interactions MAY constrain response
 semantics without changing the provider-visible action catalog.
 
@@ -7919,6 +7928,22 @@ effective authority and MUST NOT independently infer a broader trusted-project
 default. The child MUST inherit the parent's cooperation mode unless the primary
 user explicitly approves a scope change.
 
+Root-parent authority materialization MUST supply filesystem bounds only: the
+current directory, the effective read and write scopes, and any profile
+permission preset. It MUST NOT synthesize a cooperation mode, MUST NOT force
+explore-only onto an unrelated request, and MUST NOT record approval. A requested
+or profile-defaulted cooperation mode MUST be validated against genuine
+provenance, and child scopes MUST be narrowed, before any pane, process, lineage
+entry, turn, or scope declaration is allocated.
+
+Explicit user approval for unrestricted writes MUST come only from an
+authenticated primary client request or from an already approved unrestricted
+parent declaration that records that approval provenance. A cooperation mode the
+child merely requested, and any mode synthesized from root filesystem bounds,
+MUST NOT authorize an unrestricted child or descendant. A scope declaration MUST
+carry its approval provenance explicitly rather than inferring it from the
+declared mode.
+
 Spawned agents MUST be discoverable through the local message passing protocol.
 
 Spawned subagent conversations MUST be durable saved conversations with a
@@ -8007,7 +8032,8 @@ The baseline cooperation modes are:
   lock for the scope.
 - `unrestricted`: The subagent may write according to the parent permission
   policy without additional scope restrictions. This mode MUST require explicit
-  user approval unless the session policy allows unrestricted subagent writes.
+  user approval. No session policy or configuration MAY authorize unrestricted
+  subagent writes without that explicit approval.
 
 Spawned subagent panes SHOULD start in the controlling pane's current working
 directory. Scope checks that resolve relative command effects MUST use the

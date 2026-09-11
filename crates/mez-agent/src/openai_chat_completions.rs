@@ -808,6 +808,8 @@ fn openai_chat_completions_finish_reason_error(
 }
 
 fn parse_openai_chat_completions_maap_action_batch(
+    // Native MAAP tool-call arguments reach the same contract validation as
+    // model-facing MAAP text, so spawn authority fields are rejected here too.
     message: &serde_json::Value,
     raw_text: &str,
     request: &ModelRequest,

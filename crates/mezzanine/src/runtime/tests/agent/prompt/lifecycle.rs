@@ -1165,6 +1165,330 @@ fn spawn_idle_subagent_scope(
     (child_agent_id, scope)
 }
 
+/// Verifies a sandboxed root cannot mint unrestricted authority from a child's
+/// own cooperation-mode request.
+///
+/// Root authority materialization supplies filesystem bounds only. An
+/// unapproved unrestricted request must therefore be denied before any window,
+/// pane process, turn, lineage record, or scope declaration exists to
+/// reconcile, and the denial must stay Forbidden rather than becoming a
+/// correctable argument error.
+#[test]
+fn runtime_unapproved_unrestricted_spawn_is_denied_before_child_state() {
+    let (mut service, primary, root, _) =
+        trusted_project_subagent_scope_service("runtime-unapproved-unrestricted-denied");
+    let audit_root = temp_root("runtime-unapproved-unrestricted-denied-audit");
+    let audit_path = audit_root.join("audit.jsonl");
+    service.set_audit_log(crate::security::audit::AuditLog::new(
+        crate::security::audit::AuditConfig {
+            enabled: true,
+            path: audit_path.clone(),
+            hash_chain: false,
+            required: true,
+        },
+    ));
+    let spawn = SubagentSpawnRequest {
+        parent_agent_id: "agent-%1".to_string(),
+        requested_role: "worker".to_string(),
+        placement: "new-pane".to_string(),
+        cooperation_mode: CooperationMode::Unrestricted,
+        cooperation_mode_defaulted: false,
+        read_scopes: Vec::new(),
+        read_scopes_defaulted: true,
+        write_scopes: Vec::new(),
+        write_scopes_defaulted: true,
+        session_mode: SubagentSessionMode::New,
+        initial_model_size: None,
+        initial_reasoning_effort: None,
+        task_prompt: "take unrestricted authority".to_string(),
+        explicit_user_approval: false,
+        skip_initial_turn: true,
+    };
+    let window_count = service.session().windows().len();
+    let turn_count = service.agent_turn_ledger().turns().len();
+
+    let error = service
+        .spawn_runtime_subagent(
+            &primary,
+            spawn,
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        error.kind(),
+        crate::error::MezErrorKind::Forbidden,
+        "{error}"
+    );
+    assert_eq!(
+        error.message(),
+        "unrestricted subagent writes require explicit user approval"
+    );
+    assert_eq!(service.session().windows().len(), window_count);
+    assert_eq!(service.agent_turn_ledger().turns().len(), turn_count);
+    assert_eq!(service.joined_subagent_dependency_count(), 0);
+    assert!(!service.has_subagent_scope_declaration("agent-%2"));
+    assert!(service.subagent_lineage("agent-%2").is_none());
+    let records = fs::read_to_string(&audit_path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .filter(|record| record["event_type"] == "subagent")
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["action"], "spawn");
+    assert_eq!(records[0]["outcome"], "denied");
+    assert_eq!(records[0]["agent_id"], serde_json::Value::Null);
+    assert!(records[0]["metadata"].get("subagent_id").is_none());
+    assert_eq!(records[0]["metadata"]["parent_agent_id"], "agent-%1");
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies a scoped parent that forces unrestricted without genuine approval
+/// is denied and audited exactly once before any child state exists.
+///
+/// The explicit requested-mode check cannot see a mode that a scoped parent
+/// declaration forces onto the child. The contract validation denial must still
+/// be audited once and must not allocate a child pane, turn, or lineage entry.
+#[test]
+fn runtime_forced_unrestricted_spawn_denial_is_audited_once() {
+    let (mut service, primary, root, _) =
+        trusted_project_subagent_scope_service("runtime-forced-unrestricted-denial");
+    let audit_root = temp_root("runtime-forced-unrestricted-denial-audit");
+    let audit_path = audit_root.join("audit.jsonl");
+    service.set_audit_log(crate::security::audit::AuditLog::new(
+        crate::security::audit::AuditConfig {
+            enabled: true,
+            path: audit_path.clone(),
+            hash_chain: false,
+            required: true,
+        },
+    ));
+    // A scoped parent declaration that records an unrestricted mode without
+    // genuine approval provenance bounds the child to that unapproved mode.
+    service.set_subagent_scope_declaration(
+        "agent-%1",
+        mez_agent::SubagentScopeDeclaration {
+            cooperation_mode: CooperationMode::Unrestricted,
+            approval_provenance: mez_agent::SubagentApprovalProvenance::Requested,
+            current_directory: "/repo".to_string(),
+            read_scopes: vec!["/repo".to_string()],
+            write_scopes: vec!["/repo".to_string()],
+            permission_preset: None,
+        },
+    );
+    let spawn = SubagentSpawnRequest {
+        parent_agent_id: "agent-%1".to_string(),
+        requested_role: "worker".to_string(),
+        placement: "new-pane".to_string(),
+        cooperation_mode: CooperationMode::OwnedWrite,
+        cooperation_mode_defaulted: false,
+        read_scopes: Vec::new(),
+        read_scopes_defaulted: true,
+        write_scopes: Vec::new(),
+        write_scopes_defaulted: true,
+        session_mode: SubagentSessionMode::New,
+        initial_model_size: None,
+        initial_reasoning_effort: None,
+        task_prompt: "inherit an unapproved mode".to_string(),
+        explicit_user_approval: false,
+        skip_initial_turn: true,
+    };
+    let window_count = service.session().windows().len();
+    let turn_count = service.agent_turn_ledger().turns().len();
+
+    let error = service
+        .spawn_runtime_subagent(
+            &primary,
+            spawn,
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        error.kind(),
+        crate::error::MezErrorKind::Forbidden,
+        "{error}"
+    );
+    assert_eq!(
+        error.message(),
+        "unrestricted subagent writes require explicit user approval"
+    );
+    assert_eq!(service.session().windows().len(), window_count);
+    assert_eq!(service.agent_turn_ledger().turns().len(), turn_count);
+    assert!(!service.has_subagent_scope_declaration("agent-%2"));
+    assert!(service.subagent_lineage("agent-%2").is_none());
+    let records = fs::read_to_string(&audit_path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .filter(|record| record["event_type"] == "subagent")
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["action"], "spawn");
+    assert_eq!(records[0]["outcome"], "denied");
+    assert_eq!(records[0]["agent_id"], serde_json::Value::Null);
+    assert!(records[0]["metadata"].get("subagent_id").is_none());
+    assert_eq!(records[0]["metadata"]["parent_agent_id"], "agent-%1");
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies genuine approval still authorizes unrestricted descendants.
+///
+/// An authenticated primary approval, and the approved unrestricted parent it
+/// creates, remain valid sources of unrestricted authority, so an explicit
+/// unrestricted request and a nested descendant request both continue to work
+/// without re-deriving approval from a requested cooperation mode.
+#[test]
+fn runtime_approved_unrestricted_parent_authorizes_descendant() {
+    let (mut service, primary, root, project_root) =
+        trusted_project_subagent_scope_service("runtime-approved-unrestricted-descendant");
+    let expected = project_root.to_string_lossy().into_owned();
+    let approved = SubagentSpawnRequest {
+        parent_agent_id: "agent-%1".to_string(),
+        requested_role: "worker".to_string(),
+        placement: "new-pane".to_string(),
+        cooperation_mode: CooperationMode::Unrestricted,
+        cooperation_mode_defaulted: false,
+        read_scopes: Vec::new(),
+        read_scopes_defaulted: true,
+        write_scopes: Vec::new(),
+        write_scopes_defaulted: true,
+        session_mode: SubagentSessionMode::New,
+        initial_model_size: None,
+        initial_reasoning_effort: None,
+        task_prompt: "own the deliverable end to end".to_string(),
+        explicit_user_approval: true,
+        skip_initial_turn: true,
+    };
+
+    let (child_agent_id, scope) = spawn_idle_subagent_scope(&mut service, &primary, approved);
+    assert_eq!(scope.cooperation_mode, CooperationMode::Unrestricted);
+    assert_eq!(
+        scope.approval_provenance,
+        mez_agent::SubagentApprovalProvenance::ExplicitUserApproval
+    );
+    assert!(scope.carries_approved_unrestricted_authority());
+    assert_eq!(scope.read_scopes, vec![expected.clone()]);
+    assert_eq!(scope.write_scopes, vec![expected]);
+
+    let descendant = SubagentSpawnRequest {
+        parent_agent_id: child_agent_id,
+        requested_role: "worker".to_string(),
+        placement: "new-pane".to_string(),
+        cooperation_mode: CooperationMode::Unrestricted,
+        cooperation_mode_defaulted: false,
+        read_scopes: Vec::new(),
+        read_scopes_defaulted: true,
+        write_scopes: Vec::new(),
+        write_scopes_defaulted: true,
+        session_mode: SubagentSessionMode::New,
+        initial_model_size: None,
+        initial_reasoning_effort: None,
+        task_prompt: "continue the approved work".to_string(),
+        explicit_user_approval: false,
+        skip_initial_turn: true,
+    };
+    let (_, descendant_scope) = spawn_idle_subagent_scope(&mut service, &primary, descendant);
+
+    assert_eq!(
+        descendant_scope.cooperation_mode,
+        CooperationMode::Unrestricted
+    );
+    assert!(descendant_scope.carries_approved_unrestricted_authority());
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies an authenticated primary control request still authorizes an
+/// unrestricted child end to end.
+///
+/// The primary client role is the authenticated approval source, so the same
+/// sandboxed root that rejects a child's unapproved request must accept this
+/// request and record explicit approval provenance on the child declaration.
+#[test]
+fn runtime_primary_control_spawn_allows_approved_unrestricted_child() {
+    let (mut service, primary, root, project_root) =
+        trusted_project_subagent_scope_service("runtime-primary-unrestricted-control");
+    let expected = project_root.to_string_lossy().into_owned();
+
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"primary-unrestricted","method":"agent/spawn","params":{"parent_agent":{"agent_id":"agent-%1"},"placement":{"mode":"new-pane"},"role":"worker","cooperation_mode":"unrestricted","prompt":"own the deliverable end to end","idempotency_key":"primary-unrestricted-spawn"}}"#,
+        &primary,
+    );
+    assert!(response.contains("\"result\""), "{response}");
+    let child_agent_id =
+        serde_json::from_str::<serde_json::Value>(&response).unwrap()["result"]["agent"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+    let scope = service
+        .subagent_scope_declaration(&child_agent_id)
+        .expect("approved unrestricted child must retain its scope declaration");
+    assert_eq!(scope.cooperation_mode, CooperationMode::Unrestricted);
+    assert_eq!(
+        scope.approval_provenance,
+        mez_agent::SubagentApprovalProvenance::ExplicitUserApproval
+    );
+    assert!(scope.carries_approved_unrestricted_authority());
+    assert_eq!(scope.read_scopes, vec![expected.clone()]);
+    assert_eq!(scope.write_scopes, vec![expected]);
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies ordinary narrowed worker spawns keep their mode and gain no
+/// approval from root filesystem bounds.
+///
+/// Root bounds must not force explore-only and must not be reported as an
+/// approval source, so an owned-write worker keeps its requested mode while
+/// inheriting the parent's narrowed filesystem authority.
+#[test]
+fn runtime_root_bounds_keep_ordinary_worker_mode_without_approval() {
+    let (mut service, primary, root, project_root) =
+        trusted_project_subagent_scope_service("runtime-root-bounds-worker-mode");
+    let expected = project_root.to_string_lossy().into_owned();
+    let spawn = SubagentSpawnRequest {
+        parent_agent_id: "agent-%1".to_string(),
+        requested_role: "worker".to_string(),
+        placement: "new-pane".to_string(),
+        cooperation_mode: CooperationMode::OwnedWrite,
+        cooperation_mode_defaulted: false,
+        read_scopes: Vec::new(),
+        read_scopes_defaulted: true,
+        write_scopes: Vec::new(),
+        write_scopes_defaulted: true,
+        session_mode: SubagentSessionMode::New,
+        initial_model_size: None,
+        initial_reasoning_effort: None,
+        task_prompt: "implement the bounded change".to_string(),
+        explicit_user_approval: false,
+        skip_initial_turn: true,
+    };
+
+    let (_, scope) = spawn_idle_subagent_scope(&mut service, &primary, spawn);
+
+    assert_eq!(scope.cooperation_mode, CooperationMode::OwnedWrite);
+    assert_eq!(
+        scope.approval_provenance,
+        mez_agent::SubagentApprovalProvenance::Requested
+    );
+    assert!(!scope.carries_approved_unrestricted_authority());
+    assert_eq!(scope.read_scopes, vec![expected.clone()]);
+    assert_eq!(scope.write_scopes, vec![expected]);
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies omitted child scopes inherit the root parent's trusted-project
 /// Bubblewrap authority instead of independently deriving authority later.
 #[test]

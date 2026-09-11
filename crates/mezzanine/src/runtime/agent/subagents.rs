@@ -32,6 +32,116 @@ const SETTLED_SUBAGENT_RESULT_LIMIT: usize = 4096;
 /// Maximum execution-aware terminal settlement claims retained by the runtime actor.
 const TERMINAL_RESULT_DISPOSITION_LIMIT: usize = 4096;
 
+/// Child identity captured from a spawn response after the child was allocated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SpawnedSubagentChild {
+    /// Runtime agent id of the created child.
+    child_agent_id: String,
+    /// Child turn id, when the spawn created an initial turn.
+    child_turn_id: Option<String>,
+}
+
+/// Whether one `spawn_agent` action had already allocated its child on failure.
+///
+/// The MAAP action wrapper needs this fact because a failure after allocation
+/// must never report the contradicting `child_created: false` evidence.
+#[derive(Debug)]
+pub(crate) enum SpawnActionAllocation {
+    /// No child pane, declaration, turn, or lineage entry existed yet.
+    None,
+    /// The child already existed; the identity is retained when the spawn
+    /// response could be decoded.
+    Allocated(Option<SpawnedSubagentChild>),
+}
+
+/// Error raised while executing one MAAP `spawn_agent` action.
+///
+/// Carrying the allocation state lets the action wrapper emit accurate
+/// `child_created` evidence instead of always claiming no child exists.
+#[derive(Debug)]
+pub(crate) struct SpawnActionExecutionError {
+    error: Box<MezError>,
+    allocation: SpawnActionAllocation,
+}
+
+impl SpawnActionExecutionError {
+    /// Records a failure raised before any child state existed.
+    fn before_allocation(error: MezError) -> Self {
+        Self {
+            error: Box::new(error),
+            allocation: SpawnActionAllocation::None,
+        }
+    }
+
+    /// Records a failure raised after the child already existed.
+    fn after_allocation(error: MezError, child: Option<SpawnedSubagentChild>) -> Self {
+        Self {
+            error: Box::new(error),
+            allocation: SpawnActionAllocation::Allocated(child),
+        }
+    }
+
+    fn kind(&self) -> crate::error::MezErrorKind {
+        self.error.kind()
+    }
+
+    fn message(&self) -> &str {
+        self.error.message()
+    }
+
+    fn allocation(&self) -> &SpawnActionAllocation {
+        &self.allocation
+    }
+}
+
+impl From<MezError> for SpawnActionExecutionError {
+    fn from(error: MezError) -> Self {
+        Self::before_allocation(error)
+    }
+}
+
+/// Decodes the allocated child identity from a successful spawn response.
+fn runtime_spawn_action_child_snapshot(spawn_json: &str) -> Option<SpawnedSubagentChild> {
+    let value = serde_json::from_str::<serde_json::Value>(spawn_json).ok()?;
+    let agent = value.get("agent")?;
+    let child_agent_id = agent.get("id")?.as_str()?.to_string();
+    let child_turn_id = value
+        .get("turn")
+        .filter(|turn| !turn.is_null())
+        .and_then(|turn| turn.get("id"))
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned);
+    Some(SpawnedSubagentChild {
+        child_agent_id,
+        child_turn_id,
+    })
+}
+
+/// Formats `child_created` evidence for one failed spawn action result.
+///
+/// A failure before allocation reports no child. A failure after allocation
+/// names the existing child and asks the parent to reconcile to it rather than
+/// spawning a duplicate.
+fn runtime_spawn_action_child_evidence(allocation: &SpawnActionAllocation) -> String {
+    match allocation {
+        SpawnActionAllocation::None => {
+            r#""child_created":false,"child_agent_id":null,"reconcile":null"#.to_string()
+        }
+        SpawnActionAllocation::Allocated(Some(child)) => format!(
+            r#""child_created":true,"child_agent_id":"{}","child_turn_id":{},"reconcile":"existing_child""#,
+            json_escape(&child.child_agent_id),
+            child
+                .child_turn_id
+                .as_deref()
+                .map(|turn_id| format!(r#""{}""#, json_escape(turn_id)))
+                .unwrap_or_else(|| "null".to_string())
+        ),
+        SpawnActionAllocation::Allocated(None) => {
+            r#""child_created":true,"child_agent_id":null,"child_turn_id":null,"reconcile":"existing_child""#.to_string()
+        }
+    }
+}
+
 /// Converts controller-owned loop completion metadata into the ordinary join shape.
 fn joined_dependency_from_loop_completion(
     completion: RuntimeAgentLoopCompletion,
@@ -639,14 +749,15 @@ impl RuntimeSessionService {
                 .execute_spawn_action_for_turn(turn, &action)
             {
                 Ok(result) => result,
-                Err(error) => {
-                    let status = if error.kind() == crate::error::MezErrorKind::Forbidden {
+                Err(spawn_error) => {
+                    let status = if spawn_error.kind() == crate::error::MezErrorKind::Forbidden {
                         ActionStatus::Denied
                     } else {
                         ActionStatus::Failed
                     };
-                    let error_code = runtime_mezzanine_error_code(error.kind());
-                    let diagnostic = error.message().to_string();
+                    let error_code = runtime_mezzanine_error_code(spawn_error.kind());
+                    let diagnostic = spawn_error.message().to_string();
+                    let evidence = runtime_spawn_action_child_evidence(spawn_error.allocation());
                     let mut result = ActionResult::failed(
                         turn,
                         &action,
@@ -662,7 +773,8 @@ impl RuntimeSessionService {
                             .content
                             .push(mez_agent::ActionContentBlock::text(guidance));
                         result.structured_content_json = Some(format!(
-                            r#"{{"spawn":null,"delivery_status":"failed","reason":"{}","guidance":"{}","error":{{"code":"{}","message":"{}"}}}}"#,
+                            r#"{{"spawn":null,"delivery_status":"failed",{},"reason":"{}","guidance":"{}","error":{{"code":"{}","message":"{}"}}}}"#,
+                            evidence,
                             json_escape(&diagnostic),
                             json_escape(guidance),
                             error_code,
@@ -670,7 +782,8 @@ impl RuntimeSessionService {
                         ));
                     } else {
                         result.structured_content_json = Some(format!(
-                            r#"{{"spawn":null,"delivery_status":"failed","error":{{"code":"{}","message":"{}"}}}}"#,
+                            r#"{{"spawn":null,"delivery_status":"failed",{},"error":{{"code":"{}","message":"{}"}}}}"#,
+                            evidence,
                             error_code,
                             json_escape(&diagnostic)
                         ));
@@ -717,7 +830,7 @@ impl RuntimeSessionService {
         &mut self,
         turn: &AgentTurnRecord,
         action: &AgentAction,
-    ) -> Result<ActionResult> {
+    ) -> std::result::Result<ActionResult, SpawnActionExecutionError> {
         let AgentActionPayload::SpawnAgent {
             role,
             placement,
@@ -730,9 +843,9 @@ impl RuntimeSessionService {
             task_prompt,
         } = &action.payload
         else {
-            return Err(MezError::invalid_args(
-                "subagent execution requires a spawn_agent action",
-            ));
+            return Err(
+                MezError::invalid_args("subagent execution requires a spawn_agent action").into(),
+            );
         };
         let normalized_cooperation_mode = runtime_cooperation_mode(cooperation_mode)?;
         let normalized_role = normalize_subagent_spawn_role(
@@ -785,15 +898,35 @@ impl RuntimeSessionService {
             );
         }
         let params = serde_json::Value::Object(params).to_string();
-        let spawn = runtime_subagent_spawn_request(&params, false)?;
+        let spawn = runtime_subagent_spawn_request(
+            &params,
+            mez_agent::SubagentApprovalProvenance::Requested,
+        )?;
         let placement_mode = runtime_subagent_placement_mode(&params)?;
-        let spawn_json = self.spawn_runtime_subagent_session_owned(spawn, placement_mode)?;
+        let spawn_json = self
+            .spawn_runtime_subagent_session_owned(spawn, placement_mode)
+            .map_err(SpawnActionExecutionError::before_allocation)?;
+        // The child pane, scope declaration, and conversation exist from this
+        // point, so a later failure must report the allocated child instead of
+        // the contradicting no-child-created evidence.
+        let allocated_child = runtime_spawn_action_child_snapshot(&spawn_json);
+        #[cfg(test)]
+        if std::mem::take(&mut self.agent.fail_subagent_spawn_after_allocation) {
+            return Err(SpawnActionExecutionError::after_allocation(
+                MezError::invalid_state("injected subagent post-allocation failure"),
+                allocated_child,
+            ));
+        }
         if self.agent.subagent_wait_policy == SubagentWaitPolicy::Join {
             let (child_agent_id, child_display_name, child_turn_id) =
-                runtime_spawn_json_agent_and_turn(&spawn_json)?;
-            let child_turn_id = child_turn_id.ok_or_else(|| {
-                MezError::invalid_state("subagent spawn response missing turn id")
-            })?;
+                runtime_spawn_json_agent_and_turn(&spawn_json).map_err(|error| {
+                    SpawnActionExecutionError::after_allocation(error, allocated_child.clone())
+                })?;
+            let child_turn_id = child_turn_id
+                .ok_or_else(|| MezError::invalid_state("subagent spawn response missing turn id"))
+                .map_err(|error| {
+                    SpawnActionExecutionError::after_allocation(error, allocated_child.clone())
+                })?;
             self.agent.joined_subagent_dependencies.insert(
                 child_turn_id.clone(),
                 JoinedSubagentDependency {

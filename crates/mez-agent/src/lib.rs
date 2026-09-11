@@ -556,10 +556,12 @@ pub use slash::{
 };
 pub use subagent::{
     ActiveWriteScope, BuiltinSubagentRole, CooperationMode, DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
-    DefaultSubagentScopeEnforcement, ScopeConflict, ScopeRegistry, SubagentContractError,
-    SubagentContractErrorKind, SubagentContractResult, SubagentProfile, SubagentScopeDeclaration,
-    SubagentScopeEnforcement, SubagentSessionMode, SubagentSpawnRequest, builtin_role_name,
-    builtin_subagent_profiles, normalize_subagent_spawn_role, subagent_action_scope_violation,
+    DefaultSubagentScopeEnforcement, ScopeConflict, ScopeRegistry, SubagentApprovalProvenance,
+    SubagentContractError, SubagentContractErrorKind, SubagentContractResult,
+    SubagentParentAuthority, SubagentParentFilesystemBounds, SubagentProfile,
+    SubagentScopeDeclaration, SubagentScopeEnforcement, SubagentSessionMode, SubagentSpawnRequest,
+    builtin_role_name, builtin_subagent_profiles, normalize_subagent_spawn_role,
+    subagent_action_scope_violation,
 };
 pub use subagent_output::subagent_task_output_for_execution;
 pub use surface::{

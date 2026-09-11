@@ -326,6 +326,27 @@ impl AuditRecord {
         record.sanitized()
     }
 
+    /// Records a denied subagent spawn without fabricating a child identity.
+    ///
+    /// A denied spawn never allocated a child pane, turn, or lineage entry, so
+    /// the record omits `subagent_id` and leaves `agent_id` unset instead of
+    /// recording an empty string that would read as a real child identity.
+    pub fn subagent_spawn_denied(
+        session_id: impl Into<String>,
+        actor: AuditActor,
+        parent_agent_id: impl Into<String>,
+        role: impl Into<String>,
+        cooperation_mode: impl Into<String>,
+        outcome: impl Into<String>,
+    ) -> Self {
+        let mut record = Self::new(session_id, actor, "subagent", "spawn")
+            .with_metadata("parent_agent_id", parent_agent_id)
+            .with_metadata("role", role)
+            .with_metadata("cooperation_mode", cooperation_mode);
+        record.outcome = outcome.into();
+        record.sanitized()
+    }
+
     /// Runs the credential access attempt operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

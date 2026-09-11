@@ -1201,6 +1201,7 @@ fn runtime_subagent_profile_preset_restricts_pane_override() {
         "agent-%2",
         mez_agent::SubagentScopeDeclaration {
             cooperation_mode: CooperationMode::ExploreOnly,
+            approval_provenance: mez_agent::SubagentApprovalProvenance::Requested,
             current_directory: "/repo".to_string(),
             read_scopes: vec!["/repo".to_string()],
             write_scopes: Vec::new(),

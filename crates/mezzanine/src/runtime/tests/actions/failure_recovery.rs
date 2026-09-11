@@ -968,3 +968,419 @@ fn runtime_spawn_depth_denial_has_guidance_and_no_spawn_side_effects() {
     );
     service.terminate_all_pane_processes().unwrap();
 }
+
+/// Builds one spawn action with an explicit role and cooperation mode.
+///
+/// The shared fixture helper only produces the compact explore-only default, so
+/// authority-focused recovery tests override those two fields directly.
+fn runtime_spawn_agent_action_with_authority(
+    id: &str,
+    task_prompt: &str,
+    role: &str,
+    cooperation_mode: &str,
+) -> mez_agent::AgentAction {
+    let mut action = runtime_spawn_agent_action(id, task_prompt);
+    if let mez_agent::AgentActionPayload::SpawnAgent {
+        role: action_role,
+        cooperation_mode: action_mode,
+        ..
+    } = &mut action.payload
+    {
+        *action_role = role.to_string();
+        *action_mode = cooperation_mode.to_string();
+    }
+    action
+}
+
+/// Builds one running execution around a single action batch of spawn actions.
+fn runtime_spawn_execution_for_actions(
+    turn: &AgentTurnRecord,
+    actions: Vec<mez_agent::AgentAction>,
+) -> mez_agent::AgentTurnExecution {
+    let action_results = actions
+        .iter()
+        .map(|action| mez_agent::ActionResult::running(turn, action, Vec::new(), None))
+        .collect::<Vec<_>>();
+    mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "delegate the delegated task".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "delegate the delegated task".to_string(),
+                actions: actions.clone(),
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results,
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    }
+}
+
+/// Verifies an unapproved unrestricted spawn is a nonrecoverable denial.
+///
+/// Root filesystem bounds cannot authorize unrestricted writes, so the denial
+/// must stay Forbidden, carry explicit no-child-created evidence, and remain
+/// outside the bounded action-failure correction path instead of being
+/// relabelled as a retryable argument problem.
+#[test]
+fn runtime_unapproved_unrestricted_spawn_denial_is_nonrecoverable() {
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "escalate my authority")
+        .unwrap();
+    service.remove_pending_agent_provider_task(&started.turn_id);
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let action = runtime_spawn_agent_action_with_authority(
+        "spawn-unapproved-unrestricted",
+        "take unrestricted authority",
+        "worker",
+        "unrestricted",
+    );
+    let mut execution = runtime_spawn_execution_for_actions(&turn, vec![action]);
+    let window_count = service.session().windows().len();
+    let turn_count = service.agent_turn_ledger().turns().len();
+
+    assert_eq!(
+        service
+            .execute_running_spawn_actions_for_turn(&turn, &mut execution)
+            .unwrap(),
+        1
+    );
+
+    let denied = &execution.action_results[0];
+    assert_eq!(denied.status, ActionStatus::Denied);
+    assert_eq!(denied.error.as_ref().unwrap().code, "forbidden");
+    assert_eq!(
+        denied.error.as_ref().unwrap().message,
+        "unrestricted subagent writes require explicit user approval"
+    );
+    let structured = denied.structured_content_json.as_deref().unwrap();
+    assert!(structured.contains("\"spawn\":null"), "{structured}");
+    assert!(
+        structured.contains("\"child_created\":false"),
+        "{structured}"
+    );
+    assert!(!mez_agent::outcome::runtime_action_result_is_feedback_candidate(denied));
+    assert_eq!(service.session().windows().len(), window_count);
+    assert_eq!(service.agent_turn_ledger().turns().len(), turn_count);
+    assert_eq!(service.joined_subagent_dependency_count(), 0);
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a correctable spawn shape error reports no child and enters the
+/// bounded correction path.
+///
+/// An unsupported profile is a malformed delegation request: the action result
+/// must report a null spawn with no child created, and the existing bounded
+/// failure feedback must queue model correction.
+#[test]
+fn runtime_correctable_spawn_shape_error_reports_no_child_and_queues_correction() {
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "delegate to a missing profile")
+        .unwrap();
+    service.remove_pending_agent_provider_task(&started.turn_id);
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let action = runtime_spawn_agent_action_with_authority(
+        "spawn-unsupported-role",
+        "delegate to a missing profile",
+        "missing-profile",
+        "explore-only",
+    );
+    let mut execution = runtime_spawn_execution_for_actions(&turn, vec![action]);
+    let window_count = service.session().windows().len();
+
+    assert_eq!(
+        service
+            .execute_running_spawn_actions_for_turn(&turn, &mut execution)
+            .unwrap(),
+        1
+    );
+
+    let failed = &execution.action_results[0];
+    assert_eq!(failed.status, ActionStatus::Failed);
+    assert_eq!(failed.error.as_ref().unwrap().code, "invalid_params");
+    let structured = failed.structured_content_json.as_deref().unwrap();
+    assert!(structured.contains("\"spawn\":null"), "{structured}");
+    assert!(
+        structured.contains("\"child_created\":false"),
+        "{structured}"
+    );
+    assert!(mez_agent::outcome::runtime_action_result_is_feedback_candidate(failed));
+    assert_eq!(service.session().windows().len(), window_count);
+    assert_eq!(service.joined_subagent_dependency_count(), 0);
+
+    append_test_execution_assistant_context(&mut service, &turn, &execution);
+    assert!(
+        service
+            .queue_agent_failure_feedback_for_correction(
+                &turn,
+                &mut execution,
+                "subagent_spawn_validation_failed",
+            )
+            .unwrap()
+    );
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    assert!(context.blocks().iter().any(|block| {
+        block.source == ContextSourceKind::ActionResult
+            && block.content.contains("spawn-unsupported-role")
+            && block.content.contains("unsupported subagent role")
+    }));
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a mixed spawn batch corrects the failed sibling while retaining the
+/// child that was actually created.
+///
+/// One correctable failure must not discard a successful sibling or duplicate
+/// its child, and the bounded correction context must carry both results.
+#[test]
+fn runtime_mixed_spawn_batch_correction_retains_successful_sibling() {
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.configure_subagent_policy(4, 4, 2, 2, SubagentWaitPolicy::Detach);
+    let started = service
+        .start_agent_prompt_turn("%1", "delegate two tasks")
+        .unwrap();
+    service.remove_pending_agent_provider_task(&started.turn_id);
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let success = runtime_spawn_agent_action_with_authority(
+        "spawn-mixed-success",
+        "inspect the repository",
+        "explorer",
+        "explore-only",
+    );
+    let failure = runtime_spawn_agent_action_with_authority(
+        "spawn-mixed-failure",
+        "delegate to a missing profile",
+        "missing-profile",
+        "explore-only",
+    );
+    let mut execution = runtime_spawn_execution_for_actions(&turn, vec![success, failure]);
+    let window_count = service.session().windows().len();
+
+    assert_eq!(
+        service
+            .execute_running_spawn_actions_for_turn(&turn, &mut execution)
+            .unwrap(),
+        2
+    );
+
+    assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
+    let failed = &execution.action_results[1];
+    assert_eq!(failed.status, ActionStatus::Failed);
+    assert!(
+        failed
+            .structured_content_json
+            .as_deref()
+            .unwrap()
+            .contains("\"child_created\":false")
+    );
+    assert_eq!(service.session().windows().len(), window_count + 1);
+
+    append_test_execution_assistant_context(&mut service, &turn, &execution);
+    assert!(
+        service
+            .queue_agent_failure_feedback_for_correction(
+                &turn,
+                &mut execution,
+                "subagent_spawn_validation_failed",
+            )
+            .unwrap()
+    );
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    assert!(context.blocks().iter().any(|block| {
+        block.source == ContextSourceKind::ActionResult
+            && block.content.contains("spawn-mixed-success")
+    }));
+    assert!(context.blocks().iter().any(|block| {
+        block.source == ContextSourceKind::ActionResult
+            && block.content.contains("spawn-mixed-failure")
+    }));
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies duplicate spawn delivery reconciles to one child.
+///
+/// Replaying the same mutating control request with the same idempotency key
+/// must return the recorded response instead of allocating a second pane, turn,
+/// or lineage record for the same delegation.
+#[test]
+fn runtime_duplicate_spawn_control_delivery_returns_same_child() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let request = r#"{"jsonrpc":"2.0","id":"spawn-duplicate","method":"agent/spawn","params":{"parent_agent":{"agent_id":"agent-%1"},"placement":{"mode":"new-pane"},"role":"explorer","cooperation_mode":"explore-only","prompt":"inspect the repository","idempotency_key":"duplicate-spawn-key"}}"#;
+    let window_count = service.session().windows().len();
+
+    let first = service.dispatch_runtime_control_body(request, &primary);
+    let second = service.dispatch_runtime_control_body(request, &primary);
+
+    assert!(first.contains("\"result\""), "{first}");
+    assert_eq!(first, second);
+    assert_eq!(service.session().windows().len(), window_count + 1);
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies spawn-param parsing never mints approval from a requested mode.
+///
+/// Approval provenance is an authenticated-control fact supplied by the caller,
+/// never by the request payload. An unrestricted request must not become
+/// approvable merely by naming that mode.
+#[test]
+fn runtime_spawn_params_require_caller_approval_provenance() {
+    let params = r#"{"parent_agent":{"agent_id":"agent-%1"},"placement":"new-pane","role":"worker","cooperation_mode":"unrestricted","prompt":"escalate my authority"}"#;
+    let requested = crate::runtime::runtime_subagent_spawn_request(
+        params,
+        mez_agent::SubagentApprovalProvenance::Requested,
+    )
+    .unwrap();
+    assert!(!requested.explicit_user_approval);
+    assert_eq!(
+        requested.validate().unwrap_err().kind(),
+        mez_agent::SubagentContractErrorKind::Forbidden
+    );
+
+    let approved = crate::runtime::runtime_subagent_spawn_request(
+        params,
+        mez_agent::SubagentApprovalProvenance::ExplicitUserApproval,
+    )
+    .unwrap();
+    assert!(approved.explicit_user_approval);
+    approved.validate().unwrap();
+}
+
+/// Verifies a failure after the child is allocated reports accurate evidence.
+///
+/// The MAAP spawn action can allocate the child pane, scope declaration, and
+/// turn and still fail during later finalization. The action result must then
+/// report the existing child with a reconcile indication instead of the
+/// contradicting no-child-created evidence, and it must not allocate a second
+/// child.
+#[test]
+fn runtime_post_allocation_spawn_failure_reports_existing_child() {
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.configure_subagent_policy(4, 4, 2, 2, SubagentWaitPolicy::Detach);
+    let started = service
+        .start_agent_prompt_turn("%1", "delegate with a late failure")
+        .unwrap();
+    service.remove_pending_agent_provider_task(&started.turn_id);
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let action = runtime_spawn_agent_action("spawn-post-allocation", "inspect the repository");
+    let mut execution = runtime_spawn_execution_for_actions(&turn, vec![action]);
+    let window_count = service.session().windows().len();
+    let turn_count = service.agent_turn_ledger().turns().len();
+
+    service.fail_next_subagent_spawn_after_allocation_for_tests();
+    assert_eq!(
+        service
+            .execute_running_spawn_actions_for_turn(&turn, &mut execution)
+            .unwrap(),
+        1
+    );
+
+    let failed = &execution.action_results[0];
+    assert_eq!(failed.status, ActionStatus::Failed);
+    let structured = failed.structured_content_json.as_deref().unwrap();
+    assert!(
+        structured.contains(r#""child_created":true"#),
+        "{structured}"
+    );
+    assert!(
+        structured.contains(r#""reconcile":"existing_child""#),
+        "{structured}"
+    );
+    assert!(
+        !structured.contains(r#""child_created":false"#),
+        "{structured}"
+    );
+    let reported_child =
+        serde_json::from_str::<serde_json::Value>(structured).unwrap()["child_agent_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+    // The existing child is reconciled by identity rather than duplicated.
+    assert_eq!(service.session().windows().len(), window_count + 1);
+    assert_eq!(service.agent_turn_ledger().turns().len(), turn_count + 1);
+    assert!(
+        service
+            .subagent_scope_declaration(&reported_child)
+            .is_some()
+    );
+    assert_eq!(service.joined_subagent_dependency_count(), 0);
+    service.terminate_all_pane_processes().unwrap();
+}

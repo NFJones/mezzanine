@@ -155,6 +155,23 @@ impl CooperationMode {
     }
 }
 
+/// Provenance of the approval that backs one subagent scope declaration.
+///
+/// Cooperation modes are authorization state rather than filesystem state. A
+/// child may request any mode, but only an authenticated primary client or an
+/// already approved unrestricted parent may actually grant unrestricted
+/// authority. Declarations carry that provenance explicitly so later spawns
+/// never infer approval from a requested or synthesized mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SubagentApprovalProvenance {
+    /// The declaration records a requested or profile-defaulted mode only.
+    #[default]
+    Requested,
+    /// An authenticated primary client, or a genuinely inherited approved
+    /// unrestricted parent, granted the declaration's cooperation mode.
+    ExplicitUserApproval,
+}
+
 /// Normalizes safe descriptive read-only roles onto the built-in explorer.
 ///
 /// Configured roles remain exact. Aliasing occurs only for explore-only
@@ -188,11 +205,18 @@ pub fn normalize_subagent_spawn_role(
     role.to_string()
 }
 
-/// Active scope restrictions inherited from a spawned subagent's parent.
+/// Declared scope, cooperation mode, and approval provenance for one spawned
+/// subagent child.
+///
+/// The declaration carries both the child's own effective cooperation mode and
+/// the provenance of the approval that backs it, so descendants inherit
+/// authority only when it was genuinely granted rather than merely requested.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubagentScopeDeclaration {
     /// Cooperation mode constraining the child agent.
     pub cooperation_mode: CooperationMode,
+    /// Provenance of the approval backing `cooperation_mode`.
+    pub approval_provenance: SubagentApprovalProvenance,
     /// Pane-shell current directory used to resolve relative effect paths.
     pub current_directory: String,
     /// Declared read scopes.
@@ -201,6 +225,96 @@ pub struct SubagentScopeDeclaration {
     pub write_scopes: Vec<String>,
     /// Optional stricter permission preset selected by the profile.
     pub permission_preset: Option<PermissionPreset>,
+}
+
+impl SubagentScopeDeclaration {
+    /// Returns whether this declaration carries genuine explicit approval for
+    /// unrestricted writes.
+    ///
+    /// A declaration carries that authority only when its cooperation mode is
+    /// `Unrestricted` and its approval came from an authenticated primary client
+    /// or an already approved unrestricted parent. A mode that a child merely
+    /// requested, and a mode synthesized from root filesystem bounds, never
+    /// satisfy this check.
+    pub fn carries_approved_unrestricted_authority(&self) -> bool {
+        self.cooperation_mode == CooperationMode::Unrestricted
+            && self.approval_provenance == SubagentApprovalProvenance::ExplicitUserApproval
+    }
+}
+
+/// Filesystem bounds materialized from a root parent pane's effective authority.
+///
+/// Root bounds deliberately carry no cooperation mode, no approval provenance,
+/// no permission preset, and no explore-only default. A root parent contributes
+/// filesystem scope only, so the requested child mode must be validated against
+/// genuine provenance and must never be manufactured from these bounds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubagentParentFilesystemBounds {
+    /// Pane-shell current directory used to resolve relative effect paths.
+    pub current_directory: String,
+    /// Effective read scopes contributed by the root parent.
+    pub read_scopes: Vec<String>,
+    /// Effective write scopes contributed by the root parent.
+    pub write_scopes: Vec<String>,
+}
+
+/// Effective parent authority that a newly spawned child may inherit.
+///
+/// The two variants are deliberately distinct in the type system. Only a
+/// genuine scoped-parent declaration can carry approval provenance; synthetic
+/// root filesystem bounds may narrow a child's scopes but never carry a
+/// cooperation mode and can never authorize one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubagentParentAuthority {
+    /// An existing scoped parent agent's already narrowed declaration.
+    ScopedParentDeclaration(SubagentScopeDeclaration),
+    /// Filesystem bounds materialized from a root parent pane.
+    RootFilesystemBounds(SubagentParentFilesystemBounds),
+}
+
+impl SubagentParentAuthority {
+    /// Returns the current directory used to resolve relative effect paths.
+    pub fn current_directory(&self) -> &str {
+        match self {
+            Self::ScopedParentDeclaration(declaration) => &declaration.current_directory,
+            Self::RootFilesystemBounds(bounds) => &bounds.current_directory,
+        }
+    }
+
+    /// Returns the inherited read scopes.
+    pub fn read_scopes(&self) -> &[String] {
+        match self {
+            Self::ScopedParentDeclaration(declaration) => &declaration.read_scopes,
+            Self::RootFilesystemBounds(bounds) => &bounds.read_scopes,
+        }
+    }
+
+    /// Returns the inherited write scopes.
+    pub fn write_scopes(&self) -> &[String] {
+        match self {
+            Self::ScopedParentDeclaration(declaration) => &declaration.write_scopes,
+            Self::RootFilesystemBounds(bounds) => &bounds.write_scopes,
+        }
+    }
+
+    /// Returns the inherited permission preset, if any.
+    ///
+    /// Only a genuine scoped-parent declaration can carry a permission preset;
+    /// synthetic root filesystem bounds never contribute one.
+    pub fn permission_preset(&self) -> Option<PermissionPreset> {
+        match self {
+            Self::ScopedParentDeclaration(declaration) => declaration.permission_preset,
+            Self::RootFilesystemBounds(_) => None,
+        }
+    }
+
+    /// Returns the genuine scoped-parent declaration, if this authority is one.
+    pub fn scoped_parent_declaration(&self) -> Option<&SubagentScopeDeclaration> {
+        match self {
+            Self::ScopedParentDeclaration(declaration) => Some(declaration),
+            Self::RootFilesystemBounds(_) => None,
+        }
+    }
 }
 
 /// Built-in subagent roles understood by the harness.
@@ -575,9 +689,9 @@ fn scopes_overlap(left: &str, right: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        CooperationMode, ScopeRegistry, SubagentContractErrorKind, SubagentScopeDeclaration,
-        SubagentSessionMode, SubagentSpawnRequest, builtin_subagent_profiles,
-        normalize_subagent_spawn_role,
+        CooperationMode, ScopeRegistry, SubagentApprovalProvenance, SubagentContractErrorKind,
+        SubagentScopeDeclaration, SubagentSessionMode, SubagentSpawnRequest,
+        builtin_subagent_profiles, normalize_subagent_spawn_role,
     };
     use crate::PermissionPreset;
 
@@ -629,6 +743,7 @@ mod tests {
     fn unrestricted_scope_requires_explicit_approval() {
         let scope = SubagentScopeDeclaration {
             cooperation_mode: CooperationMode::Unrestricted,
+            approval_provenance: SubagentApprovalProvenance::ExplicitUserApproval,
             current_directory: "/workspace".to_string(),
             read_scopes: Vec::new(),
             write_scopes: Vec::new(),
@@ -636,6 +751,7 @@ mod tests {
         };
 
         assert!(scope.cooperation_mode.requires_explicit_user_approval());
+        assert!(scope.carries_approved_unrestricted_authority());
         assert_eq!(scope.permission_preset, Some(PermissionPreset::ReadOnly));
         assert!(!CooperationMode::ExploreOnly.requires_explicit_user_approval());
     }

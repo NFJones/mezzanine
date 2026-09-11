@@ -576,8 +576,29 @@ fn audit_helpers_include_required_metadata_and_redact_secrets() {
     assert!(credential.redactions.contains(&"metadata".to_string()));
 }
 
-/// Runs the actor operation for this subsystem.
+/// Verifies a denied subagent spawn records no fabricated child identity.
 ///
+/// A denial happens before any child pane or lineage entry exists, so the audit
+/// record must omit `subagent_id` and leave `agent_id` unset instead of
+/// recording an empty string that reads as a real child agent.
+#[test]
+fn subagent_spawn_denial_audit_omits_child_identity() {
+    let denied = AuditRecord::subagent_spawn_denied(
+        "$1",
+        actor(),
+        "agent-parent",
+        "worker",
+        "unrestricted",
+        "denied",
+    );
+    assert_event(&denied, "subagent", "spawn", "denied");
+    assert_eq!(denied.agent_id, None);
+    assert_metadata(&denied, "parent_agent_id", "agent-parent");
+    assert_metadata(&denied, "role", "worker");
+    assert_metadata(&denied, "cooperation_mode", "unrestricted");
+    assert!(!denied.metadata.contains_key("subagent_id"));
+}
+
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.

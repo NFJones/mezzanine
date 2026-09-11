@@ -1767,6 +1767,11 @@ pub fn build_openai_models_http_request_with_headers(
 
 /// Runs the parse provider native maap action batch operation for this subsystem.
 ///
+/// Provider-native MAAP tool-call arguments are validated by the same
+/// `parse_maap_action_batch_json_for_turn` contract as model-facing MAAP text,
+/// so an unsupported authority field such as `explicit_user_approval` is
+/// rejected instead of being silently dropped.
+///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.

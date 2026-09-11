@@ -346,7 +346,10 @@ impl RuntimeSessionService {
             "skip_initial_turn": true,
         })
         .to_string();
-        let spawn = runtime_subagent_spawn_request(&params, false)?;
+        let spawn = runtime_subagent_spawn_request(
+            &params,
+            mez_agent::SubagentApprovalProvenance::Requested,
+        )?;
         let placement = runtime_subagent_placement_mode(&params)?;
         let spawn_json = self.spawn_runtime_routed_subagent_session_owned(spawn, placement)?;
         let (child_agent_id, _child_display_name, child_turn_id) =

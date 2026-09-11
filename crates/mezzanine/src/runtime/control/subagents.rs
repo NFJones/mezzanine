@@ -9,16 +9,19 @@
 use rand::RngExt;
 
 use super::{
-    ClientRole, Envelope, EventKind, MezError, PaneProcessStart, Path, PathBuf, Recipient, Result,
-    RuntimeAutoSizingConfig, RuntimeSessionService, RuntimeSideEffect, RuntimeSubagentLineage,
-    RuntimeSubagentPlacement, SUBAGENT_FRIENDLY_NAMES, SplitDirection, SubagentScopeDeclaration,
-    SubagentSpawnRequest, TaskState, TaskStatusPayload, compare_permission_preset_authority,
-    current_unix_seconds, json_escape, pane_id_from_runtime_agent_id,
-    runtime_agent_turn_state_json, runtime_bridge_extension_fields, runtime_cooperation_mode_name,
-    runtime_pane_by_id, runtime_subagent_placement_mode, runtime_subagent_spawn_request,
-    runtime_subagent_state_json,
+    AuditActor, AuditRecord, ClientRole, Envelope, EventKind, MezError, PaneProcessStart, Path,
+    PathBuf, Recipient, Result, RuntimeAutoSizingConfig, RuntimeSessionService, RuntimeSideEffect,
+    RuntimeSubagentLineage, RuntimeSubagentPlacement, SUBAGENT_FRIENDLY_NAMES, SplitDirection,
+    SubagentScopeDeclaration, SubagentSpawnRequest, TaskState, TaskStatusPayload,
+    compare_permission_preset_authority, current_unix_seconds, json_escape,
+    pane_id_from_runtime_agent_id, runtime_agent_turn_state_json, runtime_bridge_extension_fields,
+    runtime_cooperation_mode_name, runtime_pane_by_id, runtime_subagent_placement_mode,
+    runtime_subagent_spawn_request, runtime_subagent_state_json,
 };
 use crate::runtime::{RuntimeAgentPromptTurnStart, SandboxConfig};
+use mez_agent::{
+    SubagentApprovalProvenance, SubagentParentAuthority, SubagentParentFilesystemBounds,
+};
 
 /// Minimum useful width for adding another pane to an existing subagent bucket.
 ///
@@ -225,12 +228,20 @@ impl RuntimeSessionService {
                 "agent/spawn requires a primary or agent client",
             ));
         }
+        // Only an authenticated primary client carries explicit user approval.
+        // The model-facing schema never supplies this provenance, so an agent
+        // client cannot promote itself by naming the field.
+        let approval_provenance = if caller.role == ClientRole::Primary {
+            SubagentApprovalProvenance::ExplicitUserApproval
+        } else {
+            SubagentApprovalProvenance::Requested
+        };
         let controller = self
             .session
             .layout_owner_client_id()
             .cloned()
             .ok_or_else(|| MezError::invalid_state("agent/spawn requires an attached primary"))?;
-        let spawn = runtime_subagent_spawn_request(params, caller.role == ClientRole::Primary)?;
+        let spawn = runtime_subagent_spawn_request(params, approval_provenance)?;
         let placement = runtime_subagent_placement_mode(params)?;
         self.spawn_runtime_subagent(&controller, spawn, placement)
     }
@@ -413,45 +424,88 @@ impl RuntimeSessionService {
                 spawn.task_prompt, instructions
             );
         }
-        let inherited_scope =
-            self.subagent_parent_effective_scope(&spawn.parent_agent_id, spawn.cooperation_mode);
+        let parent_authority = self.subagent_parent_authority(&spawn.parent_agent_id);
         let inherited_sandbox_override =
             self.inherited_sandbox_override_for_child_agent(&spawn.parent_agent_id);
         let inherited_shell_mode =
             self.inherited_shell_mode_for_child_agent(&spawn.parent_agent_id);
-        if let Some(parent_scope) = inherited_scope.as_ref() {
-            spawn.cooperation_mode = parent_scope.cooperation_mode;
+        let requested_cooperation_mode = spawn.cooperation_mode;
+        // Explicit user approval may only be recorded from genuine, already
+        // granted authority: an authenticated primary caller recorded at parse
+        // time, or a genuinely inherited approved unrestricted parent. A child's
+        // requested mode and synthetic root filesystem bounds never mint it.
+        if parent_authority
+            .as_ref()
+            .and_then(SubagentParentAuthority::scoped_parent_declaration)
+            .is_some_and(|declaration| declaration.carries_approved_unrestricted_authority())
+        {
+            spawn.explicit_user_approval = true;
+        }
+        // Validate the requested or profile-defaulted mode against genuine
+        // provenance before any capacity, pane, process, or lineage state exists.
+        if requested_cooperation_mode == mez_agent::CooperationMode::Unrestricted
+            && !spawn.explicit_user_approval
+        {
+            self.append_subagent_spawn_denial_audit(
+                &spawn,
+                "unrestricted subagent writes require explicit user approval",
+            );
+            return Err(MezError::forbidden(
+                "unrestricted subagent writes require explicit user approval",
+            ));
+        }
+        if let Some(declaration) = parent_authority
+            .as_ref()
+            .and_then(SubagentParentAuthority::scoped_parent_declaration)
+        {
+            // A scoped parent's genuine mode is the child's bound; the requested
+            // unrestricted mode is only legal above after explicit approval.
+            spawn.cooperation_mode =
+                if requested_cooperation_mode == mez_agent::CooperationMode::Unrestricted {
+                    mez_agent::CooperationMode::Unrestricted
+                } else {
+                    declaration.cooperation_mode
+                };
+        }
+        if let Some(parent_authority) = parent_authority.as_ref() {
             spawn.read_scopes = if read_scopes_requested {
                 narrow_subagent_scope_paths(
-                    &parent_scope.current_directory,
-                    &parent_scope.read_scopes,
+                    parent_authority.current_directory(),
+                    parent_authority.read_scopes(),
                     &spawn.read_scopes,
                 )
             } else {
-                parent_scope.read_scopes.clone()
+                parent_authority.read_scopes().to_vec()
             };
             spawn.write_scopes = if write_scopes_requested {
                 narrow_subagent_scope_paths(
-                    &parent_scope.current_directory,
-                    &parent_scope.write_scopes,
+                    parent_authority.current_directory(),
+                    parent_authority.write_scopes(),
                     &spawn.write_scopes,
                 )
             } else {
-                parent_scope.write_scopes.clone()
+                parent_authority.write_scopes().to_vec()
             };
             for write_scope in &spawn.write_scopes {
                 if !spawn.read_scopes.contains(write_scope) {
                     spawn.read_scopes.push(write_scope.clone());
                 }
             }
-            if parent_scope.cooperation_mode == mez_agent::CooperationMode::Unrestricted {
-                spawn.explicit_user_approval = true;
-            }
         }
         if spawn.cooperation_mode == mez_agent::CooperationMode::ExploreOnly {
             spawn.write_scopes.clear();
         }
-        spawn.validate()?;
+        if let Err(error) = spawn.validate() {
+            // Every spawn denial is audited exactly once, before any child
+            // state exists. This covers a scoped parent whose declared mode
+            // forces the child to unrestricted without genuine approval
+            // provenance, which the explicit requested-mode check above cannot
+            // see.
+            if error.kind() == mez_agent::SubagentContractErrorKind::Forbidden {
+                self.append_subagent_spawn_denial_audit(&spawn, error.message());
+            }
+            return Err(error.into());
+        }
         let mut child_lineage =
             self.validate_subagent_spawn_capacity(&spawn.parent_agent_id, routed_root)?;
         let fork_snapshot = if spawn.session_mode == mez_agent::SubagentSessionMode::Fork {
@@ -497,24 +551,24 @@ impl RuntimeSessionService {
             .or_else(|| child_start_directory.clone())
             .map(|path| path.to_string_lossy().to_string())
             .unwrap_or_else(|| ".".to_string());
-        let child_scope = inherited_scope.map_or_else(
-            || SubagentScopeDeclaration {
-                cooperation_mode: spawn.cooperation_mode,
-                current_directory: current_directory.clone(),
-                read_scopes: spawn.read_scopes.clone(),
-                write_scopes: spawn.write_scopes.clone(),
-                permission_preset: profile.permission_preset,
+        // The child declaration records the provenance that actually authorized
+        // its mode so later descendants inherit approval only when it was real.
+        let child_scope = SubagentScopeDeclaration {
+            cooperation_mode: spawn.cooperation_mode,
+            approval_provenance: if spawn.explicit_user_approval {
+                SubagentApprovalProvenance::ExplicitUserApproval
+            } else {
+                SubagentApprovalProvenance::Requested
             },
-            |mut declaration| {
-                declaration.current_directory = current_directory.clone();
-                declaration.read_scopes = spawn.read_scopes.clone();
-                declaration.write_scopes = spawn.write_scopes.clone();
-                if profile.permission_preset.is_some() {
-                    declaration.permission_preset = profile.permission_preset;
-                }
-                declaration
-            },
-        );
+            current_directory: current_directory.clone(),
+            read_scopes: spawn.read_scopes.clone(),
+            write_scopes: spawn.write_scopes.clone(),
+            permission_preset: profile.permission_preset.or_else(|| {
+                parent_authority
+                    .as_ref()
+                    .and_then(SubagentParentAuthority::permission_preset)
+            }),
+        };
         self.set_subagent_scope_declaration(child_agent_id.clone(), child_scope);
         if let Some(sandbox_config) = inherited_sandbox_override {
             self.integration
@@ -933,19 +987,18 @@ impl RuntimeSessionService {
         self.pane_current_working_directory(parent_pane_id.as_str())
     }
 
-    /// Returns the parent authority that may be inherited by a new child.
+    /// Returns the genuine parent authority that may be inherited by a new child.
     ///
-    /// Scoped parents retain their already narrowed declaration. A root parent
-    /// contributes its effective primary filesystem authority only when
-    /// Bubblewrap confinement is active, preventing the child from discovering
-    /// a different trusted-project default after it starts.
-    fn subagent_parent_effective_scope(
-        &self,
-        parent_agent_id: &str,
-        cooperation_mode: mez_agent::CooperationMode,
-    ) -> Option<SubagentScopeDeclaration> {
+    /// Scoped parents retain their already narrowed declaration, including the
+    /// provenance of the approval that granted its cooperation mode. A root
+    /// parent contributes filesystem bounds only when Bubblewrap confinement is
+    /// active, preventing the child from discovering a different trusted-project
+    /// default after it starts. Root bounds never carry a cooperation mode or
+    /// approval provenance, so a child's requested mode can never be minted from
+    /// them and explore-only is never forced onto an unrelated request.
+    fn subagent_parent_authority(&self, parent_agent_id: &str) -> Option<SubagentParentAuthority> {
         if let Some(scope) = self.subagent_scope_declaration(parent_agent_id) {
-            return Some(scope);
+            return Some(SubagentParentAuthority::ScopedParentDeclaration(scope));
         }
         let parent_pane_id = pane_id_from_runtime_agent_id(parent_agent_id)?;
         let sandbox_config = self.sandbox_config_for_pane(parent_pane_id.as_str());
@@ -966,13 +1019,42 @@ impl RuntimeSessionService {
                 read_scopes.push(write_scope.clone());
             }
         }
-        Some(SubagentScopeDeclaration {
-            cooperation_mode,
-            current_directory,
-            read_scopes,
-            write_scopes,
-            permission_preset: None,
-        })
+        Some(SubagentParentAuthority::RootFilesystemBounds(
+            SubagentParentFilesystemBounds {
+                current_directory,
+                read_scopes,
+                write_scopes,
+            },
+        ))
+    }
+
+    /// Records a denied subagent spawn without allocating any child state.
+    ///
+    /// Authority denials are audited at the decision point, before any pane,
+    /// process, or lineage state can exist. A failed audit write must not
+    /// relabel the denial as a different error kind, so the record is best
+    /// effort.
+    fn append_subagent_spawn_denial_audit(
+        &mut self,
+        spawn: &SubagentSpawnRequest,
+        diagnostic: &str,
+    ) {
+        let Some(audit_log) = self.persistence.audit_log_mut() else {
+            return;
+        };
+        let record = AuditRecord::subagent_spawn_denied(
+            self.session.id.to_string(),
+            AuditActor {
+                kind: "agent".to_string(),
+                id: spawn.parent_agent_id.clone(),
+            },
+            spawn.parent_agent_id.clone(),
+            spawn.requested_role.clone(),
+            runtime_cooperation_mode_name(spawn.cooperation_mode),
+            "denied",
+        )
+        .with_metadata("diagnostic", diagnostic.to_string());
+        let _ = audit_log.append(record);
     }
 
     /// Returns the routing preference a child agent should inherit.

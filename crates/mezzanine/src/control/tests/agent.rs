@@ -195,6 +195,21 @@ fn generic_control_reports_runtime_required_methods_as_invalid_state() {
         invalid_spawn.contains("agent/spawn params contains unknown field"),
         "{invalid_spawn}"
     );
+
+    let authority_spawn = dispatch_control_request(
+        r#"{"jsonrpc":"2.0","id":7,"method":"agent/spawn","params":{"idempotency_key":"spawn-authority","explicit_user_approval":true}}"#,
+        &mut session,
+        &primary,
+    );
+    assert!(
+        authority_spawn
+            .contains("agent/spawn params contains unknown field `explicit_user_approval`"),
+        "{authority_spawn}"
+    );
+    assert!(
+        !authority_spawn.contains(r#""result""#),
+        "{authority_spawn}"
+    );
 }
 
 /// Runs the primary initialize request operation for this subsystem.

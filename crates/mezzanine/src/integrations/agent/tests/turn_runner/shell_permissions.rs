@@ -654,6 +654,7 @@ fn turn_runner_full_access_allows_out_of_scope_subagent_apply_patch() {
     let approvals = SessionApprovalStore::default();
     let subagent_scope = mez_agent::SubagentScopeDeclaration {
         cooperation_mode: mez_agent::CooperationMode::OwnedWrite,
+        approval_provenance: mez_agent::SubagentApprovalProvenance::Requested,
         current_directory: "/repo".to_string(),
         read_scopes: vec!["/repo/src/lib.rs".to_string()],
         write_scopes: vec!["/repo/docs".to_string()],
@@ -744,6 +745,7 @@ fn turn_runner_full_access_allows_out_of_scope_subagent_shell_command() {
     let approvals = SessionApprovalStore::default();
     let subagent_scope = mez_agent::SubagentScopeDeclaration {
         cooperation_mode: mez_agent::CooperationMode::ExploreOnly,
+        approval_provenance: mez_agent::SubagentApprovalProvenance::Requested,
         current_directory: "/repo".to_string(),
         read_scopes: vec!["/elsewhere".to_string()],
         write_scopes: Vec::new(),
@@ -982,6 +984,7 @@ fn turn_runner_routes_subagent_unknown_shell_actions_through_approval_policy() {
     let approvals = SessionApprovalStore::default();
     let subagent_scope = mez_agent::SubagentScopeDeclaration {
         cooperation_mode: mez_agent::CooperationMode::ExploreOnly,
+        approval_provenance: mez_agent::SubagentApprovalProvenance::Requested,
         current_directory: "/home/neil".to_string(),
         read_scopes: vec![
             "/home/neil/.codex".to_string(),
