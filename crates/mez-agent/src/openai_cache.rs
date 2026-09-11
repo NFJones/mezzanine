@@ -715,4 +715,44 @@ mod tests {
         assert!(!rendered_json.contains("reasoning_content"));
         assert!(!rendered_json.contains("call_1"));
     }
+
+    /// Verifies a reduced legacy Responses function-call result keeps its
+    /// envelope in the assembled request without re-exposing the legacy body.
+    #[test]
+    fn openai_rendering_replays_reduced_legacy_function_call_outputs() {
+        let legacy_result = ProviderTranscriptEvent::OpenAiFunctionCallOutput {
+            call_id: "call_legacy".to_string(),
+            output: "[action_result a1 shell_command succeeded]\nexit_code: 0\noutput:\nopenai-legacy-secret-sentinel"
+                .to_string(),
+        };
+        let reduced = legacy_result.sanitized_for_historical_replay().unwrap();
+        let request = request_chain_fixture(vec![
+            ModelMessage {
+                role: ModelMessageRole::System,
+                source: ContextSourceKind::Transcript,
+                placement: crate::ContextPlacement::ConversationAppend,
+                content: reduced.to_transcript_content(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::User,
+                source: ContextSourceKind::UserInstruction,
+                placement: crate::ContextPlacement::ConversationAppend,
+                content: "continue".to_string(),
+            },
+        ]);
+
+        let rendered = openai_render_request_messages(&request).unwrap();
+        let rendered_json = serde_json::to_string(&rendered.input).unwrap();
+
+        assert!(
+            rendered_json.contains("function_call_output"),
+            "{rendered_json}"
+        );
+        assert!(rendered_json.contains("call_legacy"), "{rendered_json}");
+        assert!(
+            rendered_json.contains("historical_output: omitted"),
+            "{rendered_json}"
+        );
+        assert!(!rendered_json.contains("openai-legacy-secret-sentinel"));
+    }
 }

@@ -6405,6 +6405,14 @@ model. Newly persisted typed execution records MUST NOT sanitize, omit, truncate
 or rewrap those bytes at an ordinary turn, restart, resume, or provider-switch
 boundary. Defensive reduction MAY remain only for legacy transcript records
 whose original provider-visible projection or provenance is unavailable.
+Legacy tool-result reduction MUST retain only a validated `[action_result ...]`
+header and the contiguous, individually validated metadata preamble that
+historical producers emitted: exit code, signal, timeout, truncation, and
+known-safe error-code fields. Reduction MUST stop permanently at the first body
+marker (`output`, `content`, `data`, `error`, `error_data`), separator, unknown
+line, duplicated field, or invalid scalar, and MUST NOT resume scanning later
+body lines for metadata-looking text. Ambiguous header text, control characters,
+and out-of-range or unknown scalar values MUST NOT be retained.
 Compact action/audit summaries MUST NOT replace visible assistant text when that
 text is needed for later references.
 Normal provider-context construction MUST replay the complete active transcript
@@ -6451,10 +6459,12 @@ Transcript replay MUST omit durable-storage metadata that is not useful for the
 next model decision, including transcript reference handles, per-entry sequence
 numbers, timestamps, agent identifiers, pane identifiers, and raw content byte
 counts. Historical tool entries that do not have a bounded sanitized projection
-MUST be omitted rather than replaced with placeholder text. Pending local
-messages supplied to the model MUST include the message metadata needed to
-identify sender, type, content type, and expiry together with a bounded copy of
-the message payload.
+MUST be omitted rather than replaced with placeholder text. Where a provider
+protocol requires a tool-call/result envelope to preserve native pairing, that
+envelope MUST be preserved with safe empty or validated reduced output instead
+of legacy bytes. Pending local messages supplied to the model MUST include the
+message metadata needed to identify sender, type, content type, and expiry
+together with a bounded copy of the message payload.
 
 Scheduler context supplied to the model MUST be compact when no work is queued,
 running, blocked, or runnable. Explicit action-result context MUST include

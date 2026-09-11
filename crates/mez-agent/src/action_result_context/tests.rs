@@ -349,15 +349,234 @@ fn historical_tool_replay_sanitizes_legacy_content() {
         "[action_result shell-1 shell_command succeeded]\nexit_code: 0\noutput:\nlegacy-secret",
     )
     .unwrap();
-    let unknown = historical_tool_result_context_content("legacy-secret").unwrap();
+    let unknown = historical_tool_result_context_content("legacy-secret");
 
     assert!(canonical.contains("exit_code: 0"));
     assert!(canonical.contains("historical_output: omitted"));
     assert!(!canonical.contains("legacy-secret"));
+    assert_eq!(unknown, None);
+    assert_eq!(historical_tool_result_context_content(" \n\t "), None);
+}
+
+#[test]
+/// Verifies metadata-looking body lines after any body marker stay out of
+/// reduced legacy replay context.
+///
+/// Legacy bodies were arbitrary text, so a body line that merely resembles the
+/// retained metadata preamble must never be promoted into provider context.
+fn historical_tool_replay_never_retains_body_metadata_lookalikes() {
+    for marker in HISTORICAL_BODY_MARKERS {
+        let content = format!(
+            "[action_result shell-1 shell_command succeeded]\n\
+             exit_code: 0\n\
+             {marker}\n\
+             exit_code: 7\n\
+             signal: 9\n\
+             timed_out: true\n\
+             output_truncated: true\n\
+             error_code: shell_failed\n\
+             metadata-secret-sentinel"
+        );
+        let reduced = historical_tool_result_context_content(&content).unwrap();
+        assert!(reduced.contains("exit_code: 0"), "{marker}");
+        assert!(!reduced.contains("metadata-secret-sentinel"), "{marker}");
+        assert!(!reduced.contains("exit_code: 7"), "{marker}");
+        assert!(!reduced.contains("signal: 9"), "{marker}");
+        assert!(!reduced.contains("error_code: shell_failed"), "{marker}");
+    }
+
+    let inline_marker = historical_tool_result_context_content(
+        "[action_result shell-1 shell_command succeeded]\nerror: shell_failed boom\nexit_code: 0",
+    )
+    .unwrap();
+    assert!(!inline_marker.contains("exit_code: 0"));
+    assert!(!inline_marker.contains("boom"));
+
+    let separator = historical_tool_result_context_content(
+        "[action_result shell-1 shell_command succeeded]\n---\nexit_code: 0\nmetadata-secret-sentinel",
+    )
+    .unwrap();
     assert_eq!(
-        unknown,
-        "[historical tool result omitted from provider replay]"
+        separator,
+        "[action_result shell-1 shell_command succeeded]\nhistorical_output: omitted"
     );
+}
+
+#[test]
+/// Verifies a known valid historical preamble remains useful reduced context.
+fn historical_tool_replay_keeps_valid_metadata_preamble() {
+    let reduced = historical_tool_result_context_content(
+        "[action_result a1 shell_command succeeded]\n\
+         exit_code: 0\n\
+         signal: 9\n\
+         timed_out: true\n\
+         output_truncated: true\n\
+         error_code: shell_failed\n\
+         historical_output: omitted\n\
+         legacy-body-after-marker",
+    )
+    .unwrap();
+
+    assert_eq!(
+        reduced,
+        concat!(
+            "[action_result a1 shell_command succeeded]\n",
+            "exit_code: 0\n",
+            "signal: 9\n",
+            "timed_out: true\n",
+            "output_truncated: true\n",
+            "error_code: shell_failed\n",
+            "historical_output: omitted"
+        )
+    );
+    assert!(!reduced.contains("legacy-body-after-marker"));
+}
+
+#[test]
+/// Verifies ambiguous headers, control characters, duplicated or unknown
+/// fields, and invalid scalars are omitted rather than reduced.
+fn historical_tool_replay_omits_malformed_legacy_content() {
+    let omitted = [
+        "[action_result shell-1 shell_command]\noutput:\nsecret",
+        "[action_result shell-1 shell_command succeeded extra]\noutput:\nsecret",
+        "[action_result shell 1 shell_command succeeded]\noutput:\nsecret",
+        "[action_result  shell-1 shell_command succeeded]\noutput:\nsecret",
+        "[action_result shell-1 shell_command succeeded-extra]\noutput:\nsecret",
+        "[action_result shell\u{7}1 shell_command succeeded]\noutput:\nsecret",
+        "[action_result shell-1 shell_command success]\noutput:\nsecret",
+        "[action_result \"shell-1\" shell_command succeeded]\noutput:\nsecret",
+        "legacy-secret",
+    ];
+    for content in omitted {
+        assert_eq!(
+            historical_tool_result_context_content(content),
+            None,
+            "{content:?}"
+        );
+    }
+
+    let stopped = [
+        "[action_result a1 shell_command succeeded]\nexit_code: 256",
+        "[action_result a1 shell_command succeeded]\nexit_code: -1",
+        "[action_result a1 shell_command succeeded]\nexit_code: 0x0",
+        "[action_result a1 shell_command succeeded]\nexit_code: 0 1",
+        "[action_result a1 shell_command succeeded]\nsignal: 0",
+        "[action_result a1 shell_command succeeded]\nsignal: -1",
+        "[action_result a1 shell_command succeeded]\nsignal: 256",
+        "[action_result a1 shell_command succeeded]\nsignal: 9999",
+        "[action_result a1 shell_command succeeded]\nsignal: nine",
+        "[action_result a1 shell_command succeeded]\ntimed_out: false",
+        "[action_result a1 shell_command succeeded]\noutput_truncated: true \nexit_code: 0",
+        "[action_result a1 shell_command succeeded]\nerror_code: AKIA-SECRET-SENTINEL",
+        "[action_result a1 shell_command succeeded]\nunknown_field: secret\nerror_code: shell_failed",
+    ];
+    for content in stopped {
+        assert_eq!(
+            historical_tool_result_context_content(content).unwrap(),
+            "[action_result a1 shell_command succeeded]\nhistorical_output: omitted",
+            "{content:?}"
+        );
+    }
+
+    // A validated scalar before the stopping line survives; everything after the
+    // first duplicate, unknown, or invalid line does not.
+    let stopped_after_scalar = [
+        "[action_result a1 shell_command succeeded]\nexit_code: 0\nexit_code: 0",
+        "[action_result a1 shell_command succeeded]\nexit_code: 0\ncommand: printf secret",
+        "[action_result a1 shell_command succeeded]\nexit_code: 0\noutput:\nexit_code: 7",
+        "[action_result a1 shell_command succeeded]\nexit_code: 0\nsignal: 300",
+    ];
+    for content in stopped_after_scalar {
+        assert_eq!(
+            historical_tool_result_context_content(content).unwrap(),
+            "[action_result a1 shell_command succeeded]\nexit_code: 0\nhistorical_output: omitted",
+            "{content:?}"
+        );
+    }
+}
+
+#[test]
+/// Verifies adversarial legacy lengths and shapes never panic and always stay
+/// bounded.
+fn historical_tool_replay_stays_bounded_for_adversarial_input() {
+    let long_body = "body-secret-sentinel".repeat(50_000);
+    let long_token = "a".repeat(50_000);
+    let cases = [
+        format!("[action_result a1 shell_command succeeded]\noutput:\n{long_body}"),
+        format!("[action_result {long_token} shell_command succeeded]\noutput:\n{long_body}"),
+        format!("[action_result a1 {long_token} succeeded]\noutput:\n{long_body}"),
+        format!(
+            "[action_result a1 shell_command succeeded]\nexit_code: {}\n",
+            "9".repeat(4096)
+        ),
+        format!(
+            "[action_result a1 shell_command succeeded]\n{}",
+            "exit_code: 0\n".repeat(2048)
+        ),
+        format!(
+            "[action_result a1 shell_command succeeded]\n{}",
+            "\u{0}".repeat(4096)
+        ),
+        long_body.clone(),
+        String::new(),
+        "[action_result".to_string(),
+        "[action_result ]".to_string(),
+        "[action_result ] ".to_string(),
+        "[".repeat(4096),
+    ];
+    for content in cases {
+        if let Some(reduced) = historical_tool_result_context_content(&content) {
+            assert!(reduced.len() <= 4096, "{reduced:?}");
+            assert!(!reduced.contains("body-secret-sentinel"));
+        }
+    }
+    assert_eq!(historical_tool_result_context_content(""), None);
+}
+
+#[test]
+/// Verifies error codes that real producers pass to `ActionResult::failed` and
+/// its shell-transaction failure carriers survive legacy preamble reduction.
+///
+/// These codes were missing from the allowlist, so real historical preambles
+/// were cut off at the `error_code` line and lost every retained scalar that
+/// followed it.
+fn historical_tool_replay_retains_producer_error_codes() {
+    let producer_codes = [
+        "agent_aborted",
+        "message_recipient_forbidden",
+        "invalid_message_recipient",
+        "transport_error",
+        "permission_denied",
+        "macro_bridge_error",
+        "macro_step_ordering",
+        "pane_not_ready",
+        "foreground_process_blocked_dispatch",
+        "issues_disabled",
+        "memory_disabled",
+        "memory_store_unavailable",
+        "approval_disapproved",
+        "user_only_host_access",
+        "user_only_sandbox_policy",
+        "seatbelt_probe_timeout",
+        "bubblewrap_probe_output_truncated",
+        "skill_not_found",
+        "invalid_state",
+        "forbidden",
+    ];
+    for code in producer_codes {
+        let reduced = historical_tool_result_context_content(&format!(
+            "[action_result a1 shell_command succeeded]\nexit_code: 7\nerror_code: {code}\nlegacy-secret-sentinel"
+        ))
+        .unwrap();
+        assert_eq!(
+            reduced,
+            format!(
+                "[action_result a1 shell_command succeeded]\nexit_code: 7\nerror_code: {code}\nhistorical_output: omitted"
+            ),
+            "{code}"
+        );
+        assert!(!reduced.contains("legacy-secret-sentinel"), "{code}");
+    }
 }
 
 #[test]
@@ -425,4 +644,221 @@ fn skill_action_result_transcript_content_preserves_exact_payloads() {
         "{catalog_transcript}"
     );
     assert!(catalog_transcript.contains("Available skills"));
+}
+
+#[test]
+/// Pins the exact producer error-code allowlist used by legacy replay
+/// reduction.
+///
+/// `HISTORICAL_SAFE_ERROR_CODES` is the single shared authority for which
+/// `error_code` values stay in reduced legacy replay. It must name every code a
+/// durable producer passes to `ActionResult::failed`,
+/// `RuntimeShellTransactionActionFailure::code`, or
+/// `RuntimeNativeShellFailure::kind`; losing one truncates real historical
+/// preambles at the `error_code` line. Update this pin together with the
+/// allowlist whenever a producer adds a code.
+fn historical_safe_error_codes_pin_full_producer_set() {
+    let expected: &[&str] = &[
+        "action_failed",
+        "agent_aborted",
+        "apply_patch_authority_changed",
+        "apply_patch_execution_mode_changed",
+        "apply_patch_hunk_context_mismatch",
+        "apply_patch_hunk_mismatch",
+        "apply_patch_payload_cap_exceeded",
+        "apply_patch_read_transport_incomplete",
+        "apply_patch_snapshot_byte_count_mismatch",
+        "apply_patch_snapshot_checksum_mismatch",
+        "apply_patch_transport_failed",
+        "apply_patch_transport_incomplete",
+        "apply_patch_unsafe_path",
+        "apply_patch_validation_failed",
+        "apply_patch_write_failed",
+        "approval_denied",
+        "approval_disapproved",
+        "bubblewrap_path_resolution_failed",
+        "bubblewrap_path_resolution_stale",
+        "bubblewrap_pre_payload_failure",
+        "bubblewrap_probe_identity_mismatch",
+        "bubblewrap_probe_nonzero_exit",
+        "bubblewrap_probe_output_mismatch",
+        "bubblewrap_probe_output_truncated",
+        "bubblewrap_probe_protocol_violation",
+        "bubblewrap_probe_stale_identity",
+        "bubblewrap_probe_timeout",
+        "bubblewrap_probe_write_failed",
+        "bubblewrap_status_invalid",
+        "bubblewrap_status_mismatch",
+        "cancelled",
+        "config",
+        "config_change_failed",
+        "config_invalid",
+        "conflict",
+        "denied",
+        "forbidden",
+        "foreground_process_blocked_dispatch",
+        "hook_blocked",
+        "internal_error",
+        "interrupted",
+        "invalid_message_payload",
+        "invalid_message_recipient",
+        "invalid_params",
+        "invalid_skill_name",
+        "invalid_state",
+        "invalidargs",
+        "invalidstate",
+        "io",
+        "issue_dependency_validation_failed",
+        "issue_store_unavailable",
+        "issues_disabled",
+        "macro_bridge_error",
+        "macro_step_failed",
+        "macro_step_ordering",
+        "mcp_blacklisted",
+        "mcp_invalid_args",
+        "mcp_protocol_error",
+        "mcp_schema_changed",
+        "mcp_schema_unbound",
+        "mcp_server_changed",
+        "mcp_tool_error",
+        "memory_disabled",
+        "memory_store_unavailable",
+        "message_recipient_forbidden",
+        "method_not_found",
+        "network_action_no_progress",
+        "network_http_error",
+        "network_request_failed",
+        "not_found",
+        "not_implemented",
+        "notfound",
+        "notimplemented",
+        "pane_input_write_failed",
+        "pane_not_ready",
+        "permission_denied",
+        "policy_forbidden",
+        "rate_limited",
+        "ratelimited",
+        "readiness_probe_timeout",
+        "sandbox_failure",
+        "seatbelt_established_payload_incomplete",
+        "seatbelt_pre_payload_failure",
+        "seatbelt_probe_nonzero_exit",
+        "seatbelt_probe_output_mismatch",
+        "seatbelt_probe_output_truncated",
+        "seatbelt_probe_protocol_violation",
+        "seatbelt_probe_stale_identity",
+        "seatbelt_probe_timeout",
+        "seatbelt_probe_write_failed",
+        "seatbelt_status_invalid",
+        "seatbelt_status_mismatch",
+        "shell_command_failed",
+        "shell_dispatch_limit_exceeded",
+        "shell_executable_not_os_verified",
+        "shell_exit_nonzero",
+        "shell_failed",
+        "shell_identity_probe_failed",
+        "shell_interrupted",
+        "shell_protocol_violation",
+        "shell_timeout",
+        "shell_unavailable",
+        "skill_catalog_already_requested",
+        "skill_context_already_loaded",
+        "skill_not_found",
+        "timeout",
+        "transport_error",
+        "unauthorized",
+        "unavailable",
+        "unsupported",
+        "unsupported_url_scheme",
+        "user_cancelled",
+        "user_only_host_access",
+        "user_only_host_policy",
+        "user_only_host_power_policy",
+        "user_only_sandbox_policy",
+        "user_only_transport_policy",
+    ];
+    assert_eq!(HISTORICAL_SAFE_ERROR_CODES, expected);
+    assert!(
+        HISTORICAL_SAFE_ERROR_CODES
+            .windows(2)
+            .all(|pair| pair[0] < pair[1]),
+        "the producer error-code allowlist must stay sorted and duplicate-free"
+    );
+}
+
+#[test]
+/// Verifies legacy replay keeps native signal numbers above the standard
+/// 1..=64 range while still rejecting zero, negative, and absurd values.
+///
+/// The historical producer wrote the raw `ExitStatusExt::signal()` value, an OS
+/// `i32` that can exceed the standard signal window, so a real-time signal
+/// number must not truncate an otherwise valid metadata preamble.
+fn historical_tool_replay_accepts_signal_numbers_above_standard_range() {
+    for signal in ["65", "127", "255"] {
+        let reduced = historical_tool_result_context_content(&format!(
+            "[action_result a1 shell_command succeeded]\nsignal: {signal}\nexit_code: 0\nlegacy-secret-sentinel"
+        ))
+        .unwrap();
+        assert_eq!(
+            reduced,
+            format!(
+                "[action_result a1 shell_command succeeded]\nsignal: {signal}\nexit_code: 0\nhistorical_output: omitted"
+            ),
+            "{signal}"
+        );
+        assert!(!reduced.contains("legacy-secret-sentinel"), "{signal}");
+    }
+
+    for signal in ["0", "-1", "256", "9999", "nine", "1.0"] {
+        let reduced = historical_tool_result_context_content(&format!(
+            "[action_result a1 shell_command succeeded]\nsignal: {signal}\nexit_code: 0\nlegacy-secret-sentinel"
+        ))
+        .unwrap();
+        assert_eq!(
+            reduced, "[action_result a1 shell_command succeeded]\nhistorical_output: omitted",
+            "{signal}"
+        );
+    }
+}
+
+#[test]
+/// Verifies a printable punctuated action id keeps its legacy header valid
+/// while delimiters, control characters, and over-long tokens stay omitted.
+///
+/// Action ids are model-supplied strings, so the header grammar must not turn a
+/// legitimate header into an omission for punctuation that cannot carry a
+/// secret.
+fn historical_tool_replay_accepts_punctuated_header_identity_within_byte_cap() {
+    let punctuated = historical_tool_result_context_content(
+        "[action_result action-1~2#3/4%5@6?7 shell_command succeeded]\nexit_code: 0\nlegacy-secret",
+    )
+    .unwrap();
+    assert_eq!(
+        punctuated,
+        "[action_result action-1~2#3/4%5@6?7 shell_command succeeded]\nexit_code: 0\nhistorical_output: omitted"
+    );
+
+    let at_byte_cap = historical_tool_result_context_content(&format!(
+        "[action_result {} shell_command succeeded]\nexit_code: 0",
+        "a".repeat(HISTORICAL_HEADER_TOKEN_MAX_BYTES)
+    ))
+    .unwrap();
+    assert!(at_byte_cap.contains("exit_code: 0"), "{at_byte_cap}");
+
+    let over_byte_cap = "a".repeat(HISTORICAL_HEADER_TOKEN_MAX_BYTES + 1);
+    let mut rejected = vec![over_byte_cap];
+    for delimiter in ['[', ']', '"', '\\'] {
+        rejected.push(format!("action{delimiter}1"));
+    }
+    rejected.push("action\u{7}1".to_string());
+    rejected.push("action\u{0}1".to_string());
+    for token in rejected {
+        assert_eq!(
+            historical_tool_result_context_content(&format!(
+                "[action_result {token} shell_command succeeded]\noutput:\nsecret"
+            )),
+            None,
+            "{token:?}"
+        );
+    }
 }

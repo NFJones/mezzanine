@@ -79,40 +79,361 @@ pub fn action_result_transcript_content(result: &ActionResult) -> String {
     action_result_context_content(result)
 }
 
+/// Fixed marker that replaces the omitted provider-visible body of one legacy
+/// tool result whose header or scalar preamble validated.
+const HISTORICAL_OUTPUT_OMITTED_MARKER: &str = "historical_output: omitted";
+
+/// Maximum accepted byte length of one legacy action-result header line.
+const HISTORICAL_HEADER_MAX_BYTES: usize = 512;
+
+/// Maximum accepted byte length of one header action identity or type token.
+const HISTORICAL_HEADER_TOKEN_MAX_BYTES: usize = 96;
+
+/// Maximum accepted byte length of one retained legacy metadata scalar line.
+const HISTORICAL_PREAMBLE_LINE_MAX_BYTES: usize = 128;
+
+/// Maximum number of legacy metadata scalar lines consumed before reduction
+/// stops, independent of the remaining body length.
+const HISTORICAL_PREAMBLE_MAX_LINES: usize = 16;
+
+/// Lowest accepted legacy shell termination signal number.
+///
+/// Zero means "no signal was delivered", so a historical `signal:` line must
+/// name a real signal instead of the absence of one.
+const HISTORICAL_SIGNAL_MIN: i32 = 1;
+
+/// Highest accepted legacy shell termination signal number.
+///
+/// The historical producer wrote the raw `ExitStatusExt::signal()` value, an OS
+/// `i32` that includes real-time signals outside the standard 1..=64 window, so
+/// the accepted ceiling covers the full 8-bit signal number space rather than
+/// the standard-signal subset. Zero, negative, and larger values stay rejected
+/// by `historical_decimal_scalar_in_range`.
+const HISTORICAL_SIGNAL_MAX: i32 = 255;
+
+/// Legacy body markers that permanently end metadata-preamble reduction.
+///
+/// Historical producers wrote these markers immediately before a free-form
+/// provider-visible body, so reduction must never resume after one of them.
+const HISTORICAL_BODY_MARKERS: &[&str] = &["output:", "content:", "data:", "error:", "error_data:"];
+
+/// Known-safe action error codes emitted by durable action-result producers.
+///
+/// Legacy replay retains an `error_code` line only when it names one of these
+/// codes: arbitrary text in that position could be body content or a secret
+/// that merely resembles metadata.
+///
+/// The set is the union of every code a durable producer passes to
+/// `ActionResult::failed` or to a shell-transaction failure carrier
+/// (`RuntimeShellTransactionActionFailure::code` and
+/// `RuntimeNativeShellFailure::kind`), enumerated from the construction sites in
+/// this crate and in the `mezzanine` product crate rather than guessed. A single
+/// producer-side authority is not reachable from this lower crate: the product
+/// producers live in `mezzanine`, which depends on `mez-agent` and owns
+/// `runtime_mezzanine_error_code`, `runtime_mcp_error_code`, and the runtime
+/// failure carriers, so this literal list is the one place both crates can
+/// share. The pinning regression test in `tests.rs` keeps this list equal to the
+/// enumerated producer set so a future omission is visible in one place.
+const HISTORICAL_SAFE_ERROR_CODES: &[&str] = &[
+    "action_failed",
+    "agent_aborted",
+    "apply_patch_authority_changed",
+    "apply_patch_execution_mode_changed",
+    "apply_patch_hunk_context_mismatch",
+    "apply_patch_hunk_mismatch",
+    "apply_patch_payload_cap_exceeded",
+    "apply_patch_read_transport_incomplete",
+    "apply_patch_snapshot_byte_count_mismatch",
+    "apply_patch_snapshot_checksum_mismatch",
+    "apply_patch_transport_failed",
+    "apply_patch_transport_incomplete",
+    "apply_patch_unsafe_path",
+    "apply_patch_validation_failed",
+    "apply_patch_write_failed",
+    "approval_denied",
+    "approval_disapproved",
+    "bubblewrap_path_resolution_failed",
+    "bubblewrap_path_resolution_stale",
+    "bubblewrap_pre_payload_failure",
+    "bubblewrap_probe_identity_mismatch",
+    "bubblewrap_probe_nonzero_exit",
+    "bubblewrap_probe_output_mismatch",
+    "bubblewrap_probe_output_truncated",
+    "bubblewrap_probe_protocol_violation",
+    "bubblewrap_probe_stale_identity",
+    "bubblewrap_probe_timeout",
+    "bubblewrap_probe_write_failed",
+    "bubblewrap_status_invalid",
+    "bubblewrap_status_mismatch",
+    "cancelled",
+    "config",
+    "config_change_failed",
+    "config_invalid",
+    "conflict",
+    "denied",
+    "forbidden",
+    "foreground_process_blocked_dispatch",
+    "hook_blocked",
+    "internal_error",
+    "interrupted",
+    "invalid_message_payload",
+    "invalid_message_recipient",
+    "invalid_params",
+    "invalid_skill_name",
+    "invalid_state",
+    "invalidargs",
+    "invalidstate",
+    "io",
+    "issue_dependency_validation_failed",
+    "issue_store_unavailable",
+    "issues_disabled",
+    "macro_bridge_error",
+    "macro_step_failed",
+    "macro_step_ordering",
+    "mcp_blacklisted",
+    "mcp_invalid_args",
+    "mcp_protocol_error",
+    "mcp_schema_changed",
+    "mcp_schema_unbound",
+    "mcp_server_changed",
+    "mcp_tool_error",
+    "memory_disabled",
+    "memory_store_unavailable",
+    "message_recipient_forbidden",
+    "method_not_found",
+    "network_action_no_progress",
+    "network_http_error",
+    "network_request_failed",
+    "not_found",
+    "not_implemented",
+    "notfound",
+    "notimplemented",
+    "pane_input_write_failed",
+    "pane_not_ready",
+    "permission_denied",
+    "policy_forbidden",
+    "rate_limited",
+    "ratelimited",
+    "readiness_probe_timeout",
+    "sandbox_failure",
+    "seatbelt_established_payload_incomplete",
+    "seatbelt_pre_payload_failure",
+    "seatbelt_probe_nonzero_exit",
+    "seatbelt_probe_output_mismatch",
+    "seatbelt_probe_output_truncated",
+    "seatbelt_probe_protocol_violation",
+    "seatbelt_probe_stale_identity",
+    "seatbelt_probe_timeout",
+    "seatbelt_probe_write_failed",
+    "seatbelt_status_invalid",
+    "seatbelt_status_mismatch",
+    "shell_command_failed",
+    "shell_dispatch_limit_exceeded",
+    "shell_executable_not_os_verified",
+    "shell_exit_nonzero",
+    "shell_failed",
+    "shell_identity_probe_failed",
+    "shell_interrupted",
+    "shell_protocol_violation",
+    "shell_timeout",
+    "shell_unavailable",
+    "skill_catalog_already_requested",
+    "skill_context_already_loaded",
+    "skill_not_found",
+    "timeout",
+    "transport_error",
+    "unauthorized",
+    "unavailable",
+    "unsupported",
+    "unsupported_url_scheme",
+    "user_cancelled",
+    "user_only_host_access",
+    "user_only_host_policy",
+    "user_only_host_power_policy",
+    "user_only_sandbox_policy",
+    "user_only_transport_policy",
+];
+
+/// One recognized field of the contiguous legacy metadata preamble.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HistoricalPreambleField {
+    /// Non-negative process exit code produced by the shell executor.
+    ExitCode,
+    /// Native termination signal number produced by the shell executor.
+    Signal,
+    /// `true`-only timeout flag emitted by the durable summary producer.
+    TimedOut,
+    /// `true`-only output truncation flag emitted by the durable summary producer.
+    OutputTruncated,
+    /// Known-safe action error identity.
+    ErrorCode,
+}
+
+impl HistoricalPreambleField {
+    /// Returns this field's duplicate-detection bit.
+    fn duplicate_bit(self) -> u8 {
+        match self {
+            Self::ExitCode => 1 << 0,
+            Self::Signal => 1 << 1,
+            Self::TimedOut => 1 << 2,
+            Self::OutputTruncated => 1 << 3,
+            Self::ErrorCode => 1 << 4,
+        }
+    }
+}
+
 /// Returns a provider-safe projection of one durable or legacy tool entry.
 ///
-/// Canonical action-result summaries retain only their header and safe scalar
-/// metadata. Unknown legacy tool bodies are replaced wholesale because their
-/// provenance and secret content cannot be reconstructed safely.
+/// Legacy replay retains only a validated `[action_result ...]` header and the
+/// contiguous scalar preamble that the historical durable producer emitted,
+/// with every scalar individually validated. Reduction stops permanently at
+/// the first body marker, separator, unknown line, duplicate field, or invalid
+/// scalar, so a free-form body line that merely resembles metadata can never be
+/// promoted into provider context.
+///
+/// Content without a validated header has no bounded safe projection and is
+/// omitted; blank input is absent as well. Callers that owe a provider protocol
+/// a tool-result envelope keep that envelope with safe empty or reduced output
+/// instead of replaying legacy bytes.
 pub fn historical_tool_result_context_content(content: &str) -> Option<String> {
     let trimmed = content.trim();
     if trimmed.is_empty() {
         return None;
     }
     let mut lines = trimmed.lines();
-    let header = lines.next()?;
-    if !header.starts_with("[action_result ") {
-        return Some("[historical tool result omitted from provider replay]".to_string());
-    }
-    let mut retained = vec![header.to_string()];
-    for line in lines {
-        if line == "historical_output: omitted"
-            || line.starts_with("exit_code: ")
-            || line.starts_with("signal: ")
-            || line == "timed_out: true"
-            || line == "output_truncated: true"
-            || line.starts_with("error_code: ")
-        {
-            retained.push(line.to_string());
+    let header = historical_action_result_header(lines.next()?)?;
+    let mut retained = vec![header];
+    let mut seen = 0u8;
+    for line in lines.take(HISTORICAL_PREAMBLE_MAX_LINES) {
+        if line == HISTORICAL_OUTPUT_OMITTED_MARKER {
+            break;
         }
+        if historical_line_is_body_marker(line) {
+            break;
+        }
+        let Some(field) = historical_preamble_field(line) else {
+            break;
+        };
+        if seen & field.duplicate_bit() != 0 {
+            break;
+        }
+        seen |= field.duplicate_bit();
+        retained.push(line.to_string());
     }
-    if !retained
-        .iter()
-        .any(|line| line == "historical_output: omitted")
-    {
-        retained.push("historical_output: omitted".to_string());
-    }
+    retained.push(HISTORICAL_OUTPUT_OMITTED_MARKER.to_string());
     Some(retained.join("\n"))
+}
+
+/// Validates one legacy `[action_result <id> <type> <status>]` header line.
+///
+/// The historical producer emitted exactly one space-separated identity, action
+/// type, and compact status name inside the brackets. Ambiguous header text is
+/// omitted rather than retained.
+fn historical_action_result_header(line: &str) -> Option<String> {
+    if line.len() > HISTORICAL_HEADER_MAX_BYTES {
+        return None;
+    }
+    let inner = line.strip_prefix("[action_result ")?.strip_suffix(']')?;
+    let mut tokens = inner.split(' ');
+    let action_id = tokens.next()?;
+    let action_type = tokens.next()?;
+    let status = tokens.next()?;
+    if tokens.next().is_some() {
+        return None;
+    }
+    if !historical_header_token_is_valid(action_id)
+        || !historical_header_token_is_valid(action_type)
+    {
+        return None;
+    }
+    if !matches!(
+        status,
+        "rejected"
+            | "blocked"
+            | "denied"
+            | "running"
+            | "succeeded"
+            | "failed"
+            | "cancelled"
+            | "timed_out"
+            | "interrupted"
+    ) {
+        return None;
+    }
+    Some(line.to_string())
+}
+
+/// Returns whether one header token matches the historical identifier grammar.
+///
+/// Historical action identities and types were short printable ASCII tokens.
+/// The accepted class is every printable non-space byte except the header
+/// delimiters (brackets, quote, and backslash), so punctuation in a
+/// model-supplied action id cannot turn a legitimate header into an omission for
+/// a character that cannot carry a secret. Control characters and delimiters
+/// stay rejected because they could restructure the header line, and the byte
+/// ceiling still bounds how much text one token may carry.
+fn historical_header_token_is_valid(token: &str) -> bool {
+    !token.is_empty()
+        && token.len() <= HISTORICAL_HEADER_TOKEN_MAX_BYTES
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() && !matches!(byte, b'[' | b']' | b'"' | b'\\'))
+}
+
+/// Returns whether one line begins a free-form legacy body.
+fn historical_line_is_body_marker(line: &str) -> bool {
+    HISTORICAL_BODY_MARKERS.iter().any(|marker| {
+        line.strip_prefix(marker)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
+    })
+}
+
+/// Parses one recognized legacy metadata scalar line.
+///
+/// Values are validated against the historical producer types and ranges, so an
+/// out-of-range or malformed scalar stops reduction instead of retaining text
+/// that may be body content.
+fn historical_preamble_field(line: &str) -> Option<HistoricalPreambleField> {
+    if line.len() > HISTORICAL_PREAMBLE_LINE_MAX_BYTES {
+        return None;
+    }
+    if let Some(value) = line.strip_prefix("exit_code: ") {
+        return historical_decimal_scalar_in_range(value, 0, 255)
+            .then_some(HistoricalPreambleField::ExitCode);
+    }
+    if let Some(value) = line.strip_prefix("signal: ") {
+        return historical_decimal_scalar_in_range(
+            value,
+            HISTORICAL_SIGNAL_MIN,
+            HISTORICAL_SIGNAL_MAX,
+        )
+        .then_some(HistoricalPreambleField::Signal);
+    }
+    if line == "timed_out: true" {
+        return Some(HistoricalPreambleField::TimedOut);
+    }
+    if line == "output_truncated: true" {
+        return Some(HistoricalPreambleField::OutputTruncated);
+    }
+    if let Some(code) = line.strip_prefix("error_code: ") {
+        return HISTORICAL_SAFE_ERROR_CODES
+            .contains(&code)
+            .then_some(HistoricalPreambleField::ErrorCode);
+    }
+    None
+}
+
+/// Returns whether one scalar is a short non-negative decimal in range.
+///
+/// Historical producers emitted plain JSON integers, so signs, whitespace, hex,
+/// digit separators, and over-long digit runs are rejected.
+fn historical_decimal_scalar_in_range(value: &str, min: i32, max: i32) -> bool {
+    !value.is_empty()
+        && value.len() <= 3
+        && value.bytes().all(|byte| byte.is_ascii_digit())
+        && value
+            .parse::<i32>()
+            .is_ok_and(|parsed| (min..=max).contains(&parsed))
 }
 
 /// Executes the `action_result_context_content` operation for the owning subsystem.

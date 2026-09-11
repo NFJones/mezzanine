@@ -250,12 +250,17 @@ impl ProviderTranscriptEvent {
     /// New typed execution records replay the exact event without calling this
     /// method. Untyped legacy transcript import retains the reduction because
     /// those records cannot prove which bytes were originally model-visible.
+    ///
+    /// Tool-call and tool-result continuity records keep their envelope: the
+    /// provider protocol requires exactly one result per recorded call, so a
+    /// legacy body without a bounded safe projection replays as an empty result
+    /// instead of dropping the entry or restoring legacy bytes.
     pub fn sanitized_for_historical_replay(&self) -> Option<Self> {
         match self {
             Self::OpenAiFunctionCallOutput { call_id, output } => {
                 Some(Self::OpenAiFunctionCallOutput {
                     call_id: call_id.clone(),
-                    output: crate::historical_tool_result_context_content(output)?,
+                    output: historical_tool_result_replay_output(output),
                 })
             }
             Self::OpenAiChatCompletionsToolResult {
@@ -265,14 +270,14 @@ impl ProviderTranscriptEvent {
             } => Some(Self::OpenAiChatCompletionsToolResult {
                 provider_id: provider_id.clone(),
                 tool_call_id: tool_call_id.clone(),
-                content: crate::historical_tool_result_context_content(content)?,
+                content: historical_tool_result_replay_output(content),
             }),
             Self::DeepSeekToolResult {
                 tool_call_id,
                 content,
             } => Some(Self::DeepSeekToolResult {
                 tool_call_id: tool_call_id.clone(),
-                content: crate::historical_tool_result_context_content(content)?,
+                content: historical_tool_result_replay_output(content),
             }),
             Self::OpenAiResponseOutput { .. }
             | Self::OpenAiChatCompletionsAssistantToolCall { .. }
@@ -452,6 +457,16 @@ fn openai_response_output_item_is_valid(item: &Value) -> bool {
             .and_then(Value::as_str)
             .is_some_and(|value| !value.is_empty())
     })
+}
+
+/// Returns reduced provider-visible content for one legacy tool result.
+///
+/// One result envelope is retained per recorded tool call even when the legacy
+/// body has no bounded safe projection: the entry replays with empty reduced
+/// output rather than legacy bytes, so native tool-call/result pairing survives
+/// without exposing unvalidated content.
+fn historical_tool_result_replay_output(content: &str) -> String {
+    crate::historical_tool_result_context_content(content).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -693,6 +708,63 @@ mod tests {
             assert!(encoded.contains("historical_output: omitted"));
             assert!(!encoded.contains(secret));
         }
+    }
+
+    /// Verifies legacy native tool-result reduction preserves provider pairing
+    /// while removing unvalidated legacy bodies.
+    ///
+    /// Provider protocols require exactly one result envelope per recorded tool
+    /// call, so reduction keeps the entry with safe empty or validated reduced
+    /// output instead of dropping the envelope or restoring legacy bytes.
+    #[test]
+    fn historical_replay_keeps_native_result_envelopes_without_legacy_bodies() {
+        let secret = "legacy-body-secret-sentinel";
+        let legacy_body = format!(
+            "[action_result a1 shell_command succeeded]\nexit_code: 0\noutput:\n{secret}\nexit_code: 7"
+        );
+        let deepseek = ProviderTranscriptEvent::DeepSeekToolResult {
+            tool_call_id: "call_deepseek".to_string(),
+            content: legacy_body.clone(),
+        };
+        let openai = ProviderTranscriptEvent::OpenAiFunctionCallOutput {
+            call_id: "call_openai".to_string(),
+            output: legacy_body,
+        };
+        let unreconstructable = ProviderTranscriptEvent::OpenAiChatCompletionsToolResult {
+            provider_id: "openai".to_string(),
+            tool_call_id: "call_chat".to_string(),
+            content: secret.to_string(),
+        };
+
+        for event in [deepseek, openai] {
+            let reduced = event.sanitized_for_historical_replay().unwrap();
+            let encoded = reduced.to_transcript_content();
+            assert!(encoded.contains("exit_code: 0"), "{encoded}");
+            assert!(encoded.contains("historical_output: omitted"), "{encoded}");
+            assert!(!encoded.contains(secret), "{encoded}");
+            assert!(!encoded.contains("exit_code: 7"), "{encoded}");
+            assert_eq!(
+                ProviderTranscriptEvent::from_transcript_content(&encoded),
+                Some(reduced)
+            );
+        }
+
+        let encoded = unreconstructable
+            .sanitized_for_historical_replay()
+            .unwrap()
+            .to_transcript_content();
+        assert!(!encoded.contains(secret), "{encoded}");
+        let decoded = ProviderTranscriptEvent::from_transcript_content(&encoded).unwrap();
+        let ProviderTranscriptEvent::OpenAiChatCompletionsToolResult {
+            tool_call_id,
+            content,
+            ..
+        } = decoded
+        else {
+            panic!("expected a chat completions tool-result envelope");
+        };
+        assert_eq!(tool_call_id, "call_chat");
+        assert!(content.is_empty(), "{content}");
     }
 
     /// Verifies provider-native tool results require non-empty provider call
