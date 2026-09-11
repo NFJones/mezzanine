@@ -4232,11 +4232,13 @@ the setting MUST affect only subsequently created turns.
 `agents.shell_mode` MUST default to `native` and MUST accept only `pane` or
 `native`. `native` executes agent shell actions in a freshly spawned shell
 process whose path and working directory are inferred from the pane's root
-process. The spawned shell MUST inherit the parent Mezzanine process
-environment, then overlay any available environment entries inferred from the
-pane's root process so live pane values take precedence. Native execution MUST
-NOT write to or read from the pane PTY and MUST NOT run any command through the
-pane shell to enable or perform the execution.
+process. The spawned shell MUST receive a cleared-base environment composed from
+validated environment entries inferred from the pane's root process, with live
+pane values taking precedence for duplicate names, plus the narrowly enumerated
+runtime launch requirements declared by Mezzanine, and MUST NOT inherit the
+parent Mezzanine process environment. Native execution MUST NOT write to or
+read from the pane PTY and MUST NOT run any command through the pane shell to
+enable or perform the execution.
 `agents.loop_limit` MUST be a positive integer and MUST default to `8`. It
 bounds the number of work iterations a single `/loop` command may run before
 Mezzanine stops automatic continuation and reports that the iteration limit was
@@ -7362,9 +7364,11 @@ silently fall back from native mode to pane-shell execution.
 Under native shell mode, Mezzanine MUST execute each shell-backed action in a
 freshly spawned shell process whose executable and working directory are
 inferred from the pane's live root process, never by running commands through
-the pane shell. The child MUST inherit the parent Mezzanine process environment
-and MUST overlay any available environment entries inferred from the live pane
-root process, with pane-root values taking precedence for duplicate names.
+the pane shell. The child MUST receive one composed native workload environment
+that starts from a cleared base instead of the parent Mezzanine process
+environment: validated environment entries inferred from the live pane root
+process, with pane-root values taking precedence for duplicate names, plus the
+narrowly enumerated runtime launch requirements declared by Mezzanine.
 Agent entry and provider preflight in native mode MUST inspect only live root-
 process metadata and MUST NOT schedule pane bootstrap, readiness, shell-identity, or
 path-resolution transactions. Native execution MUST run outside the serialized
@@ -7389,6 +7393,57 @@ transactions, and capture trusted backend-tagged lifecycle status outside
 command output. Native Seatbelt execution MUST use the same code-owned profile,
 minimal environment, managed-home semantics, and fail-closed lifecycle contract
 as pane-shell execution.
+
+The native workload environment contract MUST be owned by one code path shared
+by the native policy-only, host-access, Bubblewrap, and Seatbelt launch paths,
+and no native workload or code-owned launcher launch MAY inherit the ambient
+daemon environment. Each such launch MUST start from a cleared base and then
+apply these rules. Capability probes stay payload-free and host-owned: they
+carry no pane or workload data, and their sandbox environment is owned by the
+compiled proof plan (`--clearenv` plus fixed `--setenv`, or the Seatbelt probe
+profile), so an ambient probe value is never projected into a probe sandbox. A
+code-owned probe launcher MUST also run from a cleared base that carries only
+the launcher command-search path, so ambient credentials and loader variables
+in the `LD_PRELOAD` and `DYLD_INSERT_LIBRARIES` class MUST NOT enter a probe
+launcher process. Every composed entry key
+MUST be a portable environment name matching `[A-Za-z_][A-Za-z0-9_]*` of at most
+128 bytes, MUST contain no `=` or NUL byte, and MUST have a value of at most
+16 KiB. The composed environment MUST stay inside the documented budget of at
+most 512 entries and at most 256 KiB of aggregate value bytes, and that budget
+MUST be enforced on the composed result rather than per source:
+runtime-required entries MUST be charged first and MUST NOT be dropped, and
+optional pane-root evidence that does not fit MUST be dropped deterministically,
+entry by entry, instead of failing a launch or being concatenated past the
+documented budget. Malformed or oversized optional pane-root evidence MUST be
+dropped deterministically instead of failing a launch. Validated pane-root
+evidence MUST be authoritative for overlapping
+keys, and the last valid occurrence of a duplicate evidence key MUST win. The
+ambient Mezzanine environment MUST be consulted only for requirement keys that
+explicitly declare forwarding, which are the workload `PATH`, the workload
+`HOME`, and the launcher command-search path, and it MUST NOT be copied
+wholesale into a workload. The guarantee is composition rather than ambient
+non-possession: the builder clears the ambient Mezzanine environment and
+forwards only validated pane-root evidence plus declared launch requirements, so
+an ambient-only value that no pane and no declaration supplies MUST NOT reach a
+workload or a code-owned launcher, while a value the pane root itself carries,
+including one the pane inherited when that pane was created, is pane evidence
+that this contract does not filter. Pane-creation environment inheritance is a
+separate boundary. Absent optional values MUST fall back to documented defaults
+instead of failing. A missing or malformed required value MUST produce a typed
+pre-dispatch error that names the requirement category and the exact key before
+any payload process is created. Workload-visible variables and launcher/control
+variables MUST be composed into separate buckets: a code-owned launcher such as
+the Seatbelt child supervisor or `bwrap` MUST receive only the launcher control
+bucket and MUST NOT receive pane credentials or workload entries, while the
+sandboxed payload environment remains owned by the compiled sandbox plan
+(`--clearenv` plus `--setenv`, or the Seatbelt environment document).
+Sandbox-owned `HOME`, XDG paths, identity, locale, Git isolation, and whitelist
+projections MUST keep their existing precedence, and the contract MUST NOT
+weaken the stricter credential-free context admitted pane-status providers use.
+Native local inference MUST NOT claim to represent a remote shell environment;
+it describes the local pane root process only. A required daemon variable that
+cannot be dropped safely MUST be documented rather than silently restored as
+full environment inheritance.
 
 For non-interactive shell actions, the harness SHOULD send a complete command
 followed by the pane's configured submit sequence.

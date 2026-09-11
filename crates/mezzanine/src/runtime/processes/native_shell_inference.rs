@@ -15,19 +15,33 @@ use mez_mux::process::RawEnvironmentEntry;
 
 use crate::error::{MezError, Result};
 
+use super::native_workload_environment::{
+    NativeLaunchEnvironmentRole, NativeWorkloadEnvironment, compose_native_workload_environment,
+    native_ambient_environment,
+};
+
 /// Fully inferred execution context for one native spawned shell.
+///
+/// The context never expresses ambient inheritance. Every native launch starts
+/// from a cleared environment and receives exactly the composed
+/// [`NativeWorkloadEnvironment`] bucket that matches its launch role, so an
+/// ambient-only credential that exists only in the daemon environment cannot
+/// reach a workload shell, a workload interpreter, or a code-owned launcher. A
+/// value the pane root itself carries, including one the pane inherited when it
+/// was created, is pane evidence and is forwarded by design: pane creation owns
+/// that inheritance boundary rather than this context.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NativeShellContext {
     /// Absolute shell executable selected by the inference chain.
     shell_path: PathBuf,
     /// Shell grammar selected for the executable.
     classification: ShellClassification,
-    /// Root-process environment overlaid on the parent `mez` environment.
-    environment: Vec<RawEnvironmentEntry>,
+    /// Composed native workload environment for this launch.
+    environment: NativeWorkloadEnvironment,
     /// Root-process working directory for the spawned shell.
     working_directory: PathBuf,
-    /// Whether the spawned outer process inherits the daemon environment.
-    inherit_parent_environment: bool,
+    /// Environment bucket consumed by the launched process.
+    role: NativeLaunchEnvironmentRole,
 }
 
 impl NativeShellContext {
@@ -41,9 +55,28 @@ impl NativeShellContext {
         self.classification
     }
 
-    /// Returns the raw pane-root environment overlaid on the spawned shell.
+    /// Returns the validated pane-root evidence carried by this context.
+    ///
+    /// Environment signatures and configured forwarding evidence read this
+    /// evidence because it is the authoritative pane-provided source. Entries
+    /// the host reported as malformed, oversized, or unportable are absent.
     pub(crate) fn environment(&self) -> &[RawEnvironmentEntry] {
+        self.environment.pane_root_evidence()
+    }
+
+    /// Returns the composed native workload environment for this launch.
+    pub(crate) fn workload_environment(&self) -> &NativeWorkloadEnvironment {
         &self.environment
+    }
+
+    /// Returns the environment entries the launched process receives.
+    ///
+    /// Workload launches receive the workload bucket. Code-owned sandbox
+    /// launchers receive only the launcher/control bucket so internal transport
+    /// requirements never become workload-visible and workload credentials are
+    /// never copied into a launcher.
+    pub(crate) fn launch_environment(&self) -> &[RawEnvironmentEntry] {
+        self.environment.for_role(self.role)
     }
 
     /// Returns the working directory for the spawned shell.
@@ -51,23 +84,31 @@ impl NativeShellContext {
         &self.working_directory
     }
 
-    /// Reports whether the outer process inherits the daemon environment.
-    pub(crate) const fn inherit_parent_environment(&self) -> bool {
-        self.inherit_parent_environment
+    /// Returns a copy whose launched process receives one launch-role bucket.
+    ///
+    /// The native dispatch selects the role, so a compiled Bubblewrap or
+    /// Seatbelt dispatch hands the code-owned launcher only the launcher
+    /// control bucket while every other native launch receives the workload
+    /// bucket.
+    pub(crate) fn for_launch_role(mut self, role: NativeLaunchEnvironmentRole) -> Self {
+        self.role = role;
+        self
     }
 
     /// Builds a credential-free context for one admitted pane-status provider.
     ///
-    /// The compiled sandbox launch supplies its own minimal payload environment;
-    /// the outer sandbox executable therefore receives neither daemon nor pane
-    /// environment values.
+    /// The compiled sandbox launch supplies its own minimal payload environment,
+    /// so pane evidence and workload entries are dropped. The outer code-owned
+    /// launcher keeps only its declared launcher control entries, such as the
+    /// command-search `PATH` a bare launcher executable needs, and never sees a
+    /// pane credential.
     pub(crate) fn restricted_for_pane_status_provider(&self) -> Self {
         Self {
             shell_path: self.shell_path.clone(),
             classification: self.classification,
-            environment: Vec::new(),
+            environment: self.environment.restricted_to_launcher(),
             working_directory: self.working_directory.clone(),
-            inherit_parent_environment: false,
+            role: NativeLaunchEnvironmentRole::SandboxLauncher,
         }
     }
 }
@@ -75,9 +116,29 @@ impl NativeShellContext {
 #[cfg(test)]
 impl NativeShellContext {
     /// Builds one context fixture without running host inference.
+    ///
+    /// The fixture composes the supplied pane-root evidence through the shared
+    /// builder and captures the ambient test-process environment, so fixtures
+    /// follow the same composition rules as production inference without
+    /// mutating the process environment.
     pub(crate) fn for_test(
         shell_path: PathBuf,
         environment: Vec<RawEnvironmentEntry>,
+        working_directory: PathBuf,
+    ) -> Self {
+        let composed = compose_native_workload_environment(
+            &environment,
+            &native_ambient_environment(),
+            &shell_path,
+        )
+        .expect("fixture composition never requires pane identity");
+        Self::for_test_composed(shell_path, composed, working_directory)
+    }
+
+    /// Builds one context fixture around an explicitly composed environment.
+    pub(crate) fn for_test_composed(
+        shell_path: PathBuf,
+        environment: NativeWorkloadEnvironment,
         working_directory: PathBuf,
     ) -> Self {
         let classification = ShellClassification::classify(&shell_path);
@@ -86,7 +147,7 @@ impl NativeShellContext {
             classification,
             environment,
             working_directory,
-            inherit_parent_environment: true,
+            role: NativeLaunchEnvironmentRole::Workload,
         }
     }
 }
@@ -100,6 +161,14 @@ impl NativeShellContext {
 /// - `current_working_directory`: Host-reported root process working
 ///   directory.
 /// - `session_shell_path`: Spawn-time session shell recorded for the pane.
+///
+/// The returned context always carries a composed native workload environment
+/// that starts from a cleared base. Malformed host entries are dropped, and the
+/// ambient `mez` environment is consulted only for requirements that declare
+/// forwarding (`PATH`, `HOME`, and the launcher search path). Inference never
+/// claims to represent a remote shell environment: the context describes the
+/// local pane root process only, and stricter status-provider contexts derive
+/// from it through [`NativeShellContext::restricted_for_pane_status_provider`].
 ///
 /// # Errors
 /// Returns an error when the pane has no live primary process, the host
@@ -120,15 +189,23 @@ pub(crate) fn infer_native_shell_context(
             "native shell mode requires a readable root-process working directory for pid {primary_pid}"
         ))
     })?;
-    let environment = environment.unwrap_or_default();
-    let (shell_path, classification) =
-        select_native_shell_path(executable_path.as_deref(), &environment, session_shell_path)?;
+    let raw_environment = environment.unwrap_or_default();
+    let (shell_path, classification) = select_native_shell_path(
+        executable_path.as_deref(),
+        &raw_environment,
+        session_shell_path,
+    )?;
+    let environment = compose_native_workload_environment(
+        &raw_environment,
+        &native_ambient_environment(),
+        &shell_path,
+    )?;
     Ok(NativeShellContext {
         shell_path,
         classification,
         environment,
         working_directory,
-        inherit_parent_environment: true,
+        role: NativeLaunchEnvironmentRole::Workload,
     })
 }
 
@@ -195,6 +272,14 @@ mod tests {
             key: key.as_bytes().to_vec(),
             value: value.as_bytes().to_vec(),
         }
+    }
+
+    /// Returns one entry value as text for environment assertions.
+    fn value_of<'a>(entries: &'a [RawEnvironmentEntry], key: &str) -> Option<&'a str> {
+        entries
+            .iter()
+            .find(|entry| entry.key.as_slice() == key.as_bytes())
+            .and_then(|entry| std::str::from_utf8(&entry.value).ok())
     }
 
     /// Builds one successful inference result from the supplied metadata.
@@ -300,10 +385,11 @@ mod tests {
         assert!(error.to_string().contains("root process"));
     }
 
-    /// Verifies unavailable pane-root environment metadata leaves an empty
-    /// overlay so the executor can retain the parent `mez` environment.
+    /// Verifies unavailable pane-root environment metadata leaves empty
+    /// evidence while the composed workload still receives the declared
+    /// fallback requirements, so no launch restores ambient inheritance.
     #[test]
-    fn inference_allows_unavailable_root_process_environment_overlay() {
+    fn inference_allows_unavailable_root_process_environment_evidence() {
         let context = infer_native_shell_context(
             Some(42),
             Some(PathBuf::from("/bin/bash")),
@@ -311,8 +397,69 @@ mod tests {
             Some(PathBuf::from("/tmp/work")),
             Path::new("/bin/sh"),
         )
-        .expect("parent environment remains available without an overlay");
+        .expect("declared requirements replace unavailable pane-root evidence");
         assert!(context.environment().is_empty());
+        assert!(
+            value_of(context.workload_environment().workload(), "PATH")
+                .is_some_and(|path| !path.is_empty())
+        );
+    }
+
+    /// Verifies one inferred context composes the workload environment from
+    /// validated pane-root evidence plus the declared requirements instead of
+    /// inheriting the ambient daemon environment.
+    #[test]
+    fn inference_composes_workload_environment_from_pane_evidence() {
+        let context = context(
+            Some("/bin/bash"),
+            vec![
+                entry("MEZ_PANE_PROVIDED", "pane-value"),
+                entry("PATH", "/pane/bin"),
+            ],
+            "/bin/sh",
+        );
+        let workload = context.workload_environment().workload();
+
+        assert_eq!(context.launch_environment(), workload);
+        assert_eq!(value_of(workload, "PATH"), Some("/pane/bin"));
+        assert_eq!(value_of(workload, "SHELL"), Some("/bin/bash"));
+        assert_eq!(value_of(workload, "MEZ_PANE_PROVIDED"), Some("pane-value"));
+    }
+
+    /// Verifies one sandbox-launcher context exposes only the launcher control
+    /// bucket, so pane credentials never reach the outer launcher process.
+    #[test]
+    fn inference_sandbox_launcher_role_keeps_only_launcher_control_entries() {
+        let context = context(
+            Some("/bin/bash"),
+            vec![entry("MEZ_PANE_CREDENTIAL", "pane-secret")],
+            "/bin/sh",
+        )
+        .for_launch_role(NativeLaunchEnvironmentRole::SandboxLauncher);
+        let launcher = context.launch_environment();
+
+        assert_eq!(value_of(launcher, "MEZ_PANE_CREDENTIAL"), None);
+        assert!(value_of(launcher, "PATH").is_some());
+        assert_eq!(context.environment().len(), 1);
+    }
+
+    /// Verifies the stricter pane-status-provider context drops pane evidence
+    /// while keeping the launcher search path for the outer launcher process.
+    #[test]
+    fn inference_restricts_status_provider_context_to_launcher_entries() {
+        let context = context(
+            Some("/bin/bash"),
+            vec![entry("MEZ_PANE_CREDENTIAL", "pane-secret")],
+            "/bin/sh",
+        )
+        .restricted_for_pane_status_provider();
+
+        assert!(context.environment().is_empty());
+        assert!(value_of(context.launch_environment(), "PATH").is_some());
+        assert_eq!(
+            value_of(context.launch_environment(), "MEZ_PANE_CREDENTIAL"),
+            None
+        );
     }
 
     /// Verifies inference requires a readable root-process working directory.

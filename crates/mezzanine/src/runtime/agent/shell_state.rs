@@ -16,7 +16,7 @@ use super::{
     runtime_pane_readiness_state_name,
 };
 use crate::runtime::config::ShellMode;
-use crate::runtime::processes::NativeShellContext;
+use crate::runtime::processes::{NativeLaunchEnvironmentRole, NativeShellContext};
 use crate::runtime::{
     RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES, RuntimeNativeShellDispatch, SandboxConfig,
 };
@@ -867,6 +867,14 @@ impl RuntimeSessionService {
         } else {
             None
         };
+        // A code-owned sandbox launcher receives only the launcher control
+        // bucket. The compiled sandbox plan owns the payload environment, so the
+        // outer launcher process must never carry pane credentials or workload
+        // entries.
+        let context = context.for_launch_role(NativeLaunchEnvironmentRole::for_native_dispatch(
+            native_bubblewrap.is_some(),
+            native_seatbelt.is_some(),
+        ));
         let bubblewrap_activity_lease = native_bubblewrap
             .as_ref()
             .and_then(|dispatch| dispatch.activity_lease.clone());

@@ -389,13 +389,13 @@ impl SpawnedShellExecutor {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0);
-        if !self.context.inherit_parent_environment() {
-            command.env_clear();
-        }
-        // Preserve the environment inherited by the parent `mez` process so
-        // native actions retain its PATH and credentials. Pane-root entries
-        // are applied afterward as the authoritative live-context overlay.
-        for entry in self.context.environment() {
+        // Native launches never inherit the ambient `mez` environment. The
+        // composed native workload environment is the only source of child
+        // entries: validated pane-root evidence plus the narrowly enumerated
+        // runtime requirements for a workload, or the launcher/control bucket
+        // for a code-owned sandbox launcher.
+        command.env_clear();
+        for entry in self.context.launch_environment() {
             command.env(
                 OsStr::from_bytes(&entry.key),
                 OsStr::from_bytes(&entry.value),
@@ -1052,9 +1052,92 @@ fn kill_process_group(pid: i32) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::native_workload_environment::{
+        NativeLaunchEnvironmentRole, compose_native_workload_environment,
+    };
     use super::*;
     use mez_agent::{MarkerToken, ShellChildLaunch, ShellLaunchArtifact, ShellLaunchArtifactId};
     use mez_mux::process::RawEnvironmentEntry;
+
+    /// Builds one raw environment entry fixture.
+    fn entry(key: &str, value: &str) -> RawEnvironmentEntry {
+        RawEnvironmentEntry {
+            key: key.as_bytes().to_vec(),
+            value: value.as_bytes().to_vec(),
+        }
+    }
+
+    /// Returns one launched environment value as text.
+    fn environment_value<'a>(entries: &'a [RawEnvironmentEntry], key: &str) -> Option<&'a str> {
+        entries
+            .iter()
+            .find(|entry| entry.key.as_slice() == key.as_bytes())
+            .and_then(|entry| std::str::from_utf8(&entry.value).ok())
+    }
+
+    /// Returns the launched environment keys in composition order.
+    fn environment_keys(entries: &[RawEnvironmentEntry]) -> Vec<String> {
+        entries
+            .iter()
+            .map(|entry| String::from_utf8_lossy(&entry.key).into_owned())
+            .collect()
+    }
+
+    /// Builds the daemon ambient fixture consumed by composition tests.
+    ///
+    /// The fixture models a daemon environment that carries a harness-only
+    /// sentinel credential and a duplicate key. It is supplied per child-process
+    /// fixture instead of mutating the test process environment, and it keeps the
+    /// real test `PATH` so fixtures can execute ordinary tools.
+    fn daemon_ambient_fixture() -> Vec<RawEnvironmentEntry> {
+        vec![
+            entry("PATH", &std::env::var("PATH").unwrap_or_default()),
+            entry("MEZ_DAEMON_ONLY_SENTINEL", "harness-only-credential"),
+            entry("MEZ_DUPLICATE_KEY", "daemon"),
+        ]
+    }
+
+    /// Builds one workload-role context fixture whose environment was composed
+    /// from explicit pane-root evidence and the daemon ambient fixture.
+    ///
+    /// Callers apply the dispatch role switch with
+    /// `NativeShellContext::for_launch_role` so fixtures follow the same role
+    /// selection production dispatch performs.
+    fn fixture_context(evidence: Vec<RawEnvironmentEntry>) -> NativeShellContext {
+        let composed = compose_native_workload_environment(
+            &evidence,
+            &daemon_ambient_fixture(),
+            Path::new("/bin/sh"),
+        )
+        .expect("fixture composition never requires pane identity");
+        NativeShellContext::for_test_composed(
+            PathBuf::from("/bin/sh"),
+            composed,
+            std::env::temp_dir(),
+        )
+    }
+
+    /// Builds one request that runs an environment dump through a typed child
+    /// launch, modelling a code-owned sandbox launcher process.
+    fn launcher_environment_request() -> ShellExecutionRequest {
+        let transaction = ShellTransaction::new(
+            MarkerToken::new("0123456789abcdef0123456789abcdef").unwrap(),
+            "turn-1",
+            "agent-1",
+            "%1",
+            Path::new("/bin/sh"),
+            "printf ignored",
+        )
+        .unwrap()
+        .with_child_launch(ShellChildLaunch::new("/usr/bin/env", Vec::new()).unwrap());
+        ShellExecutionRequest {
+            action_id: "native-1".to_string(),
+            transaction,
+            timeout_ms: Some(5_000),
+            interactive: false,
+            stateful: false,
+        }
+    }
 
     /// Builds one test context around the host `/bin/sh`.
     fn test_context() -> NativeShellContext {
@@ -1153,13 +1236,15 @@ mod tests {
         assert!(!output.interrupted);
     }
 
-    /// Verifies native execution preserves variables inherited by the parent
-    /// `mez` process even when pane-root metadata does not contain them.
+    /// Verifies the workload keeps the declared `PATH` requirement when the pane
+    /// root supplies none.
     ///
-    /// `PATH` is required for ordinary shell command lookup and reproduces the
-    /// macOS failure caused by clearing the child environment before spawn.
+    /// `PATH` is the only deliberately ambient-forwarded workload variable and
+    /// remains required for ordinary shell command lookup, so the composed
+    /// environment still reproduces the ambient `mez` `PATH` for a pane whose
+    /// root-process environment is unreadable.
     #[test]
-    fn spawned_executor_inherits_parent_process_environment() {
+    fn spawned_executor_forwards_declared_workload_path_requirement() {
         let parent_path = std::env::var("PATH").expect("test process has PATH");
         let mut executor = SpawnedShellExecutor::new(test_context());
         let output = executor
@@ -1168,6 +1253,157 @@ mod tests {
 
         assert_eq!(output.exit_code, Some(0));
         assert_eq!(output.stdout, parent_path);
+    }
+
+    /// Verifies one isolated workload child process never receives a daemon-only
+    /// sentinel variable while a distinct pane-provided value is present and
+    /// wins on a duplicate key.
+    ///
+    /// The daemon ambient environment and pane-root evidence are built as a
+    /// per-child-process fixture instead of mutating the test process
+    /// environment, so the assertion covers composition rather than ambient
+    /// state. The payload is the real `/bin/sh` child the executor launches, and
+    /// it dumps its own environment for inspection.
+    #[test]
+    fn spawned_executor_drops_daemon_only_sentinel_while_pane_values_win() {
+        let context = fixture_context(vec![
+            entry("MEZ_PANE_PROVIDED", "pane-value"),
+            entry("MEZ_DUPLICATE_KEY", "pane"),
+        ]);
+        let mut executor = SpawnedShellExecutor::new(context);
+        let output = executor
+            .execute_shell(&request("env", Some(5_000)))
+            .unwrap();
+
+        assert_eq!(output.exit_code, Some(0));
+        assert!(!output.stdout.contains("MEZ_DAEMON_ONLY_SENTINEL"));
+        assert!(output.stdout.contains("MEZ_PANE_PROVIDED=pane-value"));
+        assert!(output.stdout.contains("MEZ_DUPLICATE_KEY=pane"));
+    }
+
+    /// Verifies optional absent values fall back to documented safe defaults
+    /// instead of failing the launch.
+    #[test]
+    fn spawned_executor_tolerates_absent_optional_values() {
+        let context = fixture_context(Vec::new());
+        let mut executor = SpawnedShellExecutor::new(context);
+        let output = executor
+            .execute_shell(&request("printf '%s|%s' \"$SHELL\" \"$PATH\"", Some(5_000)))
+            .unwrap();
+
+        assert_eq!(output.exit_code, Some(0));
+        assert!(output.stdout.starts_with("/bin/sh|"));
+        assert!(output.stdout.len() > "/bin/sh|".len());
+        assert!(!output.stdout.contains("MEZ_DAEMON_ONLY_SENTINEL"));
+    }
+
+    /// Verifies a Bubblewrap dispatch selects the launcher role and hands the
+    /// code-owned launcher only the launcher control bucket.
+    ///
+    /// CI cannot compile or execute a Bubblewrap launch plan, so the test
+    /// exercises the real dispatch role switch
+    /// (`NativeLaunchEnvironmentRole::for_native_dispatch` and
+    /// `NativeShellContext::for_launch_role`, the two calls the native dispatch
+    /// makes) on a composed context, then observes the launched environment of a
+    /// real child process standing in for the launcher. The sandboxed payload
+    /// environment stays owned by the compiled plan (`--clearenv` followed by
+    /// `--setenv`), which the security sandbox tests assert on supported
+    /// platforms.
+    #[test]
+    fn spawned_executor_bubblewrap_dispatch_selects_launcher_environment_bucket() {
+        let role = NativeLaunchEnvironmentRole::for_native_dispatch(true, false);
+        assert_eq!(role, NativeLaunchEnvironmentRole::SandboxLauncher);
+        let context = fixture_context(vec![
+            entry("PATH", "/pane/bin"),
+            entry("MEZ_PANE_CREDENTIAL", "pane-secret"),
+        ])
+        .for_launch_role(role);
+        let launcher_entries = context.launch_environment();
+
+        assert_eq!(environment_keys(launcher_entries), vec!["PATH".to_string()]);
+        assert_eq!(
+            environment_value(launcher_entries, "PATH"),
+            Some("/pane/bin")
+        );
+
+        let mut executor = SpawnedShellExecutor::new(context);
+        let output = executor
+            .execute_shell(&launcher_environment_request())
+            .unwrap();
+
+        assert_eq!(output.exit_code, Some(0));
+        assert_eq!(output.stdout.trim_end(), "PATH=/pane/bin");
+    }
+
+    /// Verifies a Seatbelt dispatch selects the launcher role while the same
+    /// composed context keeps its pane evidence in the workload bucket only.
+    ///
+    /// CI cannot compile or execute a Seatbelt profile, so the test exercises the
+    /// real dispatch role switch and observes the launched environment of a real
+    /// child process standing in for the code-owned child supervisor, which
+    /// clears its own environment before entering the profile and projects only
+    /// the validated Seatbelt environment document into the sandboxed payload.
+    #[test]
+    fn spawned_executor_seatbelt_dispatch_selects_launcher_environment_bucket() {
+        let role = NativeLaunchEnvironmentRole::for_native_dispatch(false, true);
+        assert_eq!(role, NativeLaunchEnvironmentRole::SandboxLauncher);
+        let workload_context = fixture_context(vec![
+            entry("MEZ_PANE_CREDENTIAL", "pane-secret"),
+            entry("MEZ_DUPLICATE_KEY", "pane"),
+        ]);
+        let context = workload_context.clone().for_launch_role(role);
+
+        assert_eq!(
+            environment_value(workload_context.launch_environment(), "MEZ_PANE_CREDENTIAL"),
+            Some("pane-secret")
+        );
+        let launcher_entries = context.launch_environment();
+
+        assert_eq!(environment_keys(launcher_entries), vec!["PATH".to_string()]);
+        for key in [
+            "MEZ_PANE_CREDENTIAL",
+            "MEZ_DUPLICATE_KEY",
+            "MEZ_DAEMON_ONLY_SENTINEL",
+        ] {
+            assert_eq!(
+                environment_value(launcher_entries, key),
+                None,
+                "launcher bucket must not carry {key}"
+            );
+        }
+
+        let mut executor = SpawnedShellExecutor::new(context);
+        let output = executor
+            .execute_shell(&launcher_environment_request())
+            .unwrap();
+
+        assert_eq!(output.exit_code, Some(0));
+        assert!(!output.stdout.contains("MEZ_PANE_CREDENTIAL"));
+        assert!(!output.stdout.contains("MEZ_DAEMON_ONLY_SENTINEL"));
+        assert_eq!(output.stdout.trim_end().lines().count(), 1);
+        assert!(output.stdout.trim_end().starts_with("PATH="));
+    }
+
+    /// Verifies a non-sandbox native dispatch keeps the workload bucket, so the
+    /// launcher control bucket can never leak into policy-only or host-access
+    /// launches.
+    #[test]
+    fn spawned_executor_non_sandbox_dispatch_keeps_workload_environment_bucket() {
+        let role = NativeLaunchEnvironmentRole::for_native_dispatch(false, false);
+        assert_eq!(role, NativeLaunchEnvironmentRole::Workload);
+        let context = fixture_context(vec![entry("MEZ_PANE_CREDENTIAL", "pane-secret")])
+            .for_launch_role(role);
+        let workload_entries = context.launch_environment();
+
+        assert_eq!(
+            environment_value(workload_entries, "MEZ_PANE_CREDENTIAL"),
+            Some("pane-secret")
+        );
+        assert_eq!(
+            environment_value(workload_entries, "MEZ_DAEMON_ONLY_SENTINEL"),
+            None
+        );
+        assert!(environment_keys(workload_entries).contains(&"PATH".to_string()));
     }
 
     /// Verifies an uncached native Bubblewrap probe executes in the external
@@ -1406,7 +1642,8 @@ mod tests {
     }
 
     /// Verifies the inferred environment and working directory reach the
-    /// spawned shell as an overlay captured from the pane root process.
+    /// spawned shell through the composed cleared-base environment captured from
+    /// the pane root process.
     #[test]
     fn spawned_executor_forwards_context_environment_and_working_directory() {
         let directory = std::env::temp_dir().join(format!("mez-native-cwd-{}", std::process::id()));

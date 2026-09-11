@@ -26,7 +26,11 @@ configuration pairs `full-access` with Seatbelt; otherwise it pairs
 by migration. Pane shell mode prepares the selected backend through the pane
 shell; native shell mode derives identity,
 environment, working directory, and canonical path authority from the pane
-root process and host metadata without pane input. Executable presence does not
+root process and host metadata without pane input. Native environment
+derivation composes a cleared-base environment from validated pane-root
+evidence plus the documented runtime requirements, so an ambient-only value that
+neither a pane nor a declaration supplies is dropped instead of reaching a
+sandboxed workload or its code-owned launcher. Executable presence does not
 prove capability: the exact runtime probe remains mandatory and fail-closed.
 Runtime-owned web, fetch, and MCP actions are separate capability
 and approval boundaries rather than child shell processes. `host-access` is a

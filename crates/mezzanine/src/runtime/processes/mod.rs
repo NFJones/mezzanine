@@ -9,6 +9,7 @@ mod layout;
 mod managed_shell_handoff;
 mod native_bubblewrap;
 mod native_shell_inference;
+mod native_workload_environment;
 pub(crate) mod output_filter;
 mod pane_pipes;
 mod posix_compat;
@@ -21,6 +22,7 @@ mod zsh_compat;
 pub(crate) use native_bubblewrap::NativeBubblewrapCapabilityProbe;
 pub(crate) use native_bubblewrap::{NativeBubblewrapActivityLease, NativeSandboxCapabilityProbe};
 pub(crate) use native_shell_inference::{NativeShellContext, infer_native_shell_context};
+pub(crate) use native_workload_environment::NativeLaunchEnvironmentRole;
 #[cfg(test)]
 pub(crate) use spawned_shell::execute_native_shell_dispatch;
 pub(crate) use spawned_shell::{
@@ -3180,10 +3182,11 @@ impl RuntimeSessionService {
     /// Infers native shell context from pane root-process metadata.
     ///
     /// Native shell mode never runs commands through the pane shell: the
-    /// spawned shell executable, environment overlay, and working directory
-    /// come from host inspection of the live pane root process, with the
-    /// parent `mez` environment inherited underneath that overlay and the
-    /// spawn-time session shell closing the executable fallback chain.
+    /// spawned shell executable, composed environment, and working directory
+    /// come from host inspection of the live pane root process, with a
+    /// cleared-base environment composed from validated pane-root evidence and
+    /// the declared runtime requirements and the spawn-time session shell
+    /// closing the executable fallback chain.
     pub(crate) fn native_shell_context_for_pane(
         &self,
         pane_id: &str,

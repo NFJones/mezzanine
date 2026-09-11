@@ -14,8 +14,10 @@
 //! spawned action settles.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsStr;
 use std::io::Read;
 use std::os::fd::AsRawFd;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -331,7 +333,10 @@ impl crate::runtime::RuntimeSessionService {
                 .map_err(|error| MezError::invalid_args(error.message()))?;
         let environment_evidence = PaneEnvironmentEvidence::from_parts(
             &environment_request,
-            BTreeMap::from([("MEZ_PANE_ID".to_string(), pane_id.to_string())]),
+            BTreeMap::from([(
+                "MEZ_PANE_ID".to_string(),
+                provider_pane_identity(context, pane_id)?,
+            )]),
             BTreeMap::new(),
         )
         .map_err(|error| MezError::invalid_args(error.message()))?;
@@ -1249,6 +1254,30 @@ fn native_environment_signature_for_context(
     Ok(signature)
 }
 
+/// Resolves the required pane identity for one admitted pane-status provider.
+///
+/// The shared native workload builder owns the requirement: the identity is
+/// validated as workload-visible evidence, and a missing or malformed identity
+/// becomes a typed pre-dispatch error naming the `pane_identity` category and
+/// the `MEZ_PANE_ID` key before any payload environment or sandbox plan is
+/// compiled.
+fn provider_pane_identity(context: &NativeShellContext, pane_id: &str) -> Result<String> {
+    let environment = context
+        .workload_environment()
+        .with_required_workload_value(
+            super::native_workload_environment::NativeLaunchEnvironmentRequirement::PANE_IDENTITY,
+            pane_id,
+        )?;
+    environment
+        .workload_value("MEZ_PANE_ID")
+        .map(ToString::to_string)
+        .ok_or_else(|| {
+            MezError::invalid_state(
+                "native pane status provider launch is missing its pane identity",
+            )
+        })
+}
+
 /// Resolves configured forwarding names from the root-process environment.
 fn native_environment_evidence(
     request: &mez_agent::shell::PaneEnvironmentRequest,
@@ -1309,7 +1338,21 @@ fn run_native_bubblewrap_capability_probe(
         .args(&probe_plan.arguments)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .env_clear();
+    // A capability-probe launcher runs from a cleared base and keeps only the
+    // declared launcher command-search path, so an ambient credential or a
+    // loader variable such as LD_PRELOAD or DYLD_INSERT_LIBRARIES cannot enter
+    // the probe launcher. The probe payload environment stays owned by the
+    // compiled proof plan.
+    for entry in super::native_workload_environment::launcher_control_environment(
+        &super::native_workload_environment::native_ambient_environment(),
+    ) {
+        command.env(
+            OsStr::from_bytes(&entry.key),
+            OsStr::from_bytes(&entry.value),
+        );
+    }
     // SAFETY: the hook only duplicates the still-live status sink and clears
     // close-on-exec on descriptor 3 before the probe executable starts.
     unsafe {
@@ -1414,17 +1457,31 @@ fn run_native_seatbelt_capability_probe(
     probe_plan: &crate::security::sandbox::SeatbeltCapabilityProbePlan,
     cancellation: Option<&AtomicBool>,
 ) -> Result<crate::security::sandbox::SeatbeltCapability> {
-    let mut child = Command::new(&probe_plan.executable)
+    let mut command = Command::new(&probe_plan.executable);
+    command
         .args(&probe_plan.arguments)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| {
-            MezError::invalid_state(format!(
-                "native Seatbelt capability probe could not start: {error}"
-            ))
-        })?;
+        .env_clear();
+    // A capability-probe launcher runs from a cleared base and keeps only the
+    // declared launcher command-search path, so an ambient credential or a
+    // loader variable such as LD_PRELOAD or DYLD_INSERT_LIBRARIES cannot enter
+    // the probe launcher. The probe payload environment stays owned by the
+    // compiled proof plan.
+    for entry in super::native_workload_environment::launcher_control_environment(
+        &super::native_workload_environment::native_ambient_environment(),
+    ) {
+        command.env(
+            OsStr::from_bytes(&entry.key),
+            OsStr::from_bytes(&entry.value),
+        );
+    }
+    let mut child = command.spawn().map_err(|error| {
+        MezError::invalid_state(format!(
+            "native Seatbelt capability probe could not start: {error}"
+        ))
+    })?;
     let stdout_reader = child.stdout.take().map(spawn_bounded_probe_reader);
     let stderr_reader = child.stderr.take().map(spawn_bounded_probe_reader);
     let deadline = Instant::now() + NATIVE_BUBBLEWRAP_PROBE_TIMEOUT;
@@ -1558,6 +1615,81 @@ fn native_host_name() -> String {
 mod tests {
     use super::*;
     use mez_agent::permissions::PathResolutionStatus;
+
+    /// Verifies one admitted pane-status provider fails closed through the real
+    /// required-evidence path before any sandbox plan or child process exists.
+    ///
+    /// `compile_pane_status_provider_launch` resolves the required `MEZ_PANE_ID`
+    /// value through `provider_pane_identity` before it builds
+    /// `PaneEnvironmentEvidence`, compiles a probe or launch plan, or spawns
+    /// anything, so the `Err` asserted here proves no plan and no child was
+    /// created. CI cannot run an admitted sandboxed provider launch to observe
+    /// that absence directly, so this test instead asserts the typed
+    /// pre-dispatch error, that the failure happens before dispatch, and that the
+    /// rejected context still carries no pane identity evidence a plan could
+    /// consume.
+    #[test]
+    fn provider_pane_identity_fails_closed_before_any_plan_or_child_exists() {
+        let context = crate::runtime::processes::NativeShellContext::for_test(
+            PathBuf::from("/bin/sh"),
+            Vec::new(),
+            std::env::temp_dir(),
+        );
+        assert!(
+            !context
+                .environment()
+                .iter()
+                .any(|entry| entry.key.as_slice() == b"MEZ_PANE_ID"),
+            "the fixture must model a pane root that carries no MEZ_PANE_ID evidence"
+        );
+
+        let missing_evidence =
+            super::super::native_workload_environment::NativeWorkloadEnvironmentBuilder::from_environment(
+                context.workload_environment(),
+            )
+            .with_requirement(
+                super::super::native_workload_environment::NativeLaunchEnvironmentRequirement::PANE_IDENTITY,
+                None,
+            )
+            .expect_err("a missing MEZ_PANE_ID evidence value must fail closed");
+        assert!(matches!(
+            missing_evidence.kind(),
+            crate::error::MezErrorKind::InvalidState
+        ));
+        assert!(missing_evidence.to_string().contains("pane_identity"));
+        assert!(missing_evidence.to_string().contains("MEZ_PANE_ID"));
+        assert!(missing_evidence.to_string().contains("before dispatch"));
+
+        let missing_identity = provider_pane_identity(&context, "")
+            .expect_err("a missing runtime pane identity must fail closed");
+        assert!(matches!(
+            missing_identity.kind(),
+            crate::error::MezErrorKind::InvalidState
+        ));
+        assert!(missing_identity.to_string().contains("pane_identity"));
+        assert!(missing_identity.to_string().contains("MEZ_PANE_ID"));
+        assert!(missing_identity.to_string().contains("before dispatch"));
+
+        let malformed_identity = provider_pane_identity(&context, "%1\n")
+            .expect_err("a malformed runtime pane identity must fail closed");
+        assert!(matches!(
+            malformed_identity.kind(),
+            crate::error::MezErrorKind::InvalidState
+        ));
+        assert!(malformed_identity.to_string().contains("MEZ_PANE_ID"));
+
+        assert!(
+            context
+                .workload_environment()
+                .workload_value("MEZ_PANE_ID")
+                .is_none(),
+            "a rejected launch must not write substituted pane identity evidence"
+        );
+        assert_eq!(
+            provider_pane_identity(&context, "%1").expect("a live pane identity is accepted"),
+            "%1"
+        );
+    }
 
     /// Verifies host resolution canonicalizes existing read authority and
     /// preserves nearest-parent evidence for a write target that does not yet

@@ -37,6 +37,37 @@ outside the pane. Both modes compile the same backend policy. Neither backend
 uses a privileged helper, and an unavailable executable or failed probe never
 silently changes execution to `policy-only` or the host.
 
+Native mode never inherits the ambient Mezzanine daemon environment. Each native
+launch composes a cleared-base environment from validated pane-root evidence
+plus the documented runtime requirements — the workload `PATH`, `HOME`, and the
+launcher command-search path — keeps pane-root values authoritative for
+overlapping keys, and hands a code-owned launcher such as `bwrap` or the
+Seatbelt child supervisor only its launcher control entries. The guarantee is
+composition rather than credential non-possession: the builder clears the
+ambient Mezzanine environment and forwards only validated pane-root evidence
+plus declared launch requirements, so an ambient-only value that neither a pane
+nor a declaration supplies never reaches a workload or a launcher, while a value
+the pane root itself carries — including one the pane inherited when it was
+created — is treated as pane evidence and is not filtered here. Pane-creation
+environment inheritance is a separate boundary. Capability probe launchers also
+run from a cleared base carrying only the launcher command-search path, so
+ambient credentials and loader variables such as `LD_PRELOAD` or
+`DYLD_INSERT_LIBRARIES` cannot enter a probe launcher. The composed environment
+is capped at 512 entries and 256 KiB of aggregate value bytes, with 128-byte
+names and 16 KiB values, and that budget is enforced on the composed result
+rather than per source. The sandboxed payload environment stays owned by the
+compiled plan, which keeps the fixed sandbox `HOME`, XDG paths, identity,
+locale, Git isolation, and configured whitelist projections in their existing
+precedence.
+
+The deliberate compatibility inventory keeps only three ambient values: the
+workload `PATH`, the workload `HOME` when the pane root supplied none, and the
+launcher command-search path. Ambient-only proxies, locale, agent sockets,
+toolchain roots, and harness credentials are dropped instead of inherited. A
+pane that exports a proxy, locale, agent socket, or toolchain root itself still
+reaches the action, because validated pane-root evidence is the authoritative
+source for intentional pane environment.
+
 Use `mez sandbox status --verbose` to inspect configured and effective state,
 including backend, executable, capability, profile, managed-home, network, and
 namespace facts. The JSON form is workflow schema version 2. Use `mez sandbox
