@@ -17,7 +17,7 @@ use mez_mux::overlay::{
     overlay_rendered_selection_start,
 };
 use mez_mux::overlay::{
-    OverlaySelection, OverlaySelectionKind, apply_overlay_scroll_delta, clamp_overlay_scroll,
+    OverlaySelectionKind, apply_overlay_scroll_delta, clamp_overlay_scroll,
     overlay_content_line_index_for_view_row, overlay_copy_selection, overlay_footer,
     overlay_line_prefix_columns, overlay_link_rendition, overlay_render_lines,
     overlay_rendered_line_style_spans, overlay_scroll_page_rows,
@@ -43,7 +43,7 @@ use super::{
     Size, SplitDirection, TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFrameContext,
     TerminalScreen, WindowFrameAction, agent_prompt_reserved_line_count, current_unix_millis,
     current_unix_seconds, json_escape, mouse_action_name, mux_action_command_prompt_prefill,
-    mux_action_name, pane_navigation_direction, parse_command_sequence,
+    mux_action_name, pane_navigation_direction,
     render_attached_client_view_with_screen_and_row_resolvers,
     runtime_agent_shell_command_response_json, runtime_agent_turn_duration_display,
     runtime_agent_turn_state_name, runtime_approval_policy_name, runtime_copy_position_for_view,
@@ -533,6 +533,11 @@ pub(crate) struct RuntimePresentationComponent {
     primary_display_overlay: Option<RuntimeDisplayOverlay>,
     /// Transient candidate cycle for a record-browser Save path prompt.
     record_browser_save_completion: Option<RuntimeRecordBrowserSaveCompletion>,
+    /// Product-owned typed targets for the current display-overlay generation.
+    ///
+    /// The mux carries only opaque action identities, so this registry is the
+    /// only place that can turn an identity back into validated work.
+    overlay_action_registry: OverlayActionRegistry,
     /// Typed record browsers waiting for display-response presentation.
     pending_record_browser_overlays:
         std::collections::BTreeMap<(String, String), mez_mux::record_browser::RecordBrowser>,
@@ -2996,12 +3001,13 @@ use mez_mux::render::{
 #[cfg(test)]
 pub(crate) use overlay::RuntimeCommandDisplayOverlayContent;
 pub(in crate::runtime) use overlay::default_runtime_agent_prompt_input;
+pub(crate) use overlay::runtime_display_field_text;
 use overlay::{
-    RuntimeAgentShellDisplayOutput, agent_command_link_at_line_column,
-    agent_shell_mcp_display_state_name, runtime_agent_shell_display_output,
-    runtime_agent_shell_visibility, runtime_command_display_overlay_content,
-    runtime_command_display_should_open_overlay, runtime_pane_agent_selector_rendition,
-    runtime_pane_agent_status_selector_layout, runtime_primary_prompt_input, runtime_selector_line,
+    OverlayActionRegistry, RuntimeAgentShellDisplayOutput, agent_shell_mcp_display_state_name,
+    runtime_agent_shell_display_output, runtime_agent_shell_visibility,
+    runtime_command_display_overlay_content, runtime_command_display_should_open_overlay,
+    runtime_pane_agent_selector_rendition, runtime_pane_agent_status_selector_layout,
+    runtime_primary_prompt_input, runtime_selector_line,
 };
 #[cfg(test)]
 use overlay::{runtime_agent_shell_markdown_overlay_content, runtime_human_readable_display_lines};

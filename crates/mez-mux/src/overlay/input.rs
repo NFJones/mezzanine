@@ -9,8 +9,8 @@ use crate::input::{KeyCode, parse_key_chord_bytes};
 use crate::layout::Size;
 
 use super::{
-    AnchoredSelector, DisplayOverlay, apply_overlay_scroll_delta, overlay_next_search_match,
-    overlay_selection_index_is_visible, scroll_overlay_to_line,
+    AnchoredSelector, DisplayOverlay, OverlayActionId, apply_overlay_scroll_delta,
+    overlay_next_search_match, overlay_selection_index_is_visible, scroll_overlay_to_line,
 };
 
 /// Display-overlay navigation action decoded from terminal input.
@@ -121,8 +121,8 @@ pub fn selector_input_action(input: &[u8]) -> SelectorInputAction {
 pub enum OverlayInputOutcome {
     /// Caller should close the overlay.
     Close,
-    /// Caller should execute the selected opaque command.
-    Invoke { command: String },
+    /// Caller should execute the selected opaque registered action.
+    Invoke { action_id: OverlayActionId },
     /// Mux-owned overlay state changed.
     Updated,
     /// The action was recognized but did not change state.
@@ -274,8 +274,8 @@ pub fn apply_overlay_input<Source, LiveSource>(
             overlay.search_status = None;
             OverlayInputOutcome::Updated
         }
-        OverlayInputAction::SelectActive => active_overlay_command(overlay, size)
-            .map(|command| OverlayInputOutcome::Invoke { command })
+        OverlayInputAction::SelectActive => active_overlay_action_id(overlay, size)
+            .map(|action_id| OverlayInputOutcome::Invoke { action_id })
             .unwrap_or(OverlayInputOutcome::Unchanged),
         OverlayInputAction::SelectPrevious => {
             overlay_changed_outcome(move_overlay_selection(overlay, -1, size))
@@ -461,11 +461,15 @@ fn set_overlay_selection_index<Source, LiveSource>(
     next != previous
 }
 
-/// Returns a visible active command without executing it.
-fn active_overlay_command<Source, LiveSource>(
+/// Returns the visible active action identity without executing it.
+///
+/// Only a selection registered for this overlay can be returned, so a stale
+/// active index that no longer resolves to a visible selection reports no
+/// intent instead of reusing a previous command string.
+fn active_overlay_action_id<Source, LiveSource>(
     overlay: &DisplayOverlay<Source, LiveSource>,
     size: Size,
-) -> Option<String> {
+) -> Option<OverlayActionId> {
     let index = overlay.active_selection_index?;
     if !overlay_selection_index_is_visible(overlay, index, size) {
         return None;
@@ -473,7 +477,7 @@ fn active_overlay_command<Source, LiveSource>(
     overlay
         .selections
         .get(index)
-        .map(|selection| selection.command.clone())
+        .map(|selection| selection.action_id)
 }
 
 /// Maps a state-change flag to a stable overlay outcome.
@@ -497,7 +501,7 @@ fn selector_movement_outcome(changed: bool) -> SelectorInputOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::overlay::{OverlaySelection, OverlaySelectionKind};
+    use crate::overlay::{OverlayActionId, OverlaySelection, OverlaySelectionKind};
 
     /// Builds neutral overlay state for input transition tests.
     fn overlay(lines: &[&str]) -> DisplayOverlay<()> {
@@ -635,9 +639,9 @@ mod tests {
     }
 
     /// Verifies overlay transitions own search, selection, scrolling, and
-    /// close intent while leaving opaque command execution to the caller.
+    /// close intent while reporting only the opaque registered action identity.
     #[test]
-    fn overlay_reducer_mutates_state_and_returns_command_intent() {
+    fn overlay_reducer_mutates_state_and_returns_action_id_intent() {
         let size = Size::new(20, 3).unwrap();
         let mut overlay = overlay(&["alpha", "beta", "gamma"]);
         overlay.selections.push(OverlaySelection {
@@ -645,7 +649,7 @@ mod tests {
             line_index: 1,
             start_column: 0,
             width: 4,
-            command: "open-beta".to_string(),
+            action_id: OverlayActionId(1),
             kind: OverlaySelectionKind::Primary,
         });
         overlay.active_selection_index = Some(0);
@@ -670,7 +674,7 @@ mod tests {
                 size,
             ),
             OverlayInputOutcome::Invoke {
-                command: "open-beta".to_string()
+                action_id: OverlayActionId(1)
             }
         );
         assert_eq!(
@@ -687,7 +691,7 @@ mod tests {
     }
 
     /// Verifies keyboard navigation treats wrapped physical fragments as one
-    /// logical choice while preserving a physical index for command execution.
+    /// logical choice while preserving a physical index for action execution.
     #[test]
     fn overlay_reducer_skips_fragments_of_one_logical_selection() {
         let size = Size::new(20, 8).unwrap();
@@ -698,7 +702,7 @@ mod tests {
                 line_index: 0,
                 start_column: 0,
                 width: 5,
-                command: "open-first".to_string(),
+                action_id: OverlayActionId(2),
                 kind: OverlaySelectionKind::Primary,
             },
             OverlaySelection {
@@ -706,7 +710,7 @@ mod tests {
                 line_index: 1,
                 start_column: 0,
                 width: 9,
-                command: "open-first".to_string(),
+                action_id: OverlayActionId(2),
                 kind: OverlaySelectionKind::Primary,
             },
             OverlaySelection {
@@ -714,7 +718,7 @@ mod tests {
                 line_index: 2,
                 start_column: 0,
                 width: 6,
-                command: "open-second".to_string(),
+                action_id: OverlayActionId(3),
                 kind: OverlaySelectionKind::Primary,
             },
         ];
@@ -773,9 +777,39 @@ mod tests {
                 size,
             ),
             OverlayInputOutcome::Invoke {
-                command: "open-second".to_string()
+                action_id: OverlayActionId(3)
             }
         );
+    }
+
+    /// Verifies an active index that no longer resolves to a registered
+    /// selection reports no intent instead of repeating a previous action.
+    #[test]
+    fn overlay_reducer_rejects_stale_active_selection_identity() {
+        let size = Size::new(20, 4).unwrap();
+        let mut overlay = overlay(&["alpha", "beta", "gamma"]);
+        overlay.selections.push(OverlaySelection {
+            logical_id: 0,
+            line_index: 1,
+            start_column: 0,
+            width: 4,
+            action_id: OverlayActionId(7),
+            kind: OverlaySelectionKind::Primary,
+        });
+        overlay.scroll_offset = 1;
+        overlay.active_selection_index = Some(3);
+
+        assert_eq!(
+            apply_overlay_input(
+                &mut overlay,
+                OverlayInputAction::SelectActive,
+                None,
+                true,
+                size,
+            ),
+            OverlayInputOutcome::Unchanged
+        );
+        assert_eq!(overlay.active_selection_index, Some(3));
     }
 
     /// Verifies pager filtering is reduced entirely inside mux state and an

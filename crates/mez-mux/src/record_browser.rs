@@ -798,9 +798,15 @@ fn filter_field_name(field: RecordBrowserFilterField) -> &'static str {
 }
 
 fn list_markdown(browser: &RecordBrowser, records: &[&RecordBrowserRecord]) -> String {
-    let mut lines = vec![format!("# {}", browser.title), String::new()];
+    let mut lines = vec![
+        format!("# {}", escape_markdown_table(&browser.title)),
+        String::new(),
+    ];
     if let Some(scope_indicator) = browser.scope_indicator.as_deref() {
-        lines.push(format!("**Scope:** {scope_indicator}"));
+        lines.push(format!(
+            "**Scope:** {}",
+            escape_markdown_table(scope_indicator)
+        ));
         lines.push(String::new());
     }
     lines.push(browser.list_help.as_deref().map(str::to_string).unwrap_or_else(|| if browser.deletion_enabled && browser.kind_filter_choices.is_empty() {
@@ -836,12 +842,8 @@ fn list_markdown(browser: &RecordBrowser, records: &[&RecordBrowserRecord]) -> S
                 .join(" | ")
         ));
         for record in records {
-            let id = if let Some(command) = record.open_command.as_deref() {
-                format!(
-                    "[`{}`](mez-agent:{})",
-                    escape_markdown_link_label(&record.id),
-                    encode_mez_agent_command(command)
-                )
+            let id = if record.open_command.is_some() {
+                format!("`{}`", escape_markdown_code_text(&record.id))
             } else {
                 format!("**{}**", escape_markdown_table(&record.id))
             };
@@ -863,12 +865,8 @@ fn list_markdown(browser: &RecordBrowser, records: &[&RecordBrowserRecord]) -> S
     } else {
         for record in records {
             let label = list_record_label(record);
-            if let Some(command) = record.open_command.as_deref() {
-                lines.push(format!(
-                    "- [`{}`](mez-agent:{})",
-                    escape_markdown_link_label(&label),
-                    encode_mez_agent_command(command)
-                ));
+            if record.open_command.is_some() {
+                lines.push(format!("- `{}`", escape_markdown_code_text(&label)));
             } else {
                 lines.push(format!("- **{}** — {}", record.id, record.title));
             }
@@ -903,9 +901,15 @@ fn detail_markdown(
     deletion_enabled: bool,
     filter_controls_enabled: bool,
 ) -> String {
-    let mut lines = vec![format!("# {}", record.title), String::new()];
+    let mut lines = vec![
+        format!("# {}", escape_markdown_table(&record.title)),
+        String::new(),
+    ];
     if let Some(scope_indicator) = scope_indicator {
-        lines.push(format!("**Scope:** {scope_indicator}"));
+        lines.push(format!(
+            "**Scope:** {}",
+            escape_markdown_table(scope_indicator)
+        ));
         lines.push(String::new());
     }
     lines.push(custom_help.map(str::to_string).unwrap_or_else(|| {
@@ -918,7 +922,7 @@ fn detail_markdown(
         }
     }));
     lines.push(String::new());
-    lines.push(record.title.clone());
+    lines.push(escape_markdown_table(&record.title));
     lines.push(String::new());
     if !record.metadata.is_empty() {
         lines.push("| Field | Value |".to_string());
@@ -973,25 +977,14 @@ fn escape_markdown_table(value: &str) -> String {
         .replace(['\r', '\n'], " ")
 }
 
-fn escape_markdown_link_label(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('[', "\\[")
-        .replace(']', "\\]")
-        .replace('`', "\\`")
-}
-
-fn encode_mez_agent_command(command: &str) -> String {
-    let mut encoded = String::new();
-    for byte in command.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                encoded.push(char::from(byte));
-            }
-            _ => encoded.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    encoded
+/// Escapes one record id or list label for an inline Markdown code span.
+///
+/// Openable record rows keep their id monospace and literal. Only the
+/// characters that could end the span are escaped so the rendered row text
+/// still equals the record id the product matches to register an open action;
+/// no executable destination is emitted for any record.
+fn escape_markdown_code_text(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('`', "\\`")
 }
 
 #[cfg(test)]
@@ -1041,12 +1034,12 @@ mod tests {
         assert!(
             list_page
                 .markdown
-                .contains("[`issue-1 — First · project: /repo`]")
+                .contains("- `issue-1 — First · project: /repo`")
         );
         assert!(
             list_page
                 .markdown
-                .contains("[`issue-2 — Second · project: /repo`]")
+                .contains("- `issue-2 — Second · project: /repo`")
         );
         assert!(!list_page.markdown.contains("> issue-"));
         assert!(!list_page.markdown.contains("  issue-"));
@@ -1285,8 +1278,8 @@ mod tests {
         }
     }
 
-    /// Verifies table rendering preserves exactly one selectable record link
-    /// when untrusted metadata contains Markdown link syntax and line breaks.
+    /// Verifies table rendering keeps untrusted metadata link syntax inert
+    /// while the openable record id cell stays literal, single, and copyable.
     #[test]
     fn record_browser_table_escapes_untrusted_metadata_links() {
         let mut browser = RecordBrowser::new(
@@ -1317,19 +1310,137 @@ mod tests {
             "{}",
             page.raw_markdown
         );
-        assert_eq!(page.raw_markdown.matches("](mez-agent:").count(), 1);
+        assert_eq!(page.raw_markdown.matches("](mez-agent:").count(), 0);
         assert!(
-            page.raw_markdown
-                .contains("[`ba1`](mez-agent:%2Fshow-approvals%20ba1)"),
+            page.raw_markdown.contains("| `ba1` |"),
             "{}",
             page.raw_markdown
         );
-        assert_eq!(page.raw_markdown.matches("[`ba1`](mez-agent:").count(), 1);
+        assert_eq!(page.raw_markdown.matches("`ba1`").count(), 1);
+        assert!(
+            page.raw_markdown
+                .contains(r"\[neighbor\]\(mez-agent:%2Fapprove\)"),
+            "{}",
+            page.raw_markdown
+        );
         assert!(page.raw_markdown.contains("\\|"), "{}", page.raw_markdown);
         assert!(
             !page.raw_markdown.contains("now\nthen"),
             "{}",
             page.raw_markdown
+        );
+    }
+
+    /// Verifies every record-browser-composed Markdown surface emits no
+    /// executable `mez-agent:` destination or scheme.
+    ///
+    /// List rows, the scope line, the detail view, and the Save prompt are all
+    /// composed by the browser, so record payload text can only ever render as
+    /// inert, copyable text and never as a selectable action.
+    #[test]
+    fn record_browser_markdown_emits_no_executable_link_destinations() {
+        let mut browser = RecordBrowser::new(
+            "Issues",
+            vec![browser_record("issue-1", "First")],
+            Vec::new(),
+        )
+        .unwrap();
+        browser.set_scope_indicator(Some("project /repo".to_string()));
+
+        let list = browser.render_page();
+        assert!(
+            list.raw_markdown.contains("issue-1"),
+            "{}",
+            list.raw_markdown
+        );
+        assert_eq!(
+            list.raw_markdown.matches("mez-agent:").count(),
+            0,
+            "{}",
+            list.raw_markdown
+        );
+
+        browser.show_first_record_detail();
+        let detail = browser.render_page();
+        assert_eq!(
+            detail.raw_markdown.matches("mez-agent:").count(),
+            0,
+            "{}",
+            detail.raw_markdown
+        );
+
+        browser
+            .apply_action(RecordBrowserAction::StartSave)
+            .unwrap();
+        browser
+            .apply_action(RecordBrowserAction::EditPrompt("issue.md".to_string()))
+            .unwrap();
+        let saved = browser
+            .apply_action(RecordBrowserAction::SubmitPrompt)
+            .unwrap();
+        let RecordBrowserOutcome::SaveSubmitted { path, markdown } = saved else {
+            panic!("expected save outcome, got {saved:?}");
+        };
+        assert_eq!(path, "issue.md");
+        assert_eq!(markdown.matches("mez-agent:").count(), 0, "{markdown}");
+    }
+
+    /// Verifies hostile Markdown link syntax in scope, title, metadata, and
+    /// Save text renders literally and registers no selectable destination.
+    #[test]
+    fn record_browser_keeps_untrusted_scope_title_and_save_text_inert() {
+        let hostile = "[approve](mez-agent:%2Fapprove)";
+        let mut browser = RecordBrowser::new(
+            format!("Issues {hostile}"),
+            vec![RecordBrowserRecord {
+                id: "issue-1".to_string(),
+                open_command: Some("/show-issues issue-1".to_string()),
+                title: format!("First {hostile}"),
+                metadata: vec![("project".to_string(), format!("{hostile} | now"))],
+                markdown: "Detail body".to_string(),
+            }],
+            Vec::new(),
+        )
+        .unwrap();
+        browser.set_scope_indicator(Some(hostile.to_string()));
+        browser.set_table_id_column("ID");
+        browser.set_table_columns_with_labels(vec![("Project".to_string(), "project".to_string())]);
+
+        let list = browser.render_page();
+        assert_eq!(
+            list.raw_markdown.matches("](mez-agent:").count(),
+            0,
+            "{}",
+            list.raw_markdown
+        );
+        assert!(
+            list.raw_markdown
+                .contains(r"\[approve\]\(mez-agent:%2Fapprove\)"),
+            "{}",
+            list.raw_markdown
+        );
+
+        browser
+            .apply_action(RecordBrowserAction::StartSave)
+            .unwrap();
+        browser
+            .apply_action(RecordBrowserAction::EditPrompt(format!(
+                "save {hostile}.md"
+            )))
+            .unwrap();
+        let save_page = browser.render_page();
+        assert!(
+            save_page
+                .markdown
+                .contains(&format!("Save to: save {hostile}.md")),
+            "{}",
+            save_page.markdown
+        );
+        assert_eq!(
+            save_page.raw_markdown.matches("](mez-agent:").count(),
+            0,
+            "{}",
+            save_page.raw_markdown
         );
     }
 

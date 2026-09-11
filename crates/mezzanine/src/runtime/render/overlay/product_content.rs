@@ -1,5 +1,9 @@
-//! Product prompt, shell-result, command-link, and status content projection.
+//! Product prompt, shell-result, listing-action, and status content projection.
 
+use super::action_registry::{
+    OverlayActionTarget, RuntimeOverlayAction, overlay_set_key_preset_target,
+    overlay_set_theme_target,
+};
 use super::display_content::{
     RuntimeCommandDisplayOverlayContent, runtime_command_overlay_available_width,
     runtime_human_readable_display_lines, runtime_live_overlay_source_from_json,
@@ -411,7 +415,7 @@ fn show_markdown_overlay_wraps_prose_but_preserves_table_width_and_copy_source()
         .map(|(line, _)| UnicodeWidthStr::width(line.as_str()))
         .collect::<Vec<_>>();
     assert!(table_rows.iter().any(|width| *width > 12), "{content:?}");
-    assert!(table_rows.iter().all(|width| *width <= 30), "{content:?}");
+    assert!(table_rows.iter().all(|width| *width <= 32), "{content:?}");
     assert!(
         content
             .lines
@@ -429,11 +433,12 @@ fn show_markdown_overlay_wraps_prose_but_preserves_table_width_and_copy_source()
         "{content:?}"
     );
     assert!(
-        content
-            .selections
-            .iter()
-            .any(|selection| selection.command == "/show-issues issue-1"),
-        "{content:?}"
+        content.actions.is_empty(),
+        "untrusted markdown link syntax must register no action: {content:?}"
+    );
+    assert!(
+        content.lines.iter().any(|line| line.contains("open issue")),
+        "the link label must still render as text: {content:?}"
     );
     assert!(
         content.line_copy_texts.iter().flatten().any(|copy_text| {
@@ -441,10 +446,59 @@ fn show_markdown_overlay_wraps_prose_but_preserves_table_width_and_copy_source()
         }),
         "{content:?}"
     );
+    assert!(
+        content
+            .line_copy_texts
+            .iter()
+            .flatten()
+            .any(|copy_text| { copy_text.contains("(mez-agent:%2Fshow-issues%20issue-1)") }),
+        "the hidden destination must stay copyable: {content:?}"
+    );
+}
+
+/// Verifies raw and percent-encoded `mez-agent:` destinations in any rendered
+/// body register no selectable action while their text stays copyable.
+///
+/// The product registers actions only for ranges it composes itself, so a
+/// record body, metadata value, title, prompt, or MCP description containing
+/// link syntax cannot create an executable control or repeat a prior action.
+#[cfg(test)]
+#[test]
+fn untrusted_markdown_links_register_no_overlay_actions() {
+    let ui_theme = mez_mux::theme::deepforest_ui_theme();
+    for body in [
+        "run [approve](mez-agent:%2Fapprove) now",
+        "run [approve](mez-agent:/approve) now",
+        "run mez-agent:%2Fapprove now",
+        "> [neighbor](mez-agent:%2Fapprove) needs a decision",
+        "| ID | Action |\n| --- | --- |\n| a1 | [approve](mez-agent:%2Fapprove) |",
+        "`mez-agent:%2Fapprove`",
+    ] {
+        let content = runtime_agent_shell_markdown_overlay_content_for_layout(
+            Some("show-issues".to_string()),
+            body,
+            &ui_theme,
+            80,
+            40,
+        );
+        assert!(content.actions.is_empty(), "{body}: {content:?}");
+        assert!(
+            content.lines.iter().any(|line| line.contains("approve")),
+            "{body}: {content:?}"
+        );
+        assert!(
+            content
+                .line_copy_texts
+                .iter()
+                .flatten()
+                .any(|copy_text| copy_text.contains("approve")),
+            "{body}: {content:?}"
+        );
+    }
 }
 
 /// Renders slash-command markdown display output into the command overlay
-/// pager while preserving clickable `mez-agent:` links.
+/// pager while keeping every rendered link inert.
 #[cfg(test)]
 pub(crate) fn runtime_agent_shell_markdown_overlay_content(
     command: Option<String>,
@@ -468,7 +522,7 @@ pub(crate) fn runtime_agent_shell_markdown_overlay_content_for_width(
         line_style_spans: Vec::new(),
         line_kinds: Vec::new(),
         line_copy_texts: Vec::new(),
-        selections: Vec::new(),
+        actions: Vec::new(),
     };
     for rendered in
         render_command_markdown_body_lines_for_width(markdown, ui_theme, table_display_width)
@@ -480,47 +534,28 @@ pub(crate) fn runtime_agent_shell_markdown_overlay_content_for_width(
             kind,
         } = rendered;
         let line_index = content.lines.len();
-        for (start_column, width, command) in agent_command_links_in_line(&display) {
-            let logical_id = content.selections.len();
-            content.selections.push(OverlaySelection {
+        for (start_column, width, target) in runtime_markdown_body_row_actions(
+            content.command.as_deref(),
+            copy_text.as_deref(),
+            &display,
+        ) {
+            let logical_id = content.actions.len();
+            content.actions.push(RuntimeOverlayAction {
                 logical_id,
                 line_index,
                 start_column,
                 width,
-                command,
+                target,
                 kind: OverlaySelectionKind::Primary,
             });
-        }
-        if let Some(copy_text) = copy_text.as_deref() {
-            for (start_column, width, command) in
-                agent_command_hidden_link_ranges_for_rendered_line(copy_text, &display)
-            {
-                let duplicate = content.selections.iter().any(|selection| {
-                    selection.line_index == line_index
-                        && selection.start_column == start_column
-                        && selection.width == width
-                        && selection.command == command
-                });
-                if !duplicate {
-                    let logical_id = content.selections.len();
-                    content.selections.push(OverlaySelection {
-                        logical_id,
-                        line_index,
-                        start_column,
-                        width,
-                        command,
-                        kind: OverlaySelectionKind::Primary,
-                    });
-                }
-                push_or_extend_style_span(
-                    &mut style_spans,
-                    TerminalStyleSpan {
-                        start: start_column,
-                        length: width,
-                        rendition: overlay_link_rendition(ui_theme),
-                    },
-                );
-            }
+            push_or_extend_style_span(
+                &mut style_spans,
+                TerminalStyleSpan {
+                    start: start_column,
+                    length: width,
+                    rendition: overlay_link_rendition(ui_theme),
+                },
+            );
         }
         style_spans.extend(runtime_list_themes_markdown_preview_style_spans(
             content.command.as_deref(),
@@ -554,7 +589,7 @@ pub(crate) fn runtime_agent_shell_markdown_overlay_content_for_layout(
         Some(terminal_width.max(1)),
     );
     let available_width =
-        runtime_command_overlay_available_width(terminal_width, !initial.selections.is_empty());
+        runtime_command_overlay_available_width(terminal_width, !initial.actions.is_empty());
     let mut content = if available_width == terminal_width.max(1) {
         initial
     } else {
@@ -655,104 +690,57 @@ pub(crate) fn runtime_primary_notice_status_text(line: &str) -> String {
     }
 }
 
-/// Returns the agent command link at one rendered line column.
-pub(crate) fn agent_command_link_at_line_column(line: &str, column: usize) -> Option<String> {
-    agent_command_links_in_line(line)
-        .into_iter()
-        .find(|(start_column, width, _command)| {
-            column >= *start_column && column < start_column.saturating_add(*width)
-        })
-        .map(|(_, _, command)| command)
-}
-
-/// Returns visible agent command link ranges in one rendered line.
-pub(crate) fn agent_command_links_in_line(line: &str) -> Vec<(usize, usize, String)> {
-    let scheme = "mez-agent:";
-    let mut search_start = 0;
-    let mut links = Vec::new();
-    while let Some(relative_start) = line[search_start..].find(scheme) {
-        let scheme_start = search_start.saturating_add(relative_start);
-        let encoded_start = scheme_start.saturating_add(scheme.len());
-        let encoded_end = line[encoded_start..]
-            .find(|ch: char| ch == ')' || ch.is_whitespace())
-            .map(|end| encoded_start.saturating_add(end))
-            .unwrap_or(line.len());
-        let Some(command) = percent_decode_agent_command(&line[encoded_start..encoded_end]) else {
-            search_start = encoded_end;
-            continue;
-        };
-        let destination_start_column = UnicodeWidthStr::width(&line[..scheme_start]);
-        let destination_end_column = UnicodeWidthStr::width(&line[..encoded_end]);
-        let label_clicked = command
-            .strip_prefix("/resume ")
-            .and_then(|session_id| {
-                line[..scheme_start]
-                    .rfind(session_id)
-                    .map(|label_start| (label_start, session_id))
-            })
-            .map(|(label_start, session_id)| {
-                let start_column = UnicodeWidthStr::width(&line[..label_start]);
-                let width = UnicodeWidthStr::width(session_id);
-                (start_column, width)
-            });
-        if let Some((start_column, width)) = label_clicked {
-            links.push((start_column, width, command));
-        } else {
-            links.push((
-                destination_start_column,
-                destination_end_column.saturating_sub(destination_start_column),
-                command.clone(),
-            ));
+/// Returns the product-owned action range for one rendered Markdown body row.
+///
+/// Only rows the product itself composes are considered. Listing commands
+/// publish one validated selection action per row; every other body, including
+/// untrusted record markdown, keeps any link syntax as inert, copyable text
+/// because no rendered text can register an executable target.
+pub(crate) fn runtime_markdown_body_row_actions(
+    command: Option<&str>,
+    source_line: Option<&str>,
+    display: &str,
+) -> Vec<(usize, usize, OverlayActionTarget)> {
+    let Some(source_line) = source_line else {
+        return Vec::new();
+    };
+    match command {
+        Some("list-themes") => {
+            runtime_markdown_listing_row_action(source_line, display, overlay_set_theme_target)
         }
-        search_start = encoded_end;
+        Some("list-key-presets") => {
+            runtime_markdown_listing_row_action(source_line, display, overlay_set_key_preset_target)
+        }
+        _ => Vec::new(),
     }
-    links
 }
 
-/// Returns source-aligned hidden `mez-agent:` link ranges for one rendered row.
-pub(crate) fn agent_command_hidden_link_ranges_for_rendered_line(
+/// Returns the rendered range of one validated listing action cell.
+///
+/// Listing producers author a code span whose text is the exact command label,
+/// so the range is located by its rendered text and validated by the supplied
+/// target builder. A clipped or reshaped row registers nothing rather than
+/// falling back to raw text.
+fn runtime_markdown_listing_row_action(
     source_line: &str,
     display: &str,
-) -> Vec<(usize, usize, String)> {
-    mez_mux::render::markdown_link_display_ranges(
-        source_line,
-        display,
-        agent_command_link_destination,
-    )
-}
-
-/// Decodes one `mez-agent:` markdown destination into an executable command.
-pub(crate) fn agent_command_link_destination(destination: &str) -> Option<String> {
-    let encoded = destination.strip_prefix("mez-agent:")?;
-    let command = percent_decode_agent_command(encoded)?;
-    (!command.is_empty()).then_some(command)
-}
-
-/// Percent-decodes a markdown command link destination.
-pub(crate) fn percent_decode_agent_command(encoded: &str) -> Option<String> {
-    let mut output = Vec::with_capacity(encoded.len());
-    let bytes = encoded.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            let high = hex_value(*bytes.get(index.saturating_add(1))?)?;
-            let low = hex_value(*bytes.get(index.saturating_add(2))?)?;
-            output.push(high.saturating_mul(16).saturating_add(low));
-            index = index.saturating_add(3);
-        } else {
-            output.push(bytes[index]);
-            index = index.saturating_add(1);
-        }
+    resolve: impl Fn(&str) -> Option<OverlayActionTarget>,
+) -> Vec<(usize, usize, OverlayActionTarget)> {
+    let cells = runtime_markdown_table_cells(source_line);
+    let Some(label) = cells.last() else {
+        return Vec::new();
+    };
+    let label = label.trim_matches('`').trim();
+    let Some(target) = resolve(label) else {
+        return Vec::new();
+    };
+    let Some(start_byte) = display.find(label) else {
+        return Vec::new();
+    };
+    let start_column = UnicodeWidthStr::width(&display[..start_byte]);
+    let width = UnicodeWidthStr::width(label);
+    if width == 0 {
+        return Vec::new();
     }
-    String::from_utf8(output).ok()
-}
-
-/// Decodes one ASCII hexadecimal digit.
-pub(crate) fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
+    vec![(start_column, width, target)]
 }

@@ -2,12 +2,54 @@
 
 use super::*;
 
-/// Verifies agent slash markdown shown in the command overlay keeps
-/// `mez-agent:` links selectable after markdown rendering. This preserves
-/// `/resume` session links while moving informational slash output
-/// out of the pane transcript.
+/// Builds one overlay row that carries a product-registered link action.
+///
+/// Only registered ranges are selectable, so styling tests compose the retained
+/// link rendition and the opaque action identity directly instead of deriving
+/// either one from rendered text.
+fn registered_link_overlay(
+    ui_theme: &mez_mux::theme::UiTheme,
+    display: &str,
+    copy_text: Option<String>,
+    start_column: usize,
+    width: usize,
+) -> RuntimeDisplayOverlay {
+    RuntimeDisplayOverlay {
+        lines: vec![display.to_string()],
+        line_style_spans: vec![vec![TerminalStyleSpan {
+            start: start_column,
+            length: width,
+            rendition: overlay_link_rendition(ui_theme),
+        }]],
+        line_copy_texts: vec![copy_text],
+        scroll_offset: 0,
+        selections: vec![OverlaySelection {
+            logical_id: 0,
+            line_index: 0,
+            start_column,
+            width,
+            action_id: OverlayActionId(1),
+            kind: OverlaySelectionKind::Primary,
+        }],
+        active_selection_index: Some(0),
+        dismiss_on_any_input: false,
+        search_input: None,
+        search_query: None,
+        search_match: None,
+        search_status: None,
+        mouse_selection: None,
+        live_source: None,
+        record_browser: None,
+    }
+}
+
+/// Verifies agent slash markdown containing link syntax registers no action.
+///
+/// Command bodies are presentation text the product does not author, so a
+/// rendered `mez-agent:` destination stays inert while its source text remains
+/// copyable for the operator.
 #[test]
-fn agent_shell_markdown_overlay_preserves_agent_links() {
+fn agent_shell_markdown_overlay_keeps_untrusted_links_inert() {
     let ui_theme = mez_mux::theme::deepforest_ui_theme();
     let content = runtime_agent_shell_markdown_overlay_content(
         Some("resume".to_string()),
@@ -16,70 +58,43 @@ fn agent_shell_markdown_overlay_preserves_agent_links() {
     );
 
     assert_eq!(content.command.as_deref(), Some("resume"));
+    assert!(content.actions.is_empty(), "{content:?}");
     assert!(
-        content
-            .lines
-            .iter()
-            .any(|line| line.contains("saved") && !line.contains("mez-agent:")),
+        content.lines.iter().any(|line| line.contains("saved")),
         "{content:?}"
     );
     assert!(
         content
-            .selections
+            .line_copy_texts
             .iter()
-            .any(|selection| selection.command == "/resume saved"),
-        "{content:?}"
-    );
-    assert_eq!(
-        content
-            .selections
-            .iter()
-            .filter(|selection| selection.command == "/resume saved")
-            .count(),
-        1,
+            .flatten()
+            .any(|copy_text| copy_text.contains("(mez-agent:%2Fresume%20saved)")),
         "{content:?}"
     );
 }
-/// Verifies selectable pager links keep the markdown link styling emitted
-/// by the CommonMark renderer.
+
+/// Verifies a registered pager link keeps the markdown link styling emitted
+/// for the body range it was registered from.
 ///
-/// `/resume` and similar markdown-backed command overlays should
-/// keep links readable as ordinary text links while remaining keyboard and
-/// mouse selectable, so the overlay must retain the rendered line spans in
-/// addition to the selection metadata.
+/// `/resume` rows and listing actions must stay readable as ordinary text
+/// links while remaining keyboard and mouse selectable, so the overlay retains
+/// the rendered link spans in addition to the registered range.
 #[test]
-fn agent_shell_markdown_overlay_preserves_selectable_link_style_spans() {
+fn registered_link_overlay_preserves_selectable_link_style_spans() {
     let ui_theme = mez_mux::theme::deepforest_ui_theme();
-    let content = runtime_agent_shell_markdown_overlay_content(
-        Some("resume".to_string()),
-        "- [`saved`](mez-agent:%2Fresume%20saved)",
+    let overlay = registered_link_overlay(
         &ui_theme,
+        "• saved",
+        Some("- [`saved`](mez-agent:%2Fresume%20saved)".to_string()),
+        2,
+        5,
     );
-    assert_eq!(content.selections.len(), 1, "{content:?}");
-    let selection = &content.selections[0];
-    let line = content.lines.get(selection.line_index).unwrap();
-    let column = overlay_rendered_selection_start(
-        &RuntimeDisplayOverlay {
-            lines: content.lines.clone(),
-            line_style_spans: content.line_style_spans.clone(),
-            line_copy_texts: content.line_copy_texts.clone(),
-            scroll_offset: 0,
-            selections: content.selections.clone(),
-            active_selection_index: Some(0),
-            dismiss_on_any_input: false,
-            search_input: None,
-            search_query: None,
-            search_match: None,
-            search_status: None,
-            mouse_selection: None,
-            live_source: None,
-            record_browser: None,
-        },
-        selection,
-    );
+    let selection = &overlay.selections[0];
+    let line = overlay.lines.get(selection.line_index).unwrap();
+    let column = overlay_rendered_selection_start(&overlay, selection);
     assert_eq!(&line[column..column + selection.width], "saved");
     assert!(
-        content.line_style_spans[selection.line_index]
+        overlay.line_style_spans[selection.line_index]
             .iter()
             .any(|span| {
                 span.start == selection.start_column
@@ -91,39 +106,27 @@ fn agent_shell_markdown_overlay_preserves_selectable_link_style_spans() {
                     && span.rendition.foreground
                         == Some(ui_theme.colors.agent_transcript_command.foreground)
             }),
-        "{content:?}"
+        "{overlay:?}"
     );
 }
-/// Verifies an active pager link keeps link styling on every rendered cell.
+
+/// Verifies an active registered link keeps link styling on every cell of its
+/// range, including the final one.
 ///
-/// Selected command-overlay links layer selector and markdown spans on the
-/// same columns. The final rendered row must preserve the markdown link
-/// rendition through the last link character instead of letting the
-/// fallback selection span leak onto the tail cell.
+/// Selected ranges layer the selector, body-link, and active-selection spans on
+/// the same columns. The final rendered row must preserve the link rendition
+/// through the last link character instead of letting the fallback selection
+/// span leak onto the tail cell.
 #[test]
-fn active_markdown_overlay_link_keeps_tail_cell_link_styling() {
+fn active_registered_link_keeps_tail_cell_link_styling() {
     let ui_theme = mez_mux::theme::deepforest_ui_theme();
-    let content = runtime_agent_shell_markdown_overlay_content(
-        Some("resume".to_string()),
-        "- [`saved`](mez-agent:%2Fresume%20saved)",
+    let overlay = registered_link_overlay(
         &ui_theme,
+        "• saved",
+        Some("- [`saved`](mez-agent:%2Fresume%20saved)".to_string()),
+        2,
+        5,
     );
-    let overlay = RuntimeDisplayOverlay {
-        lines: content.lines.clone(),
-        line_style_spans: content.line_style_spans.clone(),
-        line_copy_texts: content.line_copy_texts.clone(),
-        scroll_offset: 0,
-        selections: content.selections.clone(),
-        active_selection_index: Some(0),
-        dismiss_on_any_input: false,
-        search_input: None,
-        search_query: None,
-        search_match: None,
-        search_status: None,
-        mouse_selection: None,
-        live_source: None,
-        record_browser: None,
-    };
     let selection = &overlay.selections[0];
     let start = overlay_rendered_selection_start(&overlay, selection);
     let spans = overlay_rendered_line_style_spans(&overlay, 0, 80, &ui_theme);
@@ -153,38 +156,26 @@ fn active_markdown_overlay_link_keeps_tail_cell_link_styling() {
         );
     }
 }
-/// Verifies an active saved-session UUID row keeps link styling on the
-/// final visible UUID character.
+
+/// Verifies an active saved-session row keeps link styling on the final visible
+/// UUID character.
 ///
-/// `/resume` rows are emitted as hidden `mez-agent:` resume links
-/// with bold UUID labels. The command overlay must preserve that link
-/// rendition across the full visible UUID when the row is selected,
-/// including the final character that previously fell back to plain text.
+/// Saved-session rows register one action over the visible UUID, and the row
+/// keeps the link rendition across the whole id when it is selected, including
+/// the final character that previously fell back to plain text.
 #[test]
 fn active_saved_session_overlay_uuid_keeps_tail_cell_link_styling() {
     let ui_theme = mez_mux::theme::deepforest_ui_theme();
     let session_id = "018f6b3a-1b2c-7000-9000-cafebabefeed";
-    let content = runtime_agent_shell_markdown_overlay_content(
-        Some("resume".to_string()),
-        &format!("- [**{session_id}**](mez-agent:%2Fresume%20{session_id})"),
+    let overlay = registered_link_overlay(
         &ui_theme,
+        &format!("• {session_id}"),
+        Some(format!(
+            "- [`{session_id}`](mez-agent:%2Fresume%20{session_id})"
+        )),
+        2,
+        session_id.len(),
     );
-    let overlay = RuntimeDisplayOverlay {
-        lines: content.lines.clone(),
-        line_style_spans: content.line_style_spans.clone(),
-        line_copy_texts: content.line_copy_texts.clone(),
-        scroll_offset: 0,
-        selections: content.selections.clone(),
-        active_selection_index: Some(0),
-        dismiss_on_any_input: false,
-        search_input: None,
-        search_query: None,
-        search_match: None,
-        search_status: None,
-        mouse_selection: None,
-        live_source: None,
-        record_browser: None,
-    };
     let selection = &overlay.selections[0];
     let start = overlay_rendered_selection_start(&overlay, selection);
     let spans = overlay_rendered_line_style_spans(&overlay, 0, 120, &ui_theme);
@@ -215,38 +206,25 @@ fn active_saved_session_overlay_uuid_keeps_tail_cell_link_styling() {
     }
 }
 
-/// Verifies an active saved-session UUID row does not shift link styling
-/// onto the preceding bullet separator cell.
+/// Verifies an active saved-session row does not shift link styling onto the
+/// preceding bullet separator cell.
 ///
-/// `/resume` opens a selectable saved-session pager whose rows render as a
-/// bullet plus a bold linked UUID label. The selected-link foreground,
-/// underline, and active background must begin on the first UUID cell
-/// rather than leaking one column left onto the separator space.
+/// Saved-session rows render as a bullet plus a linked UUID label. The selected
+/// link foreground, underline, and active background must begin on the first
+/// UUID cell rather than leaking one column left onto the separator space.
 #[test]
 fn active_saved_session_overlay_uuid_does_not_style_previous_cell() {
     let ui_theme = mez_mux::theme::deepforest_ui_theme();
     let session_id = "018f6b3a-1b2c-7000-9000-cafebabefeed";
-    let content = runtime_agent_shell_markdown_overlay_content(
-        Some("resume".to_string()),
-        &format!("- [**{session_id}**](mez-agent:%2Fresume%20{session_id})"),
+    let overlay = registered_link_overlay(
         &ui_theme,
+        &format!("• {session_id}"),
+        Some(format!(
+            "- [`{session_id}`](mez-agent:%2Fresume%20{session_id})"
+        )),
+        2,
+        session_id.len(),
     );
-    let overlay = RuntimeDisplayOverlay {
-        lines: content.lines.clone(),
-        line_style_spans: content.line_style_spans.clone(),
-        line_copy_texts: content.line_copy_texts.clone(),
-        scroll_offset: 0,
-        selections: content.selections.clone(),
-        active_selection_index: Some(0),
-        dismiss_on_any_input: false,
-        search_input: None,
-        search_query: None,
-        search_match: None,
-        search_status: None,
-        mouse_selection: None,
-        live_source: None,
-        record_browser: None,
-    };
     let selection = &overlay.selections[0];
     let start = overlay_rendered_selection_start(&overlay, selection);
     let spans = overlay_rendered_line_style_spans(&overlay, 0, 120, &ui_theme);
@@ -268,37 +246,23 @@ fn active_saved_session_overlay_uuid_does_not_style_previous_cell() {
     );
 }
 
-/// Verifies the active selector gutter stays isolated from a link that
-/// begins at the first visible body column.
+/// Verifies the active selector gutter stays isolated from a registered link
+/// that begins at the first visible body column.
 ///
-/// `/status` renders some selectable links without a list-prefix gap. When
-/// the active row's selector gutter abuts that first link cell, the gutter
-/// must remain a standalone styled cell so the link highlight does not
-/// visually shift left into the gutter column.
+/// Some registered rows start at column zero without a list prefix. When the
+/// active row's selector gutter abuts that first link cell, the gutter must
+/// remain a standalone styled cell so the link highlight does not visually
+/// shift left into the gutter column.
 #[test]
 fn active_markdown_overlay_front_of_line_link_keeps_gutter_separate() {
     let ui_theme = mez_mux::theme::deepforest_ui_theme();
-    let content = runtime_agent_shell_markdown_overlay_content(
-        Some("status".to_string()),
-        "[`saved`](mez-agent:%2Fresume%20saved)",
+    let overlay = registered_link_overlay(
         &ui_theme,
+        "saved",
+        Some("[`saved`](mez-agent:%2Fresume%20saved)".to_string()),
+        0,
+        5,
     );
-    let overlay = RuntimeDisplayOverlay {
-        lines: content.lines.clone(),
-        line_style_spans: content.line_style_spans.clone(),
-        line_copy_texts: content.line_copy_texts.clone(),
-        scroll_offset: 0,
-        selections: content.selections.clone(),
-        active_selection_index: Some(0),
-        dismiss_on_any_input: false,
-        search_input: None,
-        search_query: None,
-        search_match: None,
-        search_status: None,
-        mouse_selection: None,
-        live_source: None,
-        record_browser: None,
-    };
     let selection = &overlay.selections[0];
     let start = overlay_rendered_selection_start(&overlay, selection);
     let spans = overlay_rendered_line_style_spans(&overlay, 0, 80, &ui_theme);
@@ -362,34 +326,20 @@ fn active_markdown_overlay_front_of_line_link_keeps_gutter_separate() {
 
 /// Verifies selected-link styling stops at the selected link boundary.
 ///
-/// Active selected-link spans should preserve link foreground and underline
-/// on the link body without leaking that rendition into the following
-/// display cell, because cursor presentation and adjacent overlay text are
-/// composed after the selected-link span list.
+/// Active selected-link spans should preserve link foreground and underline on
+/// the link body without leaking that rendition into the following display
+/// cell, because cursor presentation and adjacent overlay text are composed
+/// after the selected-link span list.
 #[test]
 fn active_markdown_overlay_link_style_stops_before_following_cell() {
     let ui_theme = mez_mux::theme::deepforest_ui_theme();
-    let content = runtime_agent_shell_markdown_overlay_content(
-        Some("status".to_string()),
-        "[`saved`](mez-agent:%2Fresume%20saved) next",
+    let overlay = registered_link_overlay(
         &ui_theme,
+        "saved next",
+        Some("[`saved`](mez-agent:%2Fresume%20saved) next".to_string()),
+        0,
+        5,
     );
-    let overlay = RuntimeDisplayOverlay {
-        lines: content.lines.clone(),
-        line_style_spans: content.line_style_spans.clone(),
-        line_copy_texts: content.line_copy_texts.clone(),
-        scroll_offset: 0,
-        selections: content.selections.clone(),
-        active_selection_index: Some(0),
-        dismiss_on_any_input: false,
-        search_input: None,
-        search_query: None,
-        search_match: None,
-        search_status: None,
-        mouse_selection: None,
-        live_source: None,
-        record_browser: None,
-    };
     let selection = &overlay.selections[0];
     let start = overlay_rendered_selection_start(&overlay, selection);
     let following_column = start.saturating_add(selection.width);

@@ -1,5 +1,6 @@
 //! Runtime display-record parsing and executable-choice adaptation.
 
+use super::action_registry::{OverlayActionTarget, overlay_terminal_command_target};
 use super::display_content::*;
 use crate::runtime::render::*;
 use mez_mux::theme::parse_hex_color;
@@ -86,7 +87,7 @@ impl RuntimeDisplayRecord {
                     start_column,
                     width,
                     label: choice.label,
-                    command: choice.command,
+                    target: choice.target,
                     kind: choice.kind,
                 });
             }
@@ -182,7 +183,7 @@ pub(crate) fn runtime_split_display_commands(
         .filter(|command| !command.is_empty() && *command != "none")
 }
 
-/// Pushes one executable choice if it is not already present.
+/// Pushes one executable choice if an equivalent target is not already present.
 pub(crate) fn runtime_push_unique_display_choice(
     choices: &mut Vec<RuntimeDisplayChoice>,
     command: &str,
@@ -192,7 +193,7 @@ pub(crate) fn runtime_push_unique_display_choice(
     };
     if choices
         .iter()
-        .any(|existing| existing.command == choice.command)
+        .any(|existing| existing.target == choice.target)
     {
         return;
     }
@@ -200,20 +201,18 @@ pub(crate) fn runtime_push_unique_display_choice(
 }
 
 /// Converts a command string into a selectable display choice when valid.
+///
+/// The choice carries one typed, validated target instead of the raw command
+/// text, so the range is only executable through the action registry.
 pub(crate) fn runtime_display_executable_choice(command: &str) -> Option<RuntimeDisplayChoice> {
-    let command = command.trim();
-    let invocations = parse_command_sequence(command).ok()?;
-    let first = invocations.first()?;
-    if invocations.len() != 1 {
+    let target = overlay_terminal_command_target(command)?;
+    let OverlayActionTarget::TerminalCommand { name, .. } = &target else {
         return None;
-    }
-    if !runtime_display_is_known_command(&first.name) {
-        return None;
-    }
+    };
     Some(RuntimeDisplayChoice {
-        label: runtime_display_choice_label(&first.name),
-        command: command.to_string(),
-        kind: runtime_display_choice_kind(&first.name),
+        label: runtime_display_choice_label(name),
+        kind: runtime_display_choice_kind(name),
+        target,
     })
 }
 
@@ -270,6 +269,28 @@ pub(crate) fn runtime_display_field_label(key: &str) -> String {
         .join(" ")
 }
 
+/// Renders untrusted text as one compact display-record field value.
+///
+/// Compact records separate fields with `:` and keys from values with `=`, and
+/// the record parser turns any `key=value` segment into a field. A
+/// program-settable value such as a pane title, client name, window name, or
+/// buffer preview could therefore inject an executable `action=` field into a
+/// chooser row, which no product-authored row intended. Untrusted values pass
+/// through here and lose exactly those structural characters plus any control
+/// character, while keeping their readable text.
+pub(crate) fn runtime_display_field_text(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_control() || matches!(ch, ':' | '=') {
+                ' '
+            } else {
+                ch
+            }
+        })
+        .collect()
+}
+
 /// Returns a readable value for common compact display values.
 pub(crate) fn runtime_display_field_value(value: &str) -> String {
     match value {
@@ -317,4 +338,52 @@ pub(super) fn runtime_theme_preview_style_spans(
         column = column.saturating_add(width);
     }
     spans
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RuntimeDisplayRecord, runtime_display_field_text, runtime_parse_display_field};
+
+    /// Verifies untrusted field text cannot inject a compact-record field.
+    ///
+    /// A pane title or buffer preview is program-settable, so a `:` or `=` in it
+    /// must never start a new `key=value` segment that the parser could accept as
+    /// an executable choice.
+    #[test]
+    fn untrusted_field_text_cannot_inject_a_record_field() {
+        let hostile = "title:action=kill-session";
+        let sanitized = runtime_display_field_text(hostile);
+        assert!(!sanitized.contains(':'), "{sanitized}");
+        assert!(!sanitized.contains('='), "{sanitized}");
+        assert!(sanitized.contains("kill-session"), "{sanitized}");
+
+        let row = format!(
+            "pane=%1:index=0:active=true:title={}:action=select-pane -t %1",
+            sanitized
+        );
+        let record = RuntimeDisplayRecord::parse_colon_delimited(&row)
+            .expect("the product row must stay a compact record");
+        assert_eq!(
+            record.field_value("title"),
+            Some("title action kill-session")
+        );
+        assert_eq!(
+            record
+                .fields
+                .iter()
+                .filter(|(key, _)| key == "action")
+                .count(),
+            1
+        );
+    }
+
+    /// Verifies control characters in untrusted text cannot break a single row.
+    #[test]
+    fn untrusted_field_text_cannot_break_a_record_row() {
+        let sanitized = runtime_display_field_text("first\nsecond\tthird");
+        assert!(!sanitized.contains('\n'), "{sanitized}");
+        assert!(!sanitized.contains('\t'), "{sanitized}");
+        assert_eq!(sanitized, "first second third");
+        assert!(runtime_parse_display_field("title=a b").is_some());
+    }
 }

@@ -1,5 +1,6 @@
 //! Display overlay rows, choices, fields, and human-readable content.
 
+use super::action_registry::{OverlayActionTarget, RuntimeOverlayAction};
 use super::product_content::*;
 use super::record_adapter::{
     RuntimeDisplayRecord, runtime_display_field_label, runtime_display_field_value,
@@ -24,8 +25,11 @@ pub(crate) struct RuntimeCommandDisplayOverlayContent {
     pub(crate) line_kinds: Vec<RichTextLineKind>,
     /// Raw source text associated with each rendered display line.
     pub(crate) line_copy_texts: Vec<Option<String>>,
-    /// Optional command actions keyed by line index.
-    pub(crate) selections: Vec<OverlaySelection>,
+    /// Product-composed selectable ranges keyed by line index.
+    ///
+    /// Ranges carry typed targets until presentation registers them, so no
+    /// rendered text ever reaches an executor as a command string.
+    pub(crate) actions: Vec<RuntimeOverlayAction>,
 }
 
 /// Wraps command-overlay rows while preserving styles and selectable ranges.
@@ -43,7 +47,7 @@ pub(crate) fn wrap_runtime_command_display_overlay_content(
         line_style_spans,
         line_kinds,
         line_copy_texts,
-        selections,
+        actions,
     } = content;
     let mut wrapped_content = RuntimeCommandDisplayOverlayContent {
         command,
@@ -52,12 +56,12 @@ pub(crate) fn wrap_runtime_command_display_overlay_content(
         line_style_spans: Vec::new(),
         line_kinds: Vec::new(),
         line_copy_texts: Vec::new(),
-        selections: Vec::new(),
+        actions: Vec::new(),
     };
     for (source_line_index, display) in lines.into_iter().enumerate() {
-        let source_selections = selections
+        let source_actions = actions
             .iter()
-            .filter(|selection| selection.line_index == source_line_index)
+            .filter(|action| action.line_index == source_line_index)
             .collect::<Vec<_>>();
         let line = RichTextLine {
             display,
@@ -81,20 +85,20 @@ pub(crate) fn wrap_runtime_command_display_overlay_content(
         };
         for wrapped in wrap_rich_text_line_to_width_with_source_ranges_hard(line, effective_width) {
             let line_index = wrapped_content.lines.len();
-            for selection in &source_selections {
-                let selection_end = selection.start_column.saturating_add(selection.width);
-                let start = selection.start_column.max(wrapped.source_start_column);
-                let end = selection_end.min(wrapped.source_end_column);
+            for action in &source_actions {
+                let action_end = action.start_column.saturating_add(action.width);
+                let start = action.start_column.max(wrapped.source_start_column);
+                let end = action_end.min(wrapped.source_end_column);
                 if start < end {
-                    wrapped_content.selections.push(OverlaySelection {
-                        logical_id: selection.logical_id,
+                    wrapped_content.actions.push(RuntimeOverlayAction {
+                        logical_id: action.logical_id,
                         line_index,
                         start_column: wrapped
                             .display_prefix_width
                             .saturating_add(start.saturating_sub(wrapped.source_start_column)),
                         width: end.saturating_sub(start),
-                        command: selection.command.clone(),
-                        kind: selection.kind,
+                        target: action.target.clone(),
+                        kind: action.kind,
                     });
                 }
             }
@@ -114,11 +118,11 @@ pub(crate) fn wrap_runtime_command_display_overlay_content(
 /// Returns the body width left after reserving the overlay selector gutter.
 pub(crate) fn runtime_command_overlay_available_width(
     terminal_width: usize,
-    has_selections: bool,
+    has_actions: bool,
 ) -> usize {
     terminal_width
         .saturating_sub(
-            has_selections
+            has_actions
                 .then(mez_mux::overlay::overlay_selection_prefix_columns)
                 .unwrap_or_default(),
         )
@@ -145,12 +149,15 @@ fn command_overlay_wrapping_preserves_split_selection_and_style_ranges() {
         }]],
         line_kinds: vec![RichTextLineKind::Normal],
         line_copy_texts: vec![Some("prefix **alpha beta gamma** suffix".to_string())],
-        selections: vec![OverlaySelection {
+        actions: vec![RuntimeOverlayAction {
             logical_id: 7,
             line_index: 0,
             start_column: 7,
             width: 16,
-            command: "/show-issues --id issue-1".to_string(),
+            target: OverlayActionTarget::RecordBrowserOpen {
+                command_name: "show-issues".to_string(),
+                record_id: "issue-1".to_string(),
+            },
             kind: OverlaySelectionKind::Primary,
         }],
     };
@@ -167,22 +174,19 @@ fn command_overlay_wrapping_preserves_split_selection_and_style_ranges() {
     );
     assert!(
         wrapped
-            .selections
+            .actions
             .windows(2)
-            .any(|selections| selections[0].line_index != selections[1].line_index),
+            .any(|actions| actions[0].line_index != actions[1].line_index),
         "{wrapped:?}"
     );
     assert!(
-        wrapped
-            .selections
-            .iter()
-            .all(|selection| selection.logical_id == 7),
+        wrapped.actions.iter().all(|action| action.logical_id == 7),
         "{wrapped:?}"
     );
     assert!(
-        wrapped.selections.iter().all(|selection| {
-            selection.command == "/show-issues --id issue-1"
-                && selection.start_column.saturating_add(selection.width) <= 10
+        wrapped.actions.iter().all(|action| {
+            action.target.agent_command_line().as_deref() == Some("/show-issues issue-1")
+                && action.start_column.saturating_add(action.width) <= 10
         }),
         "{wrapped:?}"
     );
@@ -217,12 +221,15 @@ fn command_overlay_wrapping_accounts_for_consumed_spaces_in_ranges() {
         }]],
         line_kinds: vec![RichTextLineKind::Normal],
         line_copy_texts: vec![Some("alpha beta [gamma](target)".to_string())],
-        selections: vec![OverlaySelection {
+        actions: vec![RuntimeOverlayAction {
             logical_id: 9,
             line_index: 0,
             start_column: 11,
             width: 5,
-            command: "/open-link target".to_string(),
+            target: OverlayActionTarget::RecordBrowserOpen {
+                command_name: "show-issues".to_string(),
+                record_id: "other-1".to_string(),
+            },
             kind: OverlaySelectionKind::Primary,
         }],
     };
@@ -230,10 +237,10 @@ fn command_overlay_wrapping_accounts_for_consumed_spaces_in_ranges() {
     let wrapped = wrap_runtime_command_display_overlay_content(content, 6, 6);
 
     assert_eq!(wrapped.lines, ["alpha", "beta", "gamma"]);
-    assert_eq!(wrapped.selections.len(), 1, "{wrapped:?}");
-    assert_eq!(wrapped.selections[0].line_index, 2);
-    assert_eq!(wrapped.selections[0].start_column, 0);
-    assert_eq!(wrapped.selections[0].width, 5);
+    assert_eq!(wrapped.actions.len(), 1, "{wrapped:?}");
+    assert_eq!(wrapped.actions[0].line_index, 2);
+    assert_eq!(wrapped.actions[0].start_column, 0);
+    assert_eq!(wrapped.actions[0].width, 5);
     assert_eq!(
         wrapped.line_style_spans[2],
         [TerminalStyleSpan {
@@ -264,8 +271,8 @@ pub(crate) struct RuntimeDisplayChoicePlacement {
     pub(crate) width: usize,
     /// Human-readable label shown to the user.
     pub(crate) label: String,
-    /// Terminal command executed by this choice.
-    pub(crate) command: String,
+    /// Typed target registered for this choice.
+    pub(crate) target: OverlayActionTarget,
     /// Visual importance of this choice.
     pub(crate) kind: OverlaySelectionKind,
 }
@@ -275,8 +282,8 @@ pub(crate) struct RuntimeDisplayChoicePlacement {
 pub(crate) struct RuntimeDisplayChoice {
     /// Human-readable label shown to the user.
     pub(crate) label: String,
-    /// Terminal command executed by this choice.
-    pub(crate) command: String,
+    /// Typed target registered for this choice.
+    pub(crate) target: OverlayActionTarget,
     /// Visual importance of this choice.
     pub(crate) kind: OverlaySelectionKind,
 }
@@ -301,7 +308,7 @@ pub(crate) fn runtime_command_display_overlay_content(
         line_style_spans: Vec::new(),
         line_kinds: Vec::new(),
         line_copy_texts: Vec::new(),
-        selections: Vec::new(),
+        actions: Vec::new(),
     };
     for outcome in outcomes {
         if outcome.get("kind").and_then(serde_json::Value::as_str) != Some("display") {
@@ -494,15 +501,15 @@ pub(super) fn list_themes_markdown_overlay_preserves_actions_and_preview_colors(
     let ui_theme = mez_mux::theme::deepforest_ui_theme();
     let content = runtime_agent_shell_markdown_overlay_content(
         Some("list-themes".to_string()),
-        "| active | theme | preview | source | preview colors | action |\n| --- | --- | --- | --- | --- | --- |\n| ★ active | kanagawa | █████ | builtin | #111111,#222222,#333333,#444444,#555555 | [`set-theme kanagawa`](mez-agent:set-theme%20kanagawa) |",
+        "| active | theme | preview | source | preview colors | action |\n| --- | --- | --- | --- | --- | --- |\n| ★ active | kanagawa | █████ | builtin | #111111,#222222,#333333,#444444,#555555 | `set-theme kanagawa` |",
         &ui_theme,
     );
 
     assert!(
-        content
-            .selections
-            .iter()
-            .any(|selection| selection.command == "set-theme kanagawa"),
+        content.actions.iter().any(|action| action.target
+            == OverlayActionTarget::SetTheme {
+                name: "kanagawa".to_string()
+            }),
         "{content:?}"
     );
     let line_index = content
@@ -544,12 +551,12 @@ pub(super) fn list_themes_rendered_overlay_lines_align_headers_with_selectable_r
         line_style_spans: vec![Vec::new(); 3],
         line_copy_texts: vec![None; 3],
         scroll_offset: 0,
-        selections: vec![OverlaySelection {
+        selections: vec![mez_mux::overlay::OverlaySelection {
             logical_id: 0,
             line_index: 2,
             start_column: 13,
             width: 8,
-            command: "set-theme kanagawa".to_string(),
+            action_id: mez_mux::overlay::OverlayActionId(0),
             kind: OverlaySelectionKind::Primary,
         }],
         active_selection_index: Some(0),
@@ -586,7 +593,7 @@ pub(crate) fn runtime_command_display_should_open_overlay(
     if content.lines.is_empty() {
         return false;
     }
-    if !content.selections.is_empty() {
+    if !content.actions.is_empty() {
         return true;
     }
     if content.lines.len() <= 1 {
@@ -602,7 +609,7 @@ pub(crate) fn runtime_command_display_should_open_overlay(
 pub(crate) fn runtime_command_display_transient_status_line(
     content: &RuntimeCommandDisplayOverlayContent,
 ) -> Option<String> {
-    if !content.selections.is_empty() {
+    if !content.actions.is_empty() {
         return None;
     }
     if !content
@@ -889,21 +896,17 @@ impl RuntimeCommandDisplayOverlayContent {
         self.line_copy_texts
             .append(&mut markdown_content.line_copy_texts);
         let logical_id_offset = self
-            .selections
+            .actions
             .iter()
-            .map(|selection| selection.logical_id)
+            .map(|action| action.logical_id)
             .max()
             .map_or(0, |logical_id| logical_id.saturating_add(1));
-        self.selections.extend(
-            markdown_content
-                .selections
-                .into_iter()
-                .map(|mut selection| {
-                    selection.line_index += line_offset;
-                    selection.logical_id = selection.logical_id.saturating_add(logical_id_offset);
-                    selection
-                }),
-        );
+        self.actions
+            .extend(markdown_content.actions.into_iter().map(|mut action| {
+                action.line_index += line_offset;
+                action.logical_id = action.logical_id.saturating_add(logical_id_offset);
+                action
+            }));
     }
 
     /// Appends one raw display body to this overlay content.
@@ -917,17 +920,17 @@ impl RuntimeCommandDisplayOverlayContent {
                 self.line_copy_texts.push(None);
                 for choice in display_line.choices {
                     let logical_id = self
-                        .selections
+                        .actions
                         .iter()
-                        .map(|selection| selection.logical_id)
+                        .map(|action| action.logical_id)
                         .max()
                         .map_or(0, |logical_id| logical_id.saturating_add(1));
-                    self.selections.push(OverlaySelection {
+                    self.actions.push(RuntimeOverlayAction {
                         logical_id,
                         line_index,
                         start_column: choice.start_column,
                         width: choice.width,
-                        command: choice.command,
+                        target: choice.target,
                         kind: choice.kind,
                     });
                 }

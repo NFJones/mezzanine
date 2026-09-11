@@ -205,15 +205,13 @@ fn display_overlay_search_skips_offscreen_match_ranges() {
     );
 }
 
-/// Verifies `/resume` only linkifies the first visible occurrence of
-/// a saved conversation id.
+/// Verifies a saved-session markdown row registers no action by itself.
 ///
-/// The markdown source keeps a hidden `mez-agent:` resume link on the
-/// session row. If the same UUID-like id appears again in explanatory text,
-/// that later occurrence should remain plain text so keyboard and mouse
-/// navigation expose one selection per logical session.
+/// Record rows become selectable only when the product registers a validated
+/// open target for a visible record id, so a `mez-agent:` destination in body
+/// text stays inert no matter how often its id appears.
 #[test]
-fn agent_shell_markdown_overlay_linkifies_each_session_id_once() {
+fn agent_shell_markdown_overlay_registers_no_session_link() {
     let ui_theme = mez_mux::theme::deepforest_ui_theme();
     let content = runtime_agent_shell_markdown_overlay_content(
         Some("resume".to_string()),
@@ -221,29 +219,24 @@ fn agent_shell_markdown_overlay_linkifies_each_session_id_once() {
         &ui_theme,
     );
 
+    assert!(content.actions.is_empty(), "{content:?}");
     assert_eq!(
         content
-            .selections
+            .lines
             .iter()
-            .filter(|selection| {
-                selection.command == "/resume 018f6b3a-1b2c-7000-9000-cafebabefeed"
-            })
+            .filter(|line| line.contains("018f6b3a-1b2c-7000-9000-cafebabefeed"))
             .count(),
         1,
         "{content:?}"
     );
-    assert_eq!(content.selections[0].line_index, 0);
 }
 
-/// Verifies hidden markdown command links are mapped to their rendered
-/// occurrence instead of an earlier duplicate plain-text label.
+/// Verifies a rendered markdown destination stays literal and inert.
 ///
-/// Command-overlay markdown hides `mez-agent:` destinations, so selectable
-/// metadata must be derived from the source/rendered row pair. A plain text
-/// occurrence before the actual markdown link should not receive link
-/// styling or become the mouse target for the hidden command.
+/// Destinations are no longer hidden, so the operator can read exactly what a
+/// body-text link points at while the row stays copyable and unselectable.
 #[test]
-fn agent_shell_markdown_overlay_maps_hidden_links_to_exact_rendered_occurrence() {
+fn agent_shell_markdown_overlay_renders_link_destinations_literally() {
     let ui_theme = mez_mux::theme::deepforest_ui_theme();
     let content = runtime_agent_shell_markdown_overlay_content(
         Some("status".to_string()),
@@ -251,18 +244,15 @@ fn agent_shell_markdown_overlay_maps_hidden_links_to_exact_rendered_occurrence()
         &ui_theme,
     );
 
-    assert_eq!(content.lines, vec!["saved before saved".to_string()]);
-    assert_eq!(content.selections.len(), 1, "{content:?}");
-    let selection = &content.selections[0];
-    assert_eq!(selection.command, "/resume saved");
-    assert_eq!(selection.line_index, 0);
-    assert_eq!(selection.start_column, "saved before ".len());
-    assert_eq!(selection.width, "saved".len());
+    assert!(content.actions.is_empty(), "{content:?}");
+    assert_eq!(content.lines.len(), 1, "{content:?}");
     assert!(
-        content.line_style_spans[0]
-            .iter()
-            .all(|span| span.start != 0),
-        "earlier duplicate text received link styling: {content:?}"
+        content.lines[0].starts_with("saved before saved"),
+        "{content:?}"
+    );
+    assert!(
+        content.lines[0].contains("(mez-agent:%2Fresume%20saved)"),
+        "{content:?}"
     );
 }
 
@@ -283,7 +273,7 @@ fn display_overlay_single_selection_hit_testing_requires_link_bounds() {
             line_index: 0,
             start_column: "text before ".len(),
             width: "[open]".len(),
-            command: "/open".to_string(),
+            action_id: OverlayActionId(0),
             kind: OverlaySelectionKind::Primary,
         }],
         active_selection_index: Some(0),
@@ -336,7 +326,7 @@ fn display_overlay_scroll_keeps_active_selection_visible() {
                 line_index: 0,
                 start_column: 0,
                 width: 5,
-                command: "/first".to_string(),
+                action_id: OverlayActionId(0),
                 kind: OverlaySelectionKind::Primary,
             },
             OverlaySelection {
@@ -344,7 +334,7 @@ fn display_overlay_scroll_keeps_active_selection_visible() {
                 line_index: 3,
                 start_column: 0,
                 width: 6,
-                command: "/second".to_string(),
+                action_id: OverlayActionId(1),
                 kind: OverlaySelectionKind::Primary,
             },
         ],

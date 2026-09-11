@@ -1218,7 +1218,7 @@ impl RuntimeSessionService {
                     content.lines,
                     content.line_style_spans,
                     content.line_copy_texts,
-                    content.selections,
+                    content.actions,
                     false,
                 )?;
                 if let (Some(overlay), Some(record_browser)) = (

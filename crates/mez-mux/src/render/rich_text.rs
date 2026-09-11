@@ -920,62 +920,6 @@ pub fn prefix_rich_text_lines(
         .collect()
 }
 
-/// Resolves display-column ranges for Markdown links accepted by a caller.
-///
-/// The callback translates destinations into caller-owned actions. This keeps
-/// CommonMark source/display alignment in the rich-text owner while product
-/// schemes and command decoding remain outside the mux crate.
-pub fn markdown_link_display_ranges<Action>(
-    source_line: &str,
-    display: &str,
-    resolve: impl Fn(&str) -> Option<Action>,
-) -> Vec<(usize, usize, Action)> {
-    let mut links = Vec::new();
-    let mut source_cursor = 0usize;
-    let mut display_cursor = 0usize;
-    let mut active_link: Option<(String, Option<usize>)> = None;
-    for event in Parser::new_ext(source_line, Options::all()) {
-        match event {
-            Event::Start(Tag::Link { dest_url, .. }) if resolve(&dest_url).is_some() => {
-                active_link = Some((dest_url.to_string(), None));
-            }
-            Event::Text(text) | Event::Code(text) => {
-                let text = text.as_ref();
-                let Some(relative_start) = source_line[source_cursor..].find(text) else {
-                    continue;
-                };
-                source_cursor = source_cursor
-                    .saturating_add(relative_start)
-                    .saturating_add(text.len());
-                let Some(relative_display_start) = display[display_cursor..].find(text) else {
-                    continue;
-                };
-                let absolute_display_start = display_cursor.saturating_add(relative_display_start);
-                if let Some((_, display_start)) = active_link.as_mut()
-                    && display_start.is_none()
-                {
-                    *display_start = Some(absolute_display_start);
-                }
-                display_cursor = display_cursor
-                    .saturating_add(relative_display_start)
-                    .saturating_add(text.len());
-            }
-            Event::End(TagEnd::Link) => {
-                if let Some((destination, Some(display_start))) = active_link.take()
-                    && display_cursor > display_start
-                    && let Some(action) = resolve(&destination)
-                {
-                    let start_column = UnicodeWidthStr::width(&display[..display_start]);
-                    let width = UnicodeWidthStr::width(&display[display_start..display_cursor]);
-                    links.push((start_column, width, action));
-                }
-            }
-            _ => {}
-        }
-    }
-    links
-}
-
 /// Parser-backed CommonMark renderer for pane-buffer markdown presentation.
 ///
 /// The renderer intentionally keeps the output terminal-native rather than
@@ -1211,7 +1155,6 @@ impl<'a> MarkdownRenderer<'a> {
                 self.pop_style();
                 if let Some(dest_url) = self.link_stack.pop()
                     && !dest_url.is_empty()
-                    && !dest_url.starts_with("mez-agent:")
                 {
                     self.append_dim_text(&format!(" ({dest_url})"));
                 }
@@ -2405,7 +2348,7 @@ mod tests {
         let first = "11111111-1111-1111-1111-111111111111";
         let second = "22222222-2222-2222-2222-222222222222";
         let markdown = format!(
-            "| ID | Title |\n| --- | --- |\n| [{first}](mez-agent:%2Fshow-issues%20{first}) | First |\n| [{second}](mez-agent:%2Fshow-issues%20{second}) | Second |"
+            "| ID | Title |\n| --- | --- |\n| [{first}](https://example.test/{first}) | First |\n| [{second}](https://example.test/{second}) | Second |"
         );
         let lines = render_markdown(&markdown, &theme(), Some(24));
         let body_lines = lines
@@ -2451,9 +2394,8 @@ mod tests {
     #[test]
     fn stacked_markdown_tables_preserve_wrapped_link_styles() {
         let id = "11111111-1111-1111-1111-111111111111";
-        let markdown = format!(
-            "| ID | Title |\n| --- | --- |\n| [{id}](mez-agent:%2Fshow-issues%20{id}) | First |"
-        );
+        let markdown =
+            format!("| ID | Title |\n| --- | --- |\n| [{id}](https://example.test/{id}) | First |");
         let lines = render_markdown(&markdown, &theme(), Some(8));
         let linked_fragments = lines
             .iter()

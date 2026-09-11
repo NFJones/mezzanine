@@ -770,6 +770,7 @@ pub fn overlay_text_at(line: &mut String, column: usize, width: usize, text: &st
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::overlay::OverlayActionId;
     use crate::theme::default_ui_theme;
 
     /// Builds neutral overlay state for interaction tests.
@@ -816,7 +817,7 @@ mod tests {
                 line_index: 0,
                 start_column: 0,
                 width: 4,
-                command: "zero".to_string(),
+                action_id: OverlayActionId(0),
                 kind: OverlaySelectionKind::Primary,
             },
             OverlaySelection {
@@ -824,7 +825,7 @@ mod tests {
                 line_index: 3,
                 start_column: 0,
                 width: 5,
-                command: "three".to_string(),
+                action_id: OverlayActionId(1),
                 kind: OverlaySelectionKind::Primary,
             },
         ];
@@ -881,7 +882,7 @@ mod tests {
                 line_index: index + 2,
                 start_column: 0,
                 width: 7,
-                command: format!("/show-issues issue-{index}"),
+                action_id: OverlayActionId(u64::try_from(index).unwrap_or_default()),
                 kind: OverlaySelectionKind::Primary,
             })
             .collect();
@@ -956,7 +957,7 @@ mod tests {
             line_index: 0,
             start_column: 0,
             width: 6,
-            command: "select".to_string(),
+            action_id: OverlayActionId(0),
             kind: OverlaySelectionKind::Primary,
         });
         overlay.active_selection_index = Some(0);
@@ -976,7 +977,7 @@ mod tests {
                 line_index: 0,
                 start_column: 0,
                 width: 5,
-                command: "open".to_string(),
+                action_id: OverlayActionId(4),
                 kind: OverlaySelectionKind::Primary,
             },
             OverlaySelection {
@@ -984,7 +985,7 @@ mod tests {
                 line_index: 1,
                 start_column: 0,
                 width: 9,
-                command: "open".to_string(),
+                action_id: OverlayActionId(4),
                 kind: OverlaySelectionKind::Primary,
             },
             OverlaySelection {
@@ -992,7 +993,7 @@ mod tests {
                 line_index: 2,
                 start_column: 0,
                 width: 5,
-                command: "other".to_string(),
+                action_id: OverlayActionId(5),
                 kind: OverlaySelectionKind::Primary,
             },
         ];
@@ -1056,7 +1057,7 @@ mod tests {
             line_index: 0,
             start_column: 0,
             width: 6,
-            command: "select".to_string(),
+            action_id: OverlayActionId(0),
             kind: OverlaySelectionKind::Primary,
         });
         overlay.active_selection_index = Some(0);
@@ -1071,6 +1072,62 @@ mod tests {
         assert_eq!(
             layered.rendition.background,
             Some(theme.colors.agent_model.background)
+        );
+    }
+
+    /// Verifies rendered text that merely contains an unregistered
+    /// `mez-agent:` destination exposes no selectable range at any column.
+    ///
+    /// Selectable ranges come from product-registered action identities only,
+    /// so linked, encoded, or hidden display text cannot create an executable
+    /// control or an automatic repeat of a previously registered action.
+    #[test]
+    fn overlay_hit_test_exposes_no_range_for_unregistered_link_text() {
+        use crate::overlay::{OverlayInputAction, OverlayInputOutcome, apply_overlay_input};
+
+        let mut overlay = overlay(&["run [neighbor](mez-agent:%2Fapprove) | now", "then exit"]);
+        let line = overlay.lines[0].clone();
+        assert!(line.contains("mez-agent:%2Fapprove"));
+        for column in 0..line.chars().count() {
+            assert_eq!(
+                overlay_selection_index_at_position(&overlay, 0, column),
+                None,
+                "column {column} must not expose an action"
+            );
+        }
+        let size = Size::new(24, 3).unwrap();
+        assert_eq!(
+            apply_overlay_input(
+                &mut overlay,
+                OverlayInputAction::SelectActive,
+                None,
+                true,
+                size,
+            ),
+            OverlayInputOutcome::Unchanged
+        );
+        overlay.active_selection_index = Some(0);
+        assert_eq!(
+            apply_overlay_input(
+                &mut overlay,
+                OverlayInputAction::SelectActive,
+                None,
+                true,
+                size,
+            ),
+            OverlayInputOutcome::Unchanged
+        );
+        let line_end = line.chars().count();
+        overlay.mouse_selection = Some((
+            CopyPosition { line: 0, column: 0 },
+            CopyPosition {
+                line: 0,
+                column: line_end,
+            },
+        ));
+        assert_eq!(
+            overlay_copy_selection(&overlay).as_deref(),
+            Some(line.as_str())
         );
     }
 }

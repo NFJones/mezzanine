@@ -584,14 +584,16 @@ fn markdown_presentation_replaces_overwide_leading_grapheme() {
     assert_eq!(wrapped, vec!["…".to_string(), "abc".to_string()]);
 }
 
-/// Verifies command overlay markdown keeps internal `mez-agent:` links
-/// selectable without rendering their destination text.
+/// Verifies command overlay markdown renders internal `mez-agent:` links inert
+/// without promoting their destination text into a control.
 ///
-/// Saved-session rows use these links for clickable `/resume` commands, but
-/// the visible list should show the bold session UUID rather than a
-/// parenthesized implementation URI.
+/// Saved-session markdown links stay inert after rendering.
+///
+/// The visible list shows the bold session label rather than an executable
+/// control, and the destination stays readable and copyable instead of being
+/// promoted into a selectable command.
 #[test]
-fn agent_shell_markdown_overlay_hides_internal_agent_link_destinations() {
+fn agent_shell_markdown_overlay_keeps_internal_agent_link_destinations_inert() {
     let theme = default_ui_theme();
     let content = runtime_agent_shell_markdown_overlay_content(
         Some("resume".to_string()),
@@ -599,11 +601,22 @@ fn agent_shell_markdown_overlay_hides_internal_agent_link_destinations() {
         &theme,
     );
 
-    assert_eq!(content.lines, vec!["• saved-session".to_string()]);
-    assert_eq!(content.selections.len(), 1);
-    assert_eq!(content.selections[0].command, "/resume saved-session");
-    assert_eq!(content.selections[0].start_column, 2);
-    assert_eq!(content.selections[0].width, "saved-session".len());
+    assert!(content.actions.is_empty(), "{content:?}");
+    assert!(
+        content
+            .lines
+            .iter()
+            .any(|line| line.contains("saved-session")),
+        "{content:?}"
+    );
+    assert!(
+        content
+            .line_copy_texts
+            .iter()
+            .flatten()
+            .any(|copy_text| copy_text.contains("(mez-agent:/resume%20saved-session)")),
+        "{content:?}"
+    );
 }
 
 /// Verifies plain assistant text uses the same prompt-aligned continuation

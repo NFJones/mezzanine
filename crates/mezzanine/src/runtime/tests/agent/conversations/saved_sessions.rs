@@ -526,10 +526,7 @@ fn runtime_agent_shell_clears_session_names_without_deleting_conversations() {
         r#"{"jsonrpc":"2.0","id":"list-after-clear","method":"agent/shell/command","params":{"idempotency_key":"list-after-clear","input":"/resume"}}"#,
         &primary,
     );
-    assert!(
-        picker.contains(&format!("[`{conversation_id}`]")),
-        "{picker}"
-    );
+    assert!(picker.contains(&format!("`{conversation_id}`")), "{picker}");
     assert!(!picker.contains("Pinned investigation"), "{picker}");
 
     let repeated = service.dispatch_runtime_control_body(
@@ -712,8 +709,8 @@ fn runtime_agent_shell_sorts_named_sessions_first_without_changing_latest() {
         r#"{"jsonrpc":"2.0","id":"list-order","method":"agent/shell/command","params":{"idempotency_key":"list-order","input":"/resume"}}"#,
         &primary,
     );
-    let named_position = picker.find("[`named-old`]").unwrap();
-    let unnamed_position = picker.find("[`recent-unnamed`]").unwrap();
+    let named_position = picker.find("`named-old`").unwrap();
+    let unnamed_position = picker.find("`recent-unnamed`").unwrap();
     assert!(named_position < unnamed_position, "{picker}");
 
     let latest = service.dispatch_runtime_control_body(
@@ -2116,17 +2113,11 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
         r#"{"jsonrpc":"2.0","id":"resume-list","method":"agent/shell/command","params":{"idempotency_key":"resume-list","input":"/resume"}}"#,
         &primary,
     );
-    assert!(
-        picker.contains("[`saved`](mez-agent:%2Fresume%20saved)"),
-        "{picker}"
-    );
-    assert!(
-        picker.contains("[`latest`](mez-agent:%2Fresume%20latest)"),
-        "{picker}"
-    );
+    assert!(picker.contains("`saved`"), "{picker}");
+    assert!(picker.contains("`latest`"), "{picker}");
     let saved_row = picker
         .lines()
-        .find(|line| line.contains("[`saved`]"))
+        .find(|line| line.contains("`saved`"))
         .expect("saved session table row should exist");
     assert!(saved_row.contains("latest saved prompt"), "{picker}");
 

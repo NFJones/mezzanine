@@ -188,14 +188,13 @@ pub fn key_preset_list_table_row(
     );
     let action = format!("set-key-preset {name}");
     format!(
-        "| {} | {} | {} | {} | {} | [`{}`]({}) |",
+        "| {} | {} | {} | {} | {} | `{}` |",
         markdown_cell(active_marker),
         markdown_cell(name),
         markdown_cell(source),
         markdown_cell(&key_chord_notation(bindings.escape)),
         markdown_cell(&summary),
         markdown_cell(&action),
-        action_destination(&action),
     )
 }
 
@@ -260,19 +259,6 @@ fn key_chord_notation(chord: KeyChord) -> String {
 
 fn markdown_cell(value: &str) -> String {
     value.replace('|', r"\|").replace('\n', "<br>")
-}
-
-fn action_destination(command: &str) -> String {
-    let mut encoded = String::from("mez-agent:");
-    for byte in command.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~' | b'/') {
-            encoded.push(byte as char);
-        } else {
-            encoded.push('%');
-            encoded.push_str(&format!("{byte:02X}"));
-        }
-    }
-    encoded
 }
 
 #[cfg(test)]
@@ -357,8 +343,8 @@ mod tests {
         assert_eq!(disabled.edit_prompt, None);
     }
 
-    /// Verifies key-preset rows expose selectable internal command links using
-    /// the same Markdown action convention as theme rows.
+    /// Verifies key-preset rows render their `set-key-preset` action cell as a
+    /// selectable typed target instead of Markdown link syntax.
     #[test]
     fn key_preset_row_contains_selectable_set_action() {
         let row = key_preset_list_table_row(
@@ -369,6 +355,7 @@ mod tests {
         );
         assert!(row.contains("★ active"));
         assert!(row.contains("13 direct, 0 command"));
-        assert!(row.contains("[`set-key-preset simple`](mez-agent:set-key-preset%20simple)"));
+        assert!(row.contains("`set-key-preset simple`"), "{row}");
+        assert!(!row.contains("mez-agent:"), "{row}");
     }
 }

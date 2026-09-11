@@ -253,7 +253,8 @@ fn list_themes_reports_builtin_defaults_without_runtime_config() {
     assert!(body.contains("| — | catppuccin_latte | █████ | builtin |"));
     assert!(body.contains("| — | high_contrast_dark | █████ | builtin |"));
     assert!(body.contains("| — | dracula | █████ | builtin |"));
-    assert!(body.contains("[`set-theme acid_lime`](mez-agent:set-theme%20acid_lime)"));
+    assert!(body.contains("`set-theme acid_lime`"));
+    assert!(!body.contains("mez-agent:"), "{body}");
 }
 
 /// Verifies key presets have a useful offline table with the generated default
@@ -274,7 +275,8 @@ fn list_key_presets_reports_builtin_defaults_without_runtime_config() {
     ));
     assert!(body.contains("| ★ active | default | builtin | C-a | 0 direct, 0 command |"));
     assert!(body.contains("| — | simple | builtin | C-a | 13 direct, 0 command |"));
-    assert!(body.contains("[`set-key-preset simple`](mez-agent:set-key-preset%20simple)"));
+    assert!(body.contains("`set-key-preset simple`"));
+    assert!(!body.contains("mez-agent:"), "{body}");
 }
 
 /// Verifies that the baseline command registry reports a known support level

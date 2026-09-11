@@ -194,34 +194,19 @@ pub fn ui_theme_list_table_row(
     let active_marker = if active { "★ active" } else { "—" };
     let action_label = format!("set-theme {theme}");
     format!(
-        "| {} | {} | {} | {} | {} | [`{}`]({}) |",
+        "| {} | {} | {} | {} | {} | `{}` |",
         ui_theme_list_table_markdown_cell(active_marker),
         ui_theme_list_table_markdown_cell(theme),
         ui_theme_list_table_markdown_cell(&preview),
         ui_theme_list_table_markdown_cell(source),
         ui_theme_list_table_markdown_cell(&preview_colors),
         ui_theme_list_table_markdown_cell(&action_label),
-        ui_theme_list_table_action_destination(theme),
     )
 }
 
 /// Escapes one theme-listing field for Markdown table output.
 fn ui_theme_list_table_markdown_cell(value: &str) -> String {
     value.replace('|', r"\|").replace('\n', "<br>")
-}
-
-/// Returns the internal command destination for one theme action link.
-fn ui_theme_list_table_action_destination(theme: &str) -> String {
-    let mut encoded = String::from("mez-agent:");
-    for byte in format!("set-theme {theme}").bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~' | b'/') {
-            encoded.push(byte as char);
-        } else {
-            encoded.push('%');
-            encoded.push_str(&format!("{byte:02X}"));
-        }
-    }
-    encoded
 }
 
 impl UiColorPair {

@@ -1,5 +1,6 @@
 //! Runtime service mutation for overlays, record browsers, and selections.
 
+use super::action_registry::{OverlayActionTarget, RuntimeOverlayAction};
 use super::display_content::*;
 use super::product_content::*;
 use super::selection_adapter::*;
@@ -225,6 +226,7 @@ impl RuntimeSessionService {
         record_browser.browser = browser;
         Ok(Some(render_record_browser_overlay(
             overlay,
+            &mut self.presentation.overlay_action_registry,
             &self.presentation.settings.ui_theme,
             terminal_width,
             prose_width,
@@ -250,6 +252,7 @@ impl RuntimeSessionService {
         let search_query = overlay.search_query.clone();
         let changed = render_record_browser_overlay_matching(
             overlay,
+            &mut self.presentation.overlay_action_registry,
             &self.presentation.settings.ui_theme,
             terminal_width,
             prose_width,
@@ -346,6 +349,7 @@ impl RuntimeSessionService {
             .max(1);
         render_record_browser_overlay(
             overlay,
+            &mut self.presentation.overlay_action_registry,
             &self.presentation.settings.ui_theme,
             terminal_width,
             prose_width,
@@ -355,8 +359,59 @@ impl RuntimeSessionService {
         Ok(true)
     }
 
-    /// Executes one command selected from the primary display overlay.
-    pub(crate) fn execute_primary_display_overlay_selection_command(
+    /// Executes one registered action selected from the primary display overlay.
+    ///
+    /// The mux carries only opaque action identities, so this is the only entry
+    /// point that turns a selection into work. The caller must be the attached
+    /// primary client, an overlay must currently be displayed, and the identity
+    /// must resolve to a target this product registered for the current
+    /// generation. A missing, foreign, or stale identity is a harmless no-op
+    /// that never falls back to rendered text and never repeats a prior action.
+    pub(crate) fn execute_primary_display_overlay_action(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        action_id: mez_mux::overlay::OverlayActionId,
+    ) -> Result<bool> {
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Ok(false);
+        }
+        if self.presentation.primary_display_overlay.is_none() {
+            return Ok(false);
+        }
+        let Some(target) = self
+            .presentation
+            .overlay_action_registry
+            .resolve(action_id)
+            .cloned()
+        else {
+            return Ok(true);
+        };
+        match target {
+            OverlayActionTarget::RecordBrowserPromptSelect { index } => {
+                self.execute_record_browser_prompt_select(primary_client_id, index)
+            }
+            OverlayActionTarget::RecordBrowserOpen { .. } => {
+                let Some(command) = target.agent_command_line() else {
+                    return Ok(true);
+                };
+                self.execute_overlay_agent_slash_command(primary_client_id, &command)
+            }
+            OverlayActionTarget::TerminalCommand { .. }
+            | OverlayActionTarget::SetTheme { .. }
+            | OverlayActionTarget::SetKeyPreset { .. } => {
+                let Some(command) = target.terminal_command_line() else {
+                    return Ok(true);
+                };
+                self.execute_overlay_terminal_command(primary_client_id, &command)
+            }
+        }
+    }
+
+    /// Executes one agent slash command selected from the primary display overlay.
+    ///
+    /// The command line is rebuilt from a validated target, so the executor
+    /// never sees a string that came from rendered text.
+    fn execute_overlay_agent_slash_command(
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         command: &str,
@@ -415,6 +470,15 @@ impl RuntimeSessionService {
             }
             return Ok(true);
         }
+        Ok(false)
+    }
+
+    /// Executes one terminal command selected from the primary display overlay.
+    fn execute_overlay_terminal_command(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        command: &str,
+    ) -> Result<bool> {
         self.presentation.primary_display_overlay = None;
         let content = self
             .execute_terminal_command(primary_client_id, command)
@@ -428,6 +492,66 @@ impl RuntimeSessionService {
             })?;
         self.present_runtime_command_display_content(content)?;
         Ok(true)
+    }
+
+    /// Applies one registered record-browser prompt option selection.
+    ///
+    /// Prompt option rows are ordinary key-driven state, so the registered
+    /// action moves the selector to the clicked option and then submits through
+    /// the same input path the keyboard uses.
+    fn execute_record_browser_prompt_select(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        index: usize,
+    ) -> Result<bool> {
+        let Some(current) = self
+            .presentation
+            .primary_display_overlay
+            .as_ref()
+            .and_then(|overlay| overlay.record_browser.as_ref())
+            .and_then(|record_browser| record_browser.browser.prompt_selection())
+            .map(|selection| selection.active_index)
+        else {
+            return Ok(true);
+        };
+        let delta = if index >= current {
+            isize::try_from(index.saturating_sub(current)).unwrap_or(isize::MAX)
+        } else {
+            -isize::try_from(current.saturating_sub(index)).unwrap_or(isize::MAX)
+        };
+        if delta != 0 {
+            let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                return Ok(true);
+            };
+            let Some(record_browser) = overlay.record_browser.as_mut() else {
+                return Ok(true);
+            };
+            record_browser.browser.apply_action(
+                mez_mux::record_browser::RecordBrowserAction::MovePromptSelection(delta),
+            )?;
+        }
+        self.apply_primary_display_overlay_input(primary_client_id, b"\r")
+    }
+
+    /// Returns the typed targets registered for display-overlay selections.
+    ///
+    /// Test-only projection so behavior tests can assert the registered action
+    /// instead of reconstructing a command string from rendered text.
+    #[cfg(test)]
+    pub(crate) fn primary_display_overlay_action_targets(&self) -> Vec<OverlayActionTarget> {
+        let Some(overlay) = self.presentation.primary_display_overlay.as_ref() else {
+            return Vec::new();
+        };
+        overlay
+            .selections
+            .iter()
+            .filter_map(|selection| {
+                self.presentation
+                    .overlay_action_registry
+                    .resolve(selection.action_id)
+                    .cloned()
+            })
+            .collect()
     }
 
     /// Applies mouse-wheel scrolling to the primary display overlay.
@@ -516,6 +640,7 @@ impl RuntimeSessionService {
             record_browser.browser = browser;
             return Ok(Some(render_record_browser_overlay(
                 overlay,
+                &mut self.presentation.overlay_action_registry,
                 &self.presentation.settings.ui_theme,
                 terminal_width,
                 prose_width,
@@ -543,6 +668,7 @@ impl RuntimeSessionService {
                 record_browser.browser = browser;
                 return Ok(Some(render_record_browser_overlay(
                     overlay,
+                    &mut self.presentation.overlay_action_registry,
                     &self.presentation.settings.ui_theme,
                     terminal_width,
                     prose_width,
@@ -576,6 +702,7 @@ impl RuntimeSessionService {
                 record_browser.browser = browser;
                 return Ok(Some(render_record_browser_overlay(
                     overlay,
+                    &mut self.presentation.overlay_action_registry,
                     &self.presentation.settings.ui_theme,
                     terminal_width,
                     prose_width,
@@ -603,6 +730,7 @@ impl RuntimeSessionService {
             record_browser.browser = browser;
             return Ok(Some(render_record_browser_overlay(
                 overlay,
+                &mut self.presentation.overlay_action_registry,
                 &self.presentation.settings.ui_theme,
                 terminal_width,
                 prose_width,
@@ -657,6 +785,7 @@ impl RuntimeSessionService {
             record_browser.browser.set_error(Some(status));
             return Ok(Some(render_record_browser_overlay(
                 overlay,
+                &mut self.presentation.overlay_action_registry,
                 &self.presentation.settings.ui_theme,
                 terminal_width,
                 prose_width,
@@ -686,6 +815,7 @@ impl RuntimeSessionService {
             record_browser.browser = browser;
             return Ok(Some(render_record_browser_overlay(
                 overlay,
+                &mut self.presentation.overlay_action_registry,
                 &self.presentation.settings.ui_theme,
                 terminal_width,
                 prose_width,
@@ -747,6 +877,7 @@ impl RuntimeSessionService {
             record_browser.browser.set_error(error);
             return Ok(Some(render_record_browser_overlay(
                 overlay,
+                &mut self.presentation.overlay_action_registry,
                 &self.presentation.settings.ui_theme,
                 terminal_width,
                 prose_width,
@@ -861,6 +992,7 @@ impl RuntimeSessionService {
                         .set_error(Some(error.message().to_string()));
                     return Ok(Some(render_record_browser_overlay(
                         overlay,
+                        &mut self.presentation.overlay_action_registry,
                         &self.presentation.settings.ui_theme,
                         terminal_width,
                         prose_width,
@@ -897,6 +1029,7 @@ impl RuntimeSessionService {
             record_browser.browser = browser;
             return Ok(Some(render_record_browser_overlay(
                 overlay,
+                &mut self.presentation.overlay_action_registry,
                 &self.presentation.settings.ui_theme,
                 terminal_width,
                 prose_width,
@@ -938,6 +1071,7 @@ impl RuntimeSessionService {
                         .set_error(Some(error.message().to_string()));
                     return Ok(Some(render_record_browser_overlay(
                         overlay,
+                        &mut self.presentation.overlay_action_registry,
                         &self.presentation.settings.ui_theme,
                         terminal_width,
                         prose_width,
@@ -961,6 +1095,7 @@ impl RuntimeSessionService {
             record_browser.browser = browser;
             return Ok(Some(render_record_browser_overlay(
                 overlay,
+                &mut self.presentation.overlay_action_registry,
                 &self.presentation.settings.ui_theme,
                 terminal_width,
                 prose_width,
@@ -1057,16 +1192,14 @@ impl RuntimeSessionService {
                 record_browser.browser.set_error(Some(status));
                 return Ok(Some(render_record_browser_overlay(
                     overlay,
+                    &mut self.presentation.overlay_action_registry,
                     &self.presentation.settings.ui_theme,
                     terminal_width,
                     prose_width,
                 )));
             }
             return self
-                .execute_primary_display_overlay_selection_command(
-                    primary_client_id,
-                    &format!("/resume {id}"),
-                )
+                .execute_overlay_agent_slash_command(primary_client_id, &format!("/resume {id}"))
                 .map(Some);
         }
         if matches!(selector_input_action(input), SelectorInputAction::Select)
@@ -1109,6 +1242,7 @@ impl RuntimeSessionService {
             record_browser.browser = browser;
             return Ok(Some(render_record_browser_overlay(
                 overlay,
+                &mut self.presentation.overlay_action_registry,
                 &self.presentation.settings.ui_theme,
                 terminal_width,
                 prose_width,
@@ -1151,6 +1285,7 @@ impl RuntimeSessionService {
                 .apply_action(mez_mux::record_browser::RecordBrowserAction::OpenActive)?;
             return Ok(Some(render_record_browser_overlay(
                 overlay,
+                &mut self.presentation.overlay_action_registry,
                 &self.presentation.settings.ui_theme,
                 terminal_width,
                 prose_width,
@@ -1174,6 +1309,7 @@ impl RuntimeSessionService {
                     .set_error(Some("No focused record is available to copy.".to_string()));
                 return Ok(Some(render_record_browser_overlay(
                     overlay,
+                    &mut self.presentation.overlay_action_registry,
                     &self.presentation.settings.ui_theme,
                     terminal_width,
                     prose_width,
@@ -1190,6 +1326,7 @@ impl RuntimeSessionService {
                 ));
                 return Ok(Some(render_record_browser_overlay(
                     overlay,
+                    &mut self.presentation.overlay_action_registry,
                     &self.presentation.settings.ui_theme,
                     terminal_width,
                     prose_width,
@@ -1198,6 +1335,7 @@ impl RuntimeSessionService {
             record_browser.browser.set_error(None);
             let changed = render_record_browser_overlay(
                 overlay,
+                &mut self.presentation.overlay_action_registry,
                 &self.presentation.settings.ui_theme,
                 terminal_width,
                 prose_width,
@@ -1257,6 +1395,7 @@ impl RuntimeSessionService {
                     let scroll_offset = frame.scroll_offset;
                     let changed = render_record_browser_overlay(
                         overlay,
+                        &mut self.presentation.overlay_action_registry,
                         &self.presentation.settings.ui_theme,
                         terminal_width,
                         prose_width,
@@ -1275,6 +1414,7 @@ impl RuntimeSessionService {
                     let list_scroll_offset = record_browser.browser.scroll_offset();
                     let changed = render_record_browser_overlay(
                         overlay,
+                        &mut self.presentation.overlay_action_registry,
                         &self.presentation.settings.ui_theme,
                         terminal_width,
                         prose_width,
@@ -1324,6 +1464,7 @@ impl RuntimeSessionService {
         }
         Ok(Some(render_record_browser_overlay(
             overlay,
+            &mut self.presentation.overlay_action_registry,
             &self.presentation.settings.ui_theme,
             terminal_width,
             prose_width,
@@ -1415,6 +1556,7 @@ impl RuntimeSessionService {
                 )?;
                 return Ok(render_record_browser_overlay(
                     overlay,
+                    &mut self.presentation.overlay_action_registry,
                     &self.presentation.settings.ui_theme,
                     terminal_width,
                     prose_width,
@@ -1457,6 +1599,7 @@ impl RuntimeSessionService {
             };
             let changed = render_record_browser_overlay(
                 overlay,
+                &mut self.presentation.overlay_action_registry,
                 &self.presentation.settings.ui_theme,
                 terminal_width,
                 prose_width,
@@ -1553,6 +1696,7 @@ impl RuntimeSessionService {
                 };
                 Ok(render_record_browser_overlay(
                     overlay,
+                    &mut self.presentation.overlay_action_registry,
                     &self.presentation.settings.ui_theme,
                     terminal_width,
                     prose_width,
@@ -1574,6 +1718,7 @@ impl RuntimeSessionService {
                 };
                 Ok(render_record_browser_overlay(
                     overlay,
+                    &mut self.presentation.overlay_action_registry,
                     &self.presentation.settings.ui_theme,
                     terminal_width,
                     prose_width,
@@ -1585,6 +1730,7 @@ impl RuntimeSessionService {
                 };
                 let changed = render_record_browser_overlay(
                     overlay,
+                    &mut self.presentation.overlay_action_registry,
                     &self.presentation.settings.ui_theme,
                     terminal_width,
                     prose_width,
@@ -1701,6 +1847,7 @@ impl RuntimeSessionService {
                 record_browser.browser = browser;
                 return Ok(render_record_browser_overlay_matching(
                     overlay,
+                    &mut self.presentation.overlay_action_registry,
                     &self.presentation.settings.ui_theme,
                     terminal_width,
                     prose_width,
@@ -1713,6 +1860,7 @@ impl RuntimeSessionService {
             let query = overlay.search_query.clone();
             return Ok(render_record_browser_overlay_matching(
                 overlay,
+                &mut self.presentation.overlay_action_registry,
                 &self.presentation.settings.ui_theme,
                 terminal_width,
                 prose_width,
@@ -1729,8 +1877,8 @@ impl RuntimeSessionService {
                 self.presentation.primary_display_overlay = None;
                 Ok(true)
             }
-            OverlayInputOutcome::Invoke { command } => {
-                self.execute_primary_display_overlay_selection_command(primary_client_id, &command)
+            OverlayInputOutcome::Invoke { action_id } => {
+                self.execute_primary_display_overlay_action(primary_client_id, action_id)
             }
             OverlayInputOutcome::Updated => Ok(true),
             OverlayInputOutcome::Unchanged | OverlayInputOutcome::Ignored => Ok(false),
@@ -1892,10 +2040,11 @@ impl RuntimeSessionService {
         lines: Vec<String>,
         mut line_style_spans: Vec<Vec<TerminalStyleSpan>>,
         mut line_copy_texts: Vec<Option<String>>,
-        selections: Vec<OverlaySelection>,
+        actions: Vec<RuntimeOverlayAction>,
         dismiss_on_any_input: bool,
     ) -> Result<()> {
         self.require_live()?;
+        self.presentation.overlay_action_registry.begin_generation();
         self.presentation.primary_display_overlay = if lines.is_empty() {
             None
         } else {
@@ -1903,6 +2052,10 @@ impl RuntimeSessionService {
             line_style_spans.resize(lines.len(), Vec::new());
             line_copy_texts.truncate(lines.len());
             line_copy_texts.resize(lines.len(), None);
+            let selections = self
+                .presentation
+                .overlay_action_registry
+                .register_all(actions);
             let active_selection_index = (!selections.is_empty()).then_some(0);
             Some(RuntimeDisplayOverlay {
                 lines,
@@ -1942,7 +2095,7 @@ impl RuntimeSessionService {
             let live_source = content.live_source.clone();
             let available_width = runtime_command_overlay_available_width(
                 usize::from(self.session.authoritative_size.columns),
-                !content.selections.is_empty(),
+                !content.actions.is_empty(),
             );
             content = wrap_runtime_command_display_overlay_content(
                 content,
@@ -1953,7 +2106,7 @@ impl RuntimeSessionService {
                 content.lines,
                 content.line_style_spans,
                 content.line_copy_texts,
-                content.selections,
+                content.actions,
                 false,
             )?;
             if let (Some(overlay), Some(source)) = (
@@ -1981,39 +2134,57 @@ impl RuntimeSessionService {
         &mut self,
         mut content: RuntimeCommandDisplayOverlayContent,
     ) -> bool {
-        let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+        let Some(existing) = self.presentation.primary_display_overlay.as_ref() else {
             return false;
         };
-        let active_command = overlay
-            .active_selection_index
-            .and_then(|index| overlay.selections.get(index))
-            .map(|selection| selection.command.clone());
         content.line_style_spans.truncate(content.lines.len());
         content
             .line_style_spans
             .resize(content.lines.len(), Vec::new());
         content.line_copy_texts.truncate(content.lines.len());
         content.line_copy_texts.resize(content.lines.len(), None);
-        if overlay.lines == content.lines
-            && overlay.line_style_spans == content.line_style_spans
-            && overlay.line_copy_texts == content.line_copy_texts
-            && overlay.selections == content.selections
+        if existing.lines == content.lines
+            && existing.line_style_spans == content.line_style_spans
+            && existing.line_copy_texts == content.line_copy_texts
         {
             return false;
         }
+        // Focus survives a rebuild by target identity rather than by position
+        // or text, so a refreshed generation can keep the operator's place
+        // without ever replaying an identity from the previous generation.
+        let active_target = existing
+            .active_selection_index
+            .and_then(|index| existing.selections.get(index))
+            .and_then(|selection| {
+                self.presentation
+                    .overlay_action_registry
+                    .resolve(selection.action_id)
+            })
+            .cloned();
+        self.presentation.overlay_action_registry.begin_generation();
+        let selections = self
+            .presentation
+            .overlay_action_registry
+            .register_all(content.actions);
+        let active_selection_index = active_target
+            .as_ref()
+            .and_then(|target| {
+                selections.iter().position(|selection| {
+                    self.presentation
+                        .overlay_action_registry
+                        .resolve(selection.action_id)
+                        == Some(target)
+                })
+            })
+            .or_else(|| (!selections.is_empty()).then_some(0));
+        let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+            return false;
+        };
         overlay.lines = content.lines;
         overlay.line_style_spans = content.line_style_spans;
         overlay.line_copy_texts = content.line_copy_texts;
-        overlay.selections = content.selections;
-        overlay.active_selection_index = active_command
-            .as_deref()
-            .and_then(|command| {
-                overlay
-                    .selections
-                    .iter()
-                    .position(|selection| selection.command == command)
-            })
-            .or_else(|| (!overlay.selections.is_empty()).then_some(0));
+        overlay.selections = selections;
+        overlay.active_selection_index = active_selection_index;
         overlay.mouse_selection = None;
         let client_size = self.session.authoritative_size;
         clamp_overlay_scroll(overlay, client_size);
@@ -2275,16 +2446,16 @@ impl RuntimeSessionService {
         };
         let selection_index =
             overlay_selection_index_at_position(overlay, display_line_index, position.column);
-        let Some(command) = selection_index
+        let Some(action_id) = selection_index
             .and_then(|index| overlay.selections.get(index))
-            .map(|selection| selection.command.clone())
+            .map(|selection| selection.action_id)
         else {
             return Ok(false);
         };
         if let Some(overlay) = self.presentation.primary_display_overlay.as_mut() {
             overlay.active_selection_index = selection_index;
         }
-        self.execute_primary_display_overlay_selection_command(primary_client_id, &command)
+        self.execute_primary_display_overlay_action(primary_client_id, action_id)
     }
 
     /// Starts a mouse text selection in the primary command-output overlay.

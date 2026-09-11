@@ -2,6 +2,21 @@
 
 use super::*;
 
+/// Returns the registered agent command line for one overlay selection.
+///
+/// Overlay selections carry only opaque identities, so tests resolve the
+/// product-registered target instead of reading a command string that rendered
+/// text could have supplied.
+fn registered_agent_command(
+    service: &crate::runtime::RuntimeSessionService,
+    selection_index: usize,
+) -> Option<String> {
+    service
+        .primary_display_overlay_action_targets()
+        .get(selection_index)
+        .and_then(|target| target.agent_command_line())
+}
+
 /// Verifies agent-shell record browsers keep their typed browser state after
 /// the Markdown display response opens the primary overlay.
 ///
@@ -421,10 +436,10 @@ fn runtime_record_browser_kind_selector_navigation_preserves_record_cursor() {
         .primary_display_overlay()
         .expect("kind selector should retain the display overlay");
     assert!(
-        overlay
-            .selections
+        service
+            .primary_display_overlay_action_targets()
             .iter()
-            .all(|selection| selection.command.is_empty()),
+            .all(|target| target.agent_command_line().is_none()),
         "kind-selector focus must exclude record-link selections: {:?}",
         overlay.selections
     );
@@ -1249,12 +1264,12 @@ enabled = true
         .unwrap();
     assert_eq!(overlay.active_selection_index, Some(recent_selection_index));
     assert_eq!(
-        overlay.selections[recent_selection_index].command,
-        format!("/show-issues {}", recent_issue.id)
+        registered_agent_command(&service, recent_selection_index).as_deref(),
+        Some(format!("/show-issues {}", recent_issue.id).as_str())
     );
     assert_eq!(
-        overlay.selections[older_selection_index].command,
-        format!("/show-issues {}", older_issue.id)
+        registered_agent_command(&service, older_selection_index).as_deref(),
+        Some(format!("/show-issues {}", older_issue.id).as_str())
     );
     assert!(
         !overlay_view
@@ -1563,8 +1578,17 @@ fn runtime_agent_shell_failed_nested_record_command_preserves_parent_overlay() {
     let expected_scroll_offset = overlay.scroll_offset;
     assert!(expected_scroll_offset > 0);
 
+    let failing_action_id = service
+        .primary_display_overlay()
+        .and_then(|overlay| {
+            overlay
+                .active_selection_index
+                .and_then(|index| overlay.selections.get(index))
+                .map(|selection| selection.action_id)
+        })
+        .expect("parent overlay must expose the active registered action");
     service
-        .execute_primary_display_overlay_selection_command(&primary, "/show-issues \"")
+        .execute_primary_display_overlay_action(&primary, failing_action_id)
         .unwrap();
 
     let overlay = service
@@ -1695,9 +1719,14 @@ fn runtime_agent_shell_show_context_deletes_the_selected_active_session_entry() 
         (2, "/show-context 3"),
     ] {
         assert!(
-            overlay.selections.iter().any(|selection| {
-                selection.logical_id == logical_id && selection.command == command
-            }),
+            overlay
+                .selections
+                .iter()
+                .enumerate()
+                .any(|(index, selection)| {
+                    selection.logical_id == logical_id
+                        && registered_agent_command(&service, index).as_deref() == Some(command)
+                }),
             "{overlay:?}"
         );
     }
@@ -1746,8 +1775,8 @@ fn runtime_agent_shell_show_context_deletes_the_selected_active_session_entry() 
         2
     );
     assert_eq!(
-        overlay.selections[successor_selection_index].command,
-        "/show-context 2"
+        registered_agent_command(&service, successor_selection_index).as_deref(),
+        Some("/show-context 2")
     );
 
     apply_record_browser_input(&mut service, &primary, b"d");
@@ -2003,13 +2032,13 @@ fn runtime_agent_shell_list_personalities_selects_the_focused_profile() {
     );
     assert!(
         page.raw_markdown
-            .contains("| [`alpha`](mez-agent:%2Fpersonality%20alpha) | Alpha | yes | default | terse | inherit | on | inherit |"),
+            .contains("| `alpha` | Alpha | yes | default | terse | inherit | on | inherit |"),
         "{}",
         page.raw_markdown
     );
     assert!(
         page.raw_markdown
-            .contains("| [`bravo`](mez-agent:%2Fpersonality%20bravo) | Bravo | no | — | default | inherit | inherit | off |"),
+            .contains("| `bravo` | Bravo | no | — | default | inherit | inherit | off |"),
         "{}",
         page.raw_markdown
     );
@@ -2056,11 +2085,11 @@ fn runtime_agent_shell_list_personalities_selects_the_focused_profile() {
     assert!(!browser.is_detail_view());
     let refreshed = browser.render_page().raw_markdown;
     assert!(
-        refreshed.contains("| [`alpha`](mez-agent:%2Fpersonality%20alpha) | Alpha | no | — | terse | inherit | on | inherit |"),
+        refreshed.contains("| `alpha` | Alpha | no | — | terse | inherit | on | inherit |"),
         "{refreshed}"
     );
     assert!(
-        refreshed.contains("| [`bravo`](mez-agent:%2Fpersonality%20bravo) | Bravo | yes | pane | default | inherit | inherit | off |"),
+        refreshed.contains("| `bravo` | Bravo | yes | pane | default | inherit | inherit | off |"),
         "{refreshed}"
     );
 }
@@ -2145,7 +2174,7 @@ fn runtime_agent_shell_list_personalities_falls_back_from_stale_pane_selection()
     assert_eq!(browser.active_record_id(), Some("alpha"));
     assert!(
         markdown.contains(
-            "| [`alpha`](mez-agent:%2Fpersonality%20alpha) | Alpha | yes | default | default | inherit | inherit | inherit |"
+            "| `alpha` | Alpha | yes | default | default | inherit | inherit | inherit |"
         ),
         "{markdown}"
     );
@@ -2272,8 +2301,8 @@ fn runtime_agent_shell_show_approvals_decides_selected_stable_ids() {
     assert_eq!(overlay.active_selection_index, Some(0));
     let first_selection = &overlay.selections[0];
     assert_eq!(
-        first_selection.command,
-        format!("/show-approvals {first_id}")
+        registered_agent_command(&service, 0).as_deref(),
+        Some(format!("/show-approvals {first_id}").as_str())
     );
     assert_eq!(first_selection.width, first_id.len());
     assert!(
@@ -2282,8 +2311,8 @@ fn runtime_agent_shell_show_approvals_decides_selected_stable_ids() {
     );
     let second_selection = &overlay.selections[1];
     assert_eq!(
-        second_selection.command,
-        format!("/show-approvals {second_id}")
+        registered_agent_command(&service, 1).as_deref(),
+        Some(format!("/show-approvals {second_id}").as_str())
     );
     assert_eq!(second_selection.width, second_id.len());
     assert!(
@@ -2345,8 +2374,8 @@ fn runtime_agent_shell_show_approvals_decides_selected_stable_ids() {
     let overlay = service.primary_display_overlay().unwrap();
     assert_eq!(overlay.active_selection_index, Some(1));
     assert_eq!(
-        overlay.selections[1].command,
-        format!("/show-approvals {second_id}")
+        registered_agent_command(&service, 1).as_deref(),
+        Some(format!("/show-approvals {second_id}").as_str())
     );
     let moved_view = service
         .render_client_view(
@@ -2466,8 +2495,8 @@ fn runtime_agent_shell_show_approvals_maps_wrapped_links_to_logical_records() {
         .position(|selection| selection.logical_id == 1)
         .expect("second approval should retain an ID link");
     assert_eq!(
-        overlay.selections[second_selection_index].command,
-        format!("/show-approvals {second_id}")
+        registered_agent_command(&service, second_selection_index).as_deref(),
+        Some(format!("/show-approvals {second_id}").as_str())
     );
 
     apply_record_browser_input(&mut service, &primary, b"\x1b[B");
@@ -2910,8 +2939,8 @@ fn runtime_agent_shell_show_memories_opens_arrow_selected_table_record() {
         .id
         .clone();
     assert_eq!(
-        overlay.selections[second_selection_index].command,
-        format!("/show-memories {second_id}")
+        registered_agent_command(&service, second_selection_index).as_deref(),
+        Some(format!("/show-memories {second_id}").as_str())
     );
     let expected_detail = store.inspect(&second_id).unwrap().content;
 

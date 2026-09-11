@@ -722,7 +722,7 @@ fn runtime_live_display_overlay_replacement_reconciles_interaction_state() {
         line_style_spans: vec![Vec::new()],
         line_kinds: vec![mez_mux::render::RichTextLineKind::Normal],
         line_copy_texts: vec![None],
-        selections: Vec::new(),
+        actions: Vec::new(),
     };
 
     assert!(service.replace_primary_display_overlay_content(content.clone()));
@@ -759,11 +759,15 @@ fn runtime_primary_display_overlay_executes_selectable_command_rows() {
     let overlay = service
         .primary_display_overlay()
         .expect("choose-window should open a command display overlay");
+    let work_index = service
+        .primary_display_overlay_action_targets()
+        .iter()
+        .position(|target| target.terminal_command_line().as_deref() == Some("select-window -t @2"))
+        .expect("work window row should advertise a selectable action");
     let work_selection = overlay
         .selections
-        .iter()
-        .find(|selection| selection.command == "select-window -t @2")
-        .expect("work window row should advertise a selectable action");
+        .get(work_index)
+        .expect("work window row should retain its registered range");
     let clicked_row = work_selection.line_index.saturating_add(1);
     let clicked_column = work_selection.start_column.saturating_add(2);
 
@@ -790,6 +794,138 @@ fn runtime_primary_display_overlay_executes_selectable_command_rows() {
 
     assert!(report.view_refresh_required);
     assert!(service.primary_display_overlay().is_none());
+    assert_eq!(service.session().active_window().unwrap().name, "work");
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a display-overlay action identity is honored only for the
+/// generation that registered it.
+///
+/// A stale identity, an identity that was never registered, and an identity
+/// retained across a redraw must all stay inert instead of repeating an earlier
+/// action, while the current generation still dispatches exactly once.
+#[test]
+fn runtime_primary_display_overlay_rejects_stale_and_unknown_action_identities() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .create_window_with_pane_process(&primary, "work", false, None)
+        .unwrap();
+    let original_window = service.session().active_window().unwrap().name.clone();
+
+    service
+        .execute_attached_display_command(&primary, "choose-window")
+        .unwrap();
+    let register_window_action = |service: &crate::runtime::RuntimeSessionService| {
+        let overlay = service.primary_display_overlay()?;
+        let index = service
+            .primary_display_overlay_action_targets()
+            .iter()
+            .position(|target| {
+                target.terminal_command_line().as_deref() == Some("select-window -t @2")
+            })?;
+        overlay
+            .selections
+            .get(index)
+            .map(|selection| selection.action_id)
+    };
+    let first_generation_action =
+        register_window_action(&service).expect("work window row should register an action");
+
+    // Reopening the chooser starts a new generation, so the retained identity no
+    // longer resolves even though the same row is visible again.
+    service
+        .execute_attached_display_command(&primary, "choose-window")
+        .unwrap();
+    assert!(
+        service
+            .execute_primary_display_overlay_action(&primary, first_generation_action)
+            .unwrap()
+    );
+    assert!(service.primary_display_overlay().is_some());
+    assert_eq!(
+        service.session().active_window().unwrap().name,
+        original_window
+    );
+
+    assert!(
+        service
+            .execute_primary_display_overlay_action(
+                &primary,
+                mez_mux::overlay::OverlayActionId(u64::MAX)
+            )
+            .unwrap()
+    );
+    assert!(service.primary_display_overlay().is_some());
+    assert_eq!(
+        service.session().active_window().unwrap().name,
+        original_window
+    );
+
+    let current_action =
+        register_window_action(&service).expect("reopened chooser should register the row again");
+    assert!(
+        service
+            .execute_primary_display_overlay_action(&primary, current_action)
+            .unwrap()
+    );
+    assert_eq!(service.session().active_window().unwrap().name, "work");
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies only the attached primary client may execute a display-overlay
+/// action, even when it presents the current generation's identity.
+#[test]
+fn runtime_primary_display_overlay_action_requires_attached_primary_client() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let observer = service
+        .session
+        .attach_observer_with_terminal("observer", None, 1)
+        .unwrap();
+    service
+        .create_window_with_pane_process(&primary, "work", false, None)
+        .unwrap();
+    let original_window = service.session().active_window().unwrap().name.clone();
+
+    service
+        .execute_attached_display_command(&primary, "choose-window")
+        .unwrap();
+    let action_id = service
+        .primary_display_overlay()
+        .and_then(|overlay| {
+            let index = service
+                .primary_display_overlay_action_targets()
+                .iter()
+                .position(|target| {
+                    target.terminal_command_line().as_deref() == Some("select-window -t @2")
+                })?;
+            overlay.selections.get(index)
+        })
+        .map(|selection| selection.action_id)
+        .expect("work window row should register an action");
+
+    assert!(
+        !service
+            .execute_primary_display_overlay_action(&observer, action_id)
+            .unwrap(),
+        "a non-primary client must never execute a primary overlay action"
+    );
+    assert_eq!(
+        service.session().active_window().unwrap().name,
+        original_window
+    );
+    assert!(service.primary_display_overlay().is_some());
+
+    assert!(
+        service
+            .execute_primary_display_overlay_action(&primary, action_id)
+            .unwrap()
+    );
     assert_eq!(service.session().active_window().unwrap().name, "work");
     service.terminate_all_pane_processes().unwrap();
 }
@@ -858,18 +994,19 @@ fn runtime_primary_display_overlay_executes_multiple_action_chips() {
     service
         .execute_attached_display_command(&primary, "choose-buffer")
         .unwrap();
-    let overlay = service
+    service
         .primary_display_overlay()
         .expect("choose-buffer should open a command display overlay");
-    let paste = overlay
-        .selections
+    let targets = service.primary_display_overlay_action_targets();
+    let paste = targets
         .iter()
-        .position(|selection| selection.command == "paste-buffer -b main")
+        .position(|target| {
+            target.terminal_command_line().as_deref() == Some("paste-buffer -b main")
+        })
         .expect("buffer row should expose a paste choice");
-    let delete = overlay
-        .selections
+    let delete = targets
         .iter()
-        .position(|selection| selection.command == "delete-buffer main")
+        .position(|target| target.terminal_command_line().as_deref() == Some("delete-buffer main"))
         .expect("buffer row should expose a delete choice");
     assert_eq!(delete, paste.saturating_add(1));
 
@@ -960,11 +1097,15 @@ fn runtime_primary_display_overlay_mouse_selects_action_chip() {
     let (clicked_line, clicked_column) = service
         .primary_display_overlay()
         .and_then(|overlay| {
+            let targets = service.primary_display_overlay_action_targets();
             overlay
                 .selections
                 .iter()
-                .find(|selection| selection.command == "delete-buffer main")
-                .map(|selection| {
+                .zip(targets)
+                .find(|(_, target)| {
+                    target.terminal_command_line().as_deref() == Some("delete-buffer main")
+                })
+                .map(|(selection, _)| {
                     (
                         selection.line_index.saturating_add(1),
                         selection.start_column.saturating_add(2),
@@ -1052,5 +1193,48 @@ fn runtime_primary_error_overlay_dismisses_on_any_input() {
     assert!(report.full_redraw_required);
     assert!(service.primary_error_status_overlay().is_none());
     assert!(service.primary_display_overlay().is_none());
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a program-controlled pane title cannot inject an executable choice
+/// into a compact display row.
+///
+/// Pane titles come from OSC output, and compact display rows separate fields
+/// with `:` and `=`. An unsanitized title such as `evil:action=kill-session`
+/// would add a second, attacker-chosen executable chip to the `display-panes`
+/// chooser, so the row must show the title text literally while only the
+/// product-authored `select-pane` action stays selectable.
+#[test]
+fn runtime_display_rows_ignore_injected_fields_from_pane_titles() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .session
+        .set_pane_title_explicit("%1", "evil:action=kill-session")
+        .unwrap();
+
+    service
+        .execute_attached_display_command(&primary, "display-panes")
+        .unwrap();
+
+    let lines = service
+        .primary_display_overlay_action_targets()
+        .iter()
+        .map(|target| target.terminal_command_line())
+        .collect::<Vec<_>>();
+    assert!(
+        lines.iter().all(|line| line
+            .as_deref()
+            .is_none_or(|line| !line.contains("kill-session"))),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line
+            .as_deref()
+            .is_some_and(|line| line.starts_with("select-pane"))),
+        "{lines:?}"
+    );
     service.terminate_all_pane_processes().unwrap();
 }

@@ -29,6 +29,6 @@ pub use interaction::{
     update_overlay_active_selection_for_viewport,
 };
 pub use state::{
-    AnchoredSelector, DisplayOverlay, OverlaySearchMatch, OverlaySelection, OverlaySelectionKind,
-    RecordBrowserOverlayFrame, RecordBrowserOverlayState,
+    AnchoredSelector, DisplayOverlay, OverlayActionId, OverlaySearchMatch, OverlaySelection,
+    OverlaySelectionKind, RecordBrowserOverlayFrame, RecordBrowserOverlayState,
 };

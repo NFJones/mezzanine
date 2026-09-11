@@ -1981,6 +1981,19 @@ implementation records that use `key=value:key=value` or
 labels and values before being shown in terminal overlays or pane-local agent
 command displays.
 
+Overlay actions MUST be product-registered typed targets, never derived from
+rendered display text. The multiplexer layer MUST carry only opaque action
+identifiers in its selection state, and the product MUST resolve an identifier
+only when it belongs to the current overlay generation and the invoking client
+is the attached primary. Raw or untrusted display content, including Markdown
+link syntax, hidden or percent-encoded destinations, record metadata, approval
+text, and MCP metadata, MUST NOT register an executable control; such content
+MUST render literally and remain copyable. Activating a stale, foreign, or
+unknown identifier MUST be a no-op that redraws instead of executing anything,
+and program-supplied display values such as a pane title, client name, window
+name, group name, or paste-buffer preview MUST NOT introduce a structured
+record field.
+
 Product-independent command-overlay and anchored-selector state snapshots,
 raw terminal-input decoding, navigation, search, viewport clamping,
 accept/cancel behavior, and typed effect intents MUST be owned by `mez-mux`.

@@ -5,6 +5,7 @@
 //! focus on dispatch and mutation orchestration.
 
 use super::{MezError, Result, RuntimeSessionService, json_escape};
+use crate::runtime::render::runtime_display_field_text;
 
 /// Runs the runtime list panes display operation for this subsystem.
 ///
@@ -66,7 +67,7 @@ pub(super) fn runtime_display_panes_display(service: &RuntimeSessionService) -> 
                 pane.index,
                 pane.index,
                 pane.active,
-                json_escape(&pane.title),
+                runtime_display_field_text(&json_escape(&pane.title)),
                 pane.size.columns,
                 pane.size.rows,
                 pane.id
@@ -101,7 +102,7 @@ pub(super) fn runtime_choose_client_display(service: &RuntimeSessionService) -> 
             format!(
                 "client={}:name={}:role={}:state={}:interactive={}:action=detach-client -t {}",
                 client.id,
-                json_escape(&client.name),
+                runtime_display_field_text(&json_escape(&client.name)),
                 runtime_client_role_name(client.role),
                 runtime_client_state_name(client.state),
                 client.interactive,
@@ -176,7 +177,7 @@ pub(super) fn runtime_choose_window_display(service: &RuntimeSessionService) -> 
                 "window={}:index={}:name={}:active={}:panes={}:size={}x{}:action=select-window -t {}",
                 window.id,
                 index,
-                json_escape(&window.name),
+                runtime_display_field_text(&json_escape(&window.name)),
                 window.id.to_string() == active_id,
                 window.panes().len(),
                 window.size.columns,
@@ -232,7 +233,7 @@ pub(super) fn runtime_choose_group_display(service: &RuntimeSessionService) -> S
                 "group={}:index={}:name={}:active={}:windows={}:action=select-group -t {}",
                 group.id,
                 group.index,
-                json_escape(&group.name),
+                runtime_display_field_text(&json_escape(&group.name)),
                 service
                     .session
                     .active_group()

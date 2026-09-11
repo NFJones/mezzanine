@@ -9,6 +9,7 @@ use super::{
     TerminalScreen, json_escape, runtime_flag_value, runtime_positional_args,
 };
 use crate::host::terminal::CopySelectionFormat;
+use crate::runtime::render::runtime_display_field_text;
 
 /// Runs the runtime capture lines operation for this subsystem.
 ///
@@ -326,8 +327,8 @@ pub(super) fn runtime_choose_buffer_display(
                 "buffer={}:bytes={}:origin={}:preview={}:actions=paste-buffer -b {},delete-buffer {}",
                 buffer.name,
                 buffer.bytes,
-                json_escape(origin),
-                json_escape(&buffer.preview),
+                runtime_display_field_text(&json_escape(origin)),
+                runtime_display_field_text(&json_escape(&buffer.preview)),
                 buffer.name,
                 buffer.name
             )

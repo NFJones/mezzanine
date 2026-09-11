@@ -10,13 +10,11 @@ use super::{
     MouseSelectionDragState, MouseSelectionEdge, MouseSelectionTarget, PaneAgentStatusField,
     PaneStatusAction, PaneStatusSegmentIdentity, Result, RuntimeMouseClickState,
     RuntimePaneAgentStatusSelector, RuntimeSessionService, SelectorInputOutcome, Size,
-    TerminalClientLoopAction, WindowFrameAction, WindowFrameCommandKind,
-    agent_command_link_at_line_column, agent_prompt_error_display_lines, apply_selector_input,
+    TerminalClientLoopAction, WindowFrameAction, WindowFrameCommandKind, apply_selector_input,
     current_unix_millis, runtime_agent_shell_command_response_json,
-    runtime_agent_shell_display_output, runtime_agent_shell_visibility,
-    runtime_approval_policy_name, runtime_copy_position_for_view,
-    runtime_pane_agent_status_selector_layout, runtime_scroll_selector, runtime_set_selector_index,
-    selector_input_action,
+    runtime_agent_shell_display_output, runtime_approval_policy_name,
+    runtime_copy_position_for_view, runtime_pane_agent_status_selector_layout,
+    runtime_scroll_selector, runtime_set_selector_index, selector_input_action,
 };
 use crate::host::terminal::{DEFAULT_PANE_FRAME_TEMPLATE, pane_frame_row_layout};
 use crate::runtime::service_state::RuntimePaneSettingsEntry;
@@ -417,15 +415,6 @@ impl RuntimeSessionService {
                     .select_pane_global(primary_client_id, pane_id.as_str())?;
                 self.acknowledge_focused_pane_completion();
                 let surface = self.presented_pane_surface(pane_id.as_str());
-                if self.execute_agent_command_link_at_pane_position(
-                    primary_client_id,
-                    pane_id.as_str(),
-                    target.position,
-                )? {
-                    self.presentation.mouse_selection_drag_state = None;
-                    self.presentation.last_mouse_click_state = None;
-                    return Ok((true, None));
-                }
                 let now = current_unix_millis();
                 if self
                     .presentation
@@ -595,60 +584,6 @@ impl RuntimeSessionService {
                 suppress_host_clipboard_copy,
             ),
         }
-    }
-
-    /// Executes an agent command link embedded in visible pane output.
-    ///
-    /// # Parameters
-    /// - `primary_client_id`: The primary client selecting the link.
-    /// - `pane_id`: The pane whose visible output was clicked.
-    /// - `position`: The pane-local cell position that was clicked.
-    fn execute_agent_command_link_at_pane_position(
-        &mut self,
-        primary_client_id: &mez_core::ids::ClientId,
-        pane_id: &str,
-        position: CopyPosition,
-    ) -> Result<bool> {
-        let Some(command) = self.agent_command_link_at_pane_position(pane_id, position) else {
-            return Ok(false);
-        };
-        let body = match self.execute_agent_shell_command(primary_client_id, &command) {
-            Ok(body) => body,
-            Err(error) => {
-                self.show_primary_error_overlay(agent_prompt_error_display_lines(&error))?;
-                return Ok(true);
-            }
-        };
-        match runtime_agent_shell_display_output(
-            &body,
-            &self.presentation.settings.ui_theme,
-            usize::from(self.session.authoritative_size.columns),
-            self.presentation.settings.terminal_agent_wrap_column_cap,
-        ) {
-            Ok(display_output) => self.set_agent_prompt_display_output(pane_id, display_output)?,
-            Err(error) => {
-                self.show_primary_error_overlay(agent_prompt_error_display_lines(&error))?;
-            }
-        }
-        if runtime_agent_shell_visibility(&body).as_deref() == Some("hidden") {
-            self.remove_agent_prompt_input(pane_id);
-        }
-        Ok(true)
-    }
-
-    /// Returns the agent command link at one visible pane position.
-    ///
-    /// # Parameters
-    /// - `pane_id`: The pane whose visible line should be inspected.
-    /// - `position`: The pane-local cell position to test.
-    fn agent_command_link_at_pane_position(
-        &self,
-        pane_id: &str,
-        position: CopyPosition,
-    ) -> Option<String> {
-        let screen = self.presented_pane_screen(pane_id)?;
-        let line = screen.visible_lines().get(position.line)?.to_string();
-        agent_command_link_at_line_column(line.as_str(), position.column)
     }
 
     /// Runs a command-backed window status-bar action selected by mouse release.

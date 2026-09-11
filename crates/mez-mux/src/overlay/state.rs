@@ -106,6 +106,15 @@ pub struct OverlaySearchMatch {
     pub width: usize,
 }
 
+/// Opaque product-owned identity for one selectable overlay action.
+///
+/// The mux never interprets this value and never derives it from rendered
+/// text. It only carries the identity the product registered for the overlay
+/// generation that produced the selection, so a rendered range cannot name an
+/// executable target by itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct OverlayActionId(pub u64);
+
 /// One selectable command-output overlay range.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OverlaySelection {
@@ -117,8 +126,8 @@ pub struct OverlaySelection {
     pub start_column: usize,
     /// Display-cell width of the interactive range.
     pub width: usize,
-    /// Opaque product command executed on selection.
-    pub command: String,
+    /// Opaque product-owned action identity executed on selection.
+    pub action_id: OverlayActionId,
     /// Visual importance of this action.
     pub kind: OverlaySelectionKind,
 }
