@@ -287,8 +287,32 @@ fn native_shell_provider_execution(
 /// visible, a lifecycle request must complete well before the child exits.
 /// Inline native execution in the serialized actor makes this assertion time
 /// out, while external blocking-worker execution keeps the actor responsive.
-#[tokio::test(flavor = "current_thread")]
-async fn async_native_shell_worker_keeps_runtime_actor_responsive() {
+///
+/// The debug-build actor chain needs more stack than the default libtest
+/// thread provides (it aborts at about 2 MiB), so the body runs on a
+/// dedicated 32 MiB thread instead of the harness thread. This keeps the
+/// regression active in ordinary `cargo test` runs on every platform.
+#[test]
+fn async_native_shell_worker_keeps_runtime_actor_responsive() {
+    std::thread::Builder::new()
+        .name("native-worker-liveness".to_string())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("current-thread runtime should build");
+            runtime.block_on(async_native_shell_worker_keeps_runtime_actor_responsive_body());
+        })
+        .expect("32 MiB native-worker-liveness thread should spawn")
+        .join()
+        .unwrap_or_else(|payload| std::panic::resume_unwind(payload));
+}
+
+/// The async body of the native-worker liveness regression. See
+/// `async_native_shell_worker_keeps_runtime_actor_responsive` for the
+/// contract this protects and why it runs on a dedicated large-stack thread.
+async fn async_native_shell_worker_keeps_runtime_actor_responsive_body() {
     let mut service = test_service();
     service
         .replace_config_layers(vec![ConfigLayer {
