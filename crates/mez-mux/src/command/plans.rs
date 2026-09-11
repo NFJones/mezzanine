@@ -419,9 +419,8 @@ pub fn new_window_name(invocation: &CommandInvocation) -> String {
         .or_else(|| flag_value(&invocation.args, "--name"))
         .map(ToOwned::to_owned)
         .or_else(|| {
-            if invocation.args.iter().any(|argument| argument == "--")
-                || flag_value(&invocation.args, "--shell-command").is_some()
-                || flag_value(&invocation.args, "--command").is_some()
+            if double_dash_tail_start(&invocation.args).is_some()
+                || explicit_shell_command_value(&invocation.args).is_some()
             {
                 None
             } else {
@@ -433,32 +432,157 @@ pub fn new_window_name(invocation: &CommandInvocation) -> String {
         .unwrap_or_else(|| "shell".to_string())
 }
 
+/// Accepted spellings for an explicit pane shell command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellCommandFlag {
+    /// `--shell-command`
+    ShellCommand,
+    /// `--command`
+    Command,
+}
+
+impl ShellCommandFlag {
+    /// Returns the accepted spelling of this flag.
+    pub fn spelling(self) -> &'static str {
+        match self {
+            Self::ShellCommand => "--shell-command",
+            Self::Command => "--command",
+        }
+    }
+
+    /// Returns the index of this flag's value when the flag has one.
+    fn value_index(self, args: &[String]) -> Option<usize> {
+        args.iter()
+            .position(|argument| argument == self.spelling())
+            .and_then(|index| index.checked_add(1))
+            .filter(|index| *index < args.len())
+    }
+}
+
+/// Where a pane command's shell source comes from.
+///
+/// Plan readers and prompt completion share this one precedence rule: an
+/// explicit `--shell-command`/`--command` value wins, then words after the
+/// first `--`, then positional words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellCommandSource {
+    /// The value at this argument index is user-authored shell source.
+    ExplicitFlagValue {
+        /// Flag spelling that supplied the value.
+        flag: ShellCommandFlag,
+        /// Argument index of the value.
+        value_index: usize,
+    },
+    /// Words after the first `--` are shell source, starting at this index.
+    DoubleDashTail {
+        /// Argument index of the first word after `--`.
+        start: usize,
+    },
+    /// Positional words before any `--` are shell source.
+    PositionalWords,
+    /// The invocation supplies no shell source.
+    None,
+}
+
+impl ShellCommandSource {
+    /// Classifies shell source for a `new-window` argument list.
+    pub fn for_new_window(args: &[String]) -> Self {
+        if let Some((flag, value_index)) = explicit_shell_command_value(args) {
+            return Self::ExplicitFlagValue { flag, value_index };
+        }
+        if let Some(start) = double_dash_tail_start(args) {
+            return Self::DoubleDashTail { start };
+        }
+        if has_name_flag_value(args) {
+            return Self::PositionalWords;
+        }
+        Self::None
+    }
+
+    /// Classifies shell source for a `split-window` argument list.
+    pub fn for_split_window(args: &[String]) -> Self {
+        if let Some((flag, value_index)) = explicit_shell_command_value(args) {
+            return Self::ExplicitFlagValue { flag, value_index };
+        }
+        if let Some(start) = double_dash_tail_start(args) {
+            return Self::DoubleDashTail { start };
+        }
+        Self::PositionalWords
+    }
+}
+
+/// Returns the first explicit shell-command value and the flag that supplied it.
+fn explicit_shell_command_value(args: &[String]) -> Option<(ShellCommandFlag, usize)> {
+    for flag in [ShellCommandFlag::ShellCommand, ShellCommandFlag::Command] {
+        if let Some(value_index) = flag.value_index(args) {
+            return Some((flag, value_index));
+        }
+    }
+    None
+}
+
+/// Returns the index of the first word after `--`.
+fn double_dash_tail_start(args: &[String]) -> Option<usize> {
+    args.iter()
+        .position(|argument| argument == "--")
+        .map(|index| index.saturating_add(1))
+}
+
+/// Returns whether `-n`/`--name` has a following value argument.
+fn has_name_flag_value(args: &[String]) -> bool {
+    args.windows(2)
+        .any(|window| window[0] == "-n" || window[0] == "--name")
+}
+
 /// Returns the optional shell command parsed from a new-window invocation.
 pub fn new_window_shell_command(invocation: &CommandInvocation) -> Result<Option<String>> {
-    if let Some(command) = explicit_shell_command_flag(invocation)? {
-        return Ok(Some(command));
-    }
-    if let Some(command) = shell_command_after_double_dash(invocation)? {
-        return Ok(Some(command));
-    }
-    if flag_value(&invocation.args, "-n")
-        .or_else(|| flag_value(&invocation.args, "--name"))
-        .is_some()
-    {
-        return shell_command_from_words(positional_args_before_double_dash(invocation));
-    }
-    Ok(None)
+    shell_command_for_source(
+        invocation,
+        ShellCommandSource::for_new_window(&invocation.args),
+    )
 }
 
 /// Returns the optional shell command parsed from a split-window invocation.
 pub fn split_window_shell_command(invocation: &CommandInvocation) -> Result<Option<String>> {
-    if let Some(command) = explicit_shell_command_flag(invocation)? {
-        return Ok(Some(command));
+    shell_command_for_source(
+        invocation,
+        ShellCommandSource::for_split_window(&invocation.args),
+    )
+}
+
+/// Resolves one classified shell source into the effective command string.
+fn shell_command_for_source(
+    invocation: &CommandInvocation,
+    source: ShellCommandSource,
+) -> Result<Option<String>> {
+    match source {
+        ShellCommandSource::ExplicitFlagValue { value_index, .. } => {
+            let command = invocation
+                .args
+                .get(value_index)
+                .map(String::as_str)
+                .unwrap_or_default();
+            if command.trim().is_empty() {
+                return Err(MuxError::invalid_args(
+                    "pane shell command must not be empty",
+                ));
+            }
+            Ok(Some(command.to_string()))
+        }
+        ShellCommandSource::DoubleDashTail { start } => shell_command_from_words(
+            invocation
+                .args
+                .get(start..)
+                .unwrap_or_default()
+                .iter()
+                .map(String::as_str)
+                .collect(),
+        ),
+        ShellCommandSource::PositionalWords => {
+            shell_command_from_words(positional_args_before_double_dash(invocation))
+        }
+        ShellCommandSource::None => Ok(None),
     }
-    if let Some(command) = shell_command_after_double_dash(invocation)? {
-        return Ok(Some(command));
-    }
-    shell_command_from_words(positional_args_before_double_dash(invocation))
 }
 
 /// Parses a resize-pane invocation into a typed plan.
@@ -820,30 +944,6 @@ fn positional_args_before_double_dash(invocation: &CommandInvocation) -> Vec<&st
     positional_args_from_slice(&invocation.args[..end])
 }
 
-fn explicit_shell_command_flag(invocation: &CommandInvocation) -> Result<Option<String>> {
-    match flag_value(&invocation.args, "--shell-command")
-        .or_else(|| flag_value(&invocation.args, "--command"))
-    {
-        Some(command) if command.trim().is_empty() => Err(MuxError::invalid_args(
-            "pane shell command must not be empty",
-        )),
-        Some(command) => Ok(Some(command.to_string())),
-        None => Ok(None),
-    }
-}
-
-fn shell_command_after_double_dash(invocation: &CommandInvocation) -> Result<Option<String>> {
-    let Some(index) = invocation.args.iter().position(|argument| argument == "--") else {
-        return Ok(None);
-    };
-    shell_command_from_words(
-        invocation.args[index.saturating_add(1)..]
-            .iter()
-            .map(String::as_str)
-            .collect(),
-    )
-}
-
 fn shell_command_from_words(words: Vec<&str>) -> Result<Option<String>> {
     if words.is_empty() {
         return Ok(None);
@@ -1105,5 +1205,84 @@ mod tests {
 
         assert_eq!(error.kind(), crate::MuxErrorKind::InvalidArgs);
         assert!(error.message().contains("cannot combine"));
+    }
+
+    /// Verifies the shared shell-source classifier keeps the documented
+    /// precedence and that both plan readers resolve each source identically.
+    #[test]
+    fn classifies_pane_shell_command_sources_with_shared_precedence() {
+        let explicit = invocation("split-window --shell-command 'echo hi' -- tail");
+        assert_eq!(
+            ShellCommandSource::for_split_window(&explicit.args),
+            ShellCommandSource::ExplicitFlagValue {
+                flag: ShellCommandFlag::ShellCommand,
+                value_index: 1,
+            }
+        );
+        assert_eq!(
+            split_window_shell_command(&explicit).unwrap(),
+            Some("echo hi".to_string())
+        );
+
+        let command_flag = invocation("new-window --command make -n build -- ignored");
+        assert_eq!(
+            ShellCommandSource::for_new_window(&command_flag.args),
+            ShellCommandSource::ExplicitFlagValue {
+                flag: ShellCommandFlag::Command,
+                value_index: 1,
+            }
+        );
+        assert_eq!(
+            new_window_shell_command(&command_flag).unwrap(),
+            Some("make".to_string())
+        );
+
+        let tail = invocation("split-window -h -- make test");
+        assert_eq!(
+            ShellCommandSource::for_split_window(&tail.args),
+            ShellCommandSource::DoubleDashTail { start: 2 }
+        );
+        assert_eq!(
+            split_window_shell_command(&tail).unwrap(),
+            Some("make test".to_string())
+        );
+
+        let named = invocation("new-window -n build echo hi");
+        assert_eq!(
+            ShellCommandSource::for_new_window(&named.args),
+            ShellCommandSource::PositionalWords
+        );
+        assert_eq!(
+            new_window_shell_command(&named).unwrap(),
+            Some("echo hi".to_string())
+        );
+
+        let unnamed = invocation("new-window work");
+        assert_eq!(
+            ShellCommandSource::for_new_window(&unnamed.args),
+            ShellCommandSource::None
+        );
+        assert_eq!(new_window_shell_command(&unnamed).unwrap(), None);
+        assert_eq!(new_window_name(&unnamed), "work");
+
+        // A trailing `--shell-command` without a value is not the explicit
+        // source, so the later rules still decide the command string.
+        let dangling = invocation("new-window -n build --shell-command");
+        assert_eq!(
+            ShellCommandSource::for_new_window(&dangling.args),
+            ShellCommandSource::PositionalWords
+        );
+        assert_eq!(new_window_shell_command(&dangling).unwrap(), None);
+        assert_eq!(
+            split_window_shell_command(&invocation("split-window --shell-command")).unwrap(),
+            None
+        );
+        assert_eq!(
+            new_window_name(&invocation("new-window --shell-command a b")),
+            "shell"
+        );
+
+        let empty = invocation("split-window --command ''");
+        assert!(split_window_shell_command(&empty).is_err());
     }
 }

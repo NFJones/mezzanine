@@ -78,6 +78,28 @@ or observer client.
 The following commands have behavior or safety boundaries that are useful to
 know without opening the complete normative contract.
 
+### Pane creation and pipe shell commands
+
+`new-window`/`neww`, `new-group`/`newg`, and `split-window`/`splitw` accept a
+command as `--shell-command STRING` or `--command STRING`. A spelling that has
+a value takes precedence over words after `--`, and words after `--` take
+precedence over positional words; `new-window` and `new-group` treat positional
+words as the command only when `-n`/`--name` is present. The single explicit
+string is user-authored shell source that the shell runs unchanged after
+`exec`, so Mezzanine never re-quotes it. `pipe-pane` joins its positional words
+with spaces and runs the result through the resolved shell, so those words are
+shell source too. Mezzanine never offers a candidate for a shell-source token
+unless the literal path neither begins with `-` nor contains any byte outside
+ASCII letters, digits, and `_ - . / @ % + = : ,`, which no supported shell
+interprets; static command and flag candidates are suppressed in that token.
+Path candidates for other arguments are quoted with the command language and
+read back as the exact literal path; words after `--` and `-n` positional words
+are re-quoted losslessly before `exec`. Completion classifies the active token
+against the whole command line, not only the text before the cursor, so
+arguments the pane plan never consumes offer no candidates at all, and a token
+whose role cannot be classified (for example a cursor inside a word or an open
+quote) leaves the draft unchanged.
+
 ### Configuration discovery
 
 `add-options` displays the schema-owned reference for supported live

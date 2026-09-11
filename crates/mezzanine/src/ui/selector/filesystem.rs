@@ -2,8 +2,10 @@
 
 use super::{
     Path, PathBuf, SelectorCandidate, SelectorCandidateKind, SelectorSurface, SelectorTokenContext,
-    canonical_agent_command, fs, selector_token_context, unescape_selector_shell_token,
+    SelectorTokenRole, canonical_agent_command, fs, selector_token_context,
+    unescape_selector_shell_token,
 };
+use mez_mux::command::encode_selector_argument;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, Mutex, OnceLock, Weak, mpsc};
@@ -227,6 +229,12 @@ fn run_async_filesystem_selector_worker(
 }
 
 /// Builds filesystem path candidates for command arguments.
+///
+/// Mezzanine command arguments are parsed by the outer command parser before a
+/// command runs, so Mezzanine candidates are inserted with
+/// [`encode_selector_argument`] and parse back to the literal path. Tokens
+/// whose text becomes user-authored shell source only receive candidates whose
+/// literal path is in the conservative safe byte set.
 pub(super) fn path_candidates(
     surface: SelectorSurface,
     context: &SelectorTokenContext,
@@ -235,8 +243,13 @@ pub(super) fn path_candidates(
     if !path_completion_allowed(surface, context) {
         return Vec::new();
     }
-    let (directory, display_prefix, name_prefix) =
-        path_completion_parts(&context.query, working_directory);
+    let mezzanine = surface == SelectorSurface::MezzanineCommand;
+    let raw_shell_source = mezzanine && mezzanine_role_is_raw_shell_source(&context.role);
+    let (directory, display_prefix, name_prefix) = if mezzanine {
+        literal_path_completion_parts(&context.literal_query(), working_directory)
+    } else {
+        path_completion_parts(&context.query, working_directory)
+    };
     let Ok(entries) = fs::read_dir(&directory) else {
         return Vec::new();
     };
@@ -252,11 +265,26 @@ pub(super) fn path_candidates(
         }
         let is_dir = entry.file_type().ok().is_some_and(|kind| kind.is_dir());
         let suffix = if is_dir { "/" } else { "" };
-        let value = format!(
-            "{display_prefix}{}{suffix}",
-            escape_path_component_for_shell(&name)
-        );
-        let candidate = SelectorCandidate::new(value, SelectorCandidateKind::Value, !is_dir);
+        let literal = format!("{display_prefix}{name}{suffix}");
+        let (value, label) = if mezzanine {
+            if raw_shell_source && !shell_source_safe_literal(&literal) {
+                continue;
+            }
+            (encode_selector_argument(&literal), literal)
+        } else {
+            let value = format!(
+                "{display_prefix}{}{suffix}",
+                escape_path_component_for_shell(&name)
+            );
+            (value.clone(), value)
+        };
+        let candidate = SelectorCandidate {
+            value,
+            label,
+            detail: None,
+            kind: SelectorCandidateKind::Value,
+            append_space: !is_dir,
+        };
         candidates.insert(candidate.value.clone(), candidate);
         if candidates.len() > MAX_FILESYSTEM_SELECTOR_CANDIDATES {
             candidates.pop_last();
@@ -310,6 +338,11 @@ pub(super) fn path_completion_allowed(
     surface: SelectorSurface,
     context: &SelectorTokenContext,
 ) -> bool {
+    if surface == SelectorSurface::MezzanineCommand
+        && mezzanine_role_suppresses_candidates(&context.role)
+    {
+        return false;
+    }
     if context.query.starts_with('-') {
         return false;
     }
@@ -332,6 +365,29 @@ pub(super) fn path_completion_allowed(
     command_accepts_path_argument(surface, command)
 }
 
+/// Returns whether one Mezzanine token role must not receive any candidates.
+///
+/// These are arguments the pane plan never consumes and tokens whose role
+/// cannot be determined safely; both leave the draft unchanged.
+pub(super) fn mezzanine_role_suppresses_candidates(role: &SelectorTokenRole) -> bool {
+    matches!(
+        role,
+        SelectorTokenRole::IgnoredTrailing | SelectorTokenRole::Incomplete
+    )
+}
+
+/// Returns whether one Mezzanine token role is raw user-authored shell source.
+///
+/// `--shell-command`/`--command` values and `pipe-pane` positional words stay
+/// permitted for path completion so candidate construction can apply the
+/// conservative safe-literal rule instead of dropping the token entirely.
+pub(super) fn mezzanine_role_is_raw_shell_source(role: &SelectorTokenRole) -> bool {
+    matches!(
+        role,
+        SelectorTokenRole::ShellSourceValue { .. } | SelectorTokenRole::ShellSourceWords
+    )
+}
+
 /// Returns whether a command commonly accepts filesystem paths.
 ///
 /// # Parameters
@@ -346,8 +402,11 @@ pub(super) fn command_accepts_path_argument(surface: SelectorSurface, command: &
                 | "export-history"
                 | "pipe-pane"
                 | "new-window"
+                | "neww"
                 | "new-group"
+                | "newg"
                 | "split-window"
+                | "splitw"
                 | "save-layout"
                 | "load-layout"
         ),
@@ -432,6 +491,25 @@ pub(super) fn path_completion_parts(
     query: &str,
     working_directory: Option<&Path>,
 ) -> (PathBuf, String, String) {
+    path_completion_parts_with(query, working_directory, true)
+}
+
+/// Splits an already literal path query into completion parts.
+///
+/// Mezzanine prompt tokens are decoded by the outer command parser before
+/// completion, so their literal text must not be unescaped a second time.
+fn literal_path_completion_parts(
+    query: &str,
+    working_directory: Option<&Path>,
+) -> (PathBuf, String, String) {
+    path_completion_parts_with(query, working_directory, false)
+}
+
+fn path_completion_parts_with(
+    query: &str,
+    working_directory: Option<&Path>,
+    unescape_components: bool,
+) -> (PathBuf, String, String) {
     if query == "~" {
         return (expand_home_path("~"), "~/".to_string(), String::new());
     }
@@ -456,11 +534,15 @@ pub(super) fn path_completion_parts(
     let mut components = remainder.split('/').peekable();
     while let Some(component) = components.next() {
         let has_more_components = components.peek().is_some();
+        let lookup_component = if unescape_components {
+            unescape_selector_shell_token(component)
+        } else {
+            component.to_string()
+        };
         if !has_more_components && !query.ends_with('/') {
-            name_prefix = unescape_selector_shell_token(component);
+            name_prefix = lookup_component;
             break;
         }
-        let lookup_component = unescape_selector_shell_token(component);
         let next_directory = directory.join(&lookup_component);
         if component.is_empty() || !next_directory.is_dir() {
             name_prefix = lookup_component;
@@ -471,6 +553,24 @@ pub(super) fn path_completion_parts(
         display_prefix.push('/');
     }
     (directory, display_prefix, name_prefix)
+}
+
+/// Returns whether a literal path can be inserted raw into shell source.
+///
+/// A leading `-` is rejected because the value is wrapped as
+/// `exec {command}` by the pane process, where the wrapper could read it as an
+/// option. The byte set is otherwise limited to ASCII letters, digits, and
+/// `_ - . / @ % + = : ,` so no supported shell can read the literal as an
+/// expansion, operator, redirection, or comment.
+pub(super) fn shell_source_safe_literal(value: &str) -> bool {
+    !value.starts_with('-')
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'_' | b'-' | b'.' | b'/' | b'@' | b'%' | b'+' | b'=' | b':' | b','
+                )
+        })
 }
 
 /// Escapes one path component so shell completion inserts a single token.

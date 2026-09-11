@@ -1,5 +1,6 @@
 //! Mezzanine and agent command catalogs plus command-specific candidates.
 
+use super::filesystem::{mezzanine_role_is_raw_shell_source, mezzanine_role_suppresses_candidates};
 #[cfg(test)]
 use super::{Path, path_candidates};
 use super::{
@@ -74,6 +75,16 @@ pub(super) fn selector_candidates_with_filesystem(
     extra_candidates: &[SelectorExtraCandidate],
     filesystem_candidates: &[SelectorCandidate],
 ) -> Vec<SelectorCandidate> {
+    if surface == SelectorSurface::MezzanineCommand
+        && mezzanine_role_suppresses_candidates(&context.role)
+    {
+        return Vec::new();
+    }
+    if surface == SelectorSurface::MezzanineCommand
+        && mezzanine_role_is_raw_shell_source(&context.role)
+    {
+        return filesystem_candidates.to_vec();
+    }
     let mut candidates = match surface {
         SelectorSurface::MezzanineCommand => mezzanine_candidates(context),
         SelectorSurface::AgentCommand => agent_candidates(context),

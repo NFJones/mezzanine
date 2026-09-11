@@ -6,11 +6,57 @@ use super::{
     plan_selector_with_extra_in_working_directory, record_browser_save_path_candidates,
     shadow_hint, shadow_hint_with_extra, start_active_selector,
 };
+use mez_mux::command::parse_command_sequence;
+use mez_mux::command::plans::{
+    CommandPlan, command_plan_from_invocation, split_window_shell_command,
+};
+use mez_mux::process::{PaneProcessLaunch, pane_command_plan};
 use mez_mux::selector::apply_selector_candidate;
 use std::fs;
 use std::sync::Mutex;
 
 static CWD_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+/// Fixture names whose bytes are never inert in raw shell source.
+const HOSTILE_FIXTURE_NAMES: [&str; 6] = [
+    "$(touch PWNED)",
+    "`touch PWNED`",
+    "*.txt",
+    "line\nbreak.txt",
+    "back\\slash.txt",
+    "\u{00fc}n\u{00ef}code.txt",
+];
+
+/// Fixture names that must survive completion round-trips literally.
+const LITERAL_FIXTURE_NAMES: [&str; 7] = [
+    "-leading-dash.txt",
+    "$(touch PWNED)",
+    "`touch PWNED`",
+    "*.txt",
+    "line\nbreak.txt",
+    "back\\slash.txt",
+    "\u{00fc}n\u{00ef}code.txt",
+];
+
+/// Writes the shared plain and hostile completion fixture into `root`.
+fn write_completion_fixture(root: &std::path::Path) {
+    fs::create_dir_all(root.join("dir with spaces")).unwrap();
+    fs::create_dir_all(root.join("dir with spaces").join("subdir")).unwrap();
+    fs::write(root.join("plain.txt"), "plain\n").unwrap();
+    for name in LITERAL_FIXTURE_NAMES {
+        fs::write(root.join(name), "fixture\n").unwrap();
+    }
+}
+
+/// Returns the shell command the pane plan reads from one prompt line.
+fn planned_pane_shell_command(line: &str) -> Option<String> {
+    let invocation = parse_command_sequence(line).unwrap().remove(0);
+    match command_plan_from_invocation(&invocation).unwrap() {
+        CommandPlan::NewWindow(plan) | CommandPlan::NewGroup(plan) => plan.shell_command,
+        CommandPlan::SplitWindow(plan) => plan.shell_command,
+        other => panic!("expected a pane-spawning plan for `{line}`, got {other:?}"),
+    }
+}
 
 /// Verifies selector plans mezzanine command candidates from prefix.
 ///
@@ -187,17 +233,19 @@ fn selector_plans_path_candidates_for_prompt_arguments() {
     std::env::set_current_dir(original).unwrap();
     let _ = fs::remove_dir_all(&root);
 
+    // Mezzanine candidates are outer-parser encoded so the command parser
+    // yields the literal filename; the agent surface stays raw.
     assert!(
         command_plan
             .candidates
             .iter()
-            .any(|candidate| candidate.value == "fixture.toml")
+            .any(|candidate| candidate.value == "'fixture.toml'")
     );
     assert!(
         command_plan
             .candidates
             .iter()
-            .any(|candidate| candidate.value == "fixtures/")
+            .any(|candidate| candidate.value == "'fixtures/'")
     );
     assert!(
         agent_plan
@@ -255,7 +303,7 @@ fn selector_plans_path_candidates_from_explicit_working_directory() {
         command_plan
             .candidates
             .iter()
-            .any(|candidate| candidate.value == "fixture.toml")
+            .any(|candidate| candidate.value == "'fixture.toml'")
     );
     assert!(
         agent_plan
@@ -766,6 +814,62 @@ fn active_selector_refreshes_after_explicit_directory_selection() {
 
     assert_eq!(line, "/list-mcp ./src/");
     assert!(selector.should_refresh_from_selected_directory(&line, cursor));
+}
+
+/// Verifies Mezzanine directory candidates still refresh into the selected
+/// directory even though accepted values are outer-parser encoded.
+#[test]
+fn active_selector_refreshes_mezzanine_encoded_directory_selection() {
+    let _guard = CWD_TEST_LOCK.lock().unwrap();
+    let original = std::env::current_dir().unwrap();
+    let root = std::env::temp_dir().join(format!(
+        "mez-selector-encoded-refresh-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    std::env::set_current_dir(&root).unwrap();
+
+    let selector = start_active_selector(
+        SelectorSurface::MezzanineCommand,
+        "source-file ./sr/",
+        "source-file ./sr/".len(),
+        false,
+    )
+    .unwrap();
+    let (line, cursor) = selector.selected_line().unwrap();
+
+    std::env::set_current_dir(original).unwrap();
+    let _ = fs::remove_dir_all(&root);
+
+    assert_eq!(line, "source-file './src/'");
+    assert!(selector.should_refresh_from_selected_directory(&line, cursor));
+}
+
+/// Verifies Mezzanine path shadow hints complete toward the literal filename
+/// even though accepted candidates are outer-parser encoded.
+#[test]
+fn selector_shadow_hint_completes_mezzanine_literal_paths() {
+    let _guard = CWD_TEST_LOCK.lock().unwrap();
+    let original = std::env::current_dir().unwrap();
+    let root = std::env::temp_dir().join(format!("mez-selector-shadow-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("fixture.toml"), "value = true\n").unwrap();
+    std::env::set_current_dir(&root).unwrap();
+
+    let hint = shadow_hint(
+        SelectorSurface::MezzanineCommand,
+        "source-file fi",
+        "source-file fi".len(),
+    );
+
+    std::env::set_current_dir(original).unwrap();
+    let _ = fs::remove_dir_all(&root);
+
+    let hint = hint.unwrap();
+    assert_eq!(hint.text, "xture.toml");
+    assert_eq!(hint.kind, SelectorCandidateKind::Value);
 }
 
 /// Verifies non-directory selections continue cycling within the active
@@ -1319,4 +1423,527 @@ fn selector_scopes_issue_project_candidates_to_project_glob_values() {
     .unwrap();
 
     assert_eq!(plan.candidates[0].value, "/repo/example");
+}
+
+/// Verifies Mezzanine completion inserts outer-parser-encoded candidates in
+/// every supported context and that executing the resulting pane plan cannot
+/// run a hostile filename.
+#[test]
+fn selector_round_trips_literal_paths_and_spawns_requoted_shell_sources() {
+    let root =
+        std::env::temp_dir().join(format!("mez-selector-shell-source-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    write_completion_fixture(&root);
+
+    // source-file positional: the parsed argument is the literal filename.
+    for name in LITERAL_FIXTURE_NAMES {
+        let literal = format!("./{name}");
+        let line = "source-file ./";
+        let plan = plan_selector_with_extra_in_working_directory(
+            SelectorSurface::MezzanineCommand,
+            line,
+            line.len(),
+            &[],
+            Some(root.as_path()),
+        )
+        .unwrap();
+        let candidate = plan
+            .candidates
+            .iter()
+            .find(|candidate| candidate.label == literal)
+            .unwrap_or_else(|| panic!("missing candidate for {literal}"))
+            .clone();
+        let (applied, applied_cursor) = apply_selector_candidate(line, &plan, &candidate);
+        assert_eq!(applied, format!("source-file '{literal}' "));
+        assert_eq!(applied_cursor, applied.len());
+        let invocation = parse_command_sequence(&applied).unwrap().remove(0);
+        assert_eq!(invocation.positional_args(), vec![literal.as_str()]);
+    }
+
+    // split-window -c directory flag value.
+    let line = "split-window -c ./";
+    let plan = plan_selector_with_extra_in_working_directory(
+        SelectorSurface::MezzanineCommand,
+        line,
+        line.len(),
+        &[],
+        Some(root.as_path()),
+    )
+    .unwrap();
+    let candidate = plan
+        .candidates
+        .iter()
+        .find(|candidate| candidate.label == "./dir with spaces/")
+        .unwrap()
+        .clone();
+    let (applied, _) = apply_selector_candidate(line, &plan, &candidate);
+    assert_eq!(applied, "split-window -c './dir with spaces/'");
+    let invocation = parse_command_sequence(&applied).unwrap().remove(0);
+    assert_eq!(invocation.start_directory_arg(), Some("./dir with spaces/"));
+
+    // Continuation inside a spaced directory works for escaped-space and
+    // already-quoted tokens, because lookup uses the literal query.
+    for line in [
+        "source-file ./dir\\ with\\ spaces/",
+        "source-file './dir with spaces/'",
+    ] {
+        let plan = plan_selector_with_extra_in_working_directory(
+            SelectorSurface::MezzanineCommand,
+            line,
+            line.len(),
+            &[],
+            Some(root.as_path()),
+        )
+        .unwrap();
+        let candidate = plan
+            .candidates
+            .iter()
+            .find(|candidate| candidate.label == "./dir with spaces/subdir/")
+            .unwrap_or_else(|| panic!("missing subdir candidate for {line}"))
+            .clone();
+        let (applied, _) = apply_selector_candidate(line, &plan, &candidate);
+        assert_eq!(applied, "source-file './dir with spaces/subdir/'");
+        let invocation = parse_command_sequence(&applied).unwrap().remove(0);
+        assert_eq!(
+            invocation.positional_args(),
+            vec!["./dir with spaces/subdir/"]
+        );
+    }
+
+    // Shell-source words: the plan re-quotes the parsed literal, so the
+    // spawned argv contains no executable substitution. Every spelling that
+    // shares the pane readers is covered.
+    for line in [
+        "split-window -- cat ./",
+        "split-window cat ./",
+        "new-window -- cat ./",
+        "new-window -n name cat ./",
+        "new-group -- cat ./",
+        "new-group -n name cat ./",
+        "newg -- cat ./",
+        "newg -n name cat ./",
+    ] {
+        let plan = plan_selector_with_extra_in_working_directory(
+            SelectorSurface::MezzanineCommand,
+            line,
+            line.len(),
+            &[],
+            Some(root.as_path()),
+        )
+        .unwrap();
+        let candidate = plan
+            .candidates
+            .iter()
+            .find(|candidate| candidate.label == "./$(touch PWNED)")
+            .unwrap()
+            .clone();
+        let (applied, _) = apply_selector_candidate(line, &plan, &candidate);
+        let invocation = parse_command_sequence(&applied).unwrap().remove(0);
+        let command = match invocation.name.as_str() {
+            "split-window" | "splitw" => split_window_shell_command(&invocation).unwrap().unwrap(),
+            _ => planned_pane_shell_command(&applied).unwrap(),
+        };
+        assert_eq!(command, "cat './$(touch PWNED)'");
+        let argv = pane_command_plan(
+            &PaneProcessLaunch::new("/bin/sh".into()),
+            Some(command.as_str()),
+        )
+        .unwrap();
+        assert_eq!(
+            argv.args,
+            vec!["-c".to_string(), "exec cat './$(touch PWNED)'".to_string()]
+        );
+        #[cfg(unix)]
+        {
+            let status = std::process::Command::new(&argv.program)
+                .args(&argv.args)
+                .current_dir(&root)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success(), "{line}");
+            assert!(!root.join("PWNED").exists(), "{line}");
+        }
+    }
+
+    // Raw shell source: safe literals stay available and are encoded for every
+    // spelling that splices the value into `exec {command}`.
+    for (command_name, flag) in [
+        ("split-window", "--shell-command"),
+        ("new-window", "--shell-command"),
+        ("new-group", "--command"),
+        ("newg", "--command"),
+    ] {
+        let line = format!("{command_name} {flag} ./pl");
+        let plan = plan_selector_with_extra_in_working_directory(
+            SelectorSurface::MezzanineCommand,
+            &line,
+            line.len(),
+            &[],
+            Some(root.as_path()),
+        )
+        .unwrap_or_else(|| panic!("missing plan for {line}"));
+        let candidate = plan
+            .candidates
+            .iter()
+            .find(|candidate| candidate.label == "./plain.txt")
+            .unwrap_or_else(|| panic!("missing safe literal for {line}"))
+            .clone();
+        assert_eq!(candidate.value, "'./plain.txt'");
+        let (applied, _) = apply_selector_candidate(&line, &plan, &candidate);
+        assert_eq!(
+            planned_pane_shell_command(&applied),
+            Some("./plain.txt".to_string()),
+            "{line}"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Verifies raw shell source and dead arguments never receive path candidates
+/// and that partially typed drafts are left unchanged.
+#[test]
+fn selector_suppresses_path_candidates_in_shell_source_and_dead_arguments() {
+    let root = std::env::temp_dir().join(format!("mez-selector-suppressed-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    write_completion_fixture(&root);
+
+    // Raw shell source offers only conservative safe literals.
+    let line = "split-window --shell-command ./";
+    let plan = plan_selector_with_extra_in_working_directory(
+        SelectorSurface::MezzanineCommand,
+        line,
+        line.len(),
+        &[],
+        Some(root.as_path()),
+    )
+    .unwrap();
+    let labels = plan
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(labels.contains(&"./plain.txt"));
+    assert!(plan.candidates.iter().all(|candidate| {
+        candidate.value.trim_matches('\'').bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'_' | b'-' | b'.' | b'/' | b'@' | b'%' | b'+' | b'=' | b':' | b','
+                )
+        })
+    }));
+    for name in HOSTILE_FIXTURE_NAMES {
+        let literal = format!("./{name}");
+        assert!(
+            !labels.contains(&literal.as_str()),
+            "hostile literal {literal} reached raw shell source"
+        );
+    }
+
+    // A leading dash is only offered as a prefixed relative path.
+    let bare_dash = "split-window --shell-command -le";
+    let bare_dash_plan = plan_selector_with_extra_in_working_directory(
+        SelectorSurface::MezzanineCommand,
+        bare_dash,
+        bare_dash.len(),
+        &[],
+        Some(root.as_path()),
+    );
+    assert!(bare_dash_plan.is_none_or(|plan| {
+        plan.candidates
+            .iter()
+            .all(|candidate| !candidate.label.ends_with("leading-dash.txt"))
+    }));
+
+    // Dead trailing arguments are suppressed in every pane-creation form.
+    for line in [
+        "split-window --shell-command cat ./",
+        "new-window work ./",
+        "split-window --shell-command=./",
+    ] {
+        assert!(
+            plan_selector_with_extra_in_working_directory(
+                SelectorSurface::MezzanineCommand,
+                line,
+                line.len(),
+                &[],
+                Some(root.as_path()),
+            )
+            .is_none(),
+            "{line}"
+        );
+    }
+
+    // Cursors inside a word or an open/nested quote keep the draft unchanged.
+    let mid_word = "source-file ./pl";
+    assert!(
+        plan_selector_with_extra_in_working_directory(
+            SelectorSurface::MezzanineCommand,
+            mid_word,
+            "source-file ./p".len(),
+            &[],
+            Some(root.as_path()),
+        )
+        .is_none()
+    );
+    for line in ["source-file \"./pl", "source-file \"it's ./pl"] {
+        assert!(
+            plan_selector_with_extra_in_working_directory(
+                SelectorSurface::MezzanineCommand,
+                line,
+                line.len(),
+                &[],
+                Some(root.as_path()),
+            )
+            .is_none(),
+            "{line}"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Verifies new-group and newg classify and execute explicit shell commands
+/// exactly like new-window, so completion cannot offer a hostile filename.
+#[test]
+fn selector_new_group_and_newg_gate_shell_source_like_new_window() {
+    let root = std::env::temp_dir().join(format!("mez-selector-new-group-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    write_completion_fixture(&root);
+
+    for (command, flag) in [
+        ("new-group", "--shell-command"),
+        ("newg", "--shell-command"),
+        ("new-group", "--command"),
+        ("newg", "--command"),
+        ("new-window", "--shell-command"),
+        ("neww", "--command"),
+    ] {
+        let line = format!("{command} {flag} ./");
+        let plan = plan_selector_with_extra_in_working_directory(
+            SelectorSurface::MezzanineCommand,
+            &line,
+            line.len(),
+            &[],
+            Some(root.as_path()),
+        )
+        .unwrap_or_else(|| panic!("missing plan for {line}"));
+        let labels = plan
+            .candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>();
+        assert!(labels.contains(&"./plain.txt"), "{line}");
+        for name in HOSTILE_FIXTURE_NAMES {
+            let literal = format!("./{name}");
+            assert!(
+                !labels.contains(&literal.as_str()),
+                "{line}: hostile literal {literal} reached shell source"
+            );
+        }
+        let candidate = plan
+            .candidates
+            .iter()
+            .find(|candidate| candidate.label == "./plain.txt")
+            .unwrap()
+            .clone();
+        let (applied, _) = apply_selector_candidate(&line, &plan, &candidate);
+        assert_eq!(
+            planned_pane_shell_command(&applied),
+            Some("./plain.txt".to_string()),
+            "{line}"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Verifies an empty raw shell-source value token offers no static flag
+/// candidate and no leading-dash literal that `exec` could read as an option.
+#[test]
+fn selector_empty_shell_source_value_offers_no_flags_or_leading_dash_literals() {
+    let root =
+        std::env::temp_dir().join(format!("mez-selector-empty-value-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    write_completion_fixture(&root);
+
+    for line in [
+        "split-window --shell-command ",
+        "new-group --shell-command ",
+        "newg --command ",
+        "pipe-pane ",
+    ] {
+        let plan = plan_selector_with_extra_in_working_directory(
+            SelectorSurface::MezzanineCommand,
+            line,
+            line.len(),
+            &[],
+            Some(root.as_path()),
+        )
+        .unwrap_or_else(|| panic!("missing plan for {line}"));
+        assert!(
+            plan.candidates
+                .iter()
+                .any(|candidate| candidate.label == "plain.txt"),
+            "{line}"
+        );
+        assert!(
+            plan.candidates.iter().all(|candidate| {
+                candidate.kind == SelectorCandidateKind::Value
+                    && !candidate.label.starts_with('-')
+                    && !candidate.value.trim_matches('\'').starts_with('-')
+            }),
+            "{line}"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Verifies pipe-pane positional words, which the runtime joins and runs as
+/// shell source, receive only conservative safe literals.
+#[test]
+fn selector_pipe_pane_positional_words_suppress_hostile_literals() {
+    let root = std::env::temp_dir().join(format!("mez-selector-pipe-pane-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    write_completion_fixture(&root);
+
+    for (line, expected_words) in [
+        ("pipe-pane ./", vec!["./plain.txt"]),
+        ("pipe-pane cat ./", vec!["cat", "./plain.txt"]),
+        ("pipe-pane -t %1 ./", vec!["./plain.txt"]),
+    ] {
+        let plan = plan_selector_with_extra_in_working_directory(
+            SelectorSurface::MezzanineCommand,
+            line,
+            line.len(),
+            &[],
+            Some(root.as_path()),
+        )
+        .unwrap_or_else(|| panic!("missing plan for {line}"));
+        let labels = plan
+            .candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>();
+        assert!(labels.contains(&"./plain.txt"), "{line}");
+        for name in HOSTILE_FIXTURE_NAMES {
+            let literal = format!("./{name}");
+            assert!(
+                !labels.contains(&literal.as_str()),
+                "{line}: hostile literal {literal} reached pipe shell source"
+            );
+        }
+        let candidate = plan
+            .candidates
+            .iter()
+            .find(|candidate| candidate.label == "./plain.txt")
+            .unwrap()
+            .clone();
+        let (applied, _) = apply_selector_candidate(line, &plan, &candidate);
+        let invocation = parse_command_sequence(&applied).unwrap().remove(0);
+        assert_eq!(invocation.name, "pipe-pane");
+        assert_eq!(invocation.positional_args(), expected_words, "{line}");
+    }
+
+    // A query that names a hostile fixture offers nothing.
+    for name in HOSTILE_FIXTURE_NAMES {
+        let literal = format!("./{name}");
+        let line = format!("pipe-pane {literal}");
+        let labels = plan_selector_with_extra_in_working_directory(
+            SelectorSurface::MezzanineCommand,
+            &line,
+            line.len(),
+            &[],
+            Some(root.as_path()),
+        )
+        .map(|plan| {
+            plan.candidates
+                .into_iter()
+                .map(|candidate| candidate.label)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+        assert!(!labels.contains(&literal), "{line}");
+    }
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Verifies completion offers nothing for a token the whole-line pane plan
+/// never consumes, even when a filesystem entry matches the token text.
+#[test]
+fn selector_ignores_arguments_the_whole_line_pane_plan_never_consumes() {
+    let root = std::env::temp_dir().join(format!("mez-selector-whole-line-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    for name in ["work", "cat", "foo", "tail"] {
+        fs::write(root.join(name), "fixture\n").unwrap();
+    }
+
+    for (line, cursor) in [
+        ("new-window work -- tail", "new-window work".len()),
+        (
+            "split-window -- cat --shell-command rm",
+            "split-window -- cat".len(),
+        ),
+        ("new-window foo --shell-command rm", "new-window foo".len()),
+    ] {
+        assert!(
+            plan_selector_with_extra_in_working_directory(
+                SelectorSurface::MezzanineCommand,
+                line,
+                cursor,
+                &[],
+                Some(root.as_path()),
+            )
+            .is_none(),
+            "{line}"
+        );
+    }
+
+    // A word the whole-line plan does consume still completes.
+    let line = "new-window work -- tail";
+    let plan = plan_selector_with_extra_in_working_directory(
+        SelectorSurface::MezzanineCommand,
+        line,
+        line.len(),
+        &[],
+        Some(root.as_path()),
+    )
+    .unwrap();
+    assert!(
+        plan.candidates
+            .iter()
+            .any(|candidate| candidate.label == "tail"),
+        "{line}"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Verifies an incomplete Mezzanine token yields no candidates at all while
+/// the agent prompt keeps its own completion behavior.
+#[test]
+fn selector_incomplete_mezzanine_tokens_leave_the_draft_unchanged() {
+    for line in [
+        "source-file \"",
+        "source-file 'fi",
+        "split-window --shell-command \"",
+    ] {
+        assert!(
+            plan_selector(SelectorSurface::MezzanineCommand, line, line.len()).is_none(),
+            "{line}"
+        );
+    }
+
+    // The agent surface is unchanged: an incomplete token still completes.
+    let line = "/model gpt-5.4-mini";
+    assert!(
+        plan_selector(SelectorSurface::AgentCommand, line, "/model gpt-5.4".len()).is_some(),
+        "{line}"
+    );
 }

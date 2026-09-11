@@ -5,6 +5,9 @@
 //! cycling through an immutable plan. Product crates remain responsible for
 //! command catalogs, dynamic candidates, and filesystem I/O.
 
+use crate::command::plans::{ShellCommandFlag, ShellCommandSource};
+use crate::command::{flag_takes_value, scan_segment_around_cursor};
+
 /// Category for one selectable candidate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectorCandidateKind {
@@ -77,6 +80,38 @@ pub struct SelectorShadowHint {
     pub kind: SelectorCandidateKind,
 }
 
+/// Role the active prompt token plays once the command is parsed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectorTokenRole {
+    /// The command token itself.
+    CommandName,
+    /// A flag or option token.
+    Flag,
+    /// The value of a preceding value-taking flag.
+    FlagValue {
+        /// Flag whose value this token is.
+        flag: String,
+    },
+    /// The `--shell-command`/`--command` value, run as raw shell source.
+    ShellSourceValue {
+        /// Flag spelling that introduced the raw shell source.
+        flag: ShellCommandFlag,
+    },
+    /// Positional words `pipe-pane` joins into raw shell source.
+    ShellSourceWords,
+    /// A word the pane plan re-quotes into the spawned shell command.
+    ShellSourceTail,
+    /// A plain positional argument.
+    Positional {
+        /// Argument index inside the command segment.
+        index: usize,
+    },
+    /// A token the pane plan never consumes.
+    IgnoredTrailing,
+    /// A token whose role cannot be determined safely.
+    Incomplete,
+}
+
 /// Parsed token context for one prompt cursor position.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectorTokenContext {
@@ -90,6 +125,22 @@ pub struct SelectorTokenContext {
     pub token_end: usize,
     /// Unescaped tokens before the active token in this command segment.
     pub tokens_before: Vec<String>,
+    /// Start byte of the semicolon-delimited command segment.
+    pub segment_start: usize,
+    /// End byte of the semicolon-delimited command segment.
+    pub segment_end: usize,
+    /// Role the active token plays once the command is parsed.
+    pub role: SelectorTokenRole,
+}
+
+impl SelectorTokenContext {
+    /// Returns the active query text after outer quote and escape removal.
+    ///
+    /// The outer command parser removes quoting and escapes before a value is
+    /// used, so this is the literal text the active argument contains.
+    pub fn literal_query(&self) -> String {
+        unescape_selector_shell_token(&self.query)
+    }
 }
 
 /// Stateful selection over an immutable base line and product surface.
@@ -159,8 +210,8 @@ impl<S> ActiveSelector<S> {
             return false;
         };
         if candidate.append_space
-            || !candidate.value.ends_with('/')
-            || !self.plan.query.ends_with('/')
+            || !unescape_selector_shell_token(&candidate.value).ends_with('/')
+            || !unescape_selector_shell_token(&self.plan.query).ends_with('/')
         {
             return false;
         }
@@ -189,18 +240,30 @@ pub fn apply_selector_candidate(
     (next, cursor)
 }
 
-/// Parses the active shell-like token and preceding command-segment tokens.
+/// Parses the active shell-like token and surrounding command-segment tokens.
 pub fn selector_token_context(line: &str, cursor: usize) -> SelectorTokenContext {
     let cursor = clamp_to_char_boundary(line, cursor);
     let segment_start = current_command_segment_start(line, cursor);
-    let token_start = segment_start + current_token_start(&line[segment_start..cursor]);
-    let token_end = cursor + current_token_end(&line[cursor..]);
+    let scan = scan_segment_around_cursor(&line[segment_start..], cursor - segment_start);
+    let token_start = segment_start + scan.token_start;
+    let token_end = segment_start + scan.token_end;
+    let query = line[token_start..cursor].to_string();
+    let incomplete = scan.inside_quote || scan.after_escape || cursor != token_end;
+    let role = selector_token_role(
+        &scan.tokens_before,
+        &scan.tokens_after,
+        &scan.active_value,
+        incomplete,
+    );
     SelectorTokenContext {
         cursor,
-        query: line[token_start..cursor].to_string(),
+        query,
         token_start,
         token_end,
-        tokens_before: shell_tokens(&line[segment_start..token_start]),
+        tokens_before: scan.tokens_before,
+        segment_start,
+        segment_end: segment_start + scan.segment_end,
+        role,
     }
 }
 
@@ -273,60 +336,153 @@ enum QuoteState {
     Double,
 }
 
-/// Returns the current token start inside one command segment.
-fn current_token_start(segment: &str) -> usize {
-    let mut quote = QuoteState::None;
-    let mut escaped = false;
-    let mut token_start = segment.len();
-    let mut token_open = false;
-    for (index, ch) in segment.char_indices() {
-        if quote == QuoteState::None && !escaped && ch.is_whitespace() {
-            token_start = index + ch.len_utf8();
-            token_open = false;
-            continue;
-        }
-        if !token_open {
-            token_start = index;
-            token_open = true;
-        }
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match ch {
-            '\\' if quote != QuoteState::Single => escaped = true,
-            '\'' if quote == QuoteState::None => quote = QuoteState::Single,
-            '\'' if quote == QuoteState::Single => quote = QuoteState::None,
-            '"' if quote == QuoteState::None => quote = QuoteState::Double,
-            '"' if quote == QuoteState::Double => quote = QuoteState::None,
-            _ => {}
-        }
+/// Classifies the active token from the parsed tokens around it.
+///
+/// The whole command segment participates because the pane plan readers scan
+/// every argument, so a token the plan never consumes must not complete.
+fn selector_token_role(
+    tokens_before: &[String],
+    tokens_after: &[String],
+    active_value: &str,
+    incomplete: bool,
+) -> SelectorTokenRole {
+    if incomplete {
+        return SelectorTokenRole::Incomplete;
     }
-    token_start
+    let Some(command) = tokens_before.first() else {
+        return SelectorTokenRole::CommandName;
+    };
+    let args_before = &tokens_before[1..];
+    let active_index = args_before.len();
+    let mut args = args_before.to_vec();
+    args.push(active_value.to_string());
+    args.extend(tokens_after.iter().cloned());
+    let source = pane_shell_command_source(command, &args);
+    if let ShellCommandSource::ExplicitFlagValue { flag, value_index } = source
+        && value_index == active_index
+    {
+        return SelectorTokenRole::ShellSourceValue { flag };
+    }
+    if is_flag_token(active_value) {
+        return SelectorTokenRole::Flag;
+    }
+    if let Some(previous) = args_before.last()
+        && flag_takes_value(previous)
+    {
+        return SelectorTokenRole::FlagValue {
+            flag: previous.clone(),
+        };
+    }
+    if let ShellCommandSource::ExplicitFlagValue { value_index, .. } = source
+        && value_index != active_index
+    {
+        return SelectorTokenRole::IgnoredTrailing;
+    }
+    if is_pipe_pane_command(command) {
+        return pipe_pane_token_role(&args, active_index, active_value);
+    }
+    match source {
+        ShellCommandSource::DoubleDashTail { start } => {
+            if active_index >= start {
+                SelectorTokenRole::ShellSourceTail
+            } else {
+                SelectorTokenRole::IgnoredTrailing
+            }
+        }
+        ShellCommandSource::PositionalWords => SelectorTokenRole::ShellSourceTail,
+        ShellCommandSource::None if is_pane_spawning_command(command) => {
+            if positional_slot_index(&args, active_index) == 0 {
+                SelectorTokenRole::Positional {
+                    index: active_index,
+                }
+            } else {
+                SelectorTokenRole::IgnoredTrailing
+            }
+        }
+        _ => SelectorTokenRole::Positional {
+            index: active_index,
+        },
+    }
 }
 
-/// Returns the current token end inside the trailing prompt slice.
-fn current_token_end(segment: &str) -> usize {
-    let mut quote = QuoteState::None;
-    let mut escaped = false;
-    for (index, ch) in segment.char_indices() {
-        if quote == QuoteState::None && !escaped && (ch.is_whitespace() || ch == ';') {
-            return index;
-        }
-        if escaped {
-            escaped = false;
+/// Classifies one `pipe-pane` token whose positional words are raw shell source.
+///
+/// `pipe-pane` joins its positional words with single spaces and runs the
+/// result through the resolved shell, so those words use the same conservative
+/// literal gate as an explicit pane shell command.
+fn pipe_pane_token_role(
+    args: &[String],
+    active_index: usize,
+    active_value: &str,
+) -> SelectorTokenRole {
+    if let Some(previous) = active_index
+        .checked_sub(1)
+        .and_then(|index| args.get(index))
+        && pipe_pane_flag_takes_value(previous)
+    {
+        return SelectorTokenRole::FlagValue {
+            flag: previous.clone(),
+        };
+    }
+    if active_value.starts_with('-') {
+        return SelectorTokenRole::Flag;
+    }
+    SelectorTokenRole::ShellSourceWords
+}
+
+/// Returns whether one `pipe-pane` flag consumes the following argument.
+///
+/// This mirrors the runtime positional-word scan so prompt completion and
+/// execution agree on which words are joined into shell source.
+fn pipe_pane_flag_takes_value(flag: &str) -> bool {
+    matches!(
+        flag,
+        "-t" | "-b" | "--buffer" | "-o" | "--output" | "-c" | "-s" | "--content"
+    )
+}
+
+/// Returns whether `pipe-pane` is the active command spelling.
+fn is_pipe_pane_command(command: &str) -> bool {
+    command == "pipe-pane"
+}
+
+/// Classifies the shell source of the pane-creation commands.
+fn pane_shell_command_source(command: &str, args: &[String]) -> ShellCommandSource {
+    match command {
+        "new-window" | "neww" | "new-group" | "newg" => ShellCommandSource::for_new_window(args),
+        "split-window" | "splitw" => ShellCommandSource::for_split_window(args),
+        _ => ShellCommandSource::None,
+    }
+}
+
+/// Returns whether one command shares the pane-spawning shell readers.
+fn is_pane_spawning_command(command: &str) -> bool {
+    matches!(command, "new-window" | "neww" | "new-group" | "newg")
+}
+
+/// Returns whether one token is a flag or option spelling.
+fn is_flag_token(value: &str) -> bool {
+    value.starts_with('-') && value != "-"
+}
+
+/// Returns the positional slot of one argument index.
+fn positional_slot_index(args: &[String], active_index: usize) -> usize {
+    let mut slot = 0usize;
+    let mut index = 0usize;
+    while index < active_index {
+        let argument = args[index].as_str();
+        if flag_takes_value(argument) {
+            index = index.saturating_add(2);
             continue;
         }
-        match ch {
-            '\\' if quote != QuoteState::Single => escaped = true,
-            '\'' if quote == QuoteState::None => quote = QuoteState::Single,
-            '\'' if quote == QuoteState::Single => quote = QuoteState::None,
-            '"' if quote == QuoteState::None => quote = QuoteState::Double,
-            '"' if quote == QuoteState::Double => quote = QuoteState::None,
-            _ => {}
+        if is_flag_token(argument) {
+            index += 1;
+            continue;
         }
+        slot += 1;
+        index += 1;
     }
-    segment.len()
+    slot
 }
 
 /// Returns the start of the semicolon-delimited command containing `cursor`.
@@ -361,39 +517,6 @@ fn current_command_segment_start(line: &str, cursor: usize) -> usize {
             .unwrap_or(1);
     }
     start
-}
-
-/// Parses shell-like tokens while removing quotes and escapes.
-fn shell_tokens(value: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut quote = QuoteState::None;
-    let mut escaped = false;
-    let mut token_start = None;
-    for (index, ch) in value.char_indices() {
-        if quote == QuoteState::None && !escaped && ch.is_whitespace() {
-            if let Some(start) = token_start.take() {
-                tokens.push(unescape_selector_shell_token(&value[start..index]));
-            }
-            continue;
-        }
-        token_start.get_or_insert(index);
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match ch {
-            '\\' if quote != QuoteState::Single => escaped = true,
-            '\'' if quote == QuoteState::None => quote = QuoteState::Single,
-            '\'' if quote == QuoteState::Single => quote = QuoteState::None,
-            '"' if quote == QuoteState::None => quote = QuoteState::Double,
-            '"' if quote == QuoteState::Double => quote = QuoteState::None,
-            _ => {}
-        }
-    }
-    if let Some(start) = token_start {
-        tokens.push(unescape_selector_shell_token(&value[start..]));
-    }
-    tokens
 }
 
 /// Removes shell quoting and escaping from one selector token.
@@ -582,5 +705,228 @@ mod tests {
             selector_candidate_prefix_suffix("New-Window", "new"),
             Some("-Window".into())
         );
+    }
+
+    /// Verifies token contexts report plan-compatible roles for pane
+    /// creation arguments, including dead and shell-source positions.
+    #[test]
+    fn token_context_roles_follow_pane_shell_source_precedence() {
+        let command = "split-window";
+        assert_eq!(
+            selector_token_context(command, command.len()).role,
+            SelectorTokenRole::CommandName
+        );
+
+        let flag = "split-window --";
+        assert_eq!(
+            selector_token_context(flag, flag.len()).role,
+            SelectorTokenRole::Flag
+        );
+
+        let value = "split-window -c /tmp";
+        assert_eq!(
+            selector_token_context(value, value.len()).role,
+            SelectorTokenRole::FlagValue {
+                flag: "-c".to_string(),
+            }
+        );
+
+        let explicit = "split-window --shell-command ./fi";
+        assert_eq!(
+            selector_token_context(explicit, explicit.len()).role,
+            SelectorTokenRole::ShellSourceValue {
+                flag: ShellCommandFlag::ShellCommand,
+            }
+        );
+
+        // The explicit flag value is one token, so words after it are dead.
+        let dead_value_tail = "split-window --shell-command cat ./fi";
+        assert_eq!(
+            selector_token_context(dead_value_tail, dead_value_tail.len()).role,
+            SelectorTokenRole::IgnoredTrailing
+        );
+
+        let tail = "split-window -- cat ./fi";
+        assert_eq!(
+            selector_token_context(tail, tail.len()).role,
+            SelectorTokenRole::ShellSourceTail
+        );
+
+        let positional = "split-window cat ./fi";
+        assert_eq!(
+            selector_token_context(positional, positional.len()).role,
+            SelectorTokenRole::ShellSourceTail
+        );
+
+        let name = "new-window work";
+        assert_eq!(
+            selector_token_context(name, name.len()).role,
+            SelectorTokenRole::Positional { index: 0 }
+        );
+
+        let dead = "new-window work extra";
+        assert_eq!(
+            selector_token_context(dead, dead.len()).role,
+            SelectorTokenRole::IgnoredTrailing
+        );
+
+        let ignored_tail = "split-window --shell-command cat -- dead";
+        assert_eq!(
+            selector_token_context(ignored_tail, ignored_tail.len()).role,
+            SelectorTokenRole::IgnoredTrailing
+        );
+
+        let other_command = "source-file ./fi";
+        assert_eq!(
+            selector_token_context(other_command, other_command.len()).role,
+            SelectorTokenRole::Positional { index: 0 }
+        );
+    }
+
+    /// Verifies pane shell-source classification covers every command spelling
+    /// that shares the plan readers, plus `pipe-pane` positional shell words.
+    #[test]
+    fn token_context_roles_cover_shared_pane_shell_readers() {
+        let explicit = "new-group --shell-command ./fi";
+        assert_eq!(
+            selector_token_context(explicit, explicit.len()).role,
+            SelectorTokenRole::ShellSourceValue {
+                flag: ShellCommandFlag::ShellCommand,
+            }
+        );
+
+        let command = "newg --command ./fi";
+        assert_eq!(
+            selector_token_context(command, command.len()).role,
+            SelectorTokenRole::ShellSourceValue {
+                flag: ShellCommandFlag::Command,
+            }
+        );
+
+        let tail = "new-group -- cat ./fi";
+        assert_eq!(
+            selector_token_context(tail, tail.len()).role,
+            SelectorTokenRole::ShellSourceTail
+        );
+
+        let named = "newg -n group cat ./fi";
+        assert_eq!(
+            selector_token_context(named, named.len()).role,
+            SelectorTokenRole::ShellSourceTail
+        );
+
+        // Without -n/--name the positional words are the group name, not
+        // shell source, so a second positional word is never consumed.
+        let unnamed = "newg cat ./fi";
+        assert_eq!(
+            selector_token_context(unnamed, unnamed.len()).role,
+            SelectorTokenRole::IgnoredTrailing
+        );
+
+        // A dangling explicit flag still owns the value slot typed next.
+        let empty = "new-group --shell-command ";
+        assert_eq!(
+            selector_token_context(empty, empty.len()).role,
+            SelectorTokenRole::ShellSourceValue {
+                flag: ShellCommandFlag::ShellCommand,
+            }
+        );
+
+        // pipe-pane joins positional words into raw shell source.
+        let pipe = "pipe-pane cat ./fi";
+        assert_eq!(
+            selector_token_context(pipe, pipe.len()).role,
+            SelectorTokenRole::ShellSourceWords
+        );
+
+        let pipe_value = "pipe-pane -o ./out.log";
+        assert_eq!(
+            selector_token_context(pipe_value, pipe_value.len()).role,
+            SelectorTokenRole::FlagValue {
+                flag: "-o".to_string(),
+            }
+        );
+    }
+
+    /// Verifies role classification scans the whole command line so a token
+    /// the pane plan never consumes is ignored even under the cursor.
+    #[test]
+    fn token_context_ignores_tokens_the_whole_line_plan_never_consumes() {
+        for (line, cursor) in [
+            ("new-window work -- tail", "new-window work".len()),
+            (
+                "split-window -- cat --shell-command rm",
+                "split-window -- cat".len(),
+            ),
+            ("new-window foo --shell-command rm", "new-window foo".len()),
+        ] {
+            assert_eq!(
+                selector_token_context(line, cursor).role,
+                SelectorTokenRole::IgnoredTrailing,
+                "{line}"
+            );
+        }
+
+        // The words the whole-line plan does consume still classify correctly.
+        let tail = "new-window work -- tail";
+        assert_eq!(
+            selector_token_context(tail, tail.len()).role,
+            SelectorTokenRole::ShellSourceTail
+        );
+        let explicit = "split-window -- cat --shell-command rm";
+        assert_eq!(
+            selector_token_context(explicit, explicit.len()).role,
+            SelectorTokenRole::ShellSourceValue {
+                flag: ShellCommandFlag::ShellCommand,
+            }
+        );
+    }
+
+    /// Verifies partial input reports an incomplete role while the active
+    /// token span still covers the whole token instead of overrunning.
+    #[test]
+    fn token_context_marks_partial_input_incomplete_without_overrun() {
+        let line = "source-file fi";
+        let inside_word = selector_token_context(line, "source-file f".len());
+        assert_eq!(inside_word.query, "f");
+        assert_eq!(inside_word.token_start, "source-file ".len());
+        assert_eq!(inside_word.token_end, line.len());
+        assert_eq!(inside_word.role, SelectorTokenRole::Incomplete);
+
+        let quoted = "run \"foo bar\" baz";
+        let inside_quote = selector_token_context(quoted, 6);
+        assert_eq!(inside_quote.query, "\"f");
+        assert_eq!(inside_quote.token_start, 4);
+        assert_eq!(inside_quote.token_end, 13);
+        assert_eq!(inside_quote.role, SelectorTokenRole::Incomplete);
+
+        let escape = "source-file fi\\";
+        let after_escape = selector_token_context(escape, escape.len());
+        assert_eq!(after_escape.token_end, escape.len());
+        assert_eq!(after_escape.role, SelectorTokenRole::Incomplete);
+
+        let open_quote = "source-file 'fi";
+        assert_eq!(
+            selector_token_context(open_quote, open_quote.len()).role,
+            SelectorTokenRole::Incomplete
+        );
+    }
+
+    /// Verifies token contexts expose the current command segment span and
+    /// the literal query left after outer quote and escape removal.
+    #[test]
+    fn token_context_reports_segment_span_and_literal_query() {
+        let line = "rename-window one; source-file fi";
+        let context = selector_token_context(line, line.len());
+
+        assert_eq!(context.segment_start, "rename-window one; ".len());
+        assert_eq!(context.segment_end, line.len());
+        assert_eq!(context.tokens_before, ["source-file"]);
+        assert_eq!(context.role, SelectorTokenRole::Positional { index: 0 });
+        assert_eq!(context.literal_query(), "fi");
+
+        let quoted = "source-file './dir with spaces/fi";
+        let quoted_context = selector_token_context(quoted, quoted.len());
+        assert_eq!(quoted_context.literal_query(), "./dir with spaces/fi");
     }
 }

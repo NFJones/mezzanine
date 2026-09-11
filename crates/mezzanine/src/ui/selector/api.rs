@@ -159,13 +159,14 @@ pub fn plan_selector_with_extra_in_working_directory(
     working_directory: Option<&Path>,
 ) -> Option<SelectorPlan> {
     let context = selector_token_context(line, cursor);
+    let match_query = candidate_match_query(surface, &context);
     let candidates = selector_candidates(surface, &context, extra_candidates, working_directory);
-    let candidates = filter_and_sort_selector_candidates(candidates, &context.query);
+    let candidates = filter_and_sort_selector_candidates(candidates, &match_query);
     (!candidates.is_empty()).then_some(SelectorPlan {
         replacement_start: context.token_start,
         replacement_end: context.token_end,
-        query: context.query,
         candidates,
+        query: context.query,
     })
 }
 
@@ -178,19 +179,41 @@ fn plan_selector_with_extra_and_filesystem_candidates(
     filesystem_candidates: &[SelectorCandidate],
 ) -> Option<SelectorPlan> {
     let context = selector_token_context(line, cursor);
+    let match_query = candidate_match_query(surface, &context);
     let candidates = selector_candidates_with_filesystem(
         surface,
         &context,
         extra_candidates,
         filesystem_candidates,
     );
-    let candidates = filter_and_sort_selector_candidates(candidates, &context.query);
+    let candidates = filter_and_sort_selector_candidates(candidates, &match_query);
     (!candidates.is_empty()).then_some(SelectorPlan {
         replacement_start: context.token_start,
         replacement_end: context.token_end,
-        query: context.query,
         candidates,
+        query: context.query,
     })
+}
+
+/// Returns the query text selector candidates are matched against.
+///
+/// Mezzanine arguments are decoded by the outer command parser before they are
+/// used, so filesystem candidates carry encoded insertion text while their
+/// label stays literal; matching therefore uses the literal query. Agent
+/// prompt text stays raw.
+fn candidate_match_query(surface: SelectorSurface, context: &SelectorTokenContext) -> String {
+    match surface {
+        SelectorSurface::MezzanineCommand => context.literal_query(),
+        SelectorSurface::AgentCommand => context.query.clone(),
+    }
+}
+
+/// Returns the text a candidate prefix hint completes toward.
+fn candidate_hint_text(surface: SelectorSurface, candidate: &SelectorCandidate) -> &str {
+    match surface {
+        SelectorSurface::MezzanineCommand => candidate.label.as_str(),
+        SelectorSurface::AgentCommand => candidate.value.as_str(),
+    }
 }
 
 /// Builds the current prefix or parameter shadow hint without editing `line`.
@@ -273,12 +296,15 @@ fn prefix_shadow_hint_with_filesystem_candidates(
         extra_candidates,
         filesystem_candidates,
     );
-    let candidate = filter_and_sort_selector_candidates(candidates, &context.query)
+    let match_query = candidate_match_query(surface, context);
+    let candidate = filter_and_sort_selector_candidates(candidates, &match_query)
         .into_iter()
         .find(|candidate| {
-            selector_candidate_prefix_suffix(candidate.value.as_str(), &context.query).is_some()
+            selector_candidate_prefix_suffix(candidate_hint_text(surface, candidate), &match_query)
+                .is_some()
         })?;
-    let text = selector_candidate_prefix_suffix(candidate.value.as_str(), &context.query)?;
+    let text =
+        selector_candidate_prefix_suffix(candidate_hint_text(surface, &candidate), &match_query)?;
     (!text.is_empty()).then_some(SelectorShadowHint {
         insert_at: cursor,
         text,
@@ -302,12 +328,15 @@ fn prefix_shadow_hint(
         return None;
     }
     let candidates = selector_candidates(surface, context, extra_candidates, working_directory);
-    let candidate = filter_and_sort_selector_candidates(candidates, &context.query)
+    let match_query = candidate_match_query(surface, context);
+    let candidate = filter_and_sort_selector_candidates(candidates, &match_query)
         .into_iter()
         .find(|candidate| {
-            selector_candidate_prefix_suffix(candidate.value.as_str(), &context.query).is_some()
+            selector_candidate_prefix_suffix(candidate_hint_text(surface, candidate), &match_query)
+                .is_some()
         })?;
-    let text = selector_candidate_prefix_suffix(candidate.value.as_str(), &context.query)?;
+    let text =
+        selector_candidate_prefix_suffix(candidate_hint_text(surface, &candidate), &match_query)?;
     (!text.is_empty()).then_some(SelectorShadowHint {
         insert_at: cursor,
         text,

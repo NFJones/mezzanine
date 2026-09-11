@@ -1644,6 +1644,20 @@ cursor. Pressing Shift+Tab MUST select or advance the previous matching
 candidate. Selector application MUST replace only the active token in the
 current command segment and MUST NOT submit the command.
 
+Completion MUST be fail-closed for tokens whose text is executed as shell
+source. The value of `--shell-command` or `--command` on `new-window`/`neww`,
+`new-group`/`newg`, and `split-window`/`splitw`, and the positional words of
+`pipe-pane`, are user-authored shell source. Mezzanine MUST NOT offer a
+candidate for those tokens unless the candidate's literal path does not begin
+with `-` and consists only of ASCII letters, digits, and
+`_ - . / @ % + = : ,`, which no supported shell interprets. Filesystem
+candidates for other supported argument positions MUST be encoded so the
+command parser reads back the exact literal path. Completion MUST classify the
+active token against the whole command line the pane plan reads, not only the
+text before the cursor: an argument the plan never consumes MUST be classified
+as ignored and MUST receive no candidates, and a token whose role cannot be
+determined safely MUST receive no candidates at all.
+
 The command prompt and configuration shell MUST render prefix-based shadow
 hints for the best matching command name or enumerable argument value without
 mutating the editable buffer. Prefix shadow hints MUST only render when the
@@ -1769,6 +1783,13 @@ introducing additional shell parsing, or serialize it into a shell command
 using a documented, lossless quoting algorithm before applying `exec`. The
 command form actually used MUST be visible in diagnostics and audit records
 when audit logging is enabled.
+
+A single `shell-command` string is user-authored shell source. Mezzanine MUST
+transfer it to the resolved shell unchanged, and MUST NOT re-quote or otherwise
+reinterpret it as an argument vector. The accepted explicit spellings are
+`--shell-command` and `--command`. An explicit spelling that has a value takes
+precedence over words after `--`, which in turn take precedence over positional
+command arguments.
 
 When `-c` is omitted, `new-window`, `new-group`, and `split-window` MUST resolve
 the starting directory from `terminal.pane_spawn_directory` before changing

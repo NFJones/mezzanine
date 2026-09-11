@@ -17,6 +17,24 @@ commands, supports quoting and semicolon-separated commands, and does not run
 text through the pane shell. Tab and Shift+Tab select enumerable command and
 argument completions; shadow hints show a best match without changing input.
 
+Path arguments complete to one literal argument. Completing `source-file ./`
+can select a file named `$(report).txt` or `notes with spaces.md`; the prompt
+inserts command-language quoting that the parser removes again, so the command
+reads exactly the entry you picked. The agent prompt keeps its own raw
+completion behavior.
+
+Completion is deliberately unavailable where your text is executed as shell
+source. The single string given to `new-window`/`new-group
+--shell-command`/`--command` (and the `neww`, `newg`, and `split-window`/
+`splitw` spellings) is run by the shell unchanged, and `pipe-pane` joins its
+positional words into the same kind of shell source. Tab there only offers
+names that do not begin with `-` and are made of ASCII letters, digits, and
+`_ - . / @ % + = : ,`. Names with spaces, quotes, `$`, backticks, globs,
+brackets, or non-ASCII bytes are skipped instead of being inserted unsafely,
+and static flag candidates never fill that value. Completion reads the whole
+line, so arguments the command never consumes offer no candidates, and a
+cursor inside a word or an open quote leaves the draft unchanged.
+
 Use `help` in the prompt for its command guide. Use a Mezzanine command rather
 than shell text when changing panes, windows, layouts, key bindings, or Mez
 settings.
