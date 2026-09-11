@@ -28,6 +28,13 @@ small pastes stay literal even when the whole prompt is large. Recall and
 reverse search preserve those original per-paste labels, while submission
 always sends the complete underlying text.
 
+A paste whose payload exceeds the retained-byte limit, or whose closing delimiter
+never arrives before the incomplete-payload age limit, is discarded instead of
+becoming prompt input. Everything after it is discarded too, until the real
+closing delimiter is consumed, so a truncated paste can never turn into command
+input. The status bar says the paste was discarded and how to resume input:
+closing the command prompt, or pressing `Esc` at an idle agent prompt.
+
 ## Copy and paste
 
 Press `Ctrl+A [` to enter pane-local copy mode. You can scroll normal terminal

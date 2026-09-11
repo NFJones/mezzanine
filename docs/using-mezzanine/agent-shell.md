@@ -54,6 +54,11 @@ the same pasted blocks shown when the prompt was entered, and submission still
 sends the agent the complete original text. The bounded history capacity can
 retain a maximum-size bracketed paste with surrounding typed text; exceptionally
 larger complete prompts are submitted normally but are not retained for recall.
+A paste payload that exceeds the retained-byte limit, or whose closing delimiter
+never arrives in time, is discarded instead of becoming prompt input. The bytes
+after it are discarded too until the real closing delimiter arrives, so a
+truncated paste cannot submit anything; the status bar reports the discarded
+paste and `Esc` at an idle prompt resumes ordinary input.
 Press `Esc` to clear a draft without hiding the prompt. `Ctrl+D` on an empty
 prompt hides it. When no task is running, press `Ctrl+C` twice within three
 seconds to hide the prompt; when a task is running, `Ctrl+C` requests an

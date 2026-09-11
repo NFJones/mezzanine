@@ -1179,3 +1179,76 @@ fn runtime_control_terminal_command_uses_zen_live_override_handler() {
     assert_eq!(response["result"]["outcomes"][0]["kind"], "mutated");
     assert!(service.terminal_zen_mode());
 }
+
+/// Verifies a rejected paste payload cannot submit a command through the
+/// primary prompt and that the closing delimiter restores ordinary input.
+///
+/// The bytes after a rejected frame are paste data rather than keystrokes, so the
+/// prompt must discard them, must keep the command out of history, and must tell
+/// the operator why input is being ignored.
+#[test]
+fn runtime_primary_prompt_discards_rejected_paste_continuation() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    service.enter_primary_command_prompt("").unwrap();
+
+    let mut rejected = Vec::new();
+    rejected.extend_from_slice(b"\x1b[200~");
+    rejected.extend_from_slice(&vec![
+        b'x';
+        mez_mux::readline::READLINE_BRACKETED_PASTE_MAX_BYTES
+            + 1
+    ]);
+    rejected.extend_from_slice(b"unsafe-command\n");
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(rejected)],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    let prompt = service
+        .primary_prompt_input()
+        .expect("the primary prompt stays open while input is discarded");
+    assert_eq!(prompt.prompt.buffer.line(), "");
+    assert!(prompt.decoder.bracketed_paste_resynchronization_pending());
+    assert!(service.primary_command_prompt_history().is_empty());
+    assert!(
+        service
+            .primary_error_status_overlay()
+            .is_some_and(|notice| notice.contains("discarded paste payload")),
+        "{:?}",
+        service.primary_error_status_overlay()
+    );
+
+    // Only the closing delimiter resumes ordinary decoding.
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(
+                    b"\x1b[201~safe\r".to_vec(),
+                )],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(
+        service.primary_command_prompt_history(),
+        vec!["safe".to_string()]
+    );
+}

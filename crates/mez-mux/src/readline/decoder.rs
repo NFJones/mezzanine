@@ -44,12 +44,30 @@ pub enum ReadlineDecodedInput {
     BracketedPasteRejected(ReadlineBracketedPasteRejection),
 }
 
+/// Framing state of the decoder's bracketed-paste machine.
+///
+/// Falling back to ordinary decoding as soon as a payload is rejected is unsafe:
+/// the bytes after a rejected frame are the same attacker-influenced
+/// continuation, and decoding them as keys is exactly what would let pasted
+/// text edit or submit a prompt. `Discarding` therefore drops input until the
+/// complete closing delimiter arrives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BracketedPasteFraming {
+    /// No paste frame is being assembled; bytes decode as ordinary input.
+    Inactive,
+    /// One paste payload is being retained until its closing delimiter.
+    Collecting,
+    /// A rejected payload is being discarded until its closing delimiter.
+    Discarding,
+}
+
 /// Stateful terminal-input decoder for readline prompt surfaces.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadlineTerminalInputDecoder {
     pending: Vec<u8>,
-    bracketed_paste_active: bool,
+    bracketed_paste_framing: BracketedPasteFraming,
     bracketed_paste: Vec<u8>,
+    bracketed_paste_rejected: bool,
     bracketed_paste_started_at: Option<Instant>,
     bracketed_paste_max_bytes: usize,
     bracketed_paste_stale_after: Duration,
@@ -74,8 +92,9 @@ impl ReadlineTerminalInputDecoder {
     pub fn with_bracketed_paste_limits(max_bytes: usize, stale_after: Duration) -> Self {
         Self {
             pending: Vec::new(),
-            bracketed_paste_active: false,
+            bracketed_paste_framing: BracketedPasteFraming::Inactive,
             bracketed_paste: Vec::new(),
+            bracketed_paste_rejected: false,
             bracketed_paste_started_at: None,
             bracketed_paste_max_bytes: max_bytes,
             bracketed_paste_stale_after: stale_after,
@@ -94,6 +113,39 @@ impl ReadlineTerminalInputDecoder {
             .saturating_add(self.bracketed_paste.len())
     }
 
+    /// Returns whether a rejected paste payload is still being discarded.
+    ///
+    /// A prompt surface uses this to explain why input is being ignored until
+    /// the closing delimiter arrives.
+    pub fn bracketed_paste_resynchronization_pending(&self) -> bool {
+        self.bracketed_paste_framing == BracketedPasteFraming::Discarding
+    }
+
+    /// Takes the one-shot report that a decode rejected a paste payload.
+    ///
+    /// A prompt surface that applies decoded input through one call cannot
+    /// observe discard framing when the closing delimiter arrives in the same
+    /// read, because framing starts and ends inside that call. Taking this report
+    /// clears it, so exactly one caller observes each rejected payload.
+    pub fn take_bracketed_paste_rejection(&mut self) -> bool {
+        std::mem::take(&mut self.bracketed_paste_rejected)
+    }
+
+    /// Drops retained paste framing after a trusted prompt reset.
+    ///
+    /// Only a prompt lifecycle owner may call this: the state it clears exists
+    /// because attacker-influenced bytes were retained, so those bytes are
+    /// discarded rather than decoded, replayed, or reported, and ordinary
+    /// decoding resumes immediately. Returns whether anything was dropped.
+    pub fn abandon_bracketed_paste_framing(&mut self) -> bool {
+        let discarded = self.bracketed_paste_framing != BracketedPasteFraming::Inactive
+            || !self.bracketed_paste.is_empty()
+            || !self.pending.is_empty();
+        self.clear_bracketed_paste_framing();
+        self.pending.clear();
+        discarded
+    }
+
     /// Decodes complete input items while preserving incomplete suffixes.
     pub fn decode(&mut self, input: &[u8]) -> Result<Vec<ReadlineDecodedInput>> {
         self.decode_at(input, Instant::now())
@@ -102,14 +154,15 @@ impl ReadlineTerminalInputDecoder {
     /// Decodes input using `now` for deterministic incomplete-paste expiry.
     pub fn decode_at(&mut self, input: &[u8], now: Instant) -> Result<Vec<ReadlineDecodedInput>> {
         let mut decoded = Vec::new();
-        if self.bracketed_paste_active
+        if self.bracketed_paste_framing == BracketedPasteFraming::Collecting
             && self.bracketed_paste_started_at.is_some_and(|started| {
                 now.saturating_duration_since(started) >= self.bracketed_paste_stale_after
             })
         {
-            self.reset_bracketed_paste();
-            self.pending.clear();
-            decoded.push(ReadlineDecodedInput::BracketedPasteRejected(
+            // An expired payload is released and its continuation is discarded
+            // until the closing delimiter, so a truncated frame can never have
+            // its remaining bytes reinterpreted as keys.
+            decoded.push(self.begin_bracketed_paste_discard(
                 ReadlineBracketedPasteRejection::Expired {
                     stale_after: self.bracketed_paste_stale_after,
                 },
@@ -125,25 +178,41 @@ impl ReadlineTerminalInputDecoder {
 
         let mut cursor = 0;
         while cursor < bytes.len() {
-            if self.bracketed_paste_active {
+            if self.bracketed_paste_framing == BracketedPasteFraming::Discarding {
+                // Only the complete closing delimiter ends discard framing, so
+                // no byte of a rejected payload is ever decoded as a key.
+                if let Some(end_offset) = find_bytes(&bytes[cursor..], BRACKETED_PASTE_END) {
+                    self.clear_bracketed_paste_framing();
+                    cursor = cursor
+                        .saturating_add(end_offset)
+                        .saturating_add(BRACKETED_PASTE_END.len());
+                    continue;
+                }
+                // A rejected payload of any size leaves bounded state behind:
+                // only the suffix that could still complete the delimiter.
+                let tail = longest_suffix_that_prefixes(&bytes[cursor..], BRACKETED_PASTE_END);
+                if tail > 0 {
+                    self.pending
+                        .extend_from_slice(&bytes[bytes.len().saturating_sub(tail)..]);
+                }
+                break;
+            }
+            if self.bracketed_paste_framing == BracketedPasteFraming::Collecting {
                 if let Some(end_offset) = find_bytes(&bytes[cursor..], BRACKETED_PASTE_END) {
                     if !self.bracketed_paste_fits(end_offset) {
-                        self.reset_bracketed_paste();
-                        decoded.push(ReadlineDecodedInput::BracketedPasteRejected(
+                        // The rest of this batch is rescanned in discard framing,
+                        // where an oversized payload is never partly decoded.
+                        decoded.push(self.begin_bracketed_paste_discard(
                             ReadlineBracketedPasteRejection::TooLarge {
                                 max_bytes: self.bracketed_paste_max_bytes,
                             },
                         ));
-                        cursor = cursor
-                            .saturating_add(end_offset)
-                            .saturating_add(BRACKETED_PASTE_END.len());
                         continue;
                     }
                     self.bracketed_paste
                         .extend_from_slice(&bytes[cursor..cursor + end_offset]);
                     let payload = std::mem::take(&mut self.bracketed_paste);
-                    self.bracketed_paste_active = false;
-                    self.bracketed_paste_started_at = None;
+                    self.clear_bracketed_paste_framing();
                     let text = String::from_utf8(payload).map_err(|_| {
                         MuxError::invalid_args("readline paste is not valid UTF-8 text")
                     })?;
@@ -159,13 +228,12 @@ impl ReadlineTerminalInputDecoder {
                 let payload_end = bytes.len().saturating_sub(tail);
                 let payload_len = payload_end.saturating_sub(cursor);
                 if !self.bracketed_paste_fits(payload_len) {
-                    self.reset_bracketed_paste();
-                    decoded.push(ReadlineDecodedInput::BracketedPasteRejected(
+                    decoded.push(self.begin_bracketed_paste_discard(
                         ReadlineBracketedPasteRejection::TooLarge {
                             max_bytes: self.bracketed_paste_max_bytes,
                         },
                     ));
-                    break;
+                    continue;
                 }
                 self.bracketed_paste
                     .extend_from_slice(&bytes[cursor..payload_end]);
@@ -175,7 +243,7 @@ impl ReadlineTerminalInputDecoder {
                 break;
             }
             if bytes[cursor..].starts_with(BRACKETED_PASTE_START) {
-                self.bracketed_paste_active = true;
+                self.bracketed_paste_framing = BracketedPasteFraming::Collecting;
                 self.bracketed_paste.clear();
                 self.bracketed_paste_started_at = Some(now);
                 cursor = cursor.saturating_add(BRACKETED_PASTE_START.len());
@@ -211,9 +279,23 @@ impl ReadlineTerminalInputDecoder {
             .is_some_and(|total| total <= self.bracketed_paste_max_bytes)
     }
 
-    /// Clears all state owned by an active bracketed paste.
-    fn reset_bracketed_paste(&mut self) {
-        self.bracketed_paste_active = false;
+    /// Releases a rejected payload and discards input until its delimiter.
+    ///
+    /// Every byte already collected is dropped here, so only the bounded
+    /// delimiter-prefix suffix that discard framing retains survives.
+    fn begin_bracketed_paste_discard(
+        &mut self,
+        rejection: ReadlineBracketedPasteRejection,
+    ) -> ReadlineDecodedInput {
+        self.clear_bracketed_paste_framing();
+        self.bracketed_paste_framing = BracketedPasteFraming::Discarding;
+        self.bracketed_paste_rejected = true;
+        ReadlineDecodedInput::BracketedPasteRejected(rejection)
+    }
+
+    /// Clears all state owned by a paste frame or by its discard run.
+    fn clear_bracketed_paste_framing(&mut self) {
+        self.bracketed_paste_framing = BracketedPasteFraming::Inactive;
         self.bracketed_paste.clear();
         self.bracketed_paste_started_at = None;
     }
@@ -638,10 +720,16 @@ mod tests {
         );
     }
 
-    /// Verifies fragmented paste overflow is reported explicitly, releases all
-    /// retained bytes, and leaves the next ordinary key decodable.
+    /// Verifies fragmented paste overflow releases retained bytes, reports the
+    /// rejection once, and discards the attacker-influenced continuation until
+    /// the closing delimiter arrives.
+    ///
+    /// A rejected payload must not be able to edit or submit a prompt with the
+    /// bytes that follow it, so the test drives a complete command line after the
+    /// overflow and asserts that nothing decodes until the delimiter, then that
+    /// ordinary input works again.
     #[test]
-    fn readline_decoder_rejects_oversized_paste_and_recovers() {
+    fn readline_decoder_rejects_oversized_paste_and_discards_until_delimiter() {
         let now = Instant::now();
         let mut decoder =
             ReadlineTerminalInputDecoder::with_bracketed_paste_limits(3, Duration::from_secs(1));
@@ -653,7 +741,13 @@ mod tests {
                 ReadlineBracketedPasteRejection::TooLarge { max_bytes: 3 }
             )]
         );
+        assert!(decoder.bracketed_paste_resynchronization_pending());
+        // The discarded continuation is dropped, never decoded as keys.
+        assert!(decoder.decode_at(b"rm -rf /\n", now).unwrap().is_empty());
         assert_eq!(decoder.buffered_len(), 0);
+
+        assert!(decoder.decode_at(b"\x1b[201~", now).unwrap().is_empty());
+        assert!(!decoder.bracketed_paste_resynchronization_pending());
         assert_eq!(
             decoder.decode_at(b"z", now).unwrap(),
             vec![ReadlineDecodedInput::Sequence(b"z".to_vec())]
@@ -679,10 +773,14 @@ mod tests {
         );
     }
 
-    /// Verifies stale unterminated paste state is reported and reset before
-    /// current input is decoded, so malformed input cannot capture later keys.
+    /// Verifies an expired unterminated paste discards its continuation instead
+    /// of decoding it, and that expiry never reinterprets waiting bytes as keys.
+    ///
+    /// Expiry exists to bound retained payload memory, not to turn the bytes of
+    /// a truncated frame back into keystrokes, so the discarded continuation
+    /// stays discarded until the closing delimiter or a trusted reset.
     #[test]
-    fn readline_decoder_expires_unterminated_paste_and_recovers() {
+    fn readline_decoder_expires_unterminated_paste_and_discards_until_delimiter() {
         let now = Instant::now();
         let stale_after = Duration::from_millis(500);
         let mut decoder =
@@ -695,15 +793,166 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(
-            decoder.decode_at(b"z", now + stale_after).unwrap(),
-            vec![
-                ReadlineDecodedInput::BracketedPasteRejected(
-                    ReadlineBracketedPasteRejection::Expired { stale_after }
-                ),
-                ReadlineDecodedInput::Sequence(b"z".to_vec()),
-            ]
+            decoder.decode_at(b"z\n", now + stale_after).unwrap(),
+            vec![ReadlineDecodedInput::BracketedPasteRejected(
+                ReadlineBracketedPasteRejection::Expired { stale_after }
+            )]
         );
+        assert!(decoder.bracketed_paste_resynchronization_pending());
+        assert!(
+            decoder
+                .decode_at(b"y\n", now + stale_after + stale_after)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(decoder.decode_at(b"\x1b[201~", now).unwrap().is_empty());
         assert_eq!(decoder.buffered_len(), 0);
+        assert_eq!(
+            decoder.decode_at(b"z", now).unwrap(),
+            vec![ReadlineDecodedInput::Sequence(b"z".to_vec())]
+        );
+    }
+
+    /// Verifies a closing delimiter split across reads still ends discard
+    /// framing, retains only the delimiter prefix, and decodes only the bytes
+    /// that follow the complete delimiter.
+    #[test]
+    fn readline_decoder_resynchronizes_on_split_closing_delimiter() {
+        let now = Instant::now();
+        let mut decoder =
+            ReadlineTerminalInputDecoder::with_bracketed_paste_limits(3, Duration::from_secs(1));
+
+        assert_eq!(
+            decoder.decode_at(b"\x1b[200~abcd", now).unwrap(),
+            vec![ReadlineDecodedInput::BracketedPasteRejected(
+                ReadlineBracketedPasteRejection::TooLarge { max_bytes: 3 }
+            )]
+        );
+        assert!(decoder.decode_at(b"\x1b[20", now).unwrap().is_empty());
+        assert_eq!(decoder.buffered_len(), "\x1b[20".len());
+        assert_eq!(
+            decoder.decode_at(b"1~\n", now).unwrap(),
+            vec![ReadlineDecodedInput::Sequence(b"\n".to_vec())]
+        );
+        assert!(!decoder.bracketed_paste_resynchronization_pending());
+    }
+
+    /// Verifies embedded paste starts and control bytes inside a discarded
+    /// payload cannot end discard framing or produce decoded input.
+    #[test]
+    fn readline_decoder_ignores_embedded_starts_while_discarding() {
+        let now = Instant::now();
+        let mut decoder =
+            ReadlineTerminalInputDecoder::with_bracketed_paste_limits(3, Duration::from_secs(1));
+
+        assert_eq!(
+            decoder.decode_at(b"\x1b[200~abcd", now).unwrap(),
+            vec![ReadlineDecodedInput::BracketedPasteRejected(
+                ReadlineBracketedPasteRejection::TooLarge { max_bytes: 3 }
+            )]
+        );
+        // A nested start delimiter, Ctrl-C, Escape, and a newline are payload.
+        assert!(
+            decoder
+                .decode_at(b"\x1b[200~\x03\x1b\n", now)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(decoder.bracketed_paste_resynchronization_pending());
+        assert!(decoder.decode_at(b"\x1b[201~", now).unwrap().is_empty());
+        assert_eq!(
+            decoder.decode_at(b"z", now).unwrap(),
+            vec![ReadlineDecodedInput::Sequence(b"z".to_vec())]
+        );
+    }
+
+    /// Verifies the trusted reset drops discard framing without replaying the
+    /// discarded bytes and restores ordinary decoding immediately.
+    #[test]
+    fn readline_decoder_trusted_reset_restores_ordinary_input() {
+        let now = Instant::now();
+        let mut decoder =
+            ReadlineTerminalInputDecoder::with_bracketed_paste_limits(3, Duration::from_secs(1));
+
+        assert!(!decoder.abandon_bracketed_paste_framing());
+        assert_eq!(
+            decoder.decode_at(b"\x1b[200~abcd", now).unwrap(),
+            vec![ReadlineDecodedInput::BracketedPasteRejected(
+                ReadlineBracketedPasteRejection::TooLarge { max_bytes: 3 }
+            )]
+        );
+        assert!(decoder.abandon_bracketed_paste_framing());
+        assert!(!decoder.bracketed_paste_resynchronization_pending());
+        assert_eq!(decoder.buffered_len(), 0);
+        // No discarded byte is replayed, and the next key is ordinary input.
+        assert_eq!(
+            decoder.decode_at(b"z", now).unwrap(),
+            vec![ReadlineDecodedInput::Sequence(b"z".to_vec())]
+        );
+    }
+
+    /// Verifies the trusted reset drops a retained closing-delimiter prefix
+    /// instead of replaying those bytes as input.
+    ///
+    /// Discard framing keeps at most the suffix that could complete the closing
+    /// delimiter, and that suffix is exactly the state a reset must release
+    /// without decoding it as keystrokes.
+    #[test]
+    fn readline_decoder_trusted_reset_drops_retained_delimiter_prefix() {
+        let now = Instant::now();
+        let mut decoder =
+            ReadlineTerminalInputDecoder::with_bracketed_paste_limits(3, Duration::from_secs(1));
+
+        assert_eq!(
+            decoder.decode_at(b"\x1b[200~abcd", now).unwrap(),
+            vec![ReadlineDecodedInput::BracketedPasteRejected(
+                ReadlineBracketedPasteRejection::TooLarge { max_bytes: 3 }
+            )]
+        );
+        assert!(decoder.decode_at(b"\x1b[20", now).unwrap().is_empty());
+        assert_eq!(decoder.buffered_len(), "\x1b[20".len());
+        assert!(decoder.abandon_bracketed_paste_framing());
+        assert_eq!(decoder.buffered_len(), 0);
+        assert_eq!(
+            decoder.decode_at(b"p", now).unwrap(),
+            vec![ReadlineDecodedInput::Sequence(b"p".to_vec())]
+        );
+    }
+
+    /// Verifies one rejected payload sets a single one-shot report that a caller
+    /// takes once, including when its closing delimiter resolves discard framing
+    /// inside the same decode call.
+    #[test]
+    fn readline_decoder_reports_each_rejection_once() {
+        let now = Instant::now();
+        let mut decoder =
+            ReadlineTerminalInputDecoder::with_bracketed_paste_limits(3, Duration::from_secs(1));
+
+        assert!(!decoder.take_bracketed_paste_rejection());
+        assert!(decoder.decode_at(b"\x1b[200~abc", now).unwrap().is_empty());
+        assert!(!decoder.take_bracketed_paste_rejection());
+        assert_eq!(
+            decoder.decode_at(b"d", now).unwrap(),
+            vec![ReadlineDecodedInput::BracketedPasteRejected(
+                ReadlineBracketedPasteRejection::TooLarge { max_bytes: 3 }
+            )]
+        );
+        assert!(decoder.take_bracketed_paste_rejection());
+        assert!(!decoder.take_bracketed_paste_rejection());
+
+        // A complete oversized frame starts and ends discard framing inside one
+        // call, so the report is the only way a batch caller sees the rejection.
+        let mut complete =
+            ReadlineTerminalInputDecoder::with_bracketed_paste_limits(3, Duration::from_secs(1));
+        assert_eq!(
+            complete.decode_at(b"\x1b[200~abcd\x1b[201~", now).unwrap(),
+            vec![ReadlineDecodedInput::BracketedPasteRejected(
+                ReadlineBracketedPasteRejection::TooLarge { max_bytes: 3 }
+            )]
+        );
+        assert!(!complete.bracketed_paste_resynchronization_pending());
+        assert!(complete.take_bracketed_paste_rejection());
+        assert!(!complete.take_bracketed_paste_rejection());
     }
 
     /// Verifies enhanced Backspace preserves Alt and Control modifiers across

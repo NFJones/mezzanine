@@ -668,3 +668,188 @@ fn ctrl_v_host_clipboard_read() -> Option<String> {
 fn ignored_host_clipboard_copy(_: &str) -> bool {
     true
 }
+
+/// Applies one attached terminal input batch to the focused pane prompt.
+fn apply_prompt_input(
+    service: &mut RuntimeSessionService,
+    primary: &mez_core::ids::ClientId,
+    input: Vec<u8>,
+) {
+    service
+        .apply_attached_terminal_step_plan(
+            primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(input)],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+}
+
+/// Builds one bracketed paste frame whose payload exceeds the retained-byte
+/// budget, followed by the continuation bytes an attacker would supply.
+fn rejected_paste_then(continuation: &[u8]) -> Vec<u8> {
+    let mut input = Vec::new();
+    input.extend_from_slice(b"\x1b[200~");
+    input.extend_from_slice(&vec![
+        b'x';
+        mez_mux::readline::READLINE_BRACKETED_PASTE_MAX_BYTES
+            + 1
+    ]);
+    input.extend_from_slice(continuation);
+    input
+}
+
+/// Verifies a rejected oversized paste cannot reach an agent turn through the
+/// pane-local prompt, and that the closing delimiter restores ordinary input.
+///
+/// The bytes after a rejected frame are paste data rather than keystrokes, so the
+/// runtime prompt must discard them, must leave the turn state untouched, and
+/// must tell the operator why input is being ignored.
+#[test]
+fn runtime_agent_prompt_discards_rejected_paste_continuation() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_pane_screen(
+        "%1".to_string(),
+        TerminalScreen::new(Size::new(80, 24).unwrap(), 10).unwrap(),
+    );
+
+    apply_prompt_input(
+        &mut service,
+        &primary,
+        rejected_paste_then(b"discarded command\n"),
+    );
+    apply_prompt_input(&mut service, &primary, b"more discarded\n".to_vec());
+
+    let state = service.agent_prompt_inputs_for_tests().get("%1").unwrap();
+    assert_eq!(state.prompt.buffer.line(), "");
+    assert!(state.decoder.bracketed_paste_resynchronization_pending());
+    assert!(service.agent_turn_contexts().is_empty());
+    assert!(
+        service
+            .primary_error_status_overlay()
+            .is_some_and(|notice| notice.contains("discarded paste payload")),
+        "{:?}",
+        service.primary_error_status_overlay()
+    );
+
+    // Only the closing delimiter resumes ordinary decoding.
+    apply_prompt_input(&mut service, &primary, b"\x1b[201~kept\r".to_vec());
+
+    let context = service.agent_turn_contexts().get("turn-1").unwrap();
+    assert!(
+        context
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("kept"))
+    );
+    assert!(
+        !context
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("discarded command"))
+    );
+}
+
+/// Verifies Escape at an idle agent prompt releases discard framing without
+/// replaying the discarded bytes into the prompt.
+#[test]
+fn runtime_agent_prompt_escape_resets_discarded_paste_framing() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_pane_screen(
+        "%1".to_string(),
+        TerminalScreen::new(Size::new(80, 24).unwrap(), 10).unwrap(),
+    );
+
+    apply_prompt_input(
+        &mut service,
+        &primary,
+        rejected_paste_then(b"discarded command\n"),
+    );
+    assert!(
+        service
+            .agent_prompt_inputs_for_tests()
+            .get("%1")
+            .unwrap()
+            .decoder
+            .bracketed_paste_resynchronization_pending()
+    );
+
+    apply_prompt_input(&mut service, &primary, b"\x1b".to_vec());
+
+    let state = service.agent_prompt_inputs_for_tests().get("%1").unwrap();
+    assert!(!state.decoder.bracketed_paste_resynchronization_pending());
+    assert_eq!(state.prompt.buffer.line(), "");
+
+    apply_prompt_input(&mut service, &primary, b"kept\r".to_vec());
+
+    let context = service.agent_turn_contexts().get("turn-1").unwrap();
+    assert!(
+        context
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("kept"))
+    );
+    assert!(
+        !context
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("discarded command"))
+    );
+}
+
+/// Verifies a complete oversized frame is reported even though its own closing
+/// delimiter ends discard framing inside the same read.
+///
+/// Clipboard and `Ctrl+V` pastes arrive as one complete frame, so a payload above
+/// the retained-byte limit must report the discarded paste instead of silently
+/// dropping the pasted text.
+#[test]
+fn runtime_agent_prompt_reports_complete_rejected_paste() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_pane_screen(
+        "%1".to_string(),
+        TerminalScreen::new(Size::new(80, 24).unwrap(), 10).unwrap(),
+    );
+
+    let mut complete = rejected_paste_then(b"");
+    complete.extend_from_slice(b"\x1b[201~");
+    apply_prompt_input(&mut service, &primary, complete);
+
+    let state = service.agent_prompt_inputs_for_tests().get("%1").unwrap();
+    assert_eq!(state.prompt.buffer.line(), "");
+    assert!(!state.decoder.bracketed_paste_resynchronization_pending());
+    assert!(service.agent_turn_contexts().is_empty());
+    assert!(
+        service
+            .primary_error_status_overlay()
+            .is_some_and(|notice| notice.contains("discarded paste payload")),
+        "{:?}",
+        service.primary_error_status_overlay()
+    );
+}

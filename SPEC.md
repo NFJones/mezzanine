@@ -2755,9 +2755,24 @@ delimiters MUST be decoded by the prompt surface so embedded newlines in the
 pasted payload do not submit the prompt unless the user presses the normal
 submission key after the paste.
 Prompt surfaces MUST bound retained incomplete bracketed-paste payloads by byte
-count and age. An oversized or expired incomplete payload MUST be discarded,
-MUST NOT edit or submit the prompt, and MUST leave subsequent ordinary input
-decodable.
+count and age. An oversized or expired incomplete payload MUST be discarded and
+MUST NOT edit or submit the prompt. A rejected payload MUST release its retained
+bytes and MUST NOT resume ordinary decoding at the rejection point: every byte
+after the rejection MUST be discarded, including across reads, until the complete
+closing delimiter has been consumed, and only bytes after that delimiter MAY edit
+or submit the prompt. An embedded opening delimiter, Escape, Ctrl-C, or newline
+inside the discarded region MUST NOT end discard framing or become input, and no
+timeout or later byte MAY reinterpret the discarded region as keystrokes. A
+rejected payload MUST report exactly one rejection, MUST leave the prompt draft
+unmodified, and MUST retain at most the bounded suffix that could still complete
+the closing delimiter. While input is being discarded, the surface MUST show a
+bounded status notice that names the reset and MUST NOT echo discarded payload
+text.
+
+Each prompt surface MUST provide one explicit operator reset that releases
+discard framing without replaying or submitting discarded bytes. Closing the
+primary command prompt drops its decoder, and a standalone Escape at an idle
+agent prompt releases that prompt's framing.
 
 Agent and command prompt history MUST preserve which qualifying pasted spans
 were collapsed when each prompt was submitted. Up/Down recall, incremental

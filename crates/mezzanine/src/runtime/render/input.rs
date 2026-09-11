@@ -19,6 +19,21 @@ use crate::runtime::service_state::{RuntimeLiveOverlaySource, RuntimeRecordBrows
 use mez_mux::readline::{ReadlineDecodedInput, ReadlineHistoryEntry, readline_input_is_ctrl_v};
 use std::sync::mpsc::TryRecvError;
 
+/// Bounded status notice for the primary prompt discarding a rejected payload.
+///
+/// Closing the prompt drops its decoder, so the notice names that action. It
+/// never echoes discarded payload text, so a malformed paste cannot print
+/// attacker-chosen content into the status bar.
+const PRIMARY_PROMPT_PASTE_DISCARDED_NOTICE: &str =
+    "readline: discarded paste payload; Esc closes the prompt to resume input";
+
+/// Bounded status notice for the agent prompt discarding a rejected payload.
+///
+/// An active turn consumes the first Escape as an interrupt, so the notice names
+/// the idle-prompt reset the operator needs to reach.
+const AGENT_PROMPT_PASTE_DISCARDED_NOTICE: &str =
+    "readline: discarded paste payload; Esc resumes input when no task is running";
+
 impl RuntimeSessionService {
     /// Runs the apply primary prompt terminal action operation for this subsystem.
     ///
@@ -105,11 +120,26 @@ impl RuntimeSessionService {
                 .decoder
                 .apply_to_prompt(&mut prompt_input.prompt, input)?
         };
+        // The decoder's one-shot rejection report covers a payload whose closing
+        // delimiter resolved discard framing inside this same read, and the pending
+        // state keeps the notice visible while later bytes are still discarded.
+        let paste_discarded = prompt_input.decoder.take_bracketed_paste_rejection()
+            || prompt_input
+                .decoder
+                .bracketed_paste_resynchronization_pending();
+        // A rejected payload discards the bytes that follow it until the closing
+        // delimiter, and closing the prompt drops the decoder, which is this
+        // surface's trusted reset.
+        let prompt_kind = prompt_input.prompt.kind;
         let mut changed = false;
+        if paste_discarded {
+            self.show_primary_notice_overlay(vec![
+                PRIMARY_PROMPT_PASTE_DISCARDED_NOTICE.to_string(),
+            ])?;
+        }
         for outcome in outcomes {
             match outcome {
                 ReadlineOutcome::Submitted(command) => {
-                    let prompt_kind = prompt_input.prompt.kind;
                     self.presentation.primary_prompt_input = None;
                     changed = true;
                     if !command.trim().is_empty() {
@@ -148,7 +178,6 @@ impl RuntimeSessionService {
                     collapsed_paste_ranges,
                     ..
                 } => {
-                    let prompt_kind = prompt_input.prompt.kind;
                     self.presentation.primary_prompt_input = None;
                     changed = true;
                     if !command.trim().is_empty() {
@@ -287,6 +316,26 @@ impl RuntimeSessionService {
                 return self.apply_agent_prompt_interrupt_or_exit(primary_client_id, pane_id);
             }
         }
+        if input == b"\x1b"
+            && self
+                .presentation
+                .agent_prompt_inputs
+                .get(pane_id)
+                .is_some_and(|state| state.decoder.bracketed_paste_resynchronization_pending())
+        {
+            // Escape at an idle agent prompt otherwise clears the draft, so the
+            // discard reset takes precedence while a rejected payload is being
+            // discarded: the discarded bytes are dropped rather than replayed,
+            // and ordinary decoding resumes immediately. An active turn still
+            // handles Escape as an interrupt first.
+            if let Some(state) = self.presentation.agent_prompt_inputs.get_mut(pane_id) {
+                state.decoder.abandon_bracketed_paste_framing();
+            }
+            self.show_primary_notice_overlay(vec![
+                AGENT_PROMPT_PASTE_DISCARDED_NOTICE.to_string(),
+            ])?;
+            return Ok(true);
+        }
         if input == b"\x0c" {
             self.clear_agent_prompt_pending_ctrl_c_exit(pane_id);
             self.clear_agent_shell_terminal_view(pane_id)?;
@@ -338,6 +387,7 @@ impl RuntimeSessionService {
         if clipboard_requested && !deferred_clipboard_input.is_empty() {
             self.defer_agent_prompt_input_for_pending_clipboard(pane_id, &deferred_clipboard_input);
         }
+        let mut paste_discarded = false;
         let outcomes = {
             let state = self
                 .presentation
@@ -360,9 +410,22 @@ impl RuntimeSessionService {
                         )?,
                     );
                 }
+                // A rejected payload discards the bytes that follow it until the
+                // closing delimiter, so the pane says why input is being ignored
+                // and names the reset instead of swallowing keystrokes. The
+                // decoder's one-shot report covers a rejection whose delimiter
+                // arrived in this same batch, and the pending state keeps the
+                // notice visible while later bytes are still discarded.
+                paste_discarded |= state.decoder.take_bracketed_paste_rejection();
+                paste_discarded |= state.decoder.bracketed_paste_resynchronization_pending();
                 outcomes
             }
         };
+        if paste_discarded {
+            self.show_primary_notice_overlay(vec![
+                AGENT_PROMPT_PASTE_DISCARDED_NOTICE.to_string(),
+            ])?;
+        }
 
         let mut changed = clipboard_requested;
         for outcome in outcomes {

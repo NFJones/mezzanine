@@ -1,11 +1,14 @@
 //! Product prompt, selector, and decoder integration tests.
 
+use std::time::Duration;
+
 use super::{
     ReadlineEdit, ReadlineInputDecoder, ReadlineOutcome, ReadlinePrompt, ReadlinePromptKind,
 };
 use crate::ui::selector::{SelectorExtraCandidate, SelectorSurface};
 use mez_mux::readline::{
     ReadlineBracketedPasteRejection, ReadlineDecodedInput, ReadlinePasteRange,
+    ReadlineTerminalInputDecoder,
 };
 use mez_mux::selector::{SelectorCandidate, SelectorCandidateKind};
 
@@ -753,8 +756,12 @@ fn readline_decoder_collapses_split_bracketed_paste_payloads() {
     assert_eq!(prompt.buffer.line(), "");
 }
 
-/// Verifies a rejected malformed paste is a prompt no-op and does not prevent
-/// the product adapter from applying the next ordinary decoded key.
+/// Verifies a rejected malformed paste maps to a prompt no-op while an
+/// independently decoded key still edits the prompt.
+///
+/// This covers the per-item adapter mapping only. Framing recovery after a
+/// rejection is covered below, because a rejected payload must not make the
+/// bytes that follow it decodable.
 #[test]
 fn readline_decoder_rejected_bracketed_paste_leaves_prompt_usable() {
     let mut prompt = ReadlinePrompt::new(ReadlinePromptKind::Command);
@@ -777,6 +784,78 @@ fn readline_decoder_rejected_bracketed_paste_leaves_prompt_usable() {
         )
         .unwrap(),
         ReadlineOutcome::Edited
+    );
+    assert_eq!(prompt.buffer.line(), "z");
+}
+
+/// Verifies a rejected paste payload preserves the prompt draft and cannot
+/// submit the command line that follows it.
+///
+/// The continuation of a rejected frame is attacker-influenced paste data, so a
+/// surface that decoded it would let pasted text run a command with no user
+/// keystroke. The draft stays editable, nothing is submitted, and only the
+/// closing delimiter restores ordinary decoding.
+#[test]
+fn readline_decoder_rejected_bracketed_paste_preserves_draft_without_submitting() {
+    let mut decoder = ReadlineInputDecoder::new();
+    decoder.inner =
+        ReadlineTerminalInputDecoder::with_bracketed_paste_limits(3, Duration::from_secs(1));
+    let mut prompt = ReadlinePrompt::new(ReadlinePromptKind::Command);
+
+    assert_eq!(
+        decoder.apply_to_prompt(&mut prompt, b"draft ").unwrap(),
+        vec![ReadlineOutcome::Edited]
+    );
+    assert_eq!(
+        decoder
+            .apply_to_prompt(&mut prompt, b"\x1b[200~abcd")
+            .unwrap(),
+        vec![ReadlineOutcome::Noop]
+    );
+    assert!(decoder.bracketed_paste_resynchronization_pending());
+    assert!(
+        decoder
+            .apply_to_prompt(&mut prompt, b"echo unsafe\n")
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(prompt.buffer.line(), "draft ");
+
+    assert!(
+        decoder
+            .apply_to_prompt(&mut prompt, b"\x1b[201~")
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        decoder.apply_to_prompt(&mut prompt, b"ok\n").unwrap(),
+        vec![
+            ReadlineOutcome::Edited,
+            ReadlineOutcome::Submitted(String::from("draft ok")),
+        ]
+    );
+}
+
+/// Verifies the product adapter's trusted reset releases discard framing
+/// without replaying the discarded bytes into the prompt.
+#[test]
+fn readline_decoder_trusted_reset_releases_discard_framing() {
+    let mut decoder = ReadlineInputDecoder::new();
+    decoder.inner =
+        ReadlineTerminalInputDecoder::with_bracketed_paste_limits(3, Duration::from_secs(1));
+    let mut prompt = ReadlinePrompt::new(ReadlinePromptKind::Agent);
+
+    assert_eq!(
+        decoder
+            .apply_to_prompt(&mut prompt, b"\x1b[200~abcd")
+            .unwrap(),
+        vec![ReadlineOutcome::Noop]
+    );
+    assert!(decoder.abandon_bracketed_paste_framing());
+    assert!(!decoder.bracketed_paste_resynchronization_pending());
+    assert_eq!(
+        decoder.apply_to_prompt(&mut prompt, b"z").unwrap(),
+        vec![ReadlineOutcome::Edited]
     );
     assert_eq!(prompt.buffer.line(), "z");
 }

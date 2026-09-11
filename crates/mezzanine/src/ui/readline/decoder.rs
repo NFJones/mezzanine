@@ -17,6 +17,32 @@ impl ReadlineInputDecoder {
         self.inner.pending_len()
     }
 
+    /// Reports whether a rejected paste payload is still being discarded.
+    ///
+    /// A prompt surface uses this to explain why input is being ignored until
+    /// the closing delimiter arrives instead of silently swallowing keystrokes.
+    pub fn bracketed_paste_resynchronization_pending(&self) -> bool {
+        self.inner.bracketed_paste_resynchronization_pending()
+    }
+
+    /// Takes the one-shot report that a decode rejected a paste payload.
+    ///
+    /// Prompt paths that apply a whole batch through one call use this to report
+    /// a rejection whose closing delimiter arrived in the same read.
+    pub fn take_bracketed_paste_rejection(&mut self) -> bool {
+        self.inner.take_bracketed_paste_rejection()
+    }
+
+    /// Drops retained paste framing after a trusted prompt reset.
+    ///
+    /// Only a prompt lifecycle owner may call this: the state it clears exists
+    /// because attacker-influenced bytes were retained, so those bytes are
+    /// discarded rather than decoded or replayed, and ordinary decoding resumes
+    /// immediately. Returns whether anything was dropped.
+    pub fn abandon_bracketed_paste_framing(&mut self) -> bool {
+        self.inner.abandon_bracketed_paste_framing()
+    }
+
     /// Decodes complete terminal input items while preserving incomplete input.
     pub fn decode(&mut self, input: &[u8]) -> Result<Vec<ReadlineDecodedInput>> {
         Ok(self.inner.decode(input)?)
