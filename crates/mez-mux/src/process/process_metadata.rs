@@ -186,9 +186,9 @@ pub fn process_start_token_for_pid(pid: u32) -> Option<u64> {
     }
     // SAFETY: the exact structure size was initialized successfully above.
     let info = unsafe { info.assume_init() };
-    u64::from(info.pbi_start_tvsec)
+    info.pbi_start_tvsec
         .checked_mul(1_000_000)?
-        .checked_add(u64::from(info.pbi_start_tvusec))
+        .checked_add(info.pbi_start_tvusec)
 }
 
 /// Returns no creation-time token on hosts without a reviewed native reader.
