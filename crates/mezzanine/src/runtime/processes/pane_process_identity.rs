@@ -727,6 +727,39 @@ impl RuntimeSessionService {
                 == Some(identity.start_token)
     }
 
+    /// Builds OS-verified shell identity evidence for one pane.
+    ///
+    /// macOS resolves `/bin/sh` to the bash executable (and some Linux
+    /// distributions ship bash as `/bin/sh`), so a pane the runtime itself
+    /// launched as its POSIX fallback shell runs bash in POSIX mode: its
+    /// dialect stays `PosixSh` and keeps dependency-free POSIX transport
+    /// instead of demanding the managed Bash private receiver. The alias rule
+    /// applies only to adapter-owned root processes of panes the runtime owns
+    /// live: foreign shell boundaries and panes without a live runtime-owned
+    /// process keep the dialect of their own executable.
+    pub(crate) fn os_process_evidence_for_pane(
+        &self,
+        pane_id: &str,
+        identity: &RuntimePaneProcessIdentity,
+    ) -> RuntimePaneShellIdentityEvidence {
+        let mut evidence = RuntimePaneShellIdentityEvidence::from_os_process(identity);
+        let session_is_posix_sh = ShellClassification::classify(self.session.shell.path())
+            == ShellClassification::PosixSh;
+        if identity.role == RuntimePaneProcessRole::AdapterOwnedRoot
+            && evidence.dialect.classification == Some(ShellClassification::Bash)
+            && session_is_posix_sh
+            && !self
+                .process
+                .pane_foreign_shell_boundaries
+                .contains_key(pane_id)
+            && self.primary_pid_for_live_pane_process(pane_id).is_some()
+        {
+            evidence.dialect =
+                RuntimeShellDialectEvidence::os_process(ShellClassification::PosixSh);
+        }
+        evidence
+    }
+
     /// Resolves identity evidence from an OS-observed pane process and the
     /// runtime's own spawn record.
     pub(crate) fn session_shell_identity_evidence(
@@ -743,7 +776,7 @@ impl RuntimeSessionService {
                     && let classification = ShellClassification::classify(&identity.executable_path)
                     && classification != ShellClassification::UnknownUnix
                 {
-                    return Ok(RuntimePaneShellIdentityEvidence::from_os_process(identity));
+                    return Ok(service.os_process_evidence_for_pane(pane_id, identity));
                 }
                 // A replaced pane process invalidates every identity derived
                 // from it; a stale spawn record must never mask that.
@@ -797,7 +830,7 @@ impl RuntimeSessionService {
                     && let classification = ShellClassification::classify(&identity.executable_path)
                     && classification != ShellClassification::UnknownUnix
                 {
-                    return Ok(RuntimePaneShellIdentityEvidence::from_os_process(identity));
+                    return Ok(service.os_process_evidence_for_pane(pane_id, identity));
                 }
                 let Some(launch_target) = launch_hint.clone() else {
                     return Err(match live {
@@ -1022,7 +1055,7 @@ impl RuntimeSessionService {
         signature: &EnvironmentSignature,
     ) -> RuntimePaneShellIdentityEvidence {
         let mut evidence = match self.pane_process_identity(pane_id) {
-            Ok(identity) => RuntimePaneShellIdentityEvidence::from_os_process(&identity),
+            Ok(identity) => self.os_process_evidence_for_pane(pane_id, &identity),
             Err(_) => {
                 let session_path = self.session.shell.path();
                 let signature_path = PathBuf::from(&signature.shell_path);
@@ -1214,6 +1247,62 @@ mod tests {
             Some(
                 "the pane shell executable has no supported dialect and no authenticated receiver"
             )
+        );
+    }
+
+    fn bash_os_identity_for(process_id: u32, start_token: u64) -> RuntimePaneProcessIdentity {
+        RuntimePaneProcessIdentity {
+            role: RuntimePaneProcessRole::AdapterOwnedRoot,
+            generation: None,
+            process_id,
+            start_token,
+            executable_path: PathBuf::from("/usr/bin/bash"),
+        }
+    }
+
+    #[test]
+    fn sh_session_pane_with_bash_os_evidence_keeps_posix_dialect() {
+        // macOS resolves /bin/sh to the bash executable: a pane the runtime
+        // launched as its POSIX fallback shell must keep POSIX transport
+        // instead of demanding the managed Bash private receiver.
+        let mut service = test_service();
+        service.start_initial_pane_process(None).unwrap();
+        let evidence = service.os_process_evidence_for_pane("%1", &bash_os_identity_for(4242, 99));
+        assert_eq!(
+            evidence.effective_dialect(),
+            Some(ShellClassification::PosixSh)
+        );
+        assert_eq!(
+            evidence.executable.path().map(Path::to_path_buf),
+            Some(PathBuf::from("/usr/bin/bash"))
+        );
+        service.terminate_all_pane_processes().unwrap();
+    }
+
+    #[test]
+    fn sh_session_foreign_boundary_keeps_bash_dialect() {
+        // A dependency-free foreign Bash child classifies by its own
+        // executable; the sh-as-bash alias must not downgrade it.
+        let mut service = test_service();
+        service.start_initial_pane_process(None).unwrap();
+        assert!(service.begin_uncertified_foreign_shell_boundary("%1", 4242, 4243));
+        let evidence = service.os_process_evidence_for_pane("%1", &bash_os_identity_for(4242, 99));
+        assert_eq!(
+            evidence.effective_dialect(),
+            Some(ShellClassification::Bash)
+        );
+        service.terminate_all_pane_processes().unwrap();
+    }
+
+    #[test]
+    fn sh_session_without_live_pane_process_keeps_bash_dialect() {
+        // Injected identities have no live runtime-owned pane process, so the
+        // sh-as-bash alias does not apply and the executable keeps its dialect.
+        let service = test_service();
+        let evidence = service.os_process_evidence_for_pane("%9", &bash_os_identity_for(4242, 99));
+        assert_eq!(
+            evidence.effective_dialect(),
+            Some(ShellClassification::Bash)
         );
     }
 

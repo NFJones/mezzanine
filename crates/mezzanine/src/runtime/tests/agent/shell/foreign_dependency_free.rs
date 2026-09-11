@@ -612,7 +612,11 @@ fn runtime_dependency_free_foreign_bash_loader_is_ready_gated() {
     assert_eq!(
         release_inputs.len(),
         1,
-        "correlated loader readiness should release only the loader payload before managed child installation"
+        "correlated loader readiness should release only the loader payload before managed child installation: released={:?}",
+        release_inputs
+            .iter()
+            .map(|effect| String::from_utf8_lossy(effect.pane_input_parts().1).into_owned())
+            .collect::<Vec<_>>()
     );
     let payload = release_inputs
         .iter()

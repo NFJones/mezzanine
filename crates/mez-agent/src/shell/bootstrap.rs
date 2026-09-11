@@ -107,11 +107,21 @@ pub fn parse_shell_identity_probe_output(
         let line = line.trim_end_matches('\r');
         if let Some(value) = line.strip_prefix("\u{1e}mez_shell_name=") {
             let value = value.trim();
-            if !value.is_empty()
-                && value.len() <= MAX_SHELL_NAME_HINT_BYTES
-                && !value.contains(char::is_whitespace)
+            // macOS `ps -o comm=` reports the full exec path when a shell was
+            // launched through an absolute path, so a path-shaped record is
+            // reduced to its bare command name. The hint stays correlation-only
+            // evidence either way and never publishes dialect authority.
+            let name = match value.rsplit_once('/') {
+                Some((_, "")) => None,
+                Some((_, name)) => Some(name),
+                None if value.is_empty() => None,
+                None => Some(value),
+            };
+            if let Some(name) = name
+                && name.len() <= MAX_SHELL_NAME_HINT_BYTES
+                && !name.contains(char::is_whitespace)
             {
-                shell_name_hint = Some(value.to_string());
+                shell_name_hint = Some(name.to_string());
             }
         } else if let Some(value) = line.strip_prefix("\u{1e}mez_shell_launch_hint=") {
             let value = value.trim();

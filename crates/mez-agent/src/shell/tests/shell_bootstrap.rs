@@ -436,6 +436,22 @@ fn shell_identity_probe_reports_name_hint_without_path_resolution() {
         Some("/opt/custom-shell")
     );
 
+    // A macOS comm record reports the full exec path; the parser reduces it
+    // to the bare command name so the hint stays a name, not a path.
+    let path_shaped = format!(
+        "\u{1e}mez_shell_identity_begin={}\n\u{1e}mez_shell_name=/bin/bash\n\u{1e}mez_shell_identity_end={}\n",
+        marker.as_str(),
+        marker.as_str()
+    );
+    let result = parse_shell_identity_probe_output(&path_shaped, marker.as_str())
+        .unwrap()
+        .unwrap();
+    assert_eq!(result.shell_name_hint.as_deref(), Some("bash"));
+    assert_eq!(
+        result.shell_classification_hint,
+        Some(ShellClassification::Bash)
+    );
+
     // A renamed executable never promotes a dialect from its name alone.
     let renamed = format!(
         "\u{1e}mez_shell_identity_begin={}\n\u{1e}mez_shell_name=weird-fish\n\u{1e}mez_shell_identity_end={}\n",
