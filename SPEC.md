@@ -2207,6 +2207,31 @@ and right-prompt equivalents MUST be removed or replaced with inert values for
 Mezzanine-owned shells. These suppressions MUST be scoped to agent-owned shells
 and MUST NOT mutate the user's parent pane shell environment.
 
+Runtime-created agent-owned panes MUST NOT use the daemon environment as pane
+evidence. Their pane root MUST start from a cleared base and receive only the
+documented validated pane-creation allowlist plus fixed harness values: `PATH`
+with the documented native workload fallback, `HOME` with the runtime home
+directory fallback, the locale names and `TZ`, `USER`, `LOGNAME`, an absolute
+`TMPDIR`, and `SHELL` pinned to the resolved launch shell when that path is
+absolute. `MEZ`, `MEZ_SESSION`, `MEZ_WINDOW`, `MEZ_PANE`, `TERM`,
+`GIT_OPTIONAL_LOCKS`, and the session X11 values remain harness-owned and MUST
+NOT be inherited from the daemon. `TERM_FEATURES` is harness-processed rather
+than inherited verbatim: the harness derives it from the daemon value with the
+progress feature appended. User-initiated panes MUST keep inheriting the user
+environment unchanged. This cleared base is scoped to the panes the runtime
+creates through the agent-owned creation path; a pane restored from a snapshot
+is re-created through the user-shell path and is therefore not covered until
+the follow-up issue "Snapshot-restored panes are re-created through the
+user-shell path and can feed daemon environment into agent evidence" (issue
+37adefd4) is resolved. New agent-owned panes therefore start from a new
+environment signature, and daemon-only names in the `SSH_AUTH_SOCK`, proxy,
+toolchain, and `XDG_*` classes are no longer visible inside agent-owned panes in
+both pane mode and native mode; in pane mode user shell startup files can still
+export those names, but that is user-configuration dependent and MUST NOT be
+claimed as a guarantee. The guarantee is deliberate composition, not credential
+non-possession: a value deliberately passed at pane creation or later exported
+by the pane shell remains pane evidence and is forwarded.
+
 When agent mode is hidden through the toggle, an agent slash-command exit,
 keyboard prompt-exit bindings, or a control API hide request, Mezzanine MUST
 first submit the equivalent of `/stop` for any running pane-local agent task.
@@ -4266,7 +4291,15 @@ process. The spawned shell MUST receive a cleared-base environment composed from
 validated environment entries inferred from the pane's root process, with live
 pane values taking precedence for duplicate names, plus the narrowly enumerated
 runtime launch requirements declared by Mezzanine, and MUST NOT inherit the
-parent Mezzanine process environment. Native execution MUST NOT write to or
+parent Mezzanine process environment. The pane root that supplies that inferred
+evidence MUST itself be created from a cleared base plus the documented
+pane-creation allowlist when the runtime creates that pane through the
+agent-owned creation path, so a daemon-only name cannot enter native evidence
+through agent-owned pane creation. A pane restored from a snapshot is re-created
+through the user-shell path, so it is not covered until the follow-up issue
+"Snapshot-restored panes are re-created through the user-shell path and can
+feed daemon environment into agent evidence" (issue 37adefd4) is resolved.
+Native execution MUST NOT write to or
 read from the pane PTY and MUST NOT run any command through the pane shell to
 enable or perform the execution.
 `agents.loop_limit` MUST be a positive integer and MUST default to `8`. It
@@ -7448,7 +7481,15 @@ the pane shell. The child MUST receive one composed native workload environment
 that starts from a cleared base instead of the parent Mezzanine process
 environment: validated environment entries inferred from the live pane root
 process, with pane-root values taking precedence for duplicate names, plus the
-narrowly enumerated runtime launch requirements declared by Mezzanine.
+narrowly enumerated runtime launch requirements declared by Mezzanine. The pane
+root that supplies that inferred evidence MUST itself be created from a cleared
+base plus the documented pane-creation allowlist when the runtime creates that
+pane through the agent-owned creation path, so a daemon-only name cannot enter
+native evidence through agent-owned pane creation. A pane restored from a
+snapshot is re-created through the user-shell path, so it is not covered until
+the follow-up issue "Snapshot-restored panes are re-created through the
+user-shell path and can feed daemon environment into agent evidence" (issue
+37adefd4) is resolved.
 Agent entry and provider preflight in native mode MUST inspect only live root-
 process metadata and MUST NOT schedule pane bootstrap, readiness, shell-identity, or
 path-resolution transactions. Native execution MUST run outside the serialized
@@ -7508,7 +7549,8 @@ an ambient-only value that no pane and no declaration supplies MUST NOT reach a
 workload or a code-owned launcher, while a value the pane root itself carries,
 including one the pane inherited when that pane was created, is pane evidence
 that this contract does not filter. Pane-creation environment inheritance is a
-separate boundary. Absent optional values MUST fall back to documented defaults
+separate boundary that composes the documented agent-owned pane allowlist.
+Absent optional values MUST fall back to documented defaults
 instead of failing. A missing or malformed required value MUST produce a typed
 pre-dispatch error that names the requirement category and the exact key before
 any payload process is created. Workload-visible variables and launcher/control

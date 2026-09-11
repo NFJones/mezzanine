@@ -11,6 +11,7 @@ mod native_bubblewrap;
 mod native_shell_inference;
 mod native_workload_environment;
 pub(crate) mod output_filter;
+mod pane_creation_environment;
 mod pane_pipes;
 mod pane_process_identity;
 mod posix_compat;
@@ -24,6 +25,8 @@ pub(crate) use native_bubblewrap::NativeBubblewrapCapabilityProbe;
 pub(crate) use native_bubblewrap::{NativeBubblewrapActivityLease, NativeSandboxCapabilityProbe};
 pub(crate) use native_shell_inference::{NativeShellContext, infer_native_shell_context};
 pub(crate) use native_workload_environment::NativeLaunchEnvironmentRole;
+#[cfg(test)]
+pub(crate) use native_workload_environment::native_ambient_environment;
 #[cfg(test)]
 pub(crate) use spawned_shell::execute_native_shell_dispatch;
 pub(crate) use spawned_shell::{
@@ -958,6 +961,10 @@ pub(crate) struct RuntimeProcessComponent {
     /// Test-only opt-in for historical startup-adapter protocol fixtures.
     #[cfg(test)]
     legacy_managed_startup_for_tests: bool,
+    /// Test-only injected daemon-environment snapshot for pane-creation tests.
+    #[cfg(test)]
+    agent_owned_pane_daemon_environment_for_tests:
+        Option<Vec<mez_mux::process::RawEnvironmentEntry>>,
     /// Live pane process handles and their PTY lifecycle manager.
     pane_processes: PaneProcessManager,
     /// Best-known current working directory for each pane process.
@@ -3276,6 +3283,19 @@ impl RuntimeSessionService {
         self.process.legacy_managed_startup_for_tests = false;
     }
 
+    /// Installs a deterministic daemon-environment snapshot for pane-creation tests.
+    ///
+    /// Production always reads the live `mez` environment; this switch only
+    /// keeps the agent-owned pane-creation boundary observable in tests without
+    /// mutating process-global state.
+    #[cfg(test)]
+    pub(crate) fn inject_agent_owned_pane_daemon_environment_for_tests(
+        &mut self,
+        environment: Vec<mez_mux::process::RawEnvironmentEntry>,
+    ) {
+        self.process.agent_owned_pane_daemon_environment_for_tests = Some(environment);
+    }
+
     /// Reports whether a test explicitly selected historical managed startup.
     pub(crate) fn legacy_managed_startup_is_enabled(&self) -> bool {
         #[cfg(test)]
@@ -3286,6 +3306,23 @@ impl RuntimeSessionService {
         {
             false
         }
+    }
+
+    /// Returns the daemon-environment snapshot used for agent-owned pane creation.
+    ///
+    /// Production reads the live `mez` environment. Tests may inject a
+    /// deterministic snapshot so the pane-creation boundary stays observable
+    /// without mutating process-global state.
+    fn agent_owned_pane_daemon_environment(&self) -> Vec<mez_mux::process::RawEnvironmentEntry> {
+        #[cfg(test)]
+        if let Some(environment) = self
+            .process
+            .agent_owned_pane_daemon_environment_for_tests
+            .as_ref()
+        {
+            return environment.clone();
+        }
+        native_workload_environment::native_ambient_environment()
     }
 
     /// Builds startup-installed shell adapters for one explicitly managed pane.
@@ -4933,10 +4970,29 @@ impl RuntimeSessionService {
             "TERM_FEATURES",
             terminal_features_with_progress(std::env::var_os("TERM_FEATURES")),
         );
-        if let Some(environment_overrides) = environment_overrides {
-            launch = launch.with_cleared_environment();
-            for (key, value) in environment_overrides {
-                launch = launch.with_environment_variable(key, value);
+        match purpose {
+            RuntimePaneProcessPurpose::UserShell => {
+                if let Some(environment_overrides) = environment_overrides {
+                    launch = launch.with_cleared_environment();
+                    for (key, value) in environment_overrides {
+                        launch = launch.with_environment_variable(key, value);
+                    }
+                }
+            }
+            RuntimePaneProcessPurpose::AgentOwned { .. } => {
+                let resolved_shell = launch.program().to_path_buf();
+                launch = launch.with_cleared_environment();
+                for (key, value) in pane_creation_environment::agent_owned_pane_environment(
+                    &self.agent_owned_pane_daemon_environment(),
+                    &resolved_shell,
+                ) {
+                    launch = launch.with_environment_variable(key, value);
+                }
+                if let Some(environment_overrides) = environment_overrides {
+                    for (key, value) in environment_overrides {
+                        launch = launch.with_environment_variable(key, value);
+                    }
+                }
             }
         }
         if let Some(x11_proxy) = self.process.x11_proxy.as_ref() {

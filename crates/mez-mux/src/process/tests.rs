@@ -871,3 +871,139 @@ fn native_credential_reader_reports_own_process_identity() {
         "the primary group must not be duplicated among supplementary groups"
     );
 }
+
+/// Verifies a cleared pane launch base applies only harness-owned values and
+/// explicit overrides, never the ambient daemon environment.
+///
+/// `with_cleared_environment` must discard the inherited daemon environment
+/// before the mux applies `MEZ*`, `TERM`, `GIT_OPTIONAL_LOCKS`, and any explicit
+/// override, so a daemon-only credential cannot become pane evidence.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn cleared_environment_applies_harness_values_and_overrides_only() {
+    // The cleared base carries no `HOME`, so give the child an explicit start
+    // directory instead of relying on the host passwd home, which is not
+    // guaranteed to be a usable directory.
+    let start_directory =
+        std::env::temp_dir().join(format!("mez-cleared-launch-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&start_directory);
+    fs::create_dir_all(&start_directory).unwrap();
+
+    let launch = test_shell()
+        .with_cleared_environment()
+        .with_environment_variable("MEZ_TEST_OVERRIDE", "override-value");
+    let mut process = spawn_pane_process_with_start_directory(
+        &launch,
+        Some("sleep 30"),
+        &test_environment(),
+        Size::new(80, 24).unwrap(),
+        Some(&start_directory),
+    )
+    .unwrap();
+
+    let environment = wait_for_exec_environment(
+        &process,
+        &[
+            b"MEZ",
+            b"MEZ_SESSION",
+            b"MEZ_WINDOW",
+            b"MEZ_PANE",
+            b"MEZ_TEST_OVERRIDE",
+        ],
+    );
+    let value_for = |key: &[u8]| {
+        environment
+            .iter()
+            .find(|entry| entry.key == key)
+            .map(|entry| entry.value.as_slice())
+    };
+    let forwards = |key: &[u8]| value_for(key).is_some();
+
+    assert!(forwards(b"MEZ"));
+    assert!(forwards(b"MEZ_SESSION"));
+    assert!(forwards(b"MEZ_WINDOW"));
+    assert!(forwards(b"MEZ_PANE"));
+    assert!(forwards(b"TERM"));
+    assert!(forwards(b"GIT_OPTIONAL_LOCKS"));
+    assert_eq!(
+        value_for(b"MEZ_TEST_OVERRIDE"),
+        Some(b"override-value".as_slice())
+    );
+
+    assert!(
+        !forwards(b"PATH"),
+        "a cleared base must not inherit the daemon PATH"
+    );
+    assert!(
+        !forwards(b"HOME"),
+        "a cleared base must not inherit the daemon HOME"
+    );
+
+    const HARNESS_KEYS: &[&str] = &[
+        "MEZ",
+        "MEZ_SESSION",
+        "MEZ_WINDOW",
+        "MEZ_PANE",
+        "TERM",
+        "GIT_OPTIONAL_LOCKS",
+        "MEZ_TEST_OVERRIDE",
+    ];
+    // A POSIX shell injects a few names of its own at exec, so a cleared base
+    // can still expose those; every other daemon key must be gone. Checking
+    // every non-harness key avoids depending on ambient environment ordering.
+    // `portable-pty` also sets `SHELL` from the host process in its own
+    // `CommandBuilder::as_command`, after its internal `env_clear`, so that one
+    // name survives at the mux layer no matter what; Mezzanine's agent-owned
+    // pane path overrides it with the resolved launch shell.
+    const SHELL_INJECTED_KEYS: &[&str] = &["PWD", "SHLVL", "OLDPWD", "_", "SHELL"];
+    for (key, _) in std::env::vars_os() {
+        let key = key.to_string_lossy();
+        let key: &str = key.as_ref();
+        if HARNESS_KEYS.contains(&key) || SHELL_INJECTED_KEYS.contains(&key) {
+            continue;
+        }
+        assert!(
+            !forwards(key.as_bytes()),
+            "daemon-only {key} must not survive a cleared pane launch"
+        );
+    }
+
+    let _status = process.terminate(Duration::from_millis(100)).unwrap();
+    let _ = fs::remove_dir_all(&start_directory);
+}
+
+/// Waits for a freshly spawned pane process to expose its complete exec-time
+/// environment, which the kernel populates only after `execve`.
+///
+/// A single `/proc` (or `KERN_PROCARGS2`) read can observe the environment
+/// region while the kernel is still writing it, so this waits until every
+/// required key is present and two consecutive reads agree on the key set
+/// before returning; the caller's presence and absence assertions then describe
+/// one stable snapshot instead of a torn one.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn wait_for_exec_environment(
+    process: &super::PaneProcess,
+    required_keys: &[&[u8]],
+) -> Vec<super::RawEnvironmentEntry> {
+    let mut previous_keys: Option<Vec<Vec<u8>>> = None;
+    for _ in 0..200 {
+        if let Some(environment) = process_environment_for_pid(process.primary_pid())
+            && !environment.is_empty()
+            && required_keys
+                .iter()
+                .all(|key| environment.iter().any(|entry| entry.key.as_slice() == *key))
+        {
+            let mut keys = environment
+                .iter()
+                .map(|entry| entry.key.clone())
+                .collect::<Vec<_>>();
+            keys.sort();
+            if previous_keys.as_deref() == Some(keys.as_slice()) {
+                return environment;
+            }
+            previous_keys = Some(keys);
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    panic!("the spawned pane process did not expose a complete exec-time environment");
+}

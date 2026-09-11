@@ -2744,3 +2744,171 @@ fn runtime_external_editor_session_routes_input_and_retains_completion() {
     service.terminate_all_pane_processes().unwrap();
     let _ = fs::remove_dir_all(root);
 }
+
+/// Verifies runtime-created agent-owned panes do not inherit the daemon
+/// environment as pane evidence, while user-initiated panes keep inheriting it.
+///
+/// An agent-owned pane root starts from a cleared base plus the documented
+/// validated pane-creation allowlist, so a daemon-only credential cannot become
+/// that pane's exec-time environment and therefore cannot become native
+/// workload evidence. User shell panes are unchanged.
+#[test]
+fn runtime_agent_owned_pane_clears_daemon_environment_while_user_shell_inherits_it() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+
+    let user_started = service.start_initial_pane_process(Some("cat")).unwrap();
+    let user_process = service
+        .take_running_pane_process_for_adapter(&user_started.pane_id)
+        .unwrap();
+    let user_environment = pane_root_exec_environment(&user_process);
+    let probe = daemon_only_probe(&user_environment)
+        .expect("the test daemon environment exposes a non-allowlisted variable")
+        .clone();
+    assert!(
+        environment_forwards(&user_environment, &probe),
+        "a user shell pane must keep inheriting the daemon environment"
+    );
+
+    let mut daemon = crate::runtime::processes::native_ambient_environment();
+    daemon.push(mez_mux::process::RawEnvironmentEntry {
+        key: b"MEZ_AGENT_OWNED_DAEMON_SENTINEL".to_vec(),
+        value: b"daemon-only".to_vec(),
+    });
+    service.inject_agent_owned_pane_daemon_environment_for_tests(daemon);
+
+    let window_id = service.session().active_window().unwrap().id.clone();
+    let agent_started = service
+        .split_pane_in_window_with_process(
+            &primary,
+            &window_id,
+            SplitDirection::Vertical,
+            true,
+            None,
+            crate::runtime::processes::RuntimePaneProcessPurpose::AgentOwned {
+                shell_mode: crate::runtime::config::ShellMode::Native,
+            },
+        )
+        .unwrap();
+    let agent_process = service
+        .take_running_pane_process_for_adapter(&agent_started.pane_id)
+        .unwrap();
+    let agent_environment = pane_root_exec_environment(&agent_process);
+
+    assert!(
+        !environment_forwards_key(&agent_environment, b"MEZ_AGENT_OWNED_DAEMON_SENTINEL"),
+        "a daemon-only sentinel must not reach an agent-owned pane root"
+    );
+    assert!(
+        !environment_forwards(&agent_environment, &probe),
+        "daemon-only {} must not be forwarded into an agent-owned pane root",
+        String::from_utf8_lossy(&probe.key)
+    );
+    assert!(
+        environment_forwards_key(&agent_environment, b"PATH"),
+        "the agent-owned pane root must still receive a working PATH"
+    );
+
+    drop(user_process);
+    drop(agent_process);
+}
+
+/// Reads one pane root process's exec-time environment for pane-creation tests.
+///
+/// Host metadata can briefly lag a freshly spawned child, so the read retries
+/// without mutating process-global state or serializing tests.
+fn pane_root_exec_environment(
+    process: &mez_mux::process::PaneProcess,
+) -> Vec<mez_mux::process::RawEnvironmentEntry> {
+    for _ in 0..200 {
+        if let Some(environment) = process.environment()
+            && !environment.is_empty()
+        {
+            return environment;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("the pane root process did not expose an exec-time environment");
+}
+
+/// Returns true when one raw environment snapshot forwards an exact key.
+fn environment_forwards_key(
+    environment: &[mez_mux::process::RawEnvironmentEntry],
+    key: &[u8],
+) -> bool {
+    environment.iter().any(|entry| entry.key == key)
+}
+
+/// Returns true when one raw environment snapshot forwards the same mapping.
+fn environment_forwards(
+    environment: &[mez_mux::process::RawEnvironmentEntry],
+    entry: &mez_mux::process::RawEnvironmentEntry,
+) -> bool {
+    environment
+        .iter()
+        .any(|candidate| candidate.key == entry.key && candidate.value == entry.value)
+}
+
+/// Selects a daemon-only variable that pane creation must not forward.
+///
+/// Cargo-provided names are preferred because user shell startup files do not
+/// recreate them, which keeps the negative agent-owned assertion deterministic.
+fn daemon_only_probe(
+    environment: &[mez_mux::process::RawEnvironmentEntry],
+) -> Option<&mez_mux::process::RawEnvironmentEntry> {
+    const PREFERRED: &[&str] = &[
+        "CARGO_MANIFEST_DIR",
+        "CARGO_PKG_NAME",
+        "CARGO_PKG_VERSION",
+        "RUST_BACKTRACE",
+    ];
+    const EXCLUDED: &[&str] = &[
+        "PATH",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LC_MESSAGES",
+        "LC_COLLATE",
+        "LC_NUMERIC",
+        "LC_TIME",
+        "TZ",
+        "USER",
+        "LOGNAME",
+        "TMPDIR",
+        "SHELL",
+        "MEZ",
+        "MEZ_SESSION",
+        "MEZ_WINDOW",
+        "MEZ_PANE",
+        "TERM",
+        "GIT_OPTIONAL_LOCKS",
+        "TERM_FEATURES",
+        "DISPLAY",
+        "XAUTHORITY",
+        "PWD",
+        "SHLVL",
+        "OLDPWD",
+        "PS1",
+        "_",
+    ];
+    fn eligible(entry: &mez_mux::process::RawEnvironmentEntry) -> bool {
+        !entry.key.is_empty() && !entry.value.is_empty()
+    }
+    let preferred = environment.iter().find(|entry| {
+        PREFERRED
+            .iter()
+            .any(|name| name.as_bytes() == entry.key.as_slice())
+            && eligible(entry)
+    });
+    preferred.or_else(|| {
+        environment.iter().find(|entry| {
+            eligible(entry)
+                && !EXCLUDED
+                    .iter()
+                    .any(|name| name.as_bytes() == entry.key.as_slice())
+        })
+    })
+}

@@ -13,7 +13,7 @@ use super::{
 
 /// Returns the user's home directory when it is available and usable as a
 /// pane process start directory.
-fn runtime_home_directory() -> Option<PathBuf> {
+pub(super) fn runtime_home_directory() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .filter(|home| !home.is_empty())
         .map(PathBuf::from)
