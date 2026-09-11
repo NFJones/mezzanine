@@ -2425,6 +2425,16 @@ impl RuntimeSessionService {
             .unwrap_or(RuntimePaneEnvironmentAuthority::Unknown)
     }
 
+    /// Reports whether one pane has settled certified environment authority.
+    ///
+    /// Boundary tests in other subsystems assert that spoofed or foreign
+    /// foreground evidence never settles this authority without naming the
+    /// crate-private authority enum themselves.
+    #[cfg(test)]
+    pub(crate) fn pane_environment_authority_is_certified_for_tests(&self, pane_id: &str) -> bool {
+        self.pane_environment_authority(pane_id) == RuntimePaneEnvironmentAuthority::Certified
+    }
+
     /// Records a settled bootstrap failure and invalidates signature-bound caches.
     pub(crate) fn mark_pane_environment_authority_unavailable(
         &mut self,

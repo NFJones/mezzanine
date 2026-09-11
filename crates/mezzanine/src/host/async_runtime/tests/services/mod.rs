@@ -2,6 +2,8 @@
 
 mod clipboard;
 mod hooks;
+mod pane_certification_settlement;
+mod pane_certification_spoof;
 mod pane_driver;
 mod pane_io;
 mod pane_service;

@@ -571,6 +571,161 @@ fn runtime_shell_execution_identity_is_atomic_and_epoch_scoped() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies certification obtained for the persistent agent subshell does not
+/// describe a foreground program that replaced it.
+///
+/// When another program takes the pane PTY with a different process group and
+/// process generation, the certified identity must not certify that
+/// replacement, no shell command body may be delivered to it, and dispatch
+/// recovery must re-observe the live foreground through a fresh bounded
+/// observation instead of reusing the stale record.
+///
+/// The certified identity is produced by the registered bootstrap and its fresh
+/// foreground observation; the fixture only pre-seeds a rejection that
+/// production promotion must clear, so no test-only certification grant is used.
+#[test]
+fn runtime_certified_identity_does_not_cover_a_replacement_foreground_process() {
+    const COMMAND_BODY: &str = "MEZ-REPLACEMENT-COMMAND-BODY";
+    let mut service = test_runtime_service();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    let primary_pid = service.pane_processes().primary_pid("%1").unwrap();
+    let subshell_group = primary_pid.saturating_add(1);
+    certify_agent_subshell_foreground_group(&mut service, subshell_group);
+    assert_eq!(
+        service.pane_foreground_certified_shell_state("%1"),
+        Some(true)
+    );
+    service.drain_pane_io_transition();
+    // The pane worker owns the process generation required by a fresh
+    // foreground observation.
+    let _adapter_process = service.take_running_pane_process_for_adapter("%1").unwrap();
+
+    // A different program takes the PTY: new process group, new generation.
+    let replacement_group = primary_pid.saturating_add(11);
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test("%1", Some(replacement_group));
+    service
+        .apply_pane_foreground_process_event("%1", "replacement", replacement_group, None)
+        .unwrap();
+    assert_eq!(
+        service.pane_foreground_certified_shell_state("%1"),
+        Some(false),
+        "the certified identity must not describe the replacement foreground"
+    );
+    assert_eq!(
+        service.pane_process_group_is_certified_shell("%1", replacement_group),
+        Some(false),
+        "the replacement process group must not inherit the previous certification"
+    );
+
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service.start_agent_prompt_turn("%1", "inspect").unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let action = mez_agent::AgentAction {
+        id: "shell-replacement".to_string(),
+
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: "Inspect the working directory.".to_string(),
+            command: format!("printf '{COMMAND_BODY}'"),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    service.agent_turn_executions_mut().insert(
+        turn.turn_id.clone(),
+        mez_agent::AgentTurnExecution {
+            request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+            response: mez_agent::ModelResponse {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                raw_text: "run shell action".to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: Some(mez_agent::MaapBatch {
+                    rationale: "inspect with shell".to_string(),
+
+                    actions: vec![action.clone()],
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results: vec![mez_agent::ActionResult::running(
+                &turn,
+                &action,
+                Vec::new(),
+                None,
+            )],
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        },
+    );
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    service.set_pane_readiness("%1", PaneReadinessState::Busy);
+    service.drain_pane_io_transition();
+
+    let retained = service
+        .dispatch_stored_running_shell_actions(&turn.turn_id)
+        .unwrap()
+        .expect("a blocked dispatch must retain its pending shell action");
+    assert_eq!(
+        retained.action_results[0].status,
+        ActionStatus::Running,
+        "a replacement foreground must leave the shell action undispatched"
+    );
+    let pane_inputs = pane_input_effects(&service.drain_pane_io_transition().side_effects)
+        .into_iter()
+        .map(|effect| String::from_utf8_lossy(effect.pane_input_parts().1).into_owned())
+        .collect::<Vec<_>>();
+    assert!(
+        pane_inputs
+            .iter()
+            .all(|input| !input.contains(COMMAND_BODY)),
+        "no command body may reach a foreground process that replaced the certified shell: {pane_inputs:?}"
+    );
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .all(|transaction| !transaction.command.contains(COMMAND_BODY)),
+        "no shell transaction may be created for the replacement foreground"
+    );
+
+    service.recover_stranded_agent_shell_dispatches().unwrap();
+    let observations = service
+        .drain_pane_io_transition()
+        .side_effects
+        .into_iter()
+        .filter(|effect| {
+            matches!(
+                effect,
+                RuntimeSideEffect::PaneProcessIo {
+                    effect: crate::runtime::PaneProcessIoEffect::ObserveForegroundProcess { .. },
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(
+        observations, 1,
+        "blocked dispatch must re-observe the live foreground instead of reusing the stale identity"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Adapter-owned bootstrap fixture stopped at pending completion certification.
 struct PendingAgentSubshellCertificationFixture {
     /// Runtime service retaining the unpublished bootstrap environment.
@@ -1271,7 +1426,7 @@ fn runtime_shell_dispatch_fails_closed_after_persistent_foreground_block() {
 
         payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Inspect the working directory.".to_string(),
-            command: "pwd".to_string(),
+            command: "printf MEZ-BLOCKED-DISPATCH-BODY".to_string(),
             interactive: false,
             stateful: false,
             timeout_ms: None,
@@ -1425,6 +1580,23 @@ fn runtime_shell_dispatch_fails_closed_after_persistent_foreground_block() {
     );
     assert_eq!(foreground_process["certified_shell_is_foreground"], false);
     assert!(service.running_shell_transactions_for_tests().is_empty());
+    assert!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
+        "a denied dispatch must not write any pane payload"
+    );
+    assert!(
+        !service.agent_provider_task_is_pending(&turn.turn_id),
+        "an authority denial must not queue a provider retry"
+    );
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        pane_text.contains("shell command was not dispatched"),
+        "the denial must name its dispatch stage: {pane_text}"
+    );
     assert_eq!(
         service
             .agent_turn_ledger()
@@ -1434,6 +1606,309 @@ fn runtime_shell_dispatch_fails_closed_after_persistent_foreground_block() {
             .unwrap()
             .state,
         AgentTurnState::Failed
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies the synchronous agent-entry dispatch stage defers an uncertified
+/// foreign foreground without creating a transaction or writing pane input.
+///
+/// Entering agent shell for a foreign foreground (SSH or a container client)
+/// starts bounded identity discovery instead of guessing authority. While that
+/// discovery is uncertified, a further entry request must be deferred by
+/// `enter_agent_subshell_if_needed` rather than allocating bootstrap ownership
+/// or injecting anything into the program that owns the PTY.
+#[test]
+fn runtime_agent_entry_defers_uncertified_foreign_foreground_without_dispatch() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = "%1";
+    let primary_pid = service.pane_processes().primary_pid(pane_id).unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(pane_id, None);
+    let _process = service
+        .take_running_pane_process_for_adapter(pane_id)
+        .unwrap();
+    service
+        .apply_pane_foreground_process_event(pane_id, "ssh", primary_pid.saturating_add(1), None)
+        .unwrap();
+
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(pane_id),
+        Some("identity-probing")
+    );
+    assert!(service.pane_has_uncertified_foreign_shell_boundary(pane_id));
+    let identity_marker = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::ShellIdentityProbe { .. }
+            )
+            .then(|| marker.clone())
+        })
+        .expect("foreign agent entry should probe shell identity");
+    service.drain_pane_io_transition();
+
+    service.enter_agent_mode_for_pane(pane_id).unwrap();
+    let deferred = service.drain_pane_io_transition();
+    assert!(
+        pane_input_effects(&deferred.side_effects).is_empty(),
+        "a deferred agent-entry must not write pane input"
+    );
+    let transactions = service.running_shell_transactions_for_tests();
+    assert!(
+        transactions
+            .values()
+            .all(|transaction| transaction.kind != RunningShellTransactionKind::Bootstrap),
+        "no bootstrap transaction may be created while the foreign boundary is uncertified"
+    );
+    assert_eq!(
+        transactions.len(),
+        1,
+        "deferral must not allocate further shell transactions"
+    );
+    assert!(transactions.contains_key(identity_marker.as_str()));
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(pane_id),
+        Some("identity-probing")
+    );
+    assert!(
+        !service.agent_subshell_is_active(pane_id),
+        "an uncertified foreign foreground must not obtain agent subshell authority"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a pre-dispatch readiness failure stays model-correctable.
+///
+/// The failing action never reached the pane: no shell transaction was created
+/// for it and no payload was written. Because the failure is a readiness
+/// diagnostic the model can act on, the turn returns to the provider through the
+/// existing bounded correction path instead of failing.
+#[test]
+fn runtime_pane_not_ready_dispatch_failure_queues_bounded_correction() {
+    const COMMAND_BODY: &str = "MEZ-NOT-READY-BODY";
+    let mut service = test_runtime_service();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    let primary_pid = service.pane_processes().primary_pid("%1").unwrap();
+    let blocker_group = primary_pid.saturating_add(3);
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test("%1", Some(blocker_group));
+    service
+        .apply_pane_foreground_process_event("%1", "less", blocker_group, None)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service.start_agent_prompt_turn("%1", "inspect").unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let action = mez_agent::AgentAction {
+        id: "shell-not-ready-dispatch".to_string(),
+
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: "Inspect the working directory.".to_string(),
+            command: format!("printf {COMMAND_BODY}"),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "run shell action".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "inspect with shell".to_string(),
+
+                actions: vec![action.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![mez_agent::ActionResult::running(
+            &turn,
+            &action,
+            Vec::new(),
+            None,
+        )],
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+    service
+        .agent_turn_executions_mut()
+        .insert(turn.turn_id.clone(), execution.clone());
+    service
+        .append_agent_execution_chronology(&turn, &execution)
+        .unwrap();
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
+    service.drain_pane_io_transition();
+
+    let corrected = service
+        .dispatch_stored_running_shell_actions(&turn.turn_id)
+        .unwrap()
+        .expect("a settled dispatch must return its execution");
+    assert_eq!(corrected.action_results[0].status, ActionStatus::Failed);
+    assert_eq!(
+        corrected.action_results[0].error.as_ref().unwrap().code,
+        "pane_not_ready"
+    );
+    assert_eq!(
+        corrected.terminal_state,
+        AgentTurnState::Running,
+        "a pre-dispatch readiness failure must return to the model"
+    );
+    assert!(
+        service.agent_provider_task_is_pending(&turn.turn_id),
+        "bounded correction must queue a provider continuation"
+    );
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .all(|transaction| !transaction.command.contains(COMMAND_BODY)),
+        "a readiness failure must not create a shell transaction"
+    );
+    assert!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
+        "a readiness failure must not write any pane payload"
+    );
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        pane_text.contains("asking model to recover"),
+        "the correction must be visible in the pane: {pane_text}"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a user interruption never becomes a bounded model correction.
+///
+/// The documented Ctrl-C interruption stops the turn through the same `/stop`
+/// command entry the pane prompt uses. The interrupted turn must settle as
+/// interrupted, without retaining an execution and without queueing a provider
+/// retry or feeding action results back to the model.
+#[test]
+fn runtime_user_interruption_is_not_queued_for_model_correction() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service.start_agent_prompt_turn("%1", "inspect").unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let action = mez_agent::AgentAction {
+        id: "shell-interrupted".to_string(),
+
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: "Wait for the build.".to_string(),
+            command: "sleep 30".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    service.agent_turn_executions_mut().insert(
+        turn.turn_id.clone(),
+        mez_agent::AgentTurnExecution {
+            request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+            response: mez_agent::ModelResponse {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                raw_text: "run shell action".to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: Some(mez_agent::MaapBatch {
+                    rationale: "inspect with shell".to_string(),
+
+                    actions: vec![action.clone()],
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results: vec![mez_agent::ActionResult::running(
+                &turn,
+                &action,
+                Vec::new(),
+                None,
+            )],
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        },
+    );
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+
+    let body = service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
+    assert!(body.contains("stop"), "{body}");
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|record| record.turn_id == turn.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Interrupted
+    );
+    assert!(
+        !service.agent_provider_task_is_pending(&turn.turn_id),
+        "an interrupted turn must not queue a provider retry"
+    );
+    assert!(
+        service.agent_turn_executions().get(&turn.turn_id).is_none(),
+        "an interrupted turn must not retain an execution for correction"
+    );
+    assert!(
+        !service
+            .agent_turn_contexts()
+            .get(&turn.turn_id)
+            .is_some_and(|context| context
+                .blocks()
+                .iter()
+                .any(|block| block.source == ContextSourceKind::ActionResult)),
+        "an interruption must not feed action results back to the model"
     );
     service.terminate_all_pane_processes().unwrap();
 }

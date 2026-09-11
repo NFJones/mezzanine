@@ -690,6 +690,347 @@ fn runtime_dependency_free_foreign_bash_loader_is_ready_gated() {
     let _ = process.terminate(Duration::from_millis(10));
 }
 
+/// Verifies certification material replayed from an earlier interaction
+/// generation cannot certify a remote or foreign pane.
+///
+/// The replayed marker, start frame, and end frame are well formed and were all
+/// observed on this pane's own input, but they belong to a superseded epoch.
+/// They must not allocate loader or bootstrap ownership, publish certified
+/// shell, environment, or path authority, or wedge the pane; recovery must
+/// re-observe the foreground through a fresh identity probe instead.
+#[test]
+fn runtime_stale_generation_replay_cannot_certify_foreign_pane() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    let primary_pid = service.pane_processes().primary_pid(&pane_id).unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&pane_id, None);
+    let mut process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+    service
+        .apply_pane_foreground_process_event(&pane_id, "ssh", primary_pid.saturating_add(1), None)
+        .unwrap();
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+
+    let (stale_marker, stale_turn_id) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::ShellIdentityProbe { .. }
+            )
+            .then(|| (marker.clone(), transaction.turn_id.clone()))
+        })
+        .expect("dependency-free identity probe should be registered");
+    service
+        .observe_agent_shell_transaction_start(
+            &pane_id,
+            &stale_marker,
+            &stale_turn_id,
+            &format!("agent-{pane_id}"),
+            &pane_id,
+        )
+        .unwrap();
+    let stale_output = format!(
+        "\u{1e}mez_shell_identity_begin={stale_marker}\n\
+         \u{1e}mez_shell_path=/bin/bash\n\
+         \u{1e}mez_shell_version=GNU bash, version 5.2\n\
+         \u{1e}mez_shell_identity_end={stale_marker}\n"
+    );
+    {
+        let transaction = service
+            .running_shell_transactions_mut_for_tests()
+            .get_mut(&stale_marker)
+            .unwrap();
+        transaction.observed_output_bytes = stale_output.len();
+        transaction.observed_output_preview = stale_output;
+    }
+    // The replayed frame set belongs to the superseded epoch.
+    service.advance_pane_shell_interaction_generation_for_tests(&pane_id);
+    service
+        .observe_agent_shell_transaction_end(
+            &pane_id,
+            &stale_marker,
+            &stale_turn_id,
+            &format!("agent-{pane_id}"),
+            &pane_id,
+            0,
+        )
+        .unwrap();
+
+    assert!(
+        service
+            .foreign_shell_loader_marker_for_tests(&pane_id)
+            .is_none(),
+        "a superseded generation must not allocate loader ownership"
+    );
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .all(|transaction| transaction.kind != RunningShellTransactionKind::Bootstrap),
+        "a superseded generation must not register bootstrap ownership"
+    );
+    assert_ne!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("certified")
+    );
+    assert_ne!(
+        service.pane_foreground_certified_shell_state(&pane_id),
+        Some(true)
+    );
+    assert!(
+        service.pane_environment_signature(&pane_id).is_none(),
+        "a superseded generation must not publish certified environment authority"
+    );
+    assert!(!service.pane_environment_authority_is_certified_for_tests(&pane_id));
+    let request = mez_agent::shell::PanePathResolutionRequest::new(
+        vec![".".to_string()],
+        Vec::new(),
+        Vec::new(),
+    )
+    .unwrap();
+    assert!(
+        service
+            .path_scopes_for_pane_request(&pane_id, &request)
+            .map(|scopes| scopes.is_none())
+            .unwrap_or(true),
+        "a superseded generation must not publish pane path authority"
+    );
+
+    // Recovery: returning to the primary shell must re-observe the foreground
+    // with a fresh interaction generation instead of reusing the stale frame.
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&pane_id, Some(primary_pid));
+    service
+        .apply_pane_foreground_process_event(&pane_id, "sh", primary_pid, None)
+        .unwrap();
+    service.drain_pane_io_transition();
+    service.enter_agent_subshell_if_needed(&pane_id).unwrap();
+    let reobserved_marker = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::ShellIdentityProbe { .. }
+            )
+            .then(|| marker.clone())
+        });
+    assert!(
+        reobserved_marker.is_some(),
+        "recovery must re-observe the pane foreground through a fresh identity probe"
+    );
+    assert_ne!(
+        reobserved_marker.as_deref(),
+        Some(stale_marker.as_str()),
+        "recovery must not reuse a superseded identity marker"
+    );
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .all(|transaction| transaction.kind != RunningShellTransactionKind::Bootstrap),
+        "recovery must not trust the stale completion"
+    );
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
+/// Verifies remote/SSH certification still requires the authenticated managed
+/// receiver dialect event. A completed foreign bootstrap that never installed
+/// its managed child must not publish shell, environment, or path authority.
+///
+/// The dependency-free loader serves the documented remote-control workflow, so
+/// a local-only certification mechanism must not be able to remove that support
+/// and spoofable completion frames must not replace the authenticated install.
+#[test]
+fn runtime_remote_certification_requires_authenticated_managed_install() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    let primary_pid = service.pane_processes().primary_pid(&pane_id).unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&pane_id, None);
+    let mut process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+    service
+        .apply_pane_foreground_process_event(&pane_id, "ssh", primary_pid.saturating_add(1), None)
+        .unwrap();
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+
+    let (identity_marker, identity_turn_id) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::ShellIdentityProbe { .. }
+            )
+            .then(|| (marker.clone(), transaction.turn_id.clone()))
+        })
+        .expect("dependency-free identity probe should be registered");
+    service
+        .observe_agent_shell_transaction_start(
+            &pane_id,
+            &identity_marker,
+            &identity_turn_id,
+            &format!("agent-{pane_id}"),
+            &pane_id,
+        )
+        .unwrap();
+    let identity_output = format!(
+        "\u{1e}mez_shell_identity_begin={identity_marker}\n\
+         \u{1e}mez_shell_path=/bin/bash\n\
+         \u{1e}mez_shell_version=GNU bash, version 5.2\n\
+         \u{1e}mez_shell_identity_end={identity_marker}\n"
+    );
+    {
+        let transaction = service
+            .running_shell_transactions_mut_for_tests()
+            .get_mut(&identity_marker)
+            .unwrap();
+        transaction.observed_output_bytes = identity_output.len();
+        transaction.observed_output_preview = identity_output;
+    }
+    service
+        .observe_agent_shell_transaction_end(
+            &pane_id,
+            &identity_marker,
+            &identity_turn_id,
+            &format!("agent-{pane_id}"),
+            &pane_id,
+            0,
+        )
+        .unwrap();
+
+    let loader_marker = service
+        .foreign_shell_loader_marker_for_tests(&pane_id)
+        .expect("dependency-free loader should retain its nonce")
+        .to_string();
+    let bootstrap_marker = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            (transaction.kind == RunningShellTransactionKind::Bootstrap).then(|| marker.clone())
+        })
+        .expect("dependency-free child bootstrap should be registered");
+    service.drain_pane_io_transition();
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_events(
+                &pane_id,
+                &[TerminalOscEvent::ForeignShellLoaderReady {
+                    marker: loader_marker,
+                }],
+            )
+            .unwrap(),
+        1
+    );
+    service.drain_pane_io_transition();
+
+    let bootstrap_turn_id = service
+        .running_shell_transactions_for_tests()
+        .get(&bootstrap_marker)
+        .expect("dependency-free child bootstrap should remain registered")
+        .turn_id
+        .clone();
+    service
+        .observe_agent_shell_transaction_start(
+            &pane_id,
+            &bootstrap_marker,
+            &bootstrap_turn_id,
+            &format!("agent-{pane_id}"),
+            &pane_id,
+        )
+        .unwrap();
+    let bootstrap_output = "env\tos\tLinux\n\
+env\tarch\tx86_64\n\
+env\thost\tremote-host\n\
+env\tuser\tremote-user\n\
+env\tshell_path\t/bin/bash\n\
+env\tshell_class\tbash\n\
+env\tpath\t/remote/bin:/usr/bin:/bin\n\
+env\tcwd\t/remote/project\n\
+env\tgit_repo\t0\n\
+bootstrap\tcomplete\t1714500000\n";
+    {
+        let transaction = service
+            .running_shell_transactions_mut_for_tests()
+            .get_mut(&bootstrap_marker)
+            .unwrap();
+        transaction.observed_output_bytes = bootstrap_output.len();
+        transaction.observed_output_preview = bootstrap_output.to_string();
+    }
+    service
+        .observe_agent_shell_transaction_end(
+            &pane_id,
+            &bootstrap_marker,
+            &bootstrap_turn_id,
+            &format!("agent-{pane_id}"),
+            &pane_id,
+            0,
+        )
+        .unwrap();
+
+    assert_ne!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("certified"),
+        "a remote bootstrap without the authenticated managed child must not certify"
+    );
+    assert_ne!(
+        service.pane_foreground_certified_shell_state(&pane_id),
+        Some(true)
+    );
+    assert!(
+        service.pane_environment_signature(&pane_id).is_none(),
+        "an unauthenticated remote completion must not publish pane environment authority"
+    );
+    assert!(!service.pane_environment_authority_is_certified_for_tests(&pane_id));
+    let request = mez_agent::shell::PanePathResolutionRequest::new(
+        vec![".".to_string()],
+        Vec::new(),
+        Vec::new(),
+    )
+    .unwrap();
+    assert!(
+        service
+            .path_scopes_for_pane_request(&pane_id, &request)
+            .map(|scopes| scopes.is_none())
+            .unwrap_or(true),
+        "an unauthenticated remote completion must not publish pane path authority"
+    );
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
 /// Verifies a failed write of the separately dispatched dependency-free loader
 /// settles every staged child/bootstrap owner. A queued bootstrap wrapper or
 /// retained loader marker would otherwise leave pane input leased after the
@@ -1026,6 +1367,16 @@ bootstrap\tcomplete\t1714500000\n";
         service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
         Some("certified")
     );
+    assert_eq!(
+        service.pane_foreground_certified_shell_state(&pane_id),
+        Some(true),
+        "the authenticated managed receiver must still certify a remote pane shell"
+    );
+    assert!(
+        service.pane_environment_authority_is_certified_for_tests(&pane_id),
+        "a certified remote shell must still publish environment authority"
+    );
+    assert!(service.pane_environment_signature(&pane_id).is_some());
 
     service
         .apply_pane_foreground_process_event(
