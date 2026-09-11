@@ -644,6 +644,7 @@ pub(crate) struct IrohCompressionBridge {
     stream: DuplexStream,
     task: tokio::task::JoinHandle<Result<()>>,
     outbound_done: Option<tokio::sync::oneshot::Receiver<()>>,
+    outbound_settled: Option<tokio::sync::oneshot::Receiver<()>>,
 }
 
 impl IrohCompressionBridge {
@@ -675,21 +676,27 @@ impl IrohCompressionBridge {
         let (stream, bridge_stream) = tokio::io::duplex(64 * 1024);
         let (bridge_read, bridge_write) = tokio::io::split(bridge_stream);
         let (outbound_finished_tx, outbound_finished) = tokio::sync::oneshot::channel();
+        let (outbound_settled_tx, outbound_settled) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
             let activation = policy
                 .is_streaming()
                 .then(|| Arc::new(tokio::sync::Barrier::new(2)));
             let outbound_metrics = metrics.clone();
             let outbound_activation = activation.clone();
-            let outbound = pump_raw_frames_to_iroh_with_activation(
-                bridge_read,
-                send,
-                policy,
-                outbound_metrics,
-                codec,
-                outbound_activation,
-                Some(outbound_finished_tx),
-            );
+            let outbound = async move {
+                let settlement = pump_raw_frames_to_iroh_with_activation(
+                    bridge_read,
+                    send,
+                    policy,
+                    outbound_metrics,
+                    codec,
+                    outbound_activation,
+                    Some(outbound_finished_tx),
+                )
+                .await;
+                let _ = outbound_settled_tx.send(());
+                settlement
+            };
             let inbound = pump_iroh_frames_to_raw_with_activation(
                 recv,
                 bridge_write,
@@ -705,6 +712,7 @@ impl IrohCompressionBridge {
             stream,
             task,
             outbound_done: Some(outbound_finished),
+            outbound_settled: Some(outbound_settled),
         })
     }
 
@@ -736,6 +744,31 @@ impl IrohCompressionBridge {
             Ok(result) => result,
             Err(_) => Err(MezError::invalid_state(
                 "Iroh compression bridge outbound shutdown timed out",
+            )),
+        }
+    }
+
+    /// Waits for the outbound half to finish after its FIN, bounded by one deadline.
+    ///
+    /// The settlement signal means the peer acknowledged or stopped the outbound
+    /// FIN. Closing the connection before that point discards the still-queued
+    /// FIN, so a peer draining the framed stream observes a connection error
+    /// where the orderly stream end belongs. Callers that close the connection
+    /// after `finish_outbound_until` must await this settlement first.
+    pub(crate) async fn settle_outbound_until(
+        &mut self,
+        deadline: tokio::time::Instant,
+    ) -> Result<()> {
+        let Some(mut settled) = self.outbound_settled.take() else {
+            return Ok(());
+        };
+        match tokio::time::timeout_at(deadline, &mut settled).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(_)) => Err(MezError::invalid_state(
+                "Iroh compression bridge stopped before outbound settlement",
+            )),
+            Err(_) => Err(MezError::invalid_state(
+                "Iroh compression bridge outbound settlement timed out",
             )),
         }
     }

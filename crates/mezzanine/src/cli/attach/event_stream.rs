@@ -1443,6 +1443,47 @@ mod iroh_setup_tests {
         (server, client, server_connection, client_connection)
     }
 
+    /// Waits for one settled event-receiver message without racing the
+    /// product's own setup deadline with a fixture wall-clock timeout.
+    ///
+    /// The receiver's setup deadline is a tokio timer owned by the product. A
+    /// wall-clock timeout here would expire in the same runtime wake-up as that
+    /// timer whenever a loaded host deschedules this thread past the fixture
+    /// bound, and the runtime could then poll the fixture deadline first.
+    /// Parking briefly and re-checking the channel keeps the product deadline
+    /// authoritative, while the poll budget still fails a receiver that never
+    /// settles.
+    async fn recv_settled_event_receiver_message(
+        receiver: &mut tokio::sync::mpsc::Receiver<Result<IrohAttachRenderWakeup>>,
+    ) -> Option<Result<IrohAttachRenderWakeup>> {
+        const MAX_POLL_TURNS: u32 = 30_000;
+        for _ in 0..MAX_POLL_TURNS {
+            match receiver.try_recv() {
+                Ok(message) => return Some(message),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => return None,
+            }
+        }
+        panic!("event receiver must settle within the product setup timeout");
+    }
+
+    /// Waits for the peer to observe the product's connection close instead of
+    /// racing that close with a fixture wall-clock deadline. The product's own
+    /// setup deadline decides when the close happens; the poll budget only
+    /// fails a genuinely missing close.
+    async fn wait_for_peer_connection_close(connection: &iroh::endpoint::Connection) {
+        const MAX_POLL_TURNS: u32 = 30_000;
+        for _ in 0..MAX_POLL_TURNS {
+            if connection.close_reason().is_some() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+        panic!("timed-out event setup must close the peer connection");
+    }
+
     /// Verifies a peer that never opens the negotiated event stream is bounded
     /// by setup timeout and the timed-out attach connection is closed.
     #[tokio::test(flavor = "current_thread")]
@@ -1465,18 +1506,12 @@ mod iroh_setup_tests {
             None,
         );
 
-        let error = tokio::time::timeout(std::time::Duration::from_secs(1), receiver.recv())
+        let error = recv_settled_event_receiver_message(&mut receiver)
             .await
-            .expect("event receiver must settle within setup timeout")
             .expect("event receiver must report setup failure")
             .unwrap_err();
         assert!(error.message().contains("setup timed out"), "{error}");
-        tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            server_connection.closed(),
-        )
-        .await
-        .expect("timed-out event setup must close the peer connection");
+        wait_for_peer_connection_close(&server_connection).await;
 
         task.await.unwrap();
         client.close().await;

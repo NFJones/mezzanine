@@ -1655,6 +1655,11 @@ async fn serve_runtime_iroh_control_connection(
     let _ = event_stop_tx.send(true);
     let shutdown_deadline = tokio::time::Instant::now() + setup_timeout;
     let bridge_finish_result = bridge.finish_outbound_until(shutdown_deadline).await;
+    // Closing the connection while the outbound FIN is still unacknowledged
+    // discards that FIN, leaving a peer that drains the framed response stream
+    // to observe a connection error where the stream ends. Order the close
+    // after the peer's acknowledgement, bounded by the same shutdown deadline.
+    let bridge_outbound_result = bridge.settle_outbound_until(shutdown_deadline).await;
     connection.close(
         VarInt::from_u32(u32::from(result.is_err())),
         if result.is_ok() {
@@ -1674,6 +1679,7 @@ async fn serve_runtime_iroh_control_connection(
     let served = result?;
     x11_route_result?;
     bridge_finish_result?;
+    bridge_outbound_result?;
     bridge_result?;
     Ok(served)
 }
@@ -4518,6 +4524,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// Waits for the peer to observe a connection close without racing it with
+    /// a fixture wall-clock deadline; the product's own setup deadline decides
+    /// when the close happens and the poll budget only fails a hang.
+    async fn wait_for_peer_connection_close(connection: &iroh::endpoint::Connection) {
+        const MAX_POLL_TURNS: u32 = 30_000;
+        for _ in 0..MAX_POLL_TURNS {
+            if connection.close_reason().is_some() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+        panic!("the peer connection did not close within the fixture poll budget");
+    }
+
+    /// Verifies the setup deadline evicts a stalled pre-session connection
+    /// without consuming the listener, and that a revoked client profile is
+    /// rejected. The deadline also covers the handshake, so the fixture uses
+    /// the module's load-tolerant endpoint deadline and waits on the product's
+    /// own eviction instead of timing a real local handshake against a
+    /// sub-second value.
     #[tokio::test(flavor = "current_thread")]
     async fn iroh_setup_timeout_isolated_and_revoked_profile_rejected() {
         use crate::cli::{IrohControlTarget, exchange_iroh_control_request};
@@ -4560,20 +4586,19 @@ mod tests {
                 crate::runtime::current_unix_seconds(),
             )
             .unwrap();
-        let mut policy = RuntimeIrohTransportPolicy {
+        let policy = RuntimeIrohTransportPolicy {
             enabled: true,
             max_connections: 2,
             max_streams_per_connection: 1,
-            setup_timeout: std::time::Duration::from_secs(3),
+            setup_timeout: IROH_ENDPOINT_TEST_SETUP_TIMEOUT,
             idle_timeout: std::time::Duration::from_secs(5),
             ..RuntimeIrohTransportPolicy::default()
         };
-        let mut server = bind_runtime_iroh_endpoint(policy.clone(), server_secret)
+        let server = bind_runtime_iroh_endpoint(policy.clone(), server_secret)
             .await
             .unwrap()
             .unwrap();
-        policy.setup_timeout = std::time::Duration::from_millis(500);
-        server.policy.setup_timeout = policy.setup_timeout;
+        let diagnostics = server.diagnostics.clone();
         let server_addr = server.endpoint().addr();
         let (handle, actor) =
             AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
@@ -4599,12 +4624,33 @@ mod tests {
             .bind()
             .await
             .unwrap();
-        let stalled_connection = stalled
-            .connect(server_addr.clone(), MEZZANINE_IROH_ALPN)
-            .await
-            .unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(750)).await;
-        stalled_connection.close(VarInt::from_u32(1), b"setup timeout test");
+        // The endpoint's setup deadline also covers the handshake, so a loaded
+        // scheduler can evict an attempt before the fixture observes the stream
+        // stall. Retry within a bounded budget until the listener accepts one
+        // attempt, and wait on the connection's own close instead of assuming a
+        // fixed sleep elapsed the deadline; the accepted attempt is then the
+        // one the stream deadline evicts.
+        const STALL_ATTEMPTS: u32 = 3;
+        let mut stall_attempts = 0;
+        loop {
+            stall_attempts += 1;
+            assert!(
+                stall_attempts <= STALL_ATTEMPTS,
+                "the listener never accepted and evicted a stalled pre-session connection"
+            );
+            let accepted_before = diagnostics.snapshot().setup_successes;
+            let Ok(stalled_connection) = stalled
+                .connect(server_addr.clone(), MEZZANINE_IROH_ALPN)
+                .await
+            else {
+                continue;
+            };
+            wait_for_peer_connection_close(&stalled_connection).await;
+            stalled_connection.close(VarInt::from_u32(1), b"setup timeout test");
+            if diagnostics.snapshot().setup_successes > accepted_before {
+                break;
+            }
+        }
         stalled.close().await;
 
         let paired = exchange_iroh_control_request(
