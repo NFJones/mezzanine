@@ -74,6 +74,12 @@ pub struct McpExecutionRequest {
     pub arguments_json: String,
     /// Product-selected execution timeout in milliseconds.
     pub timeout_ms: u64,
+    /// Bounded identity of the tool schema generation the arguments were validated against.
+    ///
+    /// Product execution identity compares this value with the generation bound
+    /// at approval time before any transport is invoked, so a schema refresh
+    /// cannot reuse an approval that covered different metadata.
+    pub schema_generation: String,
 }
 
 /// Dependency-neutral response from one MCP tool execution.
@@ -163,6 +169,12 @@ mod tests {
             tool_name: "read_file".to_string(),
             arguments_json: r#"{"path":"README.md"}"#.to_string(),
             timeout_ms: 30_000,
+            schema_generation: crate::McpSchemaGeneration::derive(
+                "filesystem",
+                "read_file",
+                r#"{"type":"object"}"#,
+            )
+            .into_string(),
         };
         let response = McpExecutionResponse {
             content_json: r#"[{"type":"text","text":"ok"}]"#.to_string(),

@@ -10,6 +10,7 @@ mod error;
 mod prompt;
 mod protocol;
 mod registry;
+mod schema;
 mod types;
 
 pub use error::{McpError, McpErrorKind, McpResult};
@@ -26,6 +27,16 @@ pub use protocol::{
     parse_mcp_tools_list_response, string_field,
 };
 pub use registry::McpRegistry;
+pub use schema::{
+    DEFAULT_MCP_INSTANCE_MAX_BYTES, DEFAULT_MCP_INSTANCE_MAX_DEPTH, DEFAULT_MCP_INSTANCE_MAX_NODES,
+    DEFAULT_MCP_SCHEMA_CACHE_CAPACITY, DEFAULT_MCP_SCHEMA_MAX_BYTES, DEFAULT_MCP_SCHEMA_MAX_DEPTH,
+    DEFAULT_MCP_SCHEMA_MAX_NODES, DEFAULT_MCP_SCHEMA_MAX_REFERENCE_BYTES,
+    DEFAULT_MCP_SCHEMA_MAX_REFERENCES, DEFAULT_MCP_SCHEMA_REGEX_BACKTRACK_LIMIT,
+    DEFAULT_MCP_SCHEMA_REGEX_SIZE_LIMIT, MCP_SCHEMA_GENERATION_DIGEST_HEX_CHARS,
+    MCP_SCHEMA_GENERATION_PREFIX, MCP_SCHEMA_SUPPORTED_DIALECT, McpSchemaDiagnostic,
+    McpSchemaFailure, McpSchemaGeneration, McpSchemaLimits, McpSchemaValidator,
+    is_mcp_schema_generation,
+};
 pub use types::{
     DEFAULT_MCP_MAX_DISCOVERED_TOOLS, DEFAULT_MCP_MAX_MESSAGE_BYTES,
     DEFAULT_MCP_MAX_TOOL_DESCRIPTION_BYTES, DEFAULT_MCP_MAX_TOOL_DISCOVERY_RESPONSE_BYTES,
@@ -39,29 +50,6 @@ pub use types::{
     McpToolsListResponse,
 };
 
-/// Parses and validates one MCP tool argument schema before it becomes callable.
-///
-/// The schema must be valid JSON with an object root. When the root declares a
-/// `type`, it must declare `object`, because MCP tool arguments are JSON
-/// objects. Callers use the static diagnostic to keep rejected-tool reporting
-/// bounded and secret-safe.
-pub(crate) fn validate_mcp_tool_input_schema(
-    input_schema_json: &str,
-) -> std::result::Result<serde_json::Value, &'static str> {
-    let schema = serde_json::from_str::<serde_json::Value>(input_schema_json)
-        .map_err(|_| "schema is not valid JSON")?;
-    let object = schema
-        .as_object()
-        .ok_or("schema root is not a JSON object")?;
-    if object
-        .get("type")
-        .is_some_and(|schema_type| schema_type != "object")
-    {
-        return Err("schema root type is not object");
-    }
-    Ok(schema)
-}
-
 impl From<&McpToolCallPlan> for McpExecutionRequest {
     fn from(plan: &McpToolCallPlan) -> Self {
         Self {
@@ -69,6 +57,7 @@ impl From<&McpToolCallPlan> for McpExecutionRequest {
             tool_name: plan.tool_name.clone(),
             arguments_json: plan.arguments_json.clone(),
             timeout_ms: plan.timeout_ms,
+            schema_generation: plan.schema_generation.clone(),
         }
     }
 }

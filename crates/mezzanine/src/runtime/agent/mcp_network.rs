@@ -19,7 +19,25 @@ use super::{
     runtime_execution_ready_for_provider_continuation, runtime_mcp_error_code,
     runtime_mezzanine_error_code, runtime_post_mcp_hook_payload, runtime_pre_mcp_hook_payload,
 };
-use mez_agent::McpExecutionRequest;
+use mez_agent::{McpExecutionRequest, validate_mcp_execution_schema_generation};
+
+/// Stable failure code reported when live MCP metadata no longer matches an approval.
+const RUNTIME_MCP_SCHEMA_CHANGED_CODE: &str = "mcp_schema_changed";
+
+/// Stable failure code reported when an approved MCP call bound no schema generation.
+const RUNTIME_MCP_SCHEMA_UNBOUND_CODE: &str = "mcp_schema_unbound";
+
+/// Returns the bounded failure for one MCP call whose approval bound no generation.
+///
+/// The reason text comes from the shared lower-crate validator so the unbound and
+/// drifted reasons cannot drift apart.
+fn unbound_schema_binding_failure(
+    execution_request: &McpExecutionRequest,
+) -> (&'static str, String) {
+    let error = validate_mcp_execution_schema_generation(execution_request, None)
+        .expect_err("an unbound approval never verifies");
+    (RUNTIME_MCP_SCHEMA_UNBOUND_CODE, error.message().to_string())
+}
 
 impl RuntimeSessionService {
     /// Queues immediately runnable MCP calls for worker execution.
@@ -81,7 +99,7 @@ impl RuntimeSessionService {
                 timeout_ms: None,
                 approval_bypass: permission_policy.approval_bypass(),
             };
-            let plan = match self.mcp_registry().plan_tool_call(&request) {
+            let plan = match self.mcp_registry_mut().plan_tool_call(&request) {
                 Ok(plan) => plan,
                 Err(error) => {
                     let error = MezError::from(error);
@@ -113,9 +131,10 @@ impl RuntimeSessionService {
                 );
                 continue;
             }
-            self.agent
-                .pending_approved_external_actions
-                .insert((turn.turn_id.clone(), action.id.clone()));
+            self.agent.pending_approved_external_actions.insert(
+                (turn.turn_id.clone(), action.id.clone()),
+                Some(plan.schema_generation.clone()),
+            );
             queued = queued.saturating_add(1);
         }
         execution.terminal_state = runtime_agent_turn_state_from_action_results(
@@ -157,7 +176,7 @@ impl RuntimeSessionService {
                 ActionStatus::Running if can_queue_running_actions => {
                     self.agent
                         .pending_approved_external_actions
-                        .insert((turn.turn_id.clone(), action.id.clone()));
+                        .insert((turn.turn_id.clone(), action.id.clone()), None);
                     queued = queued.saturating_add(1);
                 }
                 ActionStatus::Succeeded | ActionStatus::Failed => {
@@ -174,7 +193,7 @@ impl RuntimeSessionService {
     pub(crate) fn pending_approved_external_actions(&self) -> Vec<(String, String)> {
         self.agent
             .pending_approved_external_actions
-            .iter()
+            .keys()
             .filter(|identity| {
                 !self
                     .agent
@@ -193,7 +212,7 @@ impl RuntimeSessionService {
     pub(crate) fn approved_external_action_progress_turn_ids(&self) -> Vec<String> {
         self.agent
             .pending_approved_external_actions
-            .iter()
+            .keys()
             .chain(self.agent.claimed_approved_external_actions.keys())
             .map(|(turn_id, _)| turn_id.clone())
             .collect()
@@ -227,6 +246,81 @@ impl RuntimeSessionService {
         progress: crate::runtime::RuntimeApprovedExternalActionProgress,
     ) -> Result<bool> {
         self.apply_action_presentation_progress(progress.presentation)
+    }
+
+    /// Returns the recorded approval binding for one external action.
+    ///
+    /// `Some(Some(generation))` is an approval bound to the tool-schema
+    /// generation whose assertions validated the approved arguments,
+    /// `Some(None)` is an approval that recorded no generation, and `None` means
+    /// no approval record exists for this action because the call is authorized by
+    /// policy in the same actor step that planned it.
+    fn recorded_approved_mcp_schema_generation(
+        &self,
+        turn_id: &str,
+        action_id: &str,
+    ) -> Option<Option<String>> {
+        self.agent
+            .pending_approved_external_actions
+            .get(&(turn_id.to_string(), action_id.to_string()))
+            .cloned()
+    }
+
+    /// Returns the bounded failure that must settle one approved MCP call before
+    /// any configured hook runs or any transport is leased.
+    ///
+    /// The freshly planned execution request carries the generation selected from
+    /// the current schema, and that generation is compared with the generation the
+    /// approval was bound to. An approval that recorded no generation, and a
+    /// worker-dispatched call with no recorded approval at all
+    /// (`require_recorded_binding`), is unverifiable, so the call fails closed with
+    /// a bounded reason instead of dispatching unchecked. Same-step direct dispatch
+    /// without an approval record has no approval window to compare against, so its
+    /// freshly planned generation is authoritative.
+    fn approved_mcp_schema_binding_failure(
+        &self,
+        turn_id: &str,
+        action_id: &str,
+        execution_request: &McpExecutionRequest,
+        require_recorded_binding: bool,
+    ) -> Option<(&'static str, String)> {
+        match self.recorded_approved_mcp_schema_generation(turn_id, action_id) {
+            Some(Some(bound)) => {
+                validate_mcp_execution_schema_generation(execution_request, Some(bound.as_str()))
+                    .err()
+                    .map(|error| (RUNTIME_MCP_SCHEMA_CHANGED_CODE, error.message().to_string()))
+            }
+            Some(None) => Some(unbound_schema_binding_failure(execution_request)),
+            None if require_recorded_binding => {
+                Some(unbound_schema_binding_failure(execution_request))
+            }
+            None => None,
+        }
+    }
+
+    /// Binds one approved MCP call to the tool-schema generation selected now.
+    ///
+    /// Approval re-plans the approved arguments against the currently selected
+    /// tool schema, so a metadata refresh can neither invent approval nor widen
+    /// the schema generation an earlier approval covered. Arguments that no
+    /// longer validate record no binding, and live revalidation settles that call
+    /// without dispatch.
+    pub(super) fn approved_mcp_schema_generation(
+        &mut self,
+        server: &str,
+        tool: &str,
+        arguments_json: &str,
+    ) -> Option<String> {
+        self.mcp_registry_mut()
+            .plan_tool_call(&McpToolCallRequest {
+                server_id: server.to_string(),
+                tool_name: tool.to_string(),
+                arguments_json: arguments_json.to_string(),
+                timeout_ms: None,
+                approval_bypass: true,
+            })
+            .ok()
+            .map(|plan| plan.schema_generation)
     }
 
     /// Reports whether an external action still belongs to a live turn execution.
@@ -282,7 +376,7 @@ impl RuntimeSessionService {
         if !self
             .agent
             .pending_approved_external_actions
-            .contains(&identity)
+            .contains_key(&identity)
         {
             return Ok(None);
         }
@@ -407,27 +501,6 @@ impl RuntimeSessionService {
                 tool,
                 arguments_json,
             } => {
-                if let Some(block) = self.run_configured_pre_action_hooks(
-                    HookEvent::PreMcpToolUse,
-                    &runtime_pre_mcp_hook_payload(&turn, &action, server, tool, arguments_json),
-                )? {
-                    let mut result = ActionResult::failed(
-                        &turn,
-                        &action,
-                        ActionStatus::Denied,
-                        "hook_blocked",
-                        block.message.clone(),
-                    )?;
-                    result.structured_content_json = Some(block.structured_json());
-                    self.complete_approved_external_action(RuntimeApprovedExternalActionOutcome {
-                        turn_id: turn_id.to_string(),
-                        action_id: action_id.to_string(),
-                        attempt: attempt.to_string(),
-                        result: Ok(result),
-                        mcp_transport: None,
-                    })?;
-                    return Ok(None);
-                }
                 let request = McpToolCallRequest {
                     server_id: server.clone(),
                     tool_name: tool.clone(),
@@ -435,7 +508,7 @@ impl RuntimeSessionService {
                     timeout_ms: None,
                     approval_bypass: true,
                 };
-                let plan = match self.mcp_registry().plan_tool_call(&request) {
+                let plan = match self.mcp_registry_mut().plan_tool_call(&request) {
                     Ok(plan) => plan,
                     Err(error) => {
                         let error = MezError::from(error);
@@ -458,6 +531,54 @@ impl RuntimeSessionService {
                         return Ok(None);
                     }
                 };
+                let execution_request = McpExecutionRequest::from(&plan);
+                // The current schema and the approved binding are compared before
+                // any configured hook runs or any transport is leased, so a drifted
+                // or unbound approval settles this unexecuted call with no hook side
+                // effects and no dispatch.
+                if let Some((error_code, message)) = self.approved_mcp_schema_binding_failure(
+                    turn_id,
+                    action_id,
+                    &execution_request,
+                    true,
+                ) {
+                    let result = ActionResult::failed(
+                        &turn,
+                        &action,
+                        ActionStatus::Failed,
+                        error_code,
+                        message,
+                    )?;
+                    self.complete_approved_external_action(RuntimeApprovedExternalActionOutcome {
+                        turn_id: turn_id.to_string(),
+                        action_id: action_id.to_string(),
+                        attempt: attempt.to_string(),
+                        result: Ok(result),
+                        mcp_transport: None,
+                    })?;
+                    return Ok(None);
+                }
+                if let Some(block) = self.run_configured_pre_action_hooks(
+                    HookEvent::PreMcpToolUse,
+                    &runtime_pre_mcp_hook_payload(&turn, &action, server, tool, arguments_json),
+                )? {
+                    let mut result = ActionResult::failed(
+                        &turn,
+                        &action,
+                        ActionStatus::Denied,
+                        "hook_blocked",
+                        block.message.clone(),
+                    )?;
+                    result.structured_content_json = Some(block.structured_json());
+                    self.complete_approved_external_action(RuntimeApprovedExternalActionOutcome {
+                        turn_id: turn_id.to_string(),
+                        action_id: action_id.to_string(),
+                        attempt: attempt.to_string(),
+                        result: Ok(result),
+                        mcp_transport: None,
+                    })?;
+                    return Ok(None);
+                }
                 let environment = std::env::vars().collect();
                 let auth_store = self.auth_store().cloned();
                 self.append_approved_mcp_action_audit(&turn, &action, "started")?;
@@ -1161,20 +1282,6 @@ impl RuntimeSessionService {
                 "MCP execution requires an mcp_call action",
             ));
         };
-        if let Some(block) = self.run_configured_pre_action_hooks(
-            HookEvent::PreMcpToolUse,
-            &runtime_pre_mcp_hook_payload(turn, action, server, tool, arguments_json),
-        )? {
-            let mut result = ActionResult::failed(
-                turn,
-                action,
-                ActionStatus::Denied,
-                "hook_blocked",
-                block.message.clone(),
-            )?;
-            result.structured_content_json = Some(block.structured_json());
-            return Ok(result);
-        }
         let permission_policy = self.permission_policy_for_turn(turn);
         let request = McpToolCallRequest {
             server_id: server.clone(),
@@ -1183,7 +1290,7 @@ impl RuntimeSessionService {
             timeout_ms: None,
             approval_bypass: permission_policy.approval_bypass(),
         };
-        let plan = match self.mcp_registry().plan_tool_call(&request) {
+        let plan = match self.mcp_registry_mut().plan_tool_call(&request) {
             Ok(plan) => plan,
             Err(error) => {
                 let error = MezError::from(error);
@@ -1213,6 +1320,33 @@ impl RuntimeSessionService {
         let call_id = format!("{}:{}", turn.turn_id, action.id);
         let environment = std::env::vars().collect::<BTreeMap<_, _>>();
         let execution_request = McpExecutionRequest::from(&plan);
+        // The current schema and the approved binding are compared before any
+        // configured hook runs or any transport is leased, so a drifted or unbound
+        // approval settles this unexecuted call with no hook side effects and no
+        // dispatch.
+        if let Some((error_code, message)) = self.approved_mcp_schema_binding_failure(
+            &turn.turn_id,
+            &action.id,
+            &execution_request,
+            false,
+        ) {
+            return ActionResult::failed(turn, action, ActionStatus::Failed, error_code, message)
+                .map_err(Into::into);
+        }
+        if let Some(block) = self.run_configured_pre_action_hooks(
+            HookEvent::PreMcpToolUse,
+            &runtime_pre_mcp_hook_payload(turn, action, server, tool, arguments_json),
+        )? {
+            let mut result = ActionResult::failed(
+                turn,
+                action,
+                ActionStatus::Denied,
+                "hook_blocked",
+                block.message.clone(),
+            )?;
+            result.structured_content_json = Some(block.structured_json());
+            return Ok(result);
+        }
         let audit_log = self.persistence.audit_log_mut();
         let (transports, auth_store) = self.integration.mcp_execution_bindings();
         let mut executor = RuntimeMcpActionExecutor {
@@ -1275,20 +1409,6 @@ impl RuntimeSessionService {
                 "MCP execution requires an mcp_call action",
             ));
         };
-        if let Some(block) = self.run_configured_pre_action_hooks(
-            HookEvent::PreMcpToolUse,
-            &runtime_pre_mcp_hook_payload(turn, action, server, tool, arguments_json),
-        )? {
-            let mut result = ActionResult::failed(
-                turn,
-                action,
-                ActionStatus::Denied,
-                "hook_blocked",
-                block.message.clone(),
-            )?;
-            result.structured_content_json = Some(block.structured_json());
-            return Ok(result);
-        }
         let permission_policy = self.permission_policy_for_turn(turn);
         let request = McpToolCallRequest {
             server_id: server.clone(),
@@ -1297,7 +1417,7 @@ impl RuntimeSessionService {
             timeout_ms: None,
             approval_bypass: permission_policy.approval_bypass(),
         };
-        let plan = match self.mcp_registry().plan_tool_call(&request) {
+        let plan = match self.mcp_registry_mut().plan_tool_call(&request) {
             Ok(plan) => plan,
             Err(error) => {
                 let error = MezError::from(error);
@@ -1327,6 +1447,33 @@ impl RuntimeSessionService {
         let call_id = format!("{}:{}", turn.turn_id, action.id);
         let environment = std::env::vars().collect::<BTreeMap<_, _>>();
         let execution_request = McpExecutionRequest::from(&plan);
+        // The current schema and the approved binding are compared before any
+        // configured hook runs or any transport is leased, so a drifted or unbound
+        // approval settles this unexecuted call with no hook side effects and no
+        // dispatch.
+        if let Some((error_code, message)) = self.approved_mcp_schema_binding_failure(
+            &turn.turn_id,
+            &action.id,
+            &execution_request,
+            false,
+        ) {
+            return ActionResult::failed(turn, action, ActionStatus::Failed, error_code, message)
+                .map_err(Into::into);
+        }
+        if let Some(block) = self.run_configured_pre_action_hooks(
+            HookEvent::PreMcpToolUse,
+            &runtime_pre_mcp_hook_payload(turn, action, server, tool, arguments_json),
+        )? {
+            let mut result = ActionResult::failed(
+                turn,
+                action,
+                ActionStatus::Denied,
+                "hook_blocked",
+                block.message.clone(),
+            )?;
+            result.structured_content_json = Some(block.structured_json());
+            return Ok(result);
+        }
         let audit_log = self.persistence.audit_log_mut();
         let (transports, auth_store) = self.integration.mcp_execution_bindings();
         let mut executor = RuntimeMcpActionExecutor {

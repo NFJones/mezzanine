@@ -9,6 +9,7 @@ mod compaction;
 mod context;
 mod conversations;
 mod macros;
+mod mcp_schema;
 mod model_selection;
 mod presentation;
 mod prompt;

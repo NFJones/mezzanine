@@ -9,12 +9,13 @@ use super::prompt::{
     AgentShellMcpServerSummary, AgentShellMcpSummary, AgentShellMcpToolSummary, McpPromptServer,
     McpPromptSummary, McpPromptTool, McpPromptUnavailableServer,
 };
+use super::schema::{McpSchemaDiagnostic, McpSchemaValidator};
 use super::types::{
     McpApprovalSetting, McpDiscoveredTool, McpEnvironmentPlan, McpServerConfig, McpServerKind,
     McpServerState, McpServerStatus, McpStartupPlan, McpStartupTransportPlan, McpToolCallPlan,
     McpToolCallRequest, McpToolEffects, McpToolState,
 };
-use super::{McpError as MezError, McpResult as Result, validate_mcp_tool_input_schema};
+use super::{McpError as MezError, McpResult as Result};
 
 /// Normalizes model-visible MCP metadata without omitting call-relevant text.
 fn normalized_mcp_prompt_text(value: &str) -> Option<String> {
@@ -31,6 +32,8 @@ fn normalized_mcp_prompt_text(value: &str) -> Option<String> {
 /// structured runtime state without parsing display text.
 #[derive(Debug, Default)]
 pub struct McpRegistry {
+    /// Bounded admission owner and compiled-schema cache for tool input schemas.
+    schema_validator: McpSchemaValidator,
     /// Stores the servers value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -45,10 +48,14 @@ impl McpRegistry {
     /// reintroducing raw transport credentials or treating restored metadata as
     /// a live transport authority.
     pub fn replace_with_states(&mut self, servers: Vec<McpServerState>) {
-        self.servers = servers
-            .into_iter()
-            .map(|server| (server.configured.id.clone(), server))
-            .collect();
+        self.schema_validator.invalidate_all();
+        let mut restored = BTreeMap::new();
+        for mut server in servers {
+            let server_id = server.configured.id.clone();
+            server.tools = self.admit_tool_states(&server_id, server.tools, &server.configured);
+            restored.insert(server_id, server);
+        }
+        self.servers = restored;
     }
 
     /// Runs the add server operation for this subsystem.
@@ -83,31 +90,63 @@ impl McpRegistry {
         tools: Vec<McpToolState>,
         checked_at_unix_seconds: u64,
     ) -> Result<()> {
+        // A metadata refresh invalidates compiled schema generations before the
+        // refreshed schemas are admitted, so a pre-refresh compilation can never
+        // answer a post-refresh plan.
+        self.schema_validator.invalidate_server(server_id);
+        let configured = self.server(server_id)?.configured.clone();
+        let tools = self.admit_tool_states(server_id, tools, &configured);
         let server = self.server_mut(server_id)?;
         server.status = McpServerStatus::Available;
         server.last_checked_at_unix_seconds = Some(checked_at_unix_seconds);
         server.blacklist_reason = None;
-        server.tools = tools
-            .into_iter()
-            .map(|mut tool| {
-                tool.server_id = server_id.to_string();
-                let schema_error = validate_mcp_tool_input_schema(&tool.input_schema_json).err();
-                tool.available =
-                    server.configured.tool_allowed_by_config(&tool.name) && schema_error.is_none();
-                tool.blacklisted = false;
-                tool.approval = server.configured.approval_for_tool(&tool.name);
-                if let Some(reason) = schema_error {
+        server.tools = tools;
+        Ok(())
+    }
+
+    /// Re-admits tool schemas for one server and records bounded unavailability.
+    ///
+    /// Snapshot restore and live metadata refresh share this owner so a rejected
+    /// schema can never leave a callable tool behind, and a rejected tool never
+    /// disables its server or its siblings.
+    fn admit_tool_states(
+        &mut self,
+        server_id: &str,
+        tools: Vec<McpToolState>,
+        configured: &McpServerConfig,
+    ) -> Vec<McpToolState> {
+        let mut admitted = Vec::with_capacity(tools.len());
+        for mut tool in tools {
+            tool.server_id = server_id.to_string();
+            tool.blacklisted = false;
+            tool.approval = configured.approval_for_tool(&tool.name);
+            match self.schema_validator.admit_tool_schema(
+                server_id,
+                &tool.name,
+                &tool.input_schema_json,
+            ) {
+                Ok(_generation) => {
+                    tool.available = configured.tool_allowed_by_config(&tool.name);
+                }
+                Err(diagnostic) => {
+                    tool.available = false;
                     tool.description = format!(
-                        "{} Unavailable: invalid MCP input schema ({reason}).",
-                        tool.description.trim()
+                        "{} Unavailable: invalid MCP input schema: {}.",
+                        tool.description.trim(),
+                        diagnostic.message()
                     )
                     .trim()
                     .to_string();
                 }
-                tool
-            })
-            .collect();
-        Ok(())
+            }
+            admitted.push(tool);
+        }
+        admitted
+    }
+
+    /// Returns the bounded schema validator that owns tool-schema admission.
+    pub fn schema_validator(&self) -> &McpSchemaValidator {
+        &self.schema_validator
     }
 
     /// Runs the mark available from discovered tools operation for this subsystem.
@@ -179,6 +218,7 @@ impl McpRegistry {
         reason: impl Into<String>,
         checked_at_unix_seconds: u64,
     ) -> Result<()> {
+        self.schema_validator.invalidate_server(server_id);
         let server = self.server_mut(server_id)?;
         server.status = McpServerStatus::Unavailable;
         server.last_checked_at_unix_seconds = Some(checked_at_unix_seconds);
@@ -200,6 +240,7 @@ impl McpRegistry {
         reason: impl Into<String>,
         checked_at_unix_seconds: u64,
     ) -> Result<()> {
+        self.schema_validator.invalidate_server(server_id);
         let server = self.server_mut(server_id)?;
         server.status = McpServerStatus::Failed;
         server.last_checked_at_unix_seconds = Some(checked_at_unix_seconds);
@@ -221,6 +262,7 @@ impl McpRegistry {
         reason: impl Into<String>,
         checked_at_unix_seconds: u64,
     ) -> Result<()> {
+        self.schema_validator.invalidate_server(server_id);
         let server = self.server_mut(server_id)?;
         server.status = McpServerStatus::Blacklisted;
         server.last_checked_at_unix_seconds = Some(checked_at_unix_seconds);
@@ -238,6 +280,7 @@ impl McpRegistry {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn retry_server(&mut self, server_id: &str) -> Result<()> {
+        self.schema_validator.invalidate_server(server_id);
         let server = self.server_mut(server_id)?;
         ensure_enabled(server)?;
         server.status = McpServerStatus::Configured;
@@ -332,48 +375,68 @@ impl McpRegistry {
         Ok(plan)
     }
 
-    /// Runs the plan tool call operation for this subsystem.
+    /// Plans one MCP tool call against the currently selected tool schema.
     ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn plan_tool_call(&self, request: &McpToolCallRequest) -> Result<McpToolCallPlan> {
-        let server = self.server(&request.server_id)?;
-        ensure_enabled(server)?;
-        ensure_available(server)?;
-        ensure_not_session_blacklisted(server)?;
-        if !server.configured.tool_allowed_by_config(&request.tool_name) {
-            return Err(MezError::forbidden("MCP tool is disabled by configuration"));
-        }
-        let tool = server
-            .tools
-            .iter()
-            .find(|tool| tool.name == request.tool_name)
-            .ok_or_else(|| MezError::not_found("MCP tool not found"))?;
-        if tool.blacklisted || !tool.available {
-            return Err(MezError::forbidden("MCP tool is not available"));
-        }
-        let approval = server.configured.approval_for_tool(&tool.name);
-        if approval == McpApprovalSetting::Deny && !request.approval_bypass {
-            return Err(MezError::forbidden("MCP tool is denied by policy"));
-        }
+    /// Planning admits or reuses the bounded compiled schema for the tool and
+    /// validates the exact arguments now, returning the generation the arguments
+    /// were checked against. Model-authored argument failures surface as
+    /// repairable invalid-argument errors before any batch dispatch; schema-side
+    /// failures leave the tool unavailable instead of inviting model repair.
+    pub fn plan_tool_call(&mut self, request: &McpToolCallRequest) -> Result<McpToolCallPlan> {
+        let (tool_name, input_schema_json, effects, permission_required, approval, tool_timeout_ms) = {
+            let server = self.server(&request.server_id)?;
+            ensure_enabled(server)?;
+            ensure_available(server)?;
+            ensure_not_session_blacklisted(server)?;
+            if !server.configured.tool_allowed_by_config(&request.tool_name) {
+                return Err(MezError::forbidden("MCP tool is disabled by configuration"));
+            }
+            let tool = server
+                .tools
+                .iter()
+                .find(|tool| tool.name == request.tool_name)
+                .ok_or_else(|| MezError::not_found("MCP tool not found"))?;
+            if tool.blacklisted || !tool.available {
+                return Err(MezError::forbidden("MCP tool is not available"));
+            }
+            let approval = server.configured.approval_for_tool(&tool.name);
+            if approval == McpApprovalSetting::Deny && !request.approval_bypass {
+                return Err(MezError::forbidden("MCP tool is denied by policy"));
+            }
+            (
+                tool.name.clone(),
+                tool.input_schema_json.clone(),
+                tool.effects,
+                tool.permission_required,
+                approval,
+                server.configured.tool_timeout_ms,
+            )
+        };
+        let schema_generation = self
+            .schema_validator
+            .validate_arguments(
+                &request.server_id,
+                &tool_name,
+                &input_schema_json,
+                &request.arguments_json,
+            )
+            .map_err(|diagnostic| schema_planning_error(&diagnostic))?;
         let approval_required = !request.approval_bypass
             && match approval {
                 McpApprovalSetting::Prompt => true,
                 McpApprovalSetting::Allow => false,
                 McpApprovalSetting::Deny => false,
-                McpApprovalSetting::Inherit => tool.permission_required || tool.effects.risky(),
+                McpApprovalSetting::Inherit => permission_required || effects.risky(),
             };
         Ok(McpToolCallPlan {
             server_id: request.server_id.clone(),
             tool_name: request.tool_name.clone(),
             arguments_json: request.arguments_json.clone(),
-            timeout_ms: request
-                .timeout_ms
-                .unwrap_or(server.configured.tool_timeout_ms),
+            timeout_ms: request.timeout_ms.unwrap_or(tool_timeout_ms),
             approval_required,
             audit_event_class: "external_integration",
-            effects: tool.effects,
+            effects,
+            schema_generation: schema_generation.into_string(),
         })
     }
 
@@ -808,6 +871,19 @@ fn mcp_prompt_push_description_part(parts: &mut Vec<String>, label: &str, value:
         parts.push(collapsed);
     } else {
         parts.push(format!("{label}: {collapsed}."));
+    }
+}
+
+/// Maps one bounded schema diagnostic onto the owning MCP error category.
+///
+/// Model-repairable argument failures stay `InvalidArgs` inside the existing
+/// bounded MAAP repair path. Schema-side faults are state failures because the
+/// tool should already have been withdrawn from the registry.
+fn schema_planning_error(diagnostic: &McpSchemaDiagnostic) -> MezError {
+    if diagnostic.is_model_repairable() {
+        MezError::invalid_args(diagnostic.message())
+    } else {
+        MezError::invalid_state(diagnostic.message())
     }
 }
 

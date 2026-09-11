@@ -587,6 +587,12 @@ fn mcp_plan() -> McpExecutionRequest {
         tool_name: "list".to_string(),
         arguments_json: r#"{"path":"."}"#.to_string(),
         timeout_ms: 1000,
+        schema_generation: mez_agent::McpSchemaGeneration::derive(
+            "state",
+            "list",
+            r#"{"type":"object"}"#,
+        )
+        .into_string(),
     }
 }
 

@@ -319,6 +319,7 @@ pub use execution::{
     local_execution_output_to_action_result, mcp_response_to_action_result,
     postprocess_local_shell_output, postprocess_shell_action_success_output,
     shell_command_result_content, validate_mcp_execution_request,
+    validate_mcp_execution_schema_generation,
 };
 pub use execution_transcript::{
     AgentTurnExecution, assistant_context_content_for_execution, transcript_entries_for_execution,
@@ -367,8 +368,15 @@ pub use macro_workflow::{
 };
 pub use mcp::{
     AgentShellMcpServerSummary, AgentShellMcpSummary, AgentShellMcpToolSummary,
-    McpExecutionRequest, McpExecutionResponse, McpPromptServer, McpPromptSummary, McpPromptTool,
-    McpPromptUnavailableServer,
+    DEFAULT_MCP_INSTANCE_MAX_BYTES, DEFAULT_MCP_INSTANCE_MAX_DEPTH, DEFAULT_MCP_INSTANCE_MAX_NODES,
+    DEFAULT_MCP_SCHEMA_CACHE_CAPACITY, DEFAULT_MCP_SCHEMA_MAX_BYTES, DEFAULT_MCP_SCHEMA_MAX_DEPTH,
+    DEFAULT_MCP_SCHEMA_MAX_NODES, DEFAULT_MCP_SCHEMA_MAX_REFERENCE_BYTES,
+    DEFAULT_MCP_SCHEMA_MAX_REFERENCES, DEFAULT_MCP_SCHEMA_REGEX_BACKTRACK_LIMIT,
+    DEFAULT_MCP_SCHEMA_REGEX_SIZE_LIMIT, MCP_SCHEMA_GENERATION_PREFIX,
+    MCP_SCHEMA_SUPPORTED_DIALECT, McpExecutionRequest, McpExecutionResponse, McpPromptServer,
+    McpPromptSummary, McpPromptTool, McpPromptUnavailableServer, McpSchemaDiagnostic,
+    McpSchemaFailure, McpSchemaGeneration, McpSchemaLimits, McpSchemaValidator,
+    is_mcp_schema_generation,
 };
 pub use memory::{MemoryContextRecord, MemoryContextScope};
 pub use memory_guardrail::MemoryActionBudget;

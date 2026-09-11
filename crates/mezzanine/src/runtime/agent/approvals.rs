@@ -874,9 +874,17 @@ impl RuntimeSessionService {
                 )?;
                 self.agent
                     .pending_approved_external_actions
-                    .insert((turn.turn_id.clone(), action.id.clone()));
+                    .insert((turn.turn_id.clone(), action.id.clone()), None);
             }
-            AgentActionPayload::McpCall { .. } => {
+            AgentActionPayload::McpCall {
+                server,
+                tool,
+                arguments_json,
+            } => {
+                let (server_id, tool_name, tool_arguments) =
+                    (server.clone(), tool.clone(), arguments_json.clone());
+                let approved_schema_generation =
+                    self.approved_mcp_schema_generation(&server_id, &tool_name, &tool_arguments);
                 let mut resumed_result = ActionResult::running(
                     &turn,
                     &action,
@@ -902,9 +910,10 @@ impl RuntimeSessionService {
                         action.id
                     ),
                 )?;
-                self.agent
-                    .pending_approved_external_actions
-                    .insert((turn.turn_id.clone(), action.id.clone()));
+                self.agent.pending_approved_external_actions.insert(
+                    (turn.turn_id.clone(), action.id.clone()),
+                    approved_schema_generation,
+                );
             }
             AgentActionPayload::ConfigChange { .. } => {
                 if !self

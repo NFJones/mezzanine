@@ -391,7 +391,12 @@ pub(crate) struct RuntimeAgentComponent {
     /// settled by the bounded persistence worker.
     pending_agent_provider_persistence: BTreeSet<String>,
     /// Approved network and MCP actions waiting for external worker dispatch.
-    pending_approved_external_actions: BTreeSet<(String, String)>,
+    ///
+    /// The value binds an MCP approval to the tool-schema generation that
+    /// validated the approved arguments, so live dispatch can detect that the
+    /// metadata an approval covered has changed. Network actions and approvals
+    /// with no recorded plan carry `None`.
+    pending_approved_external_actions: BTreeMap<(String, String), Option<String>>,
     /// Approved external actions currently owned by async workers.
     claimed_approved_external_actions: BTreeMap<(String, String), String>,
     /// Monotonic source for approved external-worker attempt identities.

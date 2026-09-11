@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use super::super::{
-    DEFAULT_MCP_TOOL_TIMEOUT_MS, McpErrorKind, McpRegistry, McpServerConfig, McpServerStatus,
-    McpStartupTransportPlan, McpToolCallRequest,
+    DEFAULT_MCP_TOOL_TIMEOUT_MS, McpErrorKind, McpRegistry, McpSchemaGeneration, McpServerConfig,
+    McpServerStatus, McpStartupTransportPlan, McpToolCallRequest,
 };
 use super::{config, tool};
 
@@ -380,6 +380,147 @@ fn tool_call_plan_rejects_unavailable_server() {
             arguments_json: "{}".to_string(),
             timeout_ms: None,
             approval_bypass: false,
+        })
+        .unwrap_err();
+    assert_eq!(error.kind(), McpErrorKind::Forbidden);
+}
+
+/// Verifies planning stamps the generation of the schema that validated the
+/// arguments and reports invalid arguments as repairable invalid-args failures.
+#[test]
+fn plan_tool_call_stamps_the_validated_schema_generation() {
+    let mut registry = McpRegistry::default();
+    registry.add_server(config()).unwrap();
+    let schema = r#"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#;
+    let mut read = tool();
+    read.input_schema_json = schema.to_string();
+    registry.mark_available("fs", vec![read], NOW).unwrap();
+
+    let plan = registry
+        .plan_tool_call(&McpToolCallRequest {
+            server_id: "fs".to_string(),
+            tool_name: "read_file".to_string(),
+            arguments_json: r#"{"path":"README.md"}"#.to_string(),
+            timeout_ms: None,
+            approval_bypass: false,
+        })
+        .unwrap();
+    assert_eq!(
+        plan.schema_generation,
+        McpSchemaGeneration::derive("fs", "read_file", schema).into_string()
+    );
+
+    let error = registry
+        .plan_tool_call(&McpToolCallRequest {
+            server_id: "fs".to_string(),
+            tool_name: "read_file".to_string(),
+            arguments_json: "{}".to_string(),
+            timeout_ms: None,
+            approval_bypass: false,
+        })
+        .unwrap_err();
+    assert_eq!(error.kind(), McpErrorKind::InvalidArgs);
+    assert!(error.message().contains("required"), "{}", error.message());
+    assert!(
+        error
+            .message()
+            .contains("category=instance_violates_schema"),
+        "{}",
+        error.message()
+    );
+}
+
+/// Verifies planning reuses one compiled schema across calls and recompiles it
+/// after an MCP metadata refresh invalidates the cached generation.
+#[test]
+fn planning_reuses_cached_schemas_until_metadata_refresh() {
+    let mut registry = McpRegistry::default();
+    registry.add_server(config()).unwrap();
+    registry.mark_available("fs", vec![tool()], NOW).unwrap();
+    let request = McpToolCallRequest {
+        server_id: "fs".to_string(),
+        tool_name: "read_file".to_string(),
+        arguments_json: r#"{"path":"README.md"}"#.to_string(),
+        timeout_ms: None,
+        approval_bypass: false,
+    };
+    registry.plan_tool_call(&request).unwrap();
+    let compilations = registry.schema_validator().compilation_count();
+    registry.plan_tool_call(&request).unwrap();
+    assert_eq!(
+        registry.schema_validator().compilation_count(),
+        compilations
+    );
+    assert!(registry.schema_validator().cache_hit_count() >= 1);
+
+    registry
+        .mark_available("fs", vec![tool()], NOW + 1)
+        .unwrap();
+    // A metadata refresh invalidates the cached generation and re-admits the
+    // refreshed schema, so planning recompiles instead of reusing the
+    // pre-refresh compilation.
+    assert_eq!(
+        registry.schema_validator().compilation_count(),
+        compilations + 1
+    );
+    registry.plan_tool_call(&request).unwrap();
+    assert_eq!(
+        registry.schema_validator().compilation_count(),
+        compilations + 1
+    );
+}
+
+/// Verifies an unusable tool schema withdraws only that tool: its siblings stay
+/// callable and the rejection stays bounded and secret-free.
+#[test]
+fn unusable_schemas_withdraw_only_the_affected_tool() {
+    let mut registry = McpRegistry::default();
+    registry.add_server(config()).unwrap();
+    let mut dialect = tool();
+    dialect.name = "dialect".to_string();
+    dialect.input_schema_json =
+        r#"{"$schema":"http://json-schema.org/draft-07/schema#","type":"object"}"#.to_string();
+    let mut remote = tool();
+    remote.name = "remote".to_string();
+    remote.input_schema_json =
+        r#"{"type":"object","properties":{"a":{"$ref":"https://example.test/s.json"}}}"#
+            .to_string();
+    registry
+        .mark_available("fs", vec![tool(), dialect, remote], NOW)
+        .unwrap();
+
+    let available = registry
+        .available_tools()
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(available, vec!["read_file"]);
+    for name in ["dialect", "remote"] {
+        let withdrawn = registry.list_servers()[0]
+            .tools
+            .iter()
+            .find(|tool| tool.name == name)
+            .unwrap();
+        assert!(!withdrawn.available);
+        assert!(withdrawn.description.contains("invalid MCP input schema"));
+    }
+
+    registry
+        .plan_tool_call(&McpToolCallRequest {
+            server_id: "fs".to_string(),
+            tool_name: "read_file".to_string(),
+            arguments_json: r#"{"path":"README.md"}"#.to_string(),
+            timeout_ms: None,
+            approval_bypass: true,
+        })
+        .unwrap();
+    let error = registry
+        .plan_tool_call(&McpToolCallRequest {
+            server_id: "fs".to_string(),
+            tool_name: "dialect".to_string(),
+            arguments_json: "{}".to_string(),
+            timeout_ms: None,
+            approval_bypass: true,
         })
         .unwrap_err();
     assert_eq!(error.kind(), McpErrorKind::Forbidden);

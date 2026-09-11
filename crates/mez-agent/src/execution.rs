@@ -14,7 +14,7 @@ use crate::{
     ActionStatus, AgentAction, AgentActionPayload, AgentTurnResultIdentity, LocalActionPlan,
     LocalActionPlanningError, MarkerToken, McpExecutionRequest, McpExecutionResponse,
     ShellTransaction, ShellTransportDiagnostics, action_text_content_blocks,
-    decode_shell_output_transport_with_diagnostics, local_action_plan,
+    decode_shell_output_transport_with_diagnostics, is_mcp_schema_generation, local_action_plan,
     shell_action_structured_content_json,
 };
 
@@ -215,6 +215,43 @@ pub fn validate_mcp_execution_request(
     {
         return Err(McpExecutionValidationError {
             message: "MCP execution plan does not match the action payload".to_string(),
+        });
+    }
+    if !is_mcp_schema_generation(&request.schema_generation) {
+        return Err(McpExecutionValidationError {
+            message: "MCP execution plan has no bounded tool schema generation".to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// Verifies that one live plan still uses the schema generation bound at approval time.
+///
+/// Product dispatch binds the generation that validated the approved arguments to
+/// the approved action identity. Re-planning against a refreshed schema produces a
+/// different generation, so a stale approval can never authorize a call the earlier
+/// approval did not cover, while unrelated tool or server schema changes leave the
+/// binding untouched.
+///
+/// The binding is required. An approved MCP call whose approved arguments could not
+/// be re-planned against the then-selected tool schema records no generation, so
+/// `None` fails closed: that call is settled unexecuted instead of being dispatched
+/// with no schema comparison at all.
+pub fn validate_mcp_execution_schema_generation(
+    request: &McpExecutionRequest,
+    approved_schema_generation: Option<&str>,
+) -> Result<(), McpExecutionValidationError> {
+    let Some(approved_schema_generation) = approved_schema_generation else {
+        return Err(McpExecutionValidationError {
+            message:
+                "MCP approval has no bound tool schema generation; the approval must be renewed"
+                    .to_string(),
+        });
+    };
+    if request.schema_generation != approved_schema_generation {
+        return Err(McpExecutionValidationError {
+            message: "MCP tool schema changed after approval; the approval must be renewed"
+                .to_string(),
         });
     }
     Ok(())
@@ -793,6 +830,11 @@ mod tests {
         }
     }
 
+    /// Builds one bounded schema generation fixture for MCP identity tests.
+    fn mcp_schema_generation() -> String {
+        crate::McpSchemaGeneration::derive("issues", "query", r#"{"type":"object"}"#).into_string()
+    }
+
     /// Builds one shell action fixture for timeout and result projection.
     fn shell_action() -> AgentAction {
         AgentAction {
@@ -1025,6 +1067,7 @@ mod tests {
                 tool_name: "query".to_string(),
                 arguments_json: "{}".to_string(),
                 timeout_ms: 1_000,
+                schema_generation: mcp_schema_generation(),
             },
             McpExecutionResponse {
                 content_json: r#"[{"type":"text","text":"found one"}]"#.to_string(),
@@ -1055,6 +1098,7 @@ mod tests {
                 tool_name: "query".to_string(),
                 arguments_json: "{}".to_string(),
                 timeout_ms: 1_000,
+                schema_generation: mcp_schema_generation(),
             },
             McpExecutionResponse {
                 content_json: "not-json".to_string(),
@@ -1082,6 +1126,7 @@ mod tests {
             tool_name: "query".to_string(),
             arguments_json: "{}".to_string(),
             timeout_ms: 1_000,
+            schema_generation: mcp_schema_generation(),
         };
         validate_mcp_execution_request(&action(), &request).unwrap();
 
@@ -1089,5 +1134,51 @@ mod tests {
         stale.tool_name = "delete".to_string();
         assert!(validate_mcp_execution_request(&action(), &stale).is_err());
         assert!(validate_mcp_execution_request(&shell_action(), &stale).is_err());
+    }
+
+    /// Verifies dispatch revalidation binds one approved tool-schema generation:
+    /// a refreshed schema invalidates the earlier approval, an unstamped plan is
+    /// rejected outright, and unrelated schema changes cannot disturb the binding.
+    #[test]
+    fn mcp_execution_request_validation_binds_the_approved_schema_generation() {
+        let mut request = McpExecutionRequest {
+            server_id: "issues".to_string(),
+            tool_name: "query".to_string(),
+            arguments_json: "{}".to_string(),
+            timeout_ms: 1_000,
+            schema_generation: mcp_schema_generation(),
+        };
+        validate_mcp_execution_request(&action(), &request).unwrap();
+        validate_mcp_execution_schema_generation(&request, Some(&mcp_schema_generation())).unwrap();
+
+        let unrelated = crate::McpSchemaGeneration::derive(
+            "other-server",
+            "other-tool",
+            r#"{"type":"object"}"#,
+        )
+        .into_string();
+        assert!(validate_mcp_execution_schema_generation(&request, Some(&unrelated)).is_err());
+
+        let refreshed = crate::McpSchemaGeneration::derive(
+            "issues",
+            "query",
+            r#"{"type":"object","properties":{"q":{"type":"string"}}}"#,
+        )
+        .into_string();
+        assert!(validate_mcp_execution_schema_generation(&request, Some(&refreshed)).is_err());
+
+        // An approval whose re-plan recorded no generation must fail closed so the
+        // call is settled unexecuted instead of dispatching with no comparison.
+        let unbound = validate_mcp_execution_schema_generation(&request, None).unwrap_err();
+        assert!(
+            unbound
+                .message()
+                .contains("no bound tool schema generation"),
+            "{}",
+            unbound.message()
+        );
+
+        request.schema_generation.clear();
+        assert!(validate_mcp_execution_request(&action(), &request).is_err());
     }
 }

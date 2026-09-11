@@ -944,6 +944,12 @@ pub struct McpToolCallPlan {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub effects: McpToolEffects,
+    /// Bounded identity of the tool schema generation this plan validated against.
+    ///
+    /// Live pre-transport revalidation compares this value with the generation
+    /// bound at approval time, so a metadata refresh cannot authorize a call that
+    /// the earlier approval never covered.
+    pub schema_generation: String,
 }
 
 impl McpToolCallPlan {

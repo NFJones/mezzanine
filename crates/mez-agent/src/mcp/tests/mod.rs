@@ -2,6 +2,7 @@
 
 mod protocol;
 mod registry;
+mod schema;
 
 use super::{McpApprovalSetting, McpServerConfig, McpToolEffects, McpToolState};
 

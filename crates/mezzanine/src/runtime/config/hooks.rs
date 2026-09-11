@@ -256,6 +256,9 @@ pub(crate) fn runtime_mcp_error_code(error: &MezError) -> &'static str {
         }
         crate::error::MezErrorKind::InvalidState => "transport_error",
         crate::error::MezErrorKind::Forbidden => "permission_denied",
+        // Model-repairable MCP argument failures keep a stable code so the
+        // bounded repair path can distinguish them from transport faults.
+        crate::error::MezErrorKind::InvalidArgs => "mcp_invalid_args",
         _ => "transport_error",
     }
 }

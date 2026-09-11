@@ -17,6 +17,11 @@ use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 
+/// Builds one bounded schema generation fixture for MCP transport tests.
+fn mcp_schema_generation() -> String {
+    mez_agent::McpSchemaGeneration::derive("http", "echo", r#"{"type":"object"}"#).into_string()
+}
+
 /// Verifies stdio discovery initializes server and discovers tools.
 ///
 /// This regression scenario documents the behavior being protected so a
@@ -454,6 +459,7 @@ async fn streamable_http_tool_call_posts_name_bearer_and_session_headers() {
         approval_required: false,
         audit_event_class: "external_integration",
         effects: McpToolEffects::none(),
+        schema_generation: mcp_schema_generation(),
     };
 
     let response = call_streamable_http_mcp_tool(&plan, &environment, &call, 9, Some("session-1"))
@@ -654,6 +660,7 @@ async fn streamable_http_tool_call_writes_start_and_completion_audit_records() {
         approval_required: false,
         audit_event_class: "external_integration",
         effects: McpToolEffects::none(),
+        schema_generation: mcp_schema_generation(),
     };
     let audit_dir = std::env::temp_dir().join(format!("mez-mcp-audit-{}-http", std::process::id()));
     let _ = std::fs::remove_dir_all(&audit_dir);
@@ -780,6 +787,7 @@ async fn streamable_http_matching_sse_result_settles_before_eof() {
         approval_required: false,
         audit_event_class: "external_integration",
         effects: McpToolEffects::none(),
+        schema_generation: mcp_schema_generation(),
     };
     let mut client = tokio::spawn(async move {
         call_streamable_http_mcp_tool(&plan, &BTreeMap::new(), &call, 9, None).await
