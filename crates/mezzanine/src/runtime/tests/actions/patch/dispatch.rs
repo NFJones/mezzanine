@@ -555,8 +555,14 @@ fn runtime_shell_execution_identity_is_atomic_and_epoch_scoped() {
 
     certify_agent_subshell_foreground_group(&mut service, subshell_group);
 
+    let live_executable = service
+        .pane_process_identity("%1")
+        .expect("the live pane process should expose OS executable identity")
+        .executable_path;
     let identity = service.shell_execution_identity_for_pane("%1").unwrap();
-    assert_eq!(identity.shell_path(), std::path::Path::new("/bin/sh"));
+    // Typed evidence prefers the OS-verified executable of the live pane
+    // process; a configured spawn path is only a correlation fallback.
+    assert_eq!(identity.shell_path(), live_executable.as_path());
     assert_eq!(
         identity.classification(),
         mez_agent::ShellClassification::PosixSh

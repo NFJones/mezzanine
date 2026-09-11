@@ -10,7 +10,7 @@ use mez_agent::{
 use super::super::{
     RuntimeAgentSubshellCertificationOutcome, RuntimeForeignShellBootstrapPhase,
     RuntimePaneProbedShellIdentity, RuntimePaneShellExecutionIdentity, RuntimePaneShellHandoff,
-    RuntimePendingBootstrapEnvironment,
+    RuntimePendingBootstrapEnvironment, RuntimeShellIdentityUnknownReason,
 };
 use super::{
     AgentTurnState, DEFAULT_BOOTSTRAP_TIMEOUT_MS, EventKind, MezError, PaneReadinessState, Result,
@@ -63,12 +63,18 @@ impl RuntimeSessionService {
             .is_some_and(|boundary| {
                 boundary.phase == RuntimeForeignShellBootstrapPhase::IdentityProbing
             });
-        let classification = self.shell_classification_for_pane(pane_id);
+        // Wrapping the probe in the private managed-Bash receiver payload
+        // requires both a receiver the runtime installed for this pane and an
+        // OS-verified Bash dialect. An in-band classification or reported
+        // version never selects the private transport.
+        let managed_bash_wrap = !dependency_free_foreign_probe
+            && self.managed_receiver_wrap_dialect_for_pane(pane_id)
+                == Some(ShellClassification::Bash);
         let mut input = command.clone();
         let mut staged_inputs = std::collections::VecDeque::new();
         let staged_shell = None;
         let mut completion_required = false;
-        if classification == ShellClassification::Bash && !dependency_free_foreign_probe {
+        if managed_bash_wrap {
             let token = self.bash_receiver_token_for_pane(pane_id).ok_or_else(|| {
                 MezError::invalid_state(
                     "managed Bash receiver is unavailable for shell identity probe",
@@ -156,6 +162,9 @@ impl RuntimeSessionService {
                 .get(pane_id)
                 .copied()
                 != Some(boundary.interaction_generation)
+            || self
+                .settled_pane_shell_identity_unknown(pane_id, Some(boundary.interaction_generation))
+                .is_some()
         {
             return Err(MezError::invalid_state(
                 "foreign shell changed before dependency-free bootstrap",
@@ -340,12 +349,23 @@ impl RuntimeSessionService {
         {
             return Ok(());
         }
+        let interaction_generation = self
+            .process
+            .pane_shell_interaction_generations
+            .get(pane_id)
+            .copied();
         if self.shell_execution_identity_for_pane(pane_id).is_err()
-            && self
-                .process
-                .pane_shell_interaction_generations
-                .contains_key(pane_id)
+            && interaction_generation.is_some()
         {
+            if self
+                .settled_pane_shell_identity_unknown(pane_id, interaction_generation)
+                .is_some()
+            {
+                // The epoch settled permanently unknown. Never manufacture
+                // another probe, write, or bootstrap for it; the retained
+                // pre-dispatch diagnostic explains the degraded pane.
+                return Ok(());
+            }
             self.process.pane_certified_shell_identities.remove(pane_id);
             self.process.pane_probed_shell_identities.remove(pane_id);
             return self.dispatch_shell_identity_probe_to_pane(pane_id);
@@ -412,6 +432,17 @@ impl RuntimeSessionService {
             None
         };
         let Some(probe) = probe else {
+            self.settle_pane_shell_identity_unknown_for_epoch(
+                pane_id,
+                Some(interaction_generation),
+                RuntimeShellIdentityUnknownReason::IdentityFrameMissing,
+            );
+            // A malformed or incomplete frame settles the epoch permanently
+            // unknown, so the pane must never re-probe or bootstrap for it.
+            // Clear the pending bootstrap and fail the foreign boundary here;
+            // otherwise the retained pending flag masks the settled withheld
+            // reason and the boundary stays non-terminal until the probe
+            // deadline expires.
             self.process.pane_probed_shell_identities.remove(pane_id);
             self.process.pane_bootstrap_pending.remove(pane_id);
             self.process.pane_certified_shell_identities.remove(pane_id);
@@ -440,47 +471,31 @@ impl RuntimeSessionService {
             return Ok(1);
         };
 
-        if probe.shell_classification == ShellClassification::UnknownUnix {
-            self.process.pane_probed_shell_identities.remove(pane_id);
-            self.process.pane_bootstrap_pending.remove(pane_id);
-            self.process.pane_certified_shell_identities.remove(pane_id);
-            if let Some(boundary) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) {
-                boundary.phase = RuntimeForeignShellBootstrapPhase::Failed;
-                boundary.phase_started_at_unix_ms = current_unix_millis();
-                boundary.identity_marker = None;
-                boundary.loader_payload = None;
-                boundary.loader_ready = false;
+        // Resolve typed evidence: an OS-verified executable or the pane's own
+        // absolute self-reported launch target (correlation only). Missing or
+        // unsupported hints settle typed unknown instead of manufacturing a
+        // `/bin/sh` identity or promoting in-band version text.
+        let evidence = match self.probe_shell_identity_evidence(
+            pane_id,
+            Some(interaction_generation),
+            probe.shell_classification_hint,
+            probe.shell_launch_hint.as_deref().map(PathBuf::from),
+        ) {
+            Ok(evidence) => evidence,
+            Err(reason) => {
+                return self.fail_typed_shell_identity_unknown(pane_id, marker, reason);
             }
-            self.mark_pane_environment_authority_unavailable(
-                pane_id,
-                RuntimePaneEnvironmentAuthorityUnavailableReason::UnsupportedShell,
-            );
-            self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
-            self.append_agent_error_text_to_terminal_buffer(
-                pane_id,
-                &format!(
-                    "agent: pane shell mode does not support {}; select native shell mode",
-                    probe.shell_path
-                ),
-            )?;
-            self.append_lifecycle_event(
-                EventKind::Diagnostic,
-                format!(
-                    r#"{{"pane_id":"{}","shell_identity_probe":"unsupported","marker":"{}","shell_path":"{}"}}"#,
-                    json_escape(pane_id),
-                    json_escape(marker),
-                    json_escape(&probe.shell_path)
-                ),
-            )?;
-            return Ok(1);
-        }
-
-        let execution_identity = RuntimePaneShellExecutionIdentity {
-            shell_path: PathBuf::from(probe.shell_path),
-            classification: probe.shell_classification,
-            version_probe: probe.shell_version,
-            primary_process_id: Some(primary_process_id),
-            interaction_generation: Some(interaction_generation),
+        };
+        let execution_identity = match RuntimePaneShellExecutionIdentity::from_evidence(
+            Some(primary_process_id),
+            Some(interaction_generation),
+            None,
+            evidence,
+        ) {
+            Ok(identity) => identity,
+            Err(reason) => {
+                return self.fail_typed_shell_identity_unknown(pane_id, marker, reason);
+            }
         };
         self.process.pane_probed_shell_identities.insert(
             pane_id.to_string(),
@@ -510,6 +525,50 @@ impl RuntimeSessionService {
             return Ok(1);
         }
         self.dispatch_bootstrap_to_pane(pane_id)?;
+        Ok(1)
+    }
+
+    /// Fails one pane shell identity with a typed unknown reason.
+    ///
+    /// Every failed identity settles degraded without a manufactured shell,
+    /// without a loader or bootstrap allocation, and with a precise diagnostic
+    /// retained for later shell preflight failures.
+    pub(super) fn fail_typed_shell_identity_unknown(
+        &mut self,
+        pane_id: &str,
+        marker: &str,
+        reason: RuntimeShellIdentityUnknownReason,
+    ) -> Result<usize> {
+        self.process.pane_probed_shell_identities.remove(pane_id);
+        self.process.pane_bootstrap_pending.remove(pane_id);
+        self.process.pane_certified_shell_identities.remove(pane_id);
+        if let Some(boundary) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) {
+            boundary.phase = RuntimeForeignShellBootstrapPhase::Failed;
+            boundary.phase_started_at_unix_ms = current_unix_millis();
+            boundary.identity_marker = None;
+            boundary.loader_payload = None;
+            boundary.loader_ready = false;
+        }
+        self.mark_pane_environment_authority_unavailable(
+            pane_id,
+            RuntimePaneEnvironmentAuthorityUnavailableReason::ShellIdentityUnknown(reason),
+        );
+        self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
+        if reason == RuntimeShellIdentityUnknownReason::UnsupportedShell {
+            self.append_agent_error_text_to_terminal_buffer(
+                pane_id,
+                "agent: pane shell mode does not support the reported shell; select native shell mode",
+            )?;
+        }
+        self.append_lifecycle_event(
+            EventKind::Diagnostic,
+            format!(
+                r#"{{"pane_id":"{}","shell_identity_probe":"unknown","marker":"{}","reason":"{}"}}"#,
+                json_escape(pane_id),
+                json_escape(marker),
+                reason.as_str()
+            ),
+        )?;
         Ok(1)
     }
 
@@ -932,6 +991,10 @@ impl RuntimeSessionService {
     /// proof.
     pub(crate) fn settle_deferred_foreign_bootstrap_work(&mut self) -> Result<usize> {
         let settled_receiver_ends = self.settle_ready_receiver_ends()?;
+        // The recorded foreign transaction ends settle here, but that count is
+        // bookkeeping rather than a newly dispatched handoff, so the deferred
+        // total callers inspect stays scoped to handoff work.
+        let _ = self.settle_deferred_foreign_transaction_ends()?;
         let released_loader_handoffs = self.settle_pending_foreign_loader_handoffs()?;
         let pending_child_launch_dispatches = self.dispatch_pending_foreign_child_launches()?;
         Ok(settled_receiver_ends

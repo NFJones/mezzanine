@@ -48,8 +48,10 @@ pub use pane::{
 };
 #[doc(hidden)]
 pub use process_metadata::{
-    ProcessCredentials, RawEnvironmentEntry, current_working_directory_for_pid,
-    process_credentials_for_pid, process_environment_for_pid, process_executable_path_for_pid,
+    ProcessCredentials, ProcessInstanceIdentity, ProcessInstanceIdentityUnavailable,
+    RawEnvironmentEntry, current_working_directory_for_pid, process_credentials_for_pid,
+    process_environment_for_pid, process_executable_identity_for_pid,
+    process_executable_path_for_pid, process_start_token_for_pid,
 };
 pub use spawn::{
     pane_command_plan, shell_command_from_argv, spawn_argv_pty_process, spawn_pane_process,

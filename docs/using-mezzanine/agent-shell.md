@@ -146,6 +146,13 @@ or path scopes published, and the withheld reason is reported in status and
 diagnostics. Explicit user input still reaches the pane; environment- or
 path-derived authority is not published for it.
 
+Mezzanine never promotes a pane shell dialect by executing a discovered or
+self-reported executable. The runtime classifies syntax from an OS-verified
+executable identity for the pane's own process or from the attested dialect of
+its own managed receiver; a renamed or wrapper shell without that evidence is
+typed unknown, settles degraded, and remains usable only through native mode.
+In-band frames and `--version` output are correlation records, never identity.
+
 While a dependency-free pane stays unattested, typed agent shell commands are
 refused: the pane's readiness never reaches `Ready`, so the
 `require_pane_ready_for_agent_command` preflight of every typed agent shell

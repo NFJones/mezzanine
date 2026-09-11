@@ -88,21 +88,6 @@ impl ShellClassification {
         classify_by_name(file_stem)
     }
 
-    /// Classifies the shell using the file stem plus optional runtime probe
-    /// data (version output from `$SHELL --version`). The version probe takes
-    /// precedence over the file stem when it identifies a known shell.
-    pub fn classify_with_probe(shell_path: impl AsRef<Path>, shell_version: Option<&str>) -> Self {
-        let file_stem = shell_path
-            .as_ref()
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .unwrap_or("");
-        if let Some(classification) = shell_version.and_then(classify_version_probe) {
-            return classification;
-        }
-        classify_by_name(file_stem)
-    }
-
     /// Runs the as str operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -132,31 +117,6 @@ fn classify_by_name(file_stem: &str) -> ShellClassification {
         "sh" | "dash" | "ash" | "ksh" | "posix-sh" => ShellClassification::PosixSh,
         _ => ShellClassification::UnknownUnix,
     }
-}
-
-/// Runs the classify version probe operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn classify_version_probe(version: &str) -> Option<ShellClassification> {
-    let lower = version.to_ascii_lowercase();
-    if lower.contains("bash") {
-        return Some(ShellClassification::Bash);
-    }
-    if lower.contains("zsh") {
-        return Some(ShellClassification::Zsh);
-    }
-    if lower.contains("fish") {
-        return Some(ShellClassification::Fish);
-    }
-    if lower.contains("dash") || lower.contains("debian almquist") {
-        return Some(ShellClassification::PosixSh);
-    }
-    if lower.contains("ksh") || lower.contains("kornshell") {
-        return Some(ShellClassification::PosixSh);
-    }
-    None
 }
 
 /// Carries Marker Token state for this subsystem.

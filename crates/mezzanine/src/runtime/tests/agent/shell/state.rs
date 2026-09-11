@@ -3062,6 +3062,11 @@ fn runtime_bubblewrap_fish_pane_probe_uses_posix_sh_and_caches_success() {
         .unwrap();
     configure_path_resolution_bubblewrap(&mut service);
     service.set_pane_environment_signature_for_tests("%1", path_resolution_fish_environment(&root));
+    // Declare the pane's OS-verified dialect directly: the live pane process
+    // is a placeholder command, so the typed evidence model would otherwise
+    // fall back to the session spawn record instead of the Fish pane under
+    // test.
+    service.set_pane_process_executable_for_tests("%1", "/usr/bin/fish");
     mark_test_pane_ready(&mut service, "%1");
 
     let turn = path_resolution_turn();

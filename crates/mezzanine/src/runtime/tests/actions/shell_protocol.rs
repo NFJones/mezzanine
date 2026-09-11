@@ -1422,6 +1422,9 @@ fn runtime_bash_dirty_prompt_survives_agent_subshell_admission() {
     let mut child_confirmed = false;
     for _ in 0..200 {
         let _ = service.poll_pane_outputs(8192).unwrap();
+        // Managed bootstrap ends are settled by the reconciliation pump, so a
+        // direct service driver must run that pass alongside the pane poll.
+        let _ = service.maybe_bootstrap_ready_panes().unwrap();
         if service.agent_subshell_is_active("%1")
             && !service.pane_bootstrap_is_pending_for_tests("%1")
         {
@@ -1442,6 +1445,7 @@ fn runtime_bash_dirty_prompt_survives_agent_subshell_admission() {
     assert!(hide.contains("visibility=hidden"), "{hide}");
     for _ in 0..200 {
         let _ = service.poll_pane_outputs(8192).unwrap();
+        let _ = service.maybe_bootstrap_ready_panes().unwrap();
         if service.pane_foreground_certified_shell_state("%1") == Some(true) {
             break;
         }
@@ -1543,6 +1547,10 @@ fn runtime_fish_dirty_prompt_is_discarded_during_agent_subshell_admission() {
     let child_confirmation_deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < child_confirmation_deadline {
         let _ = service.poll_pane_outputs(8192).unwrap();
+        // Managed bootstrap ends are recorded by the pane-output frame and
+        // settled by the reconciliation pump, so a direct service driver must
+        // run that pass itself.
+        let _ = service.maybe_bootstrap_ready_panes().unwrap();
         for effect in service.drain_pane_io_transition().side_effects {
             match effect {
                 RuntimeSideEffect::PaneProcessIo {
@@ -2048,6 +2056,9 @@ fn runtime_posix_dirty_prompt_is_interrupted_before_agent_admission() {
     let initial_bootstrap_deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < initial_bootstrap_deadline {
         let _ = service.poll_pane_outputs(8192).unwrap();
+        // Bootstrap ends are settled by the reconciliation pump; a direct
+        // service driver must run that pass alongside the pane poll.
+        let _ = service.maybe_bootstrap_ready_panes().unwrap();
         if !service.pane_bootstrap_is_pending_for_tests("%1") {
             break;
         }
@@ -3144,6 +3155,11 @@ fn runtime_fish_bootstrap_waits_for_payload_receiver_ready() {
     )
     .unwrap();
     service.set_pane_environment_signature_for_tests(&pane_id, environment);
+    // Declare the pane's OS-verified dialect directly: the live pane process
+    // is a placeholder command, so the typed evidence model would otherwise
+    // fall back to the session spawn record instead of the Fish pane under
+    // test.
+    service.set_pane_process_executable_for_tests(&pane_id, "/usr/bin/fish");
 
     let (marker, _wrapper) = service
         .prepare_bootstrap_to_pane(&pane_id)
@@ -3240,6 +3256,10 @@ fn settle_initial_managed_fish_bootstrap(service: &mut RuntimeSessionService, pa
     );
     for _ in 0..200 {
         let _ = service.poll_pane_outputs(8192).unwrap();
+        // The pane-output frame only records a foreign or managed bootstrap
+        // end; the reconciliation pump settles it, so a direct service driver
+        // must run that pump itself.
+        let _ = service.maybe_bootstrap_ready_panes().unwrap();
         if !service.pane_bootstrap_is_pending_for_tests(pane_id) {
             return;
         }

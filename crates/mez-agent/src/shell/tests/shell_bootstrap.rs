@@ -377,15 +377,9 @@ fn shell_classification_classifies_by_binary_name() {
 }
 
 #[test]
-/// Verifies that shell version probe output wins over filename-derived
-/// classification. The bootstrap parser receives both fields, and the probed
-/// runtime shell identity is more authoritative than `$SHELL` basename text.
-fn shell_classification_probe_takes_precedence_over_reported_name() {
-    assert_eq!(
-        ShellClassification::classify_with_probe(Path::new("/bin/sh"), Some("fish, version 3.7.1")),
-        ShellClassification::Fish
-    );
-
+/// Verifies bootstrap environment classification never promotes from version
+/// text. Reported version output is diagnostic metadata, not dialect authority.
+fn bootstrap_env_classification_ignores_version_text() {
     let output = "env\tos\tLinux\n\
 env\tarch\tx86_64\n\
 env\thost\thost\n\
@@ -399,18 +393,20 @@ bootstrap\tcomplete\t0\n";
     let (signature, _, _) = parse_bootstrap_env_output(output, Path::new("/bin/sh"));
     let signature = signature.unwrap();
 
-    assert_eq!(signature.shell_classification, ShellClassification::Fish);
+    assert_eq!(signature.shell_classification, ShellClassification::PosixSh);
 }
 
 #[test]
 /// Verifies the pre-bootstrap identity probe keeps Fish/POSIX parsing limited
-/// to one common simple command and derives renamed Fish from version evidence.
-fn shell_identity_probe_is_syntax_neutral_and_parses_renamed_fish() {
+/// to one common simple command and reports correlation-only name and launch
+/// hints without resolving or executing anything through the pane `PATH`.
+fn shell_identity_probe_reports_name_hint_without_path_resolution() {
     let marker = marker();
     let command =
         shell_identity_probe_command(marker.as_str(), "turn-1", "agent-1", "pane-1").unwrap();
     assert!(command.starts_with("/bin/sh -c "), "{command}");
-    assert!(command.ends_with(" \"$SHELL\""), "{command}");
+    assert!(!command.contains("--version"), "{command}");
+    assert!(!command.contains("command -v"), "{command}");
     assert!(
         !command.contains('\n'),
         "the interactive identity probe must remain one logical record"
@@ -422,7 +418,7 @@ fn shell_identity_probe_is_syntax_neutral_and_parses_renamed_fish() {
     );
 
     let output = format!(
-        "noise\n\u{1e}mez_shell_identity_begin={}\r\n\u{1e}mez_shell_path=/opt/custom-shell\r\n\u{1e}mez_shell_version=fish, version 3.7.1\r\n\u{1e}mez_shell_identity_end={}\r\n",
+        "noise\n\u{1e}mez_shell_identity_begin={}\r\n\u{1e}mez_shell_name=fish\r\n\u{1e}mez_shell_launch_hint=/opt/custom-shell\r\n\u{1e}mez_shell_identity_end={}\r\n",
         marker.as_str(),
         marker.as_str()
     );
@@ -430,15 +426,48 @@ fn shell_identity_probe_is_syntax_neutral_and_parses_renamed_fish() {
         .unwrap()
         .unwrap();
 
-    assert_eq!(result.shell_path, "/opt/custom-shell");
-    assert_eq!(result.shell_classification, ShellClassification::Fish);
-    assert_eq!(result.shell_version.as_deref(), Some("fish, version 3.7.1"));
+    assert_eq!(result.shell_name_hint.as_deref(), Some("fish"));
+    assert_eq!(
+        result.shell_classification_hint,
+        Some(ShellClassification::Fish)
+    );
+    assert_eq!(
+        result.shell_launch_hint.as_deref(),
+        Some("/opt/custom-shell")
+    );
+
+    // A renamed executable never promotes a dialect from its name alone.
+    let renamed = format!(
+        "\u{1e}mez_shell_identity_begin={}\n\u{1e}mez_shell_name=weird-fish\n\u{1e}mez_shell_identity_end={}\n",
+        marker.as_str(),
+        marker.as_str()
+    );
+    let result = parse_shell_identity_probe_output(&renamed, marker.as_str())
+        .unwrap()
+        .unwrap();
+    assert_eq!(result.shell_name_hint.as_deref(), Some("weird-fish"));
+    assert_eq!(result.shell_classification_hint, None);
+    assert_eq!(result.shell_launch_hint, None);
+
+    // Missing and relative hints stay absent instead of manufacturing /bin/sh.
+    let absent = format!(
+        "\u{1e}mez_shell_identity_begin={}\n\u{1e}mez_shell_launch_hint=sh\n\u{1e}mez_shell_identity_end={}\n",
+        marker.as_str(),
+        marker.as_str()
+    );
+    let result = parse_shell_identity_probe_output(&absent, marker.as_str())
+        .unwrap()
+        .unwrap();
+    assert_eq!(result.shell_name_hint, None);
+    assert_eq!(result.shell_classification_hint, None);
+    assert_eq!(result.shell_launch_hint, None);
 }
 
-/// Verifies the probe identifies the executing Bash process rather than an
-/// inherited login-shell path so managed transport survives pane re-entry.
+/// Verifies the probe identifies the executing Bash process by name and
+/// carries the inherited login-shell path as correlation only, so a reported
+/// `$SHELL` can never be adopted as verified dialect or path evidence.
 #[test]
-fn shell_identity_probe_prefers_executing_bash_over_login_shell() {
+fn shell_identity_probe_reports_executing_shell_and_carries_login_shell_hint() {
     let bash = Path::new("/bin/bash");
     if !bash.is_file() {
         eprintln!("skipping Bash identity probe because /bin/bash is unavailable");
@@ -460,12 +489,69 @@ fn shell_identity_probe_prefers_executing_bash_over_login_shell() {
         .unwrap();
 
     assert_eq!(
-        Path::new(&result.shell_path).file_name(),
-        bash.file_name(),
+        result.shell_name_hint.as_deref(),
+        Some("bash"),
         "the identity probe must report the executing Bash rather than SHELL"
     );
-    assert_ne!(result.shell_path, "/bin/zsh");
-    assert_eq!(result.shell_classification, ShellClassification::Bash);
+    assert_eq!(
+        result.shell_classification_hint,
+        Some(ShellClassification::Bash)
+    );
+    assert_eq!(result.shell_launch_hint.as_deref(), Some("/bin/zsh"));
+}
+
+/// Verifies a hostile `PATH` entry that shadows `bash` is never executed and
+/// never adopted as dialect evidence, even when `$SHELL` names it.
+#[test]
+fn shell_identity_probe_never_executes_a_path_selected_shell() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-identity-path-sentinel-{}-{}",
+        std::process::id(),
+        marker().as_str()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let sentinel = root.join("bash");
+    let executed_marker = root.join("executed");
+    std::fs::write(
+        &sentinel,
+        format!(
+            "#!/bin/sh\nprintf executed > '{}'\n",
+            executed_marker.display()
+        ),
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&sentinel).unwrap().permissions();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        permissions.set_mode(0o755);
+    }
+    std::fs::set_permissions(&sentinel, permissions).unwrap();
+
+    let probe_marker = marker();
+    let command =
+        shell_identity_probe_command(probe_marker.as_str(), "turn-1", "agent-1", "pane-1").unwrap();
+    let output = std::process::Command::new("/bin/sh")
+        .args(["-c", &format!("{command}; :")])
+        .env("PATH", &root)
+        .env("SHELL", &sentinel)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "status={:?}", output.status);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let result = parse_shell_identity_probe_output(&stdout, probe_marker.as_str())
+        .unwrap()
+        .unwrap();
+
+    assert!(
+        !executed_marker.exists(),
+        "the probe executed a PATH-selected shell replacement"
+    );
+    assert_eq!(result.shell_classification_hint, None);
+    assert_eq!(result.shell_launch_hint.as_deref(), sentinel.to_str());
+
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]

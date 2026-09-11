@@ -684,6 +684,22 @@ impl RuntimeSessionService {
         self.begin_uncertified_shell_boundary(pane_id, primary_process_id, process_group_id, true)
     }
 
+    /// Clears epoch-scoped identity settlement for one pane.
+    ///
+    /// A settled unknown is only terminal for the epoch that recorded it. Every
+    /// new shell-interaction epoch must drop it so one transient probe failure
+    /// cannot disable probing and bootstrap for the rest of the pane's life.
+    fn clear_pane_shell_identity_epoch_settlement(&mut self, pane_id: &str) {
+        self.process
+            .pane_shell_identity_unknowns
+            .borrow_mut()
+            .remove(pane_id);
+        self.process
+            .pane_shell_identity_refreshes
+            .borrow_mut()
+            .remove(pane_id);
+    }
+
     /// Starts a generation-fenced discovery boundary with explicit ownership evidence.
     fn begin_uncertified_shell_boundary(
         &mut self,
@@ -712,6 +728,7 @@ impl RuntimeSessionService {
         self.process
             .pane_shell_interaction_generations
             .insert(pane_id.to_string(), interaction_generation);
+        self.clear_pane_shell_identity_epoch_settlement(pane_id);
         self.process.pane_certified_shell_identities.remove(pane_id);
         self.process.pane_probed_shell_identities.remove(pane_id);
         self.process.pane_shell_handoffs.remove(pane_id);
@@ -855,7 +872,7 @@ impl RuntimeSessionService {
     /// The loader staging payload and its receiver token are delivered through
     /// the pane PTY, so any evidence gathered while this handoff is active is
     /// correlation only and must never publish environment or path authority.
-    fn pane_has_dependency_free_handoff(&self, pane_id: &str) -> bool {
+    pub(crate) fn pane_has_dependency_free_handoff(&self, pane_id: &str) -> bool {
         self.process
             .pane_foreign_shell_boundaries
             .get(pane_id)
@@ -1010,6 +1027,7 @@ impl RuntimeSessionService {
         self.process
             .pane_shell_interaction_generations
             .insert(pane_id.to_string(), interaction_generation);
+        self.clear_pane_shell_identity_epoch_settlement(pane_id);
         self.process
             .pane_agent_subshell_certification_rejections
             .remove(pane_id);
@@ -2005,7 +2023,20 @@ impl RuntimeSessionService {
         // Dependency-free handoffs never publish environment authority: their
         // staging payload and receiver token are delivered in-band, so anything
         // read back from the PTY is a replayable correlation record.
-        let authority_published = self.publish_bootstrap_environment(pane_id, environment);
+        let identity_evidence =
+            self.certified_pane_shell_identity_evidence(pane_id, &environment_signature);
+        let authority_published = if self.pane_has_dependency_free_handoff(pane_id) {
+            let _ = self.publish_bootstrap_environment(pane_id, environment);
+            false
+        } else if identity_evidence.publishes_executable_path_authority() {
+            self.publish_bootstrap_environment(pane_id, environment)
+        } else {
+            self.mark_pane_environment_authority_unavailable(
+                pane_id,
+                RuntimePaneEnvironmentAuthorityUnavailableReason::ShellExecutableNotOsVerified,
+            );
+            false
+        };
         self.process.pane_certified_shell_identities.insert(
             pane_id.to_string(),
             RuntimePaneCertifiedShellIdentity {
@@ -2015,6 +2046,7 @@ impl RuntimeSessionService {
                 environment_signature,
                 source: RuntimeCertifiedShellSource::AgentSubshellBootstrap,
                 authority_published,
+                evidence: identity_evidence,
             },
         );
         self.process
@@ -2101,6 +2133,7 @@ impl RuntimeSessionService {
                 pane_id.to_string(),
                 self.process.next_shell_interaction_generation,
             );
+            self.clear_pane_shell_identity_epoch_settlement(pane_id);
         }
     }
 
@@ -2474,7 +2507,7 @@ impl RuntimeSessionService {
                     pane_id,
                     exit_code,
                 } => {
-                    let agent_observed = self.observe_agent_shell_transaction_end(
+                    let agent_observed = self.observe_agent_shell_transaction_end_deferred(
                         output_pane_id,
                         marker,
                         turn_id,

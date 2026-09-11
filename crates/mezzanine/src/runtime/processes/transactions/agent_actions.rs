@@ -3,7 +3,7 @@
 use super::super::{
     ManagedShellHandoffEffect, ManagedShellHandoffEvent, ManagedShellHandoffIdentity,
     ManagedShellKind, ManagedShellSettlementRenderPolicy, RuntimeForeignShellBootstrapPhase,
-    reduce_managed_shell_handoff,
+    RuntimePendingDeferredForeignTransactionEnd, reduce_managed_shell_handoff,
 };
 use super::{
     ActionContentBlock, ActionResult, ActionStatus, AgentActionPayload, AgentTurnState,
@@ -30,6 +30,9 @@ struct ShellTransactionSettlement<'a> {
     sandbox_assessment: Option<&'a mez_agent::SandboxFailureAssessment>,
     /// Backend that produced the retained assessment, when present.
     sandbox_backend: Option<crate::runtime::SandboxBackend>,
+    /// Whether foreign identity settlement must be recorded for the deferred
+    /// pass instead of running inline under the pane-output observation frame.
+    defer_foreign_settlement: bool,
 }
 
 impl RuntimeSessionService {
@@ -919,6 +922,7 @@ impl RuntimeSessionService {
                 exit_code: pending.exit_code,
                 sandbox_assessment: assessment,
                 sandbox_backend: Some(pending.backend),
+                defer_foreign_settlement: false,
             },
         )?;
         Ok(())
@@ -1460,9 +1464,59 @@ impl RuntimeSessionService {
         let mut settled = 0usize;
         for (marker, (turn_id, agent_id, pane_id, exit_code)) in ready_ends {
             self.process.shell_receiver_pending_ends.remove(&marker);
-            settled = settled.saturating_add(self.observe_agent_shell_transaction_end(
-                &pane_id, &marker, &turn_id, &agent_id, &pane_id, exit_code,
-            )?);
+            // The deferred entry point keeps ordinary agent-action ends inline
+            // and records foreign identity/bootstrap ends for the
+            // reconciliation pass, whose typed identity resolution must never
+            // nest under the pane-output apply frame.
+            settled = settled.saturating_add(
+                self.observe_agent_shell_transaction_end_with_sandbox_assessment(
+                    &pane_id,
+                    &marker,
+                    &turn_id,
+                    &agent_id,
+                    &pane_id,
+                    ShellTransactionSettlement {
+                        exit_code,
+                        sandbox_assessment: None,
+                        sandbox_backend: None,
+                        defer_foreign_settlement: true,
+                    },
+                )?,
+            );
+        }
+        Ok(settled)
+    }
+
+    /// Settles foreign transaction ends recorded by the pane-output frame.
+    ///
+    /// The identity-probe end and the bootstrap end both resolve typed shell
+    /// identity evidence against the host kernel, so the pane-output
+    /// observation frame records them instead of settling them inline and this
+    /// pass runs the settlement after the observation handlers unwind.
+    pub(crate) fn settle_deferred_foreign_transaction_ends(&mut self) -> Result<usize> {
+        let mut settled = 0usize;
+        // Drain one end at a time and keep every end that has not settled yet,
+        // including the one that just failed: dropping the remainder would
+        // strand their still-running transactions with no recorded end left to
+        // settle them.
+        let mut pending =
+            std::mem::take(&mut self.process.pending_deferred_foreign_transaction_ends);
+        while let Some((marker, end)) = pending.pop_first() {
+            match self.observe_agent_shell_transaction_end(
+                &end.output_pane_id,
+                &marker,
+                &end.turn_id,
+                &end.agent_id,
+                &end.pane_id,
+                end.exit_code,
+            ) {
+                Ok(observed) => settled = settled.saturating_add(observed),
+                Err(error) => {
+                    pending.insert(marker, end);
+                    self.process.pending_deferred_foreign_transaction_ends = pending;
+                    return Err(error);
+                }
+            }
         }
         Ok(settled)
     }
@@ -1704,6 +1758,37 @@ impl RuntimeSessionService {
                 exit_code,
                 sandbox_assessment: None,
                 sandbox_backend: None,
+                defer_foreign_settlement: false,
+            },
+        )
+    }
+
+    /// Settles one shell transaction end observed inside the pane-output frame.
+    ///
+    /// The identity-probe end and the bootstrap end both resolve typed shell
+    /// identity evidence against the host kernel. The observation frame only
+    /// records the end; [`Self::settle_deferred_foreign_transaction_ends`]
+    /// runs the settlement after the observation handlers unwind.
+    pub(crate) fn observe_agent_shell_transaction_end_deferred(
+        &mut self,
+        output_pane_id: &str,
+        marker: &str,
+        turn_id: &str,
+        agent_id: &str,
+        pane_id: &str,
+        exit_code: i32,
+    ) -> Result<usize> {
+        self.observe_agent_shell_transaction_end_with_sandbox_assessment(
+            output_pane_id,
+            marker,
+            turn_id,
+            agent_id,
+            pane_id,
+            ShellTransactionSettlement {
+                exit_code,
+                sandbox_assessment: None,
+                sandbox_backend: None,
+                defer_foreign_settlement: true,
             },
         )
     }
@@ -1723,11 +1808,79 @@ impl RuntimeSessionService {
             exit_code,
             sandbox_assessment,
             sandbox_backend: assessment_backend,
+            defer_foreign_settlement,
         } = settlement;
         let Some(transaction_ref) = self.process.running_shell_transactions.get(marker).cloned()
         else {
             return Ok(0);
         };
+        if defer_foreign_settlement
+            && matches!(
+                &transaction_ref.kind,
+                RunningShellTransactionKind::Bootstrap
+                    | RunningShellTransactionKind::ShellIdentityProbe { .. }
+            )
+        {
+            // The pane-output observation frame only records the raw end so
+            // none of this settlement's frames nest under the observation
+            // chain; the post-unwind apply frame and the reconciliation pump
+            // re-enter this same handler with the deferral disabled.
+            if self
+                .process
+                .shell_receiver_completion_required
+                .contains(marker)
+            {
+                // A transaction that still requires receiver completion keeps
+                // the receiver-pending contract: retain the end here so a
+                // later receiver completion can never precede its recorded
+                // end, then let the deferred pass settle it once the receiver
+                // completes.
+                if self
+                    .process
+                    .shell_receiver_pending_ends
+                    .contains_key(marker)
+                {
+                    return self.fail_shell_transaction_protocol_violation(
+                        marker,
+                        transaction_ref,
+                        "duplicate-end-before-receiver-complete",
+                        "Bash transaction emitted duplicate end markers before receiver completion",
+                    );
+                }
+                self.process.shell_receiver_pending_ends.insert(
+                    marker.to_string(),
+                    (
+                        turn_id.to_string(),
+                        agent_id.to_string(),
+                        pane_id.to_string(),
+                        exit_code,
+                    ),
+                );
+                return Ok(1);
+            }
+            // A duplicate end inside the deferral window must not override the
+            // recorded settlement.
+            if self
+                .process
+                .pending_deferred_foreign_transaction_ends
+                .contains_key(marker)
+            {
+                return Ok(0);
+            }
+            self.process
+                .pending_deferred_foreign_transaction_ends
+                .insert(
+                    marker.to_string(),
+                    RuntimePendingDeferredForeignTransactionEnd {
+                        output_pane_id: output_pane_id.to_string(),
+                        turn_id: turn_id.to_string(),
+                        agent_id: agent_id.to_string(),
+                        pane_id: pane_id.to_string(),
+                        exit_code,
+                    },
+                );
+            return Ok(1);
+        }
         self.append_agent_trace_turn_event(
             pane_id,
             turn_id,

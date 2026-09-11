@@ -248,6 +248,10 @@ fn runtime_dependency_free_nushell_identity_reports_native_mode_error() {
         .unwrap();
     transaction.observed_output_bytes = identity_output.len();
     transaction.observed_output_preview = identity_output;
+    // Pin the pane's OS identity to the unrecognized nushell executable so the
+    // probe result cannot depend on a live placeholder process that may
+    // resolve as a supported shell under parallel load.
+    service.set_pane_process_executable_for_tests(&pane_id, "/usr/bin/nu");
 
     service
         .observe_agent_shell_transaction_end(
@@ -267,7 +271,9 @@ fn runtime_dependency_free_nushell_identity_reports_native_mode_error() {
     assert_eq!(
         service.pane_environment_authority(&pane_id),
         crate::runtime::processes::RuntimePaneEnvironmentAuthority::Unavailable(
-            crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::UnsupportedShell,
+            crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::ShellIdentityUnknown(
+                crate::runtime::processes::RuntimeShellIdentityUnknownReason::UnsupportedShell,
+            ),
         )
     );
     assert!(
@@ -277,15 +283,27 @@ fn runtime_dependency_free_nushell_identity_reports_native_mode_error() {
             .all(|transaction| transaction.pane_id != pane_id),
         "unsupported shell identity must not retain bootstrap work"
     );
+    let reported_mode_screen = service
+        .agent_pane_screen(&pane_id)
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    // The pane wraps this diagnostic at its column boundary and draws border
+    // glyphs on each line, so compare the alphanumeric message content instead
+    // of raw rendered lines. The typed authority/reason assertions above stay
+    // the authoritative contract check.
+    let normalized_screen = reported_mode_screen
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .collect::<String>();
+    let expected_mode_error =
+        "pane shell mode does not support the reported shell; select native shell mode"
+            .chars()
+            .filter(|character| character.is_ascii_alphanumeric())
+            .collect::<String>();
     assert!(
-        service
-            .agent_pane_screen(&pane_id)
-            .unwrap()
-            .normal_content_lines()
-            .iter()
-            .any(|line| line.contains(
-                "pane shell mode does not support /usr/bin/nu; select native shell mode"
-            ))
+        normalized_screen.contains(&expected_mode_error),
+        "{reported_mode_screen}"
     );
     assert!(pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty());
     process.terminate(Duration::from_millis(100)).unwrap();
@@ -522,6 +540,9 @@ fn runtime_dependency_free_foreign_bash_loader_is_ready_gated() {
         1,
         "identity settlement should observe exactly one transaction end event"
     );
+    // The observation frame only records the end; the deferred pass settles it
+    // exactly as the reconciliation pump does after the pane-output frame.
+    let _ = service.settle_deferred_foreign_transaction_ends().unwrap();
     assert_eq!(
         service.maybe_bootstrap_ready_panes().unwrap(),
         1,
@@ -1620,6 +1641,10 @@ fn settle_dependency_free_identity_probe(
     shell_path: &str,
     shell_version: &str,
 ) {
+    // Declare the pane's OS-verified dialect for the fixture: the live pane
+    // process is a placeholder command, so the typed evidence model would
+    // otherwise read a non-shell process and depend on live-process timing.
+    service.set_pane_process_executable_for_tests(pane_id, shell_path);
     let (identity_marker, identity_turn_id) = service
         .running_shell_transactions_for_tests()
         .iter()
@@ -1668,6 +1693,9 @@ fn settle_dependency_free_identity_probe(
         1,
         "identity settlement should observe exactly one transaction end event"
     );
+    // The observation frame only records the end; the deferred pass settles it
+    // exactly as the reconciliation pump does after the pane-output frame.
+    let _ = service.settle_deferred_foreign_transaction_ends().unwrap();
 }
 
 /// Starts one pane whose live foreground process group is a foreign shell.
@@ -1887,6 +1915,11 @@ fn runtime_deferred_receiver_end_ignores_duplicate_end_exit_code() {
 
     assert_eq!(service.settle_ready_receiver_ends().unwrap(), 1);
     assert_eq!(
+        service.settle_deferred_foreign_transaction_ends().unwrap(),
+        1,
+        "the deferred pass settles the receiver-completed foreign end"
+    );
+    assert_eq!(
         service.pending_receiver_end_exit_code_for_tests(&bootstrap_marker),
         None
     );
@@ -1977,6 +2010,113 @@ fn runtime_deferred_child_launch_failure_clears_leaked_handoff_state() {
     );
 
     let _ = process.terminate(Duration::from_millis(10));
+}
+
+/// Verifies one failing deferred foreign end preserves every end still waiting
+/// to settle instead of dropping them with their transactions left running.
+#[test]
+fn runtime_deferred_foreign_end_failure_preserves_remaining_ends() {
+    let mut service = test_runtime_service();
+    let pane_id = "%1".to_string();
+
+    // The first end settles into a bootstrap completion that needs a pane
+    // screen the fixture deliberately does not have, so settlement fails.
+    service.register_running_shell_transaction(
+        "aaa-deferred-bad".to_string(),
+        RunningShellTransactionRef {
+            turn_id: "turn-bad".to_string(),
+            kind: RunningShellTransactionKind::Bootstrap,
+            pane_id: pane_id.clone(),
+            command: "printf bad".to_string(),
+            started_at_unix_ms: 0,
+            timeout_ms: None,
+            pending_input_payload: None,
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+        false,
+    );
+    // The second end is a failed bootstrap transaction that settles cleanly.
+    service.register_running_shell_transaction(
+        "bbb-deferred-good".to_string(),
+        RunningShellTransactionRef {
+            turn_id: "turn-good".to_string(),
+            kind: RunningShellTransactionKind::Bootstrap,
+            pane_id: pane_id.clone(),
+            command: "printf good".to_string(),
+            started_at_unix_ms: 0,
+            timeout_ms: None,
+            pending_input_payload: None,
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+        false,
+    );
+
+    let agent_id = "agent-1";
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_end_deferred(
+                &pane_id,
+                "aaa-deferred-bad",
+                "turn-bad",
+                agent_id,
+                &pane_id,
+                0,
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_end_deferred(
+                &pane_id,
+                "bbb-deferred-good",
+                "turn-good",
+                agent_id,
+                &pane_id,
+                1,
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        service.pending_deferred_foreign_transaction_end_markers_for_tests(),
+        vec![
+            "aaa-deferred-bad".to_string(),
+            "bbb-deferred-good".to_string()
+        ]
+    );
+
+    // The first end fails while settling; the second must stay recorded and be
+    // settleable by the next reconciliation pass.
+    assert!(service.settle_deferred_foreign_transaction_ends().is_err());
+    assert_eq!(
+        service.pending_deferred_foreign_transaction_end_markers_for_tests(),
+        vec![
+            "aaa-deferred-bad".to_string(),
+            "bbb-deferred-good".to_string()
+        ],
+        "a settlement error must not drop unprocessed recorded ends"
+    );
+    assert_eq!(
+        service.settle_deferred_foreign_transaction_ends().unwrap(),
+        1,
+        "the preserved end must settle on the next pass"
+    );
+    assert!(
+        service
+            .pending_deferred_foreign_transaction_end_markers_for_tests()
+            .is_empty()
+    );
+    assert!(
+        !service
+            .running_shell_transactions_for_tests()
+            .contains_key("bbb-deferred-good"),
+        "the preserved end must settle its recorded transaction"
+    );
 }
 
 /// Replays the in-band bootstrap frame material one PTY-owning program can

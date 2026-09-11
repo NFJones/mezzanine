@@ -94,7 +94,15 @@ impl RuntimeSessionService {
         ) && foreground_primary_shell == Some(true);
         let may_recover_degraded =
             previous == PaneReadinessState::Degraded && foreground_primary_shell != Some(false);
+        let interaction_generation = self
+            .process
+            .pane_shell_interaction_generations
+            .get(pane_id)
+            .copied();
         let rearm_identity_bootstrap = may_recover_degraded
+            && self
+                .settled_pane_shell_identity_unknown(pane_id, interaction_generation)
+                .is_none()
             && matches!(
                 self.pane_environment_authority(pane_id),
                 RuntimePaneEnvironmentAuthority::Unavailable(

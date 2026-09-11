@@ -3,21 +3,19 @@
 //! The specification treats `SHELL` as authoritative only when it is absolute
 //! and executable, then falls back to `/bin/sh`. This module implements that
 //! precedence without consulting hidden host-side alternatives.
+//!
+//! Session-shell classification is derived only from the recorded absolute
+//! path basename, never by executing the resolved shell. A renamed or wrapper
+//! executable therefore settles as `UnknownUnix` and degrades to native mode
+//! until an authenticated receiver attests its dialect: the capability cost of
+//! losing first-bootstrap syntax for renamed shells is accepted so `--version`
+//! output can never promote a shell the runtime has not verified.
 
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::Read as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::Duration;
 
 use crate::error::{MezError, Result};
-use crate::host::process::wait_for_child_with_timeout;
-
-/// Maximum time spent collecting syntax-neutral shell version evidence.
-const SHELL_VERSION_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
-/// Maximum retained bytes from one shell version probe.
-const SHELL_VERSION_PROBE_MAX_BYTES: u64 = 4 * 1024;
 
 /// Carries Shell Source state for this subsystem.
 ///
@@ -53,9 +51,11 @@ pub struct ResolvedShell {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     source: ShellSource,
-    /// Classification derived from path plus bounded runtime version evidence.
+    /// Classification derived from the recorded absolute path basename only.
     classification: mez_agent::ShellClassification,
-    /// First bounded line emitted by `<shell> --version`, when available.
+    /// Recorded version text retained from a session record, when any. It is
+    /// never collected by executing the shell and never promotes the
+    /// classification.
     version_probe: Option<String>,
 }
 
@@ -72,20 +72,6 @@ impl ResolvedShell {
             source,
             classification,
             version_probe: None,
-        }
-    }
-
-    /// Creates resolved shell metadata after collecting bounded runtime
-    /// version evidence from the exact executable path.
-    fn with_runtime_probe(path: PathBuf, source: ShellSource) -> Self {
-        let version_probe = probe_shell_version(&path);
-        let classification =
-            mez_agent::ShellClassification::classify_with_probe(&path, version_probe.as_deref());
-        Self {
-            path,
-            source,
-            classification,
-            version_probe,
         }
     }
 
@@ -121,7 +107,10 @@ impl ResolvedShell {
         self.classification
     }
 
-    /// Returns bounded version evidence captured before bootstrap rendering.
+    /// Returns recorded session version text, when a session record carried it.
+    ///
+    /// Resolution never executes the shell to collect this evidence, and it
+    /// never selects or promotes the classification.
     pub fn version_probe(&self) -> Option<&str> {
         self.version_probe.as_deref()
     }
@@ -152,15 +141,11 @@ impl From<mez_mux::session::SessionShell> for ResolvedShell {
             ShellSource::ShellEnv
         };
         let path = shell.path().to_path_buf();
+        // Classification comes only from the recorded absolute path basename:
+        // neither the recorded classification string nor recorded version text
+        // may promote a renamed or wrapper executable to a dialect.
+        let classification = mez_agent::ShellClassification::classify(&path);
         let version_probe = shell.version_probe().map(ToOwned::to_owned);
-        let classification = if shell.classification().is_empty() {
-            mez_agent::ShellClassification::classify_with_probe(&path, version_probe.as_deref())
-        } else {
-            mez_agent::ShellClassification::classify_with_probe(
-                Path::new(shell.classification()),
-                version_probe.as_deref(),
-            )
-        };
         Self {
             path,
             source,
@@ -205,15 +190,12 @@ pub fn resolve_shell_with_fallback(
     if let Some(candidate) = shell_env {
         let candidate_path = PathBuf::from(candidate);
         if !candidate.is_empty() && candidate_path.is_absolute() && is_executable(&candidate_path) {
-            return Ok(ResolvedShell::with_runtime_probe(
-                candidate_path,
-                ShellSource::ShellEnv,
-            ));
+            return Ok(ResolvedShell::new(candidate_path, ShellSource::ShellEnv));
         }
     }
 
     if fallback.is_absolute() && is_executable(fallback) {
-        return Ok(ResolvedShell::with_runtime_probe(
+        return Ok(ResolvedShell::new(
             fallback.to_path_buf(),
             ShellSource::FallbackBinSh,
         ));
@@ -249,51 +231,15 @@ fn is_executable(path: &Path) -> bool {
     }
 }
 
-/// Collects one bounded version line from an exact resolved shell executable.
-///
-/// The probe passes only `--version`, supplies no stdin, discards stderr, and
-/// kills and reaps the child at the deadline. A reader thread drains at most
-/// the retained byte limit so an unexpectedly verbose executable cannot block
-/// on its stdout pipe while the parent waits.
-fn probe_shell_version(path: &Path) -> Option<String> {
-    let mut child = Command::new(path)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let stdout = child.stdout.take()?;
-    let reader = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let _ = stdout
-            .take(SHELL_VERSION_PROBE_MAX_BYTES)
-            .read_to_end(&mut bytes);
-        bytes
-    });
-    let completed = wait_for_child_with_timeout(&mut child, SHELL_VERSION_PROBE_TIMEOUT)
-        .ok()
-        .flatten();
-    if completed.is_none() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-    let bytes = reader.join().ok()?;
-    completed?.success().then_some(())?;
-    String::from_utf8_lossy(&bytes)
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
-}
-
 /// Exposes the tests module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 #[cfg(test)]
 mod tests {
-    use super::{OsStr, Path, PathBuf, ShellSource, fs, resolve_shell_with_fallback};
+    use super::{
+        OsStr, Path, PathBuf, ResolvedShell, ShellSource, fs, resolve_shell_with_fallback,
+    };
     use std::fs::File;
 
     /// Runs the make executable operation for this subsystem.
@@ -361,44 +307,109 @@ mod tests {
         let _ = fs::remove_file(fallback);
     }
 
-    /// Verifies bounded runtime version evidence identifies Fish even when the
-    /// executable basename no longer says `fish`. Wrapper dialect selection
-    /// must happen after this probe so renamed Fish never receives POSIX
-    /// bootstrap source.
+    /// Verifies the normal absolute Bash, Fish, Zsh, and POSIX paths still
+    /// select their adapters from the recorded basename alone, without any
+    /// version evidence collected by executing the shell.
+    #[test]
+    fn standard_absolute_shell_paths_keep_their_classification() {
+        for (path, expected) in [
+            ("/bin/bash", mez_agent::ShellClassification::Bash),
+            ("/usr/bin/bash", mez_agent::ShellClassification::Bash),
+            ("/usr/bin/fish", mez_agent::ShellClassification::Fish),
+            ("/bin/zsh", mez_agent::ShellClassification::Zsh),
+            ("/bin/dash", mez_agent::ShellClassification::PosixSh),
+            ("/bin/sh", mez_agent::ShellClassification::PosixSh),
+        ] {
+            let resolved = ResolvedShell::new(PathBuf::from(path), ShellSource::ShellEnv);
+            assert_eq!(
+                resolved.classification(),
+                expected,
+                "{path} must keep its session classification"
+            );
+            assert!(resolved.version_probe().is_none());
+        }
+    }
+
+    /// Verifies a renamed executable is classified by its absolute path
+    /// basename only and is never launched with `--version`: the sentinel the
+    /// executable would write on any launch must stay absent, and the shell
+    /// settles unknown instead of being promoted to a dialect.
     #[cfg(unix)]
     #[test]
-    fn version_probe_classifies_renamed_fish_shell() {
-        use std::os::unix::fs::symlink;
+    fn renamed_executable_is_classified_by_path_only_and_never_executed() {
+        use std::io::Write as _;
 
-        let fish = std::env::var_os("PATH").and_then(|path| {
-            std::env::split_paths(&path)
-                .map(|directory| directory.join("fish"))
-                .find(|candidate| candidate.is_file())
-        });
-        let Some(fish) = fish else {
-            return;
-        };
+        let sentinel = std::env::temp_dir().join(format!(
+            "mez-shell-probe-sentinel-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = fs::remove_file(&sentinel);
         let renamed = std::env::temp_dir().join(format!(
             "mez-renamed-shell-{}-{}",
             std::process::id(),
             std::thread::current().name().unwrap_or("test")
         ));
         let _ = fs::remove_file(&renamed);
-        symlink(&fish, &renamed).unwrap();
+        {
+            let mut file = File::create(&renamed).unwrap();
+            file.write_all(
+                format!("#!/bin/sh\nprintf launched > '{}'\n", sentinel.display()).as_bytes(),
+            )
+            .unwrap();
+        }
+        make_executable(&renamed);
 
         let resolved =
             resolve_shell_with_fallback(Some(renamed.as_os_str()), Path::new("/bin/sh")).unwrap();
 
         assert_eq!(
             resolved.classification(),
-            mez_agent::ShellClassification::Fish
+            mez_agent::ShellClassification::UnknownUnix,
+            "a renamed executable must settle unknown instead of being promoted"
         );
+        assert!(resolved.version_probe().is_none());
         assert!(
-            resolved
-                .version_probe()
-                .is_some_and(|version| version.to_ascii_lowercase().contains("fish"))
+            !sentinel.exists(),
+            "resolving a session shell must never execute it to read version text"
         );
 
         let _ = fs::remove_file(renamed);
+        let _ = fs::remove_file(sentinel);
+    }
+
+    /// Verifies a restored session record still classifies normal absolute
+    /// Bash/Fish/Zsh paths by basename, and that neither a recorded
+    /// classification string nor recorded version text promotes a renamed
+    /// path to a dialect it was never verified against.
+    #[test]
+    fn restored_session_shell_classifies_by_basename_only() {
+        let fish =
+            mez_mux::session::SessionShell::new(PathBuf::from("/usr/bin/fish"), "shell-env", false)
+                .with_execution_identity("fish", Some("fish, version 3.7.1".to_string()));
+        let resolved = ResolvedShell::from(fish);
+        assert_eq!(
+            resolved.classification(),
+            mez_agent::ShellClassification::Fish
+        );
+        assert_eq!(resolved.path(), Path::new("/usr/bin/fish"));
+        assert_eq!(
+            resolved.version_probe(),
+            Some("fish, version 3.7.1"),
+            "recorded version text must stay inert metadata"
+        );
+
+        let renamed = mez_mux::session::SessionShell::new(
+            PathBuf::from("/opt/custom-shell"),
+            "shell-env",
+            false,
+        )
+        .with_execution_identity("fish", Some("fish, version 3.7.1".to_string()));
+        let resolved = ResolvedShell::from(renamed);
+        assert_eq!(
+            resolved.classification(),
+            mez_agent::ShellClassification::UnknownUnix,
+            "recorded classification and version text must not promote a renamed path"
+        );
     }
 }

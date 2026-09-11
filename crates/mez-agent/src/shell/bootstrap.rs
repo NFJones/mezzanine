@@ -3,31 +3,59 @@
 //! The scripts are deterministic protocol payloads. Parsing returns lower
 //! agent contracts and discovered instruction metadata without product I/O.
 
-use super::transaction::classify_version_probe;
 use super::{
-    AgentShellValidationError, AgentShellValidationResult, EnvironmentGroup, EnvironmentSignature,
-    ShellClassification, ToolInventory, shell_quote, validate_shell_marker_token,
+    AgentShellValidationResult, EnvironmentGroup, EnvironmentSignature, ShellClassification,
+    ToolInventory, shell_quote, validate_shell_marker_token,
 };
 use crate::instructions::{DiscoveredInstructionFile, parse_instruction_discovery_output};
 use std::path::Path;
 
-/// Shell identity observed by a syntax-neutral pane probe.
+/// Maximum bytes retained from a single in-band shell command-name hint.
+const MAX_SHELL_NAME_HINT_BYTES: usize = 128;
+
+/// Shell identity hints observed by a syntax-neutral pane probe.
+///
+/// The probe never resolves a command name through the pane `PATH`, never
+/// executes a discovered or reported binary, and never manufactures a
+/// fallback shell. Every field is written by the pane's own foreground
+/// process, so the result is correlation evidence only: it may select which
+/// dialect renders the staged managed child and inform which child to stage,
+/// but it must never be treated as verified local path evidence or publish
+/// path, environment, or receiver authority.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShellIdentityProbeResult {
-    /// Absolute shell path selected inside the active pane environment.
-    pub shell_path: String,
-    /// Classification derived from the exact path and bounded version output.
-    pub shell_classification: ShellClassification,
-    /// First bounded version line reported by the shell, when available.
-    pub shell_version: Option<String>,
+    /// Bounded command-name hint reported by the pane's parent process.
+    pub shell_name_hint: Option<String>,
+    /// Dialect hint derived only from the command-name hint. It may select
+    /// rendering syntax for the staged managed child but never publishes
+    /// authority.
+    pub shell_classification_hint: Option<ShellClassification>,
+    /// Absolute launch target the active shell self-reported, when it did.
+    ///
+    /// The value is carried verbatim and is never executed, resolved, or
+    /// validated beyond its absolute form. It exists so a remote or container
+    /// pane can still stage the runtime's managed child; it publishes no path
+    /// or environment authority.
+    pub shell_launch_hint: Option<String>,
+}
+
+/// Returns the dialect hint for one bare command-name hint.
+///
+/// Only names that classify to a supported dialect produce a hint; unknown
+/// names stay `None` so no manufactured dialect is derived from them.
+fn shell_classification_hint_for_name(name: &str) -> Option<ShellClassification> {
+    let classification = ShellClassification::classify(Path::new(name));
+    (classification != ShellClassification::UnknownUnix).then_some(classification)
 }
 
 /// Renders one simple command accepted by POSIX-family and Fish shells.
 ///
-/// The active shell parses only an explicit `/bin/sh -c` invocation. All
-/// conditionals, substitutions, bounded version capture, and transaction
-/// markers run inside that declared POSIX child, so bootstrap dialect
-/// selection does not depend on the active shell's grammar.
+/// The active shell parses only an explicit `/bin/sh -c` invocation. The child
+/// reads its parent's command name from host process metadata and reports the
+/// active shell's own absolute launch hint verbatim. It never resolves a bare
+/// name through `PATH`, never executes a discovered binary, and never captures
+/// version output, so bootstrap dialect selection cannot be promoted by
+/// executing anything found in the pane environment.
 pub fn shell_identity_probe_command(
     marker: &str,
     turn_id: &str,
@@ -36,13 +64,15 @@ pub fn shell_identity_probe_command(
 ) -> AgentShellValidationResult<String> {
     validate_shell_marker_token(marker)?;
     let script = "printf '\\033]133;C;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' \"$1\" \"$2\" \"$3\" \"$4\";\
-printf '\\036mez_shell_identity_begin=%s\\n' \"$1\";p=$5;c=$(ps -p \"$PPID\" -o comm= 2>/dev/null|sed -n 1p|tr -d '[:space:]');c=${c#-};\
-if [ -n \"$c\" ];then case \"$c\" in /*)p=$c;;*)d=$(command -v \"$c\" 2>/dev/null);[ -n \"$d\" ]&&[ \"${d#/}\" != \"$d\" ]&&p=$d;;esac;fi;\
-printf '\\036mez_shell_path=%s\\n' \"$p\";v=;if [ -n \"$p\" ]&&[ \"${p#/}\" != \"$p\" ];then v=$(\"$p\" --version 2>/dev/null|dd bs=4096 count=1 2>/dev/null|sed -n 1p);fi;\
-printf '\\036mez_shell_version=%s\\n' \"$v\";printf '\\036mez_shell_identity_end=%s\\n' \"$1\";\
-printf '\\033]133;D;0;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' \"$1\" \"$2\" \"$3\" \"$4\"";
+m=$1;t=$2;a=$3;p=$4;\
+printf '\\036mez_shell_identity_begin=%s\\n' \"$m\";\
+n=$(ps -p \"$PPID\" -o comm= 2>/dev/null);set -- $n;n=${1#-};\
+printf '\\036mez_shell_name=%s\\n' \"$n\";\
+printf '\\036mez_shell_launch_hint=%s\\n' \"$SHELL\";\
+printf '\\036mez_shell_identity_end=%s\\n' \"$m\";\
+printf '\\033]133;D;0;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' \"$m\" \"$t\" \"$a\" \"$p\"";
     Ok(format!(
-        "/bin/sh -c {} sh {} {} {} {} \"$SHELL\"",
+        "/bin/sh -c {} sh {} {} {} {}",
         shell_quote(script),
         shell_quote(marker),
         shell_quote(turn_id),
@@ -53,8 +83,9 @@ printf '\\033]133;D;0;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\
 
 /// Parses one complete syntax-neutral shell identity probe frame.
 ///
-/// Incomplete, mismatched, relative, or malformed frames return `Ok(None)` so
-/// the runtime can retain bounded pending state or fail the probe closed.
+/// Incomplete or mismatched frames return `Ok(None)` so the runtime can retain
+/// bounded pending state or fail the probe closed. Missing, empty, relative, or
+/// malformed hints stay absent; no field ever defaults to a manufactured shell.
 pub fn parse_shell_identity_probe_output(
     output: &str,
     marker: &str,
@@ -69,30 +100,51 @@ pub fn parse_shell_identity_probe_output(
     let Some(frame_end) = frame.find(&end) else {
         return Ok(None);
     };
-    let mut shell_path = None;
-    let mut shell_version = None;
+    let mut shell_name_hint = None;
+    let mut shell_launch_hint = None;
+    let mut legacy_shell_path = None;
     for line in frame[..frame_end].lines() {
         let line = line.trim_end_matches('\r');
-        if let Some(value) = line.strip_prefix("\u{1e}mez_shell_path=") {
-            shell_path = Some(value.to_string());
-        } else if let Some(value) = line.strip_prefix("\u{1e}mez_shell_version=")
-            && !value.is_empty()
-        {
-            shell_version = Some(value.to_string());
+        if let Some(value) = line.strip_prefix("\u{1e}mez_shell_name=") {
+            let value = value.trim();
+            if !value.is_empty()
+                && value.len() <= MAX_SHELL_NAME_HINT_BYTES
+                && !value.contains(char::is_whitespace)
+            {
+                shell_name_hint = Some(value.to_string());
+            }
+        } else if let Some(value) = line.strip_prefix("\u{1e}mez_shell_launch_hint=") {
+            let value = value.trim();
+            if Path::new(value).is_absolute() {
+                shell_launch_hint = Some(value.to_string());
+            }
+        } else if let Some(value) = line.strip_prefix("\u{1e}mez_shell_path=") {
+            // Legacy in-band frames carry a self-reported absolute path. It is
+            // accepted only as a correlation launch hint: it is never executed,
+            // never resolved through `PATH`, and never promoted from version
+            // text. A newer name or launch-hint record always wins.
+            let value = value.trim();
+            if shell_launch_hint.is_none() && Path::new(value).is_absolute() {
+                shell_launch_hint = Some(value.to_string());
+                legacy_shell_path = Some(value.to_string());
+            }
         }
     }
-    let shell_path = shell_path.unwrap_or_else(|| "/bin/sh".to_string());
-    if !Path::new(&shell_path).is_absolute() {
-        return Err(AgentShellValidationError::invalid_args(
-            "shell identity probe returned a non-absolute shell path",
-        ));
-    }
-    let shell_classification =
-        ShellClassification::classify_with_probe(&shell_path, shell_version.as_deref());
+    let shell_classification_hint = shell_name_hint
+        .as_deref()
+        .and_then(shell_classification_hint_for_name)
+        .or_else(|| {
+            legacy_shell_path.as_deref().and_then(|path| {
+                Path::new(path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .and_then(shell_classification_hint_for_name)
+            })
+        });
     Ok(Some(ShellIdentityProbeResult {
-        shell_path,
-        shell_classification,
-        shell_version,
+        shell_name_hint,
+        shell_classification_hint,
+        shell_launch_hint,
     }))
 }
 
@@ -153,13 +205,6 @@ mez_bootstrap_field shell_path \"$SHELL\"\n\
 mez_shell_name=$(printf '%s' \"$SHELL\" | { IFS=/ read -r _ _ _ _ _ _ _ _ _ _ _ mez_stem; printf '%s' \"$mez_stem\"; });\n\
 mez_shell_name=${mez_shell_name:-sh}\n\
 mez_bootstrap_field shell_class \"$mez_shell_name\"\n\
-\n\
-if command -v \"$SHELL\" >/dev/null 2>&1; then\n\
-  mez_shell_ver=$(\"$SHELL\" --version 2>/dev/null | { IFS= read -r mez_first_line; printf '%s' \"$mez_first_line\"; })\n\
-  if [ -n \"$mez_shell_ver\" ]; then\n\
-    mez_bootstrap_field shell_version \"$mez_shell_ver\"\n\
-  fi\n\
-fi\n\
 \n\
 mez_bootstrap_field path \"$PATH\"\n\
 mez_bootstrap_field cwd \"$(pwd 2>/dev/null || printf '/')\"\n\
@@ -256,16 +301,12 @@ end\n\
 mez_bootstrap_field host (hostname 2>/dev/null; or printf 'unknown')\n\
 mez_bootstrap_field user (whoami 2>/dev/null; or printf 'unknown')\n\
 mez_bootstrap_field home_directory \"$HOME\"\n\
-set -l mez_shell_path (status fish-path 2>/dev/null; or command -v fish 2>/dev/null; or printf '%s' \"$SHELL\")\n\
+set -l mez_shell_path (status fish-path 2>/dev/null)\n\
 if test -z \"$mez_shell_path\"\n\
   set mez_shell_path \"$SHELL\"\n\
 end\n\
 mez_bootstrap_field shell_path \"$mez_shell_path\"\n\
 mez_bootstrap_field shell_class fish\n\
-set -l mez_shell_ver ($mez_shell_path --version 2>/dev/null | head -n 1)\n\
-if test -n \"$mez_shell_ver\"\n\
-  mez_bootstrap_field shell_version \"$mez_shell_ver\"\n\
-end\n\
 \n\
 mez_bootstrap_field path \"$PATH\"\n\
 set -l mez_cwd (pwd 2>/dev/null; or printf '/')\n\
@@ -518,18 +559,15 @@ pub fn parse_bootstrap_env_output(
     } else if shell_path.is_empty() {
         shell_path = resolved_shell_path.to_string_lossy().into_owned();
     }
-    let trusted_shell_version = shell_metadata_matches_resolved
-        .then_some(shell_version.as_deref())
-        .flatten();
     let trusted_shell_class = shell_metadata_matches_resolved
         .then_some(shell_class.as_deref())
         .flatten();
-    let probe_classification = trusted_shell_version.and_then(classify_version_probe);
-    let resolved_shell_classification =
-        ShellClassification::classify_with_probe(resolved_shell_path, trusted_shell_version);
-    let shell_classification = probe_classification
-        .or_else(|| trusted_shell_class.map(ShellClassification::classify))
-        .unwrap_or(resolved_shell_classification);
+    // Dialect selection never executes a reported or PATH-resolved binary and
+    // never promotes from version text. The in-band class name is used only
+    // when it matches the resolved path; otherwise the path name decides.
+    let shell_classification = trusted_shell_class
+        .map(ShellClassification::classify)
+        .unwrap_or_else(|| ShellClassification::classify(resolved_shell_path));
 
     let signature = if os.is_empty() && arch.is_empty() && host.is_empty() {
         None

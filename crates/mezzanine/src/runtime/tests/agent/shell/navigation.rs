@@ -668,23 +668,65 @@ fn runtime_agent_shell_immediate_reentry_stays_closed_after_failed_identity_prob
         service.pane_readiness_state(&pane_id),
         PaneReadinessState::PromptCandidate
     );
+    // The failed identity probe settles the interaction epoch permanently
+    // unknown, so a passive prompt within the same epoch must not re-arm
+    // another probe. Only a new shell-interaction epoch (a fresh agent-shell
+    // entry) can re-probe; immediate re-entry therefore stays closed.
+    let interaction_generation = service.pane_shell_interaction_generation_for_tests(&pane_id);
     assert!(
-        service.pane_bootstrap_is_pending_for_tests(&pane_id),
-        "a fresh parent prompt must re-arm the failed identity bootstrap"
+        interaction_generation.is_some(),
+        "a failed identity probe must still record its interaction epoch"
     );
-    assert_eq!(service.maybe_bootstrap_ready_panes().unwrap(), 1);
+    assert!(
+        service
+            .settled_pane_shell_identity_unknown(&pane_id, interaction_generation)
+            .is_some(),
+        "a failed identity probe must settle the interaction epoch unknown"
+    );
+    assert!(
+        !service.pane_bootstrap_is_pending_for_tests(&pane_id),
+        "a settled-unknown epoch must not re-arm a bootstrap from a passive prompt"
+    );
+    assert_eq!(service.maybe_bootstrap_ready_panes().unwrap(), 0);
     assert!(
         service
             .running_shell_transactions_for_tests()
             .values()
-            .any(|transaction| {
-                matches!(
+            .all(|transaction| {
+                !matches!(
                     transaction.kind,
                     RunningShellTransactionKind::ShellIdentityProbe { .. }
                 )
             }),
-        "the re-armed bootstrap must dispatch a second identity probe"
+        "a settled-unknown epoch must not dispatch a second identity probe"
     );
+
+    // A changed foreground shell begins a new interaction epoch. The settled
+    // unknown from the failed probe must not gate it, so the dispatcher must
+    // register one fresh identity probe for the new generation instead of
+    // silently skipping the epoch.
+    assert!(service.begin_uncertified_foreign_shell_boundary(&pane_id, 4242, 4243));
+    let new_generation = service.pane_shell_interaction_generation_for_tests(&pane_id);
+    assert_ne!(new_generation, interaction_generation);
+    assert!(
+        service
+            .settled_pane_shell_identity_unknown(&pane_id, new_generation)
+            .is_none(),
+        "a new interaction epoch must clear the previous epoch's settled unknown"
+    );
+    service.dispatch_bootstrap_to_pane(&pane_id).unwrap();
+    let probe_generation = service
+        .running_shell_transactions_for_tests()
+        .values()
+        .find_map(|transaction| match transaction.kind {
+            RunningShellTransactionKind::ShellIdentityProbe {
+                interaction_generation,
+                ..
+            } => Some(interaction_generation),
+            _ => None,
+        })
+        .expect("a fresh epoch must re-arm exactly one identity probe");
+    assert_eq!(Some(probe_generation), new_generation);
     let _ = process.terminate(Duration::from_millis(10));
 }
 
@@ -874,6 +916,9 @@ fn runtime_agent_shell_reentry_after_parent_bash_commands_completes_identity_pro
     let mut first_bootstrap_completed = false;
     for _ in 0..400 {
         let _ = service.poll_pane_outputs(8192).unwrap();
+        // Managed bootstrap ends are settled by the reconciliation pump, so a
+        // direct service driver must run that pass alongside the pane poll.
+        let _ = service.maybe_bootstrap_ready_panes().unwrap();
         if !service.pane_bootstrap_is_pending_for_tests("%1")
             && matches!(
                 service.pane_environment_authority("%1"),
@@ -999,6 +1044,9 @@ fn runtime_agent_shell_reentry_after_parent_bash_commands_completes_identity_pro
     let reentry_deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < reentry_deadline {
         let _ = service.poll_pane_outputs(8192).unwrap();
+        // The identity-probe end is settled by the deferred pass, so a direct
+        // service driver must run the reconciliation pump alongside the poll.
+        let _ = service.maybe_bootstrap_ready_panes().unwrap();
         if service.agent_subshell_is_active("%1")
             && !service.pane_bootstrap_is_pending_for_tests("%1")
             && matches!(

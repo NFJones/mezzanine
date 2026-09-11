@@ -5689,13 +5689,14 @@ Mezzanine MUST fail the shell-dependent operation with an actionable
 diagnostic. An implementation MAY provide an interactive recovery flow that
 asks the user to export a valid `SHELL`.
 
-The harness MUST classify the shell by executable name and runtime probing.
-Before selecting bootstrap syntax for a newly resolved local pane shell, it
-MUST run a bounded, non-interactive version probe against that exact absolute
-executable path. Probe input MUST be disabled, output MUST be bounded, and a
-timeout MUST kill and reap the probe. This evidence MUST take precedence over
-the executable basename so a renamed or symlinked Fish executable receives
-Fish syntax on its first bootstrap.
+The harness MUST classify the shell from an OS-verified executable identity
+for the pane's own process, or from the attested dialect of a receiver the
+runtime installed through its authenticated managed handshake. In-pane
+identity probes MUST NOT resolve a command name through the pane `PATH`,
+execute a discovered or self-reported binary, or promote a dialect from
+reported version text. A renamed, wrapper, or otherwise unrecognized
+executable without an authenticated receiver MUST settle as typed unknown and
+degrade to native mode instead of being promoted by executing `--version`.
 
 For every pane transaction, Mezzanine MUST select the executable path,
 classification, version evidence, primary process identity, and shell
