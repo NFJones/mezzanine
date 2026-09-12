@@ -1199,6 +1199,10 @@ impl RuntimeSessionService {
         if execution.action_results[result_index].status != ActionStatus::Running {
             return Ok(0);
         }
+        // Resolve the boundary this hook-blocked denial settled under before the
+        // terminal result is stored: the approved bypass marker is the remaining
+        // proof that the action was admitted outside the sandbox.
+        let sandbox_evidence = self.sandbox_evidence_for_action_id(&turn, &action.id, None, None);
         let mut blocked = ActionResult::failed(
             &turn,
             &action,
@@ -1207,6 +1211,7 @@ impl RuntimeSessionService {
             block.message.clone(),
         )?;
         blocked.structured_content_json = Some(block.structured_json());
+        sandbox_evidence.attach_to_shell_result(&action, &mut blocked);
         execution.action_results[result_index] = blocked.clone();
         execution.terminal_state = runtime_agent_turn_state_from_action_results(
             &execution.action_results,
@@ -1630,6 +1635,12 @@ impl RuntimeSessionService {
                                     turn.pane_id,
                                     foreground_diagnostic.summary(),
                                 );
+                                // Resolve the boundary this blocked dispatch reports
+                                // before the terminal result is stored: the approved
+                                // bypass marker is the remaining proof that the
+                                // action was admitted outside the sandbox.
+                                let sandbox_evidence = self
+                                    .sandbox_evidence_for_action_id(turn, &action.id, None, None);
                                 let mut result = ActionResult::failed(
                                     turn,
                                     action,
@@ -1648,6 +1659,7 @@ impl RuntimeSessionService {
                                     })
                                     .to_string(),
                                 );
+                                sandbox_evidence.attach_to_shell_result(action, &mut result);
                                 execution.action_results[index] = result;
                                 self.clear_pending_shell_dispatch_blocked_recovery_attempt(
                                     &turn.turn_id,
@@ -1763,6 +1775,12 @@ impl RuntimeSessionService {
                         runtime_pane_readiness_state_name(state),
                         foreground_diagnostic.summary(),
                     );
+                    // Resolve the boundary this not-ready dispatch reports before
+                    // the terminal result is stored: the approved bypass marker is
+                    // the remaining proof that the action was admitted outside the
+                    // sandbox.
+                    let sandbox_evidence =
+                        self.sandbox_evidence_for_action_id(turn, &action.id, None, None);
                     let mut result = ActionResult::failed(
                         turn,
                         action,
@@ -1779,6 +1797,7 @@ impl RuntimeSessionService {
                         })
                         .to_string(),
                     );
+                    sandbox_evidence.attach_to_shell_result(action, &mut result);
                     execution.action_results[index] = result;
                     self.append_agent_error_text_to_terminal_buffer(
                         &turn.pane_id,
@@ -1851,6 +1870,12 @@ impl RuntimeSessionService {
                     return Ok(dispatched);
                 }
                 RuntimeHookPipelineDecision::Block(block) => {
+                    // Resolve the boundary this hook-blocked denial settled under
+                    // before the terminal result is stored: the approved bypass
+                    // marker is the remaining proof that the action was admitted
+                    // outside the sandbox.
+                    let sandbox_evidence =
+                        self.sandbox_evidence_for_action_id(turn, &action.id, None, None);
                     let mut blocked = ActionResult::failed(
                         turn,
                         action,
@@ -1859,6 +1884,7 @@ impl RuntimeSessionService {
                         block.message.clone(),
                     )?;
                     blocked.structured_content_json = Some(block.structured_json());
+                    sandbox_evidence.attach_to_shell_result(action, &mut blocked);
                     execution.action_results[index] = blocked;
                     self.append_agent_error_text_to_terminal_buffer(
                         &turn.pane_id,

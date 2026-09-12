@@ -2564,18 +2564,24 @@ fn arm_sandbox_bypass_for_action(
     assert!(service.activate_sandbox_bypass_after_approval(turn_id, action_id));
 }
 
-/// Asserts one settled result carries exactly the bounded projection of an
-/// approved unsandboxed retry rather than the configured backend.
-fn assert_policy_only_sandbox_bypass_result(result: &mez_agent::ActionResult) {
+/// Returns the bounded sandbox projection one shell result reports.
+fn bounded_sandbox_projection(result: &mez_agent::ActionResult) -> serde_json::Value {
     let structured = result
         .structured_content_json
         .as_deref()
-        .expect("the settled result must carry structured content");
+        .expect("the shell result must carry structured content");
     let document: serde_json::Value = serde_json::from_str(structured).unwrap();
     let effective = document["sandbox_effective"]
         .as_object()
-        .expect("the settled result must carry the bounded sandbox projection");
+        .expect("the shell result must carry the bounded sandbox projection");
     assert_eq!(effective.len(), 4);
+    serde_json::Value::Object(effective.clone())
+}
+
+/// Asserts one settled result carries exactly the bounded projection of an
+/// approved unsandboxed retry rather than the configured backend.
+fn assert_policy_only_sandbox_bypass_result(result: &mez_agent::ActionResult) {
+    let effective = bounded_sandbox_projection(result);
     assert_eq!(effective["execution_boundary"], "policy-only");
     assert_eq!(effective["enforcement"], "none");
     assert_eq!(effective["network_mode"], "unenforced");
@@ -2606,9 +2612,10 @@ fn runtime_failed_shell_transaction_settlement_reports_policy_only_effective_sta
         execution.terminal_state = AgentTurnState::Running;
     }
     let transaction_ref = sandbox_bypass_settlement_transaction(&turn_id, &action_id);
-    // The synthetic fixture has no owning assistant execution block, so the
-    // settlement's transcript commit reports a context semantic violation after
-    // the failed result and its bounded sandbox projection are already stored.
+    // The synthetic fixture registers no agent turn context, so the settlement's
+    // commit_settled_action_results_context step fails with "runtime agent turn
+    // context is unavailable" after the failed result and its bounded sandbox
+    // projection are already stored.
     let _ = service.fail_running_shell_transaction_action(
         &transaction_ref,
         "sandbox-bypass-settlement-failure-marker",
@@ -2674,9 +2681,10 @@ fn runtime_failed_shell_transaction_batch_settlement_reports_policy_only_effecti
             trace_reason: "shell_transaction_runtime_failure".to_string(),
         };
     let transaction_ref = sandbox_bypass_settlement_transaction(&turn_id, &action_id);
-    // The synthetic fixture has no owning assistant execution block, so the
-    // settlement's transcript commit reports a context semantic violation after
-    // the failed results and their bounded sandbox projections are stored.
+    // The synthetic fixture registers no agent turn context, so the settlement's
+    // commit_settled_action_results_context step fails with "runtime agent turn
+    // context is unavailable" after the failed results and their bounded sandbox
+    // projections are already stored.
     let _ = service.fail_running_shell_transaction_actions(
         &transaction_ref,
         "sandbox-bypass-batch-marker",
@@ -2693,6 +2701,111 @@ fn runtime_failed_shell_transaction_batch_settlement_reports_policy_only_effecti
         assert_policy_only_sandbox_bypass_result(&execution.action_results[index]);
         assert!(!service.sandbox_bypass_active_for_action(&turn_id, candidate));
     }
+
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Forces the dispatcher's pane-not-ready terminal result for one stored
+/// running shell action.
+///
+/// The dispatcher only reports `pane_not_ready` for a readiness state it will
+/// not write into, and only while the pane foreground group is not the certified
+/// shell, so the fixture moves the pane into that pair of conditions.
+fn force_pane_not_ready_dispatch(service: &mut RuntimeSessionService) {
+    let primary_pid = service
+        .pane_processes()
+        .primary_pid("%1")
+        .expect("the dispatch fixture keeps a live pane shell");
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test("%1", Some(primary_pid.saturating_add(1)));
+    service.set_pane_readiness("%1", PaneReadinessState::FullScreen);
+}
+
+/// Registers the owning assistant execution for one stored dispatch fixture.
+///
+/// A dispatch-time terminal result settles into the turn chronology, which
+/// rejects evidence whose assistant execution is not part of that chronology.
+fn register_dispatch_fixture_chronology(service: &mut RuntimeSessionService, turn_id: &str) {
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .expect("the dispatch fixture keeps its turn");
+    let execution = service
+        .agent_turn_executions()
+        .get(turn_id)
+        .cloned()
+        .expect("the dispatch fixture keeps its execution");
+    append_test_execution_assistant_context(service, &turn, &execution);
+}
+
+/// Verifies a dispatch-time terminal failure reports the approved one-shot
+/// unsandboxed retry that was armed when the dispatcher refused the pane,
+/// instead of the configured backend a later settlement-time read would report
+/// once the bypass marker and fallback audit entry are consumed.
+#[test]
+fn runtime_dispatch_failure_reports_armed_sandbox_bypass_effective_state() {
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    configure_available_bubblewrap(&mut service);
+    arm_sandbox_bypass_for_action(
+        &mut service,
+        &turn_id,
+        &action_id,
+        "sandbox-bypass-dispatch-failure-marker",
+    );
+    // The fallback offer blocked the action and replaced its result, so restore
+    // the running result the approved resume dispatches from.
+    {
+        let execution = service
+            .agent_turn_executions_mut()
+            .get_mut(&turn_id)
+            .unwrap();
+        execution.action_results[0].status = ActionStatus::Running;
+        execution.terminal_state = AgentTurnState::Running;
+    }
+    force_pane_not_ready_dispatch(&mut service);
+    register_dispatch_fixture_chronology(&mut service, &turn_id);
+
+    let execution = service
+        .dispatch_stored_running_shell_actions(&turn_id)
+        .unwrap()
+        .expect("the stored running action should be dispatched");
+    assert_eq!(execution.action_results[0].status, ActionStatus::Failed);
+    assert_eq!(
+        execution.action_results[0]
+            .error
+            .as_ref()
+            .map(|error| error.code.as_str()),
+        Some("pane_not_ready")
+    );
+    assert_policy_only_sandbox_bypass_result(&execution.action_results[0]);
+
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a dispatch-time terminal failure that never entered an approved
+/// unsandboxed retry reports the configured backend with a plan-less
+/// projection instead of claiming enforcement nothing proved.
+#[test]
+fn runtime_dispatch_failure_reports_configured_backend_without_a_bypass() {
+    let (mut service, turn_id, _) = sandbox_fallback_execution_service();
+    configure_available_bubblewrap(&mut service);
+    force_pane_not_ready_dispatch(&mut service);
+    register_dispatch_fixture_chronology(&mut service, &turn_id);
+
+    let execution = service
+        .dispatch_stored_running_shell_actions(&turn_id)
+        .unwrap()
+        .expect("the stored running action should be dispatched");
+    assert_eq!(execution.action_results[0].status, ActionStatus::Failed);
+    let effective = bounded_sandbox_projection(&execution.action_results[0]);
+    assert_eq!(effective["execution_boundary"], "bubblewrap");
+    assert_eq!(effective["enforcement"], "none");
+    assert_eq!(effective["network_mode"], "unknown");
+    assert_eq!(effective["reason"], "not-probed");
 
     service.terminate_all_pane_processes().unwrap();
 }

@@ -1570,6 +1570,14 @@ fn runtime_shell_dispatch_fails_closed_after_persistent_foreground_block() {
             .unwrap(),
     )
     .unwrap();
+    let sandbox_effective = diagnostic["sandbox_effective"]
+        .as_object()
+        .expect("a denied dispatch must report the bounded sandbox projection");
+    assert_eq!(sandbox_effective.len(), 4);
+    assert_eq!(sandbox_effective["execution_boundary"], "policy-only");
+    assert_eq!(sandbox_effective["enforcement"], "none");
+    assert_eq!(sandbox_effective["network_mode"], "unenforced");
+    assert_eq!(sandbox_effective["reason"], "policy-only");
     let foreground_process = &diagnostic["foreground_process"];
     assert_eq!(diagnostic["reason"], "uncertified_foreground_process");
     assert_eq!(foreground_process["metadata_available"], true);
