@@ -51,6 +51,19 @@ pub(crate) struct RuntimeSubagentLineage {
     pub terminal: bool,
 }
 
+/// Runtime ownership retained for one reusable MMP subagent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimePersistentSubagent {
+    /// Durable child conversation kept across task turns.
+    pub conversation_id: String,
+    /// Pane-derived parent agent that created the child.
+    pub parent_agent_id: String,
+    /// Durable parent conversation that owns the child lifecycle.
+    pub parent_conversation_id: String,
+    /// Parent-assigned responsibility published through MMP discovery.
+    pub objective: String,
+}
+
 /// Product-specialized mux overlay carrying record-browser and live sources.
 pub(crate) type RuntimeDisplayOverlay =
     mez_mux::overlay::DisplayOverlay<RuntimeRecordBrowserOverlaySource, RuntimeLiveOverlaySource>;

@@ -155,6 +155,16 @@ impl RuntimeSessionService {
         };
         let session_id = self.session.id.as_str().to_string();
         let records = store.load_agent_session_metadata(&session_id)?;
+        let restored_bindings = records
+            .iter()
+            .filter(|record| runtime_pane_by_id(&self.session, &record.pane_id).is_ok())
+            .map(|record| {
+                (
+                    format!("agent-{}", record.pane_id),
+                    record.conversation_id.clone(),
+                )
+            })
+            .collect::<std::collections::BTreeSet<_>>();
         let restored_at = current_unix_seconds();
         let mut restored = 0usize;
         let mut interrupted = 0usize;
@@ -168,6 +178,7 @@ impl RuntimeSessionService {
                 store.conversation_allowed_actions(&conversation_id)?;
             let conversation_kind = store.conversation_kind(&conversation_id)?;
             let subagent_lineage = store.conversation_subagent_lineage(&conversation_id)?;
+            let subagent_lifetime = store.subagent_lifetime(&conversation_id)?;
             if conversation_kind == mez_agent::AgentConversationKind::Subagent
                 && subagent_lineage.is_none()
             {
@@ -175,7 +186,41 @@ impl RuntimeSessionService {
                     "subagent conversation cannot restore without durable lineage",
                 ));
             }
-            let prepared_objective = store.user_objective(&conversation_id)?;
+            let persistent_owner = if subagent_lifetime == mez_agent::SubagentLifetime::Persistent {
+                let lineage = subagent_lineage.as_ref().ok_or_else(|| {
+                    MezError::invalid_state("persistent subagent restore requires durable lineage")
+                })?;
+                let parent_conversation_id = store
+                    .persistent_subagent_parent_conversation(&conversation_id)?
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "persistent subagent restore requires an owner conversation",
+                        )
+                    })?;
+                if !restored_bindings.contains(&(
+                    lineage.parent_agent_id.clone(),
+                    parent_conversation_id.clone(),
+                )) {
+                    continue;
+                }
+                Some(parent_conversation_id)
+            } else {
+                None
+            };
+            let persistent_scope = if persistent_owner.is_some() {
+                Some(
+                    store
+                        .persistent_subagent_scope(&conversation_id)?
+                        .ok_or_else(|| {
+                            MezError::invalid_state(
+                                "persistent subagent restore requires a durable scope declaration",
+                            )
+                        })?,
+                )
+            } else {
+                None
+            };
+            let prepared_objective = store.effective_persisted_objective(&conversation_id)?;
             let visibility = runtime_agent_session_metadata_visibility(&metadata.visibility)?;
             let log_level = AgentLogLevel::parse(&metadata.log_level).ok_or_else(|| {
                 MezError::invalid_args("agent session metadata log level is invalid")
@@ -444,16 +489,54 @@ impl RuntimeSessionService {
                 interrupted = interrupted.saturating_add(1);
             }
             if let Some(lineage) = subagent_lineage {
-                self.set_restored_subagent_lineage(
-                    format!("agent-{pane_id}"),
-                    crate::runtime::RuntimeSubagentLineage {
-                        parent_agent_id: lineage.parent_agent_id,
-                        root_agent_id: lineage.root_agent_id,
-                        depth: lineage.depth,
-                        display_name: lineage.display_name,
-                        terminal: lineage.terminal,
-                    },
-                );
+                let agent_id = format!("agent-{pane_id}");
+                let runtime_lineage = crate::runtime::RuntimeSubagentLineage {
+                    parent_agent_id: lineage.parent_agent_id.clone(),
+                    root_agent_id: lineage.root_agent_id,
+                    depth: lineage.depth,
+                    display_name: lineage.display_name,
+                    terminal: lineage.terminal,
+                };
+                if persistent_owner.is_some() {
+                    self.set_subagent_lineage(agent_id.clone(), runtime_lineage);
+                } else {
+                    self.set_restored_subagent_lineage(agent_id.clone(), runtime_lineage);
+                }
+                if let Some(parent_conversation_id) = persistent_owner {
+                    let objective = store.parent_objective(&conversation_id)?.ok_or_else(|| {
+                        MezError::invalid_state(
+                            "persistent subagent restore requires a parent objective",
+                        )
+                    })?;
+                    self.set_persistent_subagent(
+                        agent_id.clone(),
+                        crate::runtime::RuntimePersistentSubagent {
+                            conversation_id: conversation_id.clone(),
+                            parent_agent_id: lineage.parent_agent_id,
+                            parent_conversation_id,
+                            objective,
+                        },
+                    );
+                    self.restore_persistent_subagent_scope(
+                        &agent_id,
+                        persistent_scope.expect("validated persistent scope"),
+                    )?;
+                    let agent_id = mez_core::ids::AgentId::opaque(agent_id).ok_or_else(|| {
+                        MezError::invalid_state(
+                            "restored persistent subagent id is invalid for MMP",
+                        )
+                    })?;
+                    if self
+                        .control
+                        .message_service()
+                        .subscription(&agent_id)
+                        .is_none()
+                    {
+                        self.control
+                            .message_service_mut()
+                            .subscribe_from_retained_start(&agent_id)?;
+                    }
+                }
             }
             restored = restored.saturating_add(1);
         }

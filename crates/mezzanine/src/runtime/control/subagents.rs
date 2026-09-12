@@ -360,7 +360,7 @@ impl RuntimeSessionService {
         spawn: SubagentSpawnRequest,
         placement: RuntimeSubagentPlacement,
     ) -> Result<String> {
-        self.spawn_runtime_subagent_internal(Some(controller), spawn, placement, false)
+        self.spawn_runtime_subagent_internal(Some(controller), spawn, placement, false, None)
     }
 
     /// Creates a child subagent for already-authorized session-owned orchestration.
@@ -369,7 +369,25 @@ impl RuntimeSessionService {
         spawn: SubagentSpawnRequest,
         placement: RuntimeSubagentPlacement,
     ) -> Result<String> {
-        self.spawn_runtime_subagent_internal(None, spawn, placement, false)
+        self.spawn_runtime_subagent_internal(None, spawn, placement, false, None)
+    }
+
+    /// Creates a reusable child owned by one durable parent conversation.
+    pub(crate) fn spawn_runtime_persistent_subagent_session_owned(
+        &mut self,
+        spawn: SubagentSpawnRequest,
+        placement: RuntimeSubagentPlacement,
+        parent_conversation_id: &str,
+        objective: &str,
+    ) -> Result<String> {
+        let objective = mez_agent::messaging::normalize_objective(objective)?;
+        self.spawn_runtime_subagent_internal(
+            None,
+            spawn,
+            placement,
+            false,
+            Some((parent_conversation_id.to_string(), objective)),
+        )
     }
 
     /// Creates a runtime-routed worker as the root of a fresh delegation tree.
@@ -378,7 +396,7 @@ impl RuntimeSessionService {
         spawn: SubagentSpawnRequest,
         placement: RuntimeSubagentPlacement,
     ) -> Result<String> {
-        self.spawn_runtime_subagent_internal(None, spawn, placement, true)
+        self.spawn_runtime_subagent_internal(None, spawn, placement, true, None)
     }
 
     /// Implements client-authenticated and session-owned subagent creation.
@@ -388,6 +406,7 @@ impl RuntimeSessionService {
         mut spawn: SubagentSpawnRequest,
         placement: RuntimeSubagentPlacement,
         routed_root: bool,
+        persistent: Option<(String, String)>,
     ) -> Result<String> {
         let profile = self
             .integration
@@ -609,7 +628,7 @@ impl RuntimeSessionService {
                     .and_then(SubagentParentAuthority::permission_preset)
             }),
         };
-        self.set_subagent_scope_declaration(child_agent_id.clone(), child_scope);
+        self.set_subagent_scope_declaration(child_agent_id.clone(), child_scope.clone());
         if let Some(sandbox_config) = inherited_sandbox_override {
             self.integration
                 .set_pane_sandbox_override(&started.pane_id, Some(sandbox_config));
@@ -668,25 +687,40 @@ impl RuntimeSessionService {
         // so it must not become a durable child contract that restore could
         // later treat as an ordinary delegated authority edge.
         if !routed_root {
-            if let Some(store) = self.persistence.cloned_transcript_store()
-                && let Err(error) = store.save_subagent_conversation_contract(
+            let lineage = mez_agent::SubagentSessionLineage {
+                parent_agent_id: spawn.parent_agent_id.clone(),
+                root_agent_id: self
+                    .subagent_lineage(&child_agent_id)
+                    .map(|lineage| lineage.root_agent_id.clone())
+                    .unwrap_or_else(|| child_agent_id.clone()),
+                depth: self
+                    .subagent_lineage(&child_agent_id)
+                    .map(|lineage| lineage.depth)
+                    .unwrap_or(0),
+                display_name: child_display_name.clone(),
+                terminal: profile.terminal,
+            };
+            let contract_result = match (self.persistence.cloned_transcript_store(), &persistent) {
+                (Some(store), Some((parent_conversation_id, objective))) => store
+                    .save_persistent_subagent_conversation_contract(
+                        &child_conversation_id,
+                        lineage,
+                        child_allowed_actions.clone(),
+                        parent_conversation_id,
+                        objective,
+                        child_scope.clone(),
+                    ),
+                (Some(store), None) => store.save_subagent_conversation_contract(
                     &child_conversation_id,
-                    mez_agent::SubagentSessionLineage {
-                        parent_agent_id: spawn.parent_agent_id.clone(),
-                        root_agent_id: self
-                            .subagent_lineage(&child_agent_id)
-                            .map(|lineage| lineage.root_agent_id.clone())
-                            .unwrap_or_else(|| child_agent_id.clone()),
-                        depth: self
-                            .subagent_lineage(&child_agent_id)
-                            .map(|lineage| lineage.depth)
-                            .unwrap_or(0),
-                        display_name: child_display_name.clone(),
-                        terminal: profile.terminal,
-                    },
+                    lineage,
                     child_allowed_actions.clone(),
-                )
-            {
+                ),
+                (None, Some(_)) => Err(MezError::invalid_state(
+                    "persistent subagent spawn requires transcript persistence",
+                )),
+                (None, None) => Ok(()),
+            };
+            if let Err(error) = contract_result {
                 self.cleanup_failed_subagent_spawn(
                     controller,
                     &started.pane_id,
@@ -695,6 +729,66 @@ impl RuntimeSessionService {
                 );
                 return Err(error);
             }
+        }
+        if let Some((parent_conversation_id, objective)) = persistent.as_ref() {
+            let now_ms = current_unix_seconds().saturating_mul(1000);
+            let child_identity = match self.ensure_runtime_message_identity(
+                &child_agent_id,
+                None,
+                &spawn.requested_role,
+                &[
+                    "agent-harness",
+                    "subagent",
+                    runtime_cooperation_mode_name(spawn.cooperation_mode),
+                ],
+                now_ms,
+            ) {
+                Ok(identity) => identity,
+                Err(error) => {
+                    self.cleanup_failed_subagent_spawn(
+                        controller,
+                        &started.pane_id,
+                        &child_agent_id,
+                        None,
+                    );
+                    return Err(error);
+                }
+            };
+            let message_setup = self
+                .control
+                .message_service_mut()
+                .update_agent_objective(&child_identity.agent_id, Some(objective), now_ms)
+                .and_then(|_| {
+                    if self
+                        .control
+                        .message_service()
+                        .subscription(&child_identity.agent_id)
+                        .is_none()
+                    {
+                        self.control
+                            .message_service_mut()
+                            .subscribe_from_retained_start(&child_identity.agent_id)?;
+                    }
+                    Ok(())
+                });
+            if let Err(error) = message_setup {
+                self.cleanup_failed_subagent_spawn(
+                    controller,
+                    &started.pane_id,
+                    &child_agent_id,
+                    None,
+                );
+                return Err(error.into());
+            }
+            self.set_persistent_subagent(
+                child_agent_id.clone(),
+                crate::runtime::RuntimePersistentSubagent {
+                    conversation_id: child_conversation_id.clone(),
+                    parent_agent_id: spawn.parent_agent_id.clone(),
+                    parent_conversation_id: parent_conversation_id.clone(),
+                    objective: objective.clone(),
+                },
+            );
         }
         #[cfg(test)]
         if self.take_subagent_spawn_after_fork_persistence_failure_for_tests() {
@@ -1387,6 +1481,11 @@ impl RuntimeSessionService {
             .agent_shell_store()
             .get(pane_id)
             .map(|session| session.session_id.clone());
+        if let Some(agent_id) = mez_core::ids::AgentId::opaque(child_agent_id.to_string()) {
+            self.control
+                .message_service_mut()
+                .retire_agent_identity(&agent_id);
+        }
         self.remove_subagent_authority_state(child_agent_id);
         self.deregister_macro_managed_subagent(child_agent_id);
         self.integration
@@ -1579,9 +1678,15 @@ impl RuntimeSessionService {
             &["agent-harness", "subagent", initial_status.cooperation_mode],
             now_ms,
         )?;
+        let persistent_objective = self
+            .persistent_subagent(initial_status.child_agent_id)
+            .map(|persistent| persistent.objective.clone());
+        let task_objective = Self::runtime_agent_objective_from_prompt(initial_status.task_prompt);
         self.publish_prepared_runtime_agent_objective(
             initial_status.child_agent_id,
-            Self::runtime_agent_objective_from_prompt(initial_status.task_prompt).as_deref(),
+            persistent_objective
+                .as_deref()
+                .or(task_objective.as_deref()),
         );
         let state = self
             .agent_turn_ledger()

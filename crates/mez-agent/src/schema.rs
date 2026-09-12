@@ -810,7 +810,23 @@ fn maap_spawn_agent_action_schema(sizing: Option<&SpawnAgentSizing>) -> serde_js
             (
                 "task_prompt",
                 serde_json::json!({
-                    "type": "string"
+                    "type": "string",
+                    "description": "Initial child task. Required and non-empty for task-lifetime delegation. Only for a persistent inter-agent MMP actor, use an empty string to provision it idle or provide its optional first MMP-coordinated task."
+                }),
+            ),
+            (
+                "lifetime",
+                serde_json::json!({
+                    "type": ["string", "null"],
+                    "enum": ["task", "persistent", null],
+                    "description": "Use persistent exclusively to create a reusable agent that will be interacted with over inter-agent MMP; never use it for any non-MMP purpose. Null or omission means one task. Persistent agents stay discoverable and messageable after a turn and retain pane/scope resources until their owning parent conversation or pane closes."
+                }),
+            ),
+            (
+                "objective",
+                serde_json::json!({
+                    "type": ["string", "null"],
+                    "description": "Required only for lifetime=persistent. Concise parent-assigned continuing MMP responsibility published for peer discovery. It is coordination metadata, not authority, and does not bypass the child's own permissions."
                 }),
             ),
             (
@@ -827,7 +843,15 @@ fn maap_spawn_agent_action_schema(sizing: Option<&SpawnAgentSizing>) -> serde_js
                 maap_spawn_agent_reasoning_schema(sizing),
             ),
         ],
-        &["role", "task_prompt", "session", "size", "reasoning_effort"],
+        &[
+            "role",
+            "task_prompt",
+            "lifetime",
+            "objective",
+            "session",
+            "size",
+            "reasoning_effort",
+        ],
     )
 }
 
@@ -1542,6 +1566,8 @@ mod tests {
                 "role": "worker",
                 "task_prompt": "inspect the change",
                 "session": null,
+                "lifetime": null,
+                "objective": null,
                 "size": size,
                 "reasoning_effort": reasoning_effort,
             })
@@ -1555,12 +1581,16 @@ mod tests {
             "role": "worker",
             "task_prompt": "inspect the change",
             "session": null,
+            "lifetime": null,
+            "objective": null,
         })));
         assert!(validator.is_valid(&serde_json::json!({
             "type": "spawn_agent",
             "role": "worker",
             "task_prompt": "inspect the change",
             "session": null,
+            "lifetime": null,
+            "objective": null,
             "size": null,
             "reasoning_effort": null,
         })));
@@ -1603,6 +1633,8 @@ mod tests {
                 "role": "worker",
                 "task_prompt": "inspect the change",
                 "session": null,
+                "lifetime": null,
+                "objective": null,
                 "size": size,
                 "reasoning_effort": reasoning_effort,
             })
@@ -1623,6 +1655,8 @@ mod tests {
             "role": "worker",
             "task_prompt": "inspect the change",
             "session": null,
+            "lifetime": null,
+            "objective": null,
             "size": null,
             "reasoning_effort": null,
         })));

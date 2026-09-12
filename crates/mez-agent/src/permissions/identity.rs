@@ -5,7 +5,8 @@
 //! path scopes, approval persistence, and enforcement remain in Mezzanine.
 
 /// Selects the baseline permission rule set exposed to an agent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum PermissionPreset {
     /// Restricts actions to the read-only baseline.
     ReadOnly,

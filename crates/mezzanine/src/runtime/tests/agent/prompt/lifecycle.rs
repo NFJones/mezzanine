@@ -433,6 +433,330 @@ fn runtime_subagent_spawn_publishes_bounded_task_objective() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies an idle persistent spawn becomes a reusable MMP actor rather than
+/// a joined one-shot child, and later messages reuse its durable conversation.
+#[test]
+fn runtime_persistent_subagent_reuses_identity_and_conversation_across_mmp_turns() {
+    let mut service = test_runtime_service();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    service.set_agent_transcript_store(AgentTranscriptStore::new(temp_root(
+        "runtime-persistent-subagent-reuse",
+    )));
+    service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let parent = service
+        .start_agent_prompt_turn("%1", "provision a reusable MMP worker")
+        .unwrap();
+    service.remove_pending_agent_provider_task(&parent.turn_id);
+    let parent_turn = service
+        .agent_turn_ledger()
+        .turn(&parent.turn_id)
+        .cloned()
+        .unwrap();
+    let mut action = runtime_spawn_agent_action("persistent-spawn", "");
+    let mez_agent::AgentActionPayload::SpawnAgent {
+        lifetime,
+        objective,
+        ..
+    } = &mut action.payload
+    else {
+        unreachable!("spawn fixture must contain spawn_agent");
+    };
+    *lifetime = mez_agent::SubagentLifetime::Persistent;
+    *objective = Some("Triage incoming MMP defects".to_string());
+
+    let result = service
+        .execute_spawn_action_for_turn(&parent_turn, &action)
+        .unwrap();
+    assert_eq!(result.status, ActionStatus::Succeeded);
+    assert_eq!(service.joined_subagent_dependency_count(), 0);
+    let structured: serde_json::Value = serde_json::from_str(
+        result
+            .structured_content_json
+            .as_deref()
+            .expect("persistent spawn structured content"),
+    )
+    .unwrap();
+    assert_eq!(structured["lifetime"], "persistent");
+    assert_eq!(structured["spawn"]["turn"], serde_json::Value::Null);
+    let child_agent_id = structured["spawn"]["agent"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let child_pane_id = structured["spawn"]["pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let child_conversation_id = service
+        .agent_shell_store()
+        .get(&child_pane_id)
+        .unwrap()
+        .session_id
+        .clone();
+    let child_id = AgentId::opaque(child_agent_id.clone()).unwrap();
+    assert_eq!(
+        service
+            .persistent_subagent(&child_agent_id)
+            .map(|record| record.conversation_id.as_str()),
+        Some(child_conversation_id.as_str())
+    );
+    assert_eq!(
+        service
+            .message_service()
+            .registered_identity(&child_id)
+            .and_then(|identity| identity.objective.as_deref()),
+        Some("Triage incoming MMP defects")
+    );
+    assert!(service.message_service().subscription(&child_id).is_some());
+    service
+        .complete_running_agent_turn_and_start_ready(
+            &parent_turn,
+            AgentTurnState::Completed,
+            "persistent child provisioning settled",
+        )
+        .unwrap();
+
+    let now_ms = crate::runtime::current_unix_millis();
+    let sender = service
+        .ensure_runtime_message_identity("agent-%1", None, "agent", &[], now_ms)
+        .unwrap();
+    for (index, payload) in ["first defect", "second defect"].into_iter().enumerate() {
+        service
+            .control
+            .message_service_mut()
+            .accept_at(
+                &sender.agent_id,
+                mez_agent::messaging::Envelope {
+                    protocol: "mmp/1",
+                    id: format!("persistent-message-{index}"),
+                    message_type: "send".to_string(),
+                    time: format!("runtime:{now_ms}"),
+                    sender: sender.clone(),
+                    recipient: mez_agent::messaging::Recipient::Agent(child_id.clone()),
+                    correlation_id: Some(parent_turn.turn_id.clone()),
+                    ttl_ms: None,
+                    content_type: "text/plain; charset=utf-8".to_string(),
+                    payload: payload.to_string(),
+                    extension_fields: Vec::new(),
+                },
+                now_ms.saturating_add(index as u64),
+            )
+            .unwrap();
+        assert_eq!(
+            service
+                .deliver_pending_runtime_agent_messages(now_ms.saturating_add(index as u64))
+                .unwrap(),
+            1
+        );
+        let child_turn = service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .rev()
+            .find(|turn| {
+                turn.agent_id == child_agent_id
+                    && turn.trigger == mez_agent::AgentTurnTrigger::LocalMessage
+            })
+            .cloned()
+            .expect("MMP message should start a child turn");
+        assert_eq!(child_turn.conversation_id, child_conversation_id);
+        service.start_ready_agent_turns().unwrap();
+        assert_eq!(
+            service
+                .agent_turn_ledger()
+                .turn(&child_turn.turn_id)
+                .map(|turn| turn.state),
+            Some(AgentTurnState::Running)
+        );
+        service
+            .complete_running_agent_turn_and_start_ready(
+                &child_turn,
+                AgentTurnState::Completed,
+                "persistent MMP child turn completed",
+            )
+            .unwrap();
+        assert!(service.persistent_subagent(&child_agent_id).is_some());
+        assert!(service.subagent_lineage(&child_agent_id).is_some());
+        assert!(service.has_subagent_scope_declaration(&child_agent_id));
+        assert!(!service.has_pending_terminal_subagent_pane_close(&child_pane_id));
+        assert!(service.agent_shell_store().get(&child_pane_id).is_some());
+    }
+
+    let child_turn_count = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .filter(|turn| turn.agent_id == child_agent_id)
+        .count();
+    let replaced = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"persistent-owner-new","method":"agent/shell/command","params":{"idempotency_key":"persistent-owner-new","input":"/new"}}"#,
+        &service.session().layout_owner_client_id().cloned().unwrap(),
+    );
+    assert!(replaced.contains(r#""kind":"mutated""#), "{replaced}");
+    assert!(service.subagent_descendant_is_fenced(&child_agent_id));
+    let sender = service
+        .message_service()
+        .registered_identity(&sender.agent_id)
+        .cloned()
+        .expect("parent identity remains registered after /new");
+    service
+        .control
+        .message_service_mut()
+        .accept_at(
+            &sender.agent_id,
+            mez_agent::messaging::Envelope {
+                protocol: "mmp/1",
+                id: "persistent-message-after-owner-replacement".to_string(),
+                message_type: "send".to_string(),
+                time: format!("runtime:{}", now_ms.saturating_add(10)),
+                sender: sender.clone(),
+                recipient: mez_agent::messaging::Recipient::Agent(child_id),
+                correlation_id: None,
+                ttl_ms: None,
+                content_type: "text/plain; charset=utf-8".to_string(),
+                payload: "must remain fenced".to_string(),
+                extension_fields: Vec::new(),
+            },
+            now_ms.saturating_add(10),
+        )
+        .unwrap();
+    assert_eq!(
+        service
+            .deliver_pending_runtime_agent_messages(now_ms.saturating_add(10))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .filter(|turn| turn.agent_id == child_agent_id)
+            .count(),
+        child_turn_count
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies restart rehydrates a persistent child only alongside its exact
+/// live parent binding, including durable scope and MMP subscription state.
+#[test]
+fn runtime_persistent_subagent_restore_rehydrates_owned_scope_and_mmp_identity() {
+    let transcript_store =
+        AgentTranscriptStore::new(temp_root("runtime-persistent-subagent-restore"));
+    let mut service = test_runtime_service();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let parent_conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let spawned = service
+        .spawn_runtime_persistent_subagent_session_owned(
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "worker".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::OwnedWrite,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: mez_agent::SubagentSessionMode::New,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
+                task_prompt: String::new(),
+                explicit_user_approval: false,
+                skip_initial_turn: true,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: false,
+            },
+            &parent_conversation_id,
+            "Handle durable MMP requests",
+        )
+        .unwrap();
+    let spawned: serde_json::Value = serde_json::from_str(&spawned).unwrap();
+    let child_pane_id = spawned["pane"]["pane_id"].as_str().unwrap().to_string();
+    let child_agent_id = format!("agent-{child_pane_id}");
+    let child_conversation_id = service
+        .agent_shell_store()
+        .get(&child_pane_id)
+        .unwrap()
+        .session_id
+        .clone();
+    let expected_scope = service
+        .subagent_scope_declaration(&child_agent_id)
+        .expect("spawned persistent scope");
+    service.checkpoint_agent_session_metadata().unwrap();
+
+    let mut restarted = test_runtime_service();
+    restarted.session.id = service.session().id.clone();
+    restarted.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    restarted.set_agent_transcript_store(transcript_store);
+    let restarted_primary = restarted
+        .attach_primary("restarted", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    restarted.start_initial_pane_process(Some("cat")).unwrap();
+    let restored_child = restarted
+        .split_pane_with_process(
+            &restarted_primary,
+            SplitDirection::Vertical,
+            Some("cat >/dev/null"),
+        )
+        .unwrap();
+    assert_eq!(restored_child.pane_id.as_str(), child_pane_id);
+
+    assert_eq!(
+        restarted
+            .restore_agent_sessions_from_transcript_store()
+            .unwrap(),
+        2
+    );
+    let restored = restarted
+        .persistent_subagent(&child_agent_id)
+        .expect("persistent ownership restored");
+    assert_eq!(restored.conversation_id, child_conversation_id);
+    assert_eq!(restored.parent_conversation_id, parent_conversation_id);
+    assert!(restarted.subagent_lineage_has_live_parent_authority(&child_agent_id));
+    assert_eq!(
+        restarted.subagent_scope_declaration(&child_agent_id),
+        Some(expected_scope)
+    );
+    let child_id = AgentId::opaque(child_agent_id).unwrap();
+    assert!(
+        restarted
+            .message_service()
+            .subscription(&child_id)
+            .is_some()
+    );
+    assert_eq!(
+        restarted
+            .message_service()
+            .registered_identity(&child_id)
+            .and_then(|identity| identity.objective.as_deref()),
+        Some("Handle durable MMP requests")
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+    restarted.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies a terminal profile is snapshotted when its child is spawned while
 /// retaining the configured provider action set for execution-time validation.
 #[test]

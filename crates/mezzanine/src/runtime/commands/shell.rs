@@ -954,6 +954,12 @@ impl RuntimeSessionService {
         {
             if let Some(conversation_id) = replaced_conversation_id.as_deref() {
                 self.clear_agent_conversation_provider_request_chain(conversation_id);
+                let parent_agent_id = format!("agent-{pane_id}");
+                self.fence_subagent_descendants_for_parent_conversation(
+                    &parent_agent_id,
+                    conversation_id,
+                );
+                let _ = self.interrupt_fenced_subagent_descendant_turns();
             }
             let conversation_id = self
                 .agent_shell_store()

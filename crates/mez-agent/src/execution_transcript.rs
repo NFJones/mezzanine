@@ -458,14 +458,18 @@ fn assistant_transcript_action_summary(action: &AgentAction) -> String {
         AgentActionPayload::SpawnAgent {
             role,
             session_mode,
+            lifetime,
+            objective,
             size,
             reasoning_effort,
             task_prompt,
             ..
         } => format!(
-            "spawn_agent role={} session={} size={} reasoning_effort={} task_bytes={}",
+            "spawn_agent role={} session={} lifetime={} objective_bytes={} size={} reasoning_effort={} task_bytes={}",
             bounded_transcript_field(role),
             session_mode.map_or("new", |mode| mode.as_str()),
+            lifetime.as_str(),
+            objective.as_deref().map(str::len).unwrap_or(0),
             size.as_deref().unwrap_or("default"),
             reasoning_effort.as_deref().unwrap_or("default"),
             task_prompt.len()
@@ -981,6 +985,8 @@ mod tests {
                 session_mode: Some(crate::SubagentSessionMode::Fork),
                 size: Some("large".to_string()),
                 reasoning_effort: Some("high".to_string()),
+                lifetime: crate::SubagentLifetime::Task,
+                objective: None,
                 task_prompt: "private implementation details".to_string(),
             },
         };
@@ -1002,7 +1008,7 @@ mod tests {
         let content = assistant_context_content_for_execution(&execution);
 
         assert!(content.contains(
-            "spawn_agent role=worker session=fork size=large reasoning_effort=high task_bytes="
+            "spawn_agent role=worker session=fork lifetime=task objective_bytes=0 size=large reasoning_effort=high task_bytes="
         ));
         assert!(!content.contains("private implementation details"));
     }

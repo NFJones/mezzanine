@@ -880,6 +880,8 @@ fn runtime_spawn_agent_action(id: &str, task_prompt: &str) -> mez_agent::AgentAc
             session_mode: None,
             size: None,
             reasoning_effort: None,
+            lifetime: mez_agent::SubagentLifetime::Task,
+            objective: None,
             task_prompt: task_prompt.to_string(),
         },
     }

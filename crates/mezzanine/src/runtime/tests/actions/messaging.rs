@@ -2990,6 +2990,63 @@ fn runtime_list_agents_defaults_to_primary_and_includes_self() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies persistent children expose bounded ownership metadata without
+/// changing the authority represented by MMP discovery rows.
+#[test]
+fn runtime_list_agents_reports_persistent_parent_ownership() {
+    let mut service = test_runtime_service();
+    let parent_conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let started = service
+        .start_agent_prompt_turn("%1", "discover my persistent MMP worker")
+        .unwrap();
+    let turn = messaging_test_turn(&service, &started.turn_id);
+    let now_ms = current_unix_seconds().saturating_mul(1000);
+    service
+        .ensure_runtime_message_identity("agent-%2", None, "worker", &["subagent"], now_ms)
+        .unwrap();
+    service.publish_prepared_runtime_agent_objective(
+        "agent-%2",
+        Some("Triage persistent peer requests"),
+    );
+    service.set_subagent_lineage(
+        "agent-%2",
+        RuntimeSubagentLineage {
+            parent_agent_id: turn.agent_id.clone(),
+            root_agent_id: turn.agent_id.clone(),
+            depth: 1,
+            display_name: "persistent worker".to_string(),
+            terminal: false,
+        },
+    );
+    service.set_persistent_subagent(
+        "agent-%2",
+        crate::runtime::RuntimePersistentSubagent {
+            conversation_id: "persistent-child-conversation".to_string(),
+            parent_agent_id: turn.agent_id.clone(),
+            parent_conversation_id,
+            objective: "Triage persistent peer requests".to_string(),
+        },
+    );
+
+    let listed = execute_list_agents_action(&mut service, &turn, Some("subagent"));
+    let row = listed["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["agent_id"] == "agent-%2")
+        .expect("persistent child discovery row");
+    assert_eq!(row["persistent"], true);
+    assert_eq!(row["parent_agent_id"], turn.agent_id);
+    assert_eq!(row["owned_by_self"], true);
+    assert_eq!(row["objective"], "Triage persistent peer requests");
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies discovery rows honor the documented row and string bounds and that
 /// an unsupported agent-type filter is rejected instead of widened.
 #[test]

@@ -15,6 +15,7 @@ use super::execute_mcp_action_through_runtime;
 use super::runtime_execute_auto_sizing_with_provider;
 use super::service_state::{
     RuntimeAgentPatchRecord, RuntimeApplyPatchBatchState, RuntimePendingApplyPatchPhase,
+    RuntimePersistentSubagent,
 };
 use super::{
     ActionResult, ActionStatus, ActiveTurnSleepInhibition, AgentAction, AgentActionPayload,
@@ -541,6 +542,8 @@ pub(crate) struct RuntimeAgentComponent {
     subagent_scope_declarations: BTreeMap<String, SubagentScopeDeclaration>,
     /// Runtime delegation lineage keyed by child agent id.
     subagent_lineage: BTreeMap<String, RuntimeSubagentLineage>,
+    /// Reusable child ownership keyed by MMP agent id.
+    persistent_subagents: BTreeMap<String, RuntimePersistentSubagent>,
     /// Resumed durable lineage whose historical parent is not live authority.
     restored_subagent_lineage: BTreeSet<String>,
     /// Live descendants fenced when their parent pane binds a different conversation.
@@ -696,6 +699,7 @@ impl RuntimeAgentComponent {
 #[derive(Clone)]
 pub(crate) struct RuntimeSubagentAuthoritySnapshot {
     lineage: Option<RuntimeSubagentLineage>,
+    persistent: Option<RuntimePersistentSubagent>,
     restored_lineage: bool,
     scope_declaration: Option<SubagentScopeDeclaration>,
     scope_registry: mez_agent::ScopeRegistry,
@@ -753,6 +757,22 @@ impl RuntimeSessionService {
     /// Returns runtime lineage metadata for one child agent.
     pub(crate) fn subagent_lineage(&self, agent_id: &str) -> Option<&RuntimeSubagentLineage> {
         self.agent.subagent_lineage.get(agent_id)
+    }
+
+    /// Returns reusable-agent ownership for one child.
+    pub(crate) fn persistent_subagent(&self, agent_id: &str) -> Option<&RuntimePersistentSubagent> {
+        self.agent.persistent_subagents.get(agent_id)
+    }
+
+    /// Records one reusable child after its durable and MMP setup succeeds.
+    pub(crate) fn set_persistent_subagent(
+        &mut self,
+        agent_id: impl Into<String>,
+        persistent: RuntimePersistentSubagent,
+    ) {
+        self.agent
+            .persistent_subagents
+            .insert(agent_id.into(), persistent);
     }
 
     /// Records runtime lineage metadata for one child agent.
@@ -896,6 +916,22 @@ impl RuntimeSessionService {
             .insert(agent_id.into(), declaration);
     }
 
+    /// Restores one live persistent child's narrowed scope ownership.
+    pub(crate) fn restore_persistent_subagent_scope(
+        &mut self,
+        agent_id: &str,
+        declaration: SubagentScopeDeclaration,
+    ) -> Result<()> {
+        self.agent.subagent_scopes.register(
+            agent_id,
+            declaration.cooperation_mode,
+            &declaration.write_scopes,
+            None,
+        )?;
+        self.set_subagent_scope_declaration(agent_id.to_string(), declaration);
+        Ok(())
+    }
+
     /// Reports whether an agent has lineage, declarations, or active scopes.
     pub(crate) fn has_subagent_authority_state(&self, agent_id: &str) -> bool {
         self.agent.subagent_lineage.contains_key(agent_id)
@@ -916,6 +952,7 @@ impl RuntimeSessionService {
             .pending_interrupted_subagent_redirections
             .remove(agent_id);
         self.agent.subagent_lineage.remove(agent_id);
+        self.agent.persistent_subagents.remove(agent_id);
         self.agent.restored_subagent_lineage.remove(agent_id);
         self.agent.fenced_subagent_descendants.remove(agent_id);
         self.agent.subagent_scope_declarations.remove(agent_id);
@@ -929,6 +966,7 @@ impl RuntimeSessionService {
     ) -> RuntimeSubagentAuthoritySnapshot {
         RuntimeSubagentAuthoritySnapshot {
             lineage: self.subagent_lineage(agent_id).cloned(),
+            persistent: self.persistent_subagent(agent_id).cloned(),
             restored_lineage: self.agent.restored_subagent_lineage.contains(agent_id),
             scope_declaration: self.subagent_scope_declaration(agent_id),
             scope_registry: self.agent.subagent_scopes.clone(),
@@ -952,6 +990,11 @@ impl RuntimeSessionService {
             self.agent
                 .subagent_lineage
                 .insert(agent_id.to_string(), lineage);
+        }
+        if let Some(persistent) = snapshot.persistent {
+            self.agent
+                .persistent_subagents
+                .insert(agent_id.to_string(), persistent);
         }
         if snapshot.restored_lineage {
             self.agent
@@ -987,6 +1030,7 @@ impl RuntimeSessionService {
     pub(crate) fn clear_all_subagent_authority_state(&mut self) {
         self.agent.pending_interrupted_subagent_redirections.clear();
         self.agent.subagent_lineage.clear();
+        self.agent.persistent_subagents.clear();
         self.agent.restored_subagent_lineage.clear();
         self.agent.subagent_scope_declarations.clear();
         self.agent.subagent_scopes = mez_agent::ScopeRegistry::default();

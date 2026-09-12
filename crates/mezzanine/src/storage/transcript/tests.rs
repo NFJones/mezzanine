@@ -582,10 +582,97 @@ fn transcript_store_persists_user_objective_without_overwriting_kind() {
             .unwrap()
     );
     let metadata = fs::read_to_string(root.join("source").join("metadata.json")).unwrap();
-    assert!(metadata.contains("\"version\":2"));
+    assert!(metadata.contains("\"version\":3"));
     assert!(metadata.contains("\"conversation_kind\":\"root\""));
     assert!(store.delete("source").unwrap());
     assert!(!root.join("source").join("metadata.json").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Persistent child metadata round-trips its immutable owner, objective, and
+/// narrowed scope while v1/v2 records retain task-lifetime defaults.
+#[test]
+fn transcript_store_round_trips_persistent_contract_and_legacy_task_defaults() {
+    let root = temp_root("persistent-contract-round-trip");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("persistent-child", 1, TranscriptRole::User))
+        .unwrap();
+    let lineage = mez_agent::SubagentSessionLineage {
+        parent_agent_id: "agent-%1".to_string(),
+        root_agent_id: "agent-%1".to_string(),
+        depth: 1,
+        display_name: "persistent child".to_string(),
+        terminal: false,
+    };
+    let scope = mez_agent::SubagentScopeDeclaration {
+        cooperation_mode: mez_agent::CooperationMode::OwnedWrite,
+        approval_provenance: mez_agent::SubagentApprovalProvenance::Requested,
+        current_directory: "/repo".to_string(),
+        read_scopes: vec!["/repo".to_string()],
+        write_scopes: vec!["/repo/src".to_string()],
+        permission_preset: Some(mez_agent::PermissionPreset::Auto),
+    };
+    store
+        .save_persistent_subagent_conversation_contract(
+            "persistent-child",
+            lineage.clone(),
+            mez_agent::AllowedActionSet::say_only(),
+            "parent-conversation",
+            "  Triage\tMMP work  ",
+            scope.clone(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        store.subagent_lifetime("persistent-child").unwrap(),
+        mez_agent::SubagentLifetime::Persistent
+    );
+    assert_eq!(
+        store
+            .persistent_subagent_parent_conversation("persistent-child")
+            .unwrap()
+            .as_deref(),
+        Some("parent-conversation")
+    );
+    assert_eq!(
+        store
+            .parent_objective("persistent-child")
+            .unwrap()
+            .as_deref(),
+        Some("Triage MMP work")
+    );
+    assert_eq!(
+        store.persistent_subagent_scope("persistent-child").unwrap(),
+        Some(scope)
+    );
+    assert_eq!(
+        store
+            .conversation_subagent_lineage("persistent-child")
+            .unwrap(),
+        Some(lineage)
+    );
+
+    for (conversation_id, version) in [("legacy-v1", 1), ("legacy-v2", 2)] {
+        store
+            .append(&entry(conversation_id, 1, TranscriptRole::User))
+            .unwrap();
+        fs::write(
+            root.join(conversation_id).join("metadata.json"),
+            format!(r#"{{"version":{version},"conversation_kind":"root"}}"#),
+        )
+        .unwrap();
+        assert_eq!(
+            store.subagent_lifetime(conversation_id).unwrap(),
+            mez_agent::SubagentLifetime::Task
+        );
+        assert_eq!(store.parent_objective(conversation_id).unwrap(), None);
+        assert_eq!(
+            store.persistent_subagent_scope(conversation_id).unwrap(),
+            None
+        );
+    }
     let _ = fs::remove_dir_all(root);
 }
 

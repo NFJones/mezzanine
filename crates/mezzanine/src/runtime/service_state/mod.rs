@@ -28,7 +28,7 @@ pub(crate) use agent_state::{
     RuntimeHookPipelineDecision, RuntimeLiveOverlaySource, RuntimeLiveOverlaySourceKind,
     RuntimeModelProfileOverrideScope, RuntimeModelProfileOverrideStore,
     RuntimePaneAgentStatusSelector, RuntimePaneSettingsEntry, RuntimePathResolutionCacheKey,
-    RuntimePendingApplyPatchPhase, RuntimeRecordBrowserOverlayFrame,
+    RuntimePendingApplyPatchPhase, RuntimePersistentSubagent, RuntimeRecordBrowserOverlayFrame,
     RuntimeRecordBrowserOverlaySource, RuntimeRecordBrowserOverlayState,
     RuntimeSandboxFailureAssessment, RuntimeSandboxFallbackAudit,
     RuntimeShellTransactionActionFailure, RuntimeSubagentLineage,

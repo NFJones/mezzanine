@@ -937,6 +937,8 @@ pub(super) fn runtime_maap_action_payload_trace_json(
             session_mode,
             size,
             reasoning_effort,
+            lifetime,
+            objective,
             task_prompt,
         } => {
             data.insert("role".to_string(), serde_json::json!(role));
@@ -955,6 +957,14 @@ pub(super) fn runtime_maap_action_payload_trace_json(
             data.insert(
                 "reasoning_effort".to_string(),
                 serde_json::json!(reasoning_effort),
+            );
+            data.insert("lifetime".to_string(), serde_json::json!(lifetime.as_str()));
+            data.insert(
+                "objective".to_string(),
+                objective
+                    .as_deref()
+                    .map(runtime_bounded_trace_string_value)
+                    .unwrap_or(serde_json::Value::Null),
             );
             data.insert(
                 "task_prompt".to_string(),

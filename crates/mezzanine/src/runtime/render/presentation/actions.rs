@@ -599,6 +599,8 @@ mod tests {
                 session_mode: Some(mez_agent::SubagentSessionMode::Fork),
                 size: Some("large".to_string()),
                 reasoning_effort: Some("high".to_string()),
+                lifetime: mez_agent::SubagentLifetime::Task,
+                objective: None,
                 task_prompt: "implement the fix".to_string(),
             },
         };
@@ -626,6 +628,8 @@ mod tests {
                 session_mode: None,
                 size: None,
                 reasoning_effort: None,
+                lifetime: mez_agent::SubagentLifetime::Task,
+                objective: None,
                 task_prompt: "inspect the repository".to_string(),
             },
         };

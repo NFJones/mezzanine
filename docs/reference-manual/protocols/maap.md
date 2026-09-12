@@ -54,7 +54,7 @@ family; otherwise the current surface is final for that response.
 | `send_message` | `recipient`, `content_type`, `payload` | Requests local MMP delivery to one recipient or scope. Optional `correlation_id` names the message being answered. Approval is per message and per recipient. A recipient that fails the grammar is not policy-gated: the planner neither admits nor denies it, and delivery fails with `invalid_message_recipient` so the recipient can be corrected. |
 | `list_agents` | none | Read-only peer discovery over the session message service; no approval mode prompts for it. Optional `agent_type` narrows or widens the view. |
 | `wait` | none | Parks the same turn until model-originated MMP peer mail arrives. It is valid only for active inter-agent MMP coordination, must be the only executable action in its batch, and is not a general delay or external-event primitive. |
-| `spawn_agent` | `role`, `task_prompt` | Requests pane-backed delegation. Optional `session: fork | new` selects a bounded immutable parent-history snapshot or an isolated child session. Optional atomic `size` and `reasoning_effort`, advertised per configured size, select the initial child turn only; scope and policy remain runtime-controlled. |
+| `spawn_agent` | `role`, `task_prompt` | Requests pane-backed delegation. Optional `session: fork | new` selects a bounded immutable parent-history snapshot or an isolated child session. Optional atomic `size` and `reasoning_effort`, advertised per configured size, select the initial child turn only. `lifetime: persistent` is exclusively for reusable inter-agent MMP actors and requires `objective`; it must never be used for another purpose. Scope and policy remain runtime-controlled. |
 | `config_change` | `setting_path`, `operation`, `value` | Proposes a supported live leaf configuration mutation. Set values accept strings, signed integers, booleans, or string arrays; objects, null set-values, floats, and mixed arrays are rejected. Provider schemas carry the value as a string containing a JSON scalar or string array, while plain non-JSON text is a string value. |
 | `mcp_server_search` | `query` | Searches configured MCP directory records and persists safe results as durable action evidence. An optional `limit` is from 1 through 20. |
 | `mcp_server_get` | `server` | Retrieves one referenceable server's complete safe tool contract; retrieval is required before calling it. |
@@ -91,7 +91,14 @@ provider schema may omit from a particular turn:
   `scope`, and `expires_in_days`.
 - `mcp_server_search`: optional `limit` from 1 through 20.
 - `spawn_agent`: optional `placement`, `cooperation_mode`, `read_scopes`,
-  `write_scopes`, `session`, and atomic `size`/`reasoning_effort`. `size` is
+  `write_scopes`, `session`, `lifetime`, `objective`, and atomic
+  `size`/`reasoning_effort`. `lifetime` is `task` or `persistent`; omission or
+  `null` means `task`. Use `persistent` exclusively for a reusable agent that
+  will be interacted with over MMP, never for any other circumstance, and
+  provide its continuing `objective`. An empty persistent `task_prompt`
+  provisions an idle actor; a non-empty prompt starts an optional initial turn.
+  Persistent agents remain discoverable and messageable between turns and are
+  owned by the creating parent conversation, not globally. `size` is
   `small`, `medium`, or `large`; both fields are required together, and the
   provider schema lists each configured size profile plus the reasoning efforts
   that size accepts. A valid pair resolves against the inherited auto-sizing

@@ -6994,6 +6994,11 @@ The baseline action types are:
   matching set is larger. Each row MUST also report whether it shortened a string
   or omitted capabilities.
 - `spawn_agent`: Request subagent pane creation through the control endpoint.
+  A `persistent` lifetime MUST be used exclusively for a reusable child that
+  the parent will interact with over MMP and MUST NOT be used in any other
+  circumstance. Such a child is owned by the current parent conversation, not
+  globally, and is controlled through `list_agents`, `send_message`, and
+  `wait`.
 - `config_change`: Propose a live configuration change.
 - `memory_search`: Search runtime-owned persistent memory records after the
   `memory` capability has been granted. This action MUST be available only when
@@ -7303,6 +7308,20 @@ Mezzanine MUST normalize it to the canonical MMP text content type
 `text/plain; charset=utf-8` before validating and delivering the message.
 
 A compact `spawn_agent` action MUST include requested role and task prompt.
+It MAY include `lifetime: "task" | "persistent" | null` and an optional
+`objective`. Omission or `null` lifetime MUST preserve one-task behavior and a
+task-lifetime spawn MUST reject `objective`. A persistent spawn MUST require a
+normalized, bounded `objective` under the shared MMP objective contract and
+MUST be used exclusively for a reusable agent that the parent will interact
+with over MMP, never for any other circumstance. Its task prompt MAY be empty
+to provision the actor idle; a non-empty prompt starts an optional initial
+turn. Explicit initial size and reasoning fields MUST require a non-empty
+initial prompt. Persistent spawns MUST settle provisioning immediately instead
+of joining under the global subagent wait policy. The child MUST retain its
+pane, identity, conversation, frozen action catalog, lineage, scopes, MMP
+subscription, and objective between individual turns. Parent conversation
+replacement or shutdown and pane/session shutdown MUST remove or fence owned
+persistent children so authority cannot become orphaned.
 It MAY include `session: "fork" | "new"`. `fork` creates a distinct durable
 subagent conversation seeded from the parent conversation's bounded current
 transcript snapshot; `new` creates a distinct durable subagent conversation

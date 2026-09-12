@@ -64,7 +64,7 @@ const SESSION_SUMMARY_FILE_NAME: &str = "summary.json";
 /// Defines the versioned durable conversation classification sidecar.
 const SESSION_METADATA_FILE_NAME: &str = "metadata.json";
 /// Current per-conversation metadata schema version.
-const SESSION_METADATA_VERSION: u64 = 2;
+const SESSION_METADATA_VERSION: u64 = 3;
 
 /// Versioned authoritative metadata for one durable conversation.
 ///
@@ -78,6 +78,14 @@ struct ConversationMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     user_objective: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    parent_objective: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parent_conversation_id: Option<String>,
+    #[serde(default)]
+    subagent_lifetime: mez_agent::SubagentLifetime,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    subagent_scope: Option<mez_agent::SubagentScopeDeclaration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     allowed_actions: Option<AllowedActionSet>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     subagent_lineage: Option<mez_agent::SubagentSessionLineage>,
@@ -88,9 +96,14 @@ struct ConversationMetadata {
 fn validate_conversation_metadata_contract(metadata: &ConversationMetadata) -> Result<()> {
     match metadata.conversation_kind.as_str() {
         "root" => {
-            if metadata.subagent_lineage.is_some() {
+            if metadata.subagent_lineage.is_some()
+                || metadata.parent_objective.is_some()
+                || metadata.parent_conversation_id.is_some()
+                || metadata.subagent_lifetime != mez_agent::SubagentLifetime::Task
+                || metadata.subagent_scope.is_some()
+            {
                 return Err(MezError::invalid_args(
-                    "root conversation metadata cannot contain subagent lineage",
+                    "root conversation metadata cannot contain subagent lifecycle metadata",
                 ));
             }
             if let Some(allowed_actions) = metadata.allowed_actions.as_ref() {
@@ -124,6 +137,30 @@ fn validate_conversation_metadata_contract(metadata: &ConversationMetadata) -> R
             if lineage.terminal && allowed_actions.contains(mez_agent::AllowedAction::SpawnAgent) {
                 return Err(MezError::invalid_args(
                     "terminal subagent conversation metadata cannot contain spawn_agent",
+                ));
+            }
+            if metadata.subagent_lifetime == mez_agent::SubagentLifetime::Persistent {
+                let objective = metadata.parent_objective.as_deref().ok_or_else(|| {
+                    MezError::invalid_state(
+                        "persistent subagent conversation requires a parent objective",
+                    )
+                })?;
+                mez_agent::messaging::normalize_objective(objective)?;
+                let parent_conversation_id =
+                    metadata.parent_conversation_id.as_deref().ok_or_else(|| {
+                        MezError::invalid_state(
+                            "persistent subagent conversation requires a parent conversation",
+                        )
+                    })?;
+                validate_conversation_id(parent_conversation_id)?;
+                if metadata.subagent_scope.is_none() {
+                    return Err(MezError::invalid_state(
+                        "persistent subagent conversation requires a durable scope declaration",
+                    ));
+                }
+            } else if metadata.subagent_scope.is_some() {
+                return Err(MezError::invalid_state(
+                    "task subagent conversation cannot contain persistent scope metadata",
                 ));
             }
         }
@@ -695,6 +732,42 @@ impl AgentTranscriptStore {
         lineage: mez_agent::SubagentSessionLineage,
         allowed_actions: AllowedActionSet,
     ) -> Result<()> {
+        self.save_subagent_conversation_contract_with_lifecycle(
+            conversation_id,
+            lineage,
+            allowed_actions,
+            None,
+        )
+    }
+
+    /// Atomically captures a reusable child contract and its parent objective.
+    pub fn save_persistent_subagent_conversation_contract(
+        &self,
+        conversation_id: &str,
+        lineage: mez_agent::SubagentSessionLineage,
+        allowed_actions: AllowedActionSet,
+        parent_conversation_id: &str,
+        objective: &str,
+        scope: mez_agent::SubagentScopeDeclaration,
+    ) -> Result<()> {
+        validate_conversation_id(parent_conversation_id)?;
+        let objective = mez_agent::messaging::normalize_objective(objective)?;
+        self.save_subagent_conversation_contract_with_lifecycle(
+            conversation_id,
+            lineage,
+            allowed_actions,
+            Some((parent_conversation_id, objective.as_str(), scope)),
+        )
+    }
+
+    /// Owns the single-lock child metadata transaction for both lifetimes.
+    fn save_subagent_conversation_contract_with_lifecycle(
+        &self,
+        conversation_id: &str,
+        lineage: mez_agent::SubagentSessionLineage,
+        allowed_actions: AllowedActionSet,
+        persistent: Option<(&str, &str, mez_agent::SubagentScopeDeclaration)>,
+    ) -> Result<()> {
         lineage
             .validate_persisted()
             .map_err(MezError::invalid_args)?;
@@ -715,6 +788,18 @@ impl AgentTranscriptStore {
             .then(|| std_fs::read(&metadata_path))
             .transpose()?;
         let mut metadata = self.read_conversation_metadata_locked(conversation_id)?;
+        let (lifetime, parent_conversation_id, parent_objective, subagent_scope) = persistent
+            .map_or(
+                (mez_agent::SubagentLifetime::Task, None, None, None),
+                |(parent_conversation_id, objective, scope)| {
+                    (
+                        mez_agent::SubagentLifetime::Persistent,
+                        Some(parent_conversation_id.to_string()),
+                        Some(objective.to_string()),
+                        Some(scope),
+                    )
+                },
+            );
         match (
             metadata.conversation_kind.as_str(),
             metadata.subagent_lineage.as_ref(),
@@ -724,9 +809,18 @@ impl AgentTranscriptStore {
                 metadata.conversation_kind = "subagent".to_string();
                 metadata.subagent_lineage = Some(lineage);
                 metadata.allowed_actions = Some(allowed_actions);
+                metadata.subagent_lifetime = lifetime;
+                metadata.parent_conversation_id = parent_conversation_id;
+                metadata.parent_objective = parent_objective;
+                metadata.subagent_scope = subagent_scope;
             }
             ("subagent", Some(current_lineage), Some(current_actions))
-                if current_lineage == &lineage && current_actions == &allowed_actions =>
+                if current_lineage == &lineage
+                    && current_actions == &allowed_actions
+                    && metadata.subagent_lifetime == lifetime
+                    && metadata.parent_conversation_id == parent_conversation_id
+                    && metadata.parent_objective == parent_objective
+                    && metadata.subagent_scope == subagent_scope =>
             {
                 return Ok(());
             }
@@ -769,6 +863,46 @@ impl AgentTranscriptStore {
         }
         self.remove_archive_recovery_journal(conversation_id)?;
         Ok(())
+    }
+
+    /// Loads the durable lifetime of one child conversation.
+    pub fn subagent_lifetime(&self, conversation_id: &str) -> Result<mez_agent::SubagentLifetime> {
+        Ok(self
+            .read_conversation_metadata(conversation_id)?
+            .subagent_lifetime)
+    }
+
+    /// Loads the durable owner conversation of a persistent child.
+    pub fn persistent_subagent_parent_conversation(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<String>> {
+        Ok(self
+            .read_conversation_metadata(conversation_id)?
+            .parent_conversation_id)
+    }
+
+    /// Loads the parent-assigned persistent objective for a child.
+    pub fn parent_objective(&self, conversation_id: &str) -> Result<Option<String>> {
+        Ok(self
+            .read_conversation_metadata(conversation_id)?
+            .parent_objective)
+    }
+
+    /// Loads the durable narrowed scope of a persistent child.
+    pub fn persistent_subagent_scope(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<mez_agent::SubagentScopeDeclaration>> {
+        Ok(self
+            .read_conversation_metadata(conversation_id)?
+            .subagent_scope)
+    }
+
+    /// Resolves the durable objective precedence for one conversation.
+    pub fn effective_persisted_objective(&self, conversation_id: &str) -> Result<Option<String>> {
+        let metadata = self.read_conversation_metadata(conversation_id)?;
+        Ok(metadata.user_objective.or(metadata.parent_objective))
     }
 
     /// Loads one conversation's durable origin, defaulting legacy sessions to root.
@@ -2832,6 +2966,10 @@ impl AgentTranscriptStore {
                 version: SESSION_METADATA_VERSION,
                 conversation_kind: "root".to_string(),
                 user_objective: None,
+                parent_objective: None,
+                parent_conversation_id: None,
+                subagent_lifetime: mez_agent::SubagentLifetime::Task,
+                subagent_scope: None,
                 allowed_actions: None,
                 subagent_lineage: None,
             });
@@ -2841,7 +2979,7 @@ impl AgentTranscriptStore {
             MezError::invalid_args(format!("conversation metadata decode failed: {error}"))
         })?;
         match metadata.version {
-            1 | SESSION_METADATA_VERSION => {}
+            1 | 2 | SESSION_METADATA_VERSION => {}
             _ => {
                 return Err(MezError::invalid_args(
                     "unsupported conversation metadata version",
@@ -2849,6 +2987,9 @@ impl AgentTranscriptStore {
             }
         }
         if let Some(objective) = metadata.user_objective.as_deref() {
+            mez_agent::messaging::normalize_objective(objective)?;
+        }
+        if let Some(objective) = metadata.parent_objective.as_deref() {
             mez_agent::messaging::normalize_objective(objective)?;
         }
         validate_conversation_metadata_contract(&metadata)?;

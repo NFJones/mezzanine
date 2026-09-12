@@ -429,6 +429,10 @@ pub enum AgentActionPayload {
         ///
         /// The value is valid only when paired with `size`.
         reasoning_effort: Option<String>,
+        /// Whether the child is one-shot or reusable through MMP.
+        lifetime: crate::SubagentLifetime,
+        /// Parent-assigned durable objective for a persistent child.
+        objective: Option<String>,
         /// Stores the task prompt value for this data structure.
         ///
         /// The field is part of structured state exchanged across this module
@@ -908,13 +912,35 @@ impl AgentAction {
                 cooperation_mode,
                 size,
                 reasoning_effort,
+                lifetime,
+                objective,
                 task_prompt,
                 ..
             } => {
                 validate_non_empty("subagent role", role)?;
                 validate_non_empty("subagent placement", placement)?;
                 validate_non_empty("subagent cooperation mode", cooperation_mode)?;
-                validate_non_empty("subagent task prompt", task_prompt)?;
+                if *lifetime == crate::SubagentLifetime::Task {
+                    validate_non_empty("subagent task prompt", task_prompt)?;
+                    if objective.is_some() {
+                        return Err(MaapContractError::invalid_args(
+                            "task subagent spawn must not define a persistent objective",
+                        ));
+                    }
+                } else {
+                    let objective = objective.as_deref().ok_or_else(|| {
+                        MaapContractError::invalid_args(
+                            "persistent subagent spawn requires an objective",
+                        )
+                    })?;
+                    crate::messaging::normalize_objective(objective)
+                        .map_err(|error| MaapContractError::invalid_args(error.message()))?;
+                    if task_prompt.trim().is_empty() && size.is_some() {
+                        return Err(MaapContractError::invalid_args(
+                            "persistent idle spawn cannot select an initial model size",
+                        ));
+                    }
+                }
                 match (size.as_deref(), reasoning_effort.as_deref()) {
                     (None, None) => Ok(()),
                     (Some(size), Some(reasoning_effort)) => {
@@ -1476,6 +1502,16 @@ fn parse_maap_action_value(
             }
             let size = optional_string(object, "size")?.map(str::to_string);
             let reasoning_effort = optional_string(object, "reasoning_effort")?.map(str::to_string);
+            let lifetime = optional_string(object, "lifetime")?
+                .map(|value| {
+                    crate::SubagentLifetime::parse(value).ok_or_else(|| {
+                        MaapContractError::invalid_args(
+                            "subagent lifetime must be task or persistent",
+                        )
+                    })
+                })
+                .transpose()?
+                .unwrap_or_default();
             if size.is_some() != reasoning_effort.is_some() {
                 return Err(MaapContractError::invalid_args(
                     "subagent size and reasoning_effort must be provided together",
@@ -1516,6 +1552,8 @@ fn parse_maap_action_value(
                     .transpose()?,
                 size,
                 reasoning_effort,
+                lifetime,
+                objective: optional_string(object, "objective")?.map(str::to_string),
                 task_prompt: required_string(object, "task_prompt")?.to_string(),
             }
         }
@@ -2134,6 +2172,81 @@ mod tests {
         assert_eq!(
             unknown.message(),
             "actions[0]: subagent size must be small, medium, or large"
+        );
+    }
+
+    /// Verifies persistent spawning is an explicit MMP lifecycle contract while
+    /// omitted lifetime preserves ordinary one-task delegation.
+    #[test]
+    fn spawn_agent_parser_validates_persistent_lifecycle_contract() {
+        let task = parse_maap_action_batch_json_for_turn(
+            r#"{"rationale":"delegate once","actions":[{"type":"spawn_agent","role":"worker","task_prompt":"implement one change"}]}"#,
+            "turn-1",
+            "agent-1",
+        )
+        .unwrap();
+        assert!(matches!(
+            task.actions[0].payload,
+            AgentActionPayload::SpawnAgent {
+                lifetime: crate::SubagentLifetime::Task,
+                objective: None,
+                ..
+            }
+        ));
+
+        let persistent = parse_maap_action_batch_json_for_turn(
+            r#"{"rationale":"provision an MMP actor","actions":[{"type":"spawn_agent","role":"worker","lifetime":"persistent","objective":"  Triage\tpeer requests  ","task_prompt":""}]}"#,
+            "turn-1",
+            "agent-1",
+        )
+        .unwrap();
+        assert!(matches!(
+            &persistent.actions[0].payload,
+            AgentActionPayload::SpawnAgent {
+                lifetime: crate::SubagentLifetime::Persistent,
+                objective: Some(objective),
+                task_prompt,
+                ..
+            } if objective == "  Triage\tpeer requests  " && task_prompt.is_empty()
+        ));
+
+        let missing_objective = parse_maap_action_batch_json_for_turn(
+            r#"{"rationale":"provision","actions":[{"type":"spawn_agent","role":"worker","lifetime":"persistent","task_prompt":""}]}"#,
+            "turn-1",
+            "agent-1",
+        )
+        .unwrap()
+        .validate_harness_contract(&[], &[])
+        .unwrap_err();
+        assert_eq!(
+            missing_objective.message(),
+            "persistent subagent spawn requires an objective"
+        );
+
+        let task_objective = parse_maap_action_batch_json_for_turn(
+            r#"{"rationale":"delegate once","actions":[{"type":"spawn_agent","role":"worker","objective":"conflicting durable responsibility","task_prompt":"implement one change"}]}"#,
+            "turn-1",
+            "agent-1",
+        )
+        .unwrap()
+        .validate_harness_contract(&[], &[])
+        .unwrap_err();
+        assert_eq!(
+            task_objective.message(),
+            "task subagent spawn must not define a persistent objective"
+        );
+
+        let idle_sizing = parse_maap_action_batch_json_for_turn(
+            r#"{"rationale":"provision","actions":[{"type":"spawn_agent","role":"worker","lifetime":"persistent","objective":"Handle peer requests","size":"small","reasoning_effort":"low","task_prompt":""}]}"#,
+            "turn-1",
+            "agent-1",
+        )
+        .unwrap()
+        .validate_harness_contract(&[], &[])
+        .unwrap_err();
+        assert_eq!(
+            idle_sizing.message(),
+            "persistent idle spawn cannot select an initial model size"
         );
     }
 

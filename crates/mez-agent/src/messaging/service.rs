@@ -378,6 +378,22 @@ impl MessageService {
         self.registered.get(agent_id)
     }
 
+    /// Retires one agent identity and its delivery subscription.
+    ///
+    /// Retained envelopes remain in the bounded queue for other matching
+    /// recipients, but the retired identity is no longer discoverable,
+    /// messageable, or eligible for fanout.
+    pub fn retire_agent_identity(&mut self, agent_id: &AgentId) -> bool {
+        let removed = self.registered.remove(agent_id).is_some();
+        self.presence.remove(agent_id);
+        self.subscriptions.remove(agent_id);
+        self.subscription_order.remove(agent_id.as_str());
+        if self.fanout_after_recipient.as_deref() == Some(agent_id.as_str()) {
+            self.fanout_after_recipient = None;
+        }
+        removed
+    }
+
     /// Runs the update presence operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -1586,6 +1602,36 @@ mod tests {
                 .register_agent_with_objective(None, None, "agent", Vec::new(), Some("  "))
                 .is_err()
         );
+    }
+
+    /// Retiring a runtime-owned child removes every MMP surface that could
+    /// otherwise leave a rolled-back or closed child reusable.
+    #[test]
+    fn retired_agent_identity_is_not_discoverable_or_subscribed() {
+        let mut service = MessageService::default();
+        let identity = service
+            .register_agent_with_objective(
+                None,
+                None,
+                "worker",
+                vec!["subagent".to_string()],
+                Some("Handle peer work"),
+            )
+            .unwrap();
+        service
+            .subscribe_from_retained_start(&identity.agent_id)
+            .unwrap();
+
+        assert!(service.retire_agent_identity(&identity.agent_id));
+        assert!(service.registered_identity(&identity.agent_id).is_none());
+        assert!(service.subscription(&identity.agent_id).is_none());
+        assert!(service.presence().is_empty());
+        assert!(
+            service
+                .discover_agents_filtered(None, None, None, None, None, &[])
+                .is_empty()
+        );
+        assert!(!service.retire_agent_identity(&identity.agent_id));
     }
 
     /// An unchanged objective publishes nothing and does not churn presence, so

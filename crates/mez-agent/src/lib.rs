@@ -566,7 +566,7 @@ pub use slash::{
 pub use subagent::{
     ActiveWriteScope, BuiltinSubagentRole, CooperationMode, DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
     DefaultSubagentScopeEnforcement, ScopeConflict, ScopeRegistry, SubagentApprovalProvenance,
-    SubagentContractError, SubagentContractErrorKind, SubagentContractResult,
+    SubagentContractError, SubagentContractErrorKind, SubagentContractResult, SubagentLifetime,
     SubagentParentAuthority, SubagentParentFilesystemBounds, SubagentProfile,
     SubagentScopeDeclaration, SubagentScopeEnforcement, SubagentSessionMode, SubagentSpawnRequest,
     builtin_role_name, builtin_subagent_profiles, normalize_subagent_spawn_role,

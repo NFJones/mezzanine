@@ -132,6 +132,7 @@ impl RuntimeSessionService {
         let mut candidates = BTreeMap::new();
         for identity in service.discover_agents_filtered(None, None, None, None, None, &[]) {
             let agent_id = identity.agent_id.as_str().to_string();
+            let persistent = self.persistent_subagent(&agent_id);
             let capabilities = identity
                 .capabilities
                 .iter()
@@ -176,6 +177,13 @@ impl RuntimeSessionService {
                 "capabilities": capabilities,
                 "status": presence.get(&agent_id).copied(),
                 "objective": identity.objective.as_deref().map(agent_list_bounded_text),
+                "persistent": persistent.is_some(),
+                "parent_agent_id": persistent
+                    .map(|record| agent_list_bounded_text(&record.parent_agent_id)),
+                "owned_by_self": persistent.is_some_and(|record| {
+                    record.parent_agent_id == turn.agent_id
+                        && record.parent_conversation_id == turn.conversation_id
+                }),
                 "truncated": row_truncated,
             });
             candidates.insert(agent_id, row);

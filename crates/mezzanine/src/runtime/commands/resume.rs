@@ -372,7 +372,7 @@ impl RuntimeSessionService {
         let presentation_entries = store.inspect_presentation(&conversation_id)?;
         let resume_directory = runtime_resume_directory_from_summary(&summary)
             .or_else(|| runtime_resume_directory_from_entries(&entries));
-        let prepared_objective = store.user_objective(&conversation_id)?;
+        let prepared_objective = store.effective_persisted_objective(&conversation_id)?;
         let prepared_resume_state =
             self.prepare_agent_resume_state_for_conversation(&conversation_id)?;
         let previous_checkpoint_records =

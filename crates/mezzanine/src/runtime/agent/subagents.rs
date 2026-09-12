@@ -846,6 +846,8 @@ impl RuntimeSessionService {
             session_mode,
             size,
             reasoning_effort,
+            lifetime,
+            objective,
             task_prompt,
         } = &action.payload
         else {
@@ -888,6 +890,9 @@ impl RuntimeSessionService {
             ),
             ("prompt".to_string(), serde_json::json!(prompt)),
         ]);
+        if *lifetime == mez_agent::SubagentLifetime::Persistent && task_prompt.trim().is_empty() {
+            params.insert("skip_initial_turn".to_string(), serde_json::json!(true));
+        }
         if let Some(read_scopes) = read_scopes {
             params.insert("read_scopes".to_string(), serde_json::json!(read_scopes));
         }
@@ -909,9 +914,21 @@ impl RuntimeSessionService {
             mez_agent::SubagentApprovalProvenance::Requested,
         )?;
         let placement_mode = runtime_subagent_placement_mode(&params)?;
-        let spawn_json = self
-            .spawn_runtime_subagent_session_owned(spawn, placement_mode)
-            .map_err(SpawnActionExecutionError::before_allocation)?;
+        let spawn_json = if *lifetime == mez_agent::SubagentLifetime::Persistent {
+            self.spawn_runtime_persistent_subagent_session_owned(
+                spawn,
+                placement_mode,
+                &turn.conversation_id,
+                objective.as_deref().ok_or_else(|| {
+                    SpawnActionExecutionError::before_allocation(MezError::invalid_args(
+                        "persistent subagent spawn requires an objective",
+                    ))
+                })?,
+            )
+        } else {
+            self.spawn_runtime_subagent_session_owned(spawn, placement_mode)
+        }
+        .map_err(SpawnActionExecutionError::before_allocation)?;
         // The child pane, scope declaration, and conversation exist from this
         // point, so a later failure must report the allocated child instead of
         // the contradicting no-child-created evidence.
@@ -923,7 +940,9 @@ impl RuntimeSessionService {
                 allocated_child,
             ));
         }
-        if self.agent.subagent_wait_policy == SubagentWaitPolicy::Join {
+        if *lifetime == mez_agent::SubagentLifetime::Task
+            && self.agent.subagent_wait_policy == SubagentWaitPolicy::Join
+        {
             let (child_agent_id, child_display_name, child_turn_id) =
                 runtime_spawn_json_agent_and_turn(&spawn_json).map_err(|error| {
                     SpawnActionExecutionError::after_allocation(error, allocated_child.clone())
@@ -975,10 +994,20 @@ impl RuntimeSessionService {
                 runtime_agent_terminal_preview(task_prompt)
             )],
             Some(format!(
-                r#"{{"spawn":{},"placement":"{}","session":"{}","delivery_status":"accepted","join_policy":"detach","error":null}}"#,
+                r#"{{"spawn":{},"placement":"{}","session":"{}","lifetime":"{}","objective":{},"delivery_status":"accepted","join_policy":"{}","error":null}}"#,
                 spawn_json,
                 json_escape(placement),
-                json_escape(effective_session_mode)
+                json_escape(effective_session_mode),
+                lifetime.as_str(),
+                objective
+                    .as_deref()
+                    .map(|value| format!(r#""{}""#, json_escape(value)))
+                    .unwrap_or_else(|| "null".to_string()),
+                if *lifetime == mez_agent::SubagentLifetime::Persistent {
+                    "persistent"
+                } else {
+                    "detach"
+                }
             )),
         ))
     }
@@ -1475,6 +1504,7 @@ impl RuntimeSessionService {
                 Ok(())
             }
         };
+        let is_persistent_agent = self.persistent_subagent(&turn.agent_id).is_some();
         let is_persistent_macro_step = turn.cooperation_mode.as_deref() == Some("macro-step")
             || self
                 .agent
@@ -1525,10 +1555,10 @@ impl RuntimeSessionService {
             )?;
         }
         self.agent.subagent_task_routes.remove(&turn.turn_id);
-        if !is_persistent_macro_step {
+        if !is_persistent_macro_step && !is_persistent_agent {
             self.remove_subagent_authority_state(&turn.agent_id);
         }
-        if success && !is_persistent_macro_step {
+        if success && !is_persistent_macro_step && !is_persistent_agent {
             self.agent
                 .pending_terminal_subagent_pane_closes
                 .insert(turn.pane_id.clone());

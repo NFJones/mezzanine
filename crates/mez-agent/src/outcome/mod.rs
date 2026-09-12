@@ -1638,6 +1638,8 @@ mod tests {
                 session_mode: None,
                 size: None,
                 reasoning_effort: None,
+                lifetime: crate::SubagentLifetime::Task,
+                objective: None,
                 task_prompt: "inspect the repository".to_string(),
             },
         };

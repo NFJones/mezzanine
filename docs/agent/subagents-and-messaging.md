@@ -40,6 +40,17 @@ The default join behavior waits for a child result before the parent continues;
 detached work can report later through local messaging. Approval requests from
 children are surfaced to the primary client and cannot be decided by observers.
 
+Use `lifetime: persistent` exclusively when the child is a reusable actor that
+the parent will interact with over MMP, and never for any other circumstance.
+Persistent spawns require a durable `objective`; an empty `task_prompt`
+provisions the child idle, while a non-empty prompt starts an optional initial
+turn. After each turn the same pane, agent identity, conversation, frozen action
+catalog, lineage, scopes, inbox subscription, and parent-assigned objective are
+retained. The parent discovers and controls that actor through `list_agents`,
+`send_message`, and `wait`. Persistent children are owned by the current parent
+conversation and are closed or fenced when that owner is replaced or removed;
+they are not global daemons. Omit `lifetime` for ordinary one-task delegation.
+
 ## Message peers directly
 
 Every agent publishes a bounded, generated objective through the session message
@@ -51,7 +62,9 @@ value for the current durable conversation with `/objective <text>`; the user
 value wins until `/objective --clear`. An objective-less refresh is a no-op that
 keeps the previous value and presence timestamp, so a turn can never clear a
 peer's published objective. Discover peers with the read-only
-`list_agents` action. Its optional
+`list_agents` action. Persistent rows additionally report their persistent
+status, owning parent agent, and whether the requesting parent conversation owns
+them. Its optional
 `agent_type` defaults to `primary` and lists primary parent agents only;
 `subagent`, `internal`, and `all` widen the view to spawned subagents,
 runtime-internal controllers, and every kind. Rows include the requesting agent

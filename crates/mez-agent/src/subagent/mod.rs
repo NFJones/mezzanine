@@ -62,6 +62,36 @@ impl std::error::Error for SubagentContractError {}
 /// Result returned by provider-independent subagent contracts.
 pub type SubagentContractResult<T> = Result<T, SubagentContractError>;
 
+/// Lifetime policy for one spawned subagent session.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentLifetime {
+    /// Close the child after its delegated task reaches a terminal state.
+    #[default]
+    Task,
+    /// Retain the child as an MMP-addressable agent across multiple turns.
+    Persistent,
+}
+
+impl SubagentLifetime {
+    /// Parses the stable model- and control-facing lifetime name.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "task" => Some(Self::Task),
+            "persistent" => Some(Self::Persistent),
+            _ => None,
+        }
+    }
+
+    /// Returns the stable model- and control-facing lifetime name.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Task => "task",
+            Self::Persistent => "persistent",
+        }
+    }
+}
+
 /// Product adapter used to enforce one active subagent scope.
 ///
 /// The agent harness owns when scope checks run, while the composition crate
@@ -123,7 +153,8 @@ pub fn subagent_action_scope_violation(
 mod scope_tests;
 
 /// Declares how a subagent may interact with shared repository state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum CooperationMode {
     /// The subagent may read and inspect but must not write.
     ExploreOnly,
@@ -162,7 +193,8 @@ impl CooperationMode {
 /// already approved unrestricted parent may actually grant unrestricted
 /// authority. Declarations carry that provenance explicitly so later spawns
 /// never infer approval from a requested or synthesized mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum SubagentApprovalProvenance {
     /// The declaration records a requested or profile-defaulted mode only.
     #[default]
@@ -211,7 +243,7 @@ pub fn normalize_subagent_spawn_role(
 /// The declaration carries both the child's own effective cooperation mode and
 /// the provenance of the approval that backs it, so descendants inherit
 /// authority only when it was genuinely granted rather than merely requested.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct SubagentScopeDeclaration {
     /// Cooperation mode constraining the child agent.
     pub cooperation_mode: CooperationMode,

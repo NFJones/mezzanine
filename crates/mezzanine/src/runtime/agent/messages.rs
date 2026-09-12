@@ -194,6 +194,9 @@ impl RuntimeSessionService {
         if self.agent_shell_store().get(pane_id).is_none() {
             return Ok(0);
         }
+        if self.subagent_descendant_is_fenced(&agent_id) {
+            return Ok(0);
+        }
         let loop_limit = self.agent_peer_message_loop_limit();
         let started_turns = self.agent_peer_message_turn_count(&agent_id);
         if started_turns >= loop_limit {
@@ -673,7 +676,11 @@ impl RuntimeSessionService {
         };
         match store.user_objective(conversation_id) {
             Ok(Some(objective)) => Some(Some(objective)),
-            Ok(None) => Some(automatic.map(ToOwned::to_owned)),
+            Ok(None) => match store.parent_objective(conversation_id) {
+                Ok(Some(objective)) => Some(Some(objective)),
+                Ok(None) => Some(automatic.map(ToOwned::to_owned)),
+                Err(_) => None,
+            },
             Err(_) => None,
         }
     }
@@ -692,7 +699,7 @@ impl RuntimeSessionService {
         let objective = if self.runtime_agent_conversation_is_ephemeral(conversation_id) {
             None
         } else if let Some(store) = self.persistence.cloned_transcript_store() {
-            store.user_objective(conversation_id)?
+            store.effective_persisted_objective(conversation_id)?
         } else {
             None
         };

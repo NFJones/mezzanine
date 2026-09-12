@@ -219,6 +219,8 @@ pub fn plan_action_result(
             session_mode,
             size,
             reasoning_effort,
+            lifetime,
+            objective,
             task_prompt,
         } => Ok(ActionResult::running(
             turn,
@@ -229,6 +231,7 @@ pub fn plan_action_result(
                     "role":role,"placement":placement,"cooperation_mode":cooperation_mode,
                     "read_scopes":read_scopes,"write_scopes":write_scopes,
                     "session":session_mode.map(|mode| mode.as_str()),
+                    "lifetime":lifetime.as_str(),"objective":objective,
                     "size":size,"reasoning_effort":reasoning_effort,"prompt_bytes":task_prompt.len()
                 })
                 .to_string(),

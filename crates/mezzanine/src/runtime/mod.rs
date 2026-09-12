@@ -449,7 +449,7 @@ use service_state::{
 };
 pub(crate) use service_state::{
     RuntimeAgentProviderPreparationOutcome, RuntimeAgentProviderPreparationWork,
-    RuntimeMcpDiscoveryOutcome, RuntimeMcpDiscoverySuccess,
+    RuntimeMcpDiscoveryOutcome, RuntimeMcpDiscoverySuccess, RuntimePersistentSubagent,
 };
 pub(crate) use sockets::hosted_session_socket_path;
 pub use sockets::{
