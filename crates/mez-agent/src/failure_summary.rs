@@ -109,10 +109,25 @@ pub fn failure_summary_execution_from_response(
             )),
         })
         .collect::<Result<Vec<_>, _>>()?;
-    response.raw_text = format!(
-        "{failed_response_raw_text}\ncontroller_failure_summary:\n{}",
-        response.raw_text
-    );
+    let normalized_summary;
+    let summary_raw_text = if response.raw_text.trim().is_empty() {
+        normalized_summary = terminal_batch
+            .actions
+            .iter()
+            .filter_map(|action| match &action.payload {
+                AgentActionPayload::Say { text, .. } if !text.trim().is_empty() => {
+                    Some(text.trim())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        normalized_summary.as_str()
+    } else {
+        &response.raw_text
+    };
+    response.raw_text =
+        format!("{failed_response_raw_text}\ncontroller_failure_summary:\n{summary_raw_text}");
     response.action_batch = Some(terminal_batch);
     let latest_response_usage = response.latest_request_usage.unwrap_or(response.usage);
     Ok(AgentTurnExecution {
@@ -398,5 +413,59 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// Verifies a validated visible summary remains available in the
+    /// controller-failure transcript when a structured provider response has
+    /// no raw text. Some providers return only parsed MAAP tool arguments, so
+    /// dropping the accepted say content would otherwise leave the terminal
+    /// failure marker without its user-facing explanation.
+    #[test]
+    fn failure_summary_uses_normalized_say_content_when_raw_text_is_empty() {
+        let response = ModelResponse {
+            provider: "test".to_string(),
+            model: "test-model".to_string(),
+            raw_text: String::new(),
+            usage: ModelTokenUsage::default(),
+            latest_request_usage: None,
+            quota_usage: Vec::new(),
+            action_batch: Some(MaapBatch {
+                rationale: "Explain the failure".to_string(),
+                actions: vec![
+                    AgentAction {
+                        id: "say-1".to_string(),
+                        payload: AgentActionPayload::Say {
+                            status: SayStatus::Progress,
+                            text: "  The provider is unavailable.  ".to_string(),
+                            content_type: "text/plain".to_string(),
+                        },
+                    },
+                    AgentAction {
+                        id: "say-2".to_string(),
+                        payload: AgentActionPayload::Say {
+                            status: SayStatus::Progress,
+                            text: "  Retry after checking credentials.  ".to_string(),
+                            content_type: "text/plain".to_string(),
+                        },
+                    },
+                ],
+            }),
+            provider_transcript_events: Vec::new(),
+        };
+
+        let execution = failure_summary_execution_from_response(
+            &turn(),
+            request(),
+            "original failure",
+            response,
+            &[],
+            &[],
+        )
+        .unwrap();
+
+        assert_eq!(
+            execution.response.raw_text,
+            "original failure\ncontroller_failure_summary:\nThe provider is unavailable.\n\nRetry after checking credentials."
+        );
     }
 }
