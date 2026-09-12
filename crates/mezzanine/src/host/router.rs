@@ -3250,21 +3250,25 @@ mod tests {
             .force_shutdown("free owner recovery quota".to_string())
             .await
             .unwrap();
-        tokio::time::timeout(Duration::from_secs(2), async {
+        // The competing runtime drops its supervisor entry before the owner's
+        // live-session quota is released, so retry the recovery under a bound
+        // instead of racing the release. A capacity block that never clears
+        // still fails the test.
+        let recovered = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
-                if router
-                    .supervisor
-                    .lookup(&competing.lease.session_id)
-                    .is_err()
-                {
-                    break;
+                match router.recover_lease(&checkpointed.lease_id).await {
+                    Ok(recovered) => break recovered,
+                    Err(error) if error.kind() == MezErrorKind::Conflict => {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                    Err(error) => {
+                        panic!("recovery should only clear through quota release: {error}")
+                    }
                 }
-                tokio::task::yield_now().await;
             }
         })
         .await
-        .unwrap();
-        let recovered = router.recover_lease(&checkpointed.lease_id).await.unwrap();
+        .expect("the competing runtime's shutdown should release the owner recovery quota");
         assert_eq!(recovered.lease.state, RemoteSessionLeaseState::Active);
 
         router
