@@ -2810,6 +2810,83 @@ fn runtime_dispatch_failure_reports_configured_backend_without_a_bypass() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies a dispatch-time terminal result for a semantic patch action carries
+/// the same bounded sandbox projection its shell sibling reports.
+///
+/// The dispatch-time terminal boundaries resolve their sandbox projection
+/// before the terminal result is stored. Existing coverage only drove shell
+/// payloads through those boundaries, so this regression pins the
+/// `apply_patch` payload to the same four conservative keys.
+#[test]
+fn runtime_dispatch_time_apply_patch_terminal_reports_effective_sandbox_boundary() {
+    let (mut service, turn_id, action_id) = apply_patch_dispatch_execution_service();
+    force_pane_not_ready_dispatch(&mut service);
+    register_dispatch_fixture_chronology(&mut service, &turn_id);
+
+    let execution = service
+        .dispatch_stored_running_shell_actions(&turn_id)
+        .unwrap()
+        .expect("the stored running patch action should be dispatched");
+    assert_eq!(execution.action_results[0].action_id, action_id);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Failed);
+    assert_eq!(
+        execution.action_results[0]
+            .error
+            .as_ref()
+            .map(|error| error.code.as_str()),
+        Some("pane_not_ready")
+    );
+    let effective = bounded_sandbox_projection(&execution.action_results[0]);
+    assert_eq!(effective["execution_boundary"], "policy-only");
+    assert_eq!(effective["enforcement"], "none");
+    assert_eq!(effective["network_mode"], "unenforced");
+    assert_eq!(effective["reason"], "policy-only");
+
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Builds a live prompt turn whose sole `apply_patch` action awaits dispatch.
+///
+/// The pane-not-ready siblings drive a shell payload through the same
+/// dispatcher. A semantic patch action needs no Bubblewrap write-scope setup
+/// while the fixture stays policy-only, because `apply_patch` only resolves
+/// sandbox path authority when a backend applies to the permission policy.
+fn apply_patch_dispatch_execution_service() -> (RuntimeSessionService, String, String) {
+    let (mut service, turn_id, _) = sandbox_fallback_execution_service();
+    let action_id = "sandbox-fallback-patch".to_string();
+    let action = mez_agent::AgentAction {
+        id: action_id.clone(),
+
+        payload: mez_agent::AgentActionPayload::ApplyPatch {
+            patch: "*** Begin Patch\n*** Add File: dispatch-boundary-note.txt\n+bounded sandbox projection\n*** End Patch"
+                .to_string(),
+            strip: None,
+        },
+    };
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .expect("the dispatch fixture keeps its turn");
+    let mut result = mez_agent::ActionResult::running(&turn, &action, Vec::new(), None);
+    // The shell fixture already completed permission approval, so the patch
+    // action reuses that settled evaluation instead of re-entering admission.
+    result.permission_evaluation = Some(Box::new(sandbox_fallback_allowed_evaluation()));
+    let execution = service
+        .agent_turn_executions_mut()
+        .get_mut(&turn_id)
+        .expect("the dispatch fixture keeps its execution");
+    execution.response.action_batch = Some(mez_agent::MaapBatch {
+        rationale: "exercise the dispatch-time patch boundary".to_string(),
+
+        actions: vec![action],
+    });
+    execution.action_results = vec![result];
+    (service, turn_id, action_id)
+}
+
 /// Builds one settled Bubblewrap payload transaction for assessment tests.
 fn sandbox_failure_transaction(turn_id: &str, action_id: &str) -> RunningShellTransactionRef {
     RunningShellTransactionRef {
