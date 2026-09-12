@@ -105,7 +105,15 @@ fn runtime_shell_transaction_observation_retains_trailing_bubblewrap_status() {
     );
     service.register_sandboxed_shell_transaction_backend(
         "marker-1",
-        crate::runtime::SandboxBackend::Bubblewrap,
+        &crate::security::sandbox::SandboxAuditSummary {
+            backend: crate::runtime::SandboxBackend::Bubblewrap,
+            runtime_profile_version: crate::security::sandbox::BUBBLEWRAP_RUNTIME_PROFILE_VERSION,
+            authority_source: crate::security::sandbox::SandboxAuthoritySource::Maximum,
+            read_only_grant_count: 1,
+            read_write_grant_count: 0,
+            network: crate::runtime::SandboxNetworkMode::Isolated,
+            plan_sha256: "f".repeat(64),
+        },
     );
     let encoded_bytes = mez_agent::SHELL_OUTPUT_BASE64_MAX_RAW_BYTES
         .div_ceil(3)

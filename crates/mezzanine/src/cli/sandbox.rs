@@ -1008,13 +1008,17 @@ fn write_setup_result<W: Write>(
 
 fn sandbox_plan_plain_text(plan: &SandboxWorkflowPlan, verbose: bool) -> String {
     let mut output = format!(
-        "project_root: {}\nproject_source: {}\nproject_marker: {}\ntrust_state: {}\nsandbox_configured: {}\nsandbox_effective: {}\napproval_policy: {}\nscope_provenance: {}\ndenied_project_root: {}\nsandbox_executable_state: {}\nruntime_profile_version: {}\ngroup_whitelist: {}\nenv_whitelist: {}\nenvironment_forwarding_state: {}\nsupplementary_group_state: {}\nsupplementary_group_count: {}\ncapability_state: {}\nmanaged_home_state: {}\nmanaged_home_bytes: {}\nmanaged_home_active: {}\nmanaged_home_path_semantics: {}\nnetwork_boundary: {}\nnamespace_boundary: {}\nreload_freshness: {}\n",
+        "project_root: {}\nproject_source: {}\nproject_marker: {}\ntrust_state: {}\nsandbox_configured: {}\nsandbox_effective: {}\nexecution_boundary: {}\nenforcement: {}\nnetwork_mode: {}\nreason: {}\napproval_policy: {}\nscope_provenance: {}\ndenied_project_root: {}\nsandbox_executable_state: {}\nruntime_profile_version: {}\ngroup_whitelist: {}\nenv_whitelist: {}\nenvironment_forwarding_state: {}\nsupplementary_group_state: {}\nsupplementary_group_count: {}\ncapability_state: {}\nmanaged_home_state: {}\nmanaged_home_bytes: {}\nmanaged_home_active: {}\nmanaged_home_path_semantics: {}\nnetwork_boundary: {}\nnamespace_boundary: {}\nreload_freshness: {}\n",
         plan.project.canonical_root.display(),
         plan.project.input_source,
         plan.project.marker_kind,
         plan.project.trust_state,
         plan.configured.sandbox,
         plan.effective.sandbox,
+        plan.effective.execution_boundary,
+        plan.effective.enforcement,
+        plan.effective.network_mode,
+        plan.effective.reason,
         plan.configured.approval_policy,
         plan.effective.scope_provenance,
         plan.effective

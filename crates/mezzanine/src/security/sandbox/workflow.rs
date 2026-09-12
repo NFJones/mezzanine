@@ -21,8 +21,10 @@ use crate::security::project::{
 use super::managed_home::inspect_seatbelt_managed_home;
 use super::seatbelt::SEATBELT_RUNTIME_PROFILE_VERSION;
 use super::{
-    BUBBLEWRAP_RUNTIME_PROFILE_VERSION, inspect_bubblewrap_managed_home,
-    sandbox_executable_available, sandbox_restriction_ids,
+    BUBBLEWRAP_RUNTIME_PROFILE_VERSION, EffectiveSandboxState, SandboxEffectiveBoundary,
+    SandboxEffectiveEvidence, SandboxEffectiveReason, SandboxEnforcement, SandboxExecutionHost,
+    inspect_bubblewrap_managed_home, resolve_effective_sandbox, sandbox_executable_available,
+    sandbox_restriction_ids,
 };
 
 /// Inputs used to build one side-effect-free sandbox workflow projection.
@@ -112,8 +114,16 @@ pub(crate) struct SandboxConfiguredState {
 /// Effective sandbox boundary and local read-only readiness evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct SandboxEffectiveState {
-    /// Effective execution boundary: policy-only, bubblewrap, seatbelt, or host.
+    /// Effective execution boundary spelling from the typed resolver.
     pub(crate) sandbox: String,
+    /// Typed execution boundary after approval and host selection.
+    pub(crate) execution_boundary: String,
+    /// Enforcement mechanism actually backing the effective boundary.
+    pub(crate) enforcement: String,
+    /// Effective backend-neutral network mode for the boundary.
+    pub(crate) network_mode: String,
+    /// Closed reason explaining the effective boundary projection.
+    pub(crate) reason: String,
     /// Provenance for effective filesystem authority.
     pub(crate) scope_provenance: String,
     /// Governing root of a withheld project-trust decision, when one applies.
@@ -202,12 +212,27 @@ pub(crate) struct SandboxWorkflowPlan {
 pub(crate) fn effective_sandbox_boundary(
     sandbox: &SandboxConfig,
     approval_policy: ApprovalPolicy,
+    host: SandboxExecutionHost,
 ) -> &'static str {
-    if approval_policy.bypasses_sandbox() {
-        "host"
-    } else {
-        sandbox.as_str()
-    }
+    effective_sandbox_status(sandbox, approval_policy, host).boundary_str()
+}
+
+/// Returns the conservative status projection for one configured sandbox.
+///
+/// Standalone status has no per-action probe or compiled-plan evidence, so the
+/// resolver reports the boundary that applies while leaving enforcement and
+/// network claims unproven.
+pub(crate) fn effective_sandbox_status(
+    sandbox: &SandboxConfig,
+    approval_policy: ApprovalPolicy,
+    host: SandboxExecutionHost,
+) -> EffectiveSandboxState {
+    resolve_effective_sandbox(
+        sandbox,
+        approval_policy,
+        host,
+        SandboxEffectiveEvidence::none(),
+    )
 }
 
 /// Builds one read-only status plan from already-loaded local state.
@@ -243,8 +268,12 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             .governing_root()
             .map(|root| root.to_string_lossy().into_owned())
     };
-    let effective_sandbox =
-        effective_sandbox_boundary(&request.permissions.sandbox, approval_policy).to_string();
+    let effective_sandbox_state = effective_sandbox_status(
+        &request.permissions.sandbox,
+        approval_policy,
+        SandboxExecutionHost::Pane,
+    );
+    let effective_sandbox = effective_sandbox_state.boundary_str().to_string();
 
     let (configured_group_whitelist, supplementary_group_state, supplementary_group_count) =
         match &request.permissions.sandbox {
@@ -265,8 +294,6 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
         managed_home_bytes,
         managed_home_active,
         managed_home_path_semantics,
-        network_boundary,
-        namespace_boundary,
     ) = match &request.permissions.sandbox {
         SandboxConfig::PolicyOnly => (
             None,
@@ -276,8 +303,6 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             0,
             false,
             "not-applicable",
-            "policy-only",
-            "visible-host-namespace",
         ),
         SandboxConfig::Bubblewrap(config) => {
             let executable = PathBuf::from(&config.executable);
@@ -303,8 +328,6 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
                 managed_home_bytes,
                 managed_home_active,
                 "synthetic-mounted-home",
-                "per-action-network-namespace-or-authorized-host-network",
-                "private-mount-pid-user-uts-ipc-namespaces",
             )
         }
         SandboxConfig::Seatbelt(config) => {
@@ -331,11 +354,11 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
                 managed_home_bytes,
                 managed_home_active,
                 "private-canonical-host-path",
-                "per-action-operation-denial-or-authorized-host-network",
-                "visible-host-namespace",
             )
         }
     };
+    let (network_boundary, namespace_boundary) =
+        boundary_mechanism_strings(effective_sandbox_state.effective_boundary);
 
     let mut diagnostics = Vec::new();
     if request.discovery.marker_kind == ProjectRootMarkerKind::Fallback {
@@ -409,23 +432,14 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             affected_path: sandbox_executable.clone(),
             source,
         });
-        let network_details = match backend {
-            SandboxBackend::Bubblewrap => {
-                "A deny policy uses an isolated network namespace; allow and approved prompt actions may use the host network."
-            }
-            SandboxBackend::Seatbelt => {
-                "A deny policy rejects network operations in the visible host namespace; allow and approved prompt actions may use host networking."
-            }
-        };
-        diagnostics.push(SandboxWorkflowDiagnostic {
-            id: "sandbox.network-policy-enforced",
-            severity: SandboxDiagnosticSeverity::Info,
-            summary: format!("{display_name} enforces shell network policy"),
-            details: network_details.to_string(),
-            remedy: "Review permissions.network_policy and the active approval policy before running shell actions.".to_string(),
-            affected_path: None,
+        if let Some(diagnostic) = network_policy_enforcement_diagnostic(
+            backend,
+            display_name,
             source,
-        });
+            &effective_sandbox_state,
+        ) {
+            diagnostics.push(diagnostic);
+        }
         diagnostics.push(SandboxWorkflowDiagnostic {
             id: "sandbox.minimal-path",
             severity: SandboxDiagnosticSeverity::Info,
@@ -480,7 +494,7 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
     }
 
     SandboxWorkflowPlan {
-        version: 2,
+        version: 3,
         project: SandboxProjectState {
             canonical_start: request.discovery.canonical_start.clone(),
             canonical_root: request.discovery.canonical_root.clone(),
@@ -513,6 +527,10 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
         },
         effective: SandboxEffectiveState {
             sandbox: effective_sandbox,
+            execution_boundary: effective_sandbox_state.boundary_str().to_string(),
+            enforcement: effective_sandbox_state.enforcement_str().to_string(),
+            network_mode: effective_sandbox_state.network_mode_str().to_string(),
+            reason: effective_sandbox_state.reason_str().to_string(),
             scope_provenance: scope_provenance.to_string(),
             denied_project_root,
             read_scopes,
@@ -582,6 +600,92 @@ fn trust_state_name(state: TrustDecision) -> &'static str {
     }
 }
 
+/// Returns the network-policy diagnostic for one backend and resolved state.
+///
+/// The unqualified enforcement claim is reserved for a resolver-verified
+/// boundary with a non-`none` enforcement mechanism. A configured backend that
+/// has not been probed reports conditional wording instead, and every other
+/// boundary reports no network-enforcement diagnostic at all.
+fn network_policy_enforcement_diagnostic(
+    backend: SandboxBackend,
+    display_name: &str,
+    source: &'static str,
+    state: &EffectiveSandboxState,
+) -> Option<SandboxWorkflowDiagnostic> {
+    if !matches!(
+        state.effective_boundary,
+        SandboxEffectiveBoundary::Bubblewrap | SandboxEffectiveBoundary::Seatbelt
+    ) {
+        return None;
+    }
+    let network_details = match backend {
+        SandboxBackend::Bubblewrap => {
+            "A deny policy uses an isolated network namespace; allow and approved prompt actions may use the host network."
+        }
+        SandboxBackend::Seatbelt => {
+            "A deny policy rejects network operations in the visible host namespace; allow and approved prompt actions may use host networking."
+        }
+    };
+    if state.reason == SandboxEffectiveReason::Verified
+        && state.enforcement != SandboxEnforcement::None
+    {
+        return Some(SandboxWorkflowDiagnostic {
+            id: "sandbox.network-policy-enforced",
+            severity: SandboxDiagnosticSeverity::Info,
+            summary: format!("{display_name} enforces shell network policy"),
+            details: network_details.to_string(),
+            remedy: "Review permissions.network_policy and the active approval policy before running shell actions.".to_string(),
+            affected_path: None,
+            source,
+        });
+    }
+    if state.reason != SandboxEffectiveReason::NotProbed {
+        return None;
+    }
+    Some(SandboxWorkflowDiagnostic {
+        id: "sandbox.network-policy-enforcement-unproven",
+        severity: SandboxDiagnosticSeverity::Info,
+        summary: format!(
+            "{display_name} will enforce shell network policy once a launch plan and capability proof exist"
+        ),
+        details: format!(
+            "This read-only status holds no compiled launch plan or exact capability proof for {display_name}, so network-policy enforcement is not claimed yet. {network_details}"
+        ),
+        remedy: "Run a sandboxed shell action in the intended pane or native execution mode to compile a launch plan and complete the capability probe.".to_string(),
+        affected_path: None,
+        source,
+    })
+}
+
+/// Returns bounded backend-mechanism descriptions for one resolved boundary.
+///
+/// Non-backend boundaries always report the visible host namespace and never
+/// claim a private namespace, and an unavailable backend reports that no
+/// network or namespace mechanism is in force.
+fn boundary_mechanism_strings(boundary: SandboxEffectiveBoundary) -> (&'static str, &'static str) {
+    match boundary {
+        SandboxEffectiveBoundary::Bubblewrap => (
+            "per-action-network-namespace-or-authorized-host-network",
+            "private-mount-pid-user-uts-ipc-namespaces",
+        ),
+        SandboxEffectiveBoundary::Seatbelt => (
+            "per-action-operation-denial-or-authorized-host-network",
+            "visible-host-namespace",
+        ),
+        SandboxEffectiveBoundary::PolicyOnly => ("policy-only", "visible-host-namespace"),
+        SandboxEffectiveBoundary::HostBypass => {
+            ("host-unenforced-network-access", "visible-host-namespace")
+        }
+        SandboxEffectiveBoundary::Unavailable => {
+            ("unenforced-backend-unavailable", "visible-host-namespace")
+        }
+        SandboxEffectiveBoundary::RemoteUnattested => (
+            "unattested-remote-shell-network",
+            "unattested-remote-shell-namespace",
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -590,6 +694,17 @@ mod tests {
         SandboxUnavailablePolicy,
     };
     use crate::security::project::{ProjectRootInputSource, ProjectRootMarkerKind};
+    use crate::security::sandbox::effective::SandboxEffectiveNetworkMode;
+
+    /// Returns a real regular executable path available on Linux and macOS.
+    fn available_test_executable() -> String {
+        let candidate = std::env::current_exe().expect("test executable path is available");
+        assert!(
+            super::sandbox_executable_available(&candidate),
+            "test executable must be a regular executable file"
+        );
+        candidate.to_string_lossy().into_owned()
+    }
 
     /// Verifies planning a trusted Bubblewrap project reports effective
     /// authority and managed-home absence without creating any directory.
@@ -608,7 +723,7 @@ mod tests {
         permissions.resources.write_scopes.clear();
         permissions.resources.network_policy = NetworkPolicy::Deny;
         permissions.sandbox = SandboxConfig::Bubblewrap(BubblewrapConfig {
-            executable: "/bin/sh".to_string(),
+            executable: available_test_executable(),
             unavailable: SandboxUnavailablePolicy::Fail,
             network: SandboxNetworkMode::Isolated,
             environment: SandboxEnvironmentPolicy::Minimal,
@@ -640,6 +755,10 @@ mod tests {
         });
 
         assert_eq!(plan.effective.sandbox, "bubblewrap");
+        assert_eq!(plan.effective.execution_boundary, "bubblewrap");
+        assert_eq!(plan.effective.enforcement, "none");
+        assert_eq!(plan.effective.network_mode, "unknown");
+        assert_eq!(plan.effective.reason, "not-probed");
         assert_eq!(plan.effective.scope_provenance, "trusted-project");
         assert_eq!(plan.effective.managed_home_state, "absent");
         assert_eq!(plan.effective.managed_home_bytes, 0);
@@ -716,7 +835,7 @@ mod tests {
         permissions.authorization.approval_policy = mez_agent::ApprovalPolicy::HostAccess;
         permissions.resources.read_scopes = vec!["/tmp".to_string()];
         permissions.sandbox = SandboxConfig::Bubblewrap(BubblewrapConfig {
-            executable: "/bin/sh".to_string(),
+            executable: available_test_executable(),
             unavailable: SandboxUnavailablePolicy::Fail,
             network: SandboxNetworkMode::Isolated,
             environment: SandboxEnvironmentPolicy::Minimal,
@@ -746,7 +865,16 @@ mod tests {
         });
 
         assert_eq!(plan.configured.sandbox, "bubblewrap");
-        assert_eq!(plan.effective.sandbox, "host");
+        assert_eq!(plan.effective.sandbox, "host-bypass");
+        assert_eq!(plan.effective.execution_boundary, "host-bypass");
+        assert_eq!(plan.effective.enforcement, "none");
+        assert_eq!(plan.effective.network_mode, "unenforced");
+        assert_eq!(plan.effective.reason, "host-access-bypass");
+        assert_eq!(
+            plan.effective.network_boundary,
+            "host-unenforced-network-access"
+        );
+        assert_eq!(plan.effective.namespace_boundary, "visible-host-namespace");
         assert!(
             plan.diagnostics
                 .iter()
@@ -826,6 +954,112 @@ mod tests {
         assert_eq!(
             pending.effective.denied_project_root.as_deref(),
             Some(nested_root.to_string_lossy().as_ref())
+        );
+    }
+
+    /// Builds one resolved state for network-diagnostic wording tests.
+    fn effective_state(
+        effective_boundary: SandboxEffectiveBoundary,
+        enforcement: SandboxEnforcement,
+        reason: SandboxEffectiveReason,
+    ) -> EffectiveSandboxState {
+        EffectiveSandboxState {
+            configured_intent: "bubblewrap",
+            selected_backend: Some(SandboxBackend::Bubblewrap),
+            effective_boundary,
+            enforcement,
+            network_mode: SandboxEffectiveNetworkMode::Unknown,
+            reason,
+        }
+    }
+
+    /// Verifies the network diagnostic asserts enforcement only for a verified
+    /// resolver state and never emits an unqualified claim otherwise.
+    #[test]
+    fn network_policy_diagnostic_reserves_enforcement_claim_for_verified_state() {
+        let verified = effective_state(
+            SandboxEffectiveBoundary::Bubblewrap,
+            SandboxEnforcement::BubblewrapNetworkNamespace,
+            SandboxEffectiveReason::Verified,
+        );
+        let verified_diagnostic = network_policy_enforcement_diagnostic(
+            SandboxBackend::Bubblewrap,
+            "Bubblewrap",
+            "bubblewrap",
+            &verified,
+        )
+        .expect("a verified state must report network enforcement");
+        assert_eq!(verified_diagnostic.id, "sandbox.network-policy-enforced");
+        assert_eq!(
+            verified_diagnostic.summary,
+            "Bubblewrap enforces shell network policy"
+        );
+
+        let not_probed = effective_state(
+            SandboxEffectiveBoundary::Seatbelt,
+            SandboxEnforcement::None,
+            SandboxEffectiveReason::NotProbed,
+        );
+        let not_probed_diagnostic = network_policy_enforcement_diagnostic(
+            SandboxBackend::Seatbelt,
+            "Seatbelt",
+            "seatbelt",
+            &not_probed,
+        )
+        .expect("a not-probed backend must explain that enforcement is unproven");
+        assert_eq!(
+            not_probed_diagnostic.id,
+            "sandbox.network-policy-enforcement-unproven"
+        );
+        assert_eq!(
+            not_probed_diagnostic.summary,
+            "Seatbelt will enforce shell network policy once a launch plan and capability proof exist"
+        );
+
+        for (boundary, reason) in [
+            (
+                SandboxEffectiveBoundary::PolicyOnly,
+                SandboxEffectiveReason::PolicyOnly,
+            ),
+            (
+                SandboxEffectiveBoundary::HostBypass,
+                SandboxEffectiveReason::HostAccessBypass,
+            ),
+            (
+                SandboxEffectiveBoundary::Unavailable,
+                SandboxEffectiveReason::BackendUnavailable,
+            ),
+            (
+                SandboxEffectiveBoundary::RemoteUnattested,
+                SandboxEffectiveReason::RemoteShellUnattested,
+            ),
+        ] {
+            assert!(
+                network_policy_enforcement_diagnostic(
+                    SandboxBackend::Bubblewrap,
+                    "Bubblewrap",
+                    "bubblewrap",
+                    &effective_state(boundary, SandboxEnforcement::None, reason),
+                )
+                .is_none(),
+                "{boundary:?} must not report a network-enforcement claim"
+            );
+        }
+
+        let effects_incomplete = effective_state(
+            SandboxEffectiveBoundary::Bubblewrap,
+            SandboxEnforcement::None,
+            SandboxEffectiveReason::EffectsIncomplete,
+        );
+        assert!(
+            network_policy_enforcement_diagnostic(
+                SandboxBackend::Bubblewrap,
+                "Bubblewrap",
+                "bubblewrap",
+                &effects_incomplete,
+            )
+            .is_none(),
+            "an unproven enforcement mechanism must not claim network enforcement"
         );
     }
 }

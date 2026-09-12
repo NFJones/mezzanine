@@ -312,12 +312,15 @@ pub(crate) fn runtime_permission_policy_display(
     } else {
         "none".to_string()
     };
+    let sandbox_host = service.sandbox_execution_host(pane_id);
     let effective_sandbox = crate::security::sandbox::effective_sandbox_boundary(
         &configured.sandbox,
         policy.approval_policy,
+        sandbox_host,
     );
+    let sandbox_effective = service.effective_sandbox_state_for_pane(pane_id);
     format!(
-        "preset={} preset_scope=pane-subtree preset_source={} preset_owner_pane={} approval_policy={} approval_scope=pane-subtree approval_source={} approval_owner_pane={} bypass={} bypass_scope=session rules={} rules_scope=session sandbox={} sandbox_effective={} network_policy={} read_scopes={} write_scopes={} effective_scope_provenance={} effective_read_scopes={} effective_write_scopes={} trusted_project_root={} effective_scope_denied_root={} sandbox_restrictions={} source=runtime-policy",
+        "preset={} preset_scope=pane-subtree preset_source={} preset_owner_pane={} approval_policy={} approval_scope=pane-subtree approval_source={} approval_owner_pane={} bypass={} bypass_scope=session rules={} rules_scope=session sandbox={} sandbox_effective={} sandbox_enforcement={} network_mode={} sandbox_reason={} network_policy={} read_scopes={} write_scopes={} effective_scope_provenance={} effective_read_scopes={} effective_write_scopes={} trusted_project_root={} effective_scope_denied_root={} sandbox_restrictions={} source=runtime-policy",
         runtime_permission_preset_name(policy.preset),
         policy_status.preset_source.source,
         preset_owner,
@@ -328,6 +331,9 @@ pub(crate) fn runtime_permission_policy_display(
         policy.rules().len(),
         configured.sandbox.as_str(),
         effective_sandbox,
+        sandbox_effective.enforcement_str(),
+        sandbox_effective.network_mode_str(),
+        sandbox_effective.reason_str(),
         configured.resources.network_policy.as_str(),
         configured.resources.read_scopes.len(),
         configured.resources.write_scopes.len(),

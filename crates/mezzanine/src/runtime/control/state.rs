@@ -378,17 +378,31 @@ impl RuntimeSessionService {
         } else {
             Vec::new()
         };
+        let sandbox_host = self
+            .session
+            .active_window()
+            .map(|window| self.sandbox_execution_host(window.active_pane().id.as_str()))
+            .unwrap_or(crate::security::sandbox::SandboxExecutionHost::Pane);
         let effective_sandbox = crate::security::sandbox::effective_sandbox_boundary(
             &configured.sandbox,
             self.permission_policy().approval_policy,
+            sandbox_host,
+        );
+        let sandbox_effective = crate::security::sandbox::effective_sandbox_status(
+            &configured.sandbox,
+            self.permission_policy().approval_policy,
+            sandbox_host,
         );
         format!(
-            r#"{{"preset":"{}","approval_policy":"{}","bypass_active":{},"sandbox":"{}","sandbox_effective":"{}","network_policy":"{}","trusted_project":{},"trusted_directories":{},"read_scopes":{},"write_scopes":{},"effective_scope_provenance":"{}","effective_read_scopes":{},"effective_write_scopes":{},"trusted_project_root":{},"effective_scope_denied_root":{},"sandbox_restrictions":{},"command_rule_generation":{}}}"#,
+            r#"{{"preset":"{}","approval_policy":"{}","bypass_active":{},"sandbox":"{}","sandbox_effective":"{}","sandbox_enforcement":"{}","network_mode":"{}","sandbox_reason":"{}","network_policy":"{}","trusted_project":{},"trusted_directories":{},"read_scopes":{},"write_scopes":{},"effective_scope_provenance":"{}","effective_read_scopes":{},"effective_write_scopes":{},"trusted_project_root":{},"effective_scope_denied_root":{},"sandbox_restrictions":{},"command_rule_generation":{}}}"#,
             runtime_permission_preset_name(self.permission_policy().preset),
             runtime_approval_policy_name(self.permission_policy().approval_policy),
             self.permission_policy().approval_bypass(),
             configured.sandbox.as_str(),
             effective_sandbox,
+            sandbox_effective.enforcement_str(),
+            sandbox_effective.network_mode_str(),
+            sandbox_effective.reason_str(),
             configured.resources.network_policy.as_str(),
             trusted_project,
             runtime_string_array_json(&trusted_directories),

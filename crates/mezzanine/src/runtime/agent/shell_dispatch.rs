@@ -314,6 +314,15 @@ impl RuntimeSessionService {
                             "error": failure.message
                         }),
                     ));
+                self.attach_effective_sandbox_to_shell_result(
+                    &turn,
+                    &action,
+                    None,
+                    execution.action_results[result_index]
+                        .permission_evaluation
+                        .as_deref(),
+                    &mut result,
+                );
                 let _ = self.reconcile_action_presentation_progress_for_execution(
                     &turn.turn_id,
                     &action.id,
@@ -457,7 +466,7 @@ impl RuntimeSessionService {
                 error.message()
             ))
         })?;
-        let result = local_execution_output_to_action_result(
+        let mut result = local_execution_output_to_action_result(
             &turn,
             &action,
             LocalExecutionOutput::spawned_shell(shell_output),
@@ -469,6 +478,15 @@ impl RuntimeSessionService {
                 error.message()
             ))
         })?;
+        self.attach_effective_sandbox_to_shell_result(
+            &turn,
+            &action,
+            None,
+            execution.action_results[result_index]
+                .permission_evaluation
+                .as_deref(),
+            &mut result,
+        );
         execution.action_results[result_index] = result.clone();
         let mut settled_results = vec![result.clone()];
         if matches!(exit_code, Some(code) if code != 0)
@@ -2045,6 +2063,8 @@ impl RuntimeSessionService {
             ));
         }
         let backend_name = backend.as_str();
+        let configured_intent = self.sandbox_config_for_pane(&turn.pane_id);
+        let configured_intent = configured_intent.as_str();
         let mut blocked = ActionResult::blocked(
             turn,
             action,
@@ -2053,6 +2073,9 @@ impl RuntimeSessionService {
                     "{backend_name} could not represent the approved policy requirements before payload execution"
                 ),
                 "approval is required for one exact unsandboxed retry".to_string(),
+                format!(
+                    "the configured {configured_intent} intent remains selected, but this approved retry runs unenforced and can reach host networking"
+                ),
             ],
             mez_agent::shell_action_structured_content_json(
                 action,
@@ -2455,6 +2478,7 @@ impl RuntimeSessionService {
                 }
             }),
         ));
+        self.attach_effective_sandbox_to_shell_result(turn, action, None, None, &mut result);
         let _ = self.append_agent_error_text_to_terminal_buffer(
             &turn.pane_id,
             &format!(

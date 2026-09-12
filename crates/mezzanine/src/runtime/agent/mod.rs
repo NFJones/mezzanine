@@ -173,6 +173,7 @@ pub(crate) use provider_execution::execute_agent_provider_persistence_work;
 mod provider_tasks;
 mod routed_workflow;
 mod sandbox_assessment;
+mod sandbox_effective;
 mod scheduler_state;
 mod session_titles;
 

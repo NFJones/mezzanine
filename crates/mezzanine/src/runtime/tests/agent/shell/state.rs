@@ -6,6 +6,37 @@ use crate::runtime::processes::{
 
 use super::*;
 
+/// Configures Bubblewrap with an executable that exists on every test host.
+///
+/// The resolver checks executable availability, so tests that observe a live
+/// backend boundary must not depend on a fixed host path.
+fn configure_available_bubblewrap(service: &mut RuntimeSessionService) {
+    let executable = std::env::current_exe()
+        .expect("test executable path is available")
+        .to_string_lossy()
+        .into_owned();
+    let configured =
+        crate::runtime::config::runtime_configured_permissions_from_config(&serde_json::json!({
+            "permissions": {
+                "sandbox": "bubblewrap",
+                "read_scopes": ["."],
+                "write_scopes": ["."],
+                "network_policy": "deny",
+                "bubblewrap": {
+                    "executable": executable,
+                    "unavailable": "fail",
+                    "network": "isolated",
+                    "environment": "minimal",
+                    "env_whitelist": []
+                }
+            }
+        }))
+        .unwrap();
+    service
+        .integration
+        .replace_configured_permissions(configured);
+}
+
 /// Builds one concrete pane environment identity for path-resolution tests.
 fn path_resolution_environment(working_directory: &Path) -> mez_agent::EnvironmentSignature {
     mez_agent::EnvironmentSignature::new(
@@ -227,6 +258,10 @@ fn runtime_policy_only_shell_audit_omits_plan_metadata() {
         serde_json::from_str(fs::read_to_string(&audit_path).unwrap().trim()).unwrap();
     let metadata = record["metadata"].as_object().unwrap();
     assert_eq!(metadata["sandbox_backend"], "policy-only");
+    assert_eq!(metadata["sandbox_effective"], "policy-only");
+    assert_eq!(metadata["sandbox_enforcement"], "none");
+    assert_eq!(metadata["network_mode"], "unenforced");
+    assert_eq!(metadata["sandbox_reason"], "policy-only");
     assert!(!metadata.contains_key("sandbox_plan_sha256"));
     assert!(!metadata.contains_key("sandbox_authority_source"));
     assert!(
@@ -264,7 +299,11 @@ fn runtime_host_access_shell_audit_records_distinct_policy_bypass() {
     assert_eq!(record["approval_state"], "host-policy-bypass");
     assert_eq!(record["metadata"]["sandbox_bypass"], "host-policy-bypass");
     assert_eq!(record["metadata"]["sandbox_configured"], "bubblewrap");
-    assert_eq!(record["metadata"]["sandbox_effective"], "host");
+    assert_eq!(record["metadata"]["sandbox_effective"], "host-bypass");
+    assert_eq!(record["metadata"]["sandbox_backend"], "host-bypass");
+    assert_eq!(record["metadata"]["sandbox_enforcement"], "none");
+    assert_eq!(record["metadata"]["network_mode"], "unenforced");
+    assert_eq!(record["metadata"]["sandbox_reason"], "host-access-bypass");
     assert!(record["metadata"].get("sandbox_fallback").is_none());
     fs::remove_dir_all(root).unwrap();
 }
@@ -277,6 +316,7 @@ fn runtime_bubblewrap_shell_audit_records_redacted_plan_metadata() {
     let audit_path = root.join("audit.jsonl");
     let mut service = test_runtime_service();
     configure_path_resolution_bubblewrap(&mut service);
+    configure_available_bubblewrap(&mut service);
     service.set_audit_log(AuditLog::new(crate::security::audit::AuditConfig {
         enabled: true,
         path: audit_path.clone(),
@@ -320,9 +360,257 @@ fn runtime_bubblewrap_shell_audit_records_redacted_plan_metadata() {
     assert_eq!(metadata["sandbox_read_write_grant_count"], "1");
     assert_eq!(metadata["sandbox_network"], "isolated");
     assert_eq!(metadata["sandbox_plan_sha256"], plan_sha256);
+    assert_eq!(metadata["sandbox_effective"], "bubblewrap");
+    assert_eq!(metadata["sandbox_enforcement"], "none");
+    assert_eq!(metadata["network_mode"], "unknown");
+    assert_eq!(metadata["sandbox_reason"], "not-probed");
     assert!(!serialized.contains("/private/workspace/secret.txt"));
     assert!(!serialized.contains("--ro-bind"));
     fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies a configured backend without a compiled plan writes no backend
+/// name and reports unproven enforcement instead of falling back to config.
+#[test]
+fn runtime_bubblewrap_audit_without_plan_omits_backend_name() {
+    let root = temp_root("runtime-bubblewrap-audit-without-plan");
+    let audit_path = root.join("audit.jsonl");
+    let mut service = test_runtime_service();
+    configure_available_bubblewrap(&mut service);
+    service.set_audit_log(AuditLog::new(crate::security::audit::AuditConfig {
+        enabled: true,
+        path: audit_path.clone(),
+        hash_chain: false,
+        required: true,
+    }));
+    let turn = path_resolution_turn();
+    let action = sandbox_audit_action();
+
+    service
+        .append_agent_shell_command_audit(&turn, &action, "pwd", None, None, "sent")
+        .unwrap();
+
+    let record: serde_json::Value =
+        serde_json::from_str(fs::read_to_string(&audit_path).unwrap().trim()).unwrap();
+    let metadata = record["metadata"].as_object().unwrap();
+    assert_eq!(metadata["sandbox_effective"], "bubblewrap");
+    assert!(!metadata.contains_key("sandbox_backend"));
+    assert_eq!(metadata["sandbox_enforcement"], "none");
+    assert_eq!(metadata["network_mode"], "unknown");
+    assert_eq!(metadata["sandbox_reason"], "not-probed");
+    assert!(!metadata.contains_key("sandbox_plan_sha256"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies an unavailable backend executable reports unavailable and never
+/// writes a backend name from configuration alone.
+#[test]
+fn runtime_missing_executable_audit_reports_unavailable() {
+    let root = temp_root("runtime-missing-executable-audit");
+    let audit_path = root.join("audit.jsonl");
+    let mut service = test_runtime_service();
+    let configured =
+        crate::runtime::config::runtime_configured_permissions_from_config(&serde_json::json!({
+            "permissions": {
+                "sandbox": "bubblewrap",
+                "network_policy": "deny",
+                "bubblewrap": {
+                    "executable": "/nonexistent/mez-audit-test-bwrap",
+                    "unavailable": "fail",
+                    "network": "isolated",
+                    "environment": "minimal",
+                    "env_whitelist": []
+                }
+            }
+        }))
+        .unwrap();
+    service
+        .integration
+        .replace_configured_permissions(configured);
+    service.set_audit_log(AuditLog::new(crate::security::audit::AuditConfig {
+        enabled: true,
+        path: audit_path.clone(),
+        hash_chain: false,
+        required: true,
+    }));
+    let turn = path_resolution_turn();
+    let action = sandbox_audit_action();
+
+    service
+        .append_agent_shell_command_audit(&turn, &action, "pwd", None, None, "sent")
+        .unwrap();
+
+    let record: serde_json::Value =
+        serde_json::from_str(fs::read_to_string(&audit_path).unwrap().trim()).unwrap();
+    let metadata = record["metadata"].as_object().unwrap();
+    assert_eq!(metadata["sandbox_effective"], "unavailable");
+    assert!(!metadata.contains_key("sandbox_backend"));
+    assert_eq!(metadata["sandbox_enforcement"], "none");
+    assert_eq!(metadata["network_mode"], "unknown");
+    assert_eq!(metadata["sandbox_reason"], "backend-unavailable");
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies a foreign pane reports remote-unattested in status and audit and
+/// never inherits the configured Bubblewrap backend.
+#[test]
+fn runtime_foreign_pane_reports_remote_unattested() {
+    let root = temp_root("runtime-foreign-pane-audit");
+    let audit_path = root.join("audit.jsonl");
+    let mut service = test_runtime_service();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    configure_available_bubblewrap(&mut service);
+    let primary_pid = service.pane_processes().primary_pid("%1").unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test("%1", None);
+    service
+        .apply_pane_foreground_process_event("%1", "ssh", primary_pid.saturating_add(1), None)
+        .unwrap();
+    assert!(service.begin_uncertified_foreign_shell_boundary_for_current_foreground("%1"));
+
+    let state = service.effective_sandbox_state_for_pane("%1");
+    assert_eq!(state.boundary_str(), "remote-unattested");
+    assert_eq!(state.enforcement_str(), "none");
+    assert_eq!(state.network_mode_str(), "unknown");
+    assert_eq!(state.reason_str(), "remote-shell-unattested");
+
+    service.set_audit_log(AuditLog::new(crate::security::audit::AuditConfig {
+        enabled: true,
+        path: audit_path.clone(),
+        hash_chain: false,
+        required: true,
+    }));
+    let turn = path_resolution_turn();
+    let action = sandbox_audit_action();
+    service
+        .append_agent_shell_command_audit(&turn, &action, "pwd", None, None, "sent")
+        .unwrap();
+    let record: serde_json::Value =
+        serde_json::from_str(fs::read_to_string(&audit_path).unwrap().trim()).unwrap();
+    let metadata = record["metadata"].as_object().unwrap();
+    assert_eq!(metadata["sandbox_effective"], "remote-unattested");
+    assert!(!metadata.contains_key("sandbox_backend"));
+    assert_eq!(metadata["sandbox_reason"], "remote-shell-unattested");
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies shell action results carry only the bounded resolver projection by
+/// fixed keys and never expose argv, paths, or probe output.
+#[test]
+fn runtime_shell_result_carries_bounded_sandbox_effective_fields() {
+    let mut service = test_runtime_service();
+    configure_available_bubblewrap(&mut service);
+    let turn = path_resolution_turn();
+    let action = sandbox_audit_action();
+    let plan = mez_agent::local_action_plan(&action).unwrap().unwrap();
+    let mut result = mez_agent::ActionResult::succeeded(
+        &turn,
+        &action,
+        vec!["ok".to_string()],
+        Some(mez_agent::shell_action_structured_content_json(
+            &action,
+            &plan,
+            Some("pane_shell"),
+            true,
+            serde_json::Value::Null,
+            &[],
+            serde_json::json!({"source": "test"}),
+        )),
+    );
+
+    service.attach_effective_sandbox_to_shell_result(&turn, &action, None, None, &mut result);
+
+    let structured = result.structured_content_json.as_deref().unwrap();
+    let document: serde_json::Value = serde_json::from_str(structured).unwrap();
+    let effective = document["sandbox_effective"].as_object().unwrap();
+    assert_eq!(effective.len(), 4);
+    assert_eq!(effective["execution_boundary"], "bubblewrap");
+    assert_eq!(effective["enforcement"], "none");
+    assert_eq!(effective["network_mode"], "unknown");
+    assert_eq!(effective["reason"], "not-probed");
+    for value in effective.values() {
+        let value = value.as_str().unwrap();
+        assert!(!value.contains('/'), "{value}");
+        assert!(!value.contains(' '), "{value}");
+    }
+
+    let mut failed = mez_agent::ActionResult::failed(
+        &turn,
+        &action,
+        ActionStatus::Failed,
+        "test_failure",
+        "failed",
+    )
+    .unwrap();
+    failed.structured_content_json = Some(mez_agent::shell_action_structured_content_json(
+        &action,
+        &plan,
+        Some("pane_shell"),
+        true,
+        serde_json::Value::Null,
+        &[],
+        serde_json::json!({"source": "test"}),
+    ));
+    service.attach_effective_sandbox_to_shell_result(&turn, &action, None, None, &mut failed);
+    let failed_document: serde_json::Value =
+        serde_json::from_str(failed.structured_content_json.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        failed_document["sandbox_effective"]["execution_boundary"],
+        "bubblewrap"
+    );
+    assert_eq!(failed_document["sandbox_effective"]["reason"], "not-probed");
+}
+
+/// Verifies the sandbox fallback approval discloses the configured intent, the
+/// unenforced retry, and reachable host networking without changing binding.
+#[test]
+fn runtime_sandbox_fallback_approval_discloses_unenforced_host_networking() {
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    configure_path_resolution_bubblewrap(&mut service);
+    assert!(
+        service
+            .offer_sandbox_fallback_approval(
+                "sandbox-disclosure-marker",
+                &turn_id,
+                &action_id,
+                crate::runtime::RuntimeSandboxFallbackAudit {
+                    backend: crate::runtime::SandboxBackend::Bubblewrap,
+                    reason: "pre_payload_failure".to_string(),
+                    proof: "trusted status closed without an exit-code event".to_string(),
+                    partial_effect_warning: false,
+                    approving_client_id: None,
+                },
+            )
+            .unwrap()
+    );
+
+    let execution = service.agent_turn_executions().get(&turn_id).unwrap();
+    let result = execution
+        .action_results
+        .iter()
+        .find(|result| result.action_id == action_id)
+        .unwrap();
+    let disclosure = result
+        .content
+        .iter()
+        .map(|block| block.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        disclosure.contains("the configured bubblewrap intent remains selected"),
+        "{disclosure}"
+    );
+    assert!(disclosure.contains("runs unenforced"), "{disclosure}");
+    assert!(
+        disclosure.contains("can reach host networking"),
+        "{disclosure}"
+    );
+    assert!(!service.sandbox_bypass_active_for_action(&turn_id, &action_id));
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Builds shell-dispatch and retry-result audit records for one approved
@@ -1409,15 +1697,32 @@ fn withheld_implicit_authority_reports_policy_only_without_confinement_claim() {
     let policy_only_boundary = crate::security::sandbox::effective_sandbox_boundary(
         &configured.sandbox,
         service.permission_policy().approval_policy,
+        crate::security::sandbox::SandboxExecutionHost::Pane,
     );
     assert_eq!(policy_only_boundary, "policy-only");
+    let policy_only_state = crate::security::sandbox::effective_sandbox_status(
+        &configured.sandbox,
+        service.permission_policy().approval_policy,
+        crate::security::sandbox::SandboxExecutionHost::Pane,
+    );
+    assert_eq!(policy_only_state.enforcement_str(), "none");
+    assert_eq!(policy_only_state.network_mode_str(), "unenforced");
+    assert_eq!(policy_only_state.reason_str(), "policy-only");
 
     configure_trusted_project_bubblewrap(&mut service);
     let bubblewrap_boundary = crate::security::sandbox::effective_sandbox_boundary(
         &service.configured_permissions().sandbox,
         service.permission_policy().approval_policy,
+        crate::security::sandbox::SandboxExecutionHost::Pane,
     );
-    assert_eq!(bubblewrap_boundary, "bubblewrap");
+    let expected_bubblewrap_boundary = if crate::security::sandbox::sandbox_executable_available(
+        std::path::Path::new("/usr/bin/bwrap"),
+    ) {
+        "bubblewrap"
+    } else {
+        "unavailable"
+    };
+    assert_eq!(bubblewrap_boundary, expected_bubblewrap_boundary);
     assert_eq!(
         service.primary_path_scope_status("%1").provenance,
         "project-trust-rejected"
@@ -1766,6 +2071,11 @@ fn runtime_host_access_does_not_enforce_network_policy() {
     assert_eq!(execution.action_results[0].status, ActionStatus::Running);
     assert!(execution.action_results[0].error.is_none());
     assert_eq!(service.running_shell_transactions_for_tests().len(), 1);
+    let sandbox_state = service.effective_sandbox_state_for_pane("%1");
+    assert_eq!(sandbox_state.boundary_str(), "host-bypass");
+    assert_eq!(sandbox_state.enforcement_str(), "none");
+    assert_eq!(sandbox_state.network_mode_str(), "unenforced");
+    assert_eq!(sandbox_state.reason_str(), "host-access-bypass");
     service.terminate_all_pane_processes().unwrap();
 }
 
@@ -2097,6 +2407,113 @@ fn runtime_sandbox_fallback_bypass_is_exact_and_cleared_on_settlement() {
 
     service.clear_sandbox_bypass_for_action("turn-1", "action-1");
     assert!(!service.activate_sandbox_bypass_after_approval("turn-1", "action-1"));
+}
+
+/// Verifies a settled approved one-shot unsandboxed retry reports its true
+/// effective state instead of falling through to an unproven backend claim.
+#[test]
+fn runtime_settled_sandbox_bypass_reports_policy_only_effective_state() {
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    configure_available_bubblewrap(&mut service);
+    assert!(
+        service
+            .offer_sandbox_fallback_approval(
+                "sandbox-bypass-settlement-marker",
+                &turn_id,
+                &action_id,
+                crate::runtime::RuntimeSandboxFallbackAudit {
+                    backend: crate::runtime::SandboxBackend::Bubblewrap,
+                    reason: "pre_payload_failure".to_string(),
+                    proof: "trusted status closed without an exit-code event".to_string(),
+                    partial_effect_warning: false,
+                    approving_client_id: None,
+                },
+            )
+            .unwrap()
+    );
+    service.grant_sandbox_bypass_after_approval(&turn_id, &action_id);
+    assert!(service.activate_sandbox_bypass_after_approval(&turn_id, &action_id));
+    // The fallback offer blocked the action and replaced its result, so restore
+    // the running result the approved resume dispatches from.
+    {
+        let execution = service
+            .agent_turn_executions_mut()
+            .get_mut(&turn_id)
+            .unwrap();
+        execution.action_results[0].status = ActionStatus::Running;
+        execution.terminal_state = AgentTurnState::Running;
+    }
+    // Register the unwrapped pane transaction an approved bypass dispatches:
+    // no sandbox plan is retained, mirroring dispatch with sandbox_bypassed.
+    let marker = "sandbox-bypass-settlement-marker".to_string();
+    service.running_shell_transactions_mut_for_tests().insert(
+        marker.clone(),
+        RunningShellTransactionRef {
+            turn_id: turn_id.clone(),
+            kind: RunningShellTransactionKind::AgentAction {
+                action_id: action_id.clone(),
+            },
+            pane_id: "%1".to_string(),
+            command: "env".to_string(),
+            started_at_unix_ms: 0,
+            timeout_ms: None,
+            pending_input_payload: None,
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+    );
+    assert!(!service.shell_transaction_is_sandboxed_for_tests(&marker));
+    // The synthetic fixture has no owning assistant execution block, so the
+    // settlement's transcript commit reports a context semantic violation after
+    // the action result and bounded sandbox projection are already stored.
+    let _ =
+        service.observe_agent_shell_transaction_end("%1", &marker, &turn_id, "agent-%1", "%1", 0);
+
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .unwrap();
+    let execution = service.agent_turn_executions().get(&turn_id).unwrap();
+    assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
+    let structured = execution.action_results[0]
+        .structured_content_json
+        .as_deref()
+        .expect("the settled result must carry structured content");
+    let document: serde_json::Value = serde_json::from_str(structured).unwrap();
+    let effective = document["sandbox_effective"]
+        .as_object()
+        .expect("the settled result must carry the bounded sandbox projection");
+    assert_eq!(effective.len(), 4);
+    assert_eq!(effective["execution_boundary"], "policy-only");
+    assert_eq!(effective["enforcement"], "none");
+    assert_eq!(effective["network_mode"], "unenforced");
+    assert_eq!(effective["reason"], "sandbox-bypass-approved");
+    assert!(!service.sandbox_bypass_active_for_action(&turn_id, &action_id));
+
+    // The ordinary sandboxed pane path still reports the configured backend
+    // without inheriting the one-shot bypass.
+    let evaluation = execution.action_results[0].permission_evaluation.clone();
+    let action = execution
+        .response
+        .action_batch
+        .as_ref()
+        .unwrap()
+        .actions
+        .first()
+        .unwrap()
+        .clone();
+    let ordinary =
+        service.effective_sandbox_state_for_action(&turn, &action, None, evaluation.as_deref());
+    assert_eq!(ordinary.boundary_str(), "bubblewrap");
+    assert_eq!(ordinary.enforcement_str(), "none");
+    assert_eq!(ordinary.network_mode_str(), "unknown");
+    assert_eq!(ordinary.reason_str(), "not-probed");
+
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Builds one settled Bubblewrap payload transaction for assessment tests.

@@ -731,7 +731,7 @@ impl RuntimeSessionService {
             self.register_shell_receiver_payload(&marker_id, receiver_payload);
         }
         if let Some(summary) = sandbox_audit_summary.as_ref() {
-            self.register_sandboxed_shell_transaction_backend(&marker_id, summary.backend);
+            self.register_sandboxed_shell_transaction_backend(&marker_id, summary);
         }
         if let Some(activity_lock) = managed_home_activity_lock {
             self.register_managed_home_activity_lock(&marker_id, activity_lock);

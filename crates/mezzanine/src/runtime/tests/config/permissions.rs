@@ -374,8 +374,25 @@ fn runtime_permission_status_reports_explicit_scope_provenance() {
         "{display}"
     );
     assert!(display.contains("trusted_project_root=none"), "{display}");
+    let executable_available = crate::security::sandbox::sandbox_executable_available(
+        std::path::Path::new("/usr/bin/bwrap"),
+    );
     assert!(
-        display.contains("sandbox_effective=bubblewrap"),
+        display.contains(if executable_available {
+            "sandbox_effective=bubblewrap"
+        } else {
+            "sandbox_effective=unavailable"
+        }),
+        "{display}"
+    );
+    assert!(display.contains("sandbox_enforcement=none"), "{display}");
+    assert!(display.contains("network_mode=unknown"), "{display}");
+    assert!(
+        display.contains(if executable_available {
+            "sandbox_reason=not-probed"
+        } else {
+            "sandbox_reason=backend-unavailable"
+        }),
         "{display}"
     );
     for restriction in crate::security::sandbox::BUBBLEWRAP_RESTRICTION_IDS {

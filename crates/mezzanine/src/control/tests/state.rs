@@ -76,6 +76,18 @@ fn dispatches_read_only_session_methods() {
         "policy-only"
     );
     assert_eq!(
+        response_json["result"]["session"]["permission_summary"]["sandbox_enforcement"],
+        "none"
+    );
+    assert_eq!(
+        response_json["result"]["session"]["permission_summary"]["network_mode"],
+        "unenforced"
+    );
+    assert_eq!(
+        response_json["result"]["session"]["permission_summary"]["sandbox_reason"],
+        "policy-only"
+    );
+    assert_eq!(
         response_json["result"]["session"]["permission_summary"]["network_policy"],
         "prompt"
     );

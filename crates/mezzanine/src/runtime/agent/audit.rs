@@ -40,18 +40,13 @@ impl RuntimeSessionService {
             .to_string();
         let permission_policy = self.permission_policy_for_turn(turn);
         let host_policy_bypass = permission_policy.approval_policy.bypasses_sandbox();
-        let fallback_bypass = !host_policy_bypass
-            && fallback_audit.is_some()
-            && self.sandbox_bypass_active_for_action(&turn.turn_id, &action.id);
-        let sandbox_effective = if host_policy_bypass {
-            "host".to_string()
-        } else if fallback_bypass {
-            "policy-only".to_string()
-        } else if let Some(summary) = sandbox_summary {
-            summary.backend.as_str().to_string()
-        } else {
-            configured_sandbox.clone()
-        };
+        let sandbox_state = self.effective_sandbox_state_for_action(
+            turn,
+            action,
+            sandbox_summary,
+            permission_evaluation,
+        );
+        let sandbox_effective = sandbox_state.boundary_str().to_string();
         let Some(audit_log) = self.persistence.audit_log_mut() else {
             return Ok(());
         };
@@ -72,9 +67,15 @@ impl RuntimeSessionService {
             "command_sha256",
             exact_command_sha256(DEFAULT_COMMAND_SHELL_CLASSIFICATION, command),
         )
-        .with_metadata("sandbox_backend", sandbox_effective.clone())
         .with_metadata("sandbox_configured", configured_sandbox)
         .with_metadata("sandbox_effective", sandbox_effective);
+        if let Some(sandbox_backend) = sandbox_state.audit_backend_name(sandbox_summary) {
+            record = record.with_metadata("sandbox_backend", sandbox_backend);
+        }
+        record = record
+            .with_metadata("sandbox_enforcement", sandbox_state.enforcement_str())
+            .with_metadata("network_mode", sandbox_state.network_mode_str())
+            .with_metadata("sandbox_reason", sandbox_state.reason_str());
         if let Some(summary) = sandbox_summary {
             record = record
                 .with_metadata("sandbox_profile_version", summary.runtime_profile_version)

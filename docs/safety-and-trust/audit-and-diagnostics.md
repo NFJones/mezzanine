@@ -31,9 +31,14 @@ actor, action, policy and approval state, outcome, and redaction metadata.
 
 Audit records redact secrets by default: they must not contain raw credentials,
 provider tokens, private keys, or approval secrets. Sandboxed shell-command
-records identify `bubblewrap` or `seatbelt` and expose only bounded profile
+records identify `bubblewrap` or `seatbelt` only when a compiled launch plan
+backs the claim, and expose only bounded profile
 version, authority source, grant counts, effective network mode, and launch-plan
-digest. Approved unsandboxed fallback records identify `policy-only` as the
+digest, together with the shared `sandbox_effective`, `sandbox_enforcement`,
+`network_mode`, and `sandbox_reason` reporting fields. Policy-only records use
+`policy-only`, host-access records use `host-bypass`, unavailable records use
+`unavailable`, and unattested records use `remote-unattested`; all omit
+sandbox-plan fields. Approved unsandboxed fallback records identify `policy-only` as the
 execution backend and record the original `bubblewrap` or `seatbelt` backend
 separately, together with the fallback classification, approving client,
 partial-effect warning, retry result, and a digest rather than raw proof or

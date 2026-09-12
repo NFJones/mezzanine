@@ -205,6 +205,8 @@ impl RuntimeSessionService {
             MezError::invalid_state("sandbox fallback action is not shell-backed")
         })?;
         let backend_name = fallback.backend.as_str();
+        let configured_intent = self.sandbox_config_for_pane(&turn.pane_id);
+        let configured_intent = configured_intent.as_str();
         let mut blocked = ActionResult::blocked(
             &turn,
             &action,
@@ -217,6 +219,9 @@ impl RuntimeSessionService {
                     format!("{backend_name} failed before payload execution was proven")
                 },
                 "approval is required for one exact unsandboxed retry".to_string(),
+                format!(
+                    "the configured {configured_intent} intent remains selected, but this approved retry runs unenforced and can reach host networking"
+                ),
             ],
             mez_agent::shell_action_structured_content_json(
                 &action,

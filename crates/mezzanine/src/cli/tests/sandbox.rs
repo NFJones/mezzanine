@@ -39,9 +39,32 @@ fn sandbox_status_is_structured_and_strictly_read_only() {
 
     assert_eq!(exit_code, 0);
     let output: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    let executable_available =
+        crate::security::sandbox::sandbox_executable_available(Path::new("/bin/sh"));
     assert_eq!(output["configured"]["sandbox"], "bubblewrap");
-    assert_eq!(output["version"], 2);
-    assert_eq!(output["effective"]["sandbox"], "bubblewrap");
+    assert_eq!(output["version"], 3);
+    assert_eq!(
+        output["effective"]["sandbox"],
+        if executable_available {
+            "bubblewrap"
+        } else {
+            "unavailable"
+        }
+    );
+    assert_eq!(
+        output["effective"]["execution_boundary"],
+        output["effective"]["sandbox"]
+    );
+    assert_eq!(output["effective"]["enforcement"], "none");
+    assert_eq!(output["effective"]["network_mode"], "unknown");
+    assert_eq!(
+        output["effective"]["reason"],
+        if executable_available {
+            "not-probed"
+        } else {
+            "backend-unavailable"
+        }
+    );
     assert_eq!(output["effective"]["scope_provenance"], "explicit");
     assert_eq!(
         output["effective"]["sandbox_executable_state"],
@@ -58,11 +81,19 @@ fn sandbox_status_is_structured_and_strictly_read_only() {
     );
     assert_eq!(
         output["effective"]["network_boundary"],
-        "per-action-network-namespace-or-authorized-host-network"
+        if executable_available {
+            "per-action-network-namespace-or-authorized-host-network"
+        } else {
+            "unenforced-backend-unavailable"
+        }
     );
     assert_eq!(
         output["effective"]["namespace_boundary"],
-        "private-mount-pid-user-uts-ipc-namespaces"
+        if executable_available {
+            "private-mount-pid-user-uts-ipc-namespaces"
+        } else {
+            "visible-host-namespace"
+        }
     );
     assert_eq!(output["mutations"], serde_json::json!([]));
     assert_eq!(output["confirmation"]["required"], false);
@@ -71,6 +102,100 @@ fn sandbox_status_is_structured_and_strictly_read_only() {
     assert!(!config_root.join("project-trust.tsv").exists());
     assert!(!config_root.join("sandbox").exists());
     assert!(!home.join("runtime/mez-0").exists());
+
+    let _ = fs::remove_dir_all(home);
+}
+
+/// Verifies sandbox status reports unproven network enforcement honestly in
+/// JSON and verbose text and never emits an unqualified enforcement claim for
+/// a backend without a compiled plan and capability proof.
+#[test]
+fn sandbox_status_never_asserts_unverified_network_enforcement() {
+    let (env, home) = test_env("sandbox-status-network-enforcement-wording");
+    let config_root = home.join(".config/mezzanine");
+    fs::create_dir_all(&config_root).unwrap();
+    let executable = std::env::current_exe()
+        .expect("test executable path is available")
+        .to_string_lossy()
+        .into_owned();
+    fs::write(
+        config_root.join("config.toml"),
+        format!(
+            "version = 25\n[permissions]\napproval_policy = \"ask\"\nsandbox = \"bubblewrap\"\nread_scopes = [\"/tmp\"]\nwrite_scopes = []\n[permissions.bubblewrap]\nexecutable = \"{executable}\"\nunavailable = \"fail\"\nnetwork = \"isolated\"\nenvironment = \"minimal\"\n"
+        ),
+    )
+    .unwrap();
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    assert!(
+        crate::security::sandbox::sandbox_executable_available(Path::new(&executable)),
+        "the not-probed wording requires an available configured executable"
+    );
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let exit_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "status".to_string(),
+            project.to_string_lossy().into_owned(),
+        ]),
+        env.clone(),
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+    assert_eq!(exit_code, 0);
+    let output: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(output["effective"]["reason"], "not-probed");
+    assert_eq!(output["effective"]["enforcement"], "none");
+    let diagnostics = output["diagnostics"].as_array().unwrap();
+    assert!(
+        !diagnostics.iter().any(|diagnostic| {
+            diagnostic["id"] == "sandbox.network-policy-enforced"
+                || diagnostic["summary"]
+                    .as_str()
+                    .is_some_and(|summary| summary.contains("enforces shell network policy"))
+        }),
+        "{output}"
+    );
+    let unproven = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic["id"] == "sandbox.network-policy-enforcement-unproven")
+        .expect("not-probed status must explain that enforcement is unproven");
+    assert_eq!(
+        unproven["summary"],
+        "Bubblewrap will enforce shell network policy once a launch plan and capability proof exist"
+    );
+    assert!(stderr.is_empty());
+
+    stdout.clear();
+    let exit_code = block_on_cli_code(crate::cli::run_with(
+        vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "status".to_string(),
+            "--verbose".to_string(),
+            project.to_string_lossy().into_owned(),
+        ],
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+    assert_eq!(exit_code, 0);
+    let text = String::from_utf8(stdout).unwrap();
+    assert!(
+        text.contains(
+            "diagnostic: sandbox.network-policy-enforcement-unproven severity=info summary=Bubblewrap will enforce shell network policy once a launch plan and capability proof exist"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("enforces shell network policy"), "{text}");
+    assert!(stderr.is_empty());
 
     let _ = fs::remove_dir_all(home);
 }
@@ -195,9 +320,32 @@ fn sandbox_status_reports_seatbelt_operation_confinement() {
 
     assert_eq!(exit_code, 0);
     let output: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
-    assert_eq!(output["version"], 2);
+    let executable_available =
+        crate::security::sandbox::sandbox_executable_available(Path::new("/usr/bin/sandbox-exec"));
+    assert_eq!(output["version"], 3);
     assert_eq!(output["configured"]["sandbox"], "seatbelt");
-    assert_eq!(output["effective"]["sandbox"], "seatbelt");
+    assert_eq!(
+        output["effective"]["sandbox"],
+        if executable_available {
+            "seatbelt"
+        } else {
+            "unavailable"
+        }
+    );
+    assert_eq!(
+        output["effective"]["execution_boundary"],
+        output["effective"]["sandbox"]
+    );
+    assert_eq!(output["effective"]["enforcement"], "none");
+    assert_eq!(output["effective"]["network_mode"], "unknown");
+    assert_eq!(
+        output["effective"]["reason"],
+        if executable_available {
+            "not-probed"
+        } else {
+            "backend-unavailable"
+        }
+    );
     assert_eq!(
         output["effective"]["sandbox_executable_state"],
         if crate::security::sandbox::sandbox_executable_available(Path::new(
@@ -219,7 +367,11 @@ fn sandbox_status_reports_seatbelt_operation_confinement() {
     );
     assert_eq!(
         output["effective"]["network_boundary"],
-        "per-action-operation-denial-or-authorized-host-network"
+        if executable_available {
+            "per-action-operation-denial-or-authorized-host-network"
+        } else {
+            "unenforced-backend-unavailable"
+        }
     );
     assert_eq!(
         output["effective"]["namespace_boundary"],
@@ -246,6 +398,201 @@ fn sandbox_status_reports_seatbelt_operation_confinement() {
     assert_eq!(fs::read(&config_path).unwrap(), before_config);
     assert!(!config_root.join("project-trust.tsv").exists());
     assert!(!config_root.join("sandbox").exists());
+
+    let _ = fs::remove_dir_all(home);
+}
+
+/// Verifies policy-only status reports an unenforced boundary without any
+/// operating-system confinement claim in JSON or plain text.
+#[test]
+fn sandbox_status_reports_policy_only_without_confinement_claim() {
+    let (env, home) = test_env("sandbox-status-policy-only");
+    let config_root = home.join(".config/mezzanine");
+    fs::create_dir_all(&config_root).unwrap();
+    fs::write(
+        config_root.join("config.toml"),
+        "version = 25\n[permissions]\napproval_policy = \"ask\"\nsandbox = \"policy-only\"\n",
+    )
+    .unwrap();
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let exit_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "status".to_string(),
+            project.to_string_lossy().into_owned(),
+        ]),
+        env.clone(),
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+
+    assert_eq!(exit_code, 0);
+    let output: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(output["version"], 3);
+    assert_eq!(output["effective"]["sandbox"], "policy-only");
+    assert_eq!(output["effective"]["execution_boundary"], "policy-only");
+    assert_eq!(output["effective"]["enforcement"], "none");
+    assert_eq!(output["effective"]["network_mode"], "unenforced");
+    assert_eq!(output["effective"]["reason"], "policy-only");
+    assert_eq!(output["effective"]["network_boundary"], "policy-only");
+    assert_eq!(
+        output["effective"]["namespace_boundary"],
+        "visible-host-namespace"
+    );
+
+    stdout.clear();
+    let exit_code = block_on_cli_code(crate::cli::run_with(
+        vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "status".to_string(),
+            project.to_string_lossy().into_owned(),
+        ],
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+    assert_eq!(exit_code, 0);
+    let text = String::from_utf8(stdout).unwrap();
+    assert!(text.contains("sandbox_effective: policy-only"), "{text}");
+    assert!(text.contains("enforcement: none"), "{text}");
+    assert!(text.contains("network_mode: unenforced"), "{text}");
+    assert!(text.contains("reason: policy-only"), "{text}");
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
+/// Verifies host access reports an unenforced host bypass without the
+/// configured backend namespace or network claim.
+#[test]
+fn sandbox_status_reports_host_access_without_backend_namespace_claim() {
+    let (env, home) = test_env("sandbox-status-host-access");
+    let config_root = home.join(".config/mezzanine");
+    fs::create_dir_all(&config_root).unwrap();
+    fs::write(
+        config_root.join("config.toml"),
+        "version = 25\n[permissions]\napproval_policy = \"host-access\"\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\nexecutable = \"/nonexistent/mez-cli-test-bwrap\"\nunavailable = \"fail\"\nnetwork = \"isolated\"\nenvironment = \"minimal\"\n",
+    )
+    .unwrap();
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let exit_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "status".to_string(),
+            project.to_string_lossy().into_owned(),
+        ]),
+        env.clone(),
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+
+    assert_eq!(exit_code, 0);
+    let output: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(output["configured"]["sandbox"], "bubblewrap");
+    assert_eq!(output["effective"]["sandbox"], "host-bypass");
+    assert_eq!(output["effective"]["execution_boundary"], "host-bypass");
+    assert_eq!(output["effective"]["enforcement"], "none");
+    assert_eq!(output["effective"]["network_mode"], "unenforced");
+    assert_eq!(output["effective"]["reason"], "host-access-bypass");
+    assert_eq!(
+        output["effective"]["network_boundary"],
+        "host-unenforced-network-access"
+    );
+    assert_eq!(
+        output["effective"]["namespace_boundary"],
+        "visible-host-namespace"
+    );
+
+    stdout.clear();
+    let exit_code = block_on_cli_code(crate::cli::run_with(
+        vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "status".to_string(),
+            project.to_string_lossy().into_owned(),
+        ],
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+    assert_eq!(exit_code, 0);
+    let text = String::from_utf8(stdout).unwrap();
+    assert!(text.contains("sandbox_effective: host-bypass"), "{text}");
+    assert!(text.contains("enforcement: none"), "{text}");
+    assert!(text.contains("network_mode: unenforced"), "{text}");
+    assert!(text.contains("reason: host-access-bypass"), "{text}");
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
+/// Verifies a missing configured backend executable reports unavailable and
+/// stops claiming a private namespace or enforced network boundary.
+#[test]
+fn sandbox_status_reports_missing_executable_as_unavailable() {
+    let (env, home) = test_env("sandbox-status-missing-executable");
+    let config_root = home.join(".config/mezzanine");
+    fs::create_dir_all(&config_root).unwrap();
+    fs::write(
+        config_root.join("config.toml"),
+        "version = 25\n[permissions]\napproval_policy = \"ask\"\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\nexecutable = \"/nonexistent/mez-cli-test-bwrap\"\nunavailable = \"fail\"\nnetwork = \"isolated\"\nenvironment = \"minimal\"\n",
+    )
+    .unwrap();
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let exit_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "status".to_string(),
+            project.to_string_lossy().into_owned(),
+        ]),
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+
+    assert_eq!(exit_code, 0);
+    let output: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(output["version"], 3);
+    assert_eq!(output["effective"]["sandbox"], "unavailable");
+    assert_eq!(output["effective"]["execution_boundary"], "unavailable");
+    assert_eq!(output["effective"]["enforcement"], "none");
+    assert_eq!(output["effective"]["network_mode"], "unknown");
+    assert_eq!(output["effective"]["reason"], "backend-unavailable");
+    assert_eq!(
+        output["effective"]["network_boundary"],
+        "unenforced-backend-unavailable"
+    );
+    assert_eq!(
+        output["effective"]["namespace_boundary"],
+        "visible-host-namespace"
+    );
+    assert!(stderr.is_empty());
 
     let _ = fs::remove_dir_all(home);
 }

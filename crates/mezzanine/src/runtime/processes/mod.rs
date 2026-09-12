@@ -1090,9 +1090,11 @@ pub(crate) struct RuntimeProcessComponent {
         std::collections::BTreeMap<String, RuntimePendingDeferredForeignTransactionEnd>,
     /// Agent-action markers whose child launch uses the Bubblewrap backend.
     sandboxed_shell_transaction_markers: BTreeSet<String>,
-    /// Exact backend retained for each sandboxed agent-action marker.
-    sandboxed_shell_transaction_backends:
-        std::collections::BTreeMap<String, crate::runtime::SandboxBackend>,
+    /// Exact backend and redacted compiled-plan facts retained for each
+    /// sandboxed agent-action marker so settlement and result reporting stay
+    /// plan-backed.
+    sandboxed_shell_transaction_plans:
+        std::collections::BTreeMap<String, crate::security::sandbox::SandboxAuditSummary>,
     /// Shared managed-home activity locks retained for sandboxed workloads.
     managed_home_activity_locks: std::collections::BTreeMap<
         String,
@@ -2186,7 +2188,7 @@ impl RuntimeSessionService {
         self.process.pane_shell_output_render_pending.clear();
         self.process.managed_home_activity_locks.clear();
         self.process.seatbelt_workload_leases.clear();
-        self.process.sandboxed_shell_transaction_backends.clear();
+        self.process.sandboxed_shell_transaction_plans.clear();
     }
 
     /// Marks one registered action transaction as the owner of encoded output.
@@ -3002,9 +3004,9 @@ impl RuntimeSessionService {
         marker: &str,
     ) -> Option<crate::runtime::SandboxBackend> {
         self.process
-            .sandboxed_shell_transaction_backends
+            .sandboxed_shell_transaction_plans
             .get(marker)
-            .copied()
+            .map(|summary| summary.backend)
     }
 
     /// Returns the private Seatbelt action directory retained by one live

@@ -4724,7 +4724,10 @@ network authority by denying TCP, UDP, and Unix-domain socket operations in the
 visible host namespace. It MUST NOT describe that operation-level boundary as
 a private network namespace. Authorized Seatbelt network actions MAY use host
 networking according to the same `deny`, `prompt`, and `allow` authorization
-decisions. Every Bubblewrap profile MUST
+decisions. Reported network enforcement MUST come from a compiled launch plan
+plus an exact capability proof; configuration alone MUST NOT produce an
+`isolated` or `connected` claim, and Seatbelt reporting MUST NOT describe a
+private namespace. Every Bubblewrap profile MUST
 project the host TLS trust store at `/etc/ssl/certs` read-only, regardless of
 network mode. Brokered
 `web_search`, `fetch_url`, and MCP actions execute through product-owned
@@ -4742,6 +4745,9 @@ Trusted-project provenance MUST include the selected trusted root. A withheld
 decision MUST name the governing root so an operator can distinguish a rejected
 or revoked nested decision from the mere absence of any decision. Status MUST
 NOT report operating-system confinement for a `policy-only` configuration.
+Status, audit, and shell action results MUST report `policy-only` as no
+enforcement with an unenforced network mode and MUST NOT claim a private
+namespace or an isolated network.
 A withheld project-trust decision MUST deny `shell_command` and `apply_patch`
 admission regardless of the applied sandbox backend, including `policy-only`, a
 native shell mode, and an approved sandbox bypass, and MUST NOT dispatch a
@@ -4771,12 +4777,23 @@ configuration diagnostics. The remediation MUST NOT suggest automatic
 authority broadening or host fallback.
 
 `mez sandbox status [PATH] [--verbose]` MUST build one deterministic, read-only
-version-2 workflow projection containing configured and effective sandbox
+version-3 workflow projection containing configured and effective sandbox
 boundaries, approval policy, canonical project-root discovery and source, trust
 state, scope provenance, backend executable and capability state, runtime-profile
 version, managed-home readiness, byte usage, active state and path semantics,
 network boundary, namespace boundary, reload freshness, and stable restrictions
-and diagnostics. Bubblewrap status MUST report its private namespace boundary
+and diagnostics. The effective projection MUST add a typed execution boundary,
+enforcement mechanism, effective network mode, and closed reason resolved by one
+typed boundary resolver shared with audit and shell action results. A configured
+backend whose fixed executable is missing MUST report `unavailable` with no
+enforcement and an unknown network mode instead of the backend name. Policy-only
+execution and host access MUST report no enforcement and an unenforced network
+mode without any private-namespace claim. A configured backend without an exact
+capability proof and a compiled launch plan MUST report no enforcement and an
+unknown network mode; only a compiled plan plus capability proof may report
+`isolated` or `connected`. A foreign or unattested pane MUST report
+`remote-unattested` and MUST NOT inherit the configured backend. Bubblewrap
+status MUST report its private namespace boundary
 and synthetic mounted-home semantics. Seatbelt status MUST report operation-level
 network denial, a visible host namespace, and private canonical host-path home
 semantics without describing any of them as mounts or namespaces. Inspection
@@ -12266,14 +12283,22 @@ changes, approval prompts, approval decisions, shell commands sent by agents,
 configuration changes, subagent spawns, local protocol bridge changes, external
 connector use, credential access attempts, and logout.
 
-Agent shell-command audit records MUST identify `sandbox_backend` as
-`policy-only`, `bubblewrap`, or `seatbelt`. Sandboxed records MUST also include
+Agent shell-command audit records MUST report `sandbox_effective`,
+`sandbox_enforcement`, `network_mode`, and `sandbox_reason` from the same typed
+boundary resolver used by status and shell action results. `sandbox_backend`
+MUST name `policy-only`, `bubblewrap`, or `seatbelt` when that name applies, and
+MUST name `bubblewrap` or `seatbelt` only when a compiled plan backs the claim;
+a configured backend without a compiled plan MUST omit the backend name.
+Host-access records MUST report `host-bypass`, unavailable records MUST report
+`unavailable`, and remote-unattested records MUST report `remote-unattested`
+instead of a configured backend name. Sandboxed records MUST also include
 the fixed runtime-profile version, maximum or narrowed authority source,
 read-only and read-write grant counts, effective network mode, and deterministic
 launch-plan SHA-256. Backend-specific aggregate fields MAY distinguish
 Bubblewrap mount protection from Seatbelt operation grants but MUST remain
 path-free. An approved unsandboxed fallback MUST be recorded as `policy-only`
-and MUST identify the exact Bubblewrap or Seatbelt origin, fallback
+with reason `sandbox-bypass-approved` and MUST identify the exact Bubblewrap or
+Seatbelt origin, fallback
 classification, partial-effect warning, approving client, exact retry result,
 and a digest rather than raw proof or model rationale. These records MUST NOT
 include mount or host paths, launcher argv, generated SBPL, command content,
