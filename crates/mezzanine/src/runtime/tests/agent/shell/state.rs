@@ -2999,6 +2999,165 @@ fn runtime_dispatch_time_apply_patch_terminal_reports_applied_bubblewrap_boundar
     fs::remove_dir_all(root).unwrap();
 }
 
+/// Verifies the pre-shell hook block terminal reports the effective boundary
+/// the retained action settled under.
+///
+/// A failing blocking program hook reaches
+/// `fail_pending_shell_action_for_hook_block`, which owns the hook-blocked
+/// denial for the async completion, hook transaction, and expiry callers. The
+/// stored terminal result must carry the same bounded four-key projection as
+/// its dispatch-time siblings rather than structured hook content alone.
+#[test]
+fn runtime_dispatch_time_apply_patch_terminal_reports_hook_blocked_boundary() {
+    let (mut service, turn_id, action_id) = apply_patch_dispatch_execution_service();
+    // The terminal settles into the turn chronology, which rejects evidence
+    // whose assistant execution is not part of that chronology.
+    register_dispatch_fixture_chronology(&mut service, &turn_id);
+    // A sibling action left blocked keeps the turn open: the hook-blocked
+    // denial alone settles the execution out of the running map before the
+    // stored terminal result can be read.
+    add_blocked_sibling_action(&mut service, &turn_id);
+    service.use_hook_effect_adapter();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            // Replacing the fixture layers must restate the configured pane
+            // boundary, or the resolver falls back to the host backend.
+            text: "[permissions]\nsandbox = \"policy-only\"\n\n[hooks.guard]\nevent = \"pre_shell_command\"\nprogram = \"/bin/sh\"\nargs = [\"-c\", \"false\"]\non_failure = \"block\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    let decision = service
+        .run_configured_pre_action_hooks_with_continuation(
+            HookEvent::PreShellCommand,
+            r#"{"command":"apply patch guarded"}"#,
+            Some(crate::runtime::PendingFocusedShellHookContinuation {
+                turn_id: turn_id.clone(),
+                action_id: action_id.clone(),
+                phase_command_sha256: "phase-digest".to_string(),
+            }),
+        )
+        .unwrap();
+    assert_eq!(
+        decision,
+        crate::runtime::RuntimeHookPipelineDecision::Pending
+    );
+    let mut effects = service.drain_program_hook_transition().side_effects;
+    assert_eq!(effects.len(), 1);
+    let RuntimeSideEffect::RunProgramHook {
+        plan,
+        triggering_event_completed,
+        continuation: pending,
+    } = effects.pop().unwrap()
+    else {
+        panic!("a blocking program hook should produce a hook-worker side effect");
+    };
+    assert!(!triggering_event_completed);
+    let pending = pending.expect("the blocking program hook should retain its continuation");
+    let result = crate::integrations::hooks::HookExecutionResult {
+        hook_id: plan.hook_id.clone(),
+        event: plan.event,
+        status: crate::integrations::hooks::HookExecutionStatus::Failed,
+        exit_code: Some(1),
+        stdout: String::new(),
+        stderr: String::new(),
+        stdout_bytes: 0,
+        stderr_bytes: 0,
+        stdout_truncated: false,
+        stderr_truncated: false,
+        failure: Some(crate::integrations::hooks::HookFailure {
+            hook_id: plan.hook_id.clone(),
+            event: plan.event,
+            kind: crate::integrations::hooks::HookFailureKind::ExitNonZero,
+            message: "guard rejected the retained action".to_string(),
+            retryable: false,
+        }),
+    };
+
+    service
+        .apply_hook_transition(crate::runtime::AsyncHookEvent::ProgramCompleted {
+            plan,
+            result: Box::new(result),
+            triggering_event_completed: false,
+            continuation: Some(pending),
+        })
+        .unwrap();
+
+    let execution = service
+        .agent_turn_executions()
+        .get(&turn_id)
+        .cloned()
+        .expect("the hook-blocked terminal keeps the fixture execution");
+    assert_eq!(execution.action_results[0].action_id, action_id);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Denied);
+    assert_eq!(
+        execution.action_results[0]
+            .error
+            .as_ref()
+            .map(|error| error.code.as_str()),
+        Some("hook_blocked")
+    );
+    let effective = bounded_sandbox_projection(&execution.action_results[0]);
+    assert_eq!(effective["execution_boundary"], "policy-only");
+    assert_eq!(effective["enforcement"], "none");
+    assert_eq!(effective["network_mode"], "unenforced");
+    assert_eq!(effective["reason"], "policy-only");
+    assert!(
+        service
+            .integration
+            .pending_program_hook_continuations()
+            .is_empty()
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Adds one blocked sibling action to a running dispatch fixture turn.
+///
+/// A hook-blocked denial carries an error status, so the resulting failed turn
+/// would settle the execution out of the running map. An unrelated blocked
+/// approval keeps the turn open and the stored terminal result readable, which
+/// is what a genuinely pending approval does.
+fn add_blocked_sibling_action(service: &mut RuntimeSessionService, turn_id: &str) {
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .expect("the dispatch fixture keeps its turn");
+    let mut sibling = service
+        .agent_turn_executions()
+        .get(turn_id)
+        .and_then(|execution| execution.response.action_batch.as_ref())
+        .and_then(|batch| batch.actions.first())
+        .cloned()
+        .expect("the dispatch fixture keeps its action batch");
+    sibling.id = "sandbox-fallback-patch-sibling".to_string();
+    let result = mez_agent::ActionResult::blocked(
+        &turn,
+        &sibling,
+        vec!["blocked pending approval".to_string()],
+        serde_json::json!({"state":"pending"}).to_string(),
+    );
+    let execution = service
+        .agent_turn_executions_mut()
+        .get_mut(turn_id)
+        .expect("the dispatch fixture keeps its execution");
+    execution
+        .response
+        .action_batch
+        .as_mut()
+        .expect("the dispatch fixture keeps its action batch")
+        .actions
+        .push(sibling);
+    execution.action_results.push(result);
+}
+
 /// Builds a live prompt turn whose sole `apply_patch` action awaits dispatch.
 ///
 /// The pane-not-ready siblings drive a shell payload through the same
