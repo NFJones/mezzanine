@@ -33,6 +33,16 @@ fn runtime_service_restarts_restored_panes_without_assuming_prompt_readiness() {
 
     assert_eq!(starts.len(), 1);
     assert_eq!(
+        service.runtime_agent_surface_startup_phase_for_tests(&starts[0].pane_id),
+        None,
+        "a restored pane without a durable agent binding must not own a startup surface"
+    );
+    assert_eq!(
+        service.restored_pane_process_purpose(&starts[0].pane_id),
+        crate::runtime::processes::RuntimePaneProcessPurpose::UserShell,
+        "a restored pane without a durable agent binding stays a user shell"
+    );
+    assert_eq!(
         service.pane_readiness_state(&starts[0].pane_id),
         PaneReadinessState::Unknown
     );

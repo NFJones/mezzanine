@@ -2218,13 +2218,24 @@ absolute. `MEZ`, `MEZ_SESSION`, `MEZ_WINDOW`, `MEZ_PANE`, `TERM`,
 NOT be inherited from the daemon. `TERM_FEATURES` is harness-processed rather
 than inherited verbatim: the harness derives it from the daemon value with the
 progress feature appended. User-initiated panes MUST keep inheriting the user
-environment unchanged. This cleared base is scoped to the panes the runtime
-creates through the agent-owned creation path; a pane restored from a snapshot
-is re-created through the user-shell path and is therefore not covered until
-the follow-up issue "Snapshot-restored panes are re-created through the
-user-shell path and can feed daemon environment into agent evidence" (issue
-37adefd4) is resolved. New agent-owned panes therefore start from a new
-environment signature, and daemon-only names in the `SSH_AUTH_SOCK`, proxy,
+environment unchanged. This cleared base is scoped to every pane the runtime
+creates through the agent-owned creation path. A pane process re-created by a
+snapshot restore is agent-owned exactly when a durable non-ephemeral root agent
+binding exists for its pane id at restart. The daemon snapshot-restore path
+restores those bindings before restarting pane processes, so a bound restored
+pane is re-created through the agent-owned creation path using the pane's
+effective shell mode at restart time; a pane-local shell-mode override is not
+durable, so the configured default applies. The predicate deliberately ignores
+pane visibility: a hidden bound restored pane presents as a process surface and
+still receives the cleared base. A restored pane with no durable binding keeps
+inheriting the user environment unchanged, and if binding restore fails the
+runtime reports a diagnostic and restored panes fall back to the user-shell
+path. This automatic restore is scoped to daemon startup from a snapshot: the
+runtime control snapshot/resume path resets the in-memory agent session store
+before restarting panes, so those panes take the user-shell path unless a
+binding is re-established. Every agent-owned pane root - including a bound
+restored pane - therefore starts from a new environment signature, and
+daemon-only names in the `SSH_AUTH_SOCK`, proxy,
 toolchain, and `XDG_*` classes are no longer visible inside agent-owned panes in
 both pane mode and native mode; in pane mode user shell startup files can still
 export those names, but that is user-configuration dependent and MUST NOT be
@@ -4295,10 +4306,21 @@ parent Mezzanine process environment. The pane root that supplies that inferred
 evidence MUST itself be created from a cleared base plus the documented
 pane-creation allowlist when the runtime creates that pane through the
 agent-owned creation path, so a daemon-only name cannot enter native evidence
-through agent-owned pane creation. A pane restored from a snapshot is re-created
-through the user-shell path, so it is not covered until the follow-up issue
-"Snapshot-restored panes are re-created through the user-shell path and can
-feed daemon environment into agent evidence" (issue 37adefd4) is resolved.
+through agent-owned pane creation. A pane process re-created by a snapshot
+restore is agent-owned exactly when a durable non-ephemeral root agent binding
+exists for its pane id at restart: the daemon snapshot-restore path restores
+those bindings before restarting pane processes, so a bound restored pane is
+re-created through the agent-owned creation path using the pane's effective
+shell mode at restart time. A pane-local shell-mode override is not durable, so
+the configured default applies. The predicate deliberately ignores pane
+visibility: a hidden bound restored pane presents as a process surface and
+still receives the cleared base. A restored pane with no durable binding keeps
+inheriting the user environment unchanged, and if binding restore fails the
+runtime reports a diagnostic and restored panes fall back to the user-shell
+path. This automatic restore is scoped to daemon startup from a snapshot: the
+runtime control snapshot/resume path resets the in-memory agent session store
+before restarting panes, so those panes take the user-shell path unless a
+binding is re-established.
 Native execution MUST NOT write to or
 read from the pane PTY and MUST NOT run any command through the pane shell to
 enable or perform the execution.
@@ -7504,11 +7526,21 @@ narrowly enumerated runtime launch requirements declared by Mezzanine. The pane
 root that supplies that inferred evidence MUST itself be created from a cleared
 base plus the documented pane-creation allowlist when the runtime creates that
 pane through the agent-owned creation path, so a daemon-only name cannot enter
-native evidence through agent-owned pane creation. A pane restored from a
-snapshot is re-created through the user-shell path, so it is not covered until
-the follow-up issue "Snapshot-restored panes are re-created through the
-user-shell path and can feed daemon environment into agent evidence" (issue
-37adefd4) is resolved.
+native evidence through agent-owned pane creation. A pane process re-created by
+a snapshot restore is agent-owned exactly when a durable non-ephemeral root
+agent binding exists for its pane id at restart: the daemon snapshot-restore
+path restores those bindings before restarting pane processes, so a bound
+restored pane is re-created through the agent-owned creation path using the
+pane's effective shell mode at restart time. A pane-local shell-mode override
+is not durable, so the configured default applies. The predicate deliberately
+ignores pane visibility: a hidden bound restored pane presents as a process
+surface and still receives the cleared base. A restored pane with no durable
+binding keeps inheriting the user environment unchanged, and if binding restore
+fails the runtime reports a diagnostic and restored panes fall back to the
+user-shell path. This automatic restore is scoped to daemon startup from a
+snapshot: the runtime control snapshot/resume path resets the in-memory agent
+session store before restarting panes, so those panes take the user-shell path
+unless a binding is re-established.
 Agent entry and provider preflight in native mode MUST inspect only live root-
 process metadata and MUST NOT schedule pane bootstrap, readiness, shell-identity, or
 path-resolution transactions. Native execution MUST run outside the serialized
@@ -11307,6 +11339,10 @@ safely. Writers MUST emit only version 5 after migration.
 
 A session restored from a snapshot MUST start with zero attached primaries and
 no layout owner while retaining canonical size and valid landing navigation.
+A pane restored from a snapshot that still has a durable non-ephemeral root
+agent binding MUST present its restored agent surface: the snapshot-seeded
+process screen and the fresh-primary-PID restart marker are retained in that
+pane's process-pane state and MUST NOT be the presented surface for that pane.
 Live topology replacement MUST be atomic: replace shared topology, reset every
 attached primary to valid landing navigation, clear stale pane-scoped
 presentation, retain the owner only if still attached, use owner size when

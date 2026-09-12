@@ -11,6 +11,16 @@
 //! User-initiated panes keep inheriting the user environment exactly as before;
 //! only `RuntimePaneProcessPurpose::AgentOwned` panes cross this boundary.
 //!
+//! Restored panes cross this boundary too: snapshot restore restores durable
+//! agent session metadata before pane processes are restarted, so a pane
+//! restored from a snapshot with a durable pane-to-agent binding is re-created
+//! through the agent-owned creation path using the pane's effective agent shell
+//! mode at restart time. A restored pane with no durable agent binding keeps
+//! inheriting the user environment unchanged. A bound restored pane is still
+//! admitted or certified through the pane's normal mode-specific startup
+//! contract: pane mode runs the managed admission handshake, and native mode
+//! stays unvalidated until the first agent entry.
+//!
 //! The guarantee is deliberate composition, not credential non-possession: a
 //! value deliberately passed at pane creation, or later exported by the pane
 //! shell, remains authoritative pane evidence and is forwarded by design.
@@ -137,6 +147,60 @@ fn push_allowlisted(
     }
     *total_value_bytes = total_value_bytes.saturating_add(value.len());
     entries.push((OsString::from(name), OsString::from_vec(value.to_vec())));
+}
+
+/// Selects one daemon-only variable that pane creation must not forward.
+///
+/// Cargo-provided names are preferred because user shell startup files do not
+/// recreate them, which keeps the agent-owned negative assertion deterministic.
+/// Otherwise the last daemon entry wins whose name the projected allowlist
+/// drops and which the pane's user shell does not recreate itself.
+#[cfg(test)]
+pub(crate) fn daemon_only_probe_key_for_tests(
+    daemon: &[RawEnvironmentEntry],
+    resolved_shell: &Path,
+) -> Option<RawEnvironmentEntry> {
+    const PREFERRED: &[&str] = &[
+        "CARGO_MANIFEST_DIR",
+        "CARGO_PKG_NAME",
+        "CARGO_PKG_VERSION",
+        "RUST_BACKTRACE",
+    ];
+    const SHELL_RECREATED: &[&str] = &[
+        "PATH",
+        "HOME",
+        "PWD",
+        "SHLVL",
+        "OLDPWD",
+        "PS1",
+        "_",
+        "TERM",
+        "TERM_FEATURES",
+        "GIT_OPTIONAL_LOCKS",
+    ];
+    fn eligible(entry: &RawEnvironmentEntry) -> bool {
+        !entry.key.is_empty() && !entry.value.is_empty()
+    }
+    fn shell_recreated(key: &[u8]) -> bool {
+        key.starts_with(b"MEZ") || SHELL_RECREATED.iter().any(|name| name.as_bytes() == key)
+    }
+    let projected = agent_owned_pane_environment(daemon, resolved_shell);
+    let projected_name = |key: &[u8]| projected.iter().any(|(name, _)| name.as_bytes() == key);
+    daemon
+        .iter()
+        .rev()
+        .find(|entry| {
+            eligible(entry)
+                && PREFERRED
+                    .iter()
+                    .any(|name| name.as_bytes() == entry.key.as_slice())
+        })
+        .or_else(|| {
+            daemon.iter().rev().find(|entry| {
+                eligible(entry) && !shell_recreated(&entry.key) && !projected_name(&entry.key)
+            })
+        })
+        .cloned()
 }
 
 #[cfg(test)]

@@ -28,6 +28,8 @@ pub(crate) use native_workload_environment::NativeLaunchEnvironmentRole;
 #[cfg(test)]
 pub(crate) use native_workload_environment::native_ambient_environment;
 #[cfg(test)]
+pub(crate) use pane_creation_environment::daemon_only_probe_key_for_tests;
+#[cfg(test)]
 pub(crate) use spawned_shell::execute_native_shell_dispatch;
 pub(crate) use spawned_shell::{
     execute_native_shell_dispatch_with_progress, execute_pane_status_provider_launch,
@@ -510,6 +512,16 @@ impl RuntimeForeignShellBootstrapPhase {
 /// their shell execution mode before process launch so native startup never
 /// acquires pane-bootstrap state and pane mode can install authenticated
 /// process-local compatibility before any agent work is scheduled.
+///
+/// A pane re-created during snapshot restore is agent-owned when it still has
+/// a durable pane-to-agent binding: the runtime restores durable agent session
+/// metadata before restarting pane processes, so a bound restored pane is
+/// re-created through the agent-owned creation path instead of inheriting the
+/// daemon environment. A restored pane with no durable binding remains a user
+/// shell. A bound restored pane is still admitted or certified through the
+/// pane's normal mode-specific startup contract: pane mode runs the managed
+/// admission handshake, and native mode stays unvalidated until the first agent
+/// entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimePaneProcessPurpose {
     /// Launch the configured interactive shell without agent-owned adapters.

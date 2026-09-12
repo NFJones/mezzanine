@@ -1437,6 +1437,15 @@ impl AgentTranscriptStore {
         self.legacy_bounded_summary(conversation_id)
     }
 
+    /// Returns the durable active agent-session metadata file for tests.
+    ///
+    /// Restored-snapshot degradation tests seed malformed durable state through
+    /// this accessor instead of duplicating the on-disk layout.
+    #[cfg(test)]
+    pub(crate) fn agent_session_metadata_path_for_tests(&self) -> PathBuf {
+        self.agent_session_metadata_path()
+    }
+
     /// Loads active agent-session metadata for one Mezzanine session id.
     pub fn load_agent_session_metadata(
         &self,

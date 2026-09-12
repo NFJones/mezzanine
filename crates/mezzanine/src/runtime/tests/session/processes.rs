@@ -1668,6 +1668,192 @@ fn runtime_service_restarts_restored_panes_with_fresh_primary_pids() {
     poll_until_exit(&mut service);
 }
 
+/// Verifies a restored pane that still owns a durable pane-to-agent binding is
+/// re-created through the agent-owned creation path, while a restored pane with
+/// no durable binding keeps inheriting the daemon environment.
+///
+/// Snapshot restore restores durable agent session metadata before pane
+/// processes are restarted, so the durable binding decides the restored pane's
+/// purpose and a bound restored pane root starts from the documented
+/// pane-creation allowlist instead of the daemon environment. The mocked daemon
+/// sentinel cannot discriminate the purpose on its own because a user shell
+/// pane never consults that snapshot, so the ambient probe that the agent-owned
+/// boundary drops is the discriminating evidence. The cleared base covers the
+/// launch environment only: a bound restored pane still owns an unvalidated
+/// native startup surface until its first agent entry.
+#[test]
+fn runtime_restored_agent_bound_pane_clears_daemon_environment_while_unbound_restored_pane_inherits_it()
+ {
+    let mut original = test_session();
+    let primary = original.attach_primary("primary", true).unwrap();
+    original
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+    let payload = crate::storage::snapshot::SessionSnapshotPayload::from_session(&original);
+    let restore_input = crate::storage::snapshot::session_restore_input(&payload).unwrap();
+    let restored = Session::from_restore_input(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        restore_input,
+    )
+    .unwrap();
+    let restored_pane_ids = restored
+        .windows()
+        .iter()
+        .flat_map(|window| window.panes().iter().map(|pane| pane.id.to_string()))
+        .collect::<Vec<_>>();
+    assert_eq!(restored_pane_ids.len(), 2);
+    let bound_pane_id = restored_pane_ids[0].clone();
+    let unbound_pane_id = restored_pane_ids[1].clone();
+    let mut service = RuntimeSessionService::with_event_log(
+        restored,
+        PathBuf::from("/tmp/mez-1000/restored-agent-binding.sock"),
+        100,
+        10,
+        1024,
+    )
+    .unwrap();
+
+    let transcript_root = temp_root("runtime-restored-agent-binding");
+    let transcript_store = AgentTranscriptStore::new(transcript_root.clone());
+    let mezzanine_session_id = service.session().id.as_str().to_string();
+    transcript_store
+        .save_agent_session_metadata(
+            &mezzanine_session_id,
+            &[mez_agent::transcript::AgentSessionMetadata {
+                mezzanine_session_id: mezzanine_session_id.clone(),
+                pane_id: bound_pane_id.clone(),
+                conversation_id: "restored-agent-bound".to_string(),
+                prompt_cache_lineage_id: "lineage-restored-agent-bound".to_string(),
+                visibility: "visible".to_string(),
+                running_turn_id: None,
+                running_turn_kind: None,
+                transcript_entries: 1,
+                log_level: "normal".to_string(),
+                pane_model_profile: None,
+                planning_enabled: false,
+                response_style: None,
+                directive: None,
+                routing_enabled: None,
+                root_routing_policy: None,
+                approval_policy: None,
+                pane_permission_preset_override: None,
+                pane_approval_policy_override: None,
+                working_directory: None,
+                project_root: None,
+                context_usage: None,
+                context_usage_snapshot: None,
+                latest_request_usage: None,
+                token_usage: Default::default(),
+                token_usage_by_model: Default::default(),
+            }],
+        )
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store);
+
+    let mut daemon_environment = crate::runtime::processes::native_ambient_environment();
+    daemon_environment.push(mez_mux::process::RawEnvironmentEntry {
+        key: b"MEZ_AGENT_OWNED_DAEMON_SENTINEL".to_vec(),
+        value: b"daemon-only".to_vec(),
+    });
+    let probe = crate::runtime::processes::daemon_only_probe_key_for_tests(
+        &daemon_environment,
+        Path::new("/bin/sh"),
+    )
+    .expect("the injected daemon environment must expose a daemon-only variable");
+    service.inject_agent_owned_pane_daemon_environment_for_tests(daemon_environment);
+
+    assert_eq!(
+        service
+            .restore_agent_sessions_from_transcript_store()
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        service.restored_pane_process_purpose(&bound_pane_id),
+        crate::runtime::processes::RuntimePaneProcessPurpose::AgentOwned {
+            shell_mode: crate::runtime::config::ShellMode::Native,
+        },
+        "the workspace default selects native mode for a bound restored pane"
+    );
+    assert_eq!(
+        service.restored_pane_process_purpose(&unbound_pane_id),
+        crate::runtime::processes::RuntimePaneProcessPurpose::UserShell,
+        "a restored pane without a durable binding remains a user shell"
+    );
+
+    let starts = service.restart_restored_pane_processes(None).unwrap();
+    assert_eq!(starts.len(), 2);
+
+    let bound_process = service
+        .take_running_pane_process_for_adapter(&bound_pane_id)
+        .unwrap();
+    let unbound_process = service
+        .take_running_pane_process_for_adapter(&unbound_pane_id)
+        .unwrap();
+    let bound_environment = pane_root_exec_environment(&bound_process);
+    let unbound_environment = pane_root_exec_environment(&unbound_process);
+
+    assert!(
+        environment_forwards(&unbound_environment, &probe),
+        "an unbound restored pane must keep inheriting the daemon environment"
+    );
+    assert!(
+        !environment_forwards_key(&bound_environment, &probe.key),
+        "daemon-only {} must not reach a bound restored pane root",
+        String::from_utf8_lossy(&probe.key)
+    );
+    assert!(
+        !environment_forwards_key(&bound_environment, b"MEZ_AGENT_OWNED_DAEMON_SENTINEL"),
+        "the mocked daemon sentinel must not reach a bound restored pane root"
+    );
+    assert!(
+        environment_forwards_key(&bound_environment, b"PATH"),
+        "the bound restored pane root must still receive a working PATH"
+    );
+
+    let native_environment = service
+        .native_shell_context_for_pane(&bound_pane_id)
+        .unwrap()
+        .launch_environment()
+        .to_vec();
+    assert!(
+        !environment_forwards_key(&native_environment, &probe.key),
+        "native evidence must not carry the daemon-only {}",
+        String::from_utf8_lossy(&probe.key)
+    );
+    assert!(
+        !environment_forwards_key(&native_environment, b"MEZ_AGENT_OWNED_DAEMON_SENTINEL"),
+        "native evidence must not carry the mocked daemon sentinel"
+    );
+
+    assert_eq!(
+        service.presented_pane_surface(&bound_pane_id),
+        PaneSurfaceKind::Agent
+    );
+    assert_eq!(
+        service.presented_pane_surface(&unbound_pane_id),
+        PaneSurfaceKind::Process
+    );
+    assert_eq!(
+        service.runtime_agent_surface_startup_phase_for_tests(&bound_pane_id),
+        Some("native-validating"),
+        "a bound restored pane must stay unvalidated until its first agent entry"
+    );
+    assert!(
+        !service.pane_environment_authority_is_certified_for_tests(&bound_pane_id),
+        "native mode must not certify a restored pane's environment authority"
+    );
+    assert_eq!(
+        service.runtime_agent_surface_startup_phase_for_tests(&unbound_pane_id),
+        None
+    );
+
+    drop(bound_process);
+    drop(unbound_process);
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(transcript_root);
+}
+
 /// Verifies runtime service restarts restored panes at the rendered PTY size
 /// instead of the raw saved layout pane size.
 ///
@@ -2764,19 +2950,18 @@ fn runtime_agent_owned_pane_clears_daemon_environment_while_user_shell_inherits_
         .take_running_pane_process_for_adapter(&user_started.pane_id)
         .unwrap();
     let user_environment = pane_root_exec_environment(&user_process);
-    let probe = daemon_only_probe(&user_environment)
-        .expect("the test daemon environment exposes a non-allowlisted variable")
-        .clone();
-    assert!(
-        environment_forwards(&user_environment, &probe),
-        "a user shell pane must keep inheriting the daemon environment"
-    );
-
     let mut daemon = crate::runtime::processes::native_ambient_environment();
     daemon.push(mez_mux::process::RawEnvironmentEntry {
         key: b"MEZ_AGENT_OWNED_DAEMON_SENTINEL".to_vec(),
         value: b"daemon-only".to_vec(),
     });
+    let probe =
+        crate::runtime::processes::daemon_only_probe_key_for_tests(&daemon, Path::new("/bin/sh"))
+            .expect("the injected daemon environment must expose a daemon-only variable");
+    assert!(
+        environment_forwards(&user_environment, &probe),
+        "a user shell pane must keep inheriting the daemon environment"
+    );
     service.inject_agent_owned_pane_daemon_environment_for_tests(daemon);
 
     let window_id = service.session().active_window().unwrap().id.clone();
@@ -2851,64 +3036,630 @@ fn environment_forwards(
         .any(|candidate| candidate.key == entry.key && candidate.value == entry.value)
 }
 
-/// Selects a daemon-only variable that pane creation must not forward.
+/// Builds one restored multi-pane service with a single durable agent binding.
 ///
-/// Cargo-provided names are preferred because user shell startup files do not
-/// recreate them, which keeps the negative agent-owned assertion deterministic.
-fn daemon_only_probe(
-    environment: &[mez_mux::process::RawEnvironmentEntry],
-) -> Option<&mez_mux::process::RawEnvironmentEntry> {
-    const PREFERRED: &[&str] = &[
-        "CARGO_MANIFEST_DIR",
-        "CARGO_PKG_NAME",
-        "CARGO_PKG_VERSION",
-        "RUST_BACKTRACE",
-    ];
-    const EXCLUDED: &[&str] = &[
-        "PATH",
-        "HOME",
-        "LANG",
-        "LC_ALL",
-        "LC_CTYPE",
-        "LC_MESSAGES",
-        "LC_COLLATE",
-        "LC_NUMERIC",
-        "LC_TIME",
-        "TZ",
-        "USER",
-        "LOGNAME",
-        "TMPDIR",
-        "SHELL",
-        "MEZ",
-        "MEZ_SESSION",
-        "MEZ_WINDOW",
-        "MEZ_PANE",
-        "TERM",
-        "GIT_OPTIONAL_LOCKS",
-        "TERM_FEATURES",
-        "DISPLAY",
-        "XAUTHORITY",
-        "PWD",
-        "SHLVL",
-        "OLDPWD",
-        "PS1",
-        "_",
-    ];
-    fn eligible(entry: &mez_mux::process::RawEnvironmentEntry) -> bool {
-        !entry.key.is_empty() && !entry.value.is_empty()
+/// Snapshot restore restores durable agent session metadata before pane
+/// processes are restarted, so the injected daemon slice and the durable
+/// binding together expose the agent-owned creation boundary without mutating
+/// process-global state.
+struct RestoredAgentPaneFixture {
+    service: RuntimeSessionService,
+    transcript_root: PathBuf,
+    daemon_environment: Vec<mez_mux::process::RawEnvironmentEntry>,
+    bound_pane_id: String,
+    unbound_pane_id: String,
+    third_pane_id: Option<String>,
+}
+
+impl RestoredAgentPaneFixture {
+    /// Creates one restored two-pane session with one durable pane-to-agent binding.
+    ///
+    /// `config_text` selects the effective agent shell mode, and the injected
+    /// daemon slice mirrors the ambient environment so the probe the agent-owned
+    /// creation boundary drops is the discriminating evidence.
+    fn new(name: &str, config_text: &str) -> Self {
+        Self::with_pane_count(name, config_text, 2)
     }
-    let preferred = environment.iter().find(|entry| {
-        PREFERRED
+
+    /// Creates one restored session with `pane_count` panes and one durable binding.
+    fn with_pane_count(name: &str, config_text: &str, pane_count: usize) -> Self {
+        let mut original = test_session();
+        let primary = original.attach_primary("primary", true).unwrap();
+        for _ in 1..pane_count {
+            original
+                .split_active_pane(&primary, SplitDirection::Vertical)
+                .unwrap();
+        }
+        let payload = crate::storage::snapshot::SessionSnapshotPayload::from_session(&original);
+        let restore_input = crate::storage::snapshot::session_restore_input(&payload).unwrap();
+        let restored = Session::from_restore_input(
+            ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+            restore_input,
+        )
+        .unwrap();
+        let pane_ids = restored
+            .windows()
             .iter()
-            .any(|name| name.as_bytes() == entry.key.as_slice())
-            && eligible(entry)
-    });
-    preferred.or_else(|| {
-        environment.iter().find(|entry| {
-            eligible(entry)
-                && !EXCLUDED
-                    .iter()
-                    .any(|name| name.as_bytes() == entry.key.as_slice())
+            .flat_map(|window| window.panes().iter().map(|pane| pane.id.to_string()))
+            .collect::<Vec<_>>();
+        assert_eq!(pane_ids.len(), pane_count);
+        let transcript_root = temp_root(&format!("runtime-restored-agent-pane-{name}"));
+        let mut service = RuntimeSessionService::with_event_log(
+            restored,
+            transcript_root.join("restored.sock"),
+            100,
+            10,
+            1024,
+        )
+        .unwrap();
+        service
+            .replace_config_layers(vec![ConfigLayer {
+                name: format!("runtime-restored-agent-pane-{name}"),
+                path: None,
+                format: ConfigFormat::Toml,
+                scope: ConfigScope::Primary,
+                trusted: true,
+                text: config_text.to_string(),
+            }])
+            .unwrap();
+        let mezzanine_session_id = service.session().id.as_str().to_string();
+        let transcript_store = AgentTranscriptStore::new(transcript_root.clone());
+        transcript_store
+            .save_agent_session_metadata(
+                &mezzanine_session_id,
+                &[restored_agent_session_metadata(
+                    &mezzanine_session_id,
+                    &pane_ids[0],
+                    "restored-agent-bound",
+                )],
+            )
+            .unwrap();
+        service.set_agent_transcript_store(transcript_store);
+        let mut daemon_environment = crate::runtime::processes::native_ambient_environment();
+        daemon_environment.push(mez_mux::process::RawEnvironmentEntry {
+            key: b"MEZ_AGENT_OWNED_DAEMON_SENTINEL".to_vec(),
+            value: b"daemon-only".to_vec(),
+        });
+        service.inject_agent_owned_pane_daemon_environment_for_tests(daemon_environment.clone());
+        Self {
+            service,
+            transcript_root,
+            daemon_environment,
+            bound_pane_id: pane_ids[0].clone(),
+            unbound_pane_id: pane_ids[1].clone(),
+            third_pane_id: pane_ids.get(2).cloned(),
+        }
+    }
+
+    /// Returns the daemon-only variable that pane creation must not forward.
+    fn daemon_only_probe(&self) -> mez_mux::process::RawEnvironmentEntry {
+        crate::runtime::processes::daemon_only_probe_key_for_tests(
+            &self.daemon_environment,
+            Path::new("/bin/sh"),
+        )
+        .expect("the injected daemon environment must expose a daemon-only variable")
+    }
+
+    /// Completes the durable binding restore expected by every fixture test.
+    fn restore_agent_binding(&mut self) {
+        assert_eq!(
+            self.service
+                .restore_agent_sessions_from_transcript_store()
+                .unwrap(),
+            1,
+            "the fixture must restore its one durable pane-to-agent binding"
+        );
+    }
+
+    /// Terminates restored panes and removes the fixture transcript root.
+    fn cleanup(self) {
+        let RestoredAgentPaneFixture {
+            mut service,
+            transcript_root,
+            ..
+        } = self;
+        service.terminate_all_pane_processes().unwrap();
+        let _ = fs::remove_dir_all(&transcript_root);
+    }
+}
+
+/// Builds one durable root agent-session binding record for a restored pane.
+fn restored_agent_session_metadata(
+    mezzanine_session_id: &str,
+    pane_id: &str,
+    conversation_id: &str,
+) -> mez_agent::transcript::AgentSessionMetadata {
+    mez_agent::transcript::AgentSessionMetadata {
+        mezzanine_session_id: mezzanine_session_id.to_string(),
+        pane_id: pane_id.to_string(),
+        conversation_id: conversation_id.to_string(),
+        prompt_cache_lineage_id: format!("lineage-{conversation_id}"),
+        visibility: "visible".to_string(),
+        running_turn_id: None,
+        running_turn_kind: None,
+        transcript_entries: 1,
+        log_level: "normal".to_string(),
+        pane_model_profile: None,
+        planning_enabled: false,
+        response_style: None,
+        directive: None,
+        routing_enabled: None,
+        root_routing_policy: None,
+        approval_policy: None,
+        pane_permission_preset_override: None,
+        pane_approval_policy_override: None,
+        working_directory: None,
+        project_root: None,
+        context_usage: None,
+        context_usage_snapshot: None,
+        latest_request_usage: None,
+        token_usage: Default::default(),
+        token_usage_by_model: Default::default(),
+    }
+}
+
+/// Verifies a bound restored pane in pane shell mode is admitted and certified
+/// through the ordinary managed startup contract.
+///
+/// The durable binding selects the agent-owned creation path; it never
+/// fabricates a ready startup. A restored pane in pane mode therefore keeps a
+/// pending managed admission owner, a pending pane bootstrap, and a blocked
+/// scheduler until the authenticated POSIX adapter publishes availability and
+/// its bootstrap transaction settles environment authority.
+#[test]
+fn runtime_restored_agent_bound_pane_pane_mode_admits_and_certifies_through_managed_handshake() {
+    let mut fixture =
+        RestoredAgentPaneFixture::new("pane-mode-handshake", "[agents]\nshell_mode = \"pane\"\n");
+    let probe = fixture.daemon_only_probe();
+    fixture.restore_agent_binding();
+    assert_eq!(
+        fixture
+            .service
+            .restored_pane_process_purpose(&fixture.bound_pane_id),
+        crate::runtime::processes::RuntimePaneProcessPurpose::AgentOwned {
+            shell_mode: crate::runtime::config::ShellMode::Pane,
+        },
+        "a bound restored pane follows the configured pane shell mode"
+    );
+    assert_eq!(
+        fixture
+            .service
+            .restored_pane_process_purpose(&fixture.unbound_pane_id),
+        crate::runtime::processes::RuntimePaneProcessPurpose::UserShell
+    );
+
+    let starts = fixture
+        .service
+        .restart_restored_pane_processes(None)
+        .unwrap();
+    assert_eq!(starts.len(), 2);
+
+    assert_eq!(
+        fixture
+            .service
+            .runtime_agent_surface_startup_phase_for_tests(&fixture.bound_pane_id),
+        Some("managed-admitting"),
+        "a bound restored pane must still admit through the managed handshake"
+    );
+    assert!(
+        fixture
+            .service
+            .pane_bootstrap_is_pending_for_tests(&fixture.bound_pane_id),
+        "pane-mode restore must keep the pane bootstrap pending"
+    );
+    assert!(
+        !fixture
+            .service
+            .pane_environment_authority_is_certified_for_tests(&fixture.bound_pane_id),
+        "bootstrap authority must stay uncertified before admission"
+    );
+    assert!(
+        !fixture
+            .service
+            .agent_surface_allows_scheduler_start(&fixture.bound_pane_id)
+    );
+    assert!(
+        fixture
+            .service
+            .runtime_agent_surface_blocked_panes()
+            .contains(&fixture.bound_pane_id),
+        "an unadmitted pane-mode startup must fence the pane"
+    );
+    assert_eq!(
+        fixture
+            .service
+            .runtime_agent_surface_startup_phase_for_tests(&fixture.unbound_pane_id),
+        None
+    );
+
+    let token = fixture
+        .service
+        .posix_startup_token_for_tests(&fixture.bound_pane_id)
+        .expect("pane-mode restored startup must install a POSIX admission token")
+        .to_string();
+    assert_eq!(
+        fixture
+            .service
+            .observe_managed_shell_protocol_event(
+                &fixture.bound_pane_id,
+                mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+                mez_terminal::ManagedShellAdapter::Posix,
+                &token,
+                &mez_terminal::ManagedShellProtocolEvent::AdapterAvailable { trigger: None },
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        fixture
+            .service
+            .runtime_agent_surface_startup_phase_for_tests(&fixture.bound_pane_id),
+        Some("managed-bootstrapping")
+    );
+
+    let (marker, bootstrap_turn_id) = fixture
+        .service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            (transaction.pane_id == fixture.bound_pane_id
+                && transaction.kind == RunningShellTransactionKind::Bootstrap)
+                .then(|| (marker.clone(), transaction.turn_id.clone()))
         })
-    })
+        .expect("an admitted pane-mode restored pane must own a bootstrap transaction");
+    let agent_id = format!("agent-{}", fixture.bound_pane_id);
+    fixture
+        .service
+        .observe_agent_shell_transaction_start(
+            &fixture.bound_pane_id,
+            &marker,
+            &bootstrap_turn_id,
+            &agent_id,
+            &fixture.bound_pane_id,
+        )
+        .unwrap();
+    let output = "env\tos\tLinux\n\
+env\tarch\tx86_64\n\
+env\thost\ttest-host\n\
+env\tuser\ttest-user\n\
+env\tshell_path\t/bin/sh\n\
+env\tshell_class\tposix-sh\n\
+env\tpath\t/usr/bin:/bin\n\
+env\tcwd\t/tmp\n\
+env\tgit_repo\t0\n\
+bootstrap\tcomplete\t1714500000\n";
+    let transaction = fixture
+        .service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&marker)
+        .unwrap();
+    transaction.observed_output_bytes = output.len();
+    transaction.observed_output_preview = output.to_string();
+    fixture
+        .service
+        .observe_agent_shell_transaction_end(
+            &fixture.bound_pane_id,
+            &marker,
+            &bootstrap_turn_id,
+            &agent_id,
+            &fixture.bound_pane_id,
+            0,
+        )
+        .unwrap();
+
+    assert_eq!(
+        fixture
+            .service
+            .runtime_agent_surface_startup_phase_for_tests(&fixture.bound_pane_id),
+        Some("ready")
+    );
+    assert!(
+        fixture
+            .service
+            .pane_environment_authority_is_certified_for_tests(&fixture.bound_pane_id),
+        "settled bootstrap authority must certify the managed pane"
+    );
+    assert!(
+        fixture
+            .service
+            .pane_environment_signature(&fixture.bound_pane_id)
+            .is_some(),
+        "settled bootstrap authority must publish an environment signature"
+    );
+    assert!(
+        fixture
+            .service
+            .agent_surface_allows_scheduler_start(&fixture.bound_pane_id)
+    );
+    assert!(
+        !fixture
+            .service
+            .pane_bootstrap_is_pending_for_tests(&fixture.bound_pane_id)
+    );
+
+    let bound_process = fixture
+        .service
+        .take_running_pane_process_for_adapter(&fixture.bound_pane_id)
+        .unwrap();
+    let bound_environment = pane_root_exec_environment(&bound_process);
+    assert!(
+        !environment_forwards_key(&bound_environment, &probe.key),
+        "daemon-only {} must not reach a bound restored pane root",
+        String::from_utf8_lossy(&probe.key)
+    );
+    assert!(
+        environment_forwards_key(&bound_environment, b"PATH"),
+        "the bound restored pane root must still receive a working PATH"
+    );
+
+    drop(bound_process);
+    fixture.cleanup();
+}
+
+/// Verifies a pane-mode restored pane restarted with an explicit command is
+/// diagnosed as a failed startup instead of reported ready or left pending.
+///
+/// The restart command replaces the managed pane shell, so the managed fixture
+/// is skipped and no authenticated admission can ever arrive. The runtime must
+/// settle the pane's startup owner terminally and name the replaced shell in
+/// its diagnostic rather than fabricating readiness or stranding the owner.
+#[test]
+fn runtime_restored_agent_bound_pane_pane_mode_with_restart_command_is_diagnosed_instead_of_false_ready()
+ {
+    let mut fixture = RestoredAgentPaneFixture::new(
+        "pane-mode-restart-command",
+        "[agents]\nshell_mode = \"pane\"\n",
+    );
+    let probe = fixture.daemon_only_probe();
+    fixture.restore_agent_binding();
+
+    let starts = fixture
+        .service
+        .restart_restored_pane_processes(Some("cat >/dev/null"))
+        .unwrap();
+    assert_eq!(starts.len(), 2);
+
+    assert_eq!(
+        fixture
+            .service
+            .runtime_agent_surface_startup_phase_for_tests(&fixture.bound_pane_id),
+        Some("failed"),
+        "a restart command replaces the managed shell, so pane-mode startup cannot admit"
+    );
+    assert!(
+        !fixture
+            .service
+            .pane_bootstrap_is_pending_for_tests(&fixture.bound_pane_id)
+    );
+    assert!(
+        !fixture
+            .service
+            .pane_environment_authority_is_certified_for_tests(&fixture.bound_pane_id)
+    );
+    assert!(
+        !fixture
+            .service
+            .agent_surface_allows_scheduler_start(&fixture.bound_pane_id)
+    );
+    let replayed = fixture
+        .service
+        .event_log()
+        .unwrap()
+        .replay_for(&EventAudience::AllPrimaries);
+    assert!(
+        replayed.iter().any(|event| {
+            event
+                .payload
+                .contains(r#""agent_surface_startup":"failed""#)
+                && event.payload.contains("replaces the managed pane shell")
+        }),
+        "the diagnosed startup failure must name the replaced managed pane shell"
+    );
+    assert_eq!(
+        fixture
+            .service
+            .recover_expired_runtime_agent_surface_startups(u64::MAX)
+            .unwrap(),
+        0,
+        "a terminally failed startup must not expire into a second failure"
+    );
+
+    let bound_process = fixture
+        .service
+        .take_running_pane_process_for_adapter(&fixture.bound_pane_id)
+        .unwrap();
+    let bound_environment = pane_root_exec_environment(&bound_process);
+    assert!(
+        !environment_forwards_key(&bound_environment, &probe.key),
+        "daemon-only {} must not reach a bound restored pane root",
+        String::from_utf8_lossy(&probe.key)
+    );
+    assert!(
+        environment_forwards_key(&bound_environment, b"PATH"),
+        "the bound restored pane root must still receive a working PATH"
+    );
+
+    drop(bound_process);
+    fixture.cleanup();
+}
+
+/// Verifies the restored-pane home-directory retry keeps the agent-owned
+/// creation path for a bound pane.
+///
+/// A snapshot can name a working directory that existed during restore planning
+/// but is unusable when the fresh pane process starts. The retry must stay
+/// agent-owned, so the retried root still drops the daemon-only probe and still
+/// enters the pane mode-specific startup contract.
+#[test]
+fn runtime_restored_agent_bound_pane_home_directory_retry_keeps_agent_owned_purpose() {
+    let root = temp_root("runtime-restored-agent-cwd-retry");
+    let inaccessible_cwd = root.join("inaccessible-cwd");
+    fs::create_dir_all(&inaccessible_cwd).unwrap();
+    let original_permissions = fs::metadata(&inaccessible_cwd).unwrap().permissions();
+    fs::set_permissions(&inaccessible_cwd, fs::Permissions::from_mode(0o000)).unwrap();
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
+    assert!(home.is_dir());
+
+    let original = test_session();
+    let mut payload = crate::storage::snapshot::SessionSnapshotPayload::from_session(&original);
+    payload.windows[0].panes[0].current_working_directory =
+        Some(inaccessible_cwd.to_string_lossy().into_owned());
+    let restore_input = crate::storage::snapshot::session_restore_input(&payload).unwrap();
+    let restored = Session::from_restore_input(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        restore_input,
+    )
+    .unwrap();
+    let pane_id = restored
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    let transcript_root = temp_root("runtime-restored-agent-cwd-retry-store");
+    let mut service = RuntimeSessionService::with_event_log(
+        restored,
+        transcript_root.join("restored-cwd.sock"),
+        100,
+        10,
+        1024,
+    )
+    .unwrap();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "runtime-restored-agent-cwd-retry".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\nshell_mode = \"pane\"\n".to_string(),
+        }])
+        .unwrap();
+    let mezzanine_session_id = service.session().id.as_str().to_string();
+    let transcript_store = AgentTranscriptStore::new(transcript_root.clone());
+    transcript_store
+        .save_agent_session_metadata(
+            &mezzanine_session_id,
+            &[restored_agent_session_metadata(
+                &mezzanine_session_id,
+                &pane_id,
+                "restored-agent-cwd-retry",
+            )],
+        )
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store);
+    let mut daemon_environment = crate::runtime::processes::native_ambient_environment();
+    daemon_environment.push(mez_mux::process::RawEnvironmentEntry {
+        key: b"MEZ_AGENT_OWNED_DAEMON_SENTINEL".to_vec(),
+        value: b"daemon-only".to_vec(),
+    });
+    let probe = crate::runtime::processes::daemon_only_probe_key_for_tests(
+        &daemon_environment,
+        Path::new("/bin/sh"),
+    )
+    .expect("the injected daemon environment must expose a daemon-only variable");
+    service.inject_agent_owned_pane_daemon_environment_for_tests(daemon_environment);
+    assert_eq!(
+        service
+            .restore_agent_sessions_from_transcript_store()
+            .unwrap(),
+        1
+    );
+
+    let starts = service.restart_restored_pane_processes(None).unwrap();
+
+    assert_eq!(starts.len(), 1);
+    assert_eq!(
+        service.pane_current_working_directory(&pane_id).as_deref(),
+        Some(home.as_path())
+    );
+    let events = service
+        .event_log()
+        .unwrap()
+        .replay_for(&EventAudience::AllPrimaries);
+    assert!(events.iter().any(|event| {
+        event
+            .payload
+            .contains("snapshot resume pane cwd unavailable; retrying from home")
+    }));
+    assert_eq!(
+        service.restored_pane_process_purpose(&pane_id),
+        crate::runtime::processes::RuntimePaneProcessPurpose::AgentOwned {
+            shell_mode: crate::runtime::config::ShellMode::Pane,
+        },
+        "the home-directory retry must preserve the agent-owned creation path"
+    );
+    assert_eq!(
+        service.runtime_agent_surface_startup_phase_for_tests(&pane_id),
+        Some("managed-admitting")
+    );
+
+    let process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+    let environment = pane_root_exec_environment(&process);
+    assert!(
+        !environment_forwards_key(&environment, &probe.key),
+        "daemon-only {} must not reach a retried agent-owned pane root",
+        String::from_utf8_lossy(&probe.key)
+    );
+    drop(process);
+
+    service.terminate_all_pane_processes().unwrap();
+    fs::set_permissions(&inaccessible_cwd, original_permissions).unwrap();
+    let _ = fs::remove_dir_all(&root);
+    let _ = fs::remove_dir_all(&transcript_root);
+}
+
+/// Verifies the restored-pane creation purpose follows only the durable
+/// non-ephemeral root agent binding for that pane.
+///
+/// The predicate is deliberately in-memory: a pane restored without a durable
+/// root binding, and a pane whose live binding is ephemeral or belongs to a
+/// subagent conversation, both stay on the user-shell creation path.
+#[test]
+fn runtime_restored_pane_process_purpose_follows_durable_binding() {
+    let mut fixture = RestoredAgentPaneFixture::with_pane_count(
+        "purpose-binding",
+        "[agents]\nshell_mode = \"pane\"\n",
+        3,
+    );
+    fixture.restore_agent_binding();
+    let ephemeral_pane_id = fixture
+        .third_pane_id
+        .clone()
+        .expect("the three-pane fixture must expose its third pane");
+    {
+        let session = fixture
+            .service
+            .agent_shell_store_mut()
+            .ensure_session(&ephemeral_pane_id)
+            .unwrap();
+        session.conversation_kind = mez_agent::AgentConversationKind::Subagent;
+        session.ephemeral = true;
+    }
+
+    assert_eq!(
+        fixture
+            .service
+            .restored_pane_process_purpose(&fixture.bound_pane_id),
+        crate::runtime::processes::RuntimePaneProcessPurpose::AgentOwned {
+            shell_mode: crate::runtime::config::ShellMode::Pane,
+        }
+    );
+    assert_eq!(
+        fixture
+            .service
+            .restored_pane_process_purpose(&fixture.unbound_pane_id),
+        crate::runtime::processes::RuntimePaneProcessPurpose::UserShell
+    );
+    assert_eq!(
+        fixture
+            .service
+            .restored_pane_process_purpose(&ephemeral_pane_id),
+        crate::runtime::processes::RuntimePaneProcessPurpose::UserShell,
+        "an ephemeral or subagent binding must not select the agent-owned creation path"
+    );
+
+    fixture.cleanup();
 }

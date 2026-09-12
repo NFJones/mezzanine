@@ -340,6 +340,8 @@ pub(crate) use persistence::RuntimePersistenceComponent;
 mod processes;
 // The dual-screen foundation is consumed incrementally by dependency-gated
 // rendering, presentation, interaction, resize, and lifecycle refactors.
+#[cfg(test)]
+pub(crate) use processes::daemon_only_probe_key_for_tests;
 #[allow(unused_imports)]
 pub(crate) use processes::{
     BubblewrapEnvironmentProfile, PaneSurfaceKind,
