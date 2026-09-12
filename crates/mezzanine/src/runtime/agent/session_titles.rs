@@ -635,7 +635,10 @@ impl RuntimeSessionService {
             }
             return Err(self.deny_session_title_generation(pane_id, conversation_id, denial));
         }
-        let request = session_title_request(&model_profile, &agent_id, &inputs);
+        let allowed_actions = self
+            .capture_agent_session_allowed_actions_for_pane(pane_id)
+            .map_err(|_| SessionTitleDenial::StorageUnavailable)?;
+        let request = session_title_request(&model_profile, &agent_id, &inputs, allowed_actions);
         self.agent.session_title_tasks.begin(conversation_id);
         // A queued task resets the denial marker so a later refusal traces again.
         self.agent.session_title_tasks.clear_denial(conversation_id);

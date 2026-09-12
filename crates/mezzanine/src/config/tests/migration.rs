@@ -3443,7 +3443,7 @@ fn migrates_schema_91_by_removing_only_window_status_pill_styles() {
         let root = parse_config_json_value(format, &plan.text).unwrap();
 
         assert_eq!(plan.from_version, 91);
-        assert_eq!(plan.to_version, 92);
+        assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
         assert!(root.pointer("/frames/window/pills/build/style").is_none());
         assert_eq!(
             root.pointer("/frames/window/pills/build/foreground"),

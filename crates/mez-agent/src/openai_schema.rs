@@ -7,7 +7,7 @@
 
 use crate::{
     MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME, ModelRequest,
-    maap_action_batch_schema,
+    maap_action_batch_schema, normalize_openai_strict_schema,
 };
 
 /// Builds the OpenAI MAAP function-tool list for the current request.
@@ -26,10 +26,10 @@ fn openai_maap_current_action_batch_tool(request: &ModelRequest) -> serde_json::
         "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
         "description": crate::schema::maap_cache_stable_action_batch_description(),
         "strict": true,
-        "parameters": maap_action_batch_schema(
+        "parameters": normalize_openai_strict_schema(maap_action_batch_schema(
             &request.allowed_actions,
             &request.available_mcp_tools,
-        )
+        ))
     })
 }
 

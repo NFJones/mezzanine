@@ -1364,7 +1364,10 @@ async fn execute_runtime_agent_provider_dispatch(
         turn.pane_id.clone(),
         observation_sender,
     );
-    if let Some(request) = sandbox_failure_assessment_request.or(macro_judge_request) {
+    if let Some(mut request) = sandbox_failure_assessment_request.or(macro_judge_request) {
+        request.allowed_actions = allowed_actions.clone().ok_or_else(|| {
+            MezError::invalid_state("auxiliary request is missing its session action catalog")
+        })?;
         let response = observed_dispatch_provider_request(
             &provider,
             &execution_observer,
@@ -1401,6 +1404,9 @@ async fn execute_runtime_agent_provider_dispatch(
             auto_sizing,
             &turn,
             &context,
+            allowed_actions.clone().ok_or_else(|| {
+                MezError::invalid_state("auto-sizing request is missing its session action catalog")
+            })?,
         )
         .await?;
         return Ok(RuntimeAgentProviderWorkerOutcome::RoutingSelected(
@@ -1777,6 +1783,7 @@ async fn runtime_execute_observed_auto_sizing(
     auto_sizing: &mez_agent::AutoSizingDispatch,
     turn: &AgentTurnRecord,
     context: &mez_agent::AgentContext,
+    allowed_actions: mez_agent::AllowedActionSet,
 ) -> Result<mez_agent::AutoSizingExecution> {
     match provider {
         RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
@@ -1785,8 +1792,14 @@ async fn runtime_execute_observed_auto_sizing(
                 observer,
                 ProviderRequestPurpose::Routing,
             );
-            runtime_execute_auto_sizing_with_async_provider(&provider, auto_sizing, turn, context)
-                .await
+            runtime_execute_auto_sizing_with_async_provider(
+                &provider,
+                auto_sizing,
+                turn,
+                context,
+                allowed_actions.clone(),
+            )
+            .await
         }
         RuntimeAgentProviderDispatchProvider::Anthropic(provider) => {
             let provider = ObservedAsyncModelProvider::new(
@@ -1794,8 +1807,14 @@ async fn runtime_execute_observed_auto_sizing(
                 observer,
                 ProviderRequestPurpose::Routing,
             );
-            runtime_execute_auto_sizing_with_async_provider(&provider, auto_sizing, turn, context)
-                .await
+            runtime_execute_auto_sizing_with_async_provider(
+                &provider,
+                auto_sizing,
+                turn,
+                context,
+                allowed_actions.clone(),
+            )
+            .await
         }
         RuntimeAgentProviderDispatchProvider::DeepSeek(provider) => {
             let provider = ObservedAsyncModelProvider::new(
@@ -1803,8 +1822,14 @@ async fn runtime_execute_observed_auto_sizing(
                 observer,
                 ProviderRequestPurpose::Routing,
             );
-            runtime_execute_auto_sizing_with_async_provider(&provider, auto_sizing, turn, context)
-                .await
+            runtime_execute_auto_sizing_with_async_provider(
+                &provider,
+                auto_sizing,
+                turn,
+                context,
+                allowed_actions.clone(),
+            )
+            .await
         }
         RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider) => {
             let provider = ObservedAsyncModelProvider::new(
@@ -1812,8 +1837,14 @@ async fn runtime_execute_observed_auto_sizing(
                 observer,
                 ProviderRequestPurpose::Routing,
             );
-            runtime_execute_auto_sizing_with_async_provider(&provider, auto_sizing, turn, context)
-                .await
+            runtime_execute_auto_sizing_with_async_provider(
+                &provider,
+                auto_sizing,
+                turn,
+                context,
+                allowed_actions.clone(),
+            )
+            .await
         }
     }
 }

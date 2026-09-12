@@ -161,10 +161,7 @@ fn turn_runner_recovers_mixed_capability_and_execution_batch_without_effects() {
         requests[1].interaction_kind,
         mez_agent::ModelInteractionKind::CapabilityContinuation
     );
-    let execution_actions = requests[1].allowed_actions.action_type_names();
-    assert!(execution_actions.contains(&"shell_command"));
-    assert!(execution_actions.contains(&"apply_patch"));
-    assert!(execution_actions.contains(&"request_capability"));
+    assert_eq!(requests[1].allowed_actions, requests[0].allowed_actions);
     let recovery_context = requests[1]
         .messages
         .iter()

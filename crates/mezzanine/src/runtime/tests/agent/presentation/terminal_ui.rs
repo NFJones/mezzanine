@@ -4840,6 +4840,20 @@ fn runtime_agent_resize_projection_rejects_every_stale_owner_generation() {
     );
 }
 
+/// Verifies late presentation for a removed pane fails without recreating an
+/// uncaptured agent shell session from live configuration.
+#[test]
+fn runtime_missing_pane_presentation_does_not_recreate_agent_session() {
+    let mut service = test_runtime_service();
+
+    let error = service
+        .ensure_current_agent_presentation_screen("%999")
+        .expect_err("missing pane presentation must fail closed");
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::NotFound);
+    assert!(service.agent_shell_store().get("%999").is_none());
+}
+
 /// Verifies resize replay caches decoded durable entries across widths, reuses
 /// an exact canonical snapshot when a prior width returns, and invalidates both
 /// layers after new durable presentation source is appended.

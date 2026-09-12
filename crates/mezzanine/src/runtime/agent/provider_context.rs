@@ -661,6 +661,7 @@ impl RuntimeSessionService {
 
     /// Resolves one explicit child-turn selection through the pane's effective
     /// auto-sizing policy without issuing a router request.
+    #[cfg(test)]
     pub(crate) fn runtime_explicit_auto_sizing_selection_for_pane(
         &self,
         pane_id: &str,
@@ -677,6 +678,54 @@ impl RuntimeSessionService {
         let target = self.runtime_auto_sizing_target_profile(size, profile_name)?;
         mez_agent::auto_sizing_selection_for_explicit_pair(
             &config.allowed_reasoning_efforts,
+            &target,
+            reasoning_effort,
+        )
+        .map_err(|error| MezError::invalid_args(error.message()))
+    }
+
+    /// Resolves an explicit spawn selection from the frozen provider-visible
+    /// catalog that advertised it rather than current routing configuration.
+    pub(crate) fn runtime_explicit_auto_sizing_selection_from_catalog(
+        &self,
+        allowed_actions: &mez_agent::AllowedActionSet,
+        size: &str,
+        reasoning_effort: &str,
+    ) -> Result<mez_agent::AutoSizingSelection> {
+        let sizing = allowed_actions.spawn_agent_sizing().ok_or_else(|| {
+            MezError::invalid_args("spawn agent sizing is unavailable in the frozen action catalog")
+        })?;
+        let option = sizing
+            .sizes
+            .iter()
+            .find(|option| option.size == size)
+            .ok_or_else(|| {
+                MezError::invalid_args(
+                    "unsupported subagent model size in the frozen action catalog",
+                )
+            })?;
+        if !option
+            .allowed_reasoning_efforts
+            .iter()
+            .any(|effort| effort == reasoning_effort)
+        {
+            return Err(MezError::invalid_args(
+                "subagent reasoning effort is not allowed for the frozen model size",
+            ));
+        }
+        let profile = option.execution_profile.clone().ok_or_else(|| {
+            MezError::invalid_state(
+                "frozen spawn sizing entry lacks the execution profile required for explicit selection",
+            )
+        })?;
+        let target = mez_agent::AutoSizingTargetProfile {
+            size: option.size.clone(),
+            profile_name: option.profile_name.clone(),
+            profile,
+            supported_reasoning_efforts: Vec::new(),
+        };
+        mez_agent::auto_sizing_selection_for_explicit_pair(
+            &option.allowed_reasoning_efforts,
             &target,
             reasoning_effort,
         )
@@ -705,6 +754,7 @@ impl RuntimeSessionService {
             sizes.push(mez_agent::SpawnAgentSizeOption {
                 size: size.to_string(),
                 profile_name: profile_name.clone(),
+                execution_profile: Some(target.profile.clone()),
                 allowed_reasoning_efforts:
                     mez_agent::auto_sizing_allowed_reasoning_efforts_for_target(
                         &config.allowed_reasoning_efforts,

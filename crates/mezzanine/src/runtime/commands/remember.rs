@@ -7,10 +7,10 @@
 
 use super::compaction;
 use super::{
-    AgentActionPayload, AgentContext, AgentShellCommandOutcome, AllowedActionSet, ConfigFormat,
-    ConfigMutation, ConfigMutationOperation, ConfigMutationValue, ConfigPaths, ConfigScope,
-    ContextSourceKind, DEFAULT_PROVIDER_TIMEOUT_MS, MemoryRecord, MemoryScope, MemorySource,
-    MezError, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelProfile, ModelRequest,
+    AgentActionPayload, AgentContext, AgentShellCommandOutcome, ConfigFormat, ConfigMutation,
+    ConfigMutationOperation, ConfigMutationValue, ConfigPaths, ConfigScope, ContextSourceKind,
+    DEFAULT_PROVIDER_TIMEOUT_MS, MemoryRecord, MemoryScope, MemorySource, MezError,
+    ModelInteractionKind, ModelMessage, ModelMessageRole, ModelProfile, ModelRequest,
     ModelResponse, ProviderApiCompatibility, ReqwestProviderHttpTransport, Result,
     RuntimeAgentProviderDispatchProvider, RuntimeAgentRememberDispatch, RuntimeAgentRememberTask,
     RuntimeSessionService, current_unix_seconds,
@@ -104,6 +104,7 @@ pub(super) fn runtime_model_remember_request(
     profile: &ModelProfile,
     pane_id: &str,
     session_id: &str,
+    allowed_actions: mez_agent::AllowedActionSet,
     context_mode: bool,
     source_text: &str,
     default_ttl_days: u64,
@@ -133,8 +134,8 @@ pub(super) fn runtime_model_remember_request(
         available_mcp_tools: Vec::new(),
         memory_actions_enabled: false,
                 issue_actions_enabled: true,
-        interaction_kind: ModelInteractionKind::ActionExecution,
-        allowed_actions: AllowedActionSet::say_only(),
+        interaction_kind: ModelInteractionKind::Memory,
+        allowed_actions,
         stop: None,
         messages: vec![
             ModelMessage {
@@ -421,6 +422,7 @@ impl RuntimeSessionService {
             &model_profile,
             pane_id,
             &self.session.id.to_string(),
+            self.capture_agent_session_allowed_actions_for_pane(pane_id)?,
             invocation.args.trim().is_empty(),
             &source_text,
             self.runtime_memory_default_ttl_days(),

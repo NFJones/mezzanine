@@ -87,6 +87,7 @@ fn agent_session_metadata(
         context_usage: None,
         context_usage_snapshot: None,
         latest_request_usage: None,
+        allowed_actions: None,
     }
 }
 
@@ -176,7 +177,17 @@ fn transcript_store_persists_validates_and_deletes_conversation_kind() {
         mez_agent::AgentConversationKind::Root
     );
     store
-        .save_conversation_kind("durable-child", mez_agent::AgentConversationKind::Subagent)
+        .save_subagent_conversation_contract(
+            "durable-child",
+            mez_agent::SubagentSessionLineage {
+                parent_agent_id: "agent-%1".to_string(),
+                root_agent_id: "agent-%1".to_string(),
+                depth: 1,
+                display_name: "durable child".to_string(),
+                terminal: false,
+            },
+            mez_agent::AllowedActionSet::say_only(),
+        )
         .unwrap();
     assert_eq!(
         store.conversation_kind("durable-child").unwrap(),
@@ -211,6 +222,314 @@ fn transcript_store_persists_validates_and_deletes_conversation_kind() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies conversation-owned action catalogs and spawned-session lineage are
+/// immutable after their initial capture.
+///
+/// Later active-pane checkpoints must be able to repeat the original values,
+/// but cannot clear or replace the durable provider contract or structural
+/// delegation identity.
+#[test]
+fn transcript_store_rejects_action_catalog_and_lineage_overwrites() {
+    let root = temp_root("immutable-catalog-and-lineage");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("child", 1, TranscriptRole::User))
+        .unwrap();
+    let catalog = mez_agent::AllowedActionSet::from_actions([
+        mez_agent::AllowedAction::Say,
+        mez_agent::AllowedAction::ShellCommand,
+    ]);
+    let lineage = mez_agent::SubagentSessionLineage {
+        parent_agent_id: "agent-%1".to_string(),
+        root_agent_id: "agent-%1".to_string(),
+        depth: 1,
+        display_name: "child".to_string(),
+        terminal: false,
+    };
+    store
+        .save_subagent_conversation_contract("child", lineage.clone(), catalog.clone())
+        .unwrap();
+    store
+        .save_subagent_conversation_contract("child", lineage.clone(), catalog.clone())
+        .unwrap();
+    assert!(
+        store
+            .save_subagent_conversation_contract(
+                "child",
+                mez_agent::SubagentSessionLineage {
+                    terminal: true,
+                    ..lineage.clone()
+                },
+                catalog.clone(),
+            )
+            .is_err()
+    );
+    assert!(
+        store
+            .save_subagent_conversation_contract(
+                "child",
+                lineage.clone(),
+                mez_agent::AllowedActionSet::from_actions([mez_agent::AllowedAction::Say]),
+            )
+            .is_err()
+    );
+    assert_eq!(
+        store.conversation_allowed_actions("child").unwrap(),
+        Some(catalog)
+    );
+    assert_eq!(
+        store.conversation_subagent_lineage("child").unwrap(),
+        Some(lineage)
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a catalog-upsert failure restores the exact prior metadata sidecar
+/// and leaves the discovery row root-classified, so failed child creation has
+/// no durable subagent contract to survive later spawn cleanup.
+#[test]
+fn transcript_store_rolls_back_subagent_contract_when_catalog_upsert_fails() {
+    let root = temp_root("subagent-contract-catalog-rollback");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("child", 1, TranscriptRole::User))
+        .unwrap();
+    let metadata_path = root.join("child").join("metadata.json");
+    let original = b"{\"version\":1,\"conversation_kind\":\"root\"}\n";
+    fs::write(&metadata_path, original).unwrap();
+    store.fail_next_subagent_contract_catalog_upsert();
+
+    let error = store
+        .save_subagent_conversation_contract(
+            "child",
+            mez_agent::SubagentSessionLineage {
+                parent_agent_id: "agent-%1".to_string(),
+                root_agent_id: "agent-%1".to_string(),
+                depth: 1,
+                display_name: "child".to_string(),
+                terminal: false,
+            },
+            mez_agent::AllowedActionSet::say_only(),
+        )
+        .unwrap_err();
+
+    assert!(
+        error
+            .message()
+            .contains("injected subagent contract catalog upsert failure")
+    );
+    assert_eq!(fs::read(&metadata_path).unwrap(), original);
+    assert_eq!(
+        store.conversation_kind("child").unwrap(),
+        mez_agent::AgentConversationKind::Root
+    );
+    assert_eq!(
+        store
+            .catalog_saved_session("child")
+            .unwrap()
+            .unwrap()
+            .conversation_kind,
+        mez_agent::AgentConversationKind::Root
+    );
+
+    store
+        .append(&entry("new-child", 1, TranscriptRole::User))
+        .unwrap();
+    let new_metadata_path = root.join("new-child").join("metadata.json");
+    assert!(!new_metadata_path.exists());
+    store.fail_next_subagent_contract_catalog_upsert();
+    assert!(
+        store
+            .save_subagent_conversation_contract(
+                "new-child",
+                mez_agent::SubagentSessionLineage {
+                    parent_agent_id: "agent-%1".to_string(),
+                    root_agent_id: "agent-%1".to_string(),
+                    depth: 1,
+                    display_name: "new child".to_string(),
+                    terminal: false,
+                },
+                mez_agent::AllowedActionSet::say_only(),
+            )
+            .is_err()
+    );
+    assert!(!new_metadata_path.exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies terminal child lineage rejects a persisted spawn surface before
+/// storage readers can restore an internally contradictory delegation contract.
+#[test]
+fn transcript_store_rejects_terminal_subagent_lineage_with_spawn_catalog() {
+    let root = temp_root("terminal-lineage-spawn-catalog");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("terminal-child", 1, TranscriptRole::User))
+        .unwrap();
+    fs::write(
+        root.join("terminal-child").join("metadata.json"),
+        r#"{"version":2,"conversation_kind":"subagent","allowed_actions":{"actions":["Say","SpawnAgent"],"spawn_agent_sizing":{"sizes":[]}},"subagent_lineage":{"parent_agent_id":"agent-%1","root_agent_id":"agent-%1","depth":1,"display_name":"terminal child","terminal":true}}"#,
+    )
+    .unwrap();
+
+    let error = store
+        .conversation_allowed_actions("terminal-child")
+        .unwrap_err();
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert!(
+        error
+            .message()
+            .contains("terminal subagent conversation metadata cannot contain spawn_agent"),
+        "{error}"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies the child-contract writer rejects terminal spawn authority before
+/// it can create a metadata sidecar or reclassify the existing catalog row.
+///
+/// A caller that constructs contradictory terminal lineage must leave the
+/// durable conversation exactly as it was, rather than relying on a later
+/// metadata reader to detect an already-persisted invalid contract.
+#[test]
+fn transcript_store_rejects_terminal_spawn_contract_without_durable_mutation() {
+    let root = temp_root("terminal-contract-pre-mutation");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("terminal-child", 1, TranscriptRole::User))
+        .unwrap();
+    let metadata_path = root.join("terminal-child").join("metadata.json");
+    assert!(!metadata_path.exists());
+
+    let error = store
+        .save_subagent_conversation_contract(
+            "terminal-child",
+            mez_agent::SubagentSessionLineage {
+                parent_agent_id: "agent-%1".to_string(),
+                root_agent_id: "agent-%1".to_string(),
+                depth: 1,
+                display_name: "terminal child".to_string(),
+                terminal: true,
+            },
+            mez_agent::AllowedActionSet::from_actions([
+                mez_agent::AllowedAction::Say,
+                mez_agent::AllowedAction::SpawnAgent,
+            ])
+            .with_spawn_agent_sizing(mez_agent::SpawnAgentSizing { sizes: Vec::new() }),
+        )
+        .unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert!(
+        error
+            .message()
+            .contains("terminal subagent conversation metadata cannot contain spawn_agent"),
+        "{error}"
+    );
+    assert!(!metadata_path.exists());
+    assert_eq!(
+        store
+            .catalog_saved_session("terminal-child")
+            .unwrap()
+            .unwrap()
+            .conversation_kind,
+        mez_agent::AgentConversationKind::Root
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies invalid first action-catalog captures leave durable metadata
+/// untouched so a later valid provider contract can be captured.
+#[test]
+fn transcript_store_rejects_invalid_first_action_catalog_without_metadata_mutation() {
+    let root = temp_root("invalid-first-action-catalog");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("catalog", 1, TranscriptRole::User))
+        .unwrap();
+
+    let invalid_catalogs = [
+        mez_agent::AllowedActionSet::from_actions([]),
+        mez_agent::AllowedActionSet::capability_decision(),
+        mez_agent::AllowedActionSet::say_only()
+            .with_config_change_setting_path_description("orphaned setting paths"),
+        mez_agent::AllowedActionSet::say_only().with_spawn_agent_sizing(
+            mez_agent::SpawnAgentSizing {
+                sizes: vec![mez_agent::SpawnAgentSizeOption {
+                    size: "invalid".to_string(),
+                    profile_name: "profile".to_string(),
+                    execution_profile: None,
+                    allowed_reasoning_efforts: Vec::new(),
+                }],
+            },
+        ),
+    ];
+    for catalog in invalid_catalogs {
+        assert!(
+            store
+                .save_conversation_allowed_actions("catalog", Some(catalog))
+                .is_err()
+        );
+        assert_eq!(store.conversation_allowed_actions("catalog").unwrap(), None);
+    }
+
+    let valid_catalog = mez_agent::AllowedActionSet::from_actions([
+        mez_agent::AllowedAction::Say,
+        mez_agent::AllowedAction::ShellCommand,
+    ]);
+    store
+        .save_conversation_allowed_actions("catalog", Some(valid_catalog.clone()))
+        .unwrap();
+    assert_eq!(
+        store.conversation_allowed_actions("catalog").unwrap(),
+        Some(valid_catalog)
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies malformed persisted root catalogs fail closed at the shared
+/// metadata read boundary used by exact lookup, restart, and direct resume.
+///
+/// Root conversations may legitimately predate catalog persistence, but a
+/// present catalog must satisfy the same durable contract as a child catalog.
+#[test]
+fn transcript_store_rejects_malformed_persisted_root_action_catalogs() {
+    let root = temp_root("invalid-persisted-root-action-catalog");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    for (conversation_id, catalog) in [
+        ("empty", r#"{"actions":[]}"#),
+        (
+            "controller-only",
+            r#"{"actions":["Say","RequestCapability"]}"#,
+        ),
+        (
+            "orphaned-metadata",
+            r#"{"actions":["Say"],"config_change_setting_path_description":"orphaned"}"#,
+        ),
+    ] {
+        store
+            .append(&entry(conversation_id, 1, TranscriptRole::User))
+            .unwrap();
+        fs::write(
+            root.join(conversation_id).join("metadata.json"),
+            format!(r#"{{"version":2,"conversation_kind":"root","allowed_actions":{catalog}}}"#),
+        )
+        .unwrap();
+        let error = store
+            .conversation_allowed_actions(conversation_id)
+            .unwrap_err();
+        assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+        assert!(error.message().contains("persisted"), "{error}");
+    }
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies a user objective shares the versioned metadata sidecar with the
 /// conversation kind, lazily migrates v1 metadata, and is removed with its
 /// conversation rather than inheriting into a fork.
@@ -223,7 +542,17 @@ fn transcript_store_persists_user_objective_without_overwriting_kind() {
         .append(&entry("source", 1, TranscriptRole::User))
         .unwrap();
     store
-        .save_conversation_kind("source", mez_agent::AgentConversationKind::Subagent)
+        .save_subagent_conversation_contract(
+            "source",
+            mez_agent::SubagentSessionLineage {
+                parent_agent_id: "agent-%1".to_string(),
+                root_agent_id: "agent-%1".to_string(),
+                depth: 1,
+                display_name: "source child".to_string(),
+                terminal: false,
+            },
+            mez_agent::AllowedActionSet::say_only(),
+        )
         .unwrap();
     assert!(
         store
@@ -243,7 +572,7 @@ fn transcript_store_persists_user_objective_without_overwriting_kind() {
 
     fs::write(
         root.join("source").join("metadata.json"),
-        b"{\"version\":1,\"conversation_kind\":\"subagent\"}\n",
+        b"{\"version\":1,\"conversation_kind\":\"root\"}\n",
     )
     .unwrap();
     assert_eq!(store.user_objective("source").unwrap(), None);
@@ -254,7 +583,7 @@ fn transcript_store_persists_user_objective_without_overwriting_kind() {
     );
     let metadata = fs::read_to_string(root.join("source").join("metadata.json")).unwrap();
     assert!(metadata.contains("\"version\":2"));
-    assert!(metadata.contains("\"conversation_kind\":\"subagent\""));
+    assert!(metadata.contains("\"conversation_kind\":\"root\""));
     assert!(store.delete("source").unwrap());
     assert!(!root.join("source").join("metadata.json").exists());
     let _ = fs::remove_dir_all(root);
@@ -1453,6 +1782,26 @@ fn transcript_store_replaces_agent_session_metadata_per_mezzanine_session() {
             model: mez_agent::ModelTokenUsageKey::new("openai", "gpt-fast"),
             usage: owned_token_usage,
         }),
+        allowed_actions: Some(
+            mez_agent::AllowedActionSet::from_actions([
+                mez_agent::AllowedAction::Say,
+                mez_agent::AllowedAction::SpawnAgent,
+                mez_agent::AllowedAction::ConfigChange,
+            ])
+            .with_config_change_setting_path_description("persisted test setting paths")
+            .with_spawn_agent_sizing(mez_agent::SpawnAgentSizing {
+                sizes: vec![mez_agent::SpawnAgentSizeOption {
+                    size: "small".to_string(),
+                    profile_name: "persisted-small".to_string(),
+                    execution_profile: Some(mez_agent::ModelProfile {
+                        provider: "test-provider".to_string(),
+                        model: "test-model".to_string(),
+                        ..Default::default()
+                    }),
+                    allowed_reasoning_efforts: vec!["low".to_string(), "high".to_string()],
+                }],
+            }),
+        ),
         ..agent_session_metadata("$live", "conv1")
     };
     let foreign = AgentSessionMetadata {
@@ -1666,7 +2015,17 @@ fn transcript_store_catalog_migrates_existing_session_metadata() {
     current.content = "project_root=/workspace/current\nship the catalog".to_string();
     store.append(&current).unwrap();
     store
-        .save_conversation_kind("current", mez_agent::AgentConversationKind::Subagent)
+        .save_subagent_conversation_contract(
+            "current",
+            mez_agent::SubagentSessionLineage {
+                parent_agent_id: "agent-%1".to_string(),
+                root_agent_id: "agent-%1".to_string(),
+                depth: 1,
+                display_name: "current child".to_string(),
+                terminal: false,
+            },
+            mez_agent::AllowedActionSet::say_only(),
+        )
         .unwrap();
     store
         .name_session("current", "Current session", 40, None, false)
@@ -2041,6 +2400,132 @@ fn transcript_store_catalog_explicit_rebuild_restores_metadata() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies catalog discovery and repair exclude a version-one child sidecar
+/// that lacks the durable delegation contract while retaining healthy roots.
+///
+/// Version-one child records cannot prove lineage or action authority and must
+/// therefore remain unresumable, but one stale sidecar must not block ordinary
+/// saved-session listing or reconstruction for unrelated conversations.
+#[test]
+fn transcript_store_catalog_skips_legacy_subagent_without_durable_contract() {
+    let root = temp_root("catalog-legacy-subagent-contract");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("healthy-root", 1, TranscriptRole::User))
+        .unwrap();
+    store
+        .append(&entry("legacy-child", 1, TranscriptRole::User))
+        .unwrap();
+    fs::write(
+        root.join("legacy-child").join("metadata.json"),
+        b"{\"version\":1,\"conversation_kind\":\"subagent\"}\n",
+    )
+    .unwrap();
+
+    store.initialize(100).unwrap();
+    assert!(
+        store
+            .catalog_saved_session("healthy-root")
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        store
+            .catalog_saved_session("legacy-child")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        store.conversation_kind("legacy-child").unwrap(),
+        mez_agent::AgentConversationKind::Subagent
+    );
+    assert_eq!(
+        store.conversation_subagent_lineage("legacy-child").unwrap(),
+        None
+    );
+    assert_eq!(
+        store.conversation_allowed_actions("legacy-child").unwrap(),
+        None
+    );
+
+    store.rebuild_catalog(101).unwrap();
+    assert!(
+        store
+            .catalog_saved_session("healthy-root")
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        store
+            .catalog_saved_session("legacy-child")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("legacy-child").join("metadata.json")).unwrap(),
+        "{\"version\":1,\"conversation_kind\":\"subagent\"}\n"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies healthy catalog startup does not enumerate every indexed sidecar,
+/// while exact access still fail-closes a newly incomplete legacy child.
+#[test]
+fn transcript_store_catalog_healthy_startup_defers_legacy_child_quarantine_to_exact_access() {
+    let root = temp_root("catalog-indexed-legacy-subagent-contract");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("healthy-root", 1, TranscriptRole::User))
+        .unwrap();
+    store
+        .append(&entry("indexed-legacy-child", 1, TranscriptRole::User))
+        .unwrap();
+    store.initialize(100).unwrap();
+    assert!(
+        store
+            .catalog_saved_session("indexed-legacy-child")
+            .unwrap()
+            .is_some()
+    );
+    fs::write(
+        root.join("indexed-legacy-child").join("metadata.json"),
+        b"{\"version\":1,\"conversation_kind\":\"subagent\"}\n",
+    )
+    .unwrap();
+
+    store.initialize(101).unwrap();
+
+    assert!(
+        store
+            .catalog_saved_session("healthy-root")
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        store
+            .catalog_saved_session("indexed-legacy-child")
+            .unwrap()
+            .is_some(),
+        "healthy startup must not enumerate every catalog sidecar"
+    );
+    assert!(
+        store
+            .saved_session("indexed-legacy-child")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .catalog_saved_session("indexed-legacy-child")
+            .unwrap()
+            .is_none(),
+        "exact access quarantines the unresumable legacy child"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies ordinary metadata mutations update the catalog only after their
 /// filesystem payload or compatibility sidecar has been persisted.
 ///
@@ -2061,7 +2546,17 @@ fn transcript_store_catalog_dual_writes_session_mutations() {
         .append(&entry("conversation", 2, TranscriptRole::Assistant))
         .unwrap();
     store
-        .save_conversation_kind("conversation", mez_agent::AgentConversationKind::Subagent)
+        .save_subagent_conversation_contract(
+            "conversation",
+            mez_agent::SubagentSessionLineage {
+                parent_agent_id: "agent-%1".to_string(),
+                root_agent_id: "agent-%1".to_string(),
+                depth: 1,
+                display_name: "catalogued child".to_string(),
+                terminal: false,
+            },
+            mez_agent::AllowedActionSet::say_only(),
+        )
         .unwrap();
     store
         .name_session(
@@ -2234,9 +2729,16 @@ fn transcript_store_catalog_latest_root_skips_subagents_and_stale_rows() {
     store.append(&older_root).unwrap();
     store.append(&newest_subagent).unwrap();
     store
-        .save_conversation_kind(
+        .save_subagent_conversation_contract(
             "newest-subagent",
-            mez_agent::AgentConversationKind::Subagent,
+            mez_agent::SubagentSessionLineage {
+                parent_agent_id: "agent-%1".to_string(),
+                root_agent_id: "agent-%1".to_string(),
+                depth: 1,
+                display_name: "newest child".to_string(),
+                terminal: false,
+            },
+            mez_agent::AllowedActionSet::say_only(),
         )
         .unwrap();
     store.append(&stale_root).unwrap();
@@ -2285,7 +2787,17 @@ fn transcript_store_catalog_bounds_completion_and_keyset_pages() {
         .name_session("root-zero", "Zero entry", 60, None, false)
         .unwrap();
     store
-        .save_conversation_kind("root-child", mez_agent::AgentConversationKind::Subagent)
+        .save_subagent_conversation_contract(
+            "root-child",
+            mez_agent::SubagentSessionLineage {
+                parent_agent_id: "agent-%1".to_string(),
+                root_agent_id: "agent-%1".to_string(),
+                depth: 1,
+                display_name: "root child".to_string(),
+                terminal: false,
+            },
+            mez_agent::AllowedActionSet::say_only(),
+        )
         .unwrap();
 
     let completion_ids = store
@@ -2575,9 +3087,16 @@ fn transcript_store_archives_and_restores_session_round_trip() {
         .append_presentation(&presentation("archive-round-trip", 1))
         .unwrap();
     store
-        .save_conversation_kind(
+        .save_subagent_conversation_contract(
             "archive-round-trip",
-            mez_agent::AgentConversationKind::Subagent,
+            mez_agent::SubagentSessionLineage {
+                parent_agent_id: "agent-%1".to_string(),
+                root_agent_id: "agent-%1".to_string(),
+                depth: 1,
+                display_name: "archived child".to_string(),
+                terminal: false,
+            },
+            mez_agent::AllowedActionSet::say_only(),
         )
         .unwrap();
     store
@@ -3042,7 +3561,7 @@ fn transcript_store_preserves_v1_metadata_when_legacy_promotion_replacement_fail
     .unwrap();
     fs::write(
         &metadata_path,
-        "{\"version\":1,\"conversation_kind\":\"subagent\"}\n",
+        "{\"version\":1,\"conversation_kind\":\"root\"}\n",
     )
     .unwrap();
     store.initialize(10).unwrap();
@@ -3058,11 +3577,11 @@ fn transcript_store_preserves_v1_metadata_when_legacy_promotion_replacement_fail
     assert!(!root.join(conversation_id).join("history.tsv").exists());
     assert_eq!(
         fs::read_to_string(&metadata_path).unwrap(),
-        "{\"version\":1,\"conversation_kind\":\"subagent\"}\n"
+        "{\"version\":1,\"conversation_kind\":\"root\"}\n"
     );
     assert_eq!(
         store.conversation_kind(conversation_id).unwrap(),
-        mez_agent::AgentConversationKind::Subagent
+        mez_agent::AgentConversationKind::Root
     );
     assert!(
         store

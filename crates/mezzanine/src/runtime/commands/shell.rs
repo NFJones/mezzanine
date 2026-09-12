@@ -241,6 +241,7 @@ impl RuntimeSessionService {
             .enter_or_resume(pane_id)?
             .session_id
             .clone();
+        self.capture_agent_session_allowed_actions_for_pane(pane_id)?;
         self.reload_agent_prompt_history_for_pane(pane_id)?;
         if runtime_owned {
             if self.runtime_agent_surface_startup(pane_id).is_none() {
@@ -959,6 +960,7 @@ impl RuntimeSessionService {
                 .get(&pane_id)
                 .map(|session| session.session_id.clone())
                 .ok_or_else(|| MezError::invalid_state("agent shell session not found for pane"))?;
+            self.capture_agent_session_allowed_actions_for_pane(&pane_id)?;
             self.sync_runtime_agent_objective_for_conversation(&pane_id, &conversation_id)?;
             self.clear_agent_modified_files(&pane_id);
             self.reload_agent_prompt_history_for_pane(&pane_id)?;

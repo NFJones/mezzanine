@@ -25,6 +25,11 @@ impl RuntimeSessionService {
         mut execution: AgentTurnExecution,
         defer_external_actions: bool,
     ) -> Result<AgentTurnExecution> {
+        if self.subagent_descendant_is_fenced(&turn.agent_id) {
+            return Err(super::super::MezError::forbidden(
+                "fenced subagent descendant cannot apply provider execution after parent conversation replacement",
+            ));
+        }
         let turn_id = turn.turn_id.as_str();
         if self
             .agent_shell_store()

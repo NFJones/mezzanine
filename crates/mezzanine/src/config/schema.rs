@@ -837,6 +837,7 @@ pub(super) const SUBAGENT_PROFILE_KEYS: &[&str] = &[
     "name",
     "description",
     "terminal",
+    "allowed_actions",
     "developer_instructions",
     "developer_prompt",
     "model_profile",

@@ -65,5 +65,6 @@ zbus = { version = "=5.19.0", default-features = false, features = ["tokio"] }
 zbus = { version = "=5.19.0", default-features = false, features = ["bus-impl", "tokio"] }
 
 [dev-dependencies]
+jsonschema = { version = "0.56", default-features = false }
 portable-pty = "0.9"
 tokio = { version = "1", features = ["test-util"] }

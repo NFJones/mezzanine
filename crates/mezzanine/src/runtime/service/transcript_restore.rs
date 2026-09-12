@@ -164,6 +164,17 @@ impl RuntimeSessionService {
             }
             let pane_id = metadata.pane_id.clone();
             let conversation_id = metadata.conversation_id.clone();
+            let conversation_allowed_actions =
+                store.conversation_allowed_actions(&conversation_id)?;
+            let conversation_kind = store.conversation_kind(&conversation_id)?;
+            let subagent_lineage = store.conversation_subagent_lineage(&conversation_id)?;
+            if conversation_kind == mez_agent::AgentConversationKind::Subagent
+                && subagent_lineage.is_none()
+            {
+                return Err(MezError::invalid_state(
+                    "subagent conversation cannot restore without durable lineage",
+                ));
+            }
             let prepared_objective = store.user_objective(&conversation_id)?;
             let visibility = runtime_agent_session_metadata_visibility(&metadata.visibility)?;
             let log_level = AgentLogLevel::parse(&metadata.log_level).ok_or_else(|| {
@@ -224,13 +235,15 @@ impl RuntimeSessionService {
             let mut target_session = AgentShellSession {
                 session_id: conversation_id.clone(),
                 pane_id: pane_id.clone(),
-                conversation_kind: mez_agent::AgentConversationKind::Root,
+                conversation_kind,
                 prompt_cache_lineage_id: metadata.prompt_cache_lineage_id.clone(),
                 visibility,
                 running_turn_id: None,
                 transcript_entries: metadata.transcript_entries,
                 log_level,
                 directive: metadata.directive.clone(),
+                allowed_actions: conversation_allowed_actions
+                    .or_else(|| metadata.allowed_actions.clone()),
                 ephemeral: false,
                 ephemeral_transcript_source_conversation_id: None,
                 ephemeral_transcript_source_entries: 0,
@@ -430,6 +443,18 @@ impl RuntimeSessionService {
             if running_turn_id.is_some() {
                 interrupted = interrupted.saturating_add(1);
             }
+            if let Some(lineage) = subagent_lineage {
+                self.set_restored_subagent_lineage(
+                    format!("agent-{pane_id}"),
+                    crate::runtime::RuntimeSubagentLineage {
+                        parent_agent_id: lineage.parent_agent_id,
+                        root_agent_id: lineage.root_agent_id,
+                        depth: lineage.depth,
+                        display_name: lineage.display_name,
+                        terminal: lineage.terminal,
+                    },
+                );
+            }
             restored = restored.saturating_add(1);
         }
         if restored > 0 || interrupted > 0 {
@@ -464,7 +489,6 @@ impl RuntimeSessionService {
             .agent_shell_store()
             .sessions()
             .filter(|session| runtime_pane_by_id(&self.session, &session.pane_id).is_ok())
-            .filter(|session| session.conversation_kind == mez_agent::AgentConversationKind::Root)
             .filter(|session| {
                 session
                     .running_turn_id
@@ -554,10 +578,50 @@ impl RuntimeSessionService {
                     latest_request_usage: self
                         .agent_latest_request_usage(&conversation_id)
                         .cloned(),
+                    allowed_actions: if session.ephemeral {
+                        fallback_parent.map(|state| state.parent_allowed_actions.clone())
+                    } else {
+                        session.allowed_actions.clone()
+                    },
                 }
             })
             .collect::<Vec<_>>();
-        store.save_agent_session_metadata(&mezzanine_session_id, &records)
+        let previous_catalogs = records
+            .iter()
+            .filter_map(|record| {
+                record.allowed_actions.as_ref().map(|_| {
+                    store
+                        .conversation_allowed_actions(&record.conversation_id)
+                        .map(|catalog| (record.conversation_id.clone(), catalog))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for record in &records {
+            if let Some(allowed_actions) = record.allowed_actions.clone()
+                && let Err(error) = store.save_conversation_allowed_actions(
+                    &record.conversation_id,
+                    Some(allowed_actions),
+                )
+            {
+                for (conversation_id, previous_catalog) in previous_catalogs.iter().rev() {
+                    let _ = store.restore_conversation_allowed_actions(
+                        conversation_id,
+                        previous_catalog.clone(),
+                    );
+                }
+                return Err(error);
+            }
+        }
+        if let Err(error) = store.save_agent_session_metadata(&mezzanine_session_id, &records) {
+            for (conversation_id, previous_catalog) in previous_catalogs.iter().rev() {
+                let _ = store.restore_conversation_allowed_actions(
+                    conversation_id,
+                    previous_catalog.clone(),
+                );
+            }
+            return Err(error);
+        }
+        Ok(records.len())
     }
 
     /// Loads and validates persisted pane-local settings before `/resume` mutates live state.
@@ -569,13 +633,16 @@ impl RuntimeSessionService {
             return Ok(None);
         };
         let mezzanine_session_id = self.session.id.as_str().to_string();
-        let Some(metadata) = store
+        let metadata = store
             .load_agent_session_metadata(&mezzanine_session_id)?
             .into_iter()
-            .find(|metadata| metadata.conversation_id == conversation_id)
-        else {
+            .find(|metadata| metadata.conversation_id == conversation_id);
+        let Some(mut metadata) = metadata else {
             return Ok(None);
         };
+        if let Some(allowed_actions) = store.conversation_allowed_actions(conversation_id)? {
+            metadata.allowed_actions = Some(allowed_actions);
+        }
         let root_routing_policy = metadata
             .root_routing_policy
             .as_deref()
@@ -599,6 +666,27 @@ impl RuntimeSessionService {
         }))
     }
 
+    /// Restores the action catalog owned by a durable conversation, if present.
+    ///
+    /// Active pane metadata is replaced whenever a pane rebinds, while the
+    /// catalog sidecar remains owned by the conversation. Legacy conversations
+    /// have no sidecar catalog and continue to capture live configuration.
+    pub(crate) fn restore_agent_conversation_allowed_actions(
+        &mut self,
+        pane_id: &str,
+        conversation_id: &str,
+    ) -> Result<()> {
+        let Some(store) = self.persistence.cloned_transcript_store() else {
+            return Ok(());
+        };
+        let Some(allowed_actions) = store.conversation_allowed_actions(conversation_id)? else {
+            return Ok(());
+        };
+        self.agent_shell_store_mut()
+            .restore_allowed_actions(pane_id, allowed_actions)?;
+        Ok(())
+    }
+
     /// Commits one previously validated saved-session metadata plan.
     ///
     /// The caller performs every fallible presentation, directory, and
@@ -615,11 +703,17 @@ impl RuntimeSessionService {
             return Ok(());
         };
         let metadata = prepared.metadata;
-        let session = self
-            .agent_shell_store_mut()
-            .ensure_session(pane_id.to_string())?;
-        session.prompt_cache_lineage_id = metadata.prompt_cache_lineage_id.clone();
-        session.directive = metadata.directive.clone();
+        {
+            let session = self
+                .agent_shell_store_mut()
+                .ensure_session(pane_id.to_string())?;
+            session.prompt_cache_lineage_id = metadata.prompt_cache_lineage_id.clone();
+            session.directive = metadata.directive.clone();
+            session.allowed_actions = metadata.allowed_actions.clone();
+        }
+        if metadata.allowed_actions.is_none() {
+            self.capture_agent_session_allowed_actions_for_pane(pane_id)?;
+        }
         if let Some(profile) = metadata.pane_model_profile.as_ref() {
             self.integration
                 .model_profile_overrides_mut()
@@ -645,7 +739,6 @@ impl RuntimeSessionService {
             metadata.context_usage_snapshot,
         );
         self.restore_agent_latest_request_usage(conversation_id, metadata.latest_request_usage);
-        let _ = self.checkpoint_agent_session_metadata();
         Ok(())
     }
 

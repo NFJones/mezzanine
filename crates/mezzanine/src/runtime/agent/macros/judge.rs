@@ -101,7 +101,7 @@ impl RuntimeSessionService {
     /// Builds the structured provider request used to judge one completed
     /// macro step.
     pub(crate) fn macro_judge_request_for_turn(
-        &self,
+        &mut self,
         turn: &AgentTurnRecord,
         model_profile: &ModelProfile,
         step_index: usize,
@@ -113,8 +113,11 @@ impl RuntimeSessionService {
             .ok_or_else(|| {
                 MezError::invalid_state("macro judge requested for unknown macro run")
             })?;
-        macro_judge_model_request(turn, model_profile, run, step_index)
-            .map_err(|error| MezError::invalid_state(error.message()))
+        let mut request = macro_judge_model_request(turn, model_profile, run, step_index)
+            .map_err(|error| MezError::invalid_state(error.message()))?;
+        request.allowed_actions =
+            self.capture_agent_session_allowed_actions_for_pane(&turn.pane_id)?;
+        Ok(request)
     }
 
     /// Parses and validates the structured JSON decision returned by the judge

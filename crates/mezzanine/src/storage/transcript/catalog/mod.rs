@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 use mez_agent::AgentConversationKind;
 use mez_agent::transcript::ConversationSummary;
+use rusqlite::Connection;
 use rustix::fs::{FlockOperation, flock};
 
 use crate::error::{MezError, Result};
@@ -129,10 +130,34 @@ pub(super) fn initialize(store: &AgentTranscriptStore, now_unix_seconds: u64) ->
     };
     set_catalog_permissions(store)?;
 
-    if !migration_marker_path(store).exists() || !database_existed {
+    let migration_required = !migration_marker_path(store).exists() || !database_existed;
+    if migration_required {
         migration::import(store, &mut connection, now_unix_seconds)?;
         write_migration_marker(store)?;
         set_catalog_permissions(store)?;
+        quarantine_unrestorable_legacy_subagents(store, &connection)?;
+    }
+    Ok(())
+}
+
+/// Removes indexed rows whose current version-one child sidecar cannot prove a
+/// durable delegation contract, without rebuilding the catalog or disturbing
+/// healthy rows.
+fn quarantine_unrestorable_legacy_subagents(
+    store: &AgentTranscriptStore,
+    connection: &Connection,
+) -> Result<()> {
+    let conversation_ids = {
+        let mut statement =
+            connection.prepare("SELECT conversation_id FROM saved_conversations")?;
+        statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for conversation_id in conversation_ids {
+        if store.is_unrestorable_legacy_subagent(&conversation_id)? {
+            mutation::delete(connection, &conversation_id)?;
+        }
     }
     Ok(())
 }

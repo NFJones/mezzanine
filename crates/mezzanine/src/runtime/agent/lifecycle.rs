@@ -418,6 +418,52 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Interrupts every live turn owned by descendants fenced after a parent
+    /// conversation replacement.
+    ///
+    /// A fence revokes inherited authority. Settling the corresponding turns
+    /// before their scope declarations can be absent prevents local execution
+    /// paths from treating them as root turns and broadening to pane authority.
+    pub(crate) fn interrupt_fenced_subagent_descendant_turns(&mut self) -> Result<usize> {
+        let turns = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .filter(|turn| {
+                self.subagent_descendant_is_fenced(&turn.agent_id)
+                    && matches!(
+                        turn.state,
+                        AgentTurnState::Queued | AgentTurnState::Running | AgentTurnState::Blocked
+                    )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut interrupted = 0usize;
+        for turn in turns {
+            let fence_conversation_id = self
+                .agent
+                .fenced_subagent_descendants
+                .get(&turn.agent_id)
+                .cloned();
+            let _ = self.cancel_agent_work(&turn.turn_id);
+            self.cancel_live_shell_transactions_for_turn(&turn.turn_id)?;
+            self.agent
+                .pending_agent_provider_tasks
+                .remove(&turn.turn_id);
+            self.agent
+                .claimed_agent_provider_tasks
+                .remove(&turn.turn_id);
+            self.finish_agent_turn_without_shell_session(&turn, AgentTurnState::Interrupted)?;
+            if let Some(conversation_id) = fence_conversation_id {
+                self.agent
+                    .fenced_subagent_descendants
+                    .insert(turn.agent_id.clone(), conversation_id);
+            }
+            interrupted = interrupted.saturating_add(1);
+        }
+        Ok(interrupted)
+    }
+
     /// Starts all scheduler work that is runnable in the current runtime state.
     pub(crate) fn start_ready_agent_turns(&mut self) -> Result<usize> {
         self.start_ready_agent_turns_suppressing_status_for(None)
@@ -702,9 +748,9 @@ impl RuntimeSessionService {
             .agent
             .subagent_lineage
             .iter()
-            .filter(|(_agent_id, lineage)| {
-                lineage.parent_agent_id == parent_agent_id
-                    || self.subagent_lineage_has_ancestor(lineage, parent_agent_id)
+            .filter(|(agent_id, lineage)| {
+                agent_id != &parent_agent_id
+                    && self.subagent_lineage_has_ancestor(lineage, parent_agent_id)
             })
             .map(|(agent_id, lineage)| (lineage.depth, agent_id.clone()))
             .collect::<Vec<_>>();
@@ -724,21 +770,22 @@ impl RuntimeSessionService {
     /// # Parameters
     /// - `lineage`: Child lineage to walk upward.
     /// - `ancestor_agent_id`: Candidate ancestor agent id.
-    fn subagent_lineage_has_ancestor(
+    pub(crate) fn subagent_lineage_has_ancestor(
         &self,
         lineage: &super::super::service_state::RuntimeSubagentLineage,
         ancestor_agent_id: &str,
     ) -> bool {
         let mut current_parent = lineage.parent_agent_id.as_str();
+        let mut visited = std::collections::BTreeSet::new();
         while !current_parent.is_empty() {
-            if current_parent == ancestor_agent_id {
-                return true;
+            if !visited.insert(current_parent) {
+                return false;
             }
             let Some(parent_lineage) = self.agent.subagent_lineage.get(current_parent) else {
-                return false;
+                break;
             };
             current_parent = parent_lineage.parent_agent_id.as_str();
         }
-        false
+        visited.contains(ancestor_agent_id)
     }
 }

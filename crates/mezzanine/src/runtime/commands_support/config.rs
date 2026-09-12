@@ -715,7 +715,9 @@ pub(crate) fn runtime_apply_persisted_config_mutation_batch(
             }
             Err(error) => {
                 service.integration.replace_config_layers(previous_layers);
-                let runtime_rollback_error = service.apply_runtime_config_layers().err();
+                let runtime_rollback_error = service
+                    .restore_runtime_config_layers_without_catalog_freeze()
+                    .err();
                 let disk_rollback_error = previous_disk_text.as_ref().and_then(|previous_text| {
                     runtime_restore_primary_config_disk_state(&path, previous_text.as_deref()).err()
                 });

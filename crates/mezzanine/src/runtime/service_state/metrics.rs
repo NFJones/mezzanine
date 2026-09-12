@@ -28,6 +28,7 @@ pub(crate) struct RuntimeProviderWireRequestStatus {
     pub(crate) provider: String,
     pub(crate) model: String,
     pub(crate) interaction_kind: String,
+    pub(crate) schema_digest: String,
     pub(crate) purpose: String,
     pub(crate) usage: Option<ModelTokenUsage>,
     pub(crate) effective_input_bytes: Option<usize>,
@@ -214,6 +215,8 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub(crate) last_interaction_kind: Option<String>,
     /// Most recent allowed action surface observed by runtime metrics.
     pub(crate) last_allowed_actions: Option<String>,
+    /// Most recent provider-neutral MAAP catalog digest observed by runtime metrics.
+    pub(crate) last_schema_digest: Option<String>,
     /// Most recent prompt-cache key observed by runtime metrics.
     pub(crate) last_prompt_cache_key: Option<String>,
     /// Most recent local instructions-and-stable-input projection digest.
@@ -321,6 +324,7 @@ impl RuntimeMetricsSnapshot {
         self.last_model = Some(observation.model.clone());
         self.last_interaction_kind = Some(observation.interaction_kind.clone());
         self.last_allowed_actions = Some(observation.allowed_actions.clone());
+        self.last_schema_digest = Some(observation.schema_digest.clone());
         self.last_provider_output_token_budget_tokens = observation.max_output_tokens;
         self.last_provider_output_limit_retry_override_tokens =
             observation.output_limit_retry_override_tokens;
@@ -439,6 +443,7 @@ impl RuntimeMetricsSnapshot {
             provider: observation.provider.clone(),
             model: observation.model.clone(),
             interaction_kind: observation.interaction_kind.clone(),
+            schema_digest: observation.schema_digest.clone(),
             purpose: observation.purpose.as_str().to_string(),
             usage: observation.usage,
             effective_input_bytes: observation
@@ -756,6 +761,7 @@ mod provider_wire_tests {
             prompt_cache_lineage_id: request.prompt_cache_lineage_id.clone(),
             interaction_kind: request.interaction_kind.as_str().to_string(),
             allowed_actions: request.allowed_actions.action_type_names().join(","),
+            schema_digest: mez_agent::provider_neutral_schema_digest(&request.allowed_actions),
             max_output_tokens: request.max_output_tokens,
             output_limit_retry_override_tokens: None,
             continuity_warning: None,

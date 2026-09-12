@@ -4,7 +4,9 @@
 //! requests a coarse capability. Product adapters retain request rendering,
 //! configuration lookup, and provider transport ownership.
 
-use crate::{AgentCapability, AllowedActionSet, ModelInteractionKind};
+#[cfg(test)]
+use crate::ModelInteractionKind;
+use crate::{AgentCapability, AllowedActionSet};
 
 /// One model-requested coarse capability and its task-specific reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,35 +115,17 @@ pub fn decide_capabilities(
         .collect()
 }
 
-/// Produces the next interaction kind and allowed-action surface after a
-/// capability decision phase.
-pub fn continuation_surface(
+/// Preserves the session-owned action catalog across legacy capability decisions.
+///
+/// Capability grants are enforced by runtime policy and must never rewrite the
+/// immutable provider catalog captured at the session boundary.
+#[cfg(test)]
+fn continuation_surface(
     interaction_kind: ModelInteractionKind,
     current_actions: &AllowedActionSet,
-    decisions: &[CapabilityDecision],
+    _decisions: &[CapabilityDecision],
 ) -> (ModelInteractionKind, AllowedActionSet) {
-    let carried_execution_surface = matches!(
-        interaction_kind,
-        ModelInteractionKind::ActionExecution | ModelInteractionKind::CapabilityContinuation
-    );
-    let mut actions = if carried_execution_surface {
-        current_actions.clone()
-    } else {
-        AllowedActionSet::action_execution_base()
-    };
-    for decision in decisions {
-        if decision.granted {
-            actions.extend_set(&decision.allowed_actions);
-        }
-    }
-    if carried_execution_surface || decisions.iter().any(|decision| decision.granted) {
-        (ModelInteractionKind::ActionExecution, actions)
-    } else {
-        (
-            ModelInteractionKind::CapabilityDecision,
-            AllowedActionSet::capability_decision(),
-        )
-    }
+    (interaction_kind, current_actions.clone())
 }
 
 fn capability_decision(
@@ -212,10 +196,10 @@ mod tests {
         );
     }
 
-    /// A granted capability advances a capability decision into an executable
-    /// action surface without requiring product request or provider types.
+    /// Granted capability decisions cannot widen the session-owned request
+    /// catalog; live execution policy remains responsible for authorization.
     #[test]
-    fn continuation_surface_exposes_granted_capability_actions() {
+    fn continuation_surface_preserves_captured_catalog() {
         let decisions = decide_capabilities(
             &[CapabilityRequest {
                 capability: AgentCapability::Shell,
@@ -233,16 +217,14 @@ mod tests {
             &decisions,
         );
 
-        assert_eq!(interaction, ModelInteractionKind::ActionExecution);
-        assert!(actions.contains(AllowedAction::ShellCommand));
-        assert!(actions.contains(AllowedAction::ApplyPatch));
+        assert_eq!(interaction, ModelInteractionKind::CapabilityDecision);
+        assert_eq!(actions, AllowedActionSet::capability_decision());
     }
 
-    /// Successive capability continuations retain earlier grants so a batch
-    /// that needs more than one coarse capability cannot oscillate forever
-    /// between mutually incomplete action surfaces.
+    /// Successive capability decisions preserve the original immutable catalog
+    /// rather than accumulating grant-derived action surfaces.
     #[test]
-    fn capability_continuation_surface_accumulates_successive_grants() {
+    fn capability_continuation_surface_preserves_original_catalog() {
         let config_decisions = decide_capabilities(
             &[CapabilityRequest {
                 capability: AgentCapability::ConfigChange,
@@ -254,9 +236,11 @@ mod tests {
                 issues_enabled: true,
             },
         );
+        let original =
+            AllowedActionSet::from_actions([AllowedAction::Say, AllowedAction::ShellCommand]);
         let (interaction, config_actions) = continuation_surface(
-            ModelInteractionKind::CapabilityDecision,
-            &AllowedActionSet::capability_decision(),
+            ModelInteractionKind::ActionExecution,
+            &original,
             &config_decisions,
         );
         let shell_decisions = decide_capabilities(
@@ -274,9 +258,9 @@ mod tests {
         let (_, accumulated_actions) =
             continuation_surface(interaction, &config_actions, &shell_decisions);
 
-        assert!(accumulated_actions.contains(AllowedAction::ConfigChange));
-        assert!(accumulated_actions.contains(AllowedAction::ShellCommand));
-        assert!(accumulated_actions.contains(AllowedAction::ApplyPatch));
+        assert_eq!(interaction, ModelInteractionKind::ActionExecution);
+        assert_eq!(config_actions, original);
+        assert_eq!(accumulated_actions, original);
     }
 
     /// Response acceptance rejects identity and MAAP-shape failures before

@@ -542,7 +542,7 @@ fn openai_responses_request_body_describes_config_change_schema() {
         .unwrap();
     assert_eq!(
         path_description,
-        "Dotted live configuration path. Use only paths advertised by the product adapter, and inspect current configuration before changing dynamic names."
+        crate::config::config_change_setting_path_description()
     );
 
     let value_description = config_schema["properties"]["value"]["description"]
@@ -646,7 +646,7 @@ fn openai_responses_request_body_exposes_configured_shell_action_catalog() {
     assert_eq!(value["tool_choice"]["name"], "submit_maap_action_batch");
     assert_eq!(
         shell_tool["parameters"]["required"],
-        serde_json::json!(["rationale", "objective", "actions"])
+        serde_json::json!(["actions", "objective", "rationale"])
     );
     let shell_description = shell_tool["description"].as_str().unwrap();
     assert!(shell_description.contains("Return a function call, not prose"));
@@ -702,6 +702,114 @@ fn openai_responses_request_body_exposes_configured_shell_action_catalog() {
     assert!(
         shell_description.contains("Heredocs and here-strings are disabled"),
         "{shell_description}"
+    );
+}
+
+#[test]
+/// Verifies the OpenAI Responses request uses only its supported strict-schema
+/// keywords while runtime validation owns frozen size/reasoning pair rejection.
+fn openai_responses_spawn_schema_is_strict_and_enforces_sizing_pairs() {
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "user".to_string(),
+            content: "delegate the investigation".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
+    request.allowed_actions =
+        mez_agent::AllowedActionSet::from_actions([mez_agent::AllowedAction::SpawnAgent])
+            .with_spawn_agent_sizing(mez_agent::SpawnAgentSizing {
+                sizes: vec![
+                    mez_agent::SpawnAgentSizeOption {
+                        size: "small".to_string(),
+                        profile_name: "small-profile".to_string(),
+                        execution_profile: Some(ModelProfile {
+                            provider: "openai".to_string(),
+                            model: "gpt-small".to_string(),
+                            model_capabilities: Default::default(),
+                            reasoning_profile: None,
+                            latency_preference: None,
+                            multimodal_required: false,
+                            provider_options: std::collections::BTreeMap::new(),
+                            safety_tier: None,
+                        }),
+                        allowed_reasoning_efforts: vec!["low".to_string()],
+                    },
+                    mez_agent::SpawnAgentSizeOption {
+                        size: "large".to_string(),
+                        profile_name: "large-profile".to_string(),
+                        execution_profile: Some(ModelProfile {
+                            provider: "openai".to_string(),
+                            model: "gpt-large".to_string(),
+                            model_capabilities: Default::default(),
+                            reasoning_profile: None,
+                            latency_preference: None,
+                            multimodal_required: false,
+                            provider_options: std::collections::BTreeMap::new(),
+                            safety_tier: None,
+                        }),
+                        allowed_reasoning_efforts: vec!["high".to_string()],
+                    },
+                ],
+            });
+
+    let body: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&request).unwrap()).unwrap();
+    let tool = openai_function_tool(&body, "submit_maap_action_batch");
+    assert_eq!(tool["strict"], true);
+    assert_openai_strict_schema_shape(&tool["parameters"]);
+    fn contains_unsupported_composition(value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::Array(values) => values.iter().any(contains_unsupported_composition),
+            serde_json::Value::Object(values) => {
+                values.contains_key("allOf")
+                    || values.contains_key("oneOf")
+                    || values.values().any(contains_unsupported_composition)
+            }
+            _ => false,
+        }
+    }
+    assert!(
+        !contains_unsupported_composition(&tool["parameters"]),
+        "OpenAI strict function schemas must not emit allOf or oneOf"
+    );
+    let spawn = openai_tool_action_schemas(tool)
+        .iter()
+        .find(|schema| schema["properties"]["type"]["enum"][0] == "spawn_agent")
+        .expect("OpenAI tool should expose spawn_agent");
+    assert_eq!(
+        spawn["required"],
+        serde_json::json!([
+            "reasoning_effort",
+            "role",
+            "session",
+            "size",
+            "task_prompt",
+            "type"
+        ])
+    );
+    assert_eq!(
+        spawn["properties"]["size"]["enum"],
+        serde_json::json!(["small", "large", null])
+    );
+    assert_eq!(
+        spawn["properties"]["reasoning_effort"]["enum"],
+        serde_json::json!(["low", "high", null])
     );
 }
 

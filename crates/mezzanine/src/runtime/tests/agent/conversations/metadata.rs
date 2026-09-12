@@ -78,6 +78,7 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
                     saved_token_usage_key.clone(),
                     saved_token_usage,
                 )]),
+                allowed_actions: None,
             }],
         )
         .unwrap();
@@ -215,6 +216,202 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
             },
         )]),
         "{resumed_metadata:#?}"
+    );
+}
+
+/// Verifies conversation-owned catalogs survive active metadata replacement
+/// while a pane resumes A, then B, then A after live configuration changes.
+/// Only the active pane binding is checkpointed, so each durable conversation
+/// must retain its own immutable catalog outside that replaceable record.
+#[test]
+fn runtime_resume_restores_each_conversation_catalog_after_active_replacement() {
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-catalog-owner"));
+    for conversation_id in ["catalog-a", "catalog-b"] {
+        transcript_store
+            .append(&mez_agent::transcript::TranscriptEntry {
+                conversation_id: conversation_id.to_string(),
+                sequence: 1,
+                created_at_unix_seconds: 1,
+                role: mez_agent::transcript::TranscriptRole::User,
+                turn_id: format!("turn-{conversation_id}"),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: format!("resume {conversation_id}"),
+            })
+            .unwrap();
+    }
+    let actions_a = mez_agent::AllowedActionSet::from_actions([
+        mez_agent::AllowedAction::Say,
+        mez_agent::AllowedAction::ShellCommand,
+    ]);
+    let actions_b = mez_agent::AllowedActionSet::from_actions([
+        mez_agent::AllowedAction::Say,
+        mez_agent::AllowedAction::SpawnAgent,
+    ])
+    .with_spawn_agent_sizing(mez_agent::SpawnAgentSizing { sizes: Vec::new() });
+    transcript_store
+        .save_conversation_allowed_actions("catalog-a", Some(actions_a.clone()))
+        .unwrap();
+    transcript_store
+        .save_conversation_allowed_actions("catalog-b", Some(actions_b.clone()))
+        .unwrap();
+
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_agent_enabled_actions(mez_agent::AllowedActionSet::say_only());
+
+    for (request_id, conversation_id, expected_actions) in [
+        ("resume-a-first", "catalog-a", &actions_a),
+        ("resume-b", "catalog-b", &actions_b),
+        ("resume-a-again", "catalog-a", &actions_a),
+    ] {
+        let response = service.dispatch_runtime_control_body(
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":"{request_id}","method":"agent/shell/command","params":{{"idempotency_key":"{request_id}","input":"/resume {conversation_id}"}}}}"#
+            ),
+            &primary,
+        );
+        assert!(
+            response.contains(&format!("conversation_id={conversation_id}")),
+            "{response}"
+        );
+        assert_eq!(
+            service
+                .agent_shell_store()
+                .get("%1")
+                .and_then(|session| session.allowed_actions.as_ref()),
+            Some(expected_actions),
+            "{conversation_id} should restore its own catalog"
+        );
+    }
+}
+
+/// Verifies direct resume rejects a malformed persisted root catalog before it
+/// can replace the pane's current action surface.
+///
+/// A root conversation may omit its legacy catalog, but a present malformed
+/// catalog must fail at durable metadata lookup rather than drifting from the
+/// provider schema installed for the current pane.
+#[test]
+fn runtime_resume_rejects_malformed_persisted_root_action_catalog() {
+    let transcript_store = AgentTranscriptStore::new(temp_root("resume-invalid-root-catalog"));
+    transcript_store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: "invalid-root-catalog".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: mez_agent::transcript::TranscriptRole::User,
+            turn_id: "turn-invalid-root-catalog".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "resume invalid root catalog".to_string(),
+        })
+        .unwrap();
+    std::fs::write(
+        transcript_store
+            .presentation_path("invalid-root-catalog")
+            .unwrap()
+            .with_file_name("metadata.json"),
+        br#"{"version":2,"conversation_kind":"root","allowed_actions":{"actions":[]}}"#,
+    )
+    .unwrap();
+
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store);
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let prior = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .clone();
+
+    let error = service
+        .execute_agent_shell_resume_command("%1", "/resume invalid-root-catalog")
+        .unwrap_err();
+
+    assert!(
+        error.message().contains("persisted action catalog"),
+        "{error}"
+    );
+    assert_eq!(service.agent_shell_store().get("%1"), Some(&prior));
+}
+
+/// Verifies a failed final `/resume` checkpoint rolls back a newly captured
+/// catalog sidecar, so a later successful resume captures then-current policy.
+#[test]
+fn runtime_resume_checkpoint_failure_rolls_back_first_catalog_capture() {
+    let transcript_store =
+        AgentTranscriptStore::new(temp_root("resume-catalog-checkpoint-rollback"));
+    transcript_store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: "resume-target".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: mez_agent::transcript::TranscriptRole::User,
+            turn_id: "turn-resume-target".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "resume target".to_string(),
+        })
+        .unwrap();
+
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let first_actions = mez_agent::AllowedActionSet::from_actions([
+        mez_agent::AllowedAction::Say,
+        mez_agent::AllowedAction::ShellCommand,
+    ]);
+    service.set_agent_enabled_actions(first_actions);
+    transcript_store.fail_next_agent_session_metadata_write();
+
+    let error = service
+        .execute_agent_shell_resume_command("%1", "/resume resume-target")
+        .unwrap_err();
+    assert!(
+        error
+            .message()
+            .contains("agent session metadata write failure"),
+        "{error}"
+    );
+    assert_eq!(
+        transcript_store
+            .conversation_allowed_actions("resume-target")
+            .unwrap(),
+        None,
+        "failed resume must not leave an immutable first catalog behind"
+    );
+
+    let current_actions = mez_agent::AllowedActionSet::from_actions([
+        mez_agent::AllowedAction::Say,
+        mez_agent::AllowedAction::SpawnAgent,
+    ])
+    .with_spawn_agent_sizing(mez_agent::SpawnAgentSizing { sizes: Vec::new() });
+    service.set_agent_enabled_actions(current_actions.clone());
+    service
+        .execute_agent_shell_resume_command("%1", "/resume resume-target")
+        .unwrap();
+    assert_eq!(
+        transcript_store
+            .conversation_allowed_actions("resume-target")
+            .unwrap(),
+        Some(current_actions),
+        "later resume must capture its current action catalog"
     );
 }
 

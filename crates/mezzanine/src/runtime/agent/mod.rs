@@ -505,12 +505,18 @@ pub(crate) struct RuntimeAgentComponent {
     /// Test-only one-shot failure injected after a spawn action allocates its child.
     #[cfg(test)]
     fail_subagent_spawn_after_allocation: bool,
+    /// Test-only one-shot failure injected after a fork snapshot queues persistence.
+    #[cfg(test)]
+    fail_subagent_spawn_after_fork_persistence: bool,
     /// Test-only one-shot failure injected after a routed child is enqueued.
     #[cfg(test)]
     fail_routed_child_enqueue_trace: bool,
     /// Test-only one-shot failure injected after a durable `/fork` is created.
     #[cfg(test)]
     fail_agent_fork_after_persistence: bool,
+    /// Test-only one-shot failure injected after `/resume` changes authority.
+    #[cfg(test)]
+    fail_agent_resume_after_authority_restore: bool,
     /// Test-only one-shot failure injected before a routed loop continuation queues.
     #[cfg(test)]
     fail_routed_loop_continuation_queue: bool,
@@ -531,6 +537,14 @@ pub(crate) struct RuntimeAgentComponent {
     subagent_scope_declarations: BTreeMap<String, SubagentScopeDeclaration>,
     /// Runtime delegation lineage keyed by child agent id.
     subagent_lineage: BTreeMap<String, RuntimeSubagentLineage>,
+    /// Resumed durable lineage whose historical parent is not live authority.
+    restored_subagent_lineage: BTreeSet<String>,
+    /// Live descendants fenced when their parent pane binds a different conversation.
+    ///
+    /// A fence preserves the child pane long enough for ordinary terminal cleanup,
+    /// but prevents it from inheriting authority or routing status/results into the
+    /// parent's newly bound conversation.
+    fenced_subagent_descendants: BTreeMap<String, String>,
     /// Canonical active write-scope ownership registry.
     subagent_scopes: mez_agent::ScopeRegistry,
     /// Tool inventory cache keyed by pane environment signature.
@@ -672,6 +686,16 @@ impl RuntimeAgentComponent {
     }
 }
 
+/// Captures all authority state that `/resume` may replace for one agent.
+#[derive(Clone)]
+pub(crate) struct RuntimeSubagentAuthoritySnapshot {
+    lineage: Option<RuntimeSubagentLineage>,
+    restored_lineage: bool,
+    scope_declaration: Option<SubagentScopeDeclaration>,
+    scope_registry: mez_agent::ScopeRegistry,
+    interrupted_redirection: Option<RuntimeInterruptedSubagentRedirection>,
+}
+
 impl RuntimeSessionService {
     /// Returns the discovered tool inventory for one environment signature.
     pub(crate) fn agent_tool_inventory(
@@ -731,15 +755,103 @@ impl RuntimeSessionService {
         agent_id: impl Into<String>,
         lineage: RuntimeSubagentLineage,
     ) {
-        self.agent.subagent_lineage.insert(agent_id.into(), lineage);
+        let agent_id = agent_id.into();
+        self.agent.restored_subagent_lineage.remove(&agent_id);
+        self.agent.subagent_lineage.insert(agent_id, lineage);
+    }
+
+    /// Restores durable delegation structure without reviving historical parent authority.
+    pub(crate) fn set_restored_subagent_lineage(
+        &mut self,
+        agent_id: impl Into<String>,
+        lineage: RuntimeSubagentLineage,
+    ) {
+        let agent_id = agent_id.into();
+        self.agent.subagent_scope_declarations.remove(&agent_id);
+        self.agent.subagent_scopes.unregister(&agent_id);
+        self.agent
+            .restored_subagent_lineage
+            .insert(agent_id.clone());
+        self.agent.subagent_lineage.insert(agent_id, lineage);
+    }
+
+    /// Reports whether an agent's lineage parent is a live authority edge.
+    pub(crate) fn subagent_lineage_has_live_parent_authority(&self, agent_id: &str) -> bool {
+        self.agent.subagent_lineage.contains_key(agent_id)
+            && !self.agent.restored_subagent_lineage.contains(agent_id)
+            && !self
+                .agent
+                .fenced_subagent_descendants
+                .contains_key(agent_id)
+    }
+
+    /// Fences every live descendant of a parent before its pane conversation is replaced.
+    ///
+    /// The returned snapshot is sufficient to restore all prior descendant relationships
+    /// if the surrounding `/resume` transaction fails after this point.
+    pub(crate) fn fence_subagent_descendants_for_parent_conversation(
+        &mut self,
+        parent_agent_id: &str,
+        parent_conversation_id: &str,
+    ) -> BTreeMap<String, Option<String>> {
+        let descendants = self
+            .agent
+            .subagent_lineage
+            .iter()
+            .filter(|(_agent_id, lineage)| {
+                lineage.parent_agent_id == parent_agent_id
+                    || self.subagent_lineage_has_ancestor(lineage, parent_agent_id)
+            })
+            .map(|(agent_id, _lineage)| agent_id.clone())
+            .collect::<Vec<_>>();
+        let mut previous = BTreeMap::new();
+        for agent_id in descendants {
+            previous.insert(
+                agent_id.clone(),
+                self.agent
+                    .fenced_subagent_descendants
+                    .insert(agent_id, parent_conversation_id.to_string()),
+            );
+        }
+        previous
+    }
+
+    /// Restores descendant fences captured before a failed parent conversation replacement.
+    pub(crate) fn restore_subagent_descendant_fences(
+        &mut self,
+        snapshot: BTreeMap<String, Option<String>>,
+    ) {
+        for (agent_id, previous) in snapshot {
+            if let Some(conversation_id) = previous {
+                self.agent
+                    .fenced_subagent_descendants
+                    .insert(agent_id, conversation_id);
+            } else {
+                self.agent.fenced_subagent_descendants.remove(&agent_id);
+            }
+        }
+    }
+
+    /// Reports whether a child was fenced when its parent replaced a conversation.
+    pub(crate) fn subagent_descendant_is_fenced(&self, agent_id: &str) -> bool {
+        self.agent
+            .fenced_subagent_descendants
+            .contains_key(agent_id)
     }
 
     /// Counts direct active children of one parent agent.
     pub(crate) fn active_direct_subagent_count_for(&self, parent_agent_id: &str) -> usize {
         self.agent
             .subagent_lineage
-            .values()
-            .filter(|lineage| lineage.parent_agent_id == parent_agent_id)
+            .iter()
+            .filter(|(agent_id, lineage)| {
+                lineage.parent_agent_id == parent_agent_id
+                    && !self.agent.restored_subagent_lineage.contains(*agent_id)
+                    && !self
+                        .agent
+                        .fenced_subagent_descendants
+                        .contains_key(*agent_id)
+            })
             .count()
     }
 
@@ -758,6 +870,9 @@ impl RuntimeSessionService {
         &self,
         agent_id: &str,
     ) -> Option<SubagentScopeDeclaration> {
+        if self.subagent_descendant_is_fenced(agent_id) {
+            return None;
+        }
         self.agent
             .subagent_scope_declarations
             .get(agent_id)
@@ -795,12 +910,65 @@ impl RuntimeSessionService {
             .pending_interrupted_subagent_redirections
             .remove(agent_id);
         self.agent.subagent_lineage.remove(agent_id);
+        self.agent.restored_subagent_lineage.remove(agent_id);
+        self.agent.fenced_subagent_descendants.remove(agent_id);
         self.agent.subagent_scope_declarations.remove(agent_id);
         self.agent.subagent_scopes.unregister(agent_id);
     }
 
+    /// Captures all authority state that `/resume` may replace for one agent.
+    pub(crate) fn snapshot_subagent_authority_state(
+        &self,
+        agent_id: &str,
+    ) -> RuntimeSubagentAuthoritySnapshot {
+        RuntimeSubagentAuthoritySnapshot {
+            lineage: self.subagent_lineage(agent_id).cloned(),
+            restored_lineage: self.agent.restored_subagent_lineage.contains(agent_id),
+            scope_declaration: self.subagent_scope_declaration(agent_id),
+            scope_registry: self.agent.subagent_scopes.clone(),
+            interrupted_redirection: self
+                .agent
+                .pending_interrupted_subagent_redirections
+                .get(agent_id)
+                .cloned(),
+        }
+    }
+
+    /// Restores all authority state captured before a failed `/resume` attempt.
+    pub(crate) fn restore_subagent_authority_state(
+        &mut self,
+        agent_id: &str,
+        snapshot: RuntimeSubagentAuthoritySnapshot,
+    ) {
+        self.remove_subagent_authority_state(agent_id);
+        self.agent.subagent_scopes = snapshot.scope_registry;
+        if let Some(lineage) = snapshot.lineage {
+            self.agent
+                .subagent_lineage
+                .insert(agent_id.to_string(), lineage);
+        }
+        if snapshot.restored_lineage {
+            self.agent
+                .restored_subagent_lineage
+                .insert(agent_id.to_string());
+        }
+        if let Some(scope_declaration) = snapshot.scope_declaration {
+            self.agent
+                .subagent_scope_declarations
+                .insert(agent_id.to_string(), scope_declaration);
+        }
+        if let Some(redirection) = snapshot.interrupted_redirection {
+            self.agent
+                .pending_interrupted_subagent_redirections
+                .insert(agent_id.to_string(), redirection);
+        }
+    }
+
     /// Returns active write scopes for one agent.
     pub(crate) fn active_subagent_write_scopes_for(&self, agent_id: &str) -> Vec<ActiveWriteScope> {
+        if self.subagent_descendant_is_fenced(agent_id) {
+            return Vec::new();
+        }
         self.agent.subagent_scopes.active_write_scopes_for(agent_id)
     }
 
@@ -813,6 +981,7 @@ impl RuntimeSessionService {
     pub(crate) fn clear_all_subagent_authority_state(&mut self) {
         self.agent.pending_interrupted_subagent_redirections.clear();
         self.agent.subagent_lineage.clear();
+        self.agent.restored_subagent_lineage.clear();
         self.agent.subagent_scope_declarations.clear();
         self.agent.subagent_scopes = mez_agent::ScopeRegistry::default();
     }
@@ -1085,6 +1254,18 @@ impl RuntimeSessionService {
         self.agent.fail_subagent_spawn_after_allocation = true;
     }
 
+    /// Injects one spawn failure after a fork snapshot queues deferred persistence.
+    #[cfg(test)]
+    pub(crate) fn fail_next_subagent_spawn_after_fork_persistence_for_tests(&mut self) {
+        self.agent.fail_subagent_spawn_after_fork_persistence = true;
+    }
+
+    /// Consumes the test-only post-fork-persistence spawn failure injection.
+    #[cfg(test)]
+    pub(crate) fn take_subagent_spawn_after_fork_persistence_failure_for_tests(&mut self) -> bool {
+        std::mem::take(&mut self.agent.fail_subagent_spawn_after_fork_persistence)
+    }
+
     /// Injects one routed child trace failure after scheduler publication.
     #[cfg(test)]
     pub(crate) fn fail_next_routed_child_enqueue_trace_for_tests(&mut self) {
@@ -1101,6 +1282,18 @@ impl RuntimeSessionService {
     #[cfg(test)]
     pub(crate) fn take_agent_fork_after_persistence_failure_for_tests(&mut self) -> bool {
         std::mem::take(&mut self.agent.fail_agent_fork_after_persistence)
+    }
+
+    /// Injects one `/resume` failure after target authority replacement.
+    #[cfg(test)]
+    pub(crate) fn fail_next_agent_resume_after_authority_restore_for_tests(&mut self) {
+        self.agent.fail_agent_resume_after_authority_restore = true;
+    }
+
+    /// Consumes the test-only post-authority `/resume` failure injection.
+    #[cfg(test)]
+    pub(crate) fn take_agent_resume_after_authority_restore_failure_for_tests(&mut self) -> bool {
+        std::mem::take(&mut self.agent.fail_agent_resume_after_authority_restore)
     }
 
     /// Injects one routed loop continuation queue failure.
@@ -1673,6 +1866,22 @@ impl RuntimeSessionService {
             self.agent
                 .agent_token_usage_by_conversation
                 .insert(conversation_id.to_string(), usage.clone());
+            self.agent
+                .agent_token_usage_by_pane
+                .insert(pane_id.to_string(), usage);
+        }
+    }
+
+    /// Replaces the token aggregate displayed for one pane without changing
+    /// conversation-owned cumulative usage.
+    pub(crate) fn restore_agent_token_usage_for_pane(
+        &mut self,
+        pane_id: &str,
+        usage: BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
+    ) {
+        if usage.is_empty() {
+            self.agent.agent_token_usage_by_pane.remove(pane_id);
+        } else {
             self.agent
                 .agent_token_usage_by_pane
                 .insert(pane_id.to_string(), usage);

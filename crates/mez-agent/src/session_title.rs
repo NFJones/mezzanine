@@ -71,6 +71,7 @@ pub fn session_title_request(
     model_profile: &ModelProfile,
     agent_id: &str,
     inputs: &SessionTitleGenerationInputs<'_>,
+    allowed_actions: AllowedActionSet,
 ) -> ModelRequest {
     let mut lines = Vec::new();
     if let Some(objective) = inputs.objective {
@@ -117,7 +118,7 @@ pub fn session_title_request(
         memory_actions_enabled: false,
         issue_actions_enabled: false,
         interaction_kind: ModelInteractionKind::SessionTitle,
-        allowed_actions: AllowedActionSet::say_only(),
+        allowed_actions,
         messages: vec![
             ModelMessage {
                 role: ModelMessageRole::System,
@@ -160,7 +161,7 @@ mod tests {
         SESSION_TITLE_SUMMARY_MAX_BYTES, SessionTitleGenerationInputs, session_title_request,
     };
     use crate::{
-        AllowedAction, AllowedActionSet, ContextPlacement, ContextSourceKind, ModelInteractionKind,
+        AllowedActionSet, ContextPlacement, ContextSourceKind, ModelInteractionKind,
         ModelMessageRole, ModelProfile,
     };
 
@@ -184,12 +185,13 @@ mod tests {
                 first_prompt: Some("look at the open issues"),
                 summary_line: Some("summary line"),
             },
+            AllowedActionSet::all_enabled(),
         );
         assert_eq!(request.interaction_kind, ModelInteractionKind::SessionTitle);
         assert_eq!(request.interaction_kind.as_str(), "session_title");
         assert!(!request.interaction_kind.expects_maap_batch());
         assert!(!request.interaction_kind.expects_structured_json());
-        assert_eq!(request.allowed_actions, AllowedActionSet::say_only());
+        assert_eq!(request.allowed_actions, AllowedActionSet::all_enabled());
         assert_eq!(
             request
                 .allowed_actions
@@ -197,7 +199,11 @@ mod tests {
                 .iter()
                 .copied()
                 .collect::<Vec<_>>(),
-            vec![AllowedAction::Say]
+            AllowedActionSet::all_enabled()
+                .actions
+                .iter()
+                .copied()
+                .collect::<Vec<_>>()
         );
         assert_eq!(
             request.max_output_tokens,
@@ -223,6 +229,7 @@ mod tests {
                 objective: Some("Inspect the backlog"),
                 ..Default::default()
             },
+            AllowedActionSet::all_enabled(),
         );
         assert!(request.turn_id.is_empty());
         assert!(request.prompt_cache_lineage_id.is_none());
@@ -243,6 +250,7 @@ mod tests {
                 first_prompt: Some("look at the open issues"),
                 summary_line: Some("one summary"),
             },
+            AllowedActionSet::all_enabled(),
         );
         let messages = request.messages.iter().collect::<Vec<_>>();
         assert_eq!(messages.len(), 2);
@@ -270,6 +278,7 @@ mod tests {
                 first_prompt: Some(&"prompt ".repeat(400)),
                 summary_line: Some(&"summary ".repeat(400)),
             },
+            AllowedActionSet::all_enabled(),
         );
         let content = request
             .messages
@@ -294,7 +303,12 @@ mod tests {
     fn title_request_without_inputs_is_well_formed() {
         let inputs = SessionTitleGenerationInputs::default();
         assert!(!inputs.has_input());
-        let request = session_title_request(&profile(), "agent-pane-1", &inputs);
+        let request = session_title_request(
+            &profile(),
+            "agent-pane-1",
+            &inputs,
+            AllowedActionSet::all_enabled(),
+        );
         assert_eq!(request.interaction_kind, ModelInteractionKind::SessionTitle);
         let content = request
             .messages

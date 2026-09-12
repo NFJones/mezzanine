@@ -127,6 +127,94 @@ fn runtime_spawn_agent_sizing_reflects_explicit_pair_policy() {
     );
 }
 
+/// Verifies a frozen sizing catalog selects its captured execution profile
+/// without consulting mutable live profile definitions after the snapshot.
+#[test]
+fn runtime_explicit_spawn_sizing_uses_frozen_execution_profile() {
+    let service = test_runtime_service();
+    let captured = runtime_model_profile("runtime-batch", "frozen-model");
+    let catalog = mez_agent::AllowedActionSet::from_actions([
+        mez_agent::AllowedAction::Say,
+        mez_agent::AllowedAction::SpawnAgent,
+    ])
+    .with_spawn_agent_sizing(mez_agent::SpawnAgentSizing {
+        sizes: vec![mez_agent::SpawnAgentSizeOption {
+            size: "small".to_string(),
+            profile_name: "removed-live-profile".to_string(),
+            execution_profile: Some(captured.clone()),
+            allowed_reasoning_efforts: vec!["high".to_string()],
+        }],
+    });
+
+    let selection = service
+        .runtime_explicit_auto_sizing_selection_from_catalog(&catalog, "small", "high")
+        .expect("frozen sizing must not resolve the removed live profile");
+
+    assert_eq!(selection.selected_profile_name, "removed-live-profile");
+    assert_eq!(selection.selected_profile.provider, captured.provider);
+    assert_eq!(selection.selected_profile.model, captured.model);
+    assert_eq!(
+        selection.selected_profile.reasoning_profile.as_deref(),
+        Some("high")
+    );
+    let error = service
+        .runtime_explicit_auto_sizing_selection_from_catalog(&catalog, "small", "low")
+        .unwrap_err();
+    assert!(
+        error
+            .message()
+            .contains("reasoning effort is not allowed for the frozen model size"),
+        "{error}"
+    );
+}
+
+/// Verifies legacy frozen sizing entries without execution profiles remain
+/// readable while rejecting explicit selections, matching the schema's
+/// null-only automatic-routing branch for those entries.
+#[test]
+fn runtime_legacy_spawn_sizing_rejects_explicit_selection() {
+    let service = test_runtime_service();
+    let captured = runtime_model_profile("runtime-batch", "frozen-large");
+    let catalog = mez_agent::AllowedActionSet::from_actions([
+        mez_agent::AllowedAction::Say,
+        mez_agent::AllowedAction::SpawnAgent,
+    ])
+    .with_spawn_agent_sizing(mez_agent::SpawnAgentSizing {
+        sizes: vec![
+            mez_agent::SpawnAgentSizeOption {
+                size: "small".to_string(),
+                profile_name: "legacy-small".to_string(),
+                execution_profile: None,
+                allowed_reasoning_efforts: vec!["low".to_string()],
+            },
+            mez_agent::SpawnAgentSizeOption {
+                size: "large".to_string(),
+                profile_name: "frozen-large".to_string(),
+                execution_profile: Some(captured.clone()),
+                allowed_reasoning_efforts: vec!["high".to_string()],
+            },
+        ],
+    });
+
+    let error = service
+        .runtime_explicit_auto_sizing_selection_from_catalog(&catalog, "small", "low")
+        .unwrap_err();
+
+    assert!(
+        error.message().contains("lacks the execution profile"),
+        "{error}"
+    );
+    let selection = service
+        .runtime_explicit_auto_sizing_selection_from_catalog(&catalog, "large", "high")
+        .expect("captured entries remain selectable beside legacy entries");
+    assert_eq!(selection.selected_profile.provider, captured.provider);
+    assert_eq!(selection.selected_profile.model, captured.model);
+    assert_eq!(
+        selection.selected_profile.reasoning_profile.as_deref(),
+        Some("high")
+    );
+}
+
 /// Verifies that configured named model profiles populate the full
 /// specification-facing profile fields and that configured fallback profiles
 /// are filtered through safety, privacy, residency, and approval

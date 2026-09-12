@@ -370,6 +370,17 @@ pub(super) fn encode_agent_session_metadata(metadata: &AgentSessionMetadata) -> 
             .clone()
             .unwrap_or_default(),
         metadata.root_routing_policy.clone().unwrap_or_default(),
+        metadata
+            .allowed_actions
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|error| {
+                MezError::invalid_state(format!(
+                    "agent session action catalog JSON encoding failed: {error}"
+                ))
+            })?
+            .unwrap_or_default(),
     ]
     .into_iter()
     .map(|field| escape_field(&field))
@@ -394,7 +405,8 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
         || fields.len() == 26
         || fields.len() == 27
         || fields.len() == 29
-        || fields.len() == 30)
+        || fields.len() == 30
+        || fields.len() == 31)
         || fields[0] != AGENT_SESSION_METADATA_VERSION
     {
         return Err(MezError::invalid_args(
@@ -578,6 +590,17 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
         pane_permission_preset_override: fields.get(27).filter(|value| !value.is_empty()).cloned(),
         pane_approval_policy_override: fields.get(28).filter(|value| !value.is_empty()).cloned(),
         root_routing_policy: fields.get(29).filter(|value| !value.is_empty()).cloned(),
+        allowed_actions: fields
+            .get(30)
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                serde_json::from_str(value).map_err(|error| {
+                    MezError::invalid_args(format!(
+                        "agent session action catalog JSON is invalid: {error}"
+                    ))
+                })
+            })
+            .transpose()?,
     };
     metadata.validate()?;
     Ok(metadata)

@@ -109,8 +109,11 @@ impl RuntimeSessionService {
                 .map(|restriction| (*restriction).to_string())
                 .collect(),
         };
-        let request = mez_agent::sandbox_failure_assessment_request(turn, model_profile, &evidence)
-            .map_err(|error| MezError::invalid_state(error.message()))?;
+        let mut request =
+            mez_agent::sandbox_failure_assessment_request(turn, model_profile, &evidence)
+                .map_err(|error| MezError::invalid_state(error.message()))?;
+        request.allowed_actions =
+            self.capture_agent_session_allowed_actions_for_pane(&turn.pane_id)?;
         self.agent.sandbox_failure_assessments.insert(
             turn.turn_id.clone(),
             RuntimeSandboxFailureAssessment {

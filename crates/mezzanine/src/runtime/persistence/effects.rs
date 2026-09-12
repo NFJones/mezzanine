@@ -205,6 +205,28 @@ impl RuntimePersistenceComponent {
         self.queued_transcript_effects.push(effect);
     }
 
+    /// Cancels queued transcript entries and their sequence reservation for one
+    /// abandoned conversation.
+    ///
+    /// Spawn rollback uses this keyed fence after deleting a child conversation.
+    /// It must remove only that child's queued entries, leaving unrelated
+    /// transcript persistence in dispatch order for the external worker.
+    pub(crate) fn cancel_queued_transcript_entries_for_conversation(
+        &mut self,
+        conversation_id: &str,
+    ) {
+        self.queued_transcript_effects
+            .retain_mut(|effect| match effect {
+                RuntimeSideEffect::PersistTranscriptEntries { entries, .. } => {
+                    entries.retain(|entry| entry.conversation_id != conversation_id);
+                    !entries.is_empty()
+                }
+                _ => true,
+            });
+        self.deferred_transcript_next_sequences
+            .remove(conversation_id);
+    }
+
     /// Queues one archive lifecycle operation unless that conversation already has work pending.
     #[allow(
         dead_code,

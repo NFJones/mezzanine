@@ -32,7 +32,7 @@ fn zen_focus_duration_typed_validation() {
 fn validates_custom_subagent_profile_schema() {
     let valid = validate_config_text(
         ConfigFormat::Toml,
-        "[subagents.reviewer]\nname = \"Reviewer\"\ndescription = \"Reviews changes\"\nterminal = true\ndeveloper_instructions = \"Focus on correctness.\"\nmodel_profile = \"default\"\npermission_preset = \"read-only\"\nmcp_servers = [\"filesystem\"]\ndefault_cooperation_mode = \"explore-only\"\ndefault_read_scopes = [\"src\"]\ndefault_write_scopes = []\n[subagents.reviewer.shell_env]\nREVIEW_MODE = \"strict\"\n",
+        "[subagents.reviewer]\nname = \"Reviewer\"\ndescription = \"Reviews changes\"\nterminal = true\nallowed_actions = [\"say\", \"shell_command\"]\ndeveloper_instructions = \"Focus on correctness.\"\nmodel_profile = \"default\"\npermission_preset = \"read-only\"\nmcp_servers = [\"filesystem\"]\ndefault_cooperation_mode = \"explore-only\"\ndefault_read_scopes = [\"src\"]\ndefault_write_scopes = []\n[subagents.reviewer.shell_env]\nREVIEW_MODE = \"strict\"\n",
         ConfigScope::Primary,
     );
 
@@ -49,6 +49,29 @@ fn validates_custom_subagent_profile_schema() {
         diagnostic.path == "subagents.reviewer.unknown"
             && diagnostic.message == "unknown subagent profile configuration key"
     }));
+}
+
+/// Verifies profile action restrictions use only non-empty, provider-visible
+/// action names so invalid child authority fails during config validation.
+#[test]
+fn validates_subagent_profile_allowed_actions() {
+    for (value, valid) in [
+        ("[\"say\"]", true),
+        ("[]", false),
+        ("[\"request_capability\"]", false),
+        ("[\"unknown\"]", false),
+    ] {
+        let validation = validate_config_text(
+            ConfigFormat::Toml,
+            &format!("[subagents.reviewer]\nallowed_actions = {value}\n"),
+            ConfigScope::Primary,
+        );
+        assert_eq!(
+            validation.valid, valid,
+            "{value}: {:?}",
+            validation.diagnostics
+        );
+    }
 }
 
 /// Verifies that user-defined personality profiles are part of the baseline

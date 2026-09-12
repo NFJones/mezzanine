@@ -1458,9 +1458,19 @@ fn runtime_resume_hides_subagents_but_allows_toggle_and_direct_resume() {
             .unwrap();
     }
     transcript_store
-        .save_conversation_kind("child-session", mez_agent::AgentConversationKind::Subagent)
+        .save_subagent_conversation_contract(
+            "child-session",
+            mez_agent::SubagentSessionLineage {
+                parent_agent_id: "agent-%9".to_string(),
+                root_agent_id: "agent-%1".to_string(),
+                depth: 2,
+                display_name: "resumed child".to_string(),
+                terminal: true,
+            },
+            mez_agent::AllowedActionSet::say_only(),
+        )
         .unwrap();
-    service.set_agent_transcript_store(transcript_store);
+    service.set_agent_transcript_store(transcript_store.clone());
     let primary = service
         .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
         .unwrap();
@@ -1527,6 +1537,354 @@ fn runtime_resume_hides_subagents_but_allows_toggle_and_direct_resume() {
             .get("%1")
             .map(|session| session.session_id.as_str()),
         Some("child-session")
+    );
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .map(|session| session.conversation_kind),
+        Some(mez_agent::AgentConversationKind::Subagent)
+    );
+    assert_eq!(
+        service.subagent_lineage("agent-%1"),
+        Some(&RuntimeSubagentLineage {
+            parent_agent_id: "agent-%9".to_string(),
+            root_agent_id: "agent-%1".to_string(),
+            depth: 2,
+            display_name: "resumed child".to_string(),
+            terminal: true,
+        })
+    );
+    let error = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: true,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: true,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: true,
+                session_mode: mez_agent::SubagentSessionMode::New,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
+                task_prompt: "attempt terminal delegation".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: true,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap_err();
+    assert!(
+        error
+            .message()
+            .contains("restored subagent lineage has no live parent authority"),
+        "{error}"
+    );
+    service.checkpoint_agent_session_metadata().unwrap();
+    let mut restarted = test_runtime_service();
+    restarted.session.id = service.session().id.clone();
+    restarted.set_agent_transcript_store(transcript_store);
+    assert_eq!(
+        restarted
+            .restore_agent_sessions_from_transcript_store()
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        restarted.subagent_lineage("agent-%1"),
+        Some(&RuntimeSubagentLineage {
+            parent_agent_id: "agent-%9".to_string(),
+            root_agent_id: "agent-%1".to_string(),
+            depth: 2,
+            display_name: "resumed child".to_string(),
+            terminal: true,
+        })
+    );
+    assert!(!restarted.subagent_lineage_has_live_parent_authority("agent-%1"));
+}
+
+/// Verifies direct resume retains durable delegation ceilings while refusing
+/// to treat a reused historical parent pane as current permission or scope
+/// authority.
+#[test]
+fn runtime_direct_resume_keeps_structural_lineage_without_stale_parent_authority() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-stale-parent"));
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: "resumed-child".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 10,
+            role: TranscriptRole::User,
+            turn_id: "turn-resumed-child".to_string(),
+            agent_id: "agent-%9".to_string(),
+            pane_id: "%9".to_string(),
+            content: "resume delegated work".to_string(),
+        })
+        .unwrap();
+    transcript_store
+        .save_subagent_conversation_contract(
+            "resumed-child",
+            mez_agent::SubagentSessionLineage {
+                parent_agent_id: "agent-%1".to_string(),
+                root_agent_id: "agent-%1".to_string(),
+                depth: 2,
+                display_name: "resumed child".to_string(),
+                terminal: false,
+            },
+            mez_agent::AllowedActionSet::say_only(),
+        )
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let resumed_pane = service
+        .split_pane_with_process(&primary, SplitDirection::Vertical, Some("cat >/dev/null"))
+        .unwrap()
+        .pane_id;
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(resumed_pane.as_str())
+        .unwrap();
+    service.set_pane_permission_preset_override("%1", Some(mez_agent::PermissionPreset::Auto));
+    service.set_pane_approval_policy_override("%1", Some(ApprovalPolicy::HostAccess));
+    service.set_subagent_scope_declaration(
+        "agent-%1",
+        mez_agent::SubagentScopeDeclaration {
+            cooperation_mode: CooperationMode::Unrestricted,
+            approval_provenance: mez_agent::SubagentApprovalProvenance::ExplicitUserApproval,
+            current_directory: "/stale-parent".to_string(),
+            read_scopes: vec!["/stale-parent".to_string()],
+            write_scopes: vec!["/stale-parent".to_string()],
+            permission_preset: Some(mez_agent::PermissionPreset::Auto),
+        },
+    );
+
+    service
+        .execute_agent_shell_resume_command(resumed_pane.as_str(), "/resume resumed-child")
+        .unwrap();
+
+    let resumed_agent_id = format!("agent-{resumed_pane}");
+    assert_eq!(
+        service.subagent_lineage(&resumed_agent_id),
+        Some(&RuntimeSubagentLineage {
+            parent_agent_id: "agent-%1".to_string(),
+            root_agent_id: "agent-%1".to_string(),
+            depth: 2,
+            display_name: "resumed child".to_string(),
+            terminal: false,
+        })
+    );
+    assert!(!service.subagent_lineage_has_live_parent_authority(&resumed_agent_id));
+    assert!(!service.has_subagent_scope_declaration(&resumed_agent_id));
+    assert!(
+        service
+            .active_subagent_write_scopes_for(&resumed_agent_id)
+            .is_empty()
+    );
+    let policy = service.permission_policy_for_agent(&resumed_agent_id);
+    assert_eq!(policy.preset, mez_agent::PermissionPreset::ReadOnly);
+    assert_eq!(policy.approval_policy, ApprovalPolicy::Ask);
+    let pane_count_before = service
+        .session()
+        .windows()
+        .iter()
+        .flat_map(|window| window.panes())
+        .count();
+    let error = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: resumed_agent_id,
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: true,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: true,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: true,
+                session_mode: mez_agent::SubagentSessionMode::New,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
+                task_prompt: "attempt terminal delegation".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: true,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap_err();
+    assert!(
+        error
+            .message()
+            .contains("restored subagent lineage has no live parent authority"),
+        "{error}"
+    );
+    assert_eq!(
+        service
+            .session()
+            .windows()
+            .iter()
+            .flat_map(|window| window.panes())
+            .count(),
+        pane_count_before,
+        "a restored structural-only parent must reject descendants before pane allocation"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies direct resume fails closed when a durable conversation is marked
+/// as a subagent but lacks the lineage required to restore delegation limits.
+#[test]
+fn runtime_resume_rejects_subagent_without_durable_lineage() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-missing-lineage"));
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: "missing-lineage".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 10,
+            role: TranscriptRole::User,
+            turn_id: "turn-missing-lineage".to_string(),
+            agent_id: "agent-%9".to_string(),
+            pane_id: "%9".to_string(),
+            content: "resume delegated work".to_string(),
+        })
+        .unwrap();
+    let metadata_path = transcript_store
+        .presentation_path("missing-lineage")
+        .unwrap()
+        .with_file_name("metadata.json");
+    fs::write(
+        metadata_path,
+        r#"{"version":2,"conversation_kind":"subagent"}"#,
+    )
+    .unwrap();
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"missing-lineage","method":"agent/shell/command","params":{"idempotency_key":"missing-lineage","input":"/resume missing-lineage"}}"#,
+        &primary,
+    );
+
+    assert!(
+        response.contains("cannot restore without durable lineage"),
+        "{response}"
+    );
+}
+
+/// Verifies malformed durable child lineage fails closed during direct resume
+/// rather than restoring a conversation without its delegation constraints.
+#[test]
+fn runtime_resume_rejects_subagent_with_malformed_lineage() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-malformed-lineage"));
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: "malformed-lineage".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 10,
+            role: TranscriptRole::User,
+            turn_id: "turn-malformed-lineage".to_string(),
+            agent_id: "agent-%9".to_string(),
+            pane_id: "%9".to_string(),
+            content: "resume delegated work".to_string(),
+        })
+        .unwrap();
+    let metadata_path = transcript_store
+        .presentation_path("malformed-lineage")
+        .unwrap()
+        .with_file_name("metadata.json");
+    fs::write(
+        metadata_path,
+        r#"{"version":2,"conversation_kind":"subagent","subagent_lineage":{"parent_agent_id":"","root_agent_id":"agent-%1","depth":1,"display_name":"child","terminal":false}}"#,
+    )
+    .unwrap();
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"malformed-lineage","method":"agent/shell/command","params":{"idempotency_key":"malformed-lineage","input":"/resume malformed-lineage"}}"#,
+        &primary,
+    );
+
+    assert!(
+        response.contains("persisted subagent lineage parent agent id is empty"),
+        "{response}"
+    );
+}
+
+/// Verifies direct resume rejects a terminal child whose durable catalog still
+/// exposes descendant spawning, preserving terminal lineage semantics.
+#[test]
+fn runtime_resume_rejects_terminal_subagent_with_spawn_catalog() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-terminal-spawn"));
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: "terminal-spawn".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 10,
+            role: TranscriptRole::User,
+            turn_id: "turn-terminal-spawn".to_string(),
+            agent_id: "agent-%9".to_string(),
+            pane_id: "%9".to_string(),
+            content: "resume delegated work".to_string(),
+        })
+        .unwrap();
+    let metadata_path = transcript_store
+        .presentation_path("terminal-spawn")
+        .unwrap()
+        .with_file_name("metadata.json");
+    fs::write(
+        metadata_path,
+        r#"{"version":2,"conversation_kind":"subagent","allowed_actions":{"actions":["Say","SpawnAgent"],"spawn_agent_sizing":{"sizes":[]}},"subagent_lineage":{"parent_agent_id":"agent-%1","root_agent_id":"agent-%1","depth":1,"display_name":"terminal child","terminal":true}}"#,
+    )
+    .unwrap();
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"terminal-spawn","method":"agent/shell/command","params":{"idempotency_key":"terminal-spawn","input":"/resume terminal-spawn"}}"#,
+        &primary,
+    );
+
+    assert!(
+        response.contains("terminal subagent conversation metadata cannot contain spawn_agent"),
+        "{response}"
     );
 }
 
@@ -1927,6 +2285,768 @@ fn runtime_resume_omits_presentation_only_conversations() {
     );
 }
 
+/// Verifies a late `/resume` failure restores both structural-only restored
+/// lineage and live child scope authority without leaking target authority.
+#[test]
+fn runtime_resume_late_failure_restores_complete_prior_subagent_authority() {
+    let mut service = test_runtime_service();
+    let transcript_store =
+        AgentTranscriptStore::new(temp_root("runtime-resume-authority-rollback"));
+    for conversation_id in ["root-target", "child-target"] {
+        transcript_store
+            .append(&TranscriptEntry {
+                conversation_id: conversation_id.to_string(),
+                sequence: 1,
+                created_at_unix_seconds: 10,
+                role: TranscriptRole::User,
+                turn_id: format!("turn-{conversation_id}"),
+                agent_id: "agent-%9".to_string(),
+                pane_id: "%9".to_string(),
+                content: "resume target".to_string(),
+            })
+            .unwrap();
+    }
+    transcript_store
+        .save_subagent_conversation_contract(
+            "child-target",
+            mez_agent::SubagentSessionLineage {
+                parent_agent_id: "agent-%9".to_string(),
+                root_agent_id: "agent-%1".to_string(),
+                depth: 2,
+                display_name: "target child".to_string(),
+                terminal: false,
+            },
+            mez_agent::AllowedActionSet::say_only(),
+        )
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.checkpoint_agent_session_metadata().unwrap();
+    let checkpoint_before_failure = transcript_store
+        .load_agent_session_metadata(service.session().id.as_str())
+        .unwrap();
+
+    let agent_id = "agent-%1";
+    let structural = RuntimeSubagentLineage {
+        parent_agent_id: "agent-%8".to_string(),
+        root_agent_id: "agent-%1".to_string(),
+        depth: 2,
+        display_name: "structural prior".to_string(),
+        terminal: false,
+    };
+    service.set_restored_subagent_lineage(agent_id, structural.clone());
+    service.fail_next_agent_resume_after_authority_restore_for_tests();
+    let error = service
+        .execute_agent_shell_resume_command("%1", "/resume root-target")
+        .unwrap_err();
+    assert!(
+        error.message().contains("post-authority restoration"),
+        "{error}"
+    );
+    assert_eq!(service.subagent_lineage(agent_id), Some(&structural));
+    assert!(!service.subagent_lineage_has_live_parent_authority(agent_id));
+    assert!(!service.has_subagent_scope_declaration(agent_id));
+    assert!(
+        service
+            .active_subagent_write_scopes_for(agent_id)
+            .is_empty()
+    );
+    assert_eq!(
+        transcript_store
+            .load_agent_session_metadata(service.session().id.as_str())
+            .unwrap(),
+        checkpoint_before_failure,
+        "late resume failure must not leave the target pane binding checkpointed"
+    );
+
+    let live = RuntimeSubagentLineage {
+        parent_agent_id: "agent-%7".to_string(),
+        root_agent_id: "agent-%1".to_string(),
+        depth: 1,
+        display_name: "live prior".to_string(),
+        terminal: false,
+    };
+    let scope = mez_agent::SubagentScopeDeclaration {
+        cooperation_mode: CooperationMode::OwnedWrite,
+        approval_provenance: mez_agent::SubagentApprovalProvenance::Requested,
+        current_directory: "/repo".to_string(),
+        read_scopes: vec!["/repo".to_string()],
+        write_scopes: vec!["/repo/src".to_string()],
+        permission_preset: Some(mez_agent::PermissionPreset::Auto),
+    };
+    service.set_subagent_lineage(agent_id, live.clone());
+    service.set_subagent_scope_declaration(agent_id, scope.clone());
+    service
+        .register_subagent_write_scopes_for_tests(
+            agent_id,
+            CooperationMode::OwnedWrite,
+            &scope.write_scopes,
+            None,
+        )
+        .unwrap();
+    let scopes_before = service.active_subagent_write_scopes_for(agent_id);
+    let child_agent_id = "agent-%2";
+    service.set_subagent_lineage(
+        child_agent_id,
+        RuntimeSubagentLineage {
+            parent_agent_id: agent_id.to_string(),
+            root_agent_id: agent_id.to_string(),
+            depth: 2,
+            display_name: "live prior child".to_string(),
+            terminal: false,
+        },
+    );
+    let child_turn = mez_agent::AgentTurnRecord {
+        turn_id: "resume-rollback-fenced-child".to_string(),
+        conversation_id: service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .session_id
+            .clone(),
+        agent_id: child_agent_id.to_string(),
+        pane_id: "%1".to_string(),
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 1,
+        deadline_at_unix_millis: 0,
+        policy_profile: "default".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: Some("resume-rollback-parent".to_string()),
+        state: AgentTurnState::Queued,
+        cooperation_mode: None,
+        initial_capability: None,
+    };
+    service
+        .agent_turn_ledger_mut()
+        .queue_turn(child_turn.clone())
+        .unwrap();
+    {
+        let overrides = service.integration.model_profile_overrides_mut();
+        overrides
+            .agent_profiles
+            .insert(agent_id.to_string(), "prior-own-agent-profile".to_string());
+        overrides.subagent_profiles.insert(
+            agent_id.to_string(),
+            "prior-own-subagent-profile".to_string(),
+        );
+        overrides.agent_profiles.insert(
+            child_agent_id.to_string(),
+            "prior-agent-profile".to_string(),
+        );
+        overrides.subagent_profiles.insert(
+            child_agent_id.to_string(),
+            "prior-subagent-profile".to_string(),
+        );
+    }
+    service.fail_next_agent_resume_after_authority_restore_for_tests();
+    let error = service
+        .execute_agent_shell_resume_command("%1", "/resume child-target")
+        .unwrap_err();
+    assert!(
+        error.message().contains("post-authority restoration"),
+        "{error}"
+    );
+    assert_eq!(service.subagent_lineage(agent_id), Some(&live));
+    assert!(service.subagent_lineage_has_live_parent_authority(agent_id));
+    assert_eq!(service.subagent_scope_declaration(agent_id), Some(scope));
+    assert_eq!(
+        service.active_subagent_write_scopes_for(agent_id),
+        scopes_before
+    );
+    assert!(service.subagent_lineage_has_live_parent_authority(child_agent_id));
+    assert!(!service.subagent_descendant_is_fenced(child_agent_id));
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&child_turn.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Queued),
+        "injected resume failure must restore the pre-fence descendant turn"
+    );
+    let overrides = service.integration.model_profile_overrides();
+    assert_eq!(
+        overrides.agent_profiles.get(agent_id),
+        Some(&"prior-own-agent-profile".to_string())
+    );
+    assert_eq!(
+        overrides.subagent_profiles.get(agent_id),
+        Some(&"prior-own-subagent-profile".to_string())
+    );
+    assert_eq!(
+        overrides.agent_profiles.get(child_agent_id),
+        Some(&"prior-agent-profile".to_string())
+    );
+    assert_eq!(
+        overrides.subagent_profiles.get(child_agent_id),
+        Some(&"prior-subagent-profile".to_string())
+    );
+}
+
+/// Verifies replacing a profile-overridden child pane clears its own agent and
+/// subagent profile selectors for both root and different-child targets.
+///
+/// Pane-local overrides belong to the prior conversation authority just like
+/// descendant overrides. A replacement must therefore remove the pane's own
+/// stable agent-id entries, while a later target may establish fresh policy.
+#[test]
+fn runtime_resume_replacement_clears_overrides_for_own_child_agent_id() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-own-overrides"));
+    for conversation_id in ["root-target", "child-target"] {
+        transcript_store
+            .append(&TranscriptEntry {
+                conversation_id: conversation_id.to_string(),
+                sequence: 1,
+                created_at_unix_seconds: 10,
+                role: TranscriptRole::User,
+                turn_id: format!("turn-{conversation_id}"),
+                agent_id: "agent-%9".to_string(),
+                pane_id: "%9".to_string(),
+                content: "resume target".to_string(),
+            })
+            .unwrap();
+    }
+    transcript_store
+        .save_subagent_conversation_contract(
+            "child-target",
+            mez_agent::SubagentSessionLineage {
+                parent_agent_id: "agent-%9".to_string(),
+                root_agent_id: "agent-%1".to_string(),
+                depth: 1,
+                display_name: "replacement child".to_string(),
+                terminal: false,
+            },
+            mez_agent::AllowedActionSet::say_only(),
+        )
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store);
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_restored_subagent_lineage(
+        "agent-%1".to_string(),
+        RuntimeSubagentLineage {
+            parent_agent_id: "agent-%9".to_string(),
+            root_agent_id: "agent-%1".to_string(),
+            depth: 1,
+            display_name: "prior child".to_string(),
+            terminal: false,
+        },
+    );
+
+    for target in ["root-target", "child-target"] {
+        let overrides = service.integration.model_profile_overrides_mut();
+        overrides
+            .agent_profiles
+            .insert("agent-%1".to_string(), "prior-agent-profile".to_string());
+        overrides
+            .subagent_profiles
+            .insert("agent-%1".to_string(), "prior-subagent-profile".to_string());
+
+        service
+            .execute_agent_shell_resume_command("%1", &format!("/resume {target}"))
+            .unwrap();
+
+        let overrides = service.integration.model_profile_overrides();
+        assert!(
+            !overrides.agent_profiles.contains_key("agent-%1"),
+            "{target} replacement must clear the pane agent profile"
+        );
+        assert!(
+            !overrides.subagent_profiles.contains_key("agent-%1"),
+            "{target} replacement must clear the pane subagent profile"
+        );
+    }
+}
+
+/// Verifies resuming a pane's already-live conversation preserves detached
+/// child authority, result delivery, and delegation capacity relationships.
+///
+/// A fence is only valid when the pane replaces its conversation. Rebinding A
+/// to A must leave its live descendants attached to that same authority.
+#[test]
+fn runtime_resume_current_conversation_preserves_detached_child_authority() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-current-child"));
+    service.set_agent_transcript_store(transcript_store);
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let conversation_a = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    service.configure_subagent_policy(1, 4, 2, 2, SubagentWaitPolicy::Detach);
+    let parent = service
+        .start_agent_prompt_turn("%1", "delegate from conversation A")
+        .unwrap();
+    service.remove_pending_agent_provider_task(&parent.turn_id);
+    let parent_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == parent.turn_id)
+        .cloned()
+        .unwrap();
+    let spawned = service
+        .execute_spawn_action_for_turn(
+            &parent_turn,
+            &runtime_spawn_agent_action("spawn-current", "finish conversation A work"),
+        )
+        .unwrap();
+    let child_agent_id = spawned
+        .structured_content_json
+        .as_deref()
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok())
+        .and_then(|content| {
+            content["spawn"]["agent"]["id"]
+                .as_str()
+                .map(ToOwned::to_owned)
+        })
+        .expect("detached spawn should report its child agent");
+    let child_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.agent_id == child_agent_id)
+        .cloned()
+        .expect("detached child turn should remain live");
+    service
+        .complete_running_agent_turn_and_start_ready(
+            &parent_turn,
+            AgentTurnState::Completed,
+            "detached child parent settled before same-conversation resume",
+        )
+        .unwrap();
+    let direct_children_before = service.active_direct_subagent_count_for("agent-%1");
+    {
+        let overrides = service.integration.model_profile_overrides_mut();
+        overrides
+            .agent_profiles
+            .insert("agent-%1".to_string(), "same-own-agent-profile".to_string());
+        overrides.subagent_profiles.insert(
+            "agent-%1".to_string(),
+            "same-own-subagent-profile".to_string(),
+        );
+        overrides
+            .agent_profiles
+            .insert(child_agent_id.clone(), "same-agent-profile".to_string());
+        overrides
+            .subagent_profiles
+            .insert(child_agent_id.clone(), "same-subagent-profile".to_string());
+    }
+
+    service
+        .execute_agent_shell_resume_command("%1", &format!("/resume {conversation_a}"))
+        .unwrap();
+
+    assert!(!service.subagent_descendant_is_fenced(&child_agent_id));
+    assert!(service.subagent_lineage_has_live_parent_authority(&child_agent_id));
+    assert_eq!(
+        service.active_direct_subagent_count_for("agent-%1"),
+        direct_children_before,
+        "same-conversation resume must not detach a live child from its parent capacity"
+    );
+    let overrides = service.integration.model_profile_overrides();
+    assert_eq!(
+        overrides.agent_profiles.get("agent-%1"),
+        Some(&"same-own-agent-profile".to_string())
+    );
+    assert_eq!(
+        overrides.subagent_profiles.get("agent-%1"),
+        Some(&"same-own-subagent-profile".to_string())
+    );
+    assert_eq!(
+        overrides.agent_profiles.get(&child_agent_id),
+        Some(&"same-agent-profile".to_string())
+    );
+    assert_eq!(
+        overrides.subagent_profiles.get(&child_agent_id),
+        Some(&"same-subagent-profile".to_string())
+    );
+    service
+        .integration
+        .model_profile_overrides_mut()
+        .agent_profiles
+        .remove(&child_agent_id);
+    service
+        .integration
+        .model_profile_overrides_mut()
+        .subagent_profiles
+        .remove(&child_agent_id);
+    service
+        .execute_spawn_action_for_turn(
+            &child_turn,
+            &runtime_spawn_agent_action("nested-after-same-resume", "child capacity remains live"),
+        )
+        .unwrap();
+    assert_eq!(service.active_direct_subagent_count_for(&child_agent_id), 1);
+
+    service
+        .emit_subagent_task_result_for_state(&child_turn, AgentTurnState::Completed)
+        .unwrap();
+    let resumed_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join(" ");
+    let resumed_text = resumed_text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        resumed_text.contains("result delivered:"),
+        "same-conversation resume lost live child result delivery: {resumed_text}"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a live child that resumes its own current conversation retains its
+/// live lineage, declared and registered scopes, and authority to delegate.
+#[test]
+fn runtime_resume_live_child_current_conversation_preserves_own_authority() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-live-child"));
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let conversation_a = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let lineage = RuntimeSubagentLineage {
+        parent_agent_id: "agent-%9".to_string(),
+        root_agent_id: "agent-%1".to_string(),
+        depth: 1,
+        display_name: "live child A".to_string(),
+        terminal: false,
+    };
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: conversation_a.clone(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "turn-live-child-a".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "resume live child A".to_string(),
+        })
+        .unwrap();
+    transcript_store
+        .save_subagent_conversation_contract(
+            &conversation_a,
+            mez_agent::SubagentSessionLineage {
+                parent_agent_id: lineage.parent_agent_id.clone(),
+                root_agent_id: lineage.root_agent_id.clone(),
+                depth: lineage.depth,
+                display_name: lineage.display_name.clone(),
+                terminal: lineage.terminal,
+            },
+            mez_agent::AllowedActionSet::from_actions([
+                mez_agent::AllowedAction::Say,
+                mez_agent::AllowedAction::SpawnAgent,
+            ])
+            .with_spawn_agent_sizing(mez_agent::SpawnAgentSizing { sizes: Vec::new() }),
+        )
+        .unwrap();
+    let scope = mez_agent::SubagentScopeDeclaration {
+        cooperation_mode: CooperationMode::OwnedWrite,
+        approval_provenance: mez_agent::SubagentApprovalProvenance::Requested,
+        current_directory: "/repo".to_string(),
+        read_scopes: vec!["/repo".to_string()],
+        write_scopes: vec!["/repo/src".to_string()],
+        permission_preset: Some(mez_agent::PermissionPreset::Auto),
+    };
+    service.set_subagent_lineage("agent-%1", lineage.clone());
+    service.set_subagent_scope_declaration("agent-%1", scope.clone());
+    service
+        .register_subagent_write_scopes_for_tests(
+            "agent-%1",
+            CooperationMode::OwnedWrite,
+            &scope.write_scopes,
+            None,
+        )
+        .unwrap();
+    let scopes_before = service.active_subagent_write_scopes_for("agent-%1");
+
+    service
+        .execute_agent_shell_resume_command("%1", &format!("/resume {conversation_a}"))
+        .unwrap();
+
+    assert_eq!(service.subagent_lineage("agent-%1"), Some(&lineage));
+    assert!(service.subagent_lineage_has_live_parent_authority("agent-%1"));
+    assert_eq!(service.subagent_scope_declaration("agent-%1"), Some(scope));
+    assert_eq!(
+        service.active_subagent_write_scopes_for("agent-%1"),
+        scopes_before
+    );
+    let turn = service
+        .start_agent_prompt_turn("%1", "delegate from live child A")
+        .unwrap();
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|candidate| candidate.turn_id == turn.turn_id)
+        .cloned()
+        .unwrap();
+    service
+        .execute_spawn_action_for_turn(
+            &turn,
+            &runtime_spawn_agent_action("live-child-descendant", "delegation remains live"),
+        )
+        .unwrap();
+    assert_eq!(service.active_direct_subagent_count_for("agent-%1"), 1);
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a successful parent `/resume` fences detached children from the
+/// replaced conversation, so their prior authority and terminal bridge result
+/// cannot cross into the newly bound conversation.
+#[test]
+fn runtime_resume_fences_detached_child_authority_and_result_delivery() {
+    let mut service = test_runtime_service();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    service.permission_policy_mut().set_approval_bypass(true);
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-fenced-child"));
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: "conversation-b".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "turn-conversation-b".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "resume conversation B".to_string(),
+        })
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store);
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.configure_subagent_policy(1, 4, 2, 2, SubagentWaitPolicy::Detach);
+    let parent = service
+        .start_agent_prompt_turn("%1", "delegate from conversation A")
+        .unwrap();
+    service.remove_pending_agent_provider_task(&parent.turn_id);
+    let parent_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == parent.turn_id)
+        .cloned()
+        .unwrap();
+    let spawned = service
+        .execute_spawn_action_for_turn(
+            &parent_turn,
+            &runtime_spawn_agent_action("spawn-detached", "finish conversation A work"),
+        )
+        .unwrap();
+    let child_agent_id = spawned
+        .structured_content_json
+        .as_deref()
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok())
+        .and_then(|content| {
+            content["spawn"]["agent"]["id"]
+                .as_str()
+                .map(ToOwned::to_owned)
+        })
+        .expect("detached spawn should report its child agent");
+    let child_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.agent_id == child_agent_id)
+        .cloned()
+        .expect("detached child turn should remain live");
+    let native_provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "queue stale child native shell action".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "exercise stale child native dispatch".to_string(),
+                actions: vec![mez_agent::AgentAction {
+                    id: "fenced-child-native-shell".to_string(),
+                    payload: mez_agent::AgentActionPayload::ShellCommand {
+                        summary: "Emit a stale child marker".to_string(),
+                        command: "printf fenced-child-native-side-effect".to_string(),
+                        interactive: false,
+                        stateful: false,
+                        timeout_ms: Some(1_000),
+                    },
+                }],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    let native_execution = service
+        .execute_agent_turn_with_provider(
+            &child_turn.turn_id,
+            &native_provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    assert_eq!(native_execution.terminal_state, AgentTurnState::Running);
+    assert!(
+        service
+            .pending_native_shell_actions()
+            .iter()
+            .any(|identity| {
+                identity
+                    == &(
+                        child_turn.turn_id.clone(),
+                        "fenced-child-native-shell".to_string(),
+                    )
+            })
+    );
+    service
+        .complete_running_agent_turn_and_start_ready(
+            &parent_turn,
+            AgentTurnState::Completed,
+            "detached child parent settled before resume",
+        )
+        .unwrap();
+    {
+        let overrides = service.integration.model_profile_overrides_mut();
+        overrides
+            .agent_profiles
+            .insert(child_agent_id.clone(), "old-agent-profile".to_string());
+        overrides
+            .subagent_profiles
+            .insert(child_agent_id.clone(), "old-subagent-profile".to_string());
+    }
+
+    service
+        .execute_agent_shell_resume_command("%1", "/resume conversation-b")
+        .unwrap();
+
+    assert!(service.subagent_descendant_is_fenced(&child_agent_id));
+    assert!(!service.subagent_lineage_has_live_parent_authority(&child_agent_id));
+    assert!(
+        service
+            .subagent_scope_declaration(&child_agent_id)
+            .is_none()
+    );
+    assert!(
+        service
+            .active_subagent_write_scopes_for(&child_agent_id)
+            .is_empty()
+    );
+    assert_eq!(service.active_direct_subagent_count_for("agent-%1"), 0);
+    let overrides = service.integration.model_profile_overrides();
+    assert!(!overrides.agent_profiles.contains_key(&child_agent_id));
+    assert!(!overrides.subagent_profiles.contains_key(&child_agent_id));
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&child_turn.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Interrupted
+    );
+    assert!(
+        !service
+            .native_shell_progress_turn_ids()
+            .contains(&child_turn.turn_id)
+    );
+    assert!(
+        service
+            .claim_native_shell_action(&child_turn.turn_id, "fenced-child-native-shell")
+            .unwrap()
+            .is_none()
+    );
+    let replacement_turn = service
+        .start_agent_prompt_turn("%1", "delegate from conversation B")
+        .unwrap();
+    service.remove_pending_agent_provider_task(&replacement_turn.turn_id);
+    let replacement_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == replacement_turn.turn_id)
+        .cloned()
+        .expect("replacement parent turn should remain live");
+    assert!(
+        service
+            .execute_spawn_action_for_turn(
+                &replacement_turn,
+                &runtime_spawn_agent_action("spawn-after-replacement", "begin conversation B work"),
+            )
+            .is_ok(),
+        "a fenced child must not consume replacement conversation capacity"
+    );
+    assert!(
+        service
+            .execute_spawn_action_for_turn(
+                &child_turn,
+                &runtime_spawn_agent_action("nested-after-resume", "must be denied"),
+            )
+            .is_err()
+    );
+
+    service
+        .emit_subagent_task_result_for_state(&child_turn, AgentTurnState::Completed)
+        .unwrap();
+    let resumed_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        resumed_text.contains("Conversation ID: conversation-b"),
+        "{resumed_text}"
+    );
+    assert!(
+        !resumed_text.contains("subagent task completed"),
+        "fenced child result leaked into conversation B: {resumed_text}"
+    );
+    assert!(
+        !resumed_text.contains("fenced-child-native-side-effect"),
+        "fenced child native action reached a pane: {resumed_text}"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies corrupt target objective metadata rejects `/resume` after the
 /// target bind begins and restores the prior conversation and MMP identity.
 ///
@@ -2017,6 +3137,7 @@ fn runtime_resume_objective_metadata_failure_restores_prior_binding_and_identity
                     model: target_usage_key,
                     usage: target_usage,
                 }),
+                allowed_actions: None,
             }],
         )
         .unwrap();
@@ -2239,6 +3360,15 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
+    let prior_actions = mez_agent::AllowedActionSet::from_actions([
+        mez_agent::AllowedAction::Say,
+        mez_agent::AllowedAction::ShellCommand,
+    ]);
+    service.set_agent_enabled_actions(prior_actions.clone());
+    service
+        .capture_agent_session_allowed_actions_for_pane("%1")
+        .unwrap();
+    service.set_agent_enabled_actions(mez_agent::AllowedActionSet::say_only());
     service.set_pane_current_working_directory("%1", cwd.clone());
 
     let picker = service.dispatch_runtime_control_body(
@@ -2264,6 +3394,20 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
             .get("%1")
             .map(|session| session.session_id.as_str()),
         Some("latest")
+    );
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .and_then(|session| session.allowed_actions.as_ref()),
+        Some(&mez_agent::AllowedActionSet::say_only())
+    );
+    assert_ne!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .and_then(|session| session.allowed_actions.as_ref()),
+        Some(&prior_actions)
     );
 
     let latest_conversation_id = service

@@ -503,6 +503,12 @@ pub struct RuntimeAgentLoopState {
     pub parent_conversation_id: String,
     /// Durable parent transcript count to restore after ephemeral loop forks.
     pub parent_transcript_entries: u64,
+    /// Immutable action catalog captured from the durable parent conversation.
+    ///
+    /// Ephemeral loop iterations clear their pane-local catalog as a new
+    /// session boundary. The controller retains this parent snapshot so
+    /// restoring the durable conversation never recaptures live configuration.
+    pub parent_allowed_actions: mez_agent::AllowedActionSet,
     /// Prompt-cache lineage to retain while rebinding forked loop iterations.
     pub parent_prompt_cache_lineage_id: Option<String>,
     /// One-based work iteration currently being evaluated or executed.

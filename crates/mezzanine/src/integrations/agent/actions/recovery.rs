@@ -5,9 +5,9 @@
 //! and final failure-summary execution shaping.
 
 use super::super::{
-    AgentTurnRecord, AgentTurnState, AllowedActionSet, AsyncModelProvider, ContextSourceKind,
-    McpPromptTool, MezError, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest,
-    ModelResponse, provider_error_retry_class,
+    AgentTurnRecord, AgentTurnState, AsyncModelProvider, ContextSourceKind, McpPromptTool,
+    MezError, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest, ModelResponse,
+    provider_error_retry_class,
 };
 use super::FAILURE_SUMMARY_RAW_TEXT_LIMIT_BYTES;
 #[cfg(test)]
@@ -85,7 +85,6 @@ fn failure_summary_request(
 ) -> ModelRequest {
     let mut request = previous_request.clone();
     select_model_interaction_kind(&mut request, ModelInteractionKind::FailureSummary);
-    request.allowed_actions = AllowedActionSet::say_only();
     append_failure_summary_evidence(&mut request, stage, error);
     request.messages.push(ModelMessage {
         role: ModelMessageRole::Context,
@@ -380,5 +379,50 @@ pub(super) async fn summarize_controller_failure_execution_async<P: AsyncModelPr
             FailureSummaryResponsePlan::Continue => {}
             FailureSummaryResponsePlan::Reject => return None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mez_agent::AllowedActionSet;
+
+    /// Verifies failure summaries retain the originating session catalog while
+    /// their interaction mode separately restricts the response to `say`.
+    #[test]
+    fn failure_summary_retains_the_originating_action_catalog() {
+        let mut request = ModelRequest {
+            provider: "test".to_string(),
+            model: "test-model".to_string(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
+            reasoning_effort: None,
+            thinking_enabled: None,
+            latency_preference: None,
+            prompt_cache_retention: None,
+            max_output_tokens: None,
+            temperature: None,
+            prompt_cache_session_id: None,
+            prompt_cache_lineage_id: None,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            available_mcp_tools: Vec::new(),
+            memory_actions_enabled: false,
+            issue_actions_enabled: false,
+            interaction_kind: ModelInteractionKind::ActionExecution,
+            allowed_actions: AllowedActionSet::all_enabled(),
+            stop: None,
+            messages: Vec::new().into(),
+        };
+        let catalog = request.allowed_actions.clone();
+        let error = MezError::invalid_state("provider unavailable");
+
+        request = failure_summary_request(&request, "provider_error", &error, "raw failure");
+
+        assert_eq!(
+            request.interaction_kind,
+            ModelInteractionKind::FailureSummary
+        );
+        assert_eq!(request.allowed_actions, catalog);
     }
 }

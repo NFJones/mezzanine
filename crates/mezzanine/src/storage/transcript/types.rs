@@ -309,6 +309,12 @@ pub struct AgentTranscriptStore {
     /// Test-only one-shot failure for recovery-journal cleanup after commit.
     #[cfg(test)]
     pub(super) fail_archive_recovery_journal_removal: Arc<AtomicBool>,
+    /// Test-only one-shot failure immediately before replacing session metadata.
+    #[cfg(test)]
+    pub(super) fail_agent_session_metadata_write: Arc<AtomicBool>,
+    /// Test-only one-shot failure after a child contract sidecar commits.
+    #[cfg(test)]
+    pub(super) fail_subagent_contract_catalog_upsert: Arc<AtomicBool>,
     /// Test-only countdown that fails the second subsequent objective read.
     #[cfg(test)]
     pub(super) fail_user_objective_read_countdown: Arc<AtomicU8>,

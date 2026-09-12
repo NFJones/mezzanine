@@ -103,7 +103,7 @@ impl RuntimeSessionService {
                 Ok(report) => report,
                 Err(error) => {
                     self.integration.replace_config_layers(previous_layers);
-                    let _ = self.apply_runtime_config_layers();
+                    let _ = self.restore_runtime_config_layers_without_catalog_freeze();
                     return Err(error);
                 }
             };
@@ -646,7 +646,7 @@ impl RuntimeSessionService {
                 }
                 Err(error) => {
                     self.integration.replace_config_layers(previous_layers);
-                    let _ = self.apply_runtime_config_layers();
+                    let _ = self.restore_runtime_config_layers_without_catalog_freeze();
                     return Err(error);
                 }
             }
@@ -722,7 +722,7 @@ impl RuntimeSessionService {
                 }
                 Err(error) => {
                     self.integration.replace_config_layers(previous_layers);
-                    let _ = self.apply_runtime_config_layers();
+                    let _ = self.restore_runtime_config_layers_without_catalog_freeze();
                     return Err(error);
                 }
             }

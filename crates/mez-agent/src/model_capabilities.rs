@@ -9,7 +9,7 @@
 use crate::{ProviderApiCompatibility, ProviderCapabilities};
 
 /// Provenance policy used to resolve one effective model capability record.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub enum ModelCapabilityMetadataPolicy {
     /// No model-specific declaration was available; use API-wide behavior.
     #[default]
@@ -21,7 +21,7 @@ pub enum ModelCapabilityMetadataPolicy {
 }
 
 /// Typed capabilities effective for one selected provider model.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct ModelCapabilities {
     /// Policy describing how model-specific support was established.
     pub metadata_policy: ModelCapabilityMetadataPolicy,

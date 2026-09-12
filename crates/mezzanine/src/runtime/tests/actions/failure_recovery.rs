@@ -877,6 +877,7 @@ fn runtime_spawn_depth_denial_has_guidance_and_no_spawn_side_effects() {
     );
     let allowed_actions = service
         .agent_provider_request_control_for_turn(&turn)
+        .expect("provider control should capture the session action schema")
         .0
         .expect("provider turns should retain their static action set");
     assert!(allowed_actions.contains(mez_agent::AllowedAction::SpawnAgent));

@@ -255,6 +255,16 @@ impl RuntimeSessionService {
                 "only running runtime agent turns can execute through a provider",
             ));
         }
+        if self.agent_shell_store().get(&turn.pane_id).is_none() {
+            self.complete_running_agent_turn_and_start_ready(
+                &turn,
+                AgentTurnState::Failed,
+                "provider_execution_missing_shell_session",
+            )?;
+            return Err(MezError::invalid_state(
+                "agent shell session not found for pane",
+            ));
+        }
         self.agent
             .agent_turn_model_profiles
             .insert(turn_id.to_string(), model_profile.clone());
@@ -286,6 +296,7 @@ impl RuntimeSessionService {
                 &auto_sizing,
                 &turn,
                 &context,
+                self.capture_agent_session_allowed_actions_for_pane(&turn.pane_id)?,
             ) {
                 Ok(execution) => execution,
                 Err(error) => {
@@ -369,7 +380,7 @@ impl RuntimeSessionService {
             ),
         )?;
         let (allowed_actions, interaction_kind) =
-            self.agent_provider_request_control_for_turn(&turn);
+            self.agent_provider_request_control_for_turn(&turn)?;
         self.record_runtime_provider_request_shape_for_context(
             &model_profile,
             &turn,
@@ -437,7 +448,7 @@ impl RuntimeSessionService {
         let mut output_limit_recovery_attempts = 0u32;
         let mut execution = loop {
             let (allowed_actions, interaction_kind) =
-                self.agent_provider_request_control_for_turn(&turn);
+                self.agent_provider_request_control_for_turn(&turn)?;
             let mut provider_ledger = AgentTurnLedger::new(false);
             let runner = AgentTurnRunner {
                 provider,
@@ -663,6 +674,7 @@ impl RuntimeSessionService {
                 &auto_sizing,
                 &turn,
                 &context,
+                self.capture_agent_session_allowed_actions_for_pane(&turn.pane_id)?,
             ) {
                 Ok(execution) => execution,
                 Err(error) => {
@@ -769,7 +781,7 @@ impl RuntimeSessionService {
         let mut output_limit_recovery_attempts = 0u32;
         let mut execution = loop {
             let (allowed_actions, interaction_kind) =
-                self.agent_provider_request_control_for_turn(&turn);
+                self.agent_provider_request_control_for_turn(&turn)?;
             let mut provider_ledger = AgentTurnLedger::new(false);
             let runner = AgentTurnRunner {
                 provider,

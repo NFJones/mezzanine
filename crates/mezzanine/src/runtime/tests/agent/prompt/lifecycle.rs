@@ -74,6 +74,25 @@ fn runtime_native_subagent_startup_bypasses_pane_bootstrap() {
     let turn_id = spawned["turn"]["id"].as_str().unwrap();
 
     assert_eq!(
+        spawned["allowed_actions"],
+        serde_json::json!([
+            "say",
+            "shell_command",
+            "web_search",
+            "fetch_url",
+            "send_message",
+            "spawn_agent",
+            "mcp_server_search",
+            "mcp_server_get",
+            "mcp_call",
+            "memory_search",
+            "list_agents",
+            "issue_query",
+        ])
+    );
+    assert!(spawned["action_schema_digest"].as_str().is_some());
+
+    assert_eq!(
         service.runtime_agent_surface_startup_phase_for_tests(pane_id),
         Some("ready")
     );
@@ -90,6 +109,152 @@ fn runtime_native_subagent_startup_bypasses_pane_bootstrap() {
         Some(AgentTurnState::Running)
     );
     service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a durable child retains its captured action catalog after its pane
+/// is removed, including direct UUID resume in a fresh runtime instance.
+///
+/// Root-only checkpoints intentionally omit child pane bindings. The child
+/// catalog must therefore be saved by durable conversation identity at spawn
+/// time, before pane cleanup can discard the in-memory session that captured
+/// it. Otherwise direct child recovery after a configuration change would
+/// silently recapture the new live action surface.
+#[test]
+fn runtime_durable_child_catalog_survives_pane_cleanup_direct_resume_and_restart() {
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-child-catalog-resume"));
+    let catalog_a = mez_agent::AllowedActionSet::from_actions([
+        mez_agent::AllowedAction::Say,
+        mez_agent::AllowedAction::ShellCommand,
+    ]);
+    let catalog_b = mez_agent::AllowedActionSet::say_only();
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service.set_agent_enabled_actions(catalog_a.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let spawned = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "default".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: SubagentSessionMode::New,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
+                task_prompt: "preserve this child catalog".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: true,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap();
+    let child_pane_id =
+        serde_json::from_str::<serde_json::Value>(&spawned).unwrap()["pane"]["pane_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+    let child_conversation_id = service
+        .agent_shell_store()
+        .get(&child_pane_id)
+        .unwrap()
+        .session_id
+        .clone();
+    assert_eq!(
+        transcript_store
+            .conversation_allowed_actions(&child_conversation_id)
+            .unwrap(),
+        Some(catalog_a.clone())
+    );
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: child_conversation_id.clone(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "child-catalog-prompt".to_string(),
+            agent_id: format!("agent-{child_pane_id}"),
+            pane_id: child_pane_id.clone(),
+            content: "preserve this child catalog".to_string(),
+        })
+        .unwrap();
+
+    service
+        .dispatch_runtime_pane_close(
+            &primary,
+            &format!(r#"{{"pane_id":"{child_pane_id}","force":true}}"#),
+        )
+        .unwrap();
+    service.set_agent_enabled_actions(catalog_b.clone());
+    let resumed = service.dispatch_runtime_control_body(
+        &format!(
+            r#"{{"jsonrpc":"2.0","id":"resume-child","method":"agent/shell/command","params":{{"idempotency_key":"resume-child","input":"/resume {child_conversation_id}"}}}}"#
+        ),
+        &primary,
+    );
+    assert!(resumed.contains(&child_conversation_id), "{resumed}");
+    let resumed_child = service
+        .agent_shell_store()
+        .sessions()
+        .find(|session| session.session_id == child_conversation_id);
+    assert!(
+        resumed_child.is_some(),
+        "{resumed}; sessions={:?}",
+        service.agent_shell_store().sessions().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        resumed_child.and_then(|session| session.allowed_actions.as_ref()),
+        Some(&catalog_a)
+    );
+    service.terminate_all_pane_processes().unwrap();
+
+    let mut restarted = test_runtime_service();
+    restarted.set_agent_transcript_store(transcript_store.clone());
+    restarted.set_agent_enabled_actions(catalog_b);
+    let restarted_primary = restarted
+        .attach_primary("restarted", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    restarted.start_initial_pane_process(Some("cat")).unwrap();
+    restarted
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let resumed_after_restart = restarted.dispatch_runtime_control_body(
+        &format!(
+            r#"{{"jsonrpc":"2.0","id":"resume-child-restart","method":"agent/shell/command","params":{{"idempotency_key":"resume-child-restart","input":"/resume {child_conversation_id}"}}}}"#
+        ),
+        &restarted_primary,
+    );
+    assert!(
+        resumed_after_restart.contains(&child_conversation_id),
+        "{resumed_after_restart}"
+    );
+    assert_eq!(
+        restarted
+            .agent_shell_store()
+            .sessions()
+            .find(|session| session.session_id == child_conversation_id)
+            .and_then(|session| session.allowed_actions.as_ref()),
+        Some(&catalog_a)
+    );
+    restarted.terminate_all_pane_processes().unwrap();
+    let _ = std::fs::remove_dir_all(transcript_store.root());
 }
 
 /// Verifies a real subagent spawn leaves the parent pane with only its
@@ -271,7 +436,7 @@ fn runtime_subagent_spawn_publishes_bounded_task_objective() {
 /// Verifies a terminal profile is snapshotted when its child is spawned while
 /// retaining the configured provider action set for execution-time validation.
 #[test]
-fn runtime_terminal_profile_spawn_retains_spawn_agent_surface() {
+fn runtime_terminal_profile_spawn_removes_spawn_agent_surface() {
     let mut service = test_runtime_service();
     service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
     service
@@ -331,61 +496,203 @@ fn runtime_terminal_profile_spawn_retains_spawn_agent_surface() {
         .expect("spawned terminal child turn should exist");
     let allowed_actions = service
         .agent_provider_request_control_for_turn(&turn)
+        .expect("provider control should capture the child action schema")
         .0
         .expect("spawned child should have a static action set");
 
-    assert!(allowed_actions.contains(mez_agent::AllowedAction::SpawnAgent));
+    assert!(!allowed_actions.contains(mez_agent::AllowedAction::SpawnAgent));
+    service.terminate_all_pane_processes().unwrap();
+}
 
-    let action = runtime_spawn_agent_action("spawn-from-terminal", "delegate again");
-    let mut execution = mez_agent::AgentTurnExecution {
-        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
-        response: mez_agent::ModelResponse {
-            provider: "runtime-batch".to_string(),
-            model: "test".to_string(),
-            raw_text: "spawn from terminal profile".to_string(),
-            usage: Default::default(),
-            latest_request_usage: None,
-            quota_usage: Default::default(),
-            action_batch: Some(mez_agent::MaapBatch {
-                rationale: "delegate from terminal profile".to_string(),
-                actions: vec![action.clone()],
-            }),
-            provider_transcript_events: Vec::new(),
-        },
-        latest_response_usage: Default::default(),
-        routing_token_usage_by_model: std::collections::BTreeMap::new(),
-        action_results: vec![mez_agent::ActionResult::running(
-            &turn,
-            &action,
-            Vec::new(),
-            None,
-        )],
-        final_turn: false,
-        terminal_state: AgentTurnState::Running,
-    };
+/// Verifies a configured profile cannot broaden a frozen parent action catalog.
+///
+/// The denial is evaluated before pane or turn allocation and includes bounded
+/// catalog diagnostics so configuration errors can be identified without
+/// observing or cleaning up partial child state.
+#[test]
+fn runtime_subagent_profile_action_broadening_is_denied_before_child_allocation() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[subagents.restricted]\nallowed_actions = [\"say\", \"shell_command\"]\n"
+                .to_string(),
+        }])
+        .unwrap();
+    service.set_agent_enabled_actions(mez_agent::AllowedActionSet::say_only());
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let window_count = service.session().windows().len();
+    let turn_count = service.agent_turn_ledger().turns().len();
+
+    let error = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "restricted".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: true,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: true,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: true,
+                session_mode: SubagentSessionMode::New,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
+                task_prompt: "attempt to broaden child actions".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: true,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        error.kind(),
+        crate::error::MezErrorKind::Forbidden,
+        "{error}"
+    );
+    assert!(error.message().contains("parent_actions=say"), "{error}");
+    assert!(
+        error
+            .message()
+            .contains("requested_actions=say,shell_command"),
+        "{error}"
+    );
+    assert!(error.message().contains("schema_digest="), "{error}");
+    assert_eq!(service.session().windows().len(), window_count);
+    assert_eq!(service.agent_turn_ledger().turns().len(), turn_count);
+    assert!(service.subagent_lineage("agent-%2").is_none());
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies the built-in explorer ceiling intersects a narrow parent catalog.
+///
+/// The explorer baseline is a structural upper bound rather than a user-authored
+/// request, so a parent limited to `say` can delegate safely without gaining
+/// the explorer profile's broader read-only actions.
+#[test]
+fn runtime_explorer_intrinsic_ceiling_intersects_narrow_parent_catalog() {
+    let mut service = test_runtime_service();
+    let parent_actions = mez_agent::AllowedActionSet::say_only();
+    service.set_agent_enabled_actions(parent_actions.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let spawned = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: true,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: true,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: true,
+                session_mode: SubagentSessionMode::New,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
+                task_prompt: "inspect within the parent catalog".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: true,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap();
+    let pane_id = serde_json::from_str::<serde_json::Value>(&spawned).unwrap()["pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     assert_eq!(
         service
-            .execute_running_spawn_actions_for_turn(&turn, &mut execution)
-            .unwrap(),
-        1
+            .agent_shell_store()
+            .get(&pane_id)
+            .and_then(|session| session.allowed_actions.as_ref()),
+        Some(&parent_actions)
     );
-    assert_eq!(execution.action_results[0].status, ActionStatus::Denied);
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a spawn whose declared parent has no live session fails before it
+/// can synthesize a parent catalog or allocate a child pane, turn, or lineage.
+#[test]
+fn runtime_subagent_missing_parent_session_rejects_without_mutation() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let window_count = service.session().windows().len();
+    let turn_count = service.agent_turn_ledger().turns().len();
+
+    let error = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%9".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: true,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: true,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: true,
+                session_mode: SubagentSessionMode::New,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
+                task_prompt: "attempt missing parent spawn".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: true,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap_err();
+
     assert_eq!(
-        execution.action_results[0]
-            .error
-            .as_ref()
-            .map(|error| error.code.as_str()),
-        Some("forbidden")
+        error.kind(),
+        crate::error::MezErrorKind::InvalidState,
+        "{error}"
     );
     assert!(
-        execution.action_results[0]
-            .structured_content_json
-            .as_deref()
-            .is_some_and(
-                |content| content.contains("terminal subagent profile cannot spawn children")
-            )
+        error.message().contains("parent session is unavailable"),
+        "{error}"
     );
+    assert_eq!(service.session().windows().len(), window_count);
+    assert_eq!(service.agent_turn_ledger().turns().len(), turn_count);
+    assert!(service.agent_shell_store().get("%9").is_none());
+    assert!(service.subagent_lineage("agent-%2").is_none());
     service.terminate_all_pane_processes().unwrap();
 }
 
@@ -907,7 +1214,7 @@ fn runtime_subagent_sessions_are_durable_but_hidden_from_resume() {
             .load_agent_session_metadata(service.session().id.as_str())
             .unwrap()
             .iter()
-            .all(|metadata| metadata.conversation_id != child_conversation_id)
+            .any(|metadata| metadata.conversation_id == child_conversation_id)
     );
     service.terminate_all_pane_processes().unwrap();
 }
@@ -1087,9 +1394,131 @@ fn runtime_subagent_session_modes_fork_bounded_history_or_start_isolated() {
         parent.prompt_cache_lineage_id
     );
     assert_eq!(fresh_session.transcript_entries, 0);
+    let forked_actions = service
+        .agent_shell_store()
+        .get(&forked_pane)
+        .and_then(|session| session.allowed_actions.as_ref())
+        .expect("forked child should retain its derived action catalog");
+    let fresh_actions = service
+        .agent_shell_store()
+        .get(&fresh_pane)
+        .and_then(|session| session.allowed_actions.as_ref())
+        .expect("new child should retain its derived action catalog");
+    assert_eq!(forked_actions, fresh_actions);
+    assert!(!forked_actions.contains(mez_agent::AllowedAction::ApplyPatch));
+    assert_eq!(
+        transcript_store
+            .conversation_allowed_actions(&forked_session.session_id)
+            .unwrap(),
+        Some(forked_actions.clone())
+    );
+    assert_eq!(
+        transcript_store
+            .conversation_allowed_actions(&fresh_session.session_id)
+            .unwrap(),
+        Some(fresh_actions.clone())
+    );
     assert!(fresh_context.blocks().iter().all(|block| {
         block.content != "captured parent decision" && block.content != "later parent mutation"
     }));
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a failed forked spawn fences its queued transcript prefix before
+/// deferred effects drain, so persistence cannot recreate the deleted child as
+/// an orphan root conversation.
+#[test]
+fn runtime_failed_forked_subagent_spawn_cancels_queued_transcript_persistence() {
+    let transcript_store = AgentTranscriptStore::new(temp_root("failed-forked-subagent-spawn"));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service.persistence.enable_transcript_adapter();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let parent = service.agent_shell_store().get("%1").unwrap().clone();
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: parent.session_id,
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "parent-turn".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "forked child must not survive rollback".to_string(),
+        })
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 1)
+        .unwrap();
+    let durable_conversations_before = fs::read_dir(transcript_store.root())
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry.file_type().is_ok_and(|file_type| file_type.is_dir())
+                && !entry.file_name().to_string_lossy().starts_with('.')
+        })
+        .map(|entry| entry.file_name())
+        .collect::<std::collections::BTreeSet<_>>();
+
+    service.fail_next_subagent_spawn_after_fork_persistence_for_tests();
+    let error = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: SubagentSessionMode::Fork,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
+                task_prompt: "fail after queuing the fork snapshot".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: true,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap_err();
+
+    assert!(
+        error.message().contains("after fork persistence"),
+        "{error}"
+    );
+    assert!(service.find_pane_descriptor("%2").is_none());
+    assert!(service.agent_shell_store().get("%2").is_none());
+    assert!(
+        service
+            .drain_deferred_effects_transition()
+            .side_effects
+            .iter()
+            .all(|effect| !matches!(effect, RuntimeSideEffect::PersistTranscriptEntries { .. }))
+    );
+    let durable_conversations_after = fs::read_dir(transcript_store.root())
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry.file_type().is_ok_and(|file_type| file_type.is_dir())
+                && !entry.file_name().to_string_lossy().starts_with('.')
+        })
+        .map(|entry| entry.file_name())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(durable_conversations_after, durable_conversations_before);
     service.terminate_all_pane_processes().unwrap();
 }
 
@@ -2169,6 +2598,12 @@ reasoning_profile = "medium"
 provider = "runtime-batch"
 model = "gpt-large"
 reasoning_profile = "high"
+
+[subagents.terminal-worker]
+terminal = true
+
+[subagents.restricted-worker]
+allowed_actions = ["say", "shell_command"]
 "#
             .to_string(),
         }])
@@ -2181,6 +2616,21 @@ reasoning_profile = "high"
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
+    let mut parent_auto_sizing = service.agent_auto_sizing().clone();
+    parent_auto_sizing.small_model_profile = "large".to_string();
+    parent_auto_sizing.medium_model_profile = "large".to_string();
+    parent_auto_sizing.large_model_profile = "large".to_string();
+    parent_auto_sizing.allowed_reasoning_efforts = vec!["high".to_string()];
+    service.set_agent_auto_sizing_override("%1", Some(parent_auto_sizing));
+    service
+        .capture_agent_session_allowed_actions_for_pane("%1")
+        .expect("parent should freeze its advertised sizing catalog");
+    let mut reloaded_auto_sizing = service.agent_auto_sizing().clone();
+    reloaded_auto_sizing.small_model_profile = "small".to_string();
+    reloaded_auto_sizing.medium_model_profile = "small".to_string();
+    reloaded_auto_sizing.large_model_profile = "small".to_string();
+    reloaded_auto_sizing.allowed_reasoning_efforts = vec!["low".to_string()];
+    service.set_agent_auto_sizing_override("%1", Some(reloaded_auto_sizing));
 
     let spawned = service
         .spawn_runtime_subagent(
@@ -2211,6 +2661,20 @@ reasoning_profile = "high"
     let spawned = serde_json::from_str::<serde_json::Value>(&spawned).unwrap();
     let child_pane_id = spawned["pane"]["pane_id"].as_str().unwrap().to_string();
     let first_turn_id = spawned["turn"]["id"].as_str().unwrap().to_string();
+    let child_catalog = service
+        .agent_shell_store()
+        .get(&child_pane_id)
+        .and_then(|session| session.allowed_actions.as_ref())
+        .expect("child should capture its session catalog after inherited policy setup");
+    let child_sizing = child_catalog
+        .spawn_agent_sizing()
+        .expect("child catalog should include inherited spawn sizing");
+    assert!(
+        child_sizing
+            .sizes
+            .iter()
+            .all(|option| option.profile_name == "large")
+    );
     let first_turn = service
         .agent_turn_ledger()
         .turns()
@@ -2254,6 +2718,418 @@ reasoning_profile = "high"
             .runtime_auto_sizing_dispatch_for_turn(&second_turn, second_profile)
             .unwrap()
             .is_some()
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies explicit child sizing resolves from the parent catalog that
+/// advertised it even when terminal, depth-limited, or profile-restricted
+/// child catalogs intentionally omit `spawn_agent` and its sizing metadata.
+///
+/// The parent snapshot offers only the captured large/high pair. The live
+/// parent sizing override changes afterward, so successful initial selections
+/// prove child catalog pruning and live routing state cannot replace the
+/// frozen parent contract.
+#[test]
+fn runtime_subagent_explicit_selection_uses_parent_catalog_when_child_hides_spawn() {
+    for requested_role in ["terminal-worker", "explorer", "restricted-worker"] {
+        let mut service = test_runtime_service();
+        service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+        service
+            .replace_config_layers(vec![ConfigLayer {
+                name: "parent-frozen-sizing".to_string(),
+                path: None,
+                format: ConfigFormat::Toml,
+                scope: ConfigScope::Primary,
+                trusted: true,
+                text: r#"
+[agents]
+default_provider = "runtime-batch"
+default_model_profile = "default"
+max_depth = 1
+
+[agents.auto_sizing]
+router_model_profile = "large"
+small_model_profile = "large"
+medium_model_profile = "large"
+large_model_profile = "large"
+allowed_reasoning_efforts = ["high"]
+
+[providers.runtime-batch]
+kind = "openai"
+models = ["gpt-default", "gpt-large", "gpt-small"]
+default_model = "gpt-default"
+
+[model_profiles.default]
+provider = "runtime-batch"
+model = "gpt-default"
+
+[model_profiles.large]
+provider = "runtime-batch"
+model = "gpt-large"
+reasoning_profile = "high"
+
+[model_profiles.small]
+provider = "runtime-batch"
+model = "gpt-small"
+reasoning_profile = "low"
+
+[subagents.terminal-worker]
+terminal = true
+
+[subagents.restricted-worker]
+allowed_actions = ["say", "shell_command"]
+"#
+                .to_string(),
+            }])
+            .unwrap();
+        let primary = service
+            .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+            .unwrap();
+        service.start_initial_pane_process(Some("cat")).unwrap();
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        service
+            .capture_agent_session_allowed_actions_for_pane("%1")
+            .expect("parent should freeze the advertised sizing catalog");
+        service
+            .replace_config_layers(vec![ConfigLayer {
+                name: "live-sizing-reload".to_string(),
+                path: None,
+                format: ConfigFormat::Toml,
+                scope: ConfigScope::Primary,
+                trusted: true,
+                text: r#"
+[agents]
+default_provider = "runtime-batch"
+default_model_profile = "default"
+max_depth = 1
+
+[agents.auto_sizing]
+router_model_profile = "small"
+small_model_profile = "small"
+medium_model_profile = "small"
+large_model_profile = "small"
+allowed_reasoning_efforts = ["low"]
+
+[providers.runtime-batch]
+kind = "openai"
+models = ["gpt-default", "gpt-large", "gpt-small"]
+default_model = "gpt-default"
+
+[model_profiles.default]
+provider = "runtime-batch"
+model = "gpt-default"
+
+[model_profiles.large]
+provider = "runtime-batch"
+model = "gpt-large"
+reasoning_profile = "high"
+
+[model_profiles.small]
+provider = "runtime-batch"
+model = "gpt-small"
+reasoning_profile = "low"
+
+[subagents.terminal-worker]
+terminal = true
+
+[subagents.restricted-worker]
+allowed_actions = ["say", "shell_command"]
+"#
+                .to_string(),
+            }])
+            .expect("live sizing reload should succeed after parent capture");
+
+        let spawned = service
+            .spawn_runtime_subagent(
+                &primary,
+                SubagentSpawnRequest {
+                    parent_agent_id: "agent-%1".to_string(),
+                    requested_role: requested_role.to_string(),
+                    placement: "new-pane".to_string(),
+                    cooperation_mode: CooperationMode::ExploreOnly,
+                    cooperation_mode_defaulted: false,
+                    read_scopes: Vec::new(),
+                    read_scopes_defaulted: false,
+                    write_scopes: Vec::new(),
+                    write_scopes_defaulted: false,
+                    session_mode: SubagentSessionMode::New,
+                    initial_model_size: Some("large".to_string()),
+                    initial_reasoning_effort: Some("high".to_string()),
+                    task_prompt: "complete the bounded child task".to_string(),
+                    explicit_user_approval: false,
+                    skip_initial_turn: false,
+                },
+                RuntimeSubagentPlacement::NewPane {
+                    direction: SplitDirection::Vertical,
+                    select: true,
+                },
+            )
+            .unwrap_or_else(|error| panic!("{requested_role} child sizing failed: {error}"));
+        let spawned = serde_json::from_str::<serde_json::Value>(&spawned).unwrap();
+        let child_pane_id = spawned["pane"]["pane_id"].as_str().unwrap();
+        let turn_id = spawned["turn"]["id"].as_str().unwrap();
+        let child_catalog = service
+            .agent_shell_store()
+            .get(child_pane_id)
+            .and_then(|session| session.allowed_actions.as_ref())
+            .expect("child should retain its derived action catalog");
+
+        assert!(
+            !child_catalog.contains(mez_agent::AllowedAction::SpawnAgent),
+            "{requested_role} should hide spawn_agent from the child catalog"
+        );
+        assert_eq!(child_catalog.spawn_agent_sizing(), None);
+        if requested_role == "explorer" {
+            for action in [
+                mez_agent::AllowedAction::ApplyPatch,
+                mez_agent::AllowedAction::ConfigChange,
+                mez_agent::AllowedAction::MemoryStore,
+                mez_agent::AllowedAction::IssueAdd,
+                mez_agent::AllowedAction::IssueUpdate,
+                mez_agent::AllowedAction::IssueDelete,
+            ] {
+                assert!(
+                    !child_catalog.contains(action),
+                    "explorer catalog must structurally omit {}",
+                    action.action_type(),
+                );
+            }
+            for action in [
+                mez_agent::AllowedAction::ShellCommand,
+                mez_agent::AllowedAction::McpCall,
+                mez_agent::AllowedAction::SendMessage,
+                mez_agent::AllowedAction::IssueQuery,
+            ] {
+                assert!(
+                    child_catalog.contains(action),
+                    "explorer catalog must retain {} for runtime-controlled execution",
+                    action.action_type(),
+                );
+            }
+        }
+        assert_eq!(spawned["agent"]["initial_model_profile"], "large");
+        assert_eq!(
+            service.agent_turn_model_profile(turn_id).unwrap().model,
+            "gpt-large"
+        );
+        service.terminate_all_pane_processes().unwrap();
+    }
+}
+
+/// Verifies rejected explicit sizing pairs clean every child resource created
+/// before the child turn selection is resolved.
+///
+/// Spawn setup must allocate the child pane before applying inherited policy,
+/// but an invalid pair must still leave no pane, session, lineage, or model
+/// override behind when deterministic selection rejects it.
+#[test]
+fn runtime_subagent_invalid_explicit_pair_cleans_allocated_child_state() {
+    let mut service = test_runtime_service();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let turn_count = service.agent_turn_ledger().turns().len();
+
+    let error = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: SubagentSessionMode::New,
+                initial_model_size: Some("small".to_string()),
+                initial_reasoning_effort: Some("invalid".to_string()),
+                task_prompt: "inspect the bounded change".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: false,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap_err();
+
+    assert!(error.message().contains("reasoning"), "{error}");
+    assert!(service.find_pane_descriptor("%2").is_none());
+    assert!(service.agent_shell_store().get("%2").is_none());
+    assert!(!service.has_subagent_authority_state("agent-%2"));
+    assert!(!service.has_subagent_lineage("agent-%2"));
+    assert!(
+        !service
+            .integration
+            .model_profile_overrides()
+            .agent_profiles
+            .contains_key("agent-%2")
+    );
+    assert_eq!(service.agent_turn_ledger().turns().len(), turn_count);
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a globally valid size and reasoning pair that was not advertised by
+/// the frozen parent catalog is rejected before child pane allocation.
+#[test]
+fn runtime_subagent_rejects_valid_but_unadvertised_frozen_sizing_without_side_effects() {
+    let mut service = test_runtime_service();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let frozen = mez_agent::AllowedActionSet::all_enabled().with_spawn_agent_sizing(
+        mez_agent::SpawnAgentSizing {
+            sizes: vec![mez_agent::SpawnAgentSizeOption {
+                size: "large".to_string(),
+                profile_name: "default".to_string(),
+                execution_profile: Some(runtime_model_profile("runtime-batch", "gpt-default")),
+                allowed_reasoning_efforts: vec!["high".to_string()],
+            }],
+        },
+    );
+    service
+        .agent_shell_store_mut()
+        .restore_allowed_actions("%1", frozen)
+        .unwrap();
+    let pane_count = service
+        .session()
+        .windows()
+        .iter()
+        .flat_map(|window| window.panes())
+        .count();
+    let turn_count = service.agent_turn_ledger().turns().len();
+
+    let error = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: SubagentSessionMode::New,
+                initial_model_size: Some("small".to_string()),
+                initial_reasoning_effort: Some("medium".to_string()),
+                task_prompt: "reject the unadvertised frozen pair".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: false,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap_err();
+
+    assert!(error.message().contains("frozen action catalog"), "{error}");
+    assert_eq!(
+        service
+            .session()
+            .windows()
+            .iter()
+            .flat_map(|window| window.panes())
+            .count(),
+        pane_count
+    );
+    assert!(service.find_pane_descriptor("%2").is_none());
+    assert!(service.agent_shell_store().get("%2").is_none());
+    assert!(!service.has_subagent_authority_state("agent-%2"));
+    assert_eq!(service.agent_turn_ledger().turns().len(), turn_count);
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a configured but unavailable child profile rejects before pane,
+/// process, fork-persistence, or durable child metadata allocation.
+#[test]
+fn runtime_subagent_unavailable_profile_cleans_allocated_child_state() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("missing-child-profile"));
+    service.set_agent_transcript_store(transcript_store.clone());
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    let mut profiles = service.integration.subagent_profiles().clone();
+    profiles
+        .get_mut("explorer")
+        .expect("built-in explorer profile")
+        .model_profile = Some("unavailable-profile".to_string());
+    service.integration.replace_subagent_profiles(profiles);
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let turn_count = service.agent_turn_ledger().turns().len();
+
+    let error = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: SubagentSessionMode::Fork,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
+                task_prompt: "inspect the bounded change".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: false,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap_err();
+
+    assert!(error.message().contains("unavailable-profile"), "{error}");
+    assert!(service.find_pane_descriptor("%2").is_none());
+    assert!(service.agent_shell_store().get("%2").is_none());
+    assert!(!service.has_subagent_authority_state("agent-%2"));
+    assert!(!service.has_subagent_lineage("agent-%2"));
+    assert!(
+        !service
+            .integration
+            .model_profile_overrides()
+            .agent_profiles
+            .contains_key("agent-%2")
+    );
+    assert_eq!(service.agent_turn_ledger().turns().len(), turn_count);
+    assert!(
+        transcript_store.saved_sessions().unwrap().is_empty(),
+        "missing child profile must not create a durable fork conversation"
     );
     service.terminate_all_pane_processes().unwrap();
 }

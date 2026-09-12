@@ -1546,6 +1546,9 @@ impl RuntimeSessionService {
                     approval_policy_owner = Some(pane_id.to_string());
                 }
             }
+            if !self.subagent_lineage_has_live_parent_authority(&current_agent_id) {
+                break;
+            }
             let Some(lineage) = self.subagent_lineage(&current_agent_id) else {
                 break;
             };

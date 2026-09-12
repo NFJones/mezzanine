@@ -486,6 +486,9 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
+    service
+        .capture_agent_session_allowed_actions_for_pane("%1")
+        .expect("active test session should capture its action catalog");
     service.set_pane_current_working_directory("%1".to_string(), cwd.clone());
 
     let resumed = service.dispatch_runtime_control_body(
@@ -532,6 +535,10 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
         .load_agent_session_metadata(service.session().id.as_str())
         .unwrap();
     assert_eq!(saved_metadata.len(), 1);
+    let saved_allowed_actions = saved_metadata[0]
+        .allowed_actions
+        .clone()
+        .expect("active agent checkpoint should retain its captured action catalog");
     assert_eq!(
         saved_metadata[0].working_directory.as_deref(),
         Some(cwd.to_string_lossy().as_ref())
@@ -556,6 +563,7 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
 
     let mut restored = test_runtime_service();
     restored.session.id = service.session().id.clone();
+    restored.set_agent_enabled_actions(mez_agent::AllowedActionSet::say_only());
     restored.set_agent_transcript_store(transcript_store.clone());
     let restored_count = restored
         .restore_agent_sessions_from_transcript_store()
@@ -567,6 +575,11 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
     assert_eq!(restored_session.visibility, AgentShellVisibility::Visible);
     assert_eq!(restored_session.transcript_entries, 1);
     assert_eq!(restored_session.log_level, AgentLogLevel::Trace);
+    assert_eq!(
+        restored_session.allowed_actions.as_ref(),
+        Some(&saved_allowed_actions),
+        "checkpoint restoration must retain the session catalog despite live configuration changes"
+    );
     assert_eq!(
         restored
             .agent_token_usage_for_conversation("saved")
@@ -657,6 +670,115 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
     let _ = fs::remove_dir_all(cwd);
 }
 
+/// Verifies daemon restart rejects a malformed root catalog before it can
+/// hydrate an active pane session or install an invalid action surface.
+///
+/// Legacy roots may have no catalog, but persisted catalog data is authority
+/// and must satisfy the durable validation contract before restart uses it.
+#[test]
+fn runtime_restart_rejects_malformed_persisted_root_action_catalog() {
+    let transcript_store =
+        AgentTranscriptStore::new(temp_root("restart-invalid-root-action-catalog"));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    service
+        .capture_agent_session_allowed_actions_for_pane("%1")
+        .unwrap();
+    service.checkpoint_agent_session_metadata().unwrap();
+    fs::write(
+        transcript_store
+            .presentation_path(&conversation_id)
+            .unwrap()
+            .with_file_name("metadata.json"),
+        br#"{"version":2,"conversation_kind":"root","allowed_actions":{"actions":[]}}"#,
+    )
+    .unwrap();
+
+    let mut restored = test_runtime_service();
+    restored.session.id = service.session().id.clone();
+    restored.set_agent_transcript_store(transcript_store);
+    let error = restored
+        .restore_agent_sessions_from_transcript_store()
+        .unwrap_err();
+
+    assert!(
+        error.message().contains("persisted action catalog"),
+        "{error}"
+    );
+    assert!(restored.agent_shell_store().get("%1").is_none());
+}
+
+/// Verifies daemon restart rejects a terminal child sidecar whose frozen
+/// catalog contradicts the lineage by exposing `spawn_agent`.
+#[test]
+fn runtime_restart_rejects_terminal_subagent_with_spawn_catalog() {
+    let transcript_store = AgentTranscriptStore::new(temp_root("restart-terminal-spawn"));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    transcript_store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: conversation_id.clone(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: mez_agent::transcript::TranscriptRole::User,
+            turn_id: "turn-terminal-spawn".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "restart terminal child".to_string(),
+        })
+        .unwrap();
+    service.checkpoint_agent_session_metadata().unwrap();
+    fs::write(
+        transcript_store
+            .presentation_path(&conversation_id)
+            .unwrap()
+            .with_file_name("metadata.json"),
+        br#"{"version":2,"conversation_kind":"subagent","allowed_actions":{"actions":["Say","SpawnAgent"],"spawn_agent_sizing":{"sizes":[]}},"subagent_lineage":{"parent_agent_id":"agent-%1","root_agent_id":"agent-%1","depth":1,"display_name":"terminal child","terminal":true}}"#,
+    )
+    .unwrap();
+
+    let mut restored = test_runtime_service();
+    restored.session.id = service.session().id.clone();
+    restored.set_agent_transcript_store(transcript_store);
+    let error = restored
+        .restore_agent_sessions_from_transcript_store()
+        .unwrap_err();
+
+    assert!(
+        error
+            .message()
+            .contains("terminal subagent conversation metadata cannot contain spawn_agent"),
+        "{error}"
+    );
+    assert!(restored.agent_shell_store().get("%1").is_none());
+}
+
 /// Verifies active agent metadata from a different Mezzanine session id does
 /// not auto-bind a fresh runtime pane to a stale conversation.
 #[test]
@@ -691,6 +813,7 @@ fn runtime_does_not_restore_agent_metadata_for_other_sessions() {
                 latest_request_usage: None,
                 token_usage: Default::default(),
                 token_usage_by_model: Default::default(),
+                allowed_actions: None,
             }],
         )
         .unwrap();
@@ -742,6 +865,7 @@ fn runtime_restart_hydration_creates_blank_surface_for_hidden_empty_session() {
                 context_usage: None,
                 context_usage_snapshot: None,
                 latest_request_usage: None,
+                allowed_actions: None,
             }],
         )
         .unwrap();
@@ -841,6 +965,7 @@ fn runtime_restart_objective_metadata_failure_restores_prior_pane_state() {
                 context_usage: None,
                 context_usage_snapshot: None,
                 latest_request_usage: None,
+                allowed_actions: None,
             }],
         )
         .unwrap();

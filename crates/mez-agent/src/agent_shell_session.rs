@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use crate::{
     AgentShellMcpServerSummary, AgentShellMcpSummary, AgentShellPermissionSummary,
-    AgentShellSessionError, AgentShellSessionResult, baseline_slash_commands,
+    AgentShellSessionError, AgentShellSessionResult, AllowedActionSet, baseline_slash_commands,
     validate_agent_shell_required,
 };
 
@@ -207,6 +207,12 @@ pub struct AgentShellSession {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub directive: Option<String>,
+    /// Immutable executable action schema captured for this session.
+    ///
+    /// The product captures the configured surface at the session boundary and
+    /// reuses this complete schema-bearing value for every ordinary provider
+    /// request. Runtime availability remains a separate live validation gate.
+    pub allowed_actions: Option<AllowedActionSet>,
     /// Whether this pane binding is temporary runtime-only state.
     ///
     /// Ephemeral conversations are used by loop-owned fork attempts. They may
@@ -295,6 +301,7 @@ impl AgentShellStore {
                     transcript_entries: 0,
                     log_level: AgentLogLevel::Normal,
                     directive: None,
+                    allowed_actions: None,
                     ephemeral: false,
                     ephemeral_transcript_source_conversation_id: None,
                     ephemeral_transcript_source_entries: 0,
@@ -363,6 +370,51 @@ impl AgentShellStore {
         }
         session.running_turn_id = Some(turn_id);
         Ok(())
+    }
+
+    /// Captures the configured executable action schema once for this session.
+    ///
+    /// Existing sessions retain their original complete schema, including
+    /// product-provided spawn sizing metadata, when configuration reloads.
+    pub fn capture_allowed_actions(
+        &mut self,
+        pane_id: &str,
+        allowed_actions: AllowedActionSet,
+    ) -> AgentShellSessionResult<&AgentShellSession> {
+        let session = self.session_mut(pane_id)?;
+        if session.allowed_actions.is_none() {
+            session.allowed_actions = Some(allowed_actions);
+        }
+        Ok(session)
+    }
+
+    /// Replaces the executable action schema for an explicitly restored session.
+    ///
+    /// Conversation restoration owns the replacement boundary, so it may
+    /// reinstate a durable catalog after an ephemeral binding cleared it.
+    pub fn restore_allowed_actions(
+        &mut self,
+        pane_id: &str,
+        allowed_actions: AllowedActionSet,
+    ) -> AgentShellSessionResult<&AgentShellSession> {
+        let session = self.session_mut(pane_id)?;
+        session.allowed_actions = Some(allowed_actions);
+        Ok(session)
+    }
+
+    /// Clears a catalog captured by an uncommitted runtime configuration change.
+    ///
+    /// The runtime uses this only to roll back a failed pre-application
+    /// checkpoint. Ordinary session restoration must use
+    /// [`Self::restore_allowed_actions`] so durable catalogs cannot be replaced
+    /// accidentally.
+    pub fn clear_allowed_actions(
+        &mut self,
+        pane_id: &str,
+    ) -> AgentShellSessionResult<&AgentShellSession> {
+        let session = self.session_mut(pane_id)?;
+        session.allowed_actions = None;
+        Ok(session)
     }
 
     /// Runs the finish turn operation for this subsystem.
@@ -631,6 +683,7 @@ impl AgentShellStore {
             ));
         }
         session.session_id = conversation_id;
+        session.allowed_actions = None;
         if let Some(lineage_id) = prompt_cache_lineage_id {
             validate_agent_shell_required("prompt cache lineage id", &lineage_id)?;
             session.prompt_cache_lineage_id = lineage_id;
@@ -720,6 +773,7 @@ impl AgentShellStore {
                 transcript_entries: 0,
                 log_level,
                 directive: None,
+                allowed_actions: None,
                 ephemeral: false,
                 ephemeral_transcript_source_conversation_id: None,
                 ephemeral_transcript_source_entries: 0,
@@ -1295,6 +1349,41 @@ mod tests {
         let other = store.enter_or_resume("%2").unwrap();
         assert!(looks_like_uuid_v4(&other.session_id));
         assert_ne!(other.session_id, first_session_id);
+    }
+
+    /// Verifies a session captures the complete action schema exactly once so
+    /// configuration reloads cannot alter an existing provider conversation.
+    #[test]
+    fn agent_shell_retains_first_captured_action_schema() {
+        let mut store = AgentShellStore::default();
+        store.enter_or_resume("%1").unwrap();
+        let initial = AllowedActionSet::from_actions([
+            crate::AllowedAction::Say,
+            crate::AllowedAction::SpawnAgent,
+        ])
+        .with_spawn_agent_sizing(crate::SpawnAgentSizing {
+            sizes: vec![crate::SpawnAgentSizeOption {
+                size: "small".to_string(),
+                profile_name: "test-small".to_string(),
+                execution_profile: None,
+                allowed_reasoning_efforts: vec!["low".to_string()],
+            }],
+        });
+
+        store
+            .capture_allowed_actions("%1", initial.clone())
+            .unwrap();
+        store
+            .capture_allowed_actions(
+                "%1",
+                AllowedActionSet::from_actions([crate::AllowedAction::Say]),
+            )
+            .unwrap();
+
+        assert_eq!(
+            store.get("%1").unwrap().allowed_actions.as_ref(),
+            Some(&initial)
+        );
     }
 
     /// Reports whether one string is a lowercase RFC 4122 UUIDv4.

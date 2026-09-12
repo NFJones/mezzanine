@@ -10,8 +10,7 @@ use std::{collections::BTreeSet, fmt};
 use crate::{
     AgentActionPayload, AgentCapability, AgentTurnNegotiation, AllowedAction, AllowedActionSet,
     CapabilityAvailability, CapabilityRequest, ContextSourceKind, MaapBatch, ModelInteractionKind,
-    ModelMessage, ModelMessageRole, ModelRequest, ProviderTranscriptEvent,
-    constrain_skill_actions_for_loaded_context, continuation_surface, decide_capabilities,
+    ModelMessage, ModelMessageRole, ModelRequest, ProviderTranscriptEvent, decide_capabilities,
     select_model_interaction_kind,
 };
 
@@ -292,15 +291,7 @@ pub fn capability_continuation_request(
             issues_enabled: previous_request.issue_actions_enabled,
         },
     );
-    let (interaction_kind, allowed_actions) = continuation_surface(
-        previous_request.interaction_kind,
-        &previous_request.allowed_actions,
-        &decisions,
-    );
     let mut request = previous_request.clone();
-    request.interaction_kind = interaction_kind;
-    request.allowed_actions = allowed_actions;
-    constrain_skill_actions_for_loaded_context(&mut request);
 
     let content = if decisions.len() == 1 {
         capability_decision_message(&requests[0], &decisions[0], &request.allowed_actions)
@@ -749,9 +740,8 @@ mod tests {
         );
     }
 
-    /// A granted capability continuation preserves request identity, exposes
-    /// the corresponding actions, and records the deterministic decision
-    /// without changing the cache-sensitive instruction prefix.
+    /// A capability continuation preserves the complete preceding action
+    /// catalog while recording its controller decision in chronology.
     #[test]
     fn capability_continuation_exposes_granted_actions_and_context() {
         let mut original = request();
@@ -769,16 +759,7 @@ mod tests {
             continuation.interaction_kind,
             ModelInteractionKind::CapabilityContinuation
         );
-        assert!(
-            continuation
-                .allowed_actions
-                .contains(AllowedAction::ShellCommand)
-        );
-        assert!(
-            continuation
-                .allowed_actions
-                .contains(AllowedAction::ApplyPatch)
-        );
+        assert_eq!(continuation.allowed_actions, original.allowed_actions);
         assert!(
             continuation
                 .messages
@@ -810,22 +791,19 @@ mod tests {
         );
     }
 
-    /// A disallowed executable action is converted into capability routing when
-    /// the current request surface permits capability negotiation.
+    /// A disallowed executable action is converted into capability routing
+    /// without widening the session-owned action catalog.
     #[test]
     fn disallowed_action_recovery_routes_through_capability_policy() {
+        let original = request();
         let continuation = disallowed_action_capability_continuation_request(
-            &request(),
+            &original,
             &batch(vec![shell_action()]),
             "shell_command is not allowed",
         )
         .unwrap();
 
-        assert!(
-            continuation
-                .allowed_actions
-                .contains(AllowedAction::ShellCommand)
-        );
+        assert_eq!(continuation.allowed_actions, original.allowed_actions);
         assert!(continuation.messages.iter().any(|message| {
             message
                 .content

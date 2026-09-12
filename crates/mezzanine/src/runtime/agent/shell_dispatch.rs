@@ -78,6 +78,7 @@ impl RuntimeSessionService {
     fn native_shell_action_turn_is_current(&self, turn_id: &str, action_id: &str) -> bool {
         let turn_is_live = self.agent_turn_ledger().turns().iter().any(|turn| {
             turn.turn_id == turn_id
+                && !self.subagent_descendant_is_fenced(&turn.agent_id)
                 && (turn.state == AgentTurnState::Running
                     || (turn.state == AgentTurnState::Blocked
                         && self
@@ -1027,6 +1028,10 @@ impl RuntimeSessionService {
             .find(|turn| turn.turn_id == turn_id)
             .cloned()
             .ok_or_else(|| MezError::new(crate::error::MezErrorKind::NotFound, "turn not found"))?;
+        if self.subagent_descendant_is_fenced(&turn.agent_id) {
+            let _ = self.interrupt_fenced_subagent_descendant_turns()?;
+            return Ok(None);
+        }
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             turn_id,

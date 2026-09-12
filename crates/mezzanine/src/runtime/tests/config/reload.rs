@@ -83,6 +83,254 @@ fn runtime_config_reload_reloads_layers_and_applies_live_policy() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies a session created under configuration A freezes its complete
+/// action catalog before reload B can service its first provider request.
+///
+/// A session can exist before it submits a prompt or spawns a child. Reload
+/// must capture the outgoing schema at that boundary rather than allowing the
+/// first later provider request to observe the broader replacement catalog.
+#[test]
+fn runtime_config_reload_freezes_unbound_session_action_catalog() {
+    let mut service = test_runtime_service();
+    let catalog_a = mez_agent::AllowedActionSet::from_actions([
+        mez_agent::AllowedAction::Say,
+        mez_agent::AllowedAction::ShellCommand,
+    ]);
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "catalog-a".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\nenabled_actions = [\"say\", \"shell_command\"]\n".to_string(),
+        }])
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    assert!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .is_some_and(|session| session.allowed_actions.is_none())
+    );
+
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "catalog-b".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\nenabled_actions = [\"say\"]\n".to_string(),
+        }])
+        .unwrap();
+
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .and_then(|session| session.allowed_actions.as_ref()),
+        Some(&catalog_a)
+    );
+    let turn = mez_agent::AgentTurnRecord {
+        turn_id: "catalog-reload-turn".to_string(),
+        conversation_id: service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .session_id
+            .clone(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 1,
+        deadline_at_unix_millis: 0,
+        policy_profile: "default".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        state: mez_agent::AgentTurnState::Queued,
+        cooperation_mode: None,
+        initial_capability: None,
+    };
+    assert_eq!(
+        service
+            .agent_provider_request_control_for_turn(&turn)
+            .unwrap()
+            .0,
+        Some(catalog_a),
+        "the first provider request must retain the catalog captured before reload"
+    );
+}
+
+/// Verifies a reload checkpoint persists the outgoing catalog before the new
+/// configuration is applied, so daemon restart cannot recapture the replacement.
+#[test]
+fn runtime_config_reload_persists_frozen_catalog_across_restart() {
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-reload-catalog-restart"));
+    let mut service = test_runtime_service();
+    let catalog_a = mez_agent::AllowedActionSet::from_actions([
+        mez_agent::AllowedAction::Say,
+        mez_agent::AllowedAction::ShellCommand,
+    ]);
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "catalog-a".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\nenabled_actions = [\"say\", \"shell_command\"]\n".to_string(),
+        }])
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    transcript_store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: conversation_id.clone(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: mez_agent::transcript::TranscriptRole::User,
+            turn_id: "reload-catalog-turn".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "preserve the outgoing catalog".to_string(),
+        })
+        .unwrap();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "catalog-b".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\nenabled_actions = [\"say\"]\n".to_string(),
+        }])
+        .unwrap();
+
+    assert_eq!(
+        transcript_store
+            .conversation_allowed_actions(&conversation_id)
+            .unwrap(),
+        Some(catalog_a.clone())
+    );
+    let mut restarted = test_runtime_service();
+    restarted.session.id = service.session().id.clone();
+    restarted.set_agent_enabled_actions(mez_agent::AllowedActionSet::say_only());
+    restarted.set_agent_transcript_store(transcript_store);
+    assert_eq!(
+        restarted
+            .restore_agent_sessions_from_transcript_store()
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        restarted
+            .agent_shell_store()
+            .get("%1")
+            .and_then(|session| session.allowed_actions.as_ref()),
+        Some(&catalog_a)
+    );
+}
+
+/// Verifies a rejected persisted configuration mutation restores both the
+/// in-memory and durable absence of an unbound session's outgoing catalog.
+///
+/// The candidate narrows `enabled_actions` but fails a later relationship
+/// validation. The pre-application checkpoint must therefore be rolled back
+/// rather than leaving an immutable catalog behind for a change that failed.
+#[test]
+fn runtime_rejected_config_mutation_rolls_back_unbound_catalog_checkpoint() {
+    let root = temp_root("runtime-rejected-catalog-checkpoint");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.toml");
+    let initial_text = "[agents]\nenabled_actions = [\"say\", \"shell_command\"]\n";
+    fs::write(&path, initial_text).unwrap();
+    let transcript_store = AgentTranscriptStore::new(root.join("transcripts"));
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: Some(path.clone()),
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: initial_text.to_string(),
+        }])
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    transcript_store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: conversation_id.clone(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: mez_agent::transcript::TranscriptRole::User,
+            turn_id: "rejected-catalog-turn".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "keep the old catalog until configuration commits".to_string(),
+        })
+        .unwrap();
+
+    let error = runtime_apply_persisted_config_mutation_batch(
+        &mut service,
+        path.clone(),
+        &[
+            ConfigMutation {
+                path: "agents.enabled_actions".to_string(),
+                operation: ConfigMutationOperation::Set(ConfigMutationValue::StringArray(vec![
+                    "say".to_string(),
+                ])),
+            },
+            ConfigMutation {
+                path: "agents.default_personality".to_string(),
+                operation: ConfigMutationOperation::Set(ConfigMutationValue::String(
+                    "missing-profile".to_string(),
+                )),
+            },
+        ],
+        "test:catalog-checkpoint-rollback",
+    )
+    .unwrap_err();
+
+    assert!(error.message().contains("is not defined"), "{error}");
+    assert!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .is_some_and(|session| session.allowed_actions.is_none())
+    );
+    assert_eq!(
+        transcript_store
+            .conversation_allowed_actions(&conversation_id)
+            .unwrap(),
+        None
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), initial_text);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies zen mode follows normal layer precedence and live reload semantics.
 ///
 /// A trusted project layer must override the primary value, and reloading that
@@ -104,7 +352,7 @@ fn runtime_config_reload_applies_layered_zen_mode() {
     .unwrap();
     fs::write(
         &project_path,
-        "version = 92\n[terminal]\nzen_mode = false\n",
+        "version = 93\n[terminal]\nzen_mode = false\n",
     )
     .unwrap();
     service
@@ -137,7 +385,7 @@ fn runtime_config_reload_applies_layered_zen_mode() {
         Size::new(100, 38).unwrap()
     );
 
-    fs::write(&project_path, "version = 92\n[terminal]\nzen_mode = true\n").unwrap();
+    fs::write(&project_path, "version = 93\n[terminal]\nzen_mode = true\n").unwrap();
     let response = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"reload","method":"config/reload","params":{"idempotency_key":"reload-zen-mode"}}"#,
         &primary,
@@ -154,7 +402,7 @@ fn runtime_config_reload_applies_layered_zen_mode() {
 
     fs::write(
         &project_path,
-        "version = 92\n[terminal]\nzen_mode = false\n",
+        "version = 93\n[terminal]\nzen_mode = false\n",
     )
     .unwrap();
     let response = service.dispatch_runtime_control_body(
@@ -171,7 +419,7 @@ fn runtime_config_reload_applies_layered_zen_mode() {
 
     fs::write(
         &project_path,
-        "version = 92\n[terminal]\nzen_mode = \"sometimes\"\n",
+        "version = 93\n[terminal]\nzen_mode = \"sometimes\"\n",
     )
     .unwrap();
     let response = service.dispatch_runtime_control_body(

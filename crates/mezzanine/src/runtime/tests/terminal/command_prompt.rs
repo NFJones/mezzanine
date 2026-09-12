@@ -454,7 +454,7 @@ fn runtime_show_pane_status_is_zen_safe_targeted_and_side_effect_free() {
             format: ConfigFormat::Toml,
             scope: ConfigScope::ProjectOverlay,
             trusted: true,
-            text: "version = 92\n[frames.pane]\nstatus_preset = \"minimal\"\nright_status = \"#{pill.model} #{pill.branch}\"\n[frames.pane.pills.model]\nfield = \"agent.model\"\nlabel = \"Selected model\"\n[frames.pane.pills.branch]\ncommand = \"printf TOP_SECRET_OUTPUT\"\ncwd = \"pane\"\nwhen = []\n"
+            text: "version = 93\n[frames.pane]\nstatus_preset = \"minimal\"\nright_status = \"#{pill.model} #{pill.branch}\"\n[frames.pane.pills.model]\nfield = \"agent.model\"\nlabel = \"Selected model\"\n[frames.pane.pills.branch]\ncommand = \"printf TOP_SECRET_OUTPUT\"\ncwd = \"pane\"\nwhen = []\n"
                 .to_string(),
         }])
         .unwrap();

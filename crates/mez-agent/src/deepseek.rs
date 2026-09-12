@@ -467,8 +467,7 @@ fn deepseek_provider_transcript_event_message(
 /// batch. The provider's internal `AutoToolThinking`→`ForcedToolNonThinking`
 /// fallback still catches prose responses that decline the tool call.
 pub fn deepseek_maap_request_strategy(request: &ModelRequest) -> DeepSeekMaapRequestStrategy {
-    if request.interaction_kind.expects_structured_json()
-        || request.allowed_actions.actions.is_empty()
+    if !request.interaction_kind.expects_maap_batch() || request.allowed_actions.actions.is_empty()
     {
         return DeepSeekMaapRequestStrategy::NoTool;
     }
@@ -518,7 +517,7 @@ pub fn deepseek_should_retry_with_forced_maap(
     has_action_batch: bool,
 ) -> bool {
     strategy == DeepSeekMaapRequestStrategy::AutoToolThinking
-        && !request.interaction_kind.expects_structured_json()
+        && request.interaction_kind.expects_maap_batch()
         && !request.allowed_actions.actions.is_empty()
         && !has_action_batch
 }
@@ -776,6 +775,22 @@ mod tests {
             DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME
         );
         assert_eq!(body["tools"].as_array().map(Vec::len), Some(1));
+    }
+
+    /// Verifies a compaction request retains its session catalog without
+    /// advertising a DeepSeek function tool.
+    #[test]
+    fn deepseek_compaction_omits_tools_for_session_catalog() {
+        let mut request = deepseek_test_request(Vec::new());
+        request.interaction_kind = ModelInteractionKind::Compaction;
+        request.allowed_actions = AllowedActionSet::all_enabled();
+
+        let preparation = prepare_deepseek_chat_completions_request(&request, false).unwrap();
+        let body: serde_json::Value = serde_json::from_str(&preparation.body).unwrap();
+
+        assert_eq!(preparation.strategy, DeepSeekMaapRequestStrategy::NoTool);
+        assert!(body.get("tools").is_none(), "{body}");
+        assert!(body.get("tool_choice").is_none(), "{body}");
     }
 
     /// Verifies model-declared capability gaps reject request combinations

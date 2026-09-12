@@ -189,6 +189,7 @@ impl RuntimeSessionService {
             append_mcp_context(compaction_context, &mcp_summary)?,
         )?;
         let summarized_entries = compactable_transcript_records.len();
+        let allowed_actions = self.capture_agent_session_allowed_actions_for_pane(pane_id)?;
         let request = runtime_model_compaction_request(
             &model_profile,
             pane_id,
@@ -196,6 +197,7 @@ impl RuntimeSessionService {
             transcript_entries,
             compactable_transcript_records,
             &compaction_context,
+            allowed_actions,
         )?;
         self.queue_agent_compaction_task(RuntimeAgentCompactionTask {
             pane_id: pane_id.to_string(),
@@ -290,6 +292,7 @@ impl RuntimeSessionService {
             })?
             .session_id
             .clone();
+        let allowed_actions = self.capture_agent_session_allowed_actions_for_pane(&turn.pane_id)?;
         let mut current_blocks = plan.replacement_blocks().to_vec();
         let mut pending_blocks = Vec::new();
         let recovery_attempt = match trigger {
@@ -308,6 +311,7 @@ impl RuntimeSessionService {
             &turn.pane_id,
             &conversation_id,
             &current_blocks,
+            allowed_actions.clone(),
         )?;
         if let (Some(rejected_bytes), Some(stream)) =
             (rejected_request_bytes, rejected_request_stream)
@@ -327,6 +331,7 @@ impl RuntimeSessionService {
                     &turn.pane_id,
                     &conversation_id,
                     &current_blocks,
+                    allowed_actions.clone(),
                 )?;
             }
         }
@@ -707,7 +712,7 @@ impl RuntimeSessionService {
                         &prepared.to_agent_context(),
                     )?;
                     let (allowed_actions, interaction_kind) =
-                        self.agent_provider_request_control_for_turn(&turn);
+                        self.agent_provider_request_control_for_turn(&turn)?;
                     mez_agent::apply_model_request_control(
                         &mut retry_request,
                         allowed_actions,
@@ -1065,6 +1070,7 @@ pub(super) fn runtime_model_compaction_request(
     transcript_entries: u64,
     entries: &[TranscriptEntry],
     context: &AgentContext,
+    allowed_actions: AllowedActionSet,
 ) -> Result<ModelRequest> {
     let agent_id = format!("agent-{pane_id}");
     let turn_id = format!("compact-{conversation_id}");
@@ -1091,8 +1097,8 @@ pub(super) fn runtime_model_compaction_request(
         available_mcp_tools: Vec::new(),
                 memory_actions_enabled: false,
                 issue_actions_enabled: true,
-        interaction_kind: ModelInteractionKind::ActionExecution,
-        allowed_actions: AllowedActionSet::say_only(),
+        interaction_kind: ModelInteractionKind::Compaction,
+        allowed_actions,
         messages: vec![
             ModelMessage {
                 role: ModelMessageRole::System,
@@ -1149,6 +1155,7 @@ fn runtime_rebuild_active_turn_compaction_request(
         &task.pane_id,
         &task.conversation_id,
         &blocks,
+        task.request.allowed_actions.clone(),
     )?;
     let RuntimeAgentCompactionTarget::ActiveTurn { current_blocks, .. } = &mut task.target else {
         return Err(MezError::invalid_state(
@@ -1165,10 +1172,19 @@ fn runtime_model_compaction_request_for_blocks(
     pane_id: &str,
     conversation_id: &str,
     blocks: &[ContextBlock],
+    allowed_actions: AllowedActionSet,
 ) -> Result<ModelRequest> {
     let source_context = AgentContext::new_durable(blocks.to_vec())
         .map_err(|error| MezError::invalid_state(error.message()))?;
-    runtime_model_compaction_request(profile, pane_id, conversation_id, 0, &[], &source_context)
+    runtime_model_compaction_request(
+        profile,
+        pane_id,
+        conversation_id,
+        0,
+        &[],
+        &source_context,
+        allowed_actions,
+    )
 }
 
 /// Splits only temporary compactor input while leaving the atomic source plan unchanged.

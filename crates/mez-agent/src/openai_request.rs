@@ -78,7 +78,7 @@ pub(crate) fn openai_responses_request_control_shape_with_stream(
     }
     if request.interaction_kind.expects_structured_json() {
         body["tool_choice"] = serde_json::json!("none");
-    } else {
+    } else if request.interaction_kind.expects_maap_batch() {
         body["tools"] = serde_json::json!(openai_maap_action_batch_tools(request));
         body["tool_choice"] = serde_json::json!({
             "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
@@ -86,4 +86,44 @@ pub(crate) fn openai_responses_request_control_shape_with_stream(
         });
     }
     Ok(body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AllowedActionSet, ModelInteractionKind};
+
+    /// Verifies a compaction request retains its captured session action
+    /// catalog while the Responses serializer emits no executable tools.
+    #[test]
+    fn openai_responses_compaction_omits_tools_for_session_catalog() {
+        let request = ModelRequest {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
+            reasoning_effort: None,
+            thinking_enabled: None,
+            latency_preference: None,
+            prompt_cache_retention: None,
+            max_output_tokens: None,
+            temperature: None,
+            prompt_cache_session_id: None,
+            prompt_cache_lineage_id: None,
+            turn_id: String::new(),
+            agent_id: "agent-1".to_string(),
+            available_mcp_tools: Vec::new(),
+            memory_actions_enabled: false,
+            issue_actions_enabled: false,
+            interaction_kind: ModelInteractionKind::Compaction,
+            allowed_actions: AllowedActionSet::all_enabled(),
+            stop: None,
+            messages: Vec::new().into(),
+        };
+
+        let body = openai_responses_request_control_shape_with_stream(&request, false).unwrap();
+
+        assert!(body.get("tools").is_none(), "{body}");
+        assert!(body.get("tool_choice").is_none(), "{body}");
+    }
 }

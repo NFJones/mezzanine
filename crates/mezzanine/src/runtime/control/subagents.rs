@@ -20,7 +20,8 @@ use super::{
 };
 use crate::runtime::{RuntimeAgentPromptTurnStart, SandboxConfig};
 use mez_agent::{
-    SubagentApprovalProvenance, SubagentParentAuthority, SubagentParentFilesystemBounds,
+    AllowedAction, AllowedActionSet, SubagentApprovalProvenance, SubagentParentAuthority,
+    SubagentParentFilesystemBounds,
 };
 
 /// Minimum useful width for adding another pane to an existing subagent bucket.
@@ -424,6 +425,17 @@ impl RuntimeSessionService {
                 spawn.task_prompt, instructions
             );
         }
+        if self.subagent_lineage(&spawn.parent_agent_id).is_some()
+            && !self.subagent_lineage_has_live_parent_authority(&spawn.parent_agent_id)
+        {
+            self.append_subagent_spawn_denial_audit(
+                &spawn,
+                "restored subagent lineage has no live parent authority for descendant delegation",
+            );
+            return Err(MezError::forbidden(
+                "restored subagent lineage has no live parent authority for descendant delegation",
+            ));
+        }
         let parent_authority = self.subagent_parent_authority(&spawn.parent_agent_id);
         let inherited_sandbox_override =
             self.inherited_sandbox_override_for_child_agent(&spawn.parent_agent_id);
@@ -508,6 +520,34 @@ impl RuntimeSessionService {
         }
         let mut child_lineage =
             self.validate_subagent_spawn_capacity(&spawn.parent_agent_id, routed_root)?;
+        let parent_allowed_actions =
+            self.frozen_subagent_parent_allowed_actions(&spawn.parent_agent_id)?;
+        let initial_selection = match (
+            spawn.initial_model_size.as_deref(),
+            spawn.initial_reasoning_effort.as_deref(),
+        ) {
+            (Some(size), Some(reasoning_effort)) => {
+                Some(self.runtime_explicit_auto_sizing_selection_from_catalog(
+                    &parent_allowed_actions,
+                    size,
+                    reasoning_effort,
+                )?)
+            }
+            (None, None) => None,
+            _ => {
+                return Err(MezError::invalid_args(
+                    "subagent initial size and reasoning effort must be provided together",
+                ));
+            }
+        };
+        let child_allowed_actions = self.derive_subagent_allowed_actions(
+            &spawn.parent_agent_id,
+            &profile,
+            child_lineage.depth,
+        )?;
+        if let Some(profile_name) = profile.model_profile.as_deref() {
+            self.provider_registry().resolve_profile(profile_name)?;
+        }
         let fork_snapshot = if spawn.session_mode == mez_agent::SubagentSessionMode::Fork {
             Some(self.capture_subagent_fork_snapshot(&spawn.parent_agent_id)?)
         } else {
@@ -609,6 +649,13 @@ impl RuntimeSessionService {
             self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
             return Err(error.into());
         }
+        if let Err(error) = self
+            .agent_shell_store_mut()
+            .restore_allowed_actions(&started.pane_id, child_allowed_actions.clone())
+        {
+            self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
+            return Err(error.into());
+        }
         if let Some(snapshot) = fork_snapshot.as_ref()
             && let Err(error) =
                 self.persist_subagent_fork_snapshot(&child_conversation_id, snapshot)
@@ -616,21 +663,47 @@ impl RuntimeSessionService {
             self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
             return Err(error);
         }
-        if let Some(store) = self.persistence.cloned_transcript_store()
-            && let Err(error) = store.save_conversation_kind(
-                &child_conversation_id,
-                mez_agent::AgentConversationKind::Subagent,
-            )
-        {
-            self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
-            return Err(error);
+        // Routed roots are rebound to ephemeral conversations by their
+        // workflow controller. Their depth-zero runtime lineage is transient,
+        // so it must not become a durable child contract that restore could
+        // later treat as an ordinary delegated authority edge.
+        if !routed_root {
+            if let Some(store) = self.persistence.cloned_transcript_store()
+                && let Err(error) = store.save_subagent_conversation_contract(
+                    &child_conversation_id,
+                    mez_agent::SubagentSessionLineage {
+                        parent_agent_id: spawn.parent_agent_id.clone(),
+                        root_agent_id: self
+                            .subagent_lineage(&child_agent_id)
+                            .map(|lineage| lineage.root_agent_id.clone())
+                            .unwrap_or_else(|| child_agent_id.clone()),
+                        depth: self
+                            .subagent_lineage(&child_agent_id)
+                            .map(|lineage| lineage.depth)
+                            .unwrap_or(0),
+                        display_name: child_display_name.clone(),
+                        terminal: profile.terminal,
+                    },
+                    child_allowed_actions.clone(),
+                )
+            {
+                self.cleanup_failed_subagent_spawn(
+                    controller,
+                    &started.pane_id,
+                    &child_agent_id,
+                    None,
+                );
+                return Err(error);
+            }
         }
-        if let Err(error) = self.enter_runtime_owned_agent_mode_for_pane(&started.pane_id) {
+        #[cfg(test)]
+        if self.take_subagent_spawn_after_fork_persistence_failure_for_tests() {
             self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
-            return Err(error);
+            return Err(MezError::invalid_state(
+                "injected subagent failure after fork persistence",
+            ));
         }
         if let Some(profile_name) = profile.model_profile.as_deref() {
-            self.provider_registry().resolve_profile(profile_name)?;
             self.integration
                 .model_profile_overrides_mut()
                 .agent_profiles
@@ -643,8 +716,59 @@ impl RuntimeSessionService {
                 .agent_profiles
                 .insert(child_agent_id.clone(), parent_profile);
         }
-        self.checkpoint_agent_session_metadata()?;
+        if let Some(enabled) = self.inherited_routing_for_child_agent(&spawn.parent_agent_id) {
+            self.set_agent_routing_override(&started.pane_id, Some(enabled));
+        }
+        if let Some(auto_sizing) =
+            self.inherited_auto_sizing_for_child_agent(&spawn.parent_agent_id)
+        {
+            self.set_agent_auto_sizing_override(&started.pane_id, Some(auto_sizing));
+        }
+        if let Err(error) = self.enter_runtime_owned_agent_mode_for_pane(&started.pane_id) {
+            self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
+            return Err(error);
+        }
+        let child_allowed_action_names =
+            serde_json::to_string(&child_allowed_actions.action_type_names()).map_err(|error| {
+                MezError::invalid_state(format!(
+                    "subagent action catalog diagnostics JSON encoding failed: {error}"
+                ))
+            })?;
+        let child_action_schema_digest =
+            mez_agent::provider_neutral_schema_digest(&child_allowed_actions);
         if spawn.skip_initial_turn {
+            if let Err(error) = self.append_lifecycle_event(
+                EventKind::AgentStatus,
+                format!(
+                    r#"{{"parent_agent_id":"{}","child_agent_id":"{}","child_display_name":"{}","pane_id":"{}","role":"{}","cooperation_mode":"{}","session":"{}","turn_id":null,"allowed_actions":{},"action_schema_digest":"{}"}}"#,
+                    json_escape(&spawn.parent_agent_id),
+                    json_escape(&child_agent_id),
+                    json_escape(&child_display_name),
+                    json_escape(&started.pane_id),
+                    json_escape(&spawn.requested_role),
+                    runtime_cooperation_mode_name(spawn.cooperation_mode),
+                    spawn.session_mode.as_str(),
+                    child_allowed_action_names,
+                    json_escape(&child_action_schema_digest),
+                ),
+            ) {
+                self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
+                return Err(error);
+            }
+            if let Err(error) = self.append_subagent_spawn_audit(
+                &spawn,
+                &child_agent_id,
+                &started.pane_id,
+                &child_allowed_actions,
+            ) {
+                self.cleanup_failed_subagent_spawn(
+                    controller,
+                    &started.pane_id,
+                    &child_agent_id,
+                    None,
+                );
+                return Err(error);
+            }
             let (window, pane) = match runtime_pane_by_id(&self.session, started.pane_id.as_str()) {
                 Ok(result) => result,
                 Err(error) => {
@@ -658,7 +782,7 @@ impl RuntimeSessionService {
                 }
             };
             return Ok(format!(
-                r#"{{"agent":{},"pane":{},"turn":null}}"#,
+                r#"{{"agent":{},"pane":{},"turn":null,"allowed_actions":{},"action_schema_digest":"{}"}}"#,
                 runtime_subagent_state_json(
                     &self.session,
                     pane,
@@ -673,6 +797,8 @@ impl RuntimeSessionService {
                         .map(String::as_str),
                 ),
                 self.runtime_control_pane_state_json(window, pane),
+                child_allowed_action_names,
+                json_escape(&child_action_schema_digest),
             ));
         }
         if let Err(error) =
@@ -681,32 +807,6 @@ impl RuntimeSessionService {
             self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
             return Err(error);
         }
-        if let Some(enabled) = self.inherited_routing_for_child_agent(&spawn.parent_agent_id) {
-            self.set_agent_routing_override(&started.pane_id, Some(enabled));
-        }
-        if let Some(auto_sizing) =
-            self.inherited_auto_sizing_for_child_agent(&spawn.parent_agent_id)
-        {
-            self.set_agent_auto_sizing_override(&started.pane_id, Some(auto_sizing));
-        }
-        let initial_selection = match (
-            spawn.initial_model_size.as_deref(),
-            spawn.initial_reasoning_effort.as_deref(),
-        ) {
-            (Some(size), Some(reasoning_effort)) => {
-                Some(self.runtime_explicit_auto_sizing_selection_for_pane(
-                    &started.pane_id,
-                    size,
-                    reasoning_effort,
-                )?)
-            }
-            (None, None) => None,
-            _ => {
-                return Err(MezError::invalid_args(
-                    "subagent initial size and reasoning effort must be provided together",
-                ));
-            }
-        };
         let initial_model_profile = initial_selection
             .as_ref()
             .map(|selection| selection.selected_profile_name.clone());
@@ -751,7 +851,7 @@ impl RuntimeSessionService {
         if let Err(error) = self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(
-                r#"{{"parent_agent_id":"{}","child_agent_id":"{}","child_display_name":"{}","pane_id":"{}","role":"{}","cooperation_mode":"{}","session":"{}","turn_id":"{}"}}"#,
+                r#"{{"parent_agent_id":"{}","child_agent_id":"{}","child_display_name":"{}","pane_id":"{}","role":"{}","cooperation_mode":"{}","session":"{}","turn_id":"{}","allowed_actions":{},"action_schema_digest":"{}"}}"#,
                 json_escape(&spawn.parent_agent_id),
                 json_escape(&child_agent_id),
                 json_escape(&child_display_name),
@@ -759,7 +859,9 @@ impl RuntimeSessionService {
                 json_escape(&spawn.requested_role),
                 runtime_cooperation_mode_name(spawn.cooperation_mode),
                 spawn.session_mode.as_str(),
-                json_escape(&turn.turn_id)
+                json_escape(&turn.turn_id),
+                child_allowed_action_names,
+                json_escape(&child_action_schema_digest),
             ),
         ) {
             self.cleanup_failed_subagent_spawn(
@@ -770,9 +872,12 @@ impl RuntimeSessionService {
             );
             return Err(error);
         }
-        if let Err(error) =
-            self.append_subagent_spawn_audit(&spawn, &child_agent_id, &started.pane_id)
-        {
+        if let Err(error) = self.append_subagent_spawn_audit(
+            &spawn,
+            &child_agent_id,
+            &started.pane_id,
+            &child_allowed_actions,
+        ) {
             self.cleanup_failed_subagent_spawn(
                 controller,
                 &started.pane_id,
@@ -794,7 +899,7 @@ impl RuntimeSessionService {
             }
         };
         Ok(format!(
-            r#"{{"agent":{},"pane":{},"turn":{}}}"#,
+            r#"{{"agent":{},"pane":{},"turn":{},"allowed_actions":{},"action_schema_digest":"{}"}}"#,
             runtime_subagent_state_json(
                 &self.session,
                 pane,
@@ -811,7 +916,9 @@ impl RuntimeSessionService {
                 }),
             ),
             self.runtime_control_pane_state_json(window, pane),
-            runtime_agent_turn_state_json(&turn)
+            runtime_agent_turn_state_json(&turn),
+            child_allowed_action_names,
+            json_escape(&child_action_schema_digest),
         ))
     }
 
@@ -1028,6 +1135,78 @@ impl RuntimeSessionService {
         ))
     }
 
+    /// Derives the immutable child action catalog from the parent's frozen
+    /// session catalog before any child pane or process is allocated.
+    fn derive_subagent_allowed_actions(
+        &mut self,
+        parent_agent_id: &str,
+        profile: &mez_agent::SubagentProfile,
+        child_depth: usize,
+    ) -> Result<AllowedActionSet> {
+        let parent = self.frozen_subagent_parent_allowed_actions(parent_agent_id)?;
+        let mut child = parent.clone();
+        if let Some(ceiling) = profile.intrinsic_action_ceiling.as_ref() {
+            child = child.restricted_to(ceiling.iter().copied());
+        }
+        if let Some(restriction) = profile.allowed_actions.as_ref() {
+            let requested = AllowedActionSet::from_actions(restriction.iter().copied());
+            if !parent.contains_set(&requested) {
+                return Err(MezError::forbidden(format!(
+                    "subagent profile allowed_actions broadens frozen parent catalog: parent_actions={} requested_actions={} schema_digest={}",
+                    parent.action_type_names().join(","),
+                    requested.action_type_names().join(","),
+                    mez_agent::provider_neutral_schema_digest(&parent),
+                )));
+            }
+            child = parent.restricted_to(restriction.iter().copied());
+        }
+        if profile.terminal || child_depth >= self.max_subagent_depth() {
+            child.remove(AllowedAction::SpawnAgent);
+        }
+        if child.actions.is_empty() {
+            return Err(MezError::forbidden(format!(
+                "subagent action catalog is empty after restrictions: parent_actions={} schema_digest={}",
+                parent.action_type_names().join(","),
+                mez_agent::provider_neutral_schema_digest(&parent),
+            )));
+        }
+        Ok(child)
+    }
+
+    /// Returns the parent session's immutable catalog used to validate a
+    /// spawn request before child-specific restrictions prune its metadata.
+    fn frozen_subagent_parent_allowed_actions(
+        &mut self,
+        parent_agent_id: &str,
+    ) -> Result<AllowedActionSet> {
+        let parent_pane_id = pane_id_from_runtime_agent_id(parent_agent_id)
+            .ok_or_else(|| MezError::invalid_args("subagent parent agent id is invalid"))?;
+        if self
+            .agent_shell_store()
+            .get(parent_pane_id.as_str())
+            .is_none()
+        {
+            if runtime_pane_by_id(&self.session, parent_pane_id.as_str()).is_err() {
+                return Err(MezError::invalid_state(
+                    "subagent parent session is unavailable",
+                ));
+            }
+            self.agent_shell_store_mut()
+                .ensure_session(parent_pane_id.as_str())?;
+        }
+        self.capture_agent_session_allowed_actions_for_pane(parent_pane_id.as_str())?;
+        let parent = self
+            .agent_shell_store()
+            .get(parent_pane_id.as_str())
+            .ok_or_else(|| MezError::invalid_state("subagent parent session is unavailable"))?
+            .allowed_actions
+            .clone()
+            .ok_or_else(|| {
+                MezError::invalid_state("subagent parent frozen action catalog is unavailable")
+            })?;
+        Ok(parent)
+    }
+
     /// Records a denied subagent spawn without allocating any child state.
     ///
     /// Authority denials are audited at the decision point, before any pane,
@@ -1214,6 +1393,10 @@ impl RuntimeSessionService {
             .model_profile_overrides_mut()
             .agent_profiles
             .remove(child_agent_id);
+        if let Some(conversation_id) = child_conversation_id.as_deref() {
+            self.persistence
+                .cancel_queued_transcript_entries_for_conversation(conversation_id);
+        }
         if let (Some(store), Some(conversation_id)) = (
             self.persistence.cloned_transcript_store(),
             child_conversation_id,

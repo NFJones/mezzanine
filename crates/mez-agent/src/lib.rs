@@ -291,7 +291,7 @@ pub use context_continuity::{
 pub use context_skills::constrain_skill_actions_for_loaded_context;
 pub use continuation::{
     CapabilityAvailability, CapabilityDecision, CapabilityRequest, ProviderResponseAcceptance,
-    accept_provider_response, continuation_surface, decide_capabilities,
+    accept_provider_response, decide_capabilities,
 };
 pub use deepseek::{
     DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME,
@@ -509,7 +509,7 @@ pub use scheduler::{
 };
 pub use schema::{
     OpenAiMaapToolSurface, maap_action_batch_schema, maap_current_action_batch_description,
-    normalize_openai_strict_schema,
+    normalize_openai_strict_schema, provider_neutral_schema_digest,
 };
 pub use semantic_patch::{is_mez_patch_payload, validate_apply_patch_payload};
 pub use sensitive_text::sanitize_hidden_model_note;
@@ -574,7 +574,7 @@ pub use subagent::{
 pub use subagent_output::subagent_task_output_for_execution;
 pub use surface::{
     AgentCapability, AllowedAction, AllowedActionSet, ModelInteractionKind, SpawnAgentSizeOption,
-    SpawnAgentSizing,
+    SpawnAgentSizing, SubagentSessionLineage,
 };
 pub use transcript::{
     TRANSCRIPT_CONTEXT_EVENT_MARKER, TranscriptContextEvent, TranscriptContractError,

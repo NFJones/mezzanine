@@ -1379,6 +1379,7 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
             prompt_cache_lineage_id: request.prompt_cache_lineage_id.clone(),
             interaction_kind: request.interaction_kind.as_str().to_string(),
             allowed_actions: request.allowed_actions.action_type_names().join(","),
+            schema_digest: mez_agent::provider_neutral_schema_digest(&request.allowed_actions),
             max_output_tokens: None,
             output_limit_retry_override_tokens: None,
             continuity_warning: None,

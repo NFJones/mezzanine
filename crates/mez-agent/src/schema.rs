@@ -144,6 +144,28 @@ pub fn maap_action_batch_schema(
     })
 }
 
+/// Returns a provider-neutral digest of the complete MAAP action schema.
+///
+/// The serialized schema includes action-set metadata such as configured
+/// spawn sizing and config-path guidance, while deliberately excluding
+/// provider request routing fields such as prompt-cache keys.
+pub fn provider_neutral_schema_digest(allowed_actions: &AllowedActionSet) -> String {
+    use sha2::Digest;
+
+    let mut digest = sha2::Sha256::new();
+    digest.update(b"mez-provider-neutral-schema-v1\0");
+    digest.update(
+        maap_action_batch_schema(allowed_actions, &[])
+            .to_string()
+            .as_bytes(),
+    );
+    digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 /// Runs the maap action schema operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -173,7 +195,9 @@ fn maap_action_schema(allowed_actions: &AllowedActionSet) -> serde_json::Value {
                 allowed_actions.spawn_agent_sizing(),
             )),
             AllowedAction::ConfigChange => action_schemas.push(maap_config_change_action_schema(
-                CONFIG_CHANGE_SETTING_PATH_DESCRIPTION,
+                allowed_actions
+                    .config_change_setting_path_description()
+                    .unwrap_or(CONFIG_CHANGE_SETTING_PATH_DESCRIPTION),
             )),
             AllowedAction::MemorySearch => action_schemas.push(maap_memory_search_action_schema()),
             AllowedAction::MemoryStore => action_schemas.push(maap_memory_store_action_schema()),
@@ -773,14 +797,7 @@ fn maap_spawn_agent_action_schema(sizing: Option<&SpawnAgentSizing>) -> serde_js
                     "description": "Optional child conversation mode. Prefer new for an isolated self-contained task. Use fork only when the child truly requires a bounded snapshot of parent chronology that cannot be supplied in task_prompt. Use null or omit it to preserve the current isolated new-session behavior. Include task-critical facts in task_prompt in either mode."
                 }),
             ),
-            (
-                "size",
-                serde_json::json!({
-                    "type": ["string", "null"],
-                    "enum": ["small", "medium", "large", null],
-                    "description": maap_spawn_agent_size_description(sizing),
-                }),
-            ),
+            ("size", maap_spawn_agent_size_schema(sizing)),
             (
                 "reasoning_effort",
                 maap_spawn_agent_reasoning_schema(sizing),
@@ -797,16 +814,48 @@ fn maap_spawn_agent_action_schema(sizing: Option<&SpawnAgentSizing>) -> serde_js
 /// reason about capability and cost before choosing.
 fn maap_spawn_agent_size_description(sizing: Option<&SpawnAgentSizing>) -> String {
     const BASE: &str = "Optional initial child model size. Provide it together with reasoning_effort to override automatic routing for the initial child turn only. Bias toward a smaller size than your first estimate, choosing the smallest size adequate for task scope, uncertainty, blast radius, and validation burden; use validation to detect and correct an inadequate choice.";
-    let Some(sizing) = sizing.filter(|sizing| !sizing.sizes.is_empty()) else {
+    let Some(sizing) = sizing else {
         return BASE.to_string();
     };
+    if sizing
+        .sizes
+        .iter()
+        .all(|option| option.execution_profile.is_none())
+    {
+        return format!(
+            "{BASE} Routed sizing metadata is unavailable for this session, so use null or omit size and reasoning_effort together to keep automatic routing."
+        );
+    }
     let profiles = sizing
         .sizes
         .iter()
+        .filter(|option| option.execution_profile.is_some())
         .map(|option| format!("{}={}", option.size, option.profile_name))
         .collect::<Vec<_>>()
         .join(", ");
     format!("{BASE} Configured routed profiles: {profiles}.")
+}
+
+/// Builds the nullable `spawn_agent` size field for the captured sizing contract.
+fn maap_spawn_agent_size_schema(sizing: Option<&SpawnAgentSizing>) -> serde_json::Value {
+    let values = match sizing {
+        Some(sizing) if sizing.sizes.is_empty() => serde_json::json!([null]),
+        Some(sizing) => serde_json::Value::Array(
+            sizing
+                .sizes
+                .iter()
+                .filter(|option| option.execution_profile.is_some())
+                .map(|option| serde_json::Value::String(option.size.clone()))
+                .chain(std::iter::once(serde_json::Value::Null))
+                .collect(),
+        ),
+        _ => serde_json::json!(["small", "medium", "large", null]),
+    };
+    serde_json::json!({
+        "type": ["string", "null"],
+        "enum": values,
+        "description": maap_spawn_agent_size_description(sizing),
+    })
 }
 
 /// Builds the `spawn_agent` reasoning-effort schema field.
@@ -817,13 +866,22 @@ fn maap_spawn_agent_size_description(sizing: Option<&SpawnAgentSizing>) -> Strin
 /// non-routed contexts behave unchanged.
 fn maap_spawn_agent_reasoning_schema(sizing: Option<&SpawnAgentSizing>) -> serde_json::Value {
     const BASE: &str = "Optional initial child reasoning effort. Provide it together with size. Choose the lowest adequate effort for diagnostic depth, ambiguity, and consequence; implementation, debugging, refactoring, test-writing, and repository exploration must not use low. Use validation to detect and correct an inadequate choice.";
-    let Some(sizing) = sizing.filter(|sizing| !sizing.sizes.is_empty()) else {
+    let Some(sizing) = sizing else {
         return serde_json::json!({
             "type": ["string", "null"],
             "enum": ["low", "medium", "high", "xhigh", null],
             "description": BASE,
         });
     };
+    if sizing.sizes.is_empty() {
+        return serde_json::json!({
+            "type": ["string", "null"],
+            "enum": [null],
+            "description": format!(
+                "{BASE} Routed sizing metadata is unavailable for this session, so use null or omit size and reasoning_effort together to keep automatic routing."
+            ),
+        });
+    }
     let allowed = maap_spawn_agent_allowed_reasoning_efforts(sizing);
     let mut values = allowed
         .iter()
@@ -834,6 +892,7 @@ fn maap_spawn_agent_reasoning_schema(sizing: Option<&SpawnAgentSizing>) -> serde
     let per_size = sizing
         .sizes
         .iter()
+        .filter(|option| option.execution_profile.is_some())
         .map(|option| {
             let levels = if option.allowed_reasoning_efforts.is_empty() {
                 "none".to_string()
@@ -864,6 +923,9 @@ fn maap_spawn_agent_reasoning_schema(sizing: Option<&SpawnAgentSizing>) -> serde
 fn maap_spawn_agent_allowed_reasoning_efforts(sizing: &SpawnAgentSizing) -> Vec<String> {
     let mut allowed = Vec::new();
     for option in &sizing.sizes {
+        if option.execution_profile.is_none() {
+            continue;
+        }
         for effort in &option.allowed_reasoning_efforts {
             if !allowed.iter().any(|existing| existing == effort) {
                 allowed.push(effort.clone());
@@ -1063,10 +1125,15 @@ pub fn normalize_openai_strict_schema(mut value: serde_json::Value) -> serde_jso
     if let Some(items) = schema.get_mut("items") {
         *items = normalize_openai_strict_schema(std::mem::take(items));
     }
-    if let Some(serde_json::Value::Array(variants)) = schema.get_mut("anyOf") {
-        for variant in variants {
-            *variant = normalize_openai_strict_schema(std::mem::take(variant));
+    for keyword in ["allOf", "anyOf", "oneOf"] {
+        if let Some(serde_json::Value::Array(variants)) = schema.get_mut(keyword) {
+            for variant in variants {
+                *variant = normalize_openai_strict_schema(std::mem::take(variant));
+            }
         }
+    }
+    if let Some(negated) = schema.get_mut("not") {
+        *negated = normalize_openai_strict_schema(std::mem::take(negated));
     }
 
     value
@@ -1096,6 +1163,70 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(action_types, ["say", "shell_command"]);
+    }
+
+    /// Verifies the provider-neutral catalog digest includes schema metadata
+    /// while remaining independent of unrelated provider cache routing state.
+    #[test]
+    fn provider_neutral_schema_digest_includes_action_metadata() {
+        let base = AllowedActionSet::from_actions([AllowedAction::Say, AllowedAction::SpawnAgent]);
+        let sized = base.clone().with_spawn_agent_sizing(SpawnAgentSizing {
+            sizes: vec![crate::SpawnAgentSizeOption {
+                size: "small".to_string(),
+                profile_name: "small-profile".to_string(),
+                execution_profile: None,
+                allowed_reasoning_efforts: vec!["low".to_string()],
+            }],
+        });
+
+        assert_ne!(
+            provider_neutral_schema_digest(&base),
+            provider_neutral_schema_digest(&sized)
+        );
+        assert_eq!(
+            provider_neutral_schema_digest(&sized),
+            provider_neutral_schema_digest(&sized)
+        );
+
+        let mut request = crate::ModelRequest {
+            provider: "test".to_string(),
+            model: "test-model".to_string(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
+            reasoning_effort: None,
+            thinking_enabled: None,
+            latency_preference: None,
+            prompt_cache_retention: None,
+            max_output_tokens: None,
+            temperature: None,
+            prompt_cache_session_id: Some("cache-a".to_string()),
+            prompt_cache_lineage_id: Some("lineage-a".to_string()),
+            turn_id: "turn-a".to_string(),
+            agent_id: "agent-a".to_string(),
+            available_mcp_tools: Vec::new(),
+            memory_actions_enabled: false,
+            issue_actions_enabled: false,
+            interaction_kind: crate::ModelInteractionKind::ActionExecution,
+            allowed_actions: sized.clone(),
+            stop: None,
+            messages: Vec::new().into(),
+        };
+        let digest = provider_neutral_schema_digest(&request.allowed_actions);
+        request.prompt_cache_session_id = Some("cache-b".to_string());
+        request.prompt_cache_lineage_id = Some("lineage-b".to_string());
+        assert_eq!(
+            digest,
+            provider_neutral_schema_digest(&request.allowed_actions)
+        );
+
+        let config_change = AllowedActionSet::from_actions([AllowedAction::ConfigChange])
+            .with_config_change_setting_path_description("captured setting paths");
+        assert_ne!(
+            provider_neutral_schema_digest(&AllowedActionSet::from_actions([
+                AllowedAction::ConfigChange,
+            ])),
+            provider_neutral_schema_digest(&config_change)
+        );
     }
 
     /// Verifies the static spawn schema requires a nullable session field so
@@ -1163,6 +1294,70 @@ mod tests {
         );
     }
 
+    /// Verifies sizing-capture failures leave `spawn_agent` available while
+    /// prohibiting explicit size and reasoning selections that cannot resolve.
+    #[test]
+    fn spawn_agent_schema_uses_null_only_sizing_when_metadata_is_unavailable() {
+        let schema = maap_action_batch_schema(
+            &AllowedActionSet::from_actions([AllowedAction::SpawnAgent])
+                .with_spawn_agent_sizing(SpawnAgentSizing { sizes: Vec::new() }),
+            &[],
+        );
+        let spawn = schema["properties"]["actions"]["items"]["anyOf"]
+            .as_array()
+            .and_then(|variants| {
+                variants.iter().find(|variant| {
+                    variant["properties"]["type"]["enum"] == serde_json::json!(["spawn_agent"])
+                })
+            })
+            .expect("spawn_agent schema variant");
+
+        assert_eq!(
+            spawn["properties"]["size"]["enum"],
+            serde_json::json!([null])
+        );
+        assert_eq!(
+            spawn["properties"]["reasoning_effort"]["enum"],
+            serde_json::json!([null])
+        );
+        assert!(
+            spawn["properties"]["size"]["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("metadata is unavailable"))
+        );
+        assert!(
+            spawn["properties"]["reasoning_effort"]["description"]
+                .as_str()
+                .is_some_and(
+                    |description| description.contains("omit size and reasoning_effort together")
+                )
+        );
+    }
+
+    /// Verifies the schema renders product-captured config-path metadata rather
+    /// than hashing metadata that the provider never receives.
+    #[test]
+    fn config_change_schema_renders_captured_setting_path_description() {
+        let schema = maap_action_batch_schema(
+            &AllowedActionSet::from_actions([AllowedAction::ConfigChange])
+                .with_config_change_setting_path_description("captured setting paths"),
+            &[],
+        );
+        let config_change = schema["properties"]["actions"]["items"]["anyOf"]
+            .as_array()
+            .and_then(|variants| {
+                variants.iter().find(|variant| {
+                    variant["properties"]["type"]["enum"] == serde_json::json!(["config_change"])
+                })
+            })
+            .expect("config_change schema variant");
+
+        assert_eq!(
+            config_change["properties"]["setting_path"]["description"],
+            serde_json::json!("captured setting paths")
+        );
+    }
+
     /// Verifies spawned-child guidance reflects the configured per-size
     /// reasoning allow-lists instead of advertising levels the runtime rejects.
     ///
@@ -1177,6 +1372,16 @@ mod tests {
                 crate::SpawnAgentSizeOption {
                     size: "small".to_string(),
                     profile_name: "deepseek-fast".to_string(),
+                    execution_profile: Some(crate::ModelProfile {
+                        provider: "deepseek".to_string(),
+                        model: "deepseek-fast".to_string(),
+                        model_capabilities: Default::default(),
+                        reasoning_profile: None,
+                        latency_preference: None,
+                        multimodal_required: false,
+                        provider_options: Default::default(),
+                        safety_tier: None,
+                    }),
                     allowed_reasoning_efforts: vec![
                         "low".to_string(),
                         "high".to_string(),
@@ -1186,6 +1391,16 @@ mod tests {
                 crate::SpawnAgentSizeOption {
                     size: "medium".to_string(),
                     profile_name: "deepseek-default".to_string(),
+                    execution_profile: Some(crate::ModelProfile {
+                        provider: "deepseek".to_string(),
+                        model: "deepseek-default".to_string(),
+                        model_capabilities: Default::default(),
+                        reasoning_profile: None,
+                        latency_preference: None,
+                        multimodal_required: false,
+                        provider_options: Default::default(),
+                        safety_tier: None,
+                    }),
                     allowed_reasoning_efforts: vec![
                         "low".to_string(),
                         "high".to_string(),
@@ -1195,6 +1410,16 @@ mod tests {
                 crate::SpawnAgentSizeOption {
                     size: "large".to_string(),
                     profile_name: "deepseek-default".to_string(),
+                    execution_profile: Some(crate::ModelProfile {
+                        provider: "deepseek".to_string(),
+                        model: "deepseek-default".to_string(),
+                        model_capabilities: Default::default(),
+                        reasoning_profile: None,
+                        latency_preference: None,
+                        multimodal_required: false,
+                        provider_options: Default::default(),
+                        safety_tier: None,
+                    }),
                     allowed_reasoning_efforts: vec![
                         "low".to_string(),
                         "high".to_string(),
@@ -1217,6 +1442,10 @@ mod tests {
             .expect("spawn_agent schema variant");
 
         assert_eq!(
+            spawn["properties"]["size"]["enum"],
+            serde_json::json!(["small", "medium", "large", null])
+        );
+        assert_eq!(
             spawn["properties"]["reasoning_effort"]["enum"],
             serde_json::json!(["low", "high", "xhigh", null])
         );
@@ -1238,6 +1467,141 @@ mod tests {
             size_description.contains("medium=deepseek-default"),
             "{size_description}"
         );
+    }
+
+    /// Verifies the provider schema advertises frozen size and reasoning values
+    /// without using unsupported composition to encode their cross-field pair.
+    ///
+    /// Runtime validation owns rejection of invalid frozen pairs, while this
+    /// strict-compatible provider schema preserves nullable automatic routing.
+    #[test]
+    fn spawn_agent_schema_advertises_configured_sizing_without_composition() {
+        let sizing = SpawnAgentSizing {
+            sizes: vec![
+                crate::SpawnAgentSizeOption {
+                    size: "small".to_string(),
+                    profile_name: "small-profile".to_string(),
+                    execution_profile: Some(crate::ModelProfile {
+                        provider: "test".to_string(),
+                        model: "small-model".to_string(),
+                        model_capabilities: Default::default(),
+                        reasoning_profile: None,
+                        latency_preference: None,
+                        multimodal_required: false,
+                        provider_options: Default::default(),
+                        safety_tier: None,
+                    }),
+                    allowed_reasoning_efforts: vec!["low".to_string()],
+                },
+                crate::SpawnAgentSizeOption {
+                    size: "large".to_string(),
+                    profile_name: "large-profile".to_string(),
+                    execution_profile: Some(crate::ModelProfile {
+                        provider: "test".to_string(),
+                        model: "large-model".to_string(),
+                        model_capabilities: Default::default(),
+                        reasoning_profile: None,
+                        latency_preference: None,
+                        multimodal_required: false,
+                        provider_options: Default::default(),
+                        safety_tier: None,
+                    }),
+                    allowed_reasoning_efforts: vec!["high".to_string()],
+                },
+            ],
+        };
+        let schema = maap_spawn_agent_action_schema(Some(&sizing));
+        let validator = jsonschema::validator_for(&schema).expect("spawn schema compiles");
+        let action = |size, reasoning_effort| {
+            serde_json::json!({
+                "type": "spawn_agent",
+                "role": "worker",
+                "task_prompt": "inspect the change",
+                "session": null,
+                "size": size,
+                "reasoning_effort": reasoning_effort,
+            })
+        };
+
+        assert!(validator.is_valid(&action("small", "low")));
+        assert!(validator.is_valid(&action("large", "high")));
+        assert!(validator.is_valid(&action("small", "high")));
+        assert!(!validator.is_valid(&serde_json::json!({
+            "type": "spawn_agent",
+            "role": "worker",
+            "task_prompt": "inspect the change",
+            "session": null,
+        })));
+        assert!(validator.is_valid(&serde_json::json!({
+            "type": "spawn_agent",
+            "role": "worker",
+            "task_prompt": "inspect the change",
+            "session": null,
+            "size": null,
+            "reasoning_effort": null,
+        })));
+    }
+
+    /// Verifies legacy persisted sizing entries remain readable but do not
+    /// advertise explicit pairs that cannot resolve without a frozen profile.
+    #[test]
+    fn spawn_agent_schema_omits_legacy_sizing_entries_from_explicit_pairs() {
+        let sizing = SpawnAgentSizing {
+            sizes: vec![
+                crate::SpawnAgentSizeOption {
+                    size: "small".to_string(),
+                    profile_name: "legacy-small".to_string(),
+                    execution_profile: None,
+                    allowed_reasoning_efforts: vec!["low".to_string()],
+                },
+                crate::SpawnAgentSizeOption {
+                    size: "large".to_string(),
+                    profile_name: "frozen-large".to_string(),
+                    execution_profile: Some(crate::ModelProfile {
+                        provider: "test".to_string(),
+                        model: "large-model".to_string(),
+                        model_capabilities: Default::default(),
+                        reasoning_profile: None,
+                        latency_preference: None,
+                        multimodal_required: false,
+                        provider_options: Default::default(),
+                        safety_tier: None,
+                    }),
+                    allowed_reasoning_efforts: vec!["high".to_string()],
+                },
+            ],
+        };
+        let schema = maap_spawn_agent_action_schema(Some(&sizing));
+        let validator = jsonschema::validator_for(&schema).expect("spawn schema compiles");
+        let action = |size, reasoning_effort| {
+            serde_json::json!({
+                "type": "spawn_agent",
+                "role": "worker",
+                "task_prompt": "inspect the change",
+                "session": null,
+                "size": size,
+                "reasoning_effort": reasoning_effort,
+            })
+        };
+
+        assert_eq!(
+            schema["properties"]["size"]["enum"],
+            serde_json::json!(["large", null])
+        );
+        assert_eq!(
+            schema["properties"]["reasoning_effort"]["enum"],
+            serde_json::json!(["high", null])
+        );
+        assert!(!validator.is_valid(&action("small", "low")));
+        assert!(validator.is_valid(&action("large", "high")));
+        assert!(validator.is_valid(&serde_json::json!({
+            "type": "spawn_agent",
+            "role": "worker",
+            "task_prompt": "inspect the change",
+            "session": null,
+            "size": null,
+            "reasoning_effort": null,
+        })));
     }
 
     /// Verifies third-party MCP input schemas are normalized into the OpenAI
@@ -1267,6 +1631,12 @@ mod tests {
                         {"type": "string", "format": "email"},
                         {"type": "null"}
                     ]
+                },
+                "paired": {
+                    "oneOf": [
+                        {"type": "object", "properties": {"size": {"type": "string", "format": "uri"}}},
+                        {"type": "object", "not": {"properties": {"reasoning": {"type": "string", "format": "email"}}}}
+                    ]
                 }
             }
         }));
@@ -1281,12 +1651,20 @@ mod tests {
             None
         );
         assert_eq!(
+            normalized.pointer("/properties/paired/oneOf/0/properties/size/format"),
+            None
+        );
+        assert_eq!(
+            normalized.pointer("/properties/paired/oneOf/1/not/properties/reasoning/format"),
+            None
+        );
+        assert_eq!(
             normalized.pointer("/properties/data/required"),
             Some(&serde_json::json!(["uri"]))
         );
         assert_eq!(
             normalized.pointer("/required"),
-            Some(&serde_json::json!(["choice", "data", "items"]))
+            Some(&serde_json::json!(["choice", "data", "items", "paired"]))
         );
         assert_eq!(
             normalized.pointer("/properties/data/additionalProperties"),

@@ -940,6 +940,8 @@ impl RuntimeSessionService {
             }
             self.clear_stale_agent_loop_state_for_pane(pane_id)?;
         }
+        let parent_allowed_actions =
+            self.capture_agent_session_allowed_actions_for_pane(pane_id)?;
         let parent_session = self.agent_shell_store().get(pane_id).ok_or_else(|| {
             MezError::new(
                 crate::error::MezErrorKind::NotFound,
@@ -963,6 +965,7 @@ impl RuntimeSessionService {
             mode: parsed.mode,
             parent_conversation_id: parent_conversation_id.clone(),
             parent_transcript_entries,
+            parent_allowed_actions,
             parent_prompt_cache_lineage_id: Some(parent_prompt_cache_lineage_id),
             iteration: 1,
             emitted_apply_patch: false,
@@ -1085,7 +1088,11 @@ impl RuntimeSessionService {
                         Some(state.parent_conversation_id.clone()),
                         state.parent_transcript_entries,
                     )?;
-                Ok((session.session_id.clone(), session.transcript_entries))
+                let session_id = session.session_id.clone();
+                let transcript_entries = session.transcript_entries;
+                self.agent_shell_store_mut()
+                    .restore_allowed_actions(pane_id, state.parent_allowed_actions.clone())?;
+                Ok((session_id, transcript_entries))
             }
             RuntimeAgentLoopMode::NewEachIteration => {
                 let target_conversation_id = Self::runtime_new_agent_conversation_id();
@@ -1099,7 +1106,11 @@ impl RuntimeSessionService {
                         None,
                         0,
                     )?;
-                Ok((session.session_id.clone(), session.transcript_entries))
+                let session_id = session.session_id.clone();
+                let transcript_entries = session.transcript_entries;
+                self.agent_shell_store_mut()
+                    .restore_allowed_actions(pane_id, state.parent_allowed_actions.clone())?;
+                Ok((session_id, transcript_entries))
             }
         }
     }
@@ -1133,6 +1144,8 @@ impl RuntimeSessionService {
                 &state.parent_conversation_id,
                 objective,
             )?;
+            self.agent_shell_store_mut()
+                .restore_allowed_actions(pane_id, state.parent_allowed_actions.clone())?;
             return Ok(());
         }
         self.agent_shell_store_mut()
@@ -1142,6 +1155,8 @@ impl RuntimeSessionService {
                 state.parent_transcript_entries,
                 state.parent_prompt_cache_lineage_id.clone(),
             )?;
+        self.agent_shell_store_mut()
+            .restore_allowed_actions(pane_id, state.parent_allowed_actions.clone())?;
         self.restore_agent_loop_parent_projection(&state.loop_id, pane_id);
         self.sync_prepared_runtime_agent_objective_for_conversation(
             pane_id,
@@ -1384,6 +1399,7 @@ impl RuntimeSessionService {
             model_profile = selected_profile.clone();
             turn.model_profile = selected_profile_name.clone();
         }
+        let _ = self.agent_provider_request_control_for_turn(&turn)?;
         self.agent_turn_ledger_mut().queue_turn(turn.clone())?;
         self.snapshot_agent_native_shell_timeout_for_turn(&turn_id);
         self.append_agent_trace_turn_event(
@@ -1588,7 +1604,7 @@ mod tests {
         runtime_compact_transcript_entries_for_summary, runtime_model_catalog_unavailable_reason,
         runtime_model_compaction_request, runtime_model_compaction_summary_from_response,
     };
-    use mez_agent::{AgentAction, MaapBatch};
+    use mez_agent::{AgentAction, AllowedActionSet, MaapBatch};
 
     /// Verifies model compaction consumes the structured `say` action text
     /// returned by the provider. This keeps manual and automatic compaction
@@ -1635,11 +1651,11 @@ mod tests {
         assert_eq!(reason, "missing-model-read-scope");
     }
 
-    /// Verifies the model compaction prompt exposes only the `say` action
-    /// surface and includes bounded transcript source material. Compaction
-    /// should be a summarization request, not a normal tool-capable agent turn.
+    /// Verifies the model compaction prompt retains the session action catalog
+    /// and includes bounded transcript source material. Its non-MAAP
+    /// interaction kind prevents that catalog from becoming a wire tool schema.
     #[test]
-    fn runtime_model_compaction_request_is_say_only() {
+    fn runtime_model_compaction_request_preserves_session_catalog() {
         let profile = ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
@@ -1668,14 +1684,20 @@ mod tests {
             content: "Need a compact summary".to_string(),
         }])
         .unwrap();
-        let request =
-            runtime_model_compaction_request(&profile, "%1", "as1", 1, &entries, &context).unwrap();
+        let allowed_actions = AllowedActionSet::all_enabled();
+        let request = runtime_model_compaction_request(
+            &profile,
+            "%1",
+            "as1",
+            1,
+            &entries,
+            &context,
+            allowed_actions.clone(),
+        )
+        .unwrap();
 
-        assert_eq!(
-            request.interaction_kind,
-            ModelInteractionKind::ActionExecution
-        );
-        assert_eq!(request.allowed_actions.actions.len(), 1);
+        assert_eq!(request.interaction_kind, ModelInteractionKind::Compaction);
+        assert_eq!(request.allowed_actions, allowed_actions);
         assert!(
             request
                 .messages
@@ -1908,6 +1930,7 @@ mod tests {
             mode: RuntimeAgentLoopMode::ReuseCurrentConversation,
             parent_conversation_id: "parent-conversation".to_string(),
             parent_transcript_entries: 0,
+            parent_allowed_actions: AllowedActionSet::say_only(),
             parent_prompt_cache_lineage_id: Some("lineage-1".to_string()),
             iteration: 1,
             emitted_apply_patch: false,
@@ -1925,6 +1948,7 @@ mod tests {
             mode: RuntimeAgentLoopMode::ReuseCurrentConversation,
             parent_conversation_id: "parent-conversation".to_string(),
             parent_transcript_entries: 0,
+            parent_allowed_actions: AllowedActionSet::say_only(),
             parent_prompt_cache_lineage_id: Some("lineage-1".to_string()),
             iteration: 3,
             emitted_apply_patch: false,
@@ -1995,6 +2019,7 @@ mod tests {
             mode: RuntimeAgentLoopMode::ReuseCurrentConversation,
             parent_conversation_id: "parent-conversation".to_string(),
             parent_transcript_entries: 0,
+            parent_allowed_actions: AllowedActionSet::say_only(),
             parent_prompt_cache_lineage_id: Some("lineage-1".to_string()),
             iteration: 1,
             emitted_apply_patch: false,

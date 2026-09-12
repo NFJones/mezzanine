@@ -3,7 +3,18 @@
 use std::collections::BTreeMap;
 
 use crate::transcript::AgentSessionMetadata;
-use crate::{ModelTokenUsage, ModelTokenUsageKey};
+use crate::{
+    AllowedAction, AllowedActionSet, ModelProfile, ModelTokenUsage, ModelTokenUsageKey,
+    SpawnAgentSizeOption, SpawnAgentSizing,
+};
+
+fn captured_execution_profile() -> ModelProfile {
+    ModelProfile {
+        provider: "test-provider".to_string(),
+        model: "test-model".to_string(),
+        ..Default::default()
+    }
+}
 
 fn valid_checkpoint() -> AgentSessionMetadata {
     AgentSessionMetadata {
@@ -32,6 +43,7 @@ fn valid_checkpoint() -> AgentSessionMetadata {
         context_usage: None,
         context_usage_snapshot: None,
         latest_request_usage: None,
+        allowed_actions: None,
     }
 }
 
@@ -60,4 +72,95 @@ fn agent_session_checkpoint_rejects_unknown_policy_values() {
 
     checkpoint.root_routing_policy = Some("invalid".to_string());
     assert!(checkpoint.validate().is_err());
+}
+
+/// Verifies restored session catalogs accept configurable action subsets and
+/// reject legacy controller-only actions that cannot appear in static MAAP.
+#[test]
+fn agent_session_checkpoint_validates_persisted_action_catalog() {
+    let mut checkpoint = valid_checkpoint();
+    checkpoint.allowed_actions = Some(AllowedActionSet::from_actions([
+        AllowedAction::Say,
+        AllowedAction::ShellCommand,
+    ]));
+    checkpoint.validate().unwrap();
+
+    checkpoint.allowed_actions = Some(AllowedActionSet::from_actions([
+        AllowedAction::RequestCapability,
+    ]));
+    assert!(checkpoint.validate().is_err());
+}
+
+/// Verifies durable catalogs reject empty surfaces and schema metadata that is
+/// detached from its owning action or carries malformed routed-size values.
+#[test]
+fn agent_session_checkpoint_rejects_malformed_persisted_action_catalogs() {
+    let mut checkpoint = valid_checkpoint();
+    checkpoint.allowed_actions = Some(AllowedActionSet::from_actions([]));
+    assert!(checkpoint.validate().is_err());
+
+    checkpoint.allowed_actions = Some(
+        AllowedActionSet::from_actions([AllowedAction::Say]).with_spawn_agent_sizing(
+            SpawnAgentSizing {
+                sizes: vec![SpawnAgentSizeOption {
+                    size: "small".to_string(),
+                    profile_name: "small-profile".to_string(),
+                    execution_profile: None,
+                    allowed_reasoning_efforts: vec!["medium".to_string()],
+                }],
+            },
+        ),
+    );
+    assert!(checkpoint.validate().is_err());
+
+    checkpoint.allowed_actions = Some(
+        AllowedActionSet::from_actions([AllowedAction::SpawnAgent]).with_spawn_agent_sizing(
+            SpawnAgentSizing {
+                sizes: vec![
+                    SpawnAgentSizeOption {
+                        size: "small".to_string(),
+                        profile_name: "small-profile".to_string(),
+                        execution_profile: None,
+                        allowed_reasoning_efforts: vec!["medium".to_string()],
+                    },
+                    SpawnAgentSizeOption {
+                        size: "small".to_string(),
+                        profile_name: "small-profile".to_string(),
+                        execution_profile: None,
+                        allowed_reasoning_efforts: vec!["unsupported".to_string()],
+                    },
+                ],
+            },
+        ),
+    );
+    assert!(checkpoint.validate().is_err());
+}
+
+/// Verifies distinct routed sizes may intentionally share one profile while
+/// persisted validation still treats duplicate size names as malformed.
+#[test]
+fn agent_session_checkpoint_allows_shared_sizing_profile_names() {
+    let mut checkpoint = valid_checkpoint();
+    checkpoint.allowed_actions = Some(
+        AllowedActionSet::from_actions([AllowedAction::SpawnAgent]).with_spawn_agent_sizing(
+            SpawnAgentSizing {
+                sizes: vec![
+                    SpawnAgentSizeOption {
+                        size: "small".to_string(),
+                        profile_name: "shared-profile".to_string(),
+                        execution_profile: Some(captured_execution_profile()),
+                        allowed_reasoning_efforts: vec!["low".to_string()],
+                    },
+                    SpawnAgentSizeOption {
+                        size: "medium".to_string(),
+                        profile_name: "shared-profile".to_string(),
+                        execution_profile: Some(captured_execution_profile()),
+                        allowed_reasoning_efforts: vec!["high".to_string()],
+                    },
+                ],
+            },
+        ),
+    );
+
+    checkpoint.validate().unwrap();
 }

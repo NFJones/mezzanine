@@ -84,7 +84,17 @@ fn runtime_agent_prompt_resume_completion_excludes_subagent_uuid() {
         })
         .unwrap();
     transcript_store
-        .save_conversation_kind(child_id, mez_agent::AgentConversationKind::Subagent)
+        .save_subagent_conversation_contract(
+            child_id,
+            mez_agent::SubagentSessionLineage {
+                parent_agent_id: "agent-%1".to_string(),
+                root_agent_id: "agent-%1".to_string(),
+                depth: 1,
+                display_name: "delegated child".to_string(),
+                terminal: false,
+            },
+            mez_agent::AllowedActionSet::say_only(),
+        )
         .unwrap();
     service.set_agent_transcript_store(transcript_store);
     let primary = service

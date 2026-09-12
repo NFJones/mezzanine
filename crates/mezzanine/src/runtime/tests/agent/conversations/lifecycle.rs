@@ -1052,6 +1052,91 @@ fn runtime_agent_loop_ephemeral_modes_restore_parent_projection() {
     }
 }
 
+/// Verifies forked and fresh loop iterations restore the parent catalog rather
+/// than recapturing a live configuration change after their ephemeral binding.
+/// The loop controller owns the durable parent snapshot while each temporary
+/// iteration remains free to capture its own session boundary catalog.
+#[test]
+fn runtime_agent_loop_ephemeral_modes_restore_parent_catalog_after_config_change() {
+    for command in ["/loop --fork inspect", "/loop --new inspect"] {
+        let mut service = test_runtime_service();
+        let pane_id = service.active_pane_id().unwrap().to_string();
+        let parent_actions = mez_agent::AllowedActionSet::from_actions([
+            mez_agent::AllowedAction::Say,
+            mez_agent::AllowedAction::ShellCommand,
+        ]);
+        service.set_agent_enabled_actions(parent_actions.clone());
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume(&pane_id)
+            .unwrap();
+
+        service
+            .execute_agent_shell_loop_command(&pane_id, command)
+            .unwrap();
+        assert_eq!(
+            service
+                .agent_shell_store()
+                .get(&pane_id)
+                .and_then(|session| session.allowed_actions.as_ref()),
+            Some(&parent_actions),
+            "{command} should snapshot its first ephemeral iteration"
+        );
+
+        service.set_agent_enabled_actions(mez_agent::AllowedActionSet::say_only());
+        service.stop_agent_turn_for_pane(&pane_id).unwrap();
+
+        assert_eq!(
+            service
+                .agent_shell_store()
+                .get(&pane_id)
+                .and_then(|session| session.allowed_actions.as_ref()),
+            Some(&parent_actions),
+            "{command} must restore the durable parent catalog"
+        );
+    }
+}
+
+/// Verifies an ephemeral loop checkpoint saves the parent catalog and restart
+/// restores that durable catalog instead of the temporary iteration catalog.
+#[test]
+fn runtime_agent_loop_checkpoint_restart_restores_parent_catalog() {
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-loop-catalog-restart"));
+    let mut service = test_runtime_service();
+    let parent_actions = mez_agent::AllowedActionSet::from_actions([
+        mez_agent::AllowedAction::Say,
+        mez_agent::AllowedAction::ShellCommand,
+    ]);
+    service.set_agent_enabled_actions(parent_actions.clone());
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .execute_agent_shell_loop_command("%1", "/loop --fork inspect")
+        .unwrap();
+    service.checkpoint_agent_session_metadata().unwrap();
+
+    let mut restarted = test_runtime_service();
+    restarted.session.id = service.session().id.clone();
+    restarted.set_agent_enabled_actions(mez_agent::AllowedActionSet::say_only());
+    restarted.set_agent_transcript_store(transcript_store);
+    assert_eq!(
+        restarted
+            .restore_agent_sessions_from_transcript_store()
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        restarted
+            .agent_shell_store()
+            .get("%1")
+            .and_then(|session| session.allowed_actions.as_ref()),
+        Some(&parent_actions)
+    );
+}
+
 /// Verifies that `/clear` follows the spec-level behavior of clearing the live
 /// viewport while preserving pane logs and starting a fresh visible
 /// conversation.

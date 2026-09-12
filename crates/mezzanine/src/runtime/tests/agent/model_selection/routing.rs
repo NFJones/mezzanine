@@ -103,7 +103,7 @@ fn selected_routed_loop(
 /// routing from a depth-limited parent does not consume the worker's depth.
 #[test]
 fn runtime_routed_worker_starts_at_root_depth() {
-    let (service, _parent_turn_id, worker_turn) =
+    let (mut service, _parent_turn_id, worker_turn) =
         selected_routed_loop("/loop --limit 1 inspect routing depth");
     let lineage = service
         .subagent_lineage(&worker_turn.agent_id)
@@ -114,6 +114,7 @@ fn runtime_routed_worker_starts_at_root_depth() {
     assert!(
         service
             .agent_provider_request_control_for_turn(&worker_turn)
+            .expect("provider control should capture the worker action schema")
             .0
             .unwrap()
             .contains(mez_agent::AllowedAction::SpawnAgent)
@@ -464,6 +465,7 @@ fn runtime_routed_worker_presents_child_prompt_status_and_output() {
     let mut service = test_runtime_service();
     service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
     service.set_agent_default_routing(true);
+    service.set_agent_enabled_actions(mez_agent::AllowedActionSet::say_only());
     service
         .agent_scheduler_mut()
         .set_max_concurrent_agents(1)
@@ -622,6 +624,92 @@ fn runtime_routed_worker_presents_child_prompt_status_and_output() {
             .phase,
         mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForWorkerResult
     );
+}
+
+/// Verifies transcript persistence leaves a routed root transient while its
+/// queued worker retains the catalog created at the child spawn boundary.
+///
+/// A routed worker starts at depth zero and is later rebound to an ephemeral
+/// conversation, so durable child-contract validation must not reject it as a
+/// persisted ordinary descendant before it can run.
+#[test]
+fn runtime_persisted_routed_worker_rebinding_preserves_spawn_catalog() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("persisted-routed-worker-catalog"));
+    service.set_agent_transcript_store(transcript_store);
+    let parent_actions = mez_agent::AllowedActionSet::from_actions([
+        mez_agent::AllowedAction::Say,
+        mez_agent::AllowedAction::ShellCommand,
+        mez_agent::AllowedAction::SpawnAgent,
+    ]);
+    service.set_agent_enabled_actions(parent_actions);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let prompt = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"routed-catalog","method":"agent/shell/command","params":{"idempotency_key":"routed-catalog","input":"implement catalog preservation"}}"#,
+        &primary,
+    );
+    assert!(prompt.contains(r#""state":"running""#), "{prompt}");
+    let expected = service
+        .agent_shell_store()
+        .get("%1")
+        .and_then(|session| session.allowed_actions.clone())
+        .expect("parent request should capture its frozen catalog");
+    service.set_agent_enabled_actions(mez_agent::AllowedActionSet::say_only());
+    let selection = AutoSizingRoutingSelection {
+        selected_profile: service.agent_turn_model_profile("turn-1").unwrap().clone(),
+        selected_profile_name: "default".to_string(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        decision_summary: None,
+        fallback: None,
+    };
+    service
+        .apply_routing_selected_transition(
+            &AgentId::opaque("agent-%1").unwrap(),
+            "turn-1",
+            selection,
+        )
+        .unwrap();
+    let child_turn = service
+        .routed_workflow_for_tests("turn-1")
+        .and_then(|workflow| workflow.child_turn_id.as_deref())
+        .and_then(|turn_id| {
+            service
+                .agent_turn_ledger()
+                .turns()
+                .iter()
+                .find(|turn| turn.turn_id == turn_id)
+        })
+        .cloned()
+        .expect("routed worker turn should be queued");
+    let child_catalog = service
+        .agent_provider_request_control_for_turn(&child_turn)
+        .unwrap()
+        .0
+        .expect("routed worker request should retain a catalog");
+
+    assert_eq!(child_catalog, expected);
+    assert_eq!(
+        mez_agent::provider_neutral_schema_digest(&child_catalog),
+        mez_agent::provider_neutral_schema_digest(&expected)
+    );
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%2")
+            .and_then(|session| session.allowed_actions.as_ref()),
+        Some(&expected)
+    );
+    assert!(matches!(
+        child_turn.state,
+        AgentTurnState::Queued | AgentTurnState::Running
+    ));
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies routed selection setup failure is contained after classification.
@@ -2712,6 +2800,7 @@ reasoning_profile = "high"
     assert_eq!(
         handoff_service
             .agent_provider_request_control_for_turn(&redirected_handoff_turn)
+            .expect("provider control should preserve the handoff action schema")
             .1,
         Some(mez_agent::ModelInteractionKind::RoutedHandoff)
     );

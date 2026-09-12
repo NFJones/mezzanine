@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    AgentContextUsageSnapshot, AutoSizingRoutingPolicy, LatestModelRequestUsage, ModelTokenUsage,
-    ModelTokenUsageKey,
+    AgentContextUsageSnapshot, AllowedActionSet, AutoSizingRoutingPolicy, LatestModelRequestUsage,
+    ModelTokenUsage, ModelTokenUsageKey,
 };
 
 use super::TranscriptContractError;
@@ -63,6 +63,8 @@ pub struct AgentSessionMetadata {
     pub context_usage_snapshot: Option<AgentContextUsageSnapshot>,
     /// Latest concrete execution-model request sample for cache diagnostics.
     pub latest_request_usage: Option<LatestModelRequestUsage>,
+    /// Immutable MAAP action catalog captured when this pane session started.
+    pub allowed_actions: Option<AllowedActionSet>,
 }
 
 impl AgentSessionMetadata {
@@ -131,6 +133,11 @@ impl AgentSessionMetadata {
         if let Some(latest) = self.latest_request_usage.as_ref() {
             validate_required("latest request usage provider", &latest.model.provider)?;
             validate_required("latest request usage model", &latest.model.model)?;
+        }
+        if let Some(allowed_actions) = self.allowed_actions.as_ref() {
+            allowed_actions
+                .validate_persisted()
+                .map_err(TranscriptContractError::new)?;
         }
         Ok(())
     }

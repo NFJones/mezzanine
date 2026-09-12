@@ -3,11 +3,127 @@
 use super::*;
 use crate::runtime::ActiveTurnSleepInhibition;
 
+/// Verifies an existing session retains its complete action schema after live
+/// configuration changes, including the retry and repair control path.
+#[test]
+fn runtime_session_action_snapshot_survives_live_configuration_change() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .expect("test pane should create an agent shell session");
+    let turn = mez_agent::AgentTurnRecord {
+        turn_id: "snapshot-turn".to_string(),
+        conversation_id: "snapshot-conversation".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 1,
+        deadline_at_unix_millis: 0,
+        policy_profile: "default".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        state: mez_agent::AgentTurnState::Running,
+        cooperation_mode: None,
+        initial_capability: None,
+    };
+    let initial = mez_agent::AllowedActionSet::from_actions([
+        mez_agent::AllowedAction::Say,
+        mez_agent::AllowedAction::ShellCommand,
+    ]);
+    service.set_agent_enabled_actions(initial.clone());
+
+    let captured = service
+        .agent_provider_request_control_for_turn(&turn)
+        .expect("initial provider control should capture the session schema")
+        .0
+        .expect("provider turn should retain an action schema");
+    service.set_agent_enabled_actions(mez_agent::AllowedActionSet::say_only());
+    let retried = service
+        .agent_provider_request_control_for_turn(&turn)
+        .expect("retry provider control should retain the session schema")
+        .0
+        .expect("retry should retain an action schema");
+
+    assert_eq!(captured, initial);
+    assert_eq!(retried, initial);
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .allowed_actions,
+        Some(initial)
+    );
+}
+
+/// Verifies unavailable routed sizing metadata captures a schema that keeps
+/// spawn available while preventing explicit selections the runtime cannot
+/// resolve.
+#[test]
+fn runtime_session_capture_uses_null_only_sizing_when_profile_is_unavailable() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .expect("test pane should create an agent shell session");
+    let mut auto_sizing = service.agent_auto_sizing().clone();
+    auto_sizing.small_model_profile = "unavailable-profile".to_string();
+    service.set_agent_auto_sizing_override("%1", Some(auto_sizing));
+    let turn = mez_agent::AgentTurnRecord {
+        turn_id: "unavailable-sizing-turn".to_string(),
+        conversation_id: "unavailable-sizing-conversation".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 1,
+        deadline_at_unix_millis: 0,
+        policy_profile: "default".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        state: mez_agent::AgentTurnState::Running,
+        cooperation_mode: None,
+        initial_capability: None,
+    };
+
+    let allowed_actions = service
+        .agent_provider_request_control_for_turn(&turn)
+        .expect("provider control should capture an unavailable sizing contract")
+        .0
+        .expect("provider turn should retain an action schema");
+    let sizing = allowed_actions
+        .spawn_agent_sizing()
+        .expect("spawn action should retain explicit unavailable metadata");
+    assert!(allowed_actions.contains(mez_agent::AllowedAction::SpawnAgent));
+    assert!(sizing.sizes.is_empty());
+    let schema = mez_agent::maap_action_batch_schema(&allowed_actions, &[]);
+    let spawn = schema["properties"]["actions"]["items"]["anyOf"]
+        .as_array()
+        .and_then(|variants| {
+            variants.iter().find(|variant| {
+                variant["properties"]["type"]["enum"] == serde_json::json!(["spawn_agent"])
+            })
+        })
+        .expect("spawn_agent schema variant");
+    assert_eq!(
+        spawn["properties"]["size"]["enum"],
+        serde_json::json!([null])
+    );
+    assert_eq!(
+        spawn["properties"]["reasoning_effort"]["enum"],
+        serde_json::json!([null])
+    );
+}
+
 /// Verifies a spawned child below the configured depth limit retains recursive
 /// delegation unless its selected profile marks it terminal.
 #[test]
 fn nonterminal_subagent_provider_surface_retains_spawn_agent_below_limit() {
     let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%2")
+        .expect("test child pane should own an agent shell session");
     let turn = mez_agent::AgentTurnRecord {
         turn_id: "turn-child".to_string(),
         conversation_id: "conversation-child".to_string(),
@@ -36,6 +152,7 @@ fn nonterminal_subagent_provider_surface_retains_spawn_agent_below_limit() {
 
     let allowed_actions = service
         .agent_provider_request_control_for_turn(&turn)
+        .expect("provider control should capture the session action schema")
         .0
         .expect("ordinary provider turns should have a static action set");
 
@@ -43,11 +160,18 @@ fn nonterminal_subagent_provider_surface_retains_spawn_agent_below_limit() {
     assert!(allowed_actions.contains(mez_agent::AllowedAction::SendMessage));
 }
 
-/// Verifies terminal-profile and maximum-depth agents retain the configured
-/// provider action set while execution-time policy rejects unavailable spawns.
+/// Verifies existing session snapshots stay stable after lineage changes.
+///
+/// Structural ceilings are applied once while a child catalog is derived at
+/// spawn time. Reclassifying an already captured test session must not mutate
+/// its frozen provider-visible contract.
 #[test]
-fn terminal_and_max_depth_subagent_surfaces_retain_spawn_agent() {
+fn existing_subagent_session_catalog_remains_immutable_after_lineage_changes() {
     let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%2")
+        .expect("test child pane should own an agent shell session");
     let turn = mez_agent::AgentTurnRecord {
         turn_id: "turn-child".to_string(),
         conversation_id: "conversation-child".to_string(),
@@ -76,6 +200,7 @@ fn terminal_and_max_depth_subagent_surfaces_retain_spawn_agent() {
 
     let depth_limited_actions = service
         .agent_provider_request_control_for_turn(&turn)
+        .expect("provider control should capture the session action schema")
         .0
         .expect("provider turns should have a static action set");
     assert!(depth_limited_actions.contains(mez_agent::AllowedAction::SpawnAgent));
@@ -92,6 +217,7 @@ fn terminal_and_max_depth_subagent_surfaces_retain_spawn_agent() {
     );
     let terminal_actions = service
         .agent_provider_request_control_for_turn(&turn)
+        .expect("provider control should preserve the session action schema")
         .0
         .expect("provider turns should have a static action set");
     assert!(terminal_actions.contains(mez_agent::AllowedAction::SpawnAgent));

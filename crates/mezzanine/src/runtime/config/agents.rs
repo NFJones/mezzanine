@@ -579,6 +579,35 @@ pub(crate) fn runtime_subagent_profiles_from_config(
             .unwrap_or("")
             .to_string();
         let terminal = runtime_json_bool(object.get("terminal")).unwrap_or(false);
+        let allowed_actions = object
+            .get("allowed_actions")
+            .map(|value| {
+                let values = runtime_json_string_array(Some(value))?.ok_or_else(|| {
+                    MezError::config("subagent allowed_actions must be a string array")
+                })?;
+                if values.is_empty() {
+                    return Err(MezError::config(
+                        "subagent allowed_actions must contain at least one action",
+                    ));
+                }
+                values
+                    .into_iter()
+                    .map(|value| {
+                        let action = AllowedAction::from_action_type(&value).ok_or_else(|| {
+                            MezError::config(format!(
+                                "subagent allowed_actions contains unknown action `{value}`"
+                            ))
+                        })?;
+                        if !AllowedActionSet::all_enabled().contains(action) {
+                            return Err(MezError::config(format!(
+                                "subagent allowed_actions cannot enable controller-only action `{value}`"
+                            )));
+                        }
+                        Ok(action)
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .transpose()?;
         let developer_instructions = runtime_json_string(object.get("developer_instructions"))
             .or_else(|| runtime_json_string(object.get("developer_prompt")))
             .map(ToOwned::to_owned);
@@ -606,6 +635,8 @@ pub(crate) fn runtime_subagent_profiles_from_config(
                 name,
                 description,
                 terminal,
+                intrinsic_action_ceiling: None,
+                allowed_actions,
                 developer_instructions,
                 model_profile,
                 permission_preset,

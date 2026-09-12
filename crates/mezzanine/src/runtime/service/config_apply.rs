@@ -42,6 +42,19 @@ use crate::runtime::{RuntimeConfigAffectedSubsystems, RuntimePreparedConfigReloa
 use crate::security::project::{ProjectTrustProvenance, resolve_project_trust_provenance};
 use mez_agent::ModelProfileDefinition;
 
+/// One unbound session catalog captured while preparing a configuration change.
+///
+/// Captures are committed to durable session metadata before live policy moves.
+/// If either the checkpoint or later configuration application fails, this
+/// record restores both the pane-local and conversation-owned prior values.
+#[derive(Debug, Clone)]
+struct AgentActionCatalogFreezeRecord {
+    pane_id: String,
+    conversation_id: String,
+    previous_live_catalog: Option<mez_agent::AllowedActionSet>,
+    previous_durable_catalog: Option<mez_agent::AllowedActionSet>,
+}
+
 impl RuntimeSessionService {
     /// Returns the configuration layers currently applied to the runtime.
     #[cfg(test)]
@@ -89,6 +102,85 @@ impl RuntimeSessionService {
     ) -> Result<RuntimeConfigApplyReport> {
         self.integration.replace_config_layers(layers);
         self.apply_runtime_config_layers_async().await
+    }
+
+    /// Freezes every runtime-created session that has not yet issued a model request.
+    ///
+    /// Agent shell storage deliberately has no runtime configuration dependency.
+    /// The service therefore owns this boundary: before replacing live configuration,
+    /// it supplies the outgoing complete action catalog to each unbound session.
+    /// A later provider, child, or loop action can then never capture a broader
+    /// post-reload catalog for a conversation that already existed.
+    fn freeze_unbound_agent_session_action_catalogs(
+        &mut self,
+    ) -> Result<Vec<AgentActionCatalogFreezeRecord>> {
+        let sessions = self
+            .agent_shell_store()
+            .sessions()
+            .filter(|session| session.allowed_actions.is_none())
+            .map(|session| {
+                (
+                    session.pane_id.clone(),
+                    session.session_id.clone(),
+                    session.allowed_actions.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let store = self.persistence.cloned_transcript_store();
+        let mut records = Vec::with_capacity(sessions.len());
+        for (pane_id, conversation_id, previous_live_catalog) in sessions {
+            let previous_durable_catalog = store
+                .as_ref()
+                .map(|store| store.conversation_allowed_actions(&conversation_id))
+                .transpose()?
+                .flatten();
+            if let Err(error) = self.capture_agent_session_allowed_actions_for_pane(&pane_id) {
+                let _ = self.rollback_unbound_agent_session_action_catalog_freeze(&records);
+                return Err(error);
+            }
+            records.push(AgentActionCatalogFreezeRecord {
+                pane_id,
+                conversation_id,
+                previous_live_catalog,
+                previous_durable_catalog,
+            });
+        }
+        if records.is_empty() {
+            return Ok(records);
+        }
+        if let Err(error) = self.checkpoint_agent_session_metadata() {
+            let _ = self.rollback_unbound_agent_session_action_catalog_freeze(&records);
+            return Err(error);
+        }
+        Ok(records)
+    }
+
+    /// Restores a failed outgoing-catalog checkpoint before the candidate
+    /// configuration becomes visible to any future provider request.
+    fn rollback_unbound_agent_session_action_catalog_freeze(
+        &mut self,
+        records: &[AgentActionCatalogFreezeRecord],
+    ) -> Result<()> {
+        for record in records.iter().rev() {
+            match record.previous_live_catalog.clone() {
+                Some(catalog) => self
+                    .agent_shell_store_mut()
+                    .restore_allowed_actions(&record.pane_id, catalog)?,
+                None => self
+                    .agent_shell_store_mut()
+                    .clear_allowed_actions(&record.pane_id)?,
+            };
+        }
+        if let Some(store) = self.persistence.cloned_transcript_store() {
+            for record in records.iter().rev() {
+                store.restore_conversation_allowed_actions(
+                    &record.conversation_id,
+                    record.previous_durable_catalog.clone(),
+                )?;
+            }
+            self.checkpoint_agent_session_metadata()?;
+        }
+        Ok(())
     }
 
     /// Installs startup configuration and hydrates persistent session memory.
@@ -371,12 +463,45 @@ impl RuntimeSessionService {
         )
     }
 
-    /// Applies configuration state that was parsed and composed before actor settlement.
+    /// Restores prior runtime configuration after a rejected candidate.
     ///
-    /// The actor remains the sole owner of mutable runtime subsystems, but it
-    /// does not repeat layer parsing, schema validation, or effective-config
-    /// composition already completed by an asynchronous preparation worker.
+    /// The rejected candidate has already rolled back its outgoing session
+    /// catalog transaction, so replaying the previous runtime state must not
+    /// capture a new catalog from that restored configuration.
+    pub(crate) fn restore_runtime_config_layers_without_catalog_freeze(
+        &mut self,
+    ) -> Result<RuntimeConfigApplyReport> {
+        let effective = compose_effective_config(self.integration.config_layers())?;
+        let structured = runtime_effective_config_value(self.integration.config_layers())?;
+        self.apply_prepared_runtime_config_unfrozen(
+            effective,
+            structured,
+            RuntimeConfigAffectedSubsystems::all(),
+        )
+    }
+
     pub(crate) fn apply_prepared_runtime_config(
+        &mut self,
+        effective: crate::config::EffectiveConfig,
+        structured: serde_json::Value,
+        affected: RuntimeConfigAffectedSubsystems,
+    ) -> Result<RuntimeConfigApplyReport> {
+        let frozen_catalogs = self.freeze_unbound_agent_session_action_catalogs()?;
+        match self.apply_prepared_runtime_config_unfrozen(effective, structured, affected) {
+            Ok(report) => Ok(report),
+            Err(error) => {
+                self.rollback_unbound_agent_session_action_catalog_freeze(&frozen_catalogs)?;
+                Err(error)
+            }
+        }
+    }
+
+    /// Applies parsed configuration after outgoing session catalogs are durable.
+    ///
+    /// Callers must enter through [`Self::apply_prepared_runtime_config`] so
+    /// every live configuration path freezes unbound sessions before the
+    /// agent action catalog can change.
+    fn apply_prepared_runtime_config_unfrozen(
         &mut self,
         effective: crate::config::EffectiveConfig,
         structured: serde_json::Value,

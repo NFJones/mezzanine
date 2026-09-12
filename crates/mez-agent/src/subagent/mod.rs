@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::{AgentAction, AgentActionPayload, PermissionPreset};
+use crate::{AgentAction, AgentActionPayload, AllowedAction, PermissionPreset};
 
 mod scope;
 
@@ -466,6 +466,14 @@ pub struct SubagentProfile {
     pub description: String,
     /// Whether children using this profile are forbidden from spawning subagents.
     pub terminal: bool,
+    /// Structural action ceiling supplied by a built-in profile.
+    ///
+    /// Unlike a user-authored `allowed_actions` list, this ceiling intersects a
+    /// narrow parent catalog rather than requiring the parent to contain every
+    /// action in the built-in role's full baseline.
+    pub intrinsic_action_ceiling: Option<Vec<AllowedAction>>,
+    /// Optional static action restriction applied to children using this profile.
+    pub allowed_actions: Option<Vec<AllowedAction>>,
     /// Optional developer instructions appended to the child prompt.
     pub developer_instructions: Option<String>,
     /// Optional child model-profile override.
@@ -549,6 +557,23 @@ pub fn builtin_subagent_profiles() -> BTreeMap<String, SubagentProfile> {
             name: id.to_string(),
             description: description.to_string(),
             terminal: false,
+            intrinsic_action_ceiling: (id == "explorer").then(|| {
+                vec![
+                    AllowedAction::Say,
+                    AllowedAction::ShellCommand,
+                    AllowedAction::WebSearch,
+                    AllowedAction::FetchUrl,
+                    AllowedAction::SendMessage,
+                    AllowedAction::SpawnAgent,
+                    AllowedAction::McpServerSearch,
+                    AllowedAction::McpServerGet,
+                    AllowedAction::McpCall,
+                    AllowedAction::MemorySearch,
+                    AllowedAction::ListAgents,
+                    AllowedAction::IssueQuery,
+                ]
+            }),
+            allowed_actions: None,
             developer_instructions: None,
             model_profile: None,
             permission_preset: None,
@@ -885,5 +910,27 @@ mod tests {
         assert!(profiles.contains_key("default"));
         assert!(profiles.contains_key("worker"));
         assert!(profiles.contains_key("explorer"));
+        let explorer_actions = profiles["explorer"]
+            .intrinsic_action_ceiling
+            .as_ref()
+            .expect("explorer must own a structural read-only catalog");
+        for action in [
+            crate::AllowedAction::ApplyPatch,
+            crate::AllowedAction::ConfigChange,
+            crate::AllowedAction::MemoryStore,
+            crate::AllowedAction::IssueAdd,
+            crate::AllowedAction::IssueUpdate,
+            crate::AllowedAction::IssueDelete,
+        ] {
+            assert!(!explorer_actions.contains(&action));
+        }
+        for action in [
+            crate::AllowedAction::ShellCommand,
+            crate::AllowedAction::McpCall,
+            crate::AllowedAction::SendMessage,
+            crate::AllowedAction::IssueQuery,
+        ] {
+            assert!(explorer_actions.contains(&action));
+        }
     }
 }

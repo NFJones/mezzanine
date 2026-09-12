@@ -69,7 +69,7 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         .unwrap();
     assert_eq!(
         capability_tool["parameters"]["required"],
-        serde_json::json!(["rationale", "objective", "actions"])
+        serde_json::json!(["actions", "objective", "rationale"])
     );
     let capability_description = capability_tool["description"].as_str().unwrap();
     assert!(capability_description.contains("Return a function call, not prose"));
@@ -181,7 +181,7 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         .unwrap();
     assert_eq!(
         say_schema["required"],
-        serde_json::json!(["type", "status", "content_type", "text"])
+        serde_json::json!(["content_type", "status", "text", "type"])
     );
     assert_eq!(
         say_schema["properties"]["status"]["enum"],

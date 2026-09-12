@@ -83,7 +83,7 @@ impl RuntimeSessionService {
         self.record_agent_pane_trace_log_text(
             &observation.pane_id,
             &format!(
-                "agent trace: turn {}: provider wire request id={} attempt={} retry={} purpose={} provider={} model={} interaction={} succeeded={} failure={} input_bytes={} input_items={} mcp_directory_bytes={} mcp_search_result_bytes={} mcp_retrieved_contract_bytes={} mcp_action_result_bytes={} action_result_bytes={} cache={} continuity={} continuity_warning={}",
+                "agent trace: turn {}: provider wire request id={} attempt={} retry={} purpose={} provider={} model={} interaction={} schema_digest={} succeeded={} failure={} input_bytes={} input_items={} mcp_directory_bytes={} mcp_search_result_bytes={} mcp_retrieved_contract_bytes={} mcp_action_result_bytes={} action_result_bytes={} cache={} continuity={} continuity_warning={}",
                 observation.turn_id,
                 status.request_id,
                 observation.attempt_index,
@@ -92,6 +92,7 @@ impl RuntimeSessionService {
                 status.provider,
                 status.model,
                 status.interaction_kind,
+                observation.schema_digest,
                 observation.succeeded,
                 observation.failure_kind.as_deref().unwrap_or("none"),
                 status.effective_input_bytes.map_or_else(|| "unknown".to_string(), |value| value.to_string()),
@@ -311,8 +312,11 @@ impl RuntimeSessionService {
         let Ok(mut request) = assemble_model_request(model_profile, api, turn, context) else {
             return;
         };
-        let (allowed_actions, interaction_kind) =
-            self.agent_provider_request_control_for_turn(turn);
+        let Ok((allowed_actions, interaction_kind)) =
+            self.agent_provider_request_control_for_turn(turn)
+        else {
+            return;
+        };
         mez_agent::apply_model_request_control(&mut request, allowed_actions, interaction_kind);
         apply_default_action_gates(
             &mut request,

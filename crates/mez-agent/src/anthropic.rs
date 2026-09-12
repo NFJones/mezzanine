@@ -1303,6 +1303,42 @@ mod tests {
         assert_eq!(action_types, ["say", "shell_command"]);
     }
 
+    /// Verifies failure-summary serialization preserves the immutable session
+    /// action catalog while execution validation still restricts its response.
+    #[test]
+    fn anthropic_failure_summary_schema_preserves_session_catalog() {
+        let mut request = anthropic_cache_test_request(vec![crate::ModelMessage {
+            role: ModelMessageRole::User,
+            source: crate::ContextSourceKind::UserInstruction,
+            placement: crate::ContextPlacement::ConversationAppend,
+            content: "summarize the failure".to_string(),
+        }]);
+        request.interaction_kind = crate::ModelInteractionKind::FailureSummary;
+        request.allowed_actions = crate::AllowedActionSet::all_enabled();
+
+        let body: serde_json::Value = serde_json::from_str(
+            &anthropic_messages_request_body(&request, false, &AnthropicMessagesOptions::default())
+                .unwrap(),
+        )
+        .unwrap();
+        let action_types =
+            body["tools"][0]["input_schema"]["properties"]["actions"]["items"]["anyOf"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|schema| schema["properties"]["type"]["enum"][0].as_str().unwrap())
+                .collect::<Vec<_>>();
+
+        assert_eq!(
+            request.allowed_actions,
+            crate::AllowedActionSet::all_enabled()
+        );
+        assert_eq!(
+            action_types,
+            crate::AllowedActionSet::all_enabled().action_type_names()
+        );
+    }
+
     /// Verifies neutral chronological state remains separate from prior
     /// Anthropic native messages.
     ///

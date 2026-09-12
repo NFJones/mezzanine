@@ -124,6 +124,8 @@ pub struct ProviderWireRequestObservation {
     pub interaction_kind: String,
     /// Current concrete action surface.
     pub allowed_actions: String,
+    /// Provider-neutral digest of the complete session-owned MAAP catalog.
+    pub schema_digest: String,
     /// Provider output-token budget sent with this exact request.
     pub max_output_tokens: Option<usize>,
     /// Temporary output-limit retry override carried by this exact request.
@@ -257,6 +259,7 @@ impl<'a> ProviderWireObservationContext<'a> {
             prompt_cache_lineage_id: request.prompt_cache_lineage_id.clone(),
             interaction_kind: request.interaction_kind.as_str().to_string(),
             allowed_actions: request.allowed_actions.action_type_names().join(","),
+            schema_digest: mez_agent::provider_neutral_schema_digest(&request.allowed_actions),
             max_output_tokens: request.max_output_tokens,
             output_limit_retry_override_tokens: request.max_output_tokens.filter(|_| {
                 request.interaction_kind == mez_agent::ModelInteractionKind::OutputLimitRetry

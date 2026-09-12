@@ -3203,7 +3203,7 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 92 is the current implemented configuration schema version for this
+schema version 93 is the current implemented configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
@@ -3212,6 +3212,11 @@ The `91 -> 92` migration MUST remove every authored
 `frames.window.pills.<name>.style` leaf while preserving all other window-pill
 settings and every `frames.pane.pills.<name>.style` value. Schema version 92
 MUST reject the removed window-pill leaf.
+
+The `92 -> 93` migration MUST preserve every existing subagent profile while
+advancing the document version. Schema version 93 adds optional
+`subagents.<name>.allowed_actions`, a non-empty list of provider-visible action
+names that can only narrow a child’s frozen parent action catalog.
 
 The `90 -> 91` migration MUST advance only the schema version. It MUST preserve
 configured and omitted `frames.window.pills.<name>.foreground`,
@@ -4461,7 +4466,7 @@ frame context usage, `/model list`, and explicit or provider-limit compaction
 use the same denominator.
 
 The `subagents` table MUST be a map keyed by subagent profile identity. Each
-profile MAY define `name`, `description`, `terminal`, `developer_instructions`,
+profile MAY define `name`, `description`, `terminal`, `allowed_actions`, `developer_instructions`,
 `model_profile`, `permission_preset`, `mcp_servers`, `shell_env`,
 `default_cooperation_mode`, `default_read_scopes`, and
 `default_write_scopes`.
@@ -6511,11 +6516,28 @@ message proposals, subagent spawn proposals, configuration change proposals,
 MCP tool proposals, approval responses, or completion status.
 
 Ordinary model interaction MUST use a provider action schema containing exactly
-the executable MAAP action subset configured by `agents.enabled_actions`. That
-configured subset MUST remain constant across ordinary turns, continuations,
-agent lineage, terminal profiles, and depth limits until configuration changes,
-and MUST be used by both provider exposure and runtime validation. It MUST
-default to every executable action. The model MUST use enabled actions directly
+the executable MAAP action subset configured by `agents.enabled_actions`. Mez
+MUST capture the complete schema-bearing action set, including `spawn_agent`
+sizing, reasoning, and resolved execution-profile metadata, when an agent
+session is created. Every ordinary
+provider request for that session, including retries, repairs, compaction
+continuations, and failure summaries, MUST retain that exact captured set.
+Configuration reloads apply only when a new session or child session is
+created. Explicit `spawn_agent` size and reasoning selections MUST be validated
+and resolved from the frozen sizing entry that advertised them, including its
+complete captured execution profile, rather than live routing configuration.
+Legacy sizing entries lacking an execution profile remain readable but MUST
+reject explicit selections. Spawned
+conversation persistence MUST retain direct parent, root, depth, display name,
+and terminal status so direct resume and restart preserve delegation limits.
+Conversation-owned action catalogs and spawned-session structural identity MUST
+be first-write/equality-only and MUST reject clearing or replacement. Persisted
+catalogs MUST contain configurable executable actions only, with metadata owned
+by its corresponding action and valid unique size and reasoning
+values. `ModelInteractionKind` MAY constrain response semantics or suppress
+tool emission for internal non-MAAP interactions, but MUST NOT mutate the
+captured action catalog. The snapshot MUST be used by both provider exposure
+and runtime validation. It MUST default to every executable action. The model MUST use enabled actions directly
 without first emitting `request_capability`;
 capability and model-selected skill actions MUST NOT appear in the ordinary
 provider schema or configurable action set. Integration availability,
@@ -11336,10 +11358,17 @@ Mezzanine session id, pane id, active conversation id, visibility state, active
 turn id, known transcript-entry count, log level, model-profile selection, plan
 mode, and response style. It MUST NOT duplicate model request context, terminal
 screens, passive pane output, presentation history, provider credentials,
-action feedback, transcript excerpts, or durable subagent pane bindings.
-Durable subagent conversations MUST remain resumable by explicit UUID without
-restoring child pane placement, lineage authority, or parent/child orchestration
-state. If a checkpoint records an active turn that cannot be
+action feedback, or transcript excerpts. Durable subagent pane bindings MAY be
+checkpointed only with their conversation-owned structural lineage contract;
+transient spawned-child pane placement and parent/child orchestration state
+MUST remain excluded.
+Durable subagent conversations MUST remain resumable by explicit UUID. Direct
+resume and restart MUST restore only their validated, fail-closed structural
+lineage record for delegation limits: direct parent, root, depth, display name,
+and terminal status. Structural lineage alone MUST NOT re-establish live parent
+authority, child-pane placement, or transient parent/child orchestration state;
+a restored child therefore cannot delegate until live authority is established
+by a new runtime relationship. If a checkpoint records an active turn that cannot be
 reconnected after restart, Mezzanine MUST restore the conversation binding but
 MUST mark the turn as interrupted and require a fresh user action to retry.
 

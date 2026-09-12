@@ -831,6 +831,12 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         action: &AgentAction,
     ) -> std::result::Result<ActionResult, SpawnActionExecutionError> {
+        if self.subagent_descendant_is_fenced(&turn.agent_id) {
+            return Err(MezError::forbidden(
+                "fenced subagent descendant cannot execute actions after parent conversation replacement",
+            )
+            .into());
+        }
         let AgentActionPayload::SpawnAgent {
             role,
             placement,
@@ -987,6 +993,7 @@ impl RuntimeSessionService {
         spawn: &SubagentSpawnRequest,
         child_agent_id: &str,
         pane_id: &str,
+        child_allowed_actions: &mez_agent::AllowedActionSet,
     ) -> Result<()> {
         let Some(audit_log) = self.persistence.audit_log_mut() else {
             return Ok(());
@@ -1003,7 +1010,15 @@ impl RuntimeSessionService {
             runtime_cooperation_mode_name(spawn.cooperation_mode),
             "accepted",
         )
-        .with_pane_id(pane_id.to_string());
+        .with_pane_id(pane_id.to_string())
+        .with_metadata(
+            "allowed_actions",
+            child_allowed_actions.action_type_names().join(","),
+        )
+        .with_metadata(
+            "action_schema_digest",
+            mez_agent::provider_neutral_schema_digest(child_allowed_actions),
+        );
         let _ = audit_log.append(record)?;
         Ok(())
     }
@@ -1288,6 +1303,9 @@ impl RuntimeSessionService {
         progress_percent: Option<u8>,
         summary: &str,
     ) -> Result<()> {
+        if self.subagent_descendant_is_fenced(&turn.agent_id) {
+            return Ok(());
+        }
         let Some(parent_agent_id) = self.subagent_task_parent(&turn.turn_id) else {
             return Ok(());
         };
@@ -1592,6 +1610,9 @@ impl RuntimeSessionService {
     /// In that case the parent turn recorded in the join dependency is the
     /// fallback source of truth.
     fn subagent_task_result_parent_agent_id(&self, turn: &AgentTurnRecord) -> Option<String> {
+        if self.subagent_descendant_is_fenced(&turn.agent_id) {
+            return None;
+        }
         self.subagent_task_parent(&turn.turn_id)
             .or_else(|| {
                 let dependency = self.agent.joined_subagent_dependencies.get(&turn.turn_id)?;

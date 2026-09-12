@@ -666,7 +666,7 @@ fn turn_runner_summarizes_terminal_provider_failure_with_say_only_request() {
     );
     let requests = provider.requests();
     assert_eq!(requests.len(), 2);
-    assert_eq!(requests[1].allowed_actions.action_type_names(), vec!["say"]);
+    assert_eq!(requests[1].allowed_actions, requests[0].allowed_actions);
     let failure_evidence = requests[1]
         .messages
         .iter()

@@ -110,40 +110,67 @@ impl RuntimeSessionService {
     /// depth limit cannot spawn children. Explicit exceptional interaction
     /// kinds remain authoritative.
     pub(crate) fn agent_provider_request_control_for_turn(
-        &self,
+        &mut self,
         turn: &AgentTurnRecord,
-    ) -> (
+    ) -> Result<(
         Option<mez_agent::AllowedActionSet>,
         Option<mez_agent::ModelInteractionKind>,
-    ) {
-        let previous_execution = self.agent_turn_executions().get(&turn.turn_id);
-        let allowed_actions = Some(self.agent_provider_request_allowed_actions_for_turn(turn));
+    )> {
+        let previous_interaction_kind = self
+            .agent_turn_executions()
+            .get(&turn.turn_id)
+            .map(|execution| execution.request.interaction_kind);
+        let allowed_actions =
+            Some(self.capture_agent_session_allowed_actions_for_pane(&turn.pane_id)?);
         let interaction_kind = self
             .agent
             .agent_turn_interaction_kinds
             .get(&turn.turn_id)
             .copied()
-            .or_else(|| previous_execution.map(|execution| execution.request.interaction_kind));
-        (allowed_actions, interaction_kind)
+            .or(previous_interaction_kind);
+        Ok((allowed_actions, interaction_kind))
     }
 
     /// Builds the provider request action surface for one turn.
     ///
     /// The configured action set gains routed-size reasoning data when it
     /// exposes `spawn_agent`, letting the provider schema advertise only the
-    /// size/reasoning pairs this pane's auto-sizing policy resolves. A sizing
-    /// lookup failure keeps the configured surface and never fails the turn.
-    fn agent_provider_request_allowed_actions_for_turn(
-        &self,
-        turn: &AgentTurnRecord,
-    ) -> mez_agent::AllowedActionSet {
+    /// size/reasoning pairs this pane's auto-sizing policy resolves. When that
+    /// optional metadata is unavailable, the configured static schema is
+    /// captured instead; either result remains fixed for the session.
+    pub(crate) fn capture_agent_session_allowed_actions_for_pane(
+        &mut self,
+        pane_id: &str,
+    ) -> Result<mez_agent::AllowedActionSet> {
+        if self.agent_shell_store().get(pane_id).is_none() {
+            return Err(MezError::invalid_state(
+                "agent shell session not found for pane",
+            ));
+        }
+        if let Some(snapshot) = self
+            .agent_shell_store()
+            .get(pane_id)
+            .and_then(|session| session.allowed_actions.clone())
+        {
+            return Ok(snapshot);
+        }
         let mut allowed_actions = self.agent_enabled_actions().clone();
+        if allowed_actions.contains(mez_agent::AllowedAction::ConfigChange) {
+            allowed_actions = allowed_actions.with_config_change_setting_path_description(
+                crate::config::config_change_setting_path_description(),
+            );
+        }
         if allowed_actions.contains(mez_agent::AllowedAction::SpawnAgent)
-            && let Ok(sizing) = self.runtime_spawn_agent_sizing_for_pane(&turn.pane_id)
+            && let Ok(sizing) = self.runtime_spawn_agent_sizing_for_pane(pane_id)
         {
             allowed_actions = allowed_actions.with_spawn_agent_sizing(sizing);
+        } else if allowed_actions.contains(mez_agent::AllowedAction::SpawnAgent) {
+            allowed_actions = allowed_actions
+                .with_spawn_agent_sizing(mez_agent::SpawnAgentSizing { sizes: Vec::new() });
         }
-        allowed_actions
+        self.agent_shell_store_mut()
+            .capture_allowed_actions(pane_id, allowed_actions.clone())?;
+        Ok(allowed_actions)
     }
 
     /// Installs a deterministic provider claim at a supplied context boundary
@@ -700,6 +727,13 @@ impl RuntimeSessionService {
                 "agent provider dispatch agent id does not match turn",
             ));
         }
+        if self.subagent_descendant_is_fenced(&turn.agent_id) {
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.claimed_agent_provider_tasks.remove(turn_id);
+            let _ = self.agent.agent_scheduler.cancel(turn_id);
+            self.finish_agent_turn_without_shell_session(&turn, AgentTurnState::Interrupted)?;
+            return Ok(None);
+        }
         if self
             .agent_shell_store()
             .get(&turn.pane_id)
@@ -944,7 +978,7 @@ impl RuntimeSessionService {
         let provider_context = context.to_agent_context();
         let respond_only = self.routed_presentation_turn(turn_id);
         let (allowed_actions, interaction_kind) =
-            self.agent_provider_request_control_for_turn(&turn);
+            self.agent_provider_request_control_for_turn(&turn)?;
         let auto_sizing = if macro_judge_step_index.is_some()
             || sandbox_failure_assessment_request.is_some()
             || respond_only
@@ -1019,9 +1053,17 @@ impl RuntimeSessionService {
                     ))
                 })?;
             let router_provider = auto_sizing_provider.as_ref().unwrap_or(&provider);
-            let router_request =
-                mez_agent::auto_sizing_request(auto_sizing, &turn, &provider_context)
-                    .map_err(|error| MezError::invalid_state(error.message()))?;
+            let router_request = mez_agent::auto_sizing_request(
+                auto_sizing,
+                &turn,
+                &provider_context,
+                allowed_actions.clone().ok_or_else(|| {
+                    MezError::invalid_state(
+                        "auto-sizing request is missing its session action catalog",
+                    )
+                })?,
+            )
+            .map_err(|error| MezError::invalid_state(error.message()))?;
             let router_api = resolve_provider_api(
                 &router_provider_config.kind,
                 router_provider_config.api.as_deref(),
@@ -2065,6 +2107,7 @@ impl RuntimeSessionService {
                             &auto_sizing,
                             &turn,
                             &context,
+                            self.capture_agent_session_allowed_actions_for_pane(&turn.pane_id)?,
                         ) {
                             Ok(execution) => execution,
                             Err(error) => {

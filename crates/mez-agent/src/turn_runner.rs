@@ -1049,8 +1049,8 @@ mod tests {
         assert_eq!(environment.requests.borrow().len(), 2);
     }
 
-    /// Verifies distinct capability grants accumulate and execute normally
-    /// when every continuation changes the controller-owned action surface.
+    /// Verifies distinct capability decisions retain the initial request
+    /// catalog while controller chronology records each decision.
     #[test]
     fn distinct_capability_continuations_make_progress_and_complete() {
         let turn = test_turn();
@@ -1087,16 +1087,8 @@ mod tests {
         assert_eq!(execution.terminal_state, AgentTurnState::Completed);
         let requests = environment.requests.borrow();
         assert_eq!(requests.len(), 3);
-        assert!(
-            requests[2]
-                .allowed_actions
-                .contains(crate::AllowedAction::ShellCommand)
-        );
-        assert!(
-            requests[2]
-                .allowed_actions
-                .contains(crate::AllowedAction::WebSearch)
-        );
+        assert_eq!(requests[1].allowed_actions, requests[0].allowed_actions);
+        assert_eq!(requests[2].allowed_actions, requests[0].allowed_actions);
     }
 
     /// Verifies fake provider and product ports execute the same canonical

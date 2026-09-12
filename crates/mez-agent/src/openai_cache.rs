@@ -151,7 +151,7 @@ fn openai_context_epoch_identity(
     let response_format = openai_response_format(request).unwrap_or(serde_json::Value::Null);
     let (tools, tool_choice) = if request.interaction_kind.expects_structured_json() {
         (serde_json::json!([]), serde_json::json!("none"))
-    } else {
+    } else if request.interaction_kind.expects_maap_batch() {
         (
             serde_json::json!(openai_maap_action_batch_tools(request)),
             serde_json::json!({
@@ -159,6 +159,8 @@ fn openai_context_epoch_identity(
                 "type": "function"
             }),
         )
+    } else {
+        (serde_json::json!([]), serde_json::Value::Null)
     };
     let request_controls = openai_responses_request_control_shape_with_stream(request, stream)?;
     Ok(ContextEpochIdentity {
@@ -266,16 +268,20 @@ pub fn openai_prompt_cache_diagnostics_for_request_with_stream(
     let response_format = openai_response_format(request).unwrap_or(serde_json::Value::Null);
     let tools = if request.interaction_kind.expects_structured_json() {
         serde_json::json!([])
-    } else {
+    } else if request.interaction_kind.expects_maap_batch() {
         serde_json::json!(openai_maap_action_batch_tools(request))
+    } else {
+        serde_json::json!([])
     };
     let tool_choice = if request.interaction_kind.expects_structured_json() {
         serde_json::json!("none")
-    } else {
+    } else if request.interaction_kind.expects_maap_batch() {
         serde_json::json!({
             "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
             "type": "function"
         })
+    } else {
+        serde_json::Value::Null
     };
     let provider_request_shape =
         openai_responses_request_control_shape_with_stream(request, stream)?;

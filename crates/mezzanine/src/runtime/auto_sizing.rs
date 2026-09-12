@@ -18,8 +18,10 @@ pub(crate) async fn runtime_execute_auto_sizing_with_async_provider<P: AsyncMode
     auto_sizing: &RuntimeAutoSizingDispatch,
     turn: &AgentTurnRecord,
     context: &AgentContext,
+    allowed_actions: mez_agent::AllowedActionSet,
 ) -> Result<AutoSizingExecution> {
-    let request = match mez_agent::auto_sizing_request(auto_sizing, turn, context) {
+    let request = match mez_agent::auto_sizing_request(auto_sizing, turn, context, allowed_actions)
+    {
         Ok(request) => request,
         Err(error) => {
             return Ok(AutoSizingExecution::from_selection(
@@ -48,8 +50,10 @@ pub(crate) fn runtime_execute_auto_sizing_with_provider<
     auto_sizing: &RuntimeAutoSizingDispatch,
     turn: &AgentTurnRecord,
     context: &AgentContext,
+    allowed_actions: mez_agent::AllowedActionSet,
 ) -> Result<AutoSizingExecution> {
-    let request = match mez_agent::auto_sizing_request(auto_sizing, turn, context) {
+    let request = match mez_agent::auto_sizing_request(auto_sizing, turn, context, allowed_actions)
+    {
         Ok(request) => request,
         Err(error) => {
             return Ok(AutoSizingExecution::from_selection(

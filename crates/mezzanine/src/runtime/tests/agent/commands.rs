@@ -106,6 +106,7 @@ fn runtime_show_metrics_reports_provider_tokens_by_model() {
                 prompt_cache_lineage_id: request.prompt_cache_lineage_id.clone(),
                 interaction_kind: request.interaction_kind.as_str().to_string(),
                 allowed_actions: request.allowed_actions.action_type_names().join(","),
+                schema_digest: mez_agent::provider_neutral_schema_digest(&request.allowed_actions),
                 max_output_tokens: request.max_output_tokens,
                 output_limit_retry_override_tokens: request.max_output_tokens,
                 continuity_warning: None,

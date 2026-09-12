@@ -44,11 +44,11 @@ use super::types::{
     SessionObjectiveMirrorWriteRead, SessionTitleGenerationProbe, SessionTitleMirror,
     SessionTitleMirrorHandleState, SessionTitleMirrorStatus, SessionTitleMirrorWriteRead,
 };
-use mez_agent::AgentConversationKind;
 use mez_agent::transcript::{
     AgentSessionMetadata, ConversationSummary, TranscriptEntry, TranscriptRole,
     bounded_summary_text, summarize_conversation, validate_conversation_id,
 };
+use mez_agent::{AgentConversationKind, AllowedActionSet};
 use mez_mux::readline::ReadlineHistoryEntry;
 
 /// Defines the SESSION TRANSCRIPT FILE NAME const used by this subsystem.
@@ -77,6 +77,59 @@ struct ConversationMetadata {
     conversation_kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     user_objective: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    allowed_actions: Option<AllowedActionSet>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    subagent_lineage: Option<mez_agent::SubagentSessionLineage>,
+}
+
+/// Rejects incomplete child sidecars while preserving true legacy root
+/// conversations, which predate every child-contract field.
+fn validate_conversation_metadata_contract(metadata: &ConversationMetadata) -> Result<()> {
+    match metadata.conversation_kind.as_str() {
+        "root" => {
+            if metadata.subagent_lineage.is_some() {
+                return Err(MezError::invalid_args(
+                    "root conversation metadata cannot contain subagent lineage",
+                ));
+            }
+            if let Some(allowed_actions) = metadata.allowed_actions.as_ref() {
+                allowed_actions
+                    .validate_persisted()
+                    .map_err(MezError::invalid_args)?;
+            }
+        }
+        "subagent" => {
+            if metadata.version == 1
+                && (metadata.subagent_lineage.is_none() || metadata.allowed_actions.is_none())
+            {
+                return Ok(());
+            }
+            let lineage = metadata.subagent_lineage.as_ref().ok_or_else(|| {
+                MezError::invalid_state(
+                    "subagent conversation cannot restore without durable lineage",
+                )
+            })?;
+            lineage
+                .validate_persisted()
+                .map_err(MezError::invalid_args)?;
+            let allowed_actions = metadata.allowed_actions.as_ref().ok_or_else(|| {
+                MezError::invalid_state(
+                    "subagent conversation cannot restore without durable action catalog",
+                )
+            })?;
+            allowed_actions
+                .validate_persisted()
+                .map_err(MezError::invalid_args)?;
+            if lineage.terminal && allowed_actions.contains(mez_agent::AllowedAction::SpawnAgent) {
+                return Err(MezError::invalid_args(
+                    "terminal subagent conversation metadata cannot contain spawn_agent",
+                ));
+            }
+        }
+        _ => return Err(MezError::invalid_args("invalid conversation metadata kind")),
+    }
+    Ok(())
 }
 
 /// Records a root TSV move that can be rolled back before metadata commits.
@@ -250,6 +303,10 @@ impl AgentTranscriptStore {
             #[cfg(test)]
             fail_archive_recovery_journal_removal: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
+            fail_agent_session_metadata_write: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            fail_subagent_contract_catalog_upsert: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
             fail_user_objective_read_countdown: Arc::new(AtomicU8::new(0)),
         }
     }
@@ -269,6 +326,8 @@ impl AgentTranscriptStore {
             fail_metadata_write_after_promotion: Arc::new(AtomicBool::new(false)),
             fail_legacy_promotion_permissions_after_rename: Arc::new(AtomicBool::new(false)),
             fail_archive_recovery_journal_removal: Arc::new(AtomicBool::new(false)),
+            fail_agent_session_metadata_write: Arc::new(AtomicBool::new(false)),
+            fail_subagent_contract_catalog_upsert: Arc::new(AtomicBool::new(false)),
             fail_user_objective_read_countdown: Arc::new(AtomicU8::new(0)),
         }
     }
@@ -318,6 +377,20 @@ impl AgentTranscriptStore {
     #[cfg(test)]
     pub fn fail_next_archive_recovery_journal_removal(&self) {
         self.fail_archive_recovery_journal_removal
+            .store(true, Ordering::SeqCst);
+    }
+
+    /// Causes the next agent-session metadata replacement to fail in focused tests.
+    #[cfg(test)]
+    pub fn fail_next_agent_session_metadata_write(&self) {
+        self.fail_agent_session_metadata_write
+            .store(true, Ordering::SeqCst);
+    }
+
+    /// Causes the next child-contract catalog upsert to fail after metadata commits.
+    #[cfg(test)]
+    pub fn fail_next_subagent_contract_catalog_upsert(&self) {
+        self.fail_subagent_contract_catalog_upsert
             .store(true, Ordering::SeqCst);
     }
 
@@ -394,6 +467,10 @@ impl AgentTranscriptStore {
     /// Loads one exact saved session, repairing catalog divergence from its files.
     pub fn saved_session(&self, conversation_id: &str) -> Result<Option<SavedAgentSession>> {
         validate_conversation_id(conversation_id)?;
+        if self.is_unrestorable_legacy_subagent(conversation_id)? {
+            catalog::delete(self, conversation_id)?;
+            return Ok(None);
+        }
         let mut session = match catalog::record(self, conversation_id)? {
             Some(record) if self.catalog_record_payloads_exist(conversation_id, &record)? => {
                 record.session
@@ -611,21 +688,85 @@ impl AgentTranscriptStore {
         Ok(bytes)
     }
 
-    /// Persists the durable origin classification for one conversation.
-    pub fn save_conversation_kind(
+    /// Atomically captures the immutable durable contract for one child conversation.
+    pub fn save_subagent_conversation_contract(
         &self,
         conversation_id: &str,
-        kind: AgentConversationKind,
+        lineage: mez_agent::SubagentSessionLineage,
+        allowed_actions: AllowedActionSet,
     ) -> Result<()> {
-        let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
-        let mut metadata = self.read_conversation_metadata_locked(conversation_id)?;
-        metadata.conversation_kind = match kind {
-            AgentConversationKind::Root => "root",
-            AgentConversationKind::Subagent => "subagent",
+        lineage
+            .validate_persisted()
+            .map_err(MezError::invalid_args)?;
+        allowed_actions
+            .validate_persisted()
+            .map_err(MezError::invalid_args)?;
+        if lineage.terminal && allowed_actions.contains(mez_agent::AllowedAction::SpawnAgent) {
+            return Err(MezError::invalid_args(
+                "terminal subagent conversation metadata cannot contain spawn_agent",
+            ));
         }
-        .to_string();
+        let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
+        let metadata_path = self
+            .session_dir_for(conversation_id)?
+            .join(SESSION_METADATA_FILE_NAME);
+        let previous_metadata = metadata_path
+            .exists()
+            .then(|| std_fs::read(&metadata_path))
+            .transpose()?;
+        let mut metadata = self.read_conversation_metadata_locked(conversation_id)?;
+        match (
+            metadata.conversation_kind.as_str(),
+            metadata.subagent_lineage.as_ref(),
+            metadata.allowed_actions.as_ref(),
+        ) {
+            ("root", None, None) => {
+                metadata.conversation_kind = "subagent".to_string();
+                metadata.subagent_lineage = Some(lineage);
+                metadata.allowed_actions = Some(allowed_actions);
+            }
+            ("subagent", Some(current_lineage), Some(current_actions))
+                if current_lineage == &lineage && current_actions == &allowed_actions =>
+            {
+                return Ok(());
+            }
+            ("subagent", _, _) => {
+                return Err(MezError::invalid_state(
+                    "subagent conversation contract is incomplete or cannot be overwritten",
+                ));
+            }
+            ("root", _, _) => {
+                return Err(MezError::invalid_state(
+                    "root conversation contract cannot be converted into a subagent contract",
+                ));
+            }
+            _ => return Err(MezError::invalid_args("invalid conversation metadata kind")),
+        }
         self.write_conversation_metadata_locked(conversation_id, &metadata)?;
-        self.upsert_catalog_from_files(conversation_id, Some(kind))?;
+        #[cfg(test)]
+        let catalog_result = if self
+            .fail_subagent_contract_catalog_upsert
+            .swap(false, Ordering::SeqCst)
+        {
+            Err(MezError::invalid_state(
+                "injected subagent contract catalog upsert failure",
+            ))
+        } else {
+            self.upsert_catalog_from_files(conversation_id, Some(AgentConversationKind::Subagent))
+                .map(|_| ())
+        };
+        #[cfg(not(test))]
+        let catalog_result = self
+            .upsert_catalog_from_files(conversation_id, Some(AgentConversationKind::Subagent))
+            .map(|_| ());
+        if let Err(error) = catalog_result {
+            self.restore_conversation_metadata_snapshot_locked(
+                conversation_id,
+                &metadata_path,
+                previous_metadata.as_deref(),
+            )?;
+            return Err(error);
+        }
         self.remove_archive_recovery_journal(conversation_id)?;
         Ok(())
     }
@@ -638,6 +779,95 @@ impl AgentTranscriptStore {
             "subagent" => Ok(AgentConversationKind::Subagent),
             _ => Err(MezError::invalid_args("invalid conversation metadata kind")),
         }
+    }
+
+    /// Loads the immutable action catalog owned by one durable conversation.
+    ///
+    /// Legacy conversation metadata has no catalog and returns `None`, letting
+    /// the runtime capture the configured catalog at its next session boundary.
+    pub fn conversation_allowed_actions(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<AllowedActionSet>> {
+        Ok(self
+            .read_conversation_metadata(conversation_id)?
+            .allowed_actions)
+    }
+
+    /// Saves the immutable action catalog owned by one conversation.
+    ///
+    /// This sidecar is keyed by durable conversation identity rather than a
+    /// replaceable pane binding, so inactive conversations retain their own
+    /// catalog through later checkpoints and resumes. A catalog may be written
+    /// exactly once; subsequent writes must be byte-for-byte equivalent.
+    pub fn save_conversation_allowed_actions(
+        &self,
+        conversation_id: &str,
+        allowed_actions: Option<AllowedActionSet>,
+    ) -> Result<()> {
+        let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
+        let mut metadata = self.read_conversation_metadata_locked(conversation_id)?;
+        match (&metadata.allowed_actions, allowed_actions) {
+            (None, Some(allowed_actions)) => {
+                allowed_actions
+                    .validate_persisted()
+                    .map_err(MezError::invalid_args)?;
+                metadata.allowed_actions = Some(allowed_actions);
+            }
+            (Some(current), Some(candidate)) if current == &candidate => return Ok(()),
+            (None, None) => {
+                return Err(MezError::invalid_args(
+                    "conversation action catalog must be written with a nonempty catalog",
+                ));
+            }
+            (Some(_), None) => {
+                return Err(MezError::invalid_state(
+                    "conversation action catalog cannot be cleared after capture",
+                ));
+            }
+            (Some(_), Some(_)) => {
+                return Err(MezError::invalid_state(
+                    "conversation action catalog cannot be overwritten after capture",
+                ));
+            }
+        }
+        self.write_conversation_metadata_locked(conversation_id, &metadata)
+    }
+
+    /// Restores a catalog value captured before a failed compound metadata write.
+    ///
+    /// This narrowly supports rollback of a newly-created root catalog when
+    /// pane-binding metadata persistence fails after the catalog sidecar write.
+    pub(crate) fn restore_conversation_allowed_actions(
+        &self,
+        conversation_id: &str,
+        allowed_actions: Option<AllowedActionSet>,
+    ) -> Result<()> {
+        let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
+        let mut metadata = self.read_conversation_metadata_locked(conversation_id)?;
+        if metadata.conversation_kind == "subagent" && allowed_actions.is_none() {
+            return Err(MezError::invalid_state(
+                "subagent conversation catalog cannot be removed",
+            ));
+        }
+        metadata.allowed_actions = allowed_actions;
+        self.write_conversation_metadata_locked(conversation_id, &metadata)
+    }
+
+    /// Loads durable spawned-session structural identity for one conversation.
+    pub fn conversation_subagent_lineage(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<mez_agent::SubagentSessionLineage>> {
+        let lineage = self
+            .read_conversation_metadata(conversation_id)?
+            .subagent_lineage;
+        if let Some(lineage) = lineage.as_ref() {
+            lineage
+                .validate_persisted()
+                .map_err(MezError::invalid_args)?;
+        }
+        Ok(lineage)
     }
 
     /// Returns the durable user-selected objective for one conversation.
@@ -1417,7 +1647,14 @@ impl AgentTranscriptStore {
                 );
             }
         }
-        Ok(candidates.into_values().collect())
+        candidates
+            .into_values()
+            .map(|candidate| {
+                self.is_unrestorable_legacy_subagent(&candidate.summary.conversation_id)
+                    .map(|unrestorable| (!unrestorable).then_some(candidate))
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(|candidates| candidates.into_iter().flatten().collect())
     }
 
     /// Builds one candidate for a transcript-backed or presentation-only payload.
@@ -1429,6 +1666,9 @@ impl AgentTranscriptStore {
         payload_layout: CatalogPayloadLayout,
         named: Option<&NamedAgentSession>,
     ) -> Result<Option<CatalogCandidate>> {
+        if self.is_unrestorable_legacy_subagent(conversation_id)? {
+            return Ok(None);
+        }
         let summary = if has_transcript {
             self.summary(conversation_id)?
         } else {
@@ -1671,6 +1911,15 @@ impl AgentTranscriptStore {
                     "agent session metadata belongs to a different Mezzanine session",
                 ));
             }
+        }
+        #[cfg(test)]
+        if self
+            .fail_agent_session_metadata_write
+            .swap(false, Ordering::SeqCst)
+        {
+            return Err(MezError::invalid_state(
+                "injected agent session metadata write failure",
+            ));
         }
         self.ensure_store_dir()?;
         let path = self.agent_session_metadata_path();
@@ -2574,6 +2823,8 @@ impl AgentTranscriptStore {
                 version: SESSION_METADATA_VERSION,
                 conversation_kind: "root".to_string(),
                 user_objective: None,
+                allowed_actions: None,
+                subagent_lineage: None,
             });
         }
         let data = std_fs::read(&path)?;
@@ -2588,13 +2839,20 @@ impl AgentTranscriptStore {
                 ));
             }
         }
-        if !matches!(metadata.conversation_kind.as_str(), "root" | "subagent") {
-            return Err(MezError::invalid_args("invalid conversation metadata kind"));
-        }
         if let Some(objective) = metadata.user_objective.as_deref() {
             mez_agent::messaging::normalize_objective(objective)?;
         }
+        validate_conversation_metadata_contract(&metadata)?;
         Ok(metadata)
+    }
+
+    /// Reports whether a legacy child sidecar lacks the durable contract needed
+    /// to resume it without granting authority it cannot prove.
+    pub(super) fn is_unrestorable_legacy_subagent(&self, conversation_id: &str) -> Result<bool> {
+        let metadata = self.read_conversation_metadata(conversation_id)?;
+        Ok(metadata.version == 1
+            && metadata.conversation_kind == "subagent"
+            && (metadata.subagent_lineage.is_none() || metadata.allowed_actions.is_none()))
     }
 
     /// Reads metadata while the caller owns the conversation mutation lock.
@@ -2664,6 +2922,35 @@ impl AgentTranscriptStore {
                 self.remove_archive_recovery_journal(conversation_id)?;
             }
             return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Restores the exact metadata sidecar state from before a compound write.
+    fn restore_conversation_metadata_snapshot_locked(
+        &self,
+        conversation_id: &str,
+        metadata_path: &Path,
+        previous_metadata: Option<&[u8]>,
+    ) -> Result<()> {
+        match previous_metadata {
+            Some(previous_metadata) => {
+                let temporary_path = self
+                    .session_dir_for(conversation_id)?
+                    .join(".metadata.json.rollback");
+                let mut file = OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(true)
+                    .open(&temporary_path)?;
+                file.write_all(previous_metadata)?;
+                file.sync_all()?;
+                set_private_file_permissions(&temporary_path)?;
+                std_fs::rename(temporary_path, metadata_path)?;
+                set_private_file_permissions(metadata_path)?;
+            }
+            None if metadata_path.exists() => std_fs::remove_file(metadata_path)?,
+            None => {}
         }
         Ok(())
     }

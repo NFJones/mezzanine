@@ -391,6 +391,7 @@ pub fn auto_sizing_request(
     auto_sizing: &AutoSizingDispatch,
     turn: &AgentTurnRecord,
     context: &AgentContext,
+    allowed_actions: AllowedActionSet,
 ) -> AutoSizingResult<ModelRequest> {
     let mut messages = vec![
         ModelMessage {
@@ -449,7 +450,7 @@ pub fn auto_sizing_request(
         memory_actions_enabled: false,
         issue_actions_enabled: true,
         interaction_kind: ModelInteractionKind::AutoSizing,
-        allowed_actions: AllowedActionSet::say_only(),
+        allowed_actions,
         messages: messages.into(),
     })
 }
@@ -1034,7 +1035,13 @@ mod tests {
             initial_capability: None,
         };
 
-        let request = auto_sizing_request(&dispatch(), &turn, &context).unwrap();
+        let request = auto_sizing_request(
+            &dispatch(),
+            &turn,
+            &context,
+            AllowedActionSet::all_enabled(),
+        )
+        .unwrap();
         let memory = request
             .messages
             .iter()

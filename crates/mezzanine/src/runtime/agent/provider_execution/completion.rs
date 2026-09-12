@@ -53,6 +53,13 @@ impl RuntimeSessionService {
             self.discard_agent_streaming_say_presentations_for_turn(turn_id)?;
             return Ok(false);
         }
+        if self.subagent_descendant_is_fenced(&turn.agent_id) {
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.claimed_agent_provider_tasks.remove(turn_id);
+            let _ = self.agent.agent_scheduler.cancel(turn_id);
+            self.finish_agent_turn_without_shell_session(&turn, AgentTurnState::Interrupted)?;
+            return Ok(false);
+        }
         if self
             .agent
             .claimed_agent_provider_tasks

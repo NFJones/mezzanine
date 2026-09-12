@@ -538,6 +538,13 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
                 .unwrap_or("none")
         ),
         format!(
+            "last_schema_digest = {}",
+            runtime_metrics
+                .last_schema_digest
+                .as_deref()
+                .unwrap_or("none")
+        ),
+        format!(
             "last_prompt_cache_key = {}",
             runtime_metrics
                 .last_prompt_cache_key

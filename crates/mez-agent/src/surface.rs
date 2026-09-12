@@ -40,6 +40,12 @@ pub enum ModelInteractionKind {
     /// bounded runtime evidence. The response is structured JSON and cannot
     /// grant execution authority.
     SandboxFailureAssessment,
+    /// The model is compacting conversation context into durable summary text.
+    /// The response is raw summary text and never uses a MAAP tool schema.
+    Compaction,
+    /// The model is extracting durable memories from supplied source context.
+    /// The response is raw JSON and never uses a MAAP tool schema.
+    Memory,
     /// The model is retrying after provider output exhaustion and must return
     /// one minimal complete action batch or final answer.
     OutputLimitRetry,
@@ -76,6 +82,8 @@ impl ModelInteractionKind {
             ModelInteractionKind::AutoSizing => "auto_sizing",
             ModelInteractionKind::MacroJudge => "macro_judge",
             ModelInteractionKind::SandboxFailureAssessment => "sandbox_failure_assessment",
+            ModelInteractionKind::Compaction => "compaction",
+            ModelInteractionKind::Memory => "memory",
             ModelInteractionKind::OutputLimitRetry => "output_limit_retry",
             ModelInteractionKind::RoutedHandoff => "routed_handoff",
             ModelInteractionKind::RoutedHandoffRepair => "routed_handoff_repair",
@@ -149,6 +157,8 @@ impl ModelInteractionKind {
             | ModelInteractionKind::AutoSizing
             | ModelInteractionKind::MacroJudge
             | ModelInteractionKind::SandboxFailureAssessment
+            | ModelInteractionKind::Compaction
+            | ModelInteractionKind::Memory
             | ModelInteractionKind::SessionTitle => None,
         }
     }
@@ -164,6 +174,8 @@ impl ModelInteractionKind {
             | ModelInteractionKind::AutoSizing
             | ModelInteractionKind::MacroJudge
             | ModelInteractionKind::SandboxFailureAssessment
+            | ModelInteractionKind::Compaction
+            | ModelInteractionKind::Memory
             | ModelInteractionKind::OutputLimitRetry
             | ModelInteractionKind::RoutedHandoff
             | ModelInteractionKind::RoutedHandoffRepair
@@ -264,7 +276,9 @@ impl AgentCapability {
 }
 
 /// Concrete MAAP action kinds that may be exposed in one provider request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize, serde::Serialize,
+)]
 pub enum AllowedAction {
     /// User-facing text.
     Say,
@@ -368,25 +382,78 @@ impl AllowedAction {
 }
 
 /// One configured routed model size offered to `spawn_agent` selections.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct SpawnAgentSizeOption {
     /// Routed size bucket name: `small`, `medium`, or `large`.
     pub size: String,
     /// Configured model profile resolved for this bucket.
     pub profile_name: String,
+    /// Complete resolved execution contract captured with this frozen catalog.
+    ///
+    /// Legacy persisted catalogs omit this field and remain readable, but
+    /// explicit selections from them fail closed rather than consulting
+    /// mutable live profile definitions.
+    #[serde(default)]
+    pub execution_profile: Option<crate::ModelProfile>,
     /// Reasoning efforts accepted for an explicit size/reasoning pair.
     pub allowed_reasoning_efforts: Vec<String>,
 }
 
 /// Product-provided routed-size reasoning contract for `spawn_agent`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct SpawnAgentSizing {
     /// Configured routed size offers in small, medium, large order.
     pub sizes: Vec<SpawnAgentSizeOption>,
 }
 
+/// Durable structural identity for one spawned-session conversation.
+///
+/// This value is owned by the child conversation rather than its replaceable
+/// pane binding, allowing restart and direct resume to retain delegation
+/// capacity semantics.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct SubagentSessionLineage {
+    /// Direct parent agent that created this child.
+    pub parent_agent_id: String,
+    /// Root agent that owns the delegation tree.
+    pub root_agent_id: String,
+    /// Child depth below the root agent.
+    pub depth: usize,
+    /// Stable human-readable child display name.
+    pub display_name: String,
+    /// Whether this child is forbidden from spawning descendants.
+    pub terminal: bool,
+}
+
+impl SubagentSessionLineage {
+    /// Validates durable child lineage before it can restore delegation state.
+    pub fn validate_persisted(&self) -> Result<(), String> {
+        for (field, value) in [
+            ("parent agent id", &self.parent_agent_id),
+            ("root agent id", &self.root_agent_id),
+            ("display name", &self.display_name),
+        ] {
+            if value.trim().is_empty() {
+                return Err(format!("persisted subagent lineage {field} is empty"));
+            }
+        }
+        for (field, value) in [
+            ("parent agent id", &self.parent_agent_id),
+            ("root agent id", &self.root_agent_id),
+        ] {
+            if mez_core::ids::AgentId::opaque(value.clone()).is_none() {
+                return Err(format!("persisted subagent lineage {field} is invalid"));
+            }
+        }
+        if self.depth == 0 {
+            return Err("persisted subagent lineage depth must be greater than zero".to_string());
+        }
+        Ok(())
+    }
+}
+
 /// Controller-owned concrete action surface for one provider request.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct AllowedActionSet {
     /// Stores the allowed action values.
     pub actions: BTreeSet<AllowedAction>,
@@ -430,6 +497,81 @@ impl AllowedActionSet {
         self.actions
             .iter()
             .all(|action| Self::all_enabled().contains(*action))
+    }
+
+    /// Validates a catalog loaded from durable session metadata.
+    pub fn validate_persisted(&self) -> Result<(), String> {
+        if self.actions.is_empty() {
+            return Err("persisted action catalog must contain an executable action".to_string());
+        }
+        if !self.is_configurable() {
+            return Err("persisted action catalog contains a non-configurable action".to_string());
+        }
+        match (
+            self.contains(AllowedAction::ConfigChange),
+            self.config_change_setting_path_description.as_deref(),
+        ) {
+            (true, Some(description)) if !description.trim().is_empty() => {}
+            (true, _) => {
+                return Err(
+                    "persisted config_change action lacks captured setting-path guidance"
+                        .to_string(),
+                );
+            }
+            (false, Some(_)) => {
+                return Err(
+                    "persisted config-change metadata has no config_change owner".to_string(),
+                );
+            }
+            (false, None) => {}
+        }
+        let sizing = match (
+            self.contains(AllowedAction::SpawnAgent),
+            self.spawn_agent_sizing.as_ref(),
+        ) {
+            (true, Some(sizing)) => sizing,
+            (true, None) => {
+                return Err(
+                    "persisted spawn_agent action lacks captured sizing contract".to_string(),
+                );
+            }
+            (false, Some(_)) => {
+                return Err("persisted spawn sizing metadata has no spawn_agent owner".to_string());
+            }
+            (false, None) => return Ok(()),
+        };
+        let mut sizes = BTreeSet::new();
+        for option in &sizing.sizes {
+            if !matches!(option.size.as_str(), "small" | "medium" | "large")
+                || !sizes.insert(option.size.as_str())
+            {
+                return Err(
+                    "persisted spawn sizing contains an invalid or duplicate size".to_string(),
+                );
+            }
+            if option.profile_name.trim().is_empty() {
+                return Err("persisted spawn sizing contains an invalid profile name".to_string());
+            }
+            if let Some(profile) = option.execution_profile.as_ref()
+                && (profile.provider.trim().is_empty() || profile.model.trim().is_empty())
+            {
+                return Err(
+                    "persisted spawn sizing contains an invalid execution profile".to_string(),
+                );
+            }
+            let mut efforts = BTreeSet::new();
+            for effort in &option.allowed_reasoning_efforts {
+                if !matches!(effort.as_str(), "low" | "medium" | "high" | "xhigh")
+                    || !efforts.insert(effort.as_str())
+                {
+                    return Err(
+                        "persisted spawn sizing contains an invalid or duplicate reasoning effort"
+                            .to_string(),
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Builds the initial non-executing capability-decision surface.
@@ -521,6 +663,33 @@ impl AllowedActionSet {
         self.spawn_agent_sizing.as_ref()
     }
 
+    /// Returns a restriction to the supplied actions with orphaned metadata
+    /// pruned from the resulting schema contract.
+    pub fn restricted_to(&self, actions: impl IntoIterator<Item = AllowedAction>) -> Self {
+        let actions = actions.into_iter().collect::<BTreeSet<_>>();
+        let actions = self
+            .actions
+            .intersection(&actions)
+            .copied()
+            .collect::<BTreeSet<_>>();
+        Self {
+            config_change_setting_path_description: actions
+                .contains(&AllowedAction::ConfigChange)
+                .then(|| self.config_change_setting_path_description.clone())
+                .flatten(),
+            spawn_agent_sizing: actions
+                .contains(&AllowedAction::SpawnAgent)
+                .then(|| self.spawn_agent_sizing.clone())
+                .flatten(),
+            actions,
+        }
+    }
+
+    /// Returns whether every action in `other` is available in this catalog.
+    pub fn contains_set(&self, other: &AllowedActionSet) -> bool {
+        other.actions.is_subset(&self.actions)
+    }
+
     /// Adds actions to the set.
     pub fn extend(&mut self, actions: impl IntoIterator<Item = AllowedAction>) {
         self.actions.extend(actions);
@@ -541,6 +710,12 @@ impl AllowedActionSet {
     /// Removes one action from the exposed action surface.
     pub fn remove(&mut self, action: AllowedAction) {
         self.actions.remove(&action);
+        if action == AllowedAction::ConfigChange {
+            self.config_change_setting_path_description = None;
+        }
+        if action == AllowedAction::SpawnAgent {
+            self.spawn_agent_sizing = None;
+        }
     }
 
     /// Returns true when the given action is exposed in this set.
@@ -561,5 +736,136 @@ impl Default for AllowedActionSet {
     /// Enables every configurable MAAP action by default.
     fn default() -> Self {
         Self::all_enabled()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        AllowedAction, AllowedActionSet, SpawnAgentSizeOption, SpawnAgentSizing,
+        SubagentSessionLineage,
+    };
+
+    fn captured_execution_profile() -> crate::ModelProfile {
+        crate::ModelProfile {
+            provider: "test-provider".to_string(),
+            model: "test-model".to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// Verifies a spawned-session lineage cannot restore as depth zero and
+    /// thereby acquire root delegation capacity.
+    #[test]
+    fn persisted_subagent_lineage_rejects_depth_zero() {
+        let lineage = SubagentSessionLineage {
+            parent_agent_id: "agent-%1".to_string(),
+            root_agent_id: "agent-%1".to_string(),
+            depth: 0,
+            display_name: "child".to_string(),
+            terminal: false,
+        };
+
+        assert_eq!(
+            lineage.validate_persisted(),
+            Err("persisted subagent lineage depth must be greater than zero".to_string())
+        );
+    }
+
+    /// Verifies durable child lineage rejects unsafe agent identifiers before
+    /// restored state can enter delegation traversal.
+    #[test]
+    fn persisted_subagent_lineage_rejects_invalid_agent_ids() {
+        let lineage = SubagentSessionLineage {
+            parent_agent_id: "agent-\u{0007}".to_string(),
+            root_agent_id: "agent-%1".to_string(),
+            depth: 1,
+            display_name: "child".to_string(),
+            terminal: false,
+        };
+
+        assert_eq!(
+            lineage.validate_persisted(),
+            Err("persisted subagent lineage parent agent id is invalid".to_string())
+        );
+    }
+
+    /// Verifies restriction intersects authority and prunes metadata whose
+    /// owning action is absent from the frozen child catalog.
+    #[test]
+    fn restriction_prunes_orphaned_catalog_metadata_and_reports_subsets() {
+        let parent = AllowedActionSet::from_actions([
+            AllowedAction::Say,
+            AllowedAction::ConfigChange,
+            AllowedAction::SpawnAgent,
+        ])
+        .with_config_change_setting_path_description("captured setting paths")
+        .with_spawn_agent_sizing(SpawnAgentSizing {
+            sizes: vec![SpawnAgentSizeOption {
+                size: "small".to_string(),
+                profile_name: "small-profile".to_string(),
+                execution_profile: Some(captured_execution_profile()),
+                allowed_reasoning_efforts: vec!["medium".to_string()],
+            }],
+        });
+
+        let child = parent.restricted_to([AllowedAction::Say, AllowedAction::SpawnAgent]);
+
+        assert_eq!(child.action_type_names(), ["say", "spawn_agent"]);
+        assert_eq!(child.config_change_setting_path_description(), None);
+        assert_eq!(child.spawn_agent_sizing(), parent.spawn_agent_sizing());
+        let mut terminal = child.clone();
+        terminal.remove(AllowedAction::SpawnAgent);
+        assert_eq!(terminal.spawn_agent_sizing(), None);
+        assert!(parent.contains_set(&child));
+        assert!(!child.contains_set(&parent));
+    }
+
+    /// Verifies persisted schema-bearing actions require the captured metadata
+    /// used to freeze their provider-visible contracts at session creation.
+    #[test]
+    fn persisted_catalog_requires_complete_schema_metadata() {
+        let missing_config_guidance = AllowedActionSet::from_actions([AllowedAction::ConfigChange]);
+        assert_eq!(
+            missing_config_guidance.validate_persisted(),
+            Err("persisted config_change action lacks captured setting-path guidance".to_string())
+        );
+
+        let missing_spawn_sizing = AllowedActionSet::from_actions([AllowedAction::SpawnAgent]);
+        assert_eq!(
+            missing_spawn_sizing.validate_persisted(),
+            Err("persisted spawn_agent action lacks captured sizing contract".to_string())
+        );
+
+        let legacy_sizing = AllowedActionSet::from_actions([AllowedAction::SpawnAgent])
+            .with_spawn_agent_sizing(SpawnAgentSizing {
+                sizes: vec![SpawnAgentSizeOption {
+                    size: "small".to_string(),
+                    profile_name: "small-profile".to_string(),
+                    execution_profile: None,
+                    allowed_reasoning_efforts: vec!["medium".to_string()],
+                }],
+            });
+        assert!(legacy_sizing.validate_persisted().is_ok());
+
+        let decoded_legacy_sizing = serde_json::from_str::<AllowedActionSet>(
+            r#"{"actions":["SpawnAgent"],"spawn_agent_sizing":{"sizes":[{"size":"small","profile_name":"small-profile","allowed_reasoning_efforts":["medium"]}]}}"#,
+        )
+        .unwrap();
+        assert!(decoded_legacy_sizing.validate_persisted().is_ok());
+        assert!(
+            decoded_legacy_sizing
+                .spawn_agent_sizing()
+                .unwrap()
+                .sizes
+                .first()
+                .unwrap()
+                .execution_profile
+                .is_none()
+        );
+
+        let explicitly_unavailable = AllowedActionSet::from_actions([AllowedAction::SpawnAgent])
+            .with_spawn_agent_sizing(SpawnAgentSizing { sizes: Vec::new() });
+        assert!(explicitly_unavailable.validate_persisted().is_ok());
     }
 }

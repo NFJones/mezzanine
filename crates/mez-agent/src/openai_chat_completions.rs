@@ -342,7 +342,9 @@ pub fn openai_chat_completions_request_body_with_stream(
     }
     if request.interaction_kind.expects_structured_json() {
         openai_chat_apply_response_format(&mut body, request, options, false);
-    } else if !request.allowed_actions.actions.is_empty() {
+    } else if request.interaction_kind.expects_maap_batch()
+        && !request.allowed_actions.actions.is_empty()
+    {
         match openai_chat_maap_request_mode(options) {
             OpenAiMaapRequestMode::Tools => {
                 body["tools"] = serde_json::json!([openai_chat_completions_maap_tool(request)]);
@@ -1209,6 +1211,58 @@ mod tests {
                 .collect::<Vec<_>>();
 
         assert_eq!(action_types, ["say", "fetch_url"]);
+    }
+
+    /// Verifies a memory request keeps its session catalog but does not emit a
+    /// callable Chat Completions tool surface.
+    #[test]
+    fn openai_chat_memory_omits_tools_for_session_catalog() {
+        let mut request = test_request();
+        request.interaction_kind = ModelInteractionKind::Memory;
+        request.allowed_actions = AllowedActionSet::all_enabled();
+
+        let body: serde_json::Value = serde_json::from_str(
+            &openai_chat_completions_request_body(
+                &request,
+                OpenAiChatCompletionsOptions::default(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(body.get("tools").is_none(), "{body}");
+        assert!(body.get("tool_choice").is_none(), "{body}");
+    }
+
+    /// Verifies failure-summary serialization retains the complete immutable
+    /// session catalog; response-only validation remains downstream.
+    #[test]
+    fn openai_chat_failure_summary_schema_preserves_session_catalog() {
+        let mut request = test_request();
+        request.interaction_kind = ModelInteractionKind::FailureSummary;
+        request.allowed_actions = AllowedActionSet::all_enabled();
+
+        let body: serde_json::Value = serde_json::from_str(
+            &openai_chat_completions_request_body(
+                &request,
+                OpenAiChatCompletionsOptions::default(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let action_types =
+            body["tools"][0]["function"]["parameters"]["properties"]["actions"]["items"]["anyOf"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|schema| schema["properties"]["type"]["enum"][0].as_str().unwrap())
+                .collect::<Vec<_>>();
+
+        assert_eq!(request.allowed_actions, AllowedActionSet::all_enabled());
+        assert_eq!(
+            action_types,
+            AllowedActionSet::all_enabled().action_type_names()
+        );
     }
 
     /// Verifies compatible Chat Completions accepts durable message growth and

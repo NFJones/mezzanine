@@ -2725,6 +2725,7 @@ dependencies = [
  "futures-util",
  "include_dir",
  "iroh",
+ "jsonschema",
  "keyring-core",
  "libc",
  "lz4_flex",

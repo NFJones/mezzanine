@@ -572,9 +572,19 @@ impl RuntimeSessionService {
     }
 
     /// Ensures the agent destination is bound to the pane's active conversation.
-    pub(super) fn ensure_current_agent_presentation_screen(&mut self, pane_id: &str) -> Result<()> {
+    pub(crate) fn ensure_current_agent_presentation_screen(&mut self, pane_id: &str) -> Result<()> {
+        if self.find_pane_descriptor(pane_id).is_none() {
+            return Err(MezError::new(
+                crate::error::MezErrorKind::NotFound,
+                "agent terminal presentation target pane not found",
+            ));
+        }
         if self.agent_shell_store().get(pane_id).is_none() {
             self.agent_shell_store_mut().ensure_session(pane_id)?;
+            if let Err(error) = self.capture_agent_session_allowed_actions_for_pane(pane_id) {
+                self.agent_shell_store_mut().remove_session(pane_id);
+                return Err(error);
+            }
         }
         let (conversation_id, size) = self.agent_presentation_target(pane_id)?;
         let replace = self

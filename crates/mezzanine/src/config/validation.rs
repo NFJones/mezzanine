@@ -321,6 +321,7 @@ pub fn validate_config_text(
     diagnostics.extend(validate_group_whitelist_config(format, text));
     diagnostics.extend(validate_env_whitelist_config(format, text));
     diagnostics.extend(validate_agent_enabled_actions_config(format, text));
+    diagnostics.extend(validate_subagent_allowed_actions_config(format, text));
     diagnostics.extend(validate_pane_status_config(format, text));
 
     if let Ok(root) = parse_config_json_value(format, text)
@@ -668,6 +669,77 @@ fn validate_agent_enabled_actions_config(
                 path: "agents.enabled_actions".to_string(),
                 message: format!("agents.enabled_actions contains duplicate action `{name}`"),
             });
+        }
+    }
+    diagnostics
+}
+
+/// Validates optional per-profile child action restrictions before runtime
+/// profile materialization. A profile restriction may only narrow the normal
+/// provider-visible action catalog and must retain at least one action.
+fn validate_subagent_allowed_actions_config(
+    format: ConfigFormat,
+    text: &str,
+) -> Vec<ConfigDiagnostic> {
+    let Ok(root) = parse_config_json_value(format, text) else {
+        return Vec::new();
+    };
+    let Some(profiles) = root.get("subagents").and_then(serde_json::Value::as_object) else {
+        return Vec::new();
+    };
+    let configurable = mez_agent::AllowedActionSet::all_enabled();
+    let mut diagnostics = Vec::new();
+    for (profile_id, profile) in profiles {
+        let Some(value) = profile
+            .as_object()
+            .and_then(|profile| profile.get("allowed_actions"))
+        else {
+            continue;
+        };
+        let path = format!("subagents.{profile_id}.allowed_actions");
+        let Some(values) = value.as_array() else {
+            diagnostics.push(ConfigDiagnostic {
+                path,
+                message: "subagent allowed_actions must be a non-empty string array".to_string(),
+            });
+            continue;
+        };
+        if values.is_empty() {
+            diagnostics.push(ConfigDiagnostic {
+                path,
+                message: "subagent allowed_actions must contain at least one action".to_string(),
+            });
+            continue;
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for value in values {
+            let Some(name) = value.as_str() else {
+                diagnostics.push(ConfigDiagnostic {
+                    path: path.clone(),
+                    message: "subagent allowed_actions must contain only action names".to_string(),
+                });
+                continue;
+            };
+            let Some(action) = mez_agent::AllowedAction::from_action_type(name) else {
+                diagnostics.push(ConfigDiagnostic {
+                    path: path.clone(),
+                    message: format!("subagent allowed_actions contains unknown action `{name}`"),
+                });
+                continue;
+            };
+            if !configurable.contains(action) {
+                diagnostics.push(ConfigDiagnostic {
+                    path: path.clone(),
+                    message: format!(
+                        "subagent allowed_actions cannot enable controller-only action `{name}`"
+                    ),
+                });
+            } else if !seen.insert(action) {
+                diagnostics.push(ConfigDiagnostic {
+                    path: path.clone(),
+                    message: format!("subagent allowed_actions contains duplicate action `{name}`"),
+                });
+            }
         }
     }
     diagnostics

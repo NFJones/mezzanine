@@ -455,6 +455,9 @@ impl RuntimeSessionService {
             if !visited.insert(current.to_string()) {
                 return false;
             }
+            if !self.subagent_lineage_has_live_parent_authority(current) {
+                return false;
+            }
             let Some(lineage) = self.subagent_lineage(current) else {
                 return false;
             };

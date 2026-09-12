@@ -370,6 +370,13 @@ impl RuntimeSessionService {
                     "routed worker idle spawn unexpectedly created a turn",
                 ));
             }
+            let child_allowed_actions = self
+                .agent_shell_store()
+                .get(&child_pane_id)
+                .and_then(|session| session.allowed_actions.clone())
+                .ok_or_else(|| {
+                    MezError::invalid_state("routed worker action catalog is unavailable")
+                })?;
             let child_conversation_id =
                 format!("routed-{}-{turn_id}-worker", parent_session.session_id);
             self.agent_shell_store_mut()
@@ -389,6 +396,8 @@ impl RuntimeSessionService {
                 &child_pane_id,
                 Some(self.agent_auto_sizing_for_pane(&turn.pane_id).clone()),
             );
+            self.agent_shell_store_mut()
+                .restore_allowed_actions(&child_pane_id, child_allowed_actions)?;
 
             let child_turn = self.queue_routed_child_turn(RoutedChildTurnRequest {
                 parent_turn: &turn,

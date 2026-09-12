@@ -1265,6 +1265,57 @@ fn runtime_pane_permission_override_cycle_fails_closed() {
     assert_eq!(policy.approval_policy, ApprovalPolicy::Ask);
 }
 
+/// Verifies malformed self-parent and two-node lineage cycles never classify
+/// an agent as a descendant, so cleanup traversal terminates without granting
+/// authority to corrupt in-memory delegation state.
+#[test]
+fn runtime_subagent_descendant_traversal_rejects_self_and_two_node_cycles() {
+    let mut service = test_runtime_service();
+    service.set_subagent_lineage(
+        "agent-self",
+        RuntimeSubagentLineage {
+            parent_agent_id: "agent-self".to_string(),
+            root_agent_id: "agent-root".to_string(),
+            depth: 1,
+            display_name: "self".to_string(),
+            terminal: false,
+        },
+    );
+    assert!(!service.subagent_lineage_has_ancestor(
+        service.subagent_lineage("agent-self").unwrap(),
+        "agent-root",
+    ));
+
+    service.set_subagent_lineage(
+        "agent-left",
+        RuntimeSubagentLineage {
+            parent_agent_id: "agent-right".to_string(),
+            root_agent_id: "agent-root".to_string(),
+            depth: 1,
+            display_name: "left".to_string(),
+            terminal: false,
+        },
+    );
+    service.set_subagent_lineage(
+        "agent-right",
+        RuntimeSubagentLineage {
+            parent_agent_id: "agent-left".to_string(),
+            root_agent_id: "agent-root".to_string(),
+            depth: 2,
+            display_name: "right".to_string(),
+            terminal: false,
+        },
+    );
+    assert!(!service.subagent_lineage_has_ancestor(
+        service.subagent_lineage("agent-left").unwrap(),
+        "agent-root",
+    ));
+    assert!(!service.subagent_lineage_has_ancestor(
+        service.subagent_lineage("agent-left").unwrap(),
+        "agent-right",
+    ));
+}
+
 /// Verifies only the attached primary user's pane command can select host
 /// access without broadening the configured session baseline.
 #[test]

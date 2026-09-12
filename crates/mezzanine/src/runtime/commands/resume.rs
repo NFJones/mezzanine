@@ -351,6 +351,15 @@ impl RuntimeSessionService {
             ));
         }
         let summary = saved.summary;
+        let conversation_kind = saved.conversation_kind;
+        let subagent_lineage = store.conversation_subagent_lineage(&conversation_id)?;
+        if conversation_kind == mez_agent::AgentConversationKind::Subagent
+            && subagent_lineage.is_none()
+        {
+            return Err(MezError::invalid_state(
+                "subagent conversation cannot resume without durable lineage",
+            ));
+        }
         let entries = if summary.entries == 0 {
             Vec::new()
         } else {
@@ -366,6 +375,8 @@ impl RuntimeSessionService {
         let prepared_objective = store.user_objective(&conversation_id)?;
         let prepared_resume_state =
             self.prepare_agent_resume_state_for_conversation(&conversation_id)?;
+        let previous_checkpoint_records =
+            store.load_agent_session_metadata(self.session.id.as_str())?;
         let previous_session = self
             .agent_shell_store()
             .get(pane_id)
@@ -377,14 +388,64 @@ impl RuntimeSessionService {
         let previous_presentation = self.snapshot_agent_resume_presentation(pane_id);
         let previous_transcript_refs = self.persistence.pane_transcript_refs(pane_id);
         let previous_working_directory = self.pane_current_working_directory(pane_id);
+        let agent_id = format!("agent-{pane_id}");
+        let previous_subagent_authority = self.snapshot_subagent_authority_state(&agent_id);
+        let conversation_replaced = previous_session.session_id != conversation_id;
+        let previous_subagent_descendant_fences = conversation_replaced.then(|| {
+            self.fence_subagent_descendants_for_parent_conversation(
+                &agent_id,
+                &previous_session.session_id,
+            )
+        });
+        let previous_objective =
+            mez_core::ids::AgentId::opaque(agent_id.clone()).and_then(|agent_id| {
+                self.message_service()
+                    .registered_identity(&agent_id)
+                    .and_then(|identity| identity.objective.clone())
+            });
+        let previous_model_profile = self
+            .integration
+            .model_profile_overrides()
+            .pane_profiles
+            .get(pane_id)
+            .cloned();
+        let previous_model_profile_overrides = self.integration.model_profile_overrides().clone();
+        let previous_planning_enabled = self.agent_planning_enabled(pane_id);
+        let previous_response_style = self.agent_response_style(pane_id).map(ToOwned::to_owned);
+        let previous_routing_enabled = self.agent_routing_override(pane_id);
+        let previous_root_routing_policy = self.agent_root_routing_policy_override(pane_id);
+        let previous_permission_override = self.integration.pane_permission_override(pane_id);
+        let previous_pane_usage = self.agent_token_usage_for_pane(pane_id);
+        let previous_conversation_usage =
+            self.agent_token_usage_for_conversation(&previous_session.session_id);
+        let target_conversation_usage = self.agent_token_usage_for_conversation(&conversation_id);
+        let previous_context_usage = self.agent_context_usage_display(&previous_session.session_id);
+        let previous_context_snapshot =
+            self.agent_context_usage_snapshot(&previous_session.session_id);
+        let target_context_usage = self.agent_context_usage_display(&conversation_id);
+        let target_context_snapshot = self.agent_context_usage_snapshot(&conversation_id);
+        let previous_latest_usage = self
+            .agent_latest_request_usage(&previous_session.session_id)
+            .cloned();
+        let target_latest_usage = self.agent_latest_request_usage(&conversation_id).cloned();
 
         let resume_result = (|| -> Result<(String, u64, mez_agent::AgentShellVisibility)> {
             let (session_id, transcript_entries, visibility) = {
-                let session = self.agent_shell_store_mut().bind_conversation(
-                    pane_id,
-                    &conversation_id,
-                    summary.entries as u64,
-                )?;
+                let session = if conversation_kind == mez_agent::AgentConversationKind::Subagent {
+                    self.agent_shell_store_mut()
+                        .bind_subagent_conversation_with_lineage(
+                            pane_id,
+                            &conversation_id,
+                            summary.entries as u64,
+                            None,
+                        )?
+                } else {
+                    self.agent_shell_store_mut().bind_conversation(
+                        pane_id,
+                        &conversation_id,
+                        summary.entries as u64,
+                    )?
+                };
                 (
                     session.session_id.clone(),
                     session.transcript_entries,
@@ -428,13 +489,60 @@ impl RuntimeSessionService {
                 prepared_objective.as_deref(),
             )?;
             self.commit_prepared_agent_resume_state(pane_id, &session_id, prepared_resume_state)?;
+            self.restore_agent_conversation_allowed_actions(pane_id, &session_id)?;
+            self.capture_agent_session_allowed_actions_for_pane(pane_id)?;
+            if let Some(lineage) = subagent_lineage.clone() {
+                if conversation_replaced
+                    || !self.subagent_lineage_has_live_parent_authority(&agent_id)
+                {
+                    self.set_restored_subagent_lineage(
+                        agent_id.clone(),
+                        crate::runtime::RuntimeSubagentLineage {
+                            parent_agent_id: lineage.parent_agent_id,
+                            root_agent_id: lineage.root_agent_id,
+                            depth: lineage.depth,
+                            display_name: lineage.display_name,
+                            terminal: lineage.terminal,
+                        },
+                    );
+                }
+            } else {
+                self.remove_subagent_authority_state(&agent_id);
+            }
+            if conversation_replaced {
+                let overrides = self.integration.model_profile_overrides_mut();
+                overrides.agent_profiles.remove(&agent_id);
+                overrides.subagent_profiles.remove(&agent_id);
+                for descendant_agent_id in previous_subagent_descendant_fences
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|fences| fences.keys())
+                {
+                    overrides.agent_profiles.remove(descendant_agent_id);
+                    overrides.subagent_profiles.remove(descendant_agent_id);
+                }
+            }
+            #[cfg(test)]
+            if self.take_agent_resume_after_authority_restore_failure_for_tests() {
+                return Err(MezError::invalid_state(
+                    "injected resume post-authority restoration failure",
+                ));
+            }
+            self.checkpoint_agent_session_metadata()?;
+            if conversation_replaced {
+                // The replacement is durable at this point. A late terminal
+                // cleanup failure cannot undo it, so fences remain the
+                // fail-closed authority boundary and interruption is best
+                // effort rather than a post-commit error path.
+                let _ = self.interrupt_fenced_subagent_descendant_turns();
+            }
             Ok((session_id, transcript_entries, visibility))
         })();
         let (session_id, transcript_entries, visibility) = match resume_result {
             Ok(result) => result,
             Err(error) => {
                 self.agent_shell_store_mut()
-                    .restore_session(pane_id, previous_session)?;
+                    .restore_session(pane_id, previous_session.clone())?;
                 if let Some((conversation_id, screen)) = previous_agent_screen {
                     self.set_agent_pane_screen(pane_id, conversation_id, screen);
                 } else {
@@ -448,6 +556,70 @@ impl RuntimeSessionService {
                 } else {
                     self.remove_pane_current_working_directory(pane_id);
                 }
+                self.restore_subagent_authority_state(&agent_id, previous_subagent_authority);
+                if let Some(previous_subagent_descendant_fences) =
+                    previous_subagent_descendant_fences
+                {
+                    self.restore_subagent_descendant_fences(previous_subagent_descendant_fences);
+                }
+                if let Some(profile) = previous_model_profile {
+                    self.integration
+                        .model_profile_overrides_mut()
+                        .pane_profiles
+                        .insert(pane_id.to_string(), profile);
+                } else {
+                    self.integration
+                        .model_profile_overrides_mut()
+                        .pane_profiles
+                        .remove(pane_id);
+                }
+                *self.integration.model_profile_overrides_mut() = previous_model_profile_overrides;
+                self.set_agent_planning_enabled(pane_id, previous_planning_enabled);
+                self.set_agent_response_style(pane_id, previous_response_style);
+                self.set_agent_routing_override(pane_id, previous_routing_enabled);
+                self.set_agent_root_routing_policy_override(pane_id, previous_root_routing_policy);
+                self.integration.remove_pane_permission_override(pane_id);
+                if let Some(override_state) = previous_permission_override {
+                    self.set_pane_permission_preset_override(pane_id, override_state.preset);
+                    self.set_pane_approval_policy_override(pane_id, override_state.approval_policy);
+                    self.integration
+                        .set_pane_sandbox_override(pane_id, override_state.sandbox);
+                }
+                self.replace_restored_agent_token_usage(
+                    &conversation_id,
+                    pane_id,
+                    target_conversation_usage,
+                );
+                self.replace_restored_agent_token_usage(
+                    &previous_session.session_id,
+                    pane_id,
+                    previous_conversation_usage,
+                );
+                self.restore_agent_token_usage_for_pane(pane_id, previous_pane_usage);
+                self.restore_agent_context_usage(
+                    &conversation_id,
+                    target_context_usage,
+                    target_context_snapshot,
+                );
+                self.restore_agent_context_usage(
+                    &previous_session.session_id,
+                    previous_context_usage,
+                    previous_context_snapshot,
+                );
+                self.restore_agent_latest_request_usage(&conversation_id, target_latest_usage);
+                self.restore_agent_latest_request_usage(
+                    &previous_session.session_id,
+                    previous_latest_usage,
+                );
+                let _ = self.sync_prepared_runtime_agent_objective_for_conversation(
+                    pane_id,
+                    &previous_session.session_id,
+                    previous_objective.as_deref(),
+                );
+                store.save_agent_session_metadata(
+                    self.session.id.as_str(),
+                    &previous_checkpoint_records,
+                )?;
                 return Err(error);
             }
         };
@@ -1094,6 +1266,7 @@ impl RuntimeSessionService {
                     session.visibility,
                 )
             };
+            self.capture_agent_session_allowed_actions_for_pane(&started.pane_id)?;
             self.record_pane_transcript_ref(
                 &started.pane_id,
                 format!("transcript:{}:{session_id}", started.pane_id),

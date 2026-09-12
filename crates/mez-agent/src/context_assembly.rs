@@ -14,9 +14,8 @@ use crate::{
     AgentContext, AgentPromptAssetSource, AgentPromptProfile, AgentRequestAssemblyResult,
     AllowedActionSet, ContextBlock, ContextPlacement, ContextSourceKind, ModelInteractionKind,
     ModelMessage, ModelMessageRole, ModelProfile, ModelRequest, ProviderApiCompatibility,
-    assemble_agent_system_prompt, constrain_skill_actions_for_loaded_context,
-    model_context_block_header, validate_context_placement_order, validate_context_semantics,
-    validate_model_profile_request,
+    assemble_agent_system_prompt, model_context_block_header, validate_context_placement_order,
+    validate_context_semantics, validate_model_profile_request,
 };
 
 /// Stable product identity required to assemble one provider request.
@@ -155,7 +154,7 @@ fn assemble_model_request_from_context_for_api(
             content: format!("{}{}", model_context_block_header(block), block.content),
         });
     }
-    let mut request = ModelRequest {
+    let request = ModelRequest {
         provider: profile.provider.clone(),
         model: profile.model.clone(),
         model_capabilities: api
@@ -201,7 +200,6 @@ fn assemble_model_request_from_context_for_api(
         stop: is_deepseek.then(|| vec!["\n}".to_string()]),
         messages: messages.into(),
     };
-    constrain_skill_actions_for_loaded_context(&mut request);
     Ok(request)
 }
 
