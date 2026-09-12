@@ -2436,6 +2436,10 @@ impl RuntimeSessionService {
         stage: &str,
         error: &MezError,
     ) -> Result<ActionResult> {
+        // Resolve the boundary this dispatch failure settled under before the
+        // fallback audit entry and active bypass marker are consumed: both are
+        // the only evidence that an approved retry never reached the sandbox.
+        let sandbox_evidence = self.sandbox_evidence_for_action_id(turn, &action.id, None, None);
         self.append_sandbox_fallback_result_audit(&turn.turn_id, &action.id, "failed")?;
         self.clear_sandbox_bypass_for_action(&turn.turn_id, &action.id);
         let error_kind = runtime_mezzanine_error_code(error.kind());
@@ -2478,7 +2482,7 @@ impl RuntimeSessionService {
                 }
             }),
         ));
-        self.attach_effective_sandbox_to_shell_result(turn, action, None, None, &mut result);
+        sandbox_evidence.attach_to_shell_result(action, &mut result);
         let _ = self.append_agent_error_text_to_terminal_buffer(
             &turn.pane_id,
             &format!(

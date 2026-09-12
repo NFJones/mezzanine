@@ -2516,6 +2516,187 @@ fn runtime_settled_sandbox_bypass_reports_policy_only_effective_state() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Builds one unwrapped pane transaction for approved-bypass failure tests.
+fn sandbox_bypass_settlement_transaction(
+    turn_id: &str,
+    action_id: &str,
+) -> RunningShellTransactionRef {
+    RunningShellTransactionRef {
+        turn_id: turn_id.to_string(),
+        kind: RunningShellTransactionKind::AgentAction {
+            action_id: action_id.to_string(),
+        },
+        pane_id: "%1".to_string(),
+        command: "env".to_string(),
+        started_at_unix_ms: 0,
+        timeout_ms: None,
+        pending_input_payload: None,
+        observed_output_bytes: 0,
+        observed_output_preview: String::new(),
+        observed_output_truncated: false,
+    }
+}
+
+/// Offers, grants, and activates one approved one-shot unsandboxed retry.
+fn arm_sandbox_bypass_for_action(
+    service: &mut RuntimeSessionService,
+    turn_id: &str,
+    action_id: &str,
+    marker: &str,
+) {
+    assert!(
+        service
+            .offer_sandbox_fallback_approval(
+                marker,
+                turn_id,
+                action_id,
+                crate::runtime::RuntimeSandboxFallbackAudit {
+                    backend: crate::runtime::SandboxBackend::Bubblewrap,
+                    reason: "pre_payload_failure".to_string(),
+                    proof: "trusted status closed without an exit-code event".to_string(),
+                    partial_effect_warning: false,
+                    approving_client_id: None,
+                },
+            )
+            .unwrap()
+    );
+    service.grant_sandbox_bypass_after_approval(turn_id, action_id);
+    assert!(service.activate_sandbox_bypass_after_approval(turn_id, action_id));
+}
+
+/// Asserts one settled result carries exactly the bounded projection of an
+/// approved unsandboxed retry rather than the configured backend.
+fn assert_policy_only_sandbox_bypass_result(result: &mez_agent::ActionResult) {
+    let structured = result
+        .structured_content_json
+        .as_deref()
+        .expect("the settled result must carry structured content");
+    let document: serde_json::Value = serde_json::from_str(structured).unwrap();
+    let effective = document["sandbox_effective"]
+        .as_object()
+        .expect("the settled result must carry the bounded sandbox projection");
+    assert_eq!(effective.len(), 4);
+    assert_eq!(effective["execution_boundary"], "policy-only");
+    assert_eq!(effective["enforcement"], "none");
+    assert_eq!(effective["network_mode"], "unenforced");
+    assert_eq!(effective["reason"], "sandbox-bypass-approved");
+}
+
+/// Verifies a failed shell transaction settlement reports the approved
+/// one-shot unsandboxed retry it settled under instead of the configured
+/// backend.
+#[test]
+fn runtime_failed_shell_transaction_settlement_reports_policy_only_effective_state() {
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    configure_available_bubblewrap(&mut service);
+    arm_sandbox_bypass_for_action(
+        &mut service,
+        &turn_id,
+        &action_id,
+        "sandbox-bypass-settlement-failure-marker",
+    );
+    // The fallback offer blocked the action and replaced its result, so restore
+    // the running result the approved resume dispatches from.
+    {
+        let execution = service
+            .agent_turn_executions_mut()
+            .get_mut(&turn_id)
+            .unwrap();
+        execution.action_results[0].status = ActionStatus::Running;
+        execution.terminal_state = AgentTurnState::Running;
+    }
+    let transaction_ref = sandbox_bypass_settlement_transaction(&turn_id, &action_id);
+    // The synthetic fixture has no owning assistant execution block, so the
+    // settlement's transcript commit reports a context semantic violation after
+    // the failed result and its bounded sandbox projection are already stored.
+    let _ = service.fail_running_shell_transaction_action(
+        &transaction_ref,
+        "sandbox-bypass-settlement-failure-marker",
+        crate::runtime::RuntimeShellTransactionActionFailure {
+            action_id: action_id.clone(),
+            status: ActionStatus::Failed,
+            code: "pane_input_write_failed".to_string(),
+            message: "pane input write failed while sending shell action: test fixture".to_string(),
+            sent_to_pane: false,
+            terminal_observation: serde_json::json!({"state": "failed"}),
+            trace_reason: "shell_transaction_runtime_failure".to_string(),
+        },
+    );
+
+    let execution = service.agent_turn_executions().get(&turn_id).unwrap();
+    assert_eq!(execution.action_results[0].status, ActionStatus::Failed);
+    assert_policy_only_sandbox_bypass_result(&execution.action_results[0]);
+    assert!(!service.sandbox_bypass_active_for_action(&turn_id, &action_id));
+
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a batched shell transaction failure settlement reports the approved
+/// one-shot unsandboxed retry for every action it settles.
+#[test]
+fn runtime_failed_shell_transaction_batch_settlement_reports_policy_only_effective_state() {
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    configure_available_bubblewrap(&mut service);
+    let waiter_action_id = "sandbox-fallback-batch-waiter".to_string();
+    add_sandbox_fallback_probe_waiter(&mut service, &turn_id, &waiter_action_id);
+    arm_sandbox_bypass_for_action(
+        &mut service,
+        &turn_id,
+        &action_id,
+        "sandbox-bypass-batch-lead-marker",
+    );
+    arm_sandbox_bypass_for_action(
+        &mut service,
+        &turn_id,
+        &waiter_action_id,
+        "sandbox-bypass-batch-waiter-marker",
+    );
+    // The fallback offers blocked both actions and replaced their results, so
+    // restore the running results the approved resume dispatches from.
+    {
+        let execution = service
+            .agent_turn_executions_mut()
+            .get_mut(&turn_id)
+            .unwrap();
+        for result in &mut execution.action_results {
+            result.status = ActionStatus::Running;
+        }
+        execution.terminal_state = AgentTurnState::Running;
+    }
+    let settlement_failure =
+        |action_id: &str| crate::runtime::RuntimeShellTransactionActionFailure {
+            action_id: action_id.to_string(),
+            status: ActionStatus::Failed,
+            code: "pane_input_write_failed".to_string(),
+            message: "pane input write failed while sending shell action: test fixture".to_string(),
+            sent_to_pane: false,
+            terminal_observation: serde_json::json!({"state": "failed"}),
+            trace_reason: "shell_transaction_runtime_failure".to_string(),
+        };
+    let transaction_ref = sandbox_bypass_settlement_transaction(&turn_id, &action_id);
+    // The synthetic fixture has no owning assistant execution block, so the
+    // settlement's transcript commit reports a context semantic violation after
+    // the failed results and their bounded sandbox projections are stored.
+    let _ = service.fail_running_shell_transaction_actions(
+        &transaction_ref,
+        "sandbox-bypass-batch-marker",
+        vec![
+            settlement_failure(&action_id),
+            settlement_failure(&waiter_action_id),
+        ],
+    );
+
+    let execution = service.agent_turn_executions().get(&turn_id).unwrap();
+    for (index, candidate) in [&action_id, &waiter_action_id].into_iter().enumerate() {
+        assert_eq!(execution.action_results[index].action_id, *candidate);
+        assert_eq!(execution.action_results[index].status, ActionStatus::Failed);
+        assert_policy_only_sandbox_bypass_result(&execution.action_results[index]);
+        assert!(!service.sandbox_bypass_active_for_action(&turn_id, candidate));
+    }
+
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Builds one settled Bubblewrap payload transaction for assessment tests.
 fn sandbox_failure_transaction(turn_id: &str, action_id: &str) -> RunningShellTransactionRef {
     RunningShellTransactionRef {

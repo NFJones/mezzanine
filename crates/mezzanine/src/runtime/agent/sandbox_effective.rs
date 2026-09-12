@@ -53,6 +53,33 @@ impl RuntimeSandboxEvidence {
             },
         )
     }
+
+    /// Attaches this owned evidence to one shell action result as the bounded
+    /// effective-sandbox projection.
+    ///
+    /// Only the fixed boundary, enforcement, network-mode, and reason keys are
+    /// added; the projection never includes argv, paths, or probe output.
+    /// Failure settlements gather evidence before they consume the fallback
+    /// audit entry and clear the approved bypass, then merge the state they
+    /// already resolved, so a settled result cannot fall through to a configured
+    /// backend claim that the run never enforced.
+    pub(crate) fn attach_to_shell_result(&self, action: &AgentAction, result: &mut ActionResult) {
+        if !matches!(
+            action.payload,
+            AgentActionPayload::ShellCommand { .. } | AgentActionPayload::ApplyPatch { .. }
+        ) {
+            return;
+        }
+        let Some(structured) = result.structured_content_json.as_deref() else {
+            return;
+        };
+        result.structured_content_json = Some(
+            mez_agent::shell_structured_content_with_sandbox_effective_json(
+                structured,
+                self.resolve().structured_json(),
+            ),
+        );
+    }
 }
 
 impl RuntimeSessionService {
@@ -143,21 +170,7 @@ impl RuntimeSessionService {
         evaluation: Option<&PermissionEvaluation>,
         result: &mut ActionResult,
     ) {
-        if !matches!(
-            action.payload,
-            AgentActionPayload::ShellCommand { .. } | AgentActionPayload::ApplyPatch { .. }
-        ) {
-            return;
-        }
-        let Some(structured) = result.structured_content_json.as_deref() else {
-            return;
-        };
-        let state = self.effective_sandbox_state_for_action(turn, action, plan, evaluation);
-        result.structured_content_json = Some(
-            mez_agent::shell_structured_content_with_sandbox_effective_json(
-                structured,
-                state.structured_json(),
-            ),
-        );
+        let evidence = self.sandbox_evidence_for_action_id(turn, &action.id, plan, evaluation);
+        evidence.attach_to_shell_result(action, result);
     }
 }
