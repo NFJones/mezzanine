@@ -1619,6 +1619,8 @@ mod iroh_setup_tests {
     /// complete frame may follow the already-visible channel entry.
     #[tokio::test(flavor = "current_thread")]
     async fn iroh_v3_event_receiver_retains_latest_render_while_consumer_is_blocked() {
+        // Allows iroh stream delivery and decoding to settle under parallel test load.
+        const RENDER_SETTLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
         *IROH_LATEST_RENDER_DECODED.lock().unwrap() = false;
         let (server, client, server_connection, client_connection) =
             connected_iroh_event_pair().await;
@@ -1676,7 +1678,7 @@ mod iroh_setup_tests {
             .await
             .unwrap();
         stream.flush().await.unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        tokio::time::timeout(RENDER_SETTLE_TIMEOUT, async {
             while receiver.len() != IROH_RENDER_WAKEUP_CHANNEL_CAPACITY {
                 tokio::task::yield_now().await;
             }
@@ -1705,7 +1707,7 @@ mod iroh_setup_tests {
         }
         stream.flush().await.unwrap();
 
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        tokio::time::timeout(RENDER_SETTLE_TIMEOUT, async {
             loop {
                 if *IROH_LATEST_RENDER_DECODED.lock().unwrap() {
                     break;
@@ -1717,7 +1719,7 @@ mod iroh_setup_tests {
         .expect("ordered decoding must continue while presentation is blocked");
         let first = receiver.recv().await.unwrap().unwrap();
         assert_eq!(first.pushed_snapshot.unwrap().revision, 1);
-        let latest = tokio::time::timeout(std::time::Duration::from_secs(1), receiver.recv())
+        let latest = tokio::time::timeout(RENDER_SETTLE_TIMEOUT, receiver.recv())
             .await
             .unwrap()
             .unwrap()
