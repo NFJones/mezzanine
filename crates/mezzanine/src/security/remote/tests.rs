@@ -87,37 +87,80 @@ fn endpoint_identity_persists_and_rejects_duplicate_live_use() {
 /// forked by another thread can hold this lock for the fork-to-exec window even
 /// though no live identity owns it. Acquisition must retry instead of failing
 /// fast, and must still succeed once that transient holder releases.
+///
+/// A sibling test's forked child can keep that inherited descriptor open past
+/// the production retry budget while the machine is loaded, so the scenario runs
+/// in a bounded attempt loop: a conflict is tolerated only when acquisition
+/// actually waited out the budget, and each such attempt is followed by a pause
+/// long enough for the inherited descriptor to reach `exec` and release the
+/// flock. The bounded retry is exactly what this test protects: acquisition must
+/// outlast a transient holder instead of failing fast, and must not report the
+/// documented live-use conflict for a holder no live identity owns.
 #[test]
 fn endpoint_identity_lock_acquisition_survives_transient_holder() {
+    // Bounds attempts at the documented transient fork-inherited lock window.
+    const MAX_ATTEMPTS: usize = 4;
+
     let root = test_root("transient-lock");
     let identity = RemoteEndpointIdentity::load_or_create(&root, "session-a").unwrap();
     let endpoint_id = identity.endpoint_id().to_string();
     drop(identity);
 
-    let holder = super::store::open_private_lock(&session_identity_lock_path(&root)).unwrap();
-    flock(&holder, FlockOperation::NonBlockingLockExclusive).unwrap();
-    // Keep this hold as short as the assertion allows: while it is open, any
-    // sibling test thread that forks a PTY child inherits this descriptor and
-    // keeps the flock alive until the child execs, so a long hold widens a
-    // window this test would then have to wait out inside the production retry
-    // budget. The lock is already held before the acquisition starts, so a few
-    // milliseconds still guarantee that the acquisition observes a holder.
-    let releasing = thread::spawn(move || {
-        thread::sleep(Duration::from_millis(5));
-        drop(holder);
-    });
+    let lock_path = session_identity_lock_path(&root);
+    for attempt in 1..=MAX_ATTEMPTS {
+        let holder = super::store::open_private_lock(&lock_path).unwrap();
+        flock(&holder, FlockOperation::NonBlockingLockExclusive).unwrap();
+        // Keep each hold as short as the assertions allow: while it is open, any
+        // sibling test thread that forks a PTY child inherits this descriptor and
+        // keeps the flock alive until the child execs, so a longer hold widens a
+        // window this attempt would then have to wait out inside the production
+        // retry budget. The lock is already held before the acquisition starts,
+        // so a few milliseconds still guarantee that acquisition observes a
+        // holder.
+        let releasing = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(5));
+            drop(holder);
+        });
 
-    let started = Instant::now();
-    let reacquired = RemoteEndpointIdentity::load_or_create(&root, "session-a").unwrap();
-    let waited = started.elapsed();
-    assert_eq!(reacquired.endpoint_id(), endpoint_id);
-    assert!(
-        waited >= Duration::from_millis(1),
-        "acquisition returned after {waited:?} without waiting out the transient holder"
+        let started = Instant::now();
+        let reacquired = RemoteEndpointIdentity::load_or_create(&root, "session-a");
+        let waited = started.elapsed();
+
+        match reacquired {
+            Ok(reacquired) => {
+                assert_eq!(reacquired.endpoint_id(), endpoint_id);
+                assert!(
+                    waited >= Duration::from_millis(1),
+                    "acquisition returned after {waited:?} without waiting out the transient holder"
+                );
+                drop(reacquired);
+                releasing.join().unwrap();
+                let _ = fs::remove_dir_all(root);
+                return;
+            }
+            Err(error) if error.kind() == crate::error::MezErrorKind::Conflict => {
+                // A conflict is tolerable only once acquisition actually spent the
+                // whole retry budget waiting on the holder.
+                assert!(
+                    waited >= super::store::IDENTITY_LOCK_RETRY_BUDGET,
+                    "acquisition reported a conflict after {waited:?}, before the identity lock \
+                     retry budget was exhausted"
+                );
+                releasing.join().unwrap();
+                if attempt < MAX_ATTEMPTS {
+                    // Let an inherited descriptor held by a sibling test's forked
+                    // child pass `exec`, which finally releases the flock.
+                    thread::sleep(Duration::from_millis(50));
+                }
+            }
+            Err(error) => panic!("unexpected identity acquisition failure: {error:?}"),
+        }
+    }
+
+    panic!(
+        "endpoint identity acquisition still conflicted after {MAX_ATTEMPTS} attempts: a sibling \
+         test's forked child held the inherited descriptor past the identity lock retry budget"
     );
-    drop(reacquired);
-    releasing.join().unwrap();
-    let _ = fs::remove_dir_all(root);
 }
 
 /// Verifies a live holder still conflicts once the retry budget elapses.

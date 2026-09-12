@@ -22,8 +22,12 @@ async fn async_runtime_daemon_pane_worker_feeds_pty_output_into_rendered_view() 
     service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
+    // The pane process must outlive the render observation below. If it exits
+    // first, the supervised services can drain before the cancellation future has
+    // observed the rendered output, so the shutdown request is never recorded and
+    // the shutdown assertion fails even though rendering was never contradicted.
     service
-        .start_initial_pane_process(Some("sh -c 'printf async-daemon-tick; sleep 1'"))
+        .start_initial_pane_process(Some("sh -c 'printf async-daemon-tick; sleep 30'"))
         .unwrap();
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
