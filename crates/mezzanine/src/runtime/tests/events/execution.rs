@@ -290,6 +290,143 @@ fn runtime_agent_loop_stop_clears_interrupted_loop_state() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies corrupt parent objective metadata rejects loop cancellation before
+/// it mutates the active loop binding, projection, or MMP identity.
+///
+/// The interrupted loop remains retryable after a failed restoration preflight:
+/// its work turn and controller still exist, the pane stays bound to its
+/// ephemeral loop conversation, and peer discovery still identifies that live
+/// conversation rather than the un-restored parent.
+#[test]
+fn runtime_agent_loop_stop_preserves_retryable_state_when_parent_objective_metadata_is_corrupt() {
+    let transcript_store =
+        AgentTranscriptStore::new(temp_root("runtime-agent-loop-stop-corrupt-objective"));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service.set_pane_screen(
+        "%1".to_string(),
+        TerminalScreen::new(Size::new(80, 24).unwrap(), 100).unwrap(),
+    );
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let parent_conversation = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    transcript_store
+        .save_user_objective(&parent_conversation, Some("Restore this parent objective"))
+        .unwrap();
+
+    service
+        .execute_agent_shell_loop_command("%1", "/loop --fork review this document")
+        .unwrap();
+    let loop_conversation = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let agent_id = mez_core::ids::AgentId::opaque("agent-%1".to_string()).unwrap();
+    let identity_before = service
+        .message_service()
+        .registered_identity(&agent_id)
+        .cloned()
+        .expect("loop work should publish the pane MMP identity");
+    assert!(service.agent_loop_is_active("%1"));
+    assert!(service.agent_loop_turn("turn-1").is_some());
+
+    fs::write(
+        transcript_store
+            .root()
+            .join(&parent_conversation)
+            .join("metadata.json"),
+        b"not valid objective metadata\n",
+    )
+    .unwrap();
+
+    let error = service.stop_agent_turn_for_pane("%1").unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("conversation metadata decode failed"),
+        "{error}"
+    );
+    assert!(service.agent_loop_is_active("%1"));
+    assert!(service.agent_loop_turn("turn-1").is_some());
+    let session = service.agent_shell_store().get("%1").unwrap();
+    assert_eq!(session.session_id, loop_conversation);
+    assert!(session.ephemeral);
+    assert_eq!(
+        service.message_service().registered_identity(&agent_id),
+        Some(&identity_before),
+        "failed restoration must not desynchronize the live pane MMP identity"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies loop-parent restoration consumes the prepared objective instead of
+/// reading durable metadata again after it begins to restore the parent binding.
+///
+/// A second lookup could race a metadata change after preflight and fail after
+/// the ephemeral loop state was consumed. This injected second-read failure
+/// proves the first prepared value drives restoration, leaving the loop state
+/// consumed only after the parent session and its MMP identity are coherent.
+#[test]
+fn runtime_agent_loop_stop_restores_parent_from_single_prepared_objective_read() {
+    let transcript_store =
+        AgentTranscriptStore::new(temp_root("runtime-agent-loop-single-objective-read"));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service.set_pane_screen(
+        "%1".to_string(),
+        TerminalScreen::new(Size::new(80, 24).unwrap(), 100).unwrap(),
+    );
+    let parent_conversation = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    transcript_store
+        .save_user_objective(
+            &parent_conversation,
+            Some("Restore prepared objective once"),
+        )
+        .unwrap();
+    service
+        .execute_agent_shell_loop_command("%1", "/loop --fork review this document")
+        .unwrap();
+    transcript_store.fail_second_subsequent_user_objective_read();
+
+    service.stop_agent_turn_for_pane("%1").unwrap();
+
+    assert!(!service.agent_loop_is_active("%1"));
+    assert_eq!(
+        service.agent_shell_store().get("%1").unwrap().session_id,
+        parent_conversation
+    );
+    let agent_id = mez_core::ids::AgentId::opaque("agent-%1".to_string()).unwrap();
+    assert_eq!(
+        service
+            .message_service()
+            .registered_identity(&agent_id)
+            .and_then(|identity| identity.objective.as_deref()),
+        Some("Restore prepared objective once")
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies that bootstrap parsing uses the hidden transaction capture rather
 /// than the visible pane screen. Bootstrap traffic is normally hidden from the
 /// terminal buffer, so parsing only screen history leaves the pane marked as

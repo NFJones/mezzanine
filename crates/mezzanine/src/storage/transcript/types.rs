@@ -6,6 +6,8 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, AtomicU8};
 use std::sync::{Arc, Mutex};
 
 use mez_agent::AgentConversationKind;
@@ -295,6 +297,21 @@ pub struct AgentTranscriptStore {
     /// Production stores use `SESSION_TITLE_MIRRORS_MAX_ENTRIES`; focused tests
     /// lower it so bounded compaction is observable without thousands of writes.
     pub(super) session_title_mirror_max_entries: usize,
+    /// One-shot failure injection immediately after legacy payload promotion.
+    ///
+    /// This is test-only because production failures come from the filesystem;
+    /// focused storage tests use it to verify promotion rollback keeps legacy
+    /// lifecycle operations safe when metadata persistence cannot proceed.
+    #[cfg(test)]
+    pub(super) fail_metadata_write_after_promotion: Arc<AtomicBool>,
+    #[cfg(test)]
+    pub(super) fail_legacy_promotion_permissions_after_rename: Arc<AtomicBool>,
+    /// Test-only one-shot failure for recovery-journal cleanup after commit.
+    #[cfg(test)]
+    pub(super) fail_archive_recovery_journal_removal: Arc<AtomicBool>,
+    /// Test-only countdown that fails the second subsequent objective read.
+    #[cfg(test)]
+    pub(super) fail_user_objective_read_countdown: Arc<AtomicU8>,
 }
 
 impl PartialEq for AgentTranscriptStore {

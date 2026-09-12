@@ -110,6 +110,7 @@ pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
             true,
         ),
         slash("clear", &[], SlashCommandEffect::SessionMutation, false),
+        slash("objective", &[], SlashCommandEffect::SessionMutation, true),
         slash("compact", &[], SlashCommandEffect::SessionMutation, false),
         slash("copy", &[], SlashCommandEffect::SessionMutation, true),
         slash("directive", &[], SlashCommandEffect::SessionMutation, true),

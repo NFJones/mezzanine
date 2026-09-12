@@ -77,6 +77,7 @@ pub(super) fn agent_parameter_hint(command: &str) -> Option<&'static str> {
         "personality" => Some(" <profile|style|list|status|show|clear|default>"),
         "remember" => Some(" [statement]"),
         "name-session" => Some(" [--ephemeral] <name>|--clear"),
+        "objective" => Some(" [<text>|--clear]"),
         "resume" => Some(" <session-uuid|--latest>"),
         "fork" => Some(" [conversation-id]"),
         "list-mcp" => Some(" [server-name]"),

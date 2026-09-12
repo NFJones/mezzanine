@@ -777,9 +777,10 @@ fn runtime_restart_hydration_creates_blank_surface_for_hidden_empty_session() {
 
 /// Verifies a malformed durable presentation cannot leave a partially rebound
 /// restart session, replacement screen, transcript reference, or working
-/// directory after the replay target check rejects hydration.
+/// directory and published identity when corrupt target objective metadata
+/// rejects hydration.
 #[test]
-fn runtime_restart_hydration_failure_restores_prior_pane_state() {
+fn runtime_restart_objective_metadata_failure_restores_prior_pane_state() {
     let mut service = test_runtime_service();
     let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-restore-rollback"));
     let mezzanine_session_id = service.session().id.as_str().to_string();
@@ -820,8 +821,8 @@ fn runtime_restart_hydration_failure_restores_prior_pane_state() {
                 conversation_id: "restore-target".to_string(),
                 prompt_cache_lineage_id: "lineage-restore-target".to_string(),
                 visibility: "visible".to_string(),
-                running_turn_id: None,
-                running_turn_kind: None,
+                running_turn_id: Some("turn-restore-target".to_string()),
+                running_turn_kind: Some("routed-workflow".to_string()),
                 transcript_entries: 1,
                 log_level: "normal".to_string(),
                 pane_model_profile: Some("target-profile".to_string()),
@@ -843,21 +844,24 @@ fn runtime_restart_hydration_failure_restores_prior_pane_state() {
             }],
         )
         .unwrap();
-    let presentation_path = transcript_store
+    let metadata_path = transcript_store
         .presentation_path("restore-target")
-        .unwrap();
-    let corrupt = fs::read_to_string(&presentation_path).unwrap().replacen(
-        "restore-target",
-        "wrong-restore-target",
-        1,
-    );
-    fs::write(presentation_path, corrupt).unwrap();
-    service.set_agent_transcript_store(transcript_store);
+        .unwrap()
+        .with_file_name("metadata.json");
+    fs::write(metadata_path, b"not valid metadata\n").unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
     let prior_session = service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap()
         .clone();
+    transcript_store
+        .save_user_objective(&prior_session.session_id, Some("Keep prior MMP binding"))
+        .unwrap();
+    service
+        .sync_runtime_agent_objective_for_conversation("%1", &prior_session.session_id)
+        .unwrap();
+    let agent_id = mez_core::ids::AgentId::opaque("agent-%1".to_string()).unwrap();
     let mut prior_screen = TerminalScreen::new(Size::new(80, 24).unwrap(), 120).unwrap();
     prior_screen.feed(b"prior restart projection");
     service.set_agent_pane_screen("%1", &prior_session.session_id, prior_screen);
@@ -876,10 +880,18 @@ fn runtime_restart_hydration_failure_restores_prior_pane_state() {
     assert!(
         error
             .message()
-            .contains("presentation replay target does not match"),
+            .contains("conversation metadata decode failed"),
         "{error}"
     );
     assert_eq!(service.agent_shell_store().get("%1"), Some(&prior_session));
+    assert_eq!(
+        service
+            .message_service()
+            .registered_identity(&agent_id)
+            .and_then(|identity| identity.objective.as_deref()),
+        Some("Keep prior MMP binding"),
+        "failed hydration must retain the MMP identity for the restored prior binding"
+    );
     assert_eq!(service.agent_pane_screen("%1"), Some(&screen_before));
     assert_eq!(service.persistence.pane_transcript_refs("%1"), refs_before);
     assert_eq!(
@@ -898,6 +910,16 @@ fn runtime_restart_hydration_failure_restores_prior_pane_state() {
     assert_eq!(service.agent_routing_override("%1"), None);
     assert_eq!(service.agent_root_routing_policy_override("%1"), None);
     assert_eq!(service.integration.pane_permission_override("%1"), None);
+    assert!(
+        transcript_store
+            .inspect("restore-target")
+            .unwrap()
+            .iter()
+            .all(|entry| !entry
+                .content
+                .contains("routed workflow was interrupted by runtime restart")),
+        "objective metadata must be validated before restore appends interruption diagnostics"
+    );
 }
 
 /// Verifies crash-recovered active metadata never resumes a previously running

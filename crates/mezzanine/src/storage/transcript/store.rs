@@ -9,10 +9,14 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+
 use tokio::fs::{self as tokio_fs, OpenOptions as TokioOpenOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use rustix::fs::{FlockOperation, flock};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::error::{MezError, MezErrorKind, Result};
@@ -20,7 +24,8 @@ use crate::session_title::{bound_session_title, is_display_format_character};
 
 use super::CompareAndSwapTranscriptEntryResult;
 use super::archive::{
-    archived_catalog_candidate, archived_catalog_candidates, archived_payloads_exist,
+    ArchiveRecoveryOperation, archived_catalog_candidate, archived_catalog_candidates,
+    archived_payloads_exist,
 };
 use super::catalog::{self, CatalogCandidate, CatalogPayloadLayout};
 use super::encoding::{
@@ -59,7 +64,29 @@ const SESSION_SUMMARY_FILE_NAME: &str = "summary.json";
 /// Defines the versioned durable conversation classification sidecar.
 const SESSION_METADATA_FILE_NAME: &str = "metadata.json";
 /// Current per-conversation metadata schema version.
-const SESSION_METADATA_VERSION: u64 = 1;
+const SESSION_METADATA_VERSION: u64 = 2;
+
+/// Versioned authoritative metadata for one durable conversation.
+///
+/// The sidecar is the only durable source for user-selected objectives. It is
+/// updated under the conversation lock so independent kind and objective
+/// mutations cannot overwrite one another.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+struct ConversationMetadata {
+    version: u64,
+    conversation_kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    user_objective: Option<String>,
+}
+
+/// Records a root TSV move that can be rolled back before metadata commits.
+///
+/// The state is created immediately after the rename. This keeps the legacy
+/// payload recoverable when a subsequent permission update fails.
+struct LegacyTranscriptPromotion {
+    legacy_path: PathBuf,
+    transcript_path: PathBuf,
+}
 /// Defines the SESSION PRESENTATION FILE NAME const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
@@ -216,6 +243,14 @@ impl AgentTranscriptStore {
             )),
             session_title_mirrors: Arc::new(Mutex::new(SessionTitleMirrorHandleState::default())),
             session_title_mirror_max_entries: SESSION_TITLE_MIRRORS_MAX_ENTRIES,
+            #[cfg(test)]
+            fail_metadata_write_after_promotion: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            fail_legacy_promotion_permissions_after_rename: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            fail_archive_recovery_journal_removal: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            fail_user_objective_read_countdown: Arc::new(AtomicU8::new(0)),
         }
     }
 
@@ -231,6 +266,10 @@ impl AgentTranscriptStore {
             )),
             session_title_mirrors: Arc::new(Mutex::new(SessionTitleMirrorHandleState::default())),
             session_title_mirror_max_entries: SESSION_TITLE_MIRRORS_MAX_ENTRIES,
+            fail_metadata_write_after_promotion: Arc::new(AtomicBool::new(false)),
+            fail_legacy_promotion_permissions_after_rename: Arc::new(AtomicBool::new(false)),
+            fail_archive_recovery_journal_removal: Arc::new(AtomicBool::new(false)),
+            fail_user_objective_read_countdown: Arc::new(AtomicU8::new(0)),
         }
     }
 
@@ -259,6 +298,41 @@ impl AgentTranscriptStore {
         }
         self.session_title_mirror_max_entries = max_entries;
         Ok(self)
+    }
+
+    /// Causes the next metadata write after legacy promotion to fail in focused tests.
+    #[cfg(test)]
+    pub fn fail_next_metadata_write_after_promotion(&self) {
+        self.fail_metadata_write_after_promotion
+            .store(true, Ordering::SeqCst);
+    }
+
+    /// Causes the next promoted transcript permission update to fail after rename.
+    #[cfg(test)]
+    pub fn fail_next_legacy_promotion_permissions_after_rename(&self) {
+        self.fail_legacy_promotion_permissions_after_rename
+            .store(true, Ordering::SeqCst);
+    }
+
+    /// Causes the next archive recovery-journal cleanup to fail in focused tests.
+    #[cfg(test)]
+    pub fn fail_next_archive_recovery_journal_removal(&self) {
+        self.fail_archive_recovery_journal_removal
+            .store(true, Ordering::SeqCst);
+    }
+
+    /// Causes the second subsequent objective metadata read to fail in focused tests.
+    #[cfg(test)]
+    pub fn fail_second_subsequent_user_objective_read(&self) {
+        self.fail_user_objective_read_countdown
+            .store(2, Ordering::SeqCst);
+    }
+
+    /// Reports the remaining objective-read failure countdown in focused tests.
+    #[cfg(test)]
+    pub fn user_objective_read_failure_countdown(&self) -> u8 {
+        self.fail_user_objective_read_countdown
+            .load(Ordering::SeqCst)
     }
 
     /// Atomically updates the active saved-conversation retention policy.
@@ -443,11 +517,7 @@ impl AgentTranscriptStore {
     ) -> Result<Option<CatalogCandidate>> {
         validate_conversation_id(conversation_id)?;
         let existing = catalog::record(self, conversation_id)?;
-        let named = if existing.is_none() {
-            self.read_named_sessions_index()?.remove(conversation_id)
-        } else {
-            None
-        };
+        let named = self.read_named_sessions_index()?.remove(conversation_id);
         let session_dir = self.session_dir_for(conversation_id)?;
         let directory_transcript = session_dir.join(SESSION_TRANSCRIPT_FILE_NAME).is_file();
         let legacy_transcript = self.legacy_transcript_path_for(conversation_id)?.is_file();
@@ -460,6 +530,9 @@ impl AgentTranscriptStore {
             if let Some(candidate) = archived_catalog_candidate(self, conversation_id)? {
                 return Ok(Some(candidate));
             }
+            if self.user_objective(conversation_id)?.is_some() {
+                return self.objective_only_catalog_candidate(conversation_id, named.as_ref());
+            }
             return named
                 .as_ref()
                 .map(|named| self.named_only_catalog_candidate(named))
@@ -469,7 +542,7 @@ impl AgentTranscriptStore {
             conversation_id,
             has_transcript,
             has_presentation,
-            if directory_transcript || has_presentation {
+            if directory_transcript || !has_transcript {
                 CatalogPayloadLayout::Directory
             } else {
                 CatalogPayloadLayout::LegacyTsv
@@ -492,7 +565,7 @@ impl AgentTranscriptStore {
             conversation_kind: existing.session.conversation_kind,
             has_transcript,
             has_presentation,
-            payload_layout: if directory_transcript || has_presentation {
+            payload_layout: if directory_transcript || !has_transcript {
                 CatalogPayloadLayout::Directory
             } else {
                 CatalogPayloadLayout::LegacyTsv
@@ -545,63 +618,84 @@ impl AgentTranscriptStore {
         kind: AgentConversationKind,
     ) -> Result<()> {
         let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
-        let session_dir = self.ensure_session_dir(conversation_id)?;
-        let path = session_dir.join(SESSION_METADATA_FILE_NAME);
-        let temp_path = session_dir.join(".metadata.json.tmp");
-        let kind_name = match kind {
+        let mut metadata = self.read_conversation_metadata_locked(conversation_id)?;
+        metadata.conversation_kind = match kind {
             AgentConversationKind::Root => "root",
             AgentConversationKind::Subagent => "subagent",
-        };
-        let encoded = serde_json::to_vec(&serde_json::json!({
-            "version": SESSION_METADATA_VERSION,
-            "conversation_kind": kind_name,
-        }))
-        .map_err(|error| {
-            MezError::invalid_args(format!("conversation metadata encode failed: {error}"))
-        })?;
-        let mut file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&temp_path)?;
-        file.write_all(&encoded)?;
-        file.write_all(b"\n")?;
-        file.sync_all()?;
-        set_private_file_permissions(&temp_path)?;
-        std_fs::rename(&temp_path, &path)?;
-        set_private_file_permissions(&path)?;
+        }
+        .to_string();
+        self.write_conversation_metadata_locked(conversation_id, &metadata)?;
         self.upsert_catalog_from_files(conversation_id, Some(kind))?;
+        self.remove_archive_recovery_journal(conversation_id)?;
         Ok(())
     }
 
     /// Loads one conversation's durable origin, defaulting legacy sessions to root.
     pub fn conversation_kind(&self, conversation_id: &str) -> Result<AgentConversationKind> {
-        let path = self.conversation_metadata_path_for(conversation_id)?;
-        if !path.exists() {
-            return Ok(AgentConversationKind::Root);
-        }
-        let data = std_fs::read(&path)?;
-        let value = serde_json::from_slice::<serde_json::Value>(&data).map_err(|error| {
-            MezError::invalid_args(format!("conversation metadata decode failed: {error}"))
-        })?;
-        let object = value
-            .as_object()
-            .ok_or_else(|| MezError::invalid_args("conversation metadata must be a JSON object"))?;
-        if object.get("version").and_then(serde_json::Value::as_u64)
-            != Some(SESSION_METADATA_VERSION)
-        {
-            return Err(MezError::invalid_args(
-                "unsupported conversation metadata version",
-            ));
-        }
-        match object
-            .get("conversation_kind")
-            .and_then(serde_json::Value::as_str)
-        {
-            Some("root") => Ok(AgentConversationKind::Root),
-            Some("subagent") => Ok(AgentConversationKind::Subagent),
+        let metadata = self.read_conversation_metadata(conversation_id)?;
+        match metadata.conversation_kind.as_str() {
+            "root" => Ok(AgentConversationKind::Root),
+            "subagent" => Ok(AgentConversationKind::Subagent),
             _ => Err(MezError::invalid_args("invalid conversation metadata kind")),
         }
+    }
+
+    /// Returns the durable user-selected objective for one conversation.
+    ///
+    /// Missing metadata is a legacy root conversation with no override. The
+    /// value is normalized before it reaches runtime precedence resolution, so
+    /// corrupt objective metadata fails closed rather than being published.
+    pub fn user_objective(&self, conversation_id: &str) -> Result<Option<String>> {
+        #[cfg(test)]
+        if self
+            .fail_user_objective_read_countdown
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .unwrap_or(0)
+            == 1
+        {
+            return Err(MezError::invalid_state(
+                "injected second user objective metadata read failure",
+            ));
+        }
+        let metadata = self.read_conversation_metadata(conversation_id)?;
+        Ok(metadata
+            .user_objective
+            .as_deref()
+            .map(mez_agent::messaging::normalize_objective)
+            .transpose()?)
+    }
+
+    /// Atomically sets or clears one conversation's authoritative user objective.
+    ///
+    /// The same per-conversation lock and atomic sidecar replacement used for
+    /// conversation kind writes preserve unrelated metadata fields when a kind
+    /// update races with an objective update. `None` is the explicit clear API;
+    /// protocol objective absence is handled above this persistence boundary.
+    pub fn save_user_objective(
+        &self,
+        conversation_id: &str,
+        objective: Option<&str>,
+    ) -> Result<bool> {
+        let objective = objective
+            .map(mez_agent::messaging::normalize_objective)
+            .transpose()?;
+        let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
+        let mut metadata = self.read_conversation_metadata_locked(conversation_id)?;
+        if metadata.user_objective == objective {
+            return Ok(false);
+        }
+        metadata.user_objective = objective;
+        self.write_conversation_metadata_locked(conversation_id, &metadata)?;
+        // The sidecar is authoritative and has already been atomically
+        // committed. The discovery catalog is rebuildable display metadata, so
+        // refresh or recovery-journal cleanup failure must not make a completed
+        // set or clear appear to have failed to its live MMP synchronization
+        // caller. Startup replay idempotently removes any retained journal.
+        let _ = self.upsert_catalog_from_files(conversation_id, None);
+        let _ = self.remove_archive_recovery_journal(conversation_id);
+        Ok(true)
     }
 
     /// Appends multiple validated transcript entries through Tokio filesystem
@@ -824,6 +918,7 @@ impl AgentTranscriptStore {
 
     /// Appends one validated transcript entry while its conversation lock is held.
     fn append_one_locked(&self, entry: &TranscriptEntry) -> Result<usize> {
+        self.retire_stale_active_delete_journal(&entry.conversation_id)?;
         self.ensure_session_dir(&entry.conversation_id)?;
         let path = self.transcript_path_for(&entry.conversation_id)?;
         let encoded = encode_transcript_entry(entry)?;
@@ -1221,16 +1316,22 @@ impl AgentTranscriptStore {
                 || path
                     .join(SESSION_PRESENTATION_COMPRESSED_FILE_NAME)
                     .is_file();
-            if !has_transcript && !has_presentation {
+            let has_objective = self.user_objective(conversation_id)?.is_some();
+            if !has_transcript && !has_presentation && !has_objective {
                 continue;
             }
-            if let Some(candidate) = self.catalog_candidate_for_payload(
-                conversation_id,
-                has_transcript,
-                has_presentation,
-                CatalogPayloadLayout::Directory,
-                names.get(conversation_id),
-            )? {
+            let candidate = if !has_transcript && !has_presentation {
+                self.objective_only_catalog_candidate(conversation_id, names.get(conversation_id))?
+            } else {
+                self.catalog_candidate_for_payload(
+                    conversation_id,
+                    has_transcript,
+                    has_presentation,
+                    CatalogPayloadLayout::Directory,
+                    names.get(conversation_id),
+                )?
+            };
+            if let Some(candidate) = candidate {
                 candidates.insert(conversation_id.to_string(), candidate);
             }
         }
@@ -1250,11 +1351,46 @@ impl AgentTranscriptStore {
             {
                 continue;
             }
+            let session_dir = self.session_dir_for(conversation_id)?;
+            let has_presentation = session_dir.join(SESSION_PRESENTATION_FILE_NAME).is_file()
+                || session_dir
+                    .join(SESSION_PRESENTATION_COMPRESSED_FILE_NAME)
+                    .is_file();
             if let Some(candidate) = self.catalog_candidate_for_payload(
                 conversation_id,
                 true,
-                false,
+                has_presentation,
                 CatalogPayloadLayout::LegacyTsv,
+                names.get(conversation_id),
+            )? {
+                candidates.insert(conversation_id.to_string(), candidate);
+            }
+        }
+
+        for path in &paths {
+            if !path.is_dir() {
+                continue;
+            }
+            let Some(conversation_id) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if candidates.contains_key(conversation_id)
+                || validate_conversation_id(conversation_id).is_err()
+            {
+                continue;
+            }
+            let has_presentation = path.join(SESSION_PRESENTATION_FILE_NAME).is_file()
+                || path
+                    .join(SESSION_PRESENTATION_COMPRESSED_FILE_NAME)
+                    .is_file();
+            if !has_presentation {
+                continue;
+            }
+            if let Some(candidate) = self.catalog_candidate_for_payload(
+                conversation_id,
+                false,
+                true,
+                CatalogPayloadLayout::Directory,
                 names.get(conversation_id),
             )? {
                 candidates.insert(conversation_id.to_string(), candidate);
@@ -1347,6 +1483,53 @@ impl AgentTranscriptStore {
             archive_compressed_bytes: None,
             archive_sha256: None,
         })
+    }
+
+    /// Synthesizes a zero-entry catalog record from durable objective metadata.
+    ///
+    /// The objective remains exclusively in the metadata sidecar; the catalog
+    /// records only the conversation identity and metadata modification time
+    /// needed for lifecycle lookup and ordering.
+    fn objective_only_catalog_candidate(
+        &self,
+        conversation_id: &str,
+        named: Option<&NamedAgentSession>,
+    ) -> Result<Option<CatalogCandidate>> {
+        let metadata_path = self.conversation_metadata_path_for(conversation_id)?;
+        let modified_at = metadata_path
+            .metadata()?
+            .modified()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| {
+                MezError::invalid_state(
+                    "conversation metadata modification time predates Unix epoch",
+                )
+            })?
+            .as_secs();
+        Ok(Some(CatalogCandidate {
+            summary: ConversationSummary {
+                conversation_id: conversation_id.to_string(),
+                entries: 0,
+                first_created_at_unix_seconds: modified_at,
+                last_created_at_unix_seconds: modified_at,
+                last_turn_id: String::new(),
+                agent_id: String::new(),
+                pane_id: String::new(),
+                directory: named.and_then(|session| session.directory.clone()),
+                initial_prompt: None,
+                latest_user_prompt: None,
+            },
+            name: named.map(|session| session.name.clone()),
+            named_at_unix_seconds: named.map(|session| session.named_at_unix_seconds),
+            name_preferred: named.map(|session| !session.ephemeral).unwrap_or(true),
+            conversation_kind: self.conversation_kind(conversation_id)?,
+            has_transcript: false,
+            has_presentation: false,
+            payload_layout: CatalogPayloadLayout::Directory,
+            archived_at_unix_seconds: None,
+            archive_compressed_bytes: None,
+            archive_sha256: None,
+        }))
     }
 
     /// Assigns or replaces the user-assigned display name for one conversation.
@@ -1534,18 +1717,24 @@ impl AgentTranscriptStore {
 
     /// Deletes one conversation while its per-conversation lock is held.
     fn delete_locked(&self, conversation_id: &str) -> Result<bool> {
+        self.write_archive_recovery_journal(
+            conversation_id,
+            ArchiveRecoveryOperation::DeleteActive,
+            CatalogPayloadLayout::Directory,
+        )?;
         let session_dir = self.session_dir_for(conversation_id)?;
-        let removed_payload = if session_dir.exists() {
+        let removed_directory = if session_dir.exists() {
             std_fs::remove_dir_all(session_dir)?;
             true
         } else {
-            let legacy_path = self.legacy_transcript_path_for(conversation_id)?;
-            if legacy_path.exists() {
-                std_fs::remove_file(legacy_path)?;
-                true
-            } else {
-                false
-            }
+            false
+        };
+        let legacy_path = self.legacy_transcript_path_for(conversation_id)?;
+        let removed_legacy = if legacy_path.exists() {
+            std_fs::remove_file(legacy_path)?;
+            true
+        } else {
+            false
         };
         let removed_name = self.remove_named_session(conversation_id)?;
         // The objective title mirror is a display cache: a missing or unreadable
@@ -1558,7 +1747,11 @@ impl AgentTranscriptStore {
         // afterwards, so the deletion is remembered until this handle is dropped.
         self.note_session_title_mirror_deleted(conversation_id);
         catalog::delete(self, conversation_id)?;
-        Ok(removed_payload || removed_name)
+        self.mark_active_delete_journal_committed(conversation_id)?;
+        // Payload and catalog deletion have committed. Startup replay can
+        // safely finish a retained journal, so cleanup must not fail delete.
+        let _ = self.remove_archive_recovery_journal(conversation_id);
+        Ok(removed_directory || removed_legacy || removed_name)
     }
 
     /// Forks an existing conversation into a new conversation id.
@@ -2373,6 +2566,161 @@ impl AgentTranscriptStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    /// Reads one versioned conversation metadata record without taking a lock.
+    fn read_conversation_metadata(&self, conversation_id: &str) -> Result<ConversationMetadata> {
+        let path = self.conversation_metadata_path_for(conversation_id)?;
+        if !path.exists() {
+            return Ok(ConversationMetadata {
+                version: SESSION_METADATA_VERSION,
+                conversation_kind: "root".to_string(),
+                user_objective: None,
+            });
+        }
+        let data = std_fs::read(&path)?;
+        let metadata = serde_json::from_slice::<ConversationMetadata>(&data).map_err(|error| {
+            MezError::invalid_args(format!("conversation metadata decode failed: {error}"))
+        })?;
+        match metadata.version {
+            1 | SESSION_METADATA_VERSION => {}
+            _ => {
+                return Err(MezError::invalid_args(
+                    "unsupported conversation metadata version",
+                ));
+            }
+        }
+        if !matches!(metadata.conversation_kind.as_str(), "root" | "subagent") {
+            return Err(MezError::invalid_args("invalid conversation metadata kind"));
+        }
+        if let Some(objective) = metadata.user_objective.as_deref() {
+            mez_agent::messaging::normalize_objective(objective)?;
+        }
+        Ok(metadata)
+    }
+
+    /// Reads metadata while the caller owns the conversation mutation lock.
+    fn read_conversation_metadata_locked(
+        &self,
+        conversation_id: &str,
+    ) -> Result<ConversationMetadata> {
+        self.read_conversation_metadata(conversation_id)
+    }
+
+    /// Atomically replaces metadata while the caller owns the conversation lock.
+    fn write_conversation_metadata_locked(
+        &self,
+        conversation_id: &str,
+        metadata: &ConversationMetadata,
+    ) -> Result<()> {
+        self.retire_stale_active_delete_journal(conversation_id)?;
+        let promotion = self.promote_legacy_transcript_locked(conversation_id)?;
+        let session_dir = self.session_dir_for(conversation_id)?;
+        let path = session_dir.join(SESSION_METADATA_FILE_NAME);
+        let temp_path = session_dir.join(".metadata.json.tmp");
+        let mut metadata = metadata.clone();
+        metadata.version = SESSION_METADATA_VERSION;
+        let write_result = (|| {
+            self.ensure_session_dir(conversation_id)?;
+            if let Some(promotion) = promotion.as_ref() {
+                #[cfg(test)]
+                if self
+                    .fail_legacy_promotion_permissions_after_rename
+                    .swap(false, Ordering::SeqCst)
+                {
+                    return Err(MezError::invalid_state(
+                        "injected legacy promotion permission failure after rename",
+                    ));
+                }
+                set_private_file_permissions(&promotion.transcript_path)?;
+            }
+            #[cfg(test)]
+            if self
+                .fail_metadata_write_after_promotion
+                .swap(false, Ordering::SeqCst)
+            {
+                return Err(MezError::invalid_state(
+                    "injected metadata write failure after legacy promotion",
+                ));
+            }
+            let encoded = serde_json::to_vec(&metadata).map_err(|error| {
+                MezError::invalid_args(format!("conversation metadata encode failed: {error}"))
+            })?;
+            let mut file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&temp_path)?;
+            file.write_all(&encoded)?;
+            file.write_all(b"\n")?;
+            file.sync_all()?;
+            set_private_file_permissions(&temp_path)?;
+            std_fs::rename(&temp_path, &path)?;
+            Ok(())
+        })();
+        if let Err(error) = write_result {
+            let _ = std_fs::remove_file(&temp_path);
+            if let Some(promotion) = promotion {
+                self.rollback_legacy_transcript_promotion_locked(&promotion)?;
+                self.upsert_catalog_from_files(conversation_id, None)?;
+                self.remove_archive_recovery_journal(conversation_id)?;
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Promotes a legacy root TSV into the directory payload before metadata is written.
+    ///
+    /// Metadata sidecars require a session directory. Moving the legacy payload
+    /// into that directory as one locked transition ensures archive, restore,
+    /// and deletion observe one complete payload rather than split transcript
+    /// and metadata state.
+    fn promote_legacy_transcript_locked(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<LegacyTranscriptPromotion>> {
+        let legacy_path = self.legacy_transcript_path_for(conversation_id)?;
+        if !legacy_path.is_file() {
+            return Ok(None);
+        }
+        let session_dir = self.ensure_session_dir(conversation_id)?;
+        let transcript_path = session_dir.join(SESSION_TRANSCRIPT_FILE_NAME);
+        if transcript_path.exists() {
+            return Err(MezError::conflict(
+                "legacy and directory transcript payloads both exist during metadata promotion",
+            ));
+        }
+        self.write_archive_recovery_journal(
+            conversation_id,
+            ArchiveRecoveryOperation::PromoteLegacy,
+            CatalogPayloadLayout::Directory,
+        )?;
+        std_fs::rename(&legacy_path, &transcript_path)?;
+        Ok(Some(LegacyTranscriptPromotion {
+            legacy_path,
+            transcript_path,
+        }))
+    }
+
+    /// Restores a promoted legacy transcript after its metadata transaction fails.
+    fn rollback_legacy_transcript_promotion_locked(
+        &self,
+        promotion: &LegacyTranscriptPromotion,
+    ) -> Result<()> {
+        if promotion.transcript_path.is_file() && !promotion.legacy_path.exists() {
+            std_fs::rename(&promotion.transcript_path, &promotion.legacy_path)?;
+            set_private_file_permissions(&promotion.legacy_path)?;
+        }
+        let Some(session_dir) = promotion.transcript_path.parent() else {
+            return Err(MezError::invalid_state(
+                "promoted transcript path has no session directory",
+            ));
+        };
+        if session_dir.is_dir() && std_fs::read_dir(session_dir)?.next().is_none() {
+            std_fs::remove_dir(session_dir)?;
+        }
+        Ok(())
+    }
+
     fn presentation_path_for(&self, conversation_id: &str) -> Result<PathBuf> {
         Ok(self
             .session_dir_for(conversation_id)?
@@ -3068,7 +3416,7 @@ impl AgentTranscriptStore {
     }
 
     /// Remembers one deleted conversation until this handle is dropped.
-    fn note_session_title_mirror_deleted(&self, conversation_id: &str) {
+    pub(super) fn note_session_title_mirror_deleted(&self, conversation_id: &str) {
         let Ok(mut state) = self.session_title_mirror_handle_state().lock() else {
             return;
         };

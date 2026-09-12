@@ -75,6 +75,12 @@ it applies to subsequent turns until `/plan off` (or `/plan toggle`) disables
 it. While enabled, the pane has no write sandbox scopes. Use `/plan status` to
 inspect the current mode.
 
+Use `/objective <text>` to set a durable, peer-visible objective for the
+current conversation. It takes precedence over prompt- and model-derived
+objectives until `/objective --clear` restores automatic publication. Bare
+`/objective` reports the value and whether its source is `user`, `automatic`,
+or `none`. Objectives are unavailable for ephemeral loop-worker conversations.
+
 ## Choose a shell mode
 
 The default `native` mode validates the pane root process and runs each local

@@ -438,6 +438,19 @@ fn runtime_agent_shell_names_and_resumes_zero_entry_conversations() {
         Some("Release investigation".to_string())
     );
 
+    let objective = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"objective","method":"agent/shell/command","params":{"idempotency_key":"objective","input":"/objective Preserve the named session"}}"#,
+        &primary,
+    );
+    assert!(objective.contains("source=user"), "{objective}");
+    assert_eq!(
+        transcript_store
+            .catalog_saved_session(&conversation_id)
+            .unwrap()
+            .and_then(|session| session.name),
+        Some("Release investigation".to_string())
+    );
+
     let picker = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"list","method":"agent/shell/command","params":{"idempotency_key":"list","input":"/resume"}}"#,
         &primary,
@@ -460,6 +473,98 @@ fn runtime_agent_shell_names_and_resumes_zero_entry_conversations() {
         Some(conversation_id.as_str())
     );
     service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies an objective makes a fresh zero-entry conversation durable enough
+/// to survive catalog rebuild, exact resume after `/new`, and archive/restore.
+///
+/// Objective text remains in versioned metadata rather than catalog columns;
+/// the catalog row carries only zero-entry lifecycle eligibility.
+#[test]
+fn runtime_objective_only_zero_entry_conversation_resumes_and_archives() {
+    let root = temp_root("runtime-objective-zero-entry-lifecycle");
+    let transcript_store = AgentTranscriptStore::new(root.clone());
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+
+    let objective = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"objective-zero-entry","method":"agent/shell/command","params":{"idempotency_key":"objective-zero-entry","input":"/objective Preserve zero-entry lifecycle"}}"#,
+        &primary,
+    );
+    assert!(objective.contains("source=user"), "{objective}");
+    assert_eq!(
+        transcript_store
+            .catalog_saved_session(&conversation_id)
+            .unwrap()
+            .unwrap()
+            .summary
+            .entries,
+        0
+    );
+
+    let fresh = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"new-after-objective","method":"agent/shell/command","params":{"idempotency_key":"new-after-objective","input":"/new"}}"#,
+        &primary,
+    );
+    assert!(fresh.contains("new=true"), "{fresh}");
+    transcript_store.rebuild_catalog(20).unwrap();
+
+    let resumed = service.dispatch_runtime_control_body(
+        &format!(
+            r#"{{"jsonrpc":"2.0","id":"resume-objective-zero-entry","method":"agent/shell/command","params":{{"idempotency_key":"resume-objective-zero-entry","input":"/resume {conversation_id}"}}}}"#
+        ),
+        &primary,
+    );
+    assert!(resumed.contains("entries=0"), "{resumed}");
+    assert_eq!(
+        transcript_store
+            .user_objective(&conversation_id)
+            .unwrap()
+            .as_deref(),
+        Some("Preserve zero-entry lifecycle")
+    );
+
+    service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"new-before-archive","method":"agent/shell/command","params":{"idempotency_key":"new-before-archive","input":"/new"}}"#,
+        &primary,
+    );
+    transcript_store
+        .archive_session(&conversation_id, 30)
+        .unwrap();
+    transcript_store
+        .restore_archived_session(&conversation_id)
+        .unwrap();
+    assert_eq!(
+        transcript_store
+            .saved_session(&conversation_id)
+            .unwrap()
+            .unwrap()
+            .summary
+            .entries,
+        0
+    );
+    assert_eq!(
+        transcript_store
+            .user_objective(&conversation_id)
+            .unwrap()
+            .as_deref(),
+        Some("Preserve zero-entry lifecycle")
+    );
+    service.terminate_all_pane_processes().unwrap();
+    let _ = std::fs::remove_dir_all(root);
 }
 
 /// Verifies `/name-session --clear` removes only durable name metadata,
@@ -1822,10 +1927,14 @@ fn runtime_resume_omits_presentation_only_conversations() {
     );
 }
 
-/// Verifies a replay ownership failure restores the prior conversation and
-/// both retained pane surfaces instead of leaving a partial resume binding.
+/// Verifies corrupt target objective metadata rejects `/resume` after the
+/// target bind begins and restores the prior conversation and MMP identity.
+///
+/// Durable objective lookup is deliberately part of the resume transaction:
+/// an unreadable target must not leave the pane bound to that target while its
+/// peer-discovery identity still advertises the prior conversation's value.
 #[test]
-fn runtime_resume_replay_failure_restores_prior_pane_state() {
+fn runtime_resume_objective_metadata_failure_restores_prior_binding_and_identity() {
     let mut service = test_runtime_service();
     let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-rollback"));
     let mezzanine_session_id = service.session().id.as_str().to_string();
@@ -1887,7 +1996,11 @@ fn runtime_resume_replay_failure_restores_prior_pane_state() {
                 approval_policy: None,
                 pane_permission_preset_override: Some("read-only".to_string()),
                 pane_approval_policy_override: Some("full-access".to_string()),
-                working_directory: None,
+                working_directory: Some(
+                    temp_root("runtime-resume-target-directory")
+                        .display()
+                        .to_string(),
+                ),
                 project_root: None,
                 token_usage: target_usage,
                 token_usage_by_model: std::collections::BTreeMap::from([(
@@ -1907,14 +2020,12 @@ fn runtime_resume_replay_failure_restores_prior_pane_state() {
             }],
         )
         .unwrap();
-    let presentation_path = transcript_store.presentation_path("resume-target").unwrap();
-    let corrupt = fs::read_to_string(&presentation_path).unwrap().replacen(
-        "resume-target",
-        "wrong-conversation",
-        1,
-    );
-    fs::write(&presentation_path, corrupt).unwrap();
-    service.set_agent_transcript_store(transcript_store);
+    let metadata_path = transcript_store
+        .presentation_path("resume-target")
+        .unwrap()
+        .with_file_name("metadata.json");
+    fs::write(metadata_path, b"not valid metadata\n").unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
@@ -1924,6 +2035,13 @@ fn runtime_resume_replay_failure_restores_prior_pane_state() {
         .unwrap()
         .session_id
         .clone();
+    transcript_store
+        .save_user_objective(&prior_conversation, Some("Keep prior objective A"))
+        .unwrap();
+    service
+        .sync_runtime_agent_objective_for_conversation("%1", &prior_conversation)
+        .unwrap();
+    let agent_id = mez_core::ids::AgentId::opaque("agent-%1".to_string()).unwrap();
     let mut process_screen = TerminalScreen::new(Size::new(80, 24).unwrap(), 100).unwrap();
     process_screen.feed(b"prior-process-surface");
     service.set_process_pane_screen("%1", process_screen);
@@ -1934,6 +2052,8 @@ fn runtime_resume_replay_failure_restores_prior_pane_state() {
     let agent_before = service.agent_pane_screen("%1").unwrap().clone();
     let session_before = service.agent_shell_store().get("%1").unwrap().clone();
     let transcript_refs_before = service.persistence.pane_transcript_refs("%1");
+    let prior_directory = temp_root("runtime-resume-prior-directory");
+    service.set_pane_current_working_directory("%1", prior_directory.clone());
 
     let failed = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"resume-failure","method":"agent/shell/command","params":{"idempotency_key":"resume-failure","input":"/resume resume-target"}}"#,
@@ -1941,7 +2061,7 @@ fn runtime_resume_replay_failure_restores_prior_pane_state() {
     );
     assert!(failed.contains("error"), "{failed}");
     assert!(
-        failed.contains("presentation replay target does not match"),
+        failed.contains("conversation metadata decode failed"),
         "{failed}"
     );
     assert_eq!(
@@ -1955,8 +2075,20 @@ fn runtime_resume_replay_failure_restores_prior_pane_state() {
     assert_eq!(service.agent_pane_screen("%1").unwrap(), &agent_before);
     assert_eq!(service.agent_shell_store().get("%1"), Some(&session_before));
     assert_eq!(
+        service
+            .message_service()
+            .registered_identity(&agent_id)
+            .and_then(|identity| identity.objective.as_deref()),
+        Some("Keep prior objective A")
+    );
+    assert_eq!(
         service.persistence.pane_transcript_refs("%1"),
         transcript_refs_before
+    );
+    assert_eq!(
+        service.pane_current_working_directory("%1").as_deref(),
+        Some(prior_directory.as_path()),
+        "corrupt objective metadata must fail before resume changes the pane directory"
     );
     assert!(
         !service

@@ -299,7 +299,7 @@ impl RuntimeSessionService {
             &["agent-harness"],
             now_ms,
         );
-        self.publish_runtime_agent_objective(
+        self.publish_prepared_runtime_agent_objective(
             child_agent_id.as_str(),
             Self::runtime_agent_objective_from_prompt(payload).as_deref(),
         );

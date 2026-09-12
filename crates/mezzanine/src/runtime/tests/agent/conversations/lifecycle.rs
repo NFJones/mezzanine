@@ -68,6 +68,468 @@ fn runtime_agent_shell_new_command_starts_fresh_conversation() {
     assert!(!service.agent_conversation_has_provider_request_chain_for_tests(&old_session));
 }
 
+/// Verifies `/objective` persists a normalized user selection, immediately
+/// publishes it through the pane MMP identity, rejects automatic replacement,
+/// and clears both durable precedence and the published identity explicitly.
+#[test]
+fn runtime_objective_command_persists_publishes_and_clears_user_precedence() {
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-objective-command"));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+
+    let set = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"objective-set","method":"agent/shell/command","params":{"idempotency_key":"objective-set","input":"/objective  Ship\tthe objective "}}"#,
+        &primary,
+    );
+    assert!(set.contains("source=user"), "{set}");
+    assert_eq!(
+        transcript_store
+            .user_objective(&conversation_id)
+            .unwrap()
+            .as_deref(),
+        Some("Ship the objective")
+    );
+    let agent_id = mez_core::ids::AgentId::opaque("agent-%1".to_string()).unwrap();
+    assert_eq!(
+        service
+            .message_service()
+            .registered_identity(&agent_id)
+            .and_then(|identity| identity.objective.as_deref()),
+        Some("Ship the objective")
+    );
+    assert_eq!(
+        transcript_store
+            .session_objective_mirror(&conversation_id)
+            .unwrap()
+            .map(|mirror| mirror.objective),
+        Some("Ship the objective".to_string()),
+        "the immediate MMP publication must also refresh the title source"
+    );
+    let prepared = service
+        .runtime_agent_effective_objective(&conversation_id, Some("Automatic replacement"))
+        .expect("durable objective metadata");
+    assert!(!service.publish_prepared_runtime_agent_objective("agent-%1", prepared.as_deref()));
+
+    let clear = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"objective-clear","method":"agent/shell/command","params":{"idempotency_key":"objective-clear","input":"/objective --clear"}}"#,
+        &primary,
+    );
+    assert!(clear.contains("cleared=true"), "{clear}");
+    assert_eq!(
+        transcript_store.user_objective(&conversation_id).unwrap(),
+        None
+    );
+    assert!(
+        service
+            .message_service()
+            .registered_identity(&agent_id)
+            .and_then(|identity| identity.objective.as_deref())
+            .is_none()
+    );
+}
+
+/// Verifies an explicit objective set and clear synchronize every live durable
+/// pane identity bound to the same conversation.
+#[test]
+fn runtime_objective_command_synchronizes_all_live_conversation_panes() {
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-objective-two-pane"));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let pane_two = service
+        .session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(pane_two.as_str())
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation(pane_two.as_str(), &conversation_id, 0)
+        .unwrap();
+    let pane_one_agent = mez_core::ids::AgentId::opaque("agent-%1".to_string()).unwrap();
+    let pane_two_agent = mez_core::ids::AgentId::opaque(format!("agent-{pane_two}")).unwrap();
+
+    let set = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"objective-set-both","method":"agent/shell/command","params":{"idempotency_key":"objective-set-both","input":"/objective Shared objective"}}"#,
+        &primary,
+    );
+    assert!(set.contains("source=user"), "{set}");
+    for agent_id in [&pane_one_agent, &pane_two_agent] {
+        assert_eq!(
+            service
+                .message_service()
+                .registered_identity(agent_id)
+                .and_then(|identity| identity.objective.as_deref()),
+            Some("Shared objective")
+        );
+    }
+
+    let clear = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"objective-clear-both","method":"agent/shell/command","params":{"idempotency_key":"objective-clear-both","input":"/objective --clear"}}"#,
+        &primary,
+    );
+    assert!(clear.contains("cleared=true"), "{clear}");
+    for agent_id in [&pane_one_agent, &pane_two_agent] {
+        assert!(
+            service
+                .message_service()
+                .registered_identity(agent_id)
+                .and_then(|identity| identity.objective.as_deref())
+                .is_none()
+        );
+    }
+}
+
+/// Verifies an objective command reports success and synchronizes every live
+/// pane without rereading metadata after its durable commit.
+///
+/// The injected probe fails the second public objective read. The command's
+/// initial inspection consumes the first read, so any post-commit reread would
+/// report failure before MMP synchronization. Carrying the normalized committed
+/// value lets the command succeed and leaves the probe to prove that no second
+/// read occurred before both pane identities were updated.
+#[test]
+fn runtime_objective_command_avoids_post_commit_metadata_read_and_synchronizes_identities() {
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-objective-post-rename"));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let pane_two = service
+        .session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(pane_two.as_str())
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation(pane_two.as_str(), &conversation_id, 0)
+        .unwrap();
+    transcript_store.fail_second_subsequent_user_objective_read();
+
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"objective-post-rename","method":"agent/shell/command","params":{"idempotency_key":"objective-post-rename","input":"/objective Commit through rename"}}"#,
+        &primary,
+    );
+
+    assert!(response.contains("source=user"), "{response}");
+    assert_eq!(
+        transcript_store.user_objective_read_failure_countdown(),
+        1,
+        "the command must perform its pre-save inspection without rereading after commit"
+    );
+    let metadata = std::fs::read_to_string(
+        transcript_store
+            .presentation_path(&conversation_id)
+            .unwrap()
+            .with_file_name("metadata.json"),
+    )
+    .unwrap();
+    assert!(metadata.contains("Commit through rename"), "{metadata}");
+    for agent_id in [
+        mez_core::ids::AgentId::opaque("agent-%1".to_string()).unwrap(),
+        mez_core::ids::AgentId::opaque(format!("agent-{pane_two}")).unwrap(),
+    ] {
+        assert_eq!(
+            service
+                .message_service()
+                .registered_identity(&agent_id)
+                .and_then(|identity| identity.objective.as_deref()),
+            Some("Commit through rename")
+        );
+    }
+}
+
+/// Verifies `/objective` synchronizes every live identity after its metadata
+/// replacement commits even when removal of the legacy-promotion journal fails.
+///
+/// The journal is recovery bookkeeping, not the objective commit boundary. A
+/// failed cleanup must leave the normalized value durable and publish it to all
+/// panes; startup replay then consumes the retained promotion journal
+/// idempotently without changing that value.
+#[test]
+fn runtime_objective_command_survives_committed_journal_cleanup_failure() {
+    let root = temp_root("runtime-objective-journal-cleanup");
+    let _ = std::fs::remove_dir_all(&root);
+    let transcript_store = AgentTranscriptStore::new(root.clone());
+    let conversation_id = "legacy-objective-journal";
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: conversation_id.to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 11,
+            role: TranscriptRole::User,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "legacy objective".to_string(),
+        })
+        .unwrap();
+    std::fs::rename(
+        root.join(conversation_id).join("history.tsv"),
+        root.join(format!("{conversation_id}.tsv")),
+    )
+    .unwrap();
+    std::fs::remove_dir_all(root.join(conversation_id)).unwrap();
+    transcript_store.initialize(10).unwrap();
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let pane_two = service
+        .session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", conversation_id, 1)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(pane_two.as_str())
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation(pane_two.as_str(), conversation_id, 1)
+        .unwrap();
+    transcript_store.fail_next_archive_recovery_journal_removal();
+
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"objective-journal-cleanup","method":"agent/shell/command","params":{"idempotency_key":"objective-journal-cleanup","input":"/objective Durable after journal cleanup failure"}}"#,
+        &primary,
+    );
+
+    assert!(response.contains("source=user"), "{response}");
+    assert_eq!(
+        transcript_store
+            .user_objective(conversation_id)
+            .unwrap()
+            .as_deref(),
+        Some("Durable after journal cleanup failure")
+    );
+    for agent_id in [
+        mez_core::ids::AgentId::opaque("agent-%1".to_string()).unwrap(),
+        mez_core::ids::AgentId::opaque(format!("agent-{pane_two}")).unwrap(),
+    ] {
+        assert_eq!(
+            service
+                .message_service()
+                .registered_identity(&agent_id)
+                .and_then(|identity| identity.objective.as_deref()),
+            Some("Durable after journal cleanup failure")
+        );
+    }
+    assert!(
+        root.join(".archive-recovery")
+            .join(format!("{conversation_id}.json"))
+            .is_file()
+    );
+    AgentTranscriptStore::new(root.clone())
+        .initialize(20)
+        .unwrap();
+    AgentTranscriptStore::new(root.clone())
+        .initialize(30)
+        .unwrap();
+    assert_eq!(
+        AgentTranscriptStore::new(root.clone())
+            .user_objective(conversation_id)
+            .unwrap()
+            .as_deref(),
+        Some("Durable after journal cleanup failure")
+    );
+    assert!(
+        !root
+            .join(".archive-recovery")
+            .join(format!("{conversation_id}.json"))
+            .exists()
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Verifies binding a second pane to an unpinned live conversation only refreshes
+/// that pane identity, preserving a sibling's automatic objective.
+#[test]
+fn runtime_conversation_binding_preserves_sibling_automatic_objective() {
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-objective-bind-sibling"));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let pane_two = service
+        .session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    service
+        .sync_runtime_agent_objective_for_conversation("%1", &conversation_id)
+        .unwrap();
+    let pane_one_agent = mez_core::ids::AgentId::opaque("agent-%1".to_string()).unwrap();
+    assert!(
+        service.publish_prepared_runtime_agent_objective(
+            "agent-%1",
+            Some("Sibling automatic objective")
+        )
+    );
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(pane_two.as_str())
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation(pane_two.as_str(), &conversation_id, 0)
+        .unwrap();
+    service
+        .sync_runtime_agent_objective_for_conversation(pane_two.as_str(), &conversation_id)
+        .unwrap();
+
+    assert_eq!(
+        service
+            .message_service()
+            .registered_identity(&pane_one_agent)
+            .and_then(|identity| identity.objective.as_deref()),
+        Some("Sibling automatic objective")
+    );
+}
+
+/// Verifies bare `/objective` distinguishes automatic publication, an explicit
+/// user selection, and no published value after an explicit clear.
+#[test]
+fn runtime_objective_command_reports_user_automatic_and_none_sources() {
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-objective-sources"));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .start_agent_prompt_turn("%1", "Publish an automatic objective")
+        .unwrap();
+
+    let automatic = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"objective-automatic","method":"agent/shell/command","params":{"idempotency_key":"objective-automatic","input":"/objective"}}"#,
+        &primary,
+    );
+    assert!(automatic.contains("source=automatic"), "{automatic}");
+
+    let user = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"objective-user","method":"agent/shell/command","params":{"idempotency_key":"objective-user","input":"/objective User-selected objective"}}"#,
+        &primary,
+    );
+    assert!(user.contains("source=user"), "{user}");
+    let user_query = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"objective-user-query","method":"agent/shell/command","params":{"idempotency_key":"objective-user-query","input":"/objective"}}"#,
+        &primary,
+    );
+    assert!(user_query.contains("source=user"), "{user_query}");
+
+    let cleared = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"objective-none","method":"agent/shell/command","params":{"idempotency_key":"objective-none","input":"/objective --clear"}}"#,
+        &primary,
+    );
+    assert!(cleared.contains("cleared=true"), "{cleared}");
+    let none = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"objective-none-query","method":"agent/shell/command","params":{"idempotency_key":"objective-none-query","input":"/objective"}}"#,
+        &primary,
+    );
+    assert!(none.contains("source=none"), "{none}");
+}
+
+/// Verifies a fresh conversation clears the pane identity rather than leaking
+/// a previously published durable user objective into the new conversation.
+#[test]
+fn runtime_new_conversation_clears_previous_user_objective_from_mmp_identity() {
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-objective-new"));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let prior_conversation = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    transcript_store
+        .save_user_objective(&prior_conversation, Some("Do not leak this objective"))
+        .unwrap();
+    service
+        .sync_runtime_agent_objective_for_conversation("%1", &prior_conversation)
+        .unwrap();
+
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"objective-new","method":"agent/shell/command","params":{"idempotency_key":"objective-new","input":"/new"}}"#,
+        &primary,
+    );
+    assert!(response.contains("new=true"), "{response}");
+    let fresh_conversation = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    assert_ne!(fresh_conversation, prior_conversation);
+    let agent_id = mez_core::ids::AgentId::opaque("agent-%1".to_string()).unwrap();
+    assert!(
+        service
+            .message_service()
+            .registered_identity(&agent_id)
+            .and_then(|identity| identity.objective.as_deref())
+            .is_none()
+    );
+}
+
 /// Verifies default `/loop` reuses the current pane conversation for the first
 /// work iteration.
 ///
@@ -513,7 +975,10 @@ fn runtime_agent_loop_ephemeral_modes_restore_parent_projection() {
         "/loop --fork review this document",
         "/loop --new review this document",
     ] {
+        let transcript_store =
+            AgentTranscriptStore::new(temp_root("runtime-agent-loop-objective-restore"));
         let mut service = test_runtime_service_with_size(Size::new(20, 4).unwrap());
+        service.set_agent_transcript_store(transcript_store.clone());
         let pane_id = service.active_pane_id().unwrap().to_string();
         let parent_conversation = service
             .agent_shell_store_mut()
@@ -521,6 +986,12 @@ fn runtime_agent_loop_ephemeral_modes_restore_parent_projection() {
             .unwrap()
             .session_id
             .clone();
+        transcript_store
+            .save_user_objective(&parent_conversation, Some("Restore the parent objective"))
+            .unwrap();
+        service
+            .sync_runtime_agent_objective_for_conversation(&pane_id, &parent_conversation)
+            .unwrap();
         let mut parent_screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 20).unwrap();
         parent_screen
             .feed(b"parent one\r\nparent two\r\nparent three\r\nparent four\r\nparent five");
@@ -561,6 +1032,15 @@ fn runtime_agent_loop_ephemeral_modes_restore_parent_projection() {
             parent_conversation
         );
         assert_eq!(service.agent_pane_screen(&pane_id).unwrap(), &parent_screen);
+        let agent_id = mez_core::ids::AgentId::opaque(format!("agent-{pane_id}")).unwrap();
+        assert_eq!(
+            service
+                .message_service()
+                .registered_identity(&agent_id)
+                .and_then(|identity| identity.objective.as_deref()),
+            Some("Restore the parent objective"),
+            "{command} must restore the parent MMP identity before immediate messaging"
+        );
         let agent_key = service.copy_mode_key(&pane_id, crate::runtime::PaneSurfaceKind::Agent);
         assert_eq!(
             service

@@ -2568,15 +2568,6 @@ impl RuntimeSessionService {
             .insert(state.loop_id.clone(), state);
     }
 
-    /// Removes loop controller state for one pane.
-    pub(crate) fn remove_agent_loop_state(
-        &mut self,
-        pane_id: &str,
-    ) -> Option<RuntimeAgentLoopState> {
-        let loop_id = self.agent.agent_loop_by_pane.get(pane_id)?.clone();
-        self.remove_agent_loop_state_by_id(&loop_id)
-    }
-
     /// Removes loop controller state and every pane index for one logical loop.
     pub(crate) fn remove_agent_loop_state_by_id(
         &mut self,

@@ -598,7 +598,10 @@ impl RuntimeSessionService {
         let window_id = self
             .find_pane_descriptor(&turn.pane_id)
             .map(|descriptor| descriptor.window_id);
-        let objective = self.runtime_agent_turn_objective(turn);
+        let objective = self.runtime_agent_effective_objective(
+            &turn.conversation_id,
+            self.runtime_agent_turn_objective(turn).as_deref(),
+        );
         let identity = self.control.message_service_mut().ensure_agent_identity(
             SenderIdentity {
                 agent_id,
@@ -606,13 +609,21 @@ impl RuntimeSessionService {
                 window_id,
                 role: Some("agent".to_string()),
                 capabilities: vec!["agent-harness".to_string()],
-                objective: objective.clone(),
+                objective: objective.clone().flatten(),
             },
             current_unix_seconds().saturating_mul(1000),
         )?;
-        self.publish_runtime_agent_objective(&turn.agent_id, objective.as_deref());
-        self.mirror_runtime_agent_objective(&turn.conversation_id, objective.as_deref());
-        Ok(identity)
+        if let Some(objective) = objective {
+            self.publish_prepared_runtime_agent_objective(&turn.agent_id, objective.as_deref());
+            self.mirror_runtime_agent_objective(&turn.conversation_id, objective.as_deref());
+        }
+        self.control
+            .message_service()
+            .registered_identity(&identity.agent_id)
+            .cloned()
+            .ok_or_else(|| {
+                MezError::invalid_state("runtime MMP identity disappeared after refresh")
+            })
     }
 
     /// Publishes one bounded agent objective for peer discovery.
@@ -621,7 +632,7 @@ impl RuntimeSessionService {
     /// untrusted discovery data: it is normalized through the shared objective
     /// bounds, is never logged raw, and never authorizes anything. A failed
     /// refresh keeps the previous objective and never fails a turn.
-    pub(crate) fn publish_runtime_agent_objective(
+    pub(crate) fn publish_prepared_runtime_agent_objective(
         &mut self,
         agent_id: &str,
         objective: Option<&str>,
@@ -634,6 +645,138 @@ impl RuntimeSessionService {
             .message_service_mut()
             .update_agent_objective(&agent_id, objective, now_ms)
             .unwrap_or(false)
+    }
+
+    /// Resolves the objective that may be published for one conversation.
+    ///
+    /// A user-selected durable objective is authoritative until explicitly
+    /// cleared. Persistence failures deliberately preserve automatic behavior
+    /// for existing runtime-only conversations; the slash mutation boundary
+    /// rejects unavailable persistence before accepting a user selection.
+    pub(crate) fn runtime_agent_effective_objective(
+        &self,
+        conversation_id: &str,
+        automatic: Option<&str>,
+    ) -> Option<Option<String>> {
+        if self.runtime_agent_conversation_is_ephemeral(conversation_id) {
+            return Some(automatic.map(ToOwned::to_owned));
+        }
+        let Some(store) = self.persistence.cloned_transcript_store() else {
+            return Some(automatic.map(ToOwned::to_owned));
+        };
+        match store.user_objective(conversation_id) {
+            Ok(Some(objective)) => Some(Some(objective)),
+            Ok(None) => Some(automatic.map(ToOwned::to_owned)),
+            Err(_) => None,
+        }
+    }
+
+    /// Synchronizes a pane agent's MMP identity to its currently bound conversation.
+    ///
+    /// Durable user objectives are restored immediately. Conversations without
+    /// a user selection explicitly clear the previous identity value so a
+    /// resume, fresh conversation, or fork cannot expose another conversation's
+    /// automatic or user-selected objective.
+    pub(crate) fn sync_runtime_agent_objective_for_conversation(
+        &mut self,
+        pane_id: &str,
+        conversation_id: &str,
+    ) -> Result<()> {
+        let objective = if self.runtime_agent_conversation_is_ephemeral(conversation_id) {
+            None
+        } else if let Some(store) = self.persistence.cloned_transcript_store() {
+            store.user_objective(conversation_id)?
+        } else {
+            None
+        };
+        self.sync_runtime_agent_objective_for_pane(pane_id, conversation_id, objective.as_deref())
+    }
+
+    /// Synchronizes one pane identity after that pane changes conversation bindings.
+    fn sync_runtime_agent_objective_for_pane(
+        &mut self,
+        pane_id: &str,
+        conversation_id: &str,
+        objective: Option<&str>,
+    ) -> Result<()> {
+        let agent_id = format!("agent-{pane_id}");
+        self.ensure_runtime_message_identity(
+            &agent_id,
+            None,
+            "agent",
+            &["agent-harness"],
+            current_unix_seconds().saturating_mul(1000),
+        )?;
+        let agent_id = mez_core::ids::AgentId::opaque(agent_id)
+            .ok_or_else(|| MezError::invalid_args("agent id is invalid for MMP"))?;
+        if let Some(objective) = objective {
+            self.control.message_service_mut().update_agent_objective(
+                &agent_id,
+                Some(objective),
+                current_unix_seconds().saturating_mul(1000),
+            )?;
+        } else {
+            self.control
+                .message_service_mut()
+                .clear_agent_objective(&agent_id, current_unix_seconds().saturating_mul(1000))?;
+        }
+        self.mirror_runtime_agent_objective(conversation_id, objective);
+        Ok(())
+    }
+
+    /// Synchronizes every live durable pane bound to one conversation.
+    ///
+    /// A conversation may remain live in more than one pane. An explicit user
+    /// set or clear therefore updates every authenticated pane identity rather
+    /// than leaving peers to observe a stale objective from a sibling pane.
+    pub(crate) fn sync_runtime_agent_objectives_for_conversation(
+        &mut self,
+        conversation_id: &str,
+        objective: Option<&str>,
+    ) -> Result<()> {
+        let pane_ids = self
+            .agent_shell_store()
+            .sessions()
+            .filter(|session| !session.ephemeral && session.session_id == conversation_id)
+            .map(|session| session.pane_id.clone())
+            .collect::<Vec<_>>();
+        for pane_id in pane_ids {
+            let agent_id = format!("agent-{pane_id}");
+            self.ensure_runtime_message_identity(
+                &agent_id,
+                None,
+                "agent",
+                &["agent-harness"],
+                current_unix_seconds().saturating_mul(1000),
+            )?;
+            let agent_id = mez_core::ids::AgentId::opaque(agent_id)
+                .ok_or_else(|| MezError::invalid_args("agent id is invalid for MMP"))?;
+            if let Some(objective) = objective {
+                self.control.message_service_mut().update_agent_objective(
+                    &agent_id,
+                    Some(objective),
+                    current_unix_seconds().saturating_mul(1000),
+                )?;
+            } else {
+                self.control.message_service_mut().clear_agent_objective(
+                    &agent_id,
+                    current_unix_seconds().saturating_mul(1000),
+                )?;
+            }
+        }
+        self.mirror_runtime_agent_objective(conversation_id, objective);
+        Ok(())
+    }
+
+    /// Synchronizes one pane's already validated objective during a staged
+    /// restore or resume commit.
+    pub(crate) fn sync_prepared_runtime_agent_objective_for_conversation(
+        &mut self,
+        pane_id: &str,
+        conversation_id: &str,
+        objective: Option<&str>,
+    ) -> Result<()> {
+        self.sync_runtime_agent_objective_for_pane(pane_id, conversation_id, objective)
     }
 
     /// Persists one bounded display mirror of a published agent objective.
@@ -707,9 +850,15 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         execution: &AgentTurnExecution,
     ) -> bool {
-        let objective = mez_agent::parse_maap_batch_objective(&execution.response.raw_text)
+        let automatic = mez_agent::parse_maap_batch_objective(&execution.response.raw_text)
             .or_else(|| self.runtime_agent_turn_objective(turn));
-        let changed = self.publish_runtime_agent_objective(&turn.agent_id, objective.as_deref());
+        let Some(objective) =
+            self.runtime_agent_effective_objective(&turn.conversation_id, automatic.as_deref())
+        else {
+            return false;
+        };
+        let changed =
+            self.publish_prepared_runtime_agent_objective(&turn.agent_id, objective.as_deref());
         self.mirror_runtime_agent_objective(&turn.conversation_id, objective.as_deref());
         changed
     }

@@ -81,10 +81,12 @@ struct ArchiveSidecar {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-enum ArchiveRecoveryOperation {
+pub(super) enum ArchiveRecoveryOperation {
     Archive,
     Restore,
     Delete,
+    DeleteActive,
+    PromoteLegacy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,11 +95,23 @@ struct ArchiveRecoveryJournal {
     conversation_id: String,
     operation: ArchiveRecoveryOperation,
     payload_layout: String,
+    #[serde(default)]
+    delete_committed: bool,
 }
 
 enum StagedActivePayload {
-    Directory { staged: PathBuf, active: PathBuf },
-    Legacy { staged: PathBuf, active: PathBuf },
+    Directory {
+        staged: PathBuf,
+        active: PathBuf,
+        legacy_staged: PathBuf,
+        legacy_active: PathBuf,
+    },
+    Legacy {
+        staged: PathBuf,
+        active: PathBuf,
+        sidecar_staged: PathBuf,
+        sidecar_active: PathBuf,
+    },
 }
 
 impl AgentTranscriptStore {
@@ -161,6 +175,10 @@ impl AgentTranscriptStore {
                 }
                 fs::create_dir_all(&source)?;
                 set_private_dir_permissions(&source)?;
+                let sidecar_directory = self.session_dir_path(conversation_id)?;
+                if sidecar_directory.is_dir() {
+                    copy_archive_source_tree(&sidecar_directory, &source)?;
+                }
                 let target = source.join("history.tsv");
                 fs::copy(legacy, &target)?;
                 set_private_file_permissions(&target)?;
@@ -179,18 +197,48 @@ impl AgentTranscriptStore {
             CatalogPayloadLayout::Directory => {
                 let active = self.session_dir_path(conversation_id)?;
                 let staged = self.root.join(format!(".archive-stage-{conversation_id}"));
+                let legacy_active = self.legacy_transcript_path(conversation_id)?;
+                let legacy_staged = self
+                    .root
+                    .join(format!(".archive-stage-{conversation_id}.tsv"));
                 remove_if_exists(&staged)?;
+                remove_if_exists(&legacy_staged)?;
                 fs::rename(&active, &staged)?;
-                Ok(StagedActivePayload::Directory { staged, active })
+                if legacy_active.exists()
+                    && let Err(error) = fs::rename(&legacy_active, &legacy_staged)
+                {
+                    let _ = fs::rename(&staged, &active);
+                    return Err(error.into());
+                }
+                Ok(StagedActivePayload::Directory {
+                    staged,
+                    active,
+                    legacy_staged,
+                    legacy_active,
+                })
             }
             CatalogPayloadLayout::LegacyTsv => {
                 let active = self.legacy_transcript_path(conversation_id)?;
                 let staged = self
                     .root
                     .join(format!(".archive-stage-{conversation_id}.tsv"));
+                let sidecar_active = self.session_dir_path(conversation_id)?;
+                let sidecar_staged = self.root.join(format!(".archive-stage-{conversation_id}"));
                 remove_if_exists(&staged)?;
+                remove_if_exists(&sidecar_staged)?;
                 fs::rename(&active, &staged)?;
-                Ok(StagedActivePayload::Legacy { staged, active })
+                if sidecar_active.exists()
+                    && let Err(error) = fs::rename(&sidecar_active, &sidecar_staged)
+                {
+                    let _ = fs::rename(&staged, &active);
+                    return Err(error.into());
+                }
+                Ok(StagedActivePayload::Legacy {
+                    staged,
+                    active,
+                    sidecar_staged,
+                    sidecar_active,
+                })
             }
         }
     }
@@ -246,6 +294,11 @@ impl AgentTranscriptStore {
             return Err(MezError::conflict("saved conversation is already archived"));
         }
 
+        // The catalog is a rebuildable index, and older rows can classify a
+        // split root TSV plus sidecar directory as a directory payload. Repair
+        // this exact row while holding the conversation lock before selecting
+        // the source and staging strategy for the archive transaction.
+        self.upsert_catalog_from_files(conversation_id, None)?;
         let record = catalog::record(self, conversation_id)?.ok_or_else(|| {
             MezError::new(
                 crate::error::MezErrorKind::NotFound,
@@ -255,12 +308,17 @@ impl AgentTranscriptStore {
         if record.session.archived_at_unix_seconds.is_some() {
             return Err(MezError::conflict("saved conversation is already archived"));
         }
+        let payload_layout = if !record.has_transcript && !record.has_presentation {
+            CatalogPayloadLayout::Directory
+        } else {
+            record.payload_layout
+        };
         self.write_archive_recovery_journal(
             conversation_id,
             ArchiveRecoveryOperation::Archive,
-            record.payload_layout,
+            payload_layout,
         )?;
-        let source = self.prepare_archive_source(conversation_id, record.payload_layout)?;
+        let source = self.prepare_archive_source(conversation_id, payload_layout)?;
         let named_at_unix_seconds = self.archive_named_at_unix_seconds(conversation_id)?;
         if record.session.name.is_some() && named_at_unix_seconds.is_none() {
             return Err(MezError::invalid_state(
@@ -289,7 +347,7 @@ impl AgentTranscriptStore {
         let temporary_sidecar = temporary_sidecar_path(self, conversation_id);
         write_sidecar(&temporary_sidecar, &sidecar)?;
 
-        let staged = self.stage_active_payload(conversation_id, record.payload_layout)?;
+        let staged = self.stage_active_payload(conversation_id, payload_layout)?;
         let install_result = (|| {
             fs::rename(&temporary_archive, archive_path(self, conversation_id))?;
             set_private_file_permissions(&archive_path(self, conversation_id))?;
@@ -317,7 +375,10 @@ impl AgentTranscriptStore {
         if source != self.session_dir_path(conversation_id)? {
             let _ = fs::remove_dir_all(source);
         }
-        self.remove_archive_recovery_journal(conversation_id)?;
+        // Archive installation and the catalog transition have committed. A
+        // retained journal is safe: startup replay validates the installed
+        // archive and completes this cleanup idempotently.
+        let _ = self.remove_archive_recovery_journal(conversation_id);
         Ok(info_from_sidecar(sidecar))
     }
 
@@ -367,7 +428,9 @@ impl AgentTranscriptStore {
         self.upsert_catalog_from_active_files(conversation_id)?;
         remove_if_exists(&archive_path(self, conversation_id))?;
         remove_if_exists(&archive_sidecar_path(self, conversation_id))?;
-        self.remove_archive_recovery_journal(conversation_id)?;
+        // The active payload and catalog are now durable. Leave a journal for
+        // startup recovery rather than reporting a failed completed restore.
+        let _ = self.remove_archive_recovery_journal(conversation_id);
         Ok(info_from_sidecar(sidecar))
     }
 
@@ -394,9 +457,13 @@ impl AgentTranscriptStore {
             self.upsert_catalog_from_active_files(conversation_id)?;
         } else {
             self.remove_archived_session_name(conversation_id)?;
+            let _ = self.remove_session_title_mirror(conversation_id);
+            self.note_session_title_mirror_deleted(conversation_id);
             catalog::delete(self, conversation_id)?;
         }
-        self.remove_archive_recovery_journal(conversation_id)?;
+        // Archive deletion and its catalog transition are durable. Recovery
+        // can safely replay a retained journal if best-effort cleanup fails.
+        let _ = self.remove_archive_recovery_journal(conversation_id);
         Ok(existed)
     }
 
@@ -498,10 +565,8 @@ impl AgentTranscriptStore {
                     self.upsert_catalog_from_active_files(conversation_id)?;
                     let archive = archive_path(self, conversation_id);
                     let sidecar = archive_sidecar_path(self, conversation_id);
-                    if archive.is_file() != sidecar.is_file() {
-                        remove_if_exists(&archive)?;
-                        remove_if_exists(&sidecar)?;
-                    }
+                    remove_if_exists(&archive)?;
+                    remove_if_exists(&sidecar)?;
                 }
                 remove_if_exists(&restore_temporary_path(self, conversation_id))?;
             }
@@ -514,14 +579,27 @@ impl AgentTranscriptStore {
                     self.upsert_catalog_from_active_files(conversation_id)?;
                 } else {
                     self.remove_archived_session_name(conversation_id)?;
+                    let _ = self.remove_session_title_mirror(conversation_id);
+                    self.note_session_title_mirror_deleted(conversation_id);
                     catalog::delete(self, conversation_id)?;
                 }
+            }
+            ArchiveRecoveryOperation::DeleteActive => {
+                remove_if_exists(&self.session_dir_path(conversation_id)?)?;
+                remove_if_exists(&self.legacy_transcript_path(conversation_id)?)?;
+                self.remove_archived_session_name(conversation_id)?;
+                let _ = self.remove_session_title_mirror(conversation_id);
+                self.note_session_title_mirror_deleted(conversation_id);
+                catalog::delete(self, conversation_id)?;
+            }
+            ArchiveRecoveryOperation::PromoteLegacy => {
+                self.upsert_catalog_from_active_files(conversation_id)?;
             }
         }
         Ok(())
     }
 
-    fn write_archive_recovery_journal(
+    pub(super) fn write_archive_recovery_journal(
         &self,
         conversation_id: &str,
         operation: ArchiveRecoveryOperation,
@@ -535,8 +613,33 @@ impl AgentTranscriptStore {
             conversation_id: conversation_id.to_string(),
             operation,
             payload_layout: payload_layout.as_str().to_string(),
+            delete_committed: false,
         };
+        self.write_archive_recovery_journal_record(&journal)
+    }
+
+    /// Marks an active-delete journal replayable only as a completed tombstone.
+    pub(super) fn mark_active_delete_journal_committed(&self, conversation_id: &str) -> Result<()> {
         let path = archive_recovery_journal_path(self, conversation_id);
+        let mut journal = read_archive_recovery_journal(self, &path)?;
+        if journal.operation != ArchiveRecoveryOperation::DeleteActive {
+            return Err(MezError::invalid_state(
+                "active deletion journal changed before commit",
+            ));
+        }
+        journal.delete_committed = true;
+        self.write_archive_recovery_journal_record(&journal)
+    }
+
+    /// Atomically writes one validated recovery journal record.
+    fn write_archive_recovery_journal_record(
+        &self,
+        journal: &ArchiveRecoveryJournal,
+    ) -> Result<()> {
+        let directory = archive_recovery_directory(self);
+        fs::create_dir_all(&directory)?;
+        set_private_dir_permissions(&directory)?;
+        let path = archive_recovery_journal_path(self, &journal.conversation_id);
         let temporary = path.with_extension("json.tmp");
         let bytes = serde_json::to_vec(&journal).map_err(|error| {
             MezError::invalid_args(format!("archive recovery journal encode failed: {error}"))
@@ -554,8 +657,35 @@ impl AgentTranscriptStore {
         set_private_file_permissions(&path)
     }
 
-    fn remove_archive_recovery_journal(&self, conversation_id: &str) -> Result<()> {
+    pub(super) fn remove_archive_recovery_journal(&self, conversation_id: &str) -> Result<()> {
+        #[cfg(test)]
+        if self
+            .fail_archive_recovery_journal_removal
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(MezError::invalid_state(
+                "injected archive recovery journal removal failure",
+            ));
+        }
         remove_if_exists(&archive_recovery_journal_path(self, conversation_id))
+    }
+
+    /// Retires a committed active-delete tombstone before a new payload reuses its id.
+    ///
+    /// Recovery journals are keyed by conversation id. Once a later write starts
+    /// a new generation for that id, replaying the older delete would destroy the
+    /// replacement payload. Other operation journals retain their ordinary
+    /// recovery semantics until their own transaction completes.
+    pub(super) fn retire_stale_active_delete_journal(&self, conversation_id: &str) -> Result<()> {
+        let path = archive_recovery_journal_path(self, conversation_id);
+        if !path.is_file() {
+            return Ok(());
+        }
+        let journal = read_archive_recovery_journal(self, &path)?;
+        if journal.operation == ArchiveRecoveryOperation::DeleteActive && journal.delete_committed {
+            remove_if_exists(&path)?;
+        }
+        Ok(())
     }
 }
 
@@ -711,12 +841,18 @@ fn staged_active_payload(
         CatalogPayloadLayout::Directory => StagedActivePayload::Directory {
             staged: store.root.join(format!(".archive-stage-{conversation_id}")),
             active: store.root.join(conversation_id),
+            legacy_staged: store
+                .root
+                .join(format!(".archive-stage-{conversation_id}.tsv")),
+            legacy_active: store.legacy_transcript_path_for(conversation_id)?,
         },
         CatalogPayloadLayout::LegacyTsv => StagedActivePayload::Legacy {
             staged: store
                 .root
                 .join(format!(".archive-stage-{conversation_id}.tsv")),
             active: store.legacy_transcript_path_for(conversation_id)?,
+            sidecar_staged: store.root.join(format!(".archive-stage-{conversation_id}")),
+            sidecar_active: store.root.join(conversation_id),
         },
     })
 }
@@ -1193,10 +1329,30 @@ fn valid_sha256(value: &str) -> bool {
 
 fn restore_staged_payload(staged: &StagedActivePayload) -> Result<()> {
     match staged {
-        StagedActivePayload::Directory { staged, active }
-        | StagedActivePayload::Legacy { staged, active } => {
+        StagedActivePayload::Directory {
+            staged,
+            active,
+            legacy_staged,
+            legacy_active,
+        } => {
             if staged.exists() && !active.exists() {
                 fs::rename(staged, active)?;
+            }
+            if legacy_staged.exists() && !legacy_active.exists() {
+                fs::rename(legacy_staged, legacy_active)?;
+            }
+        }
+        StagedActivePayload::Legacy {
+            staged,
+            active,
+            sidecar_staged,
+            sidecar_active,
+        } => {
+            if staged.exists() && !active.exists() {
+                fs::rename(staged, active)?;
+            }
+            if sidecar_staged.exists() && !sidecar_active.exists() {
+                fs::rename(sidecar_staged, sidecar_active)?;
             }
         }
     }
@@ -1205,12 +1361,47 @@ fn restore_staged_payload(staged: &StagedActivePayload) -> Result<()> {
 
 fn remove_staged_payload(staged: &StagedActivePayload) -> Result<()> {
     match staged {
-        StagedActivePayload::Directory { staged, .. } => {
+        StagedActivePayload::Directory {
+            staged,
+            legacy_staged,
+            ..
+        } => {
             if staged.exists() {
                 fs::remove_dir_all(staged)?;
             }
+            remove_if_exists(legacy_staged)?;
         }
-        StagedActivePayload::Legacy { staged, .. } => remove_if_exists(staged)?,
+        StagedActivePayload::Legacy {
+            staged,
+            sidecar_staged,
+            ..
+        } => {
+            remove_if_exists(staged)?;
+            remove_if_exists(sidecar_staged)?;
+        }
+    }
+    Ok(())
+}
+
+/// Copies one existing session-sidecar tree into a temporary archive source.
+fn copy_archive_source_tree(source: &Path, destination: &Path) -> Result<()> {
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let path = entry.path();
+        let target = destination.join(entry.file_name());
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.is_dir() {
+            fs::create_dir(&target)?;
+            set_private_dir_permissions(&target)?;
+            copy_archive_source_tree(&path, &target)?;
+        } else if metadata.is_file() {
+            fs::copy(&path, &target)?;
+            set_private_file_permissions(&target)?;
+        } else {
+            return Err(MezError::invalid_args(
+                "legacy session sidecar contains a link or special file",
+            ));
+        }
     }
     Ok(())
 }

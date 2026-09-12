@@ -264,6 +264,7 @@ impl RuntimeSessionService {
             .or_else(|| self.find_pane_descriptor(pane_id).map(|pane| pane.size))
             .ok_or_else(|| MezError::invalid_state("agent pane screen size is unavailable"))?;
         self.ensure_agent_pane_screen(pane_id, &conversation_id, size)?;
+        self.sync_runtime_agent_objective_for_conversation(pane_id, &conversation_id)?;
         if runtime_owned
             && self.effective_agent_shell_mode_for_pane(pane_id)
                 == crate::runtime::config::ShellMode::Native
@@ -607,6 +608,17 @@ impl RuntimeSessionService {
                     runtime_agent_shell_command_response_json(&pane_id, input, Some(&name_outcome))
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
+                    && command == "objective"
+                {
+                    let objective_outcome =
+                        self.execute_agent_shell_objective_command(&pane_id, input)?;
+                    runtime_agent_shell_command_response_json(
+                        &pane_id,
+                        input,
+                        Some(&objective_outcome),
+                    )
+                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                    outcome.as_ref()
                     && command == "list-macros"
                 {
                     let macros_outcome = self.execute_agent_shell_list_macros_command(&pane_id)?;
@@ -942,6 +954,12 @@ impl RuntimeSessionService {
             if let Some(conversation_id) = replaced_conversation_id.as_deref() {
                 self.clear_agent_conversation_provider_request_chain(conversation_id);
             }
+            let conversation_id = self
+                .agent_shell_store()
+                .get(&pane_id)
+                .map(|session| session.session_id.clone())
+                .ok_or_else(|| MezError::invalid_state("agent shell session not found for pane"))?;
+            self.sync_runtime_agent_objective_for_conversation(&pane_id, &conversation_id)?;
             self.clear_agent_modified_files(&pane_id);
             self.reload_agent_prompt_history_for_pane(&pane_id)?;
         }

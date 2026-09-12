@@ -164,6 +164,7 @@ impl RuntimeSessionService {
             }
             let pane_id = metadata.pane_id.clone();
             let conversation_id = metadata.conversation_id.clone();
+            let prepared_objective = store.user_objective(&conversation_id)?;
             let visibility = runtime_agent_session_metadata_visibility(&metadata.visibility)?;
             let log_level = AgentLogLevel::parse(&metadata.log_level).ok_or_else(|| {
                 MezError::invalid_args("agent session metadata log level is invalid")
@@ -360,6 +361,11 @@ impl RuntimeSessionService {
                     )?;
                 }
 
+                self.sync_prepared_runtime_agent_objective_for_conversation(
+                    &pane_id,
+                    &conversation_id,
+                    prepared_objective.as_deref(),
+                )?;
                 if let Some(profile) = metadata.pane_model_profile.as_ref() {
                     self.integration
                         .model_profile_overrides_mut()

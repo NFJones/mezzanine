@@ -46,9 +46,11 @@ Every agent publishes a bounded, generated objective through the session message
 service, so peers describe what they are working on rather than what they are
 called. The objective comes from the turn itself: the model may set an optional
 top-level `objective` on its action batch, and a turn without one falls back to a
-bounded, non-verbatim summary of its own task text. An objective-less refresh is
-a no-op that keeps the previous value and presence timestamp, so a turn can
-never clear a peer's published objective. Discover peers with the read-only
+bounded, non-verbatim summary of its own task text. A user may override that
+value for the current durable conversation with `/objective <text>`; the user
+value wins until `/objective --clear`. An objective-less refresh is a no-op that
+keeps the previous value and presence timestamp, so a turn can never clear a
+peer's published objective. Discover peers with the read-only
 `list_agents` action. Its optional
 `agent_type` defaults to `primary` and lists primary parent agents only;
 `subagent`, `internal`, and `all` widen the view to spawned subagents,

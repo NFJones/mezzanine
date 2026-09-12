@@ -211,6 +211,83 @@ fn transcript_store_persists_validates_and_deletes_conversation_kind() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies a user objective shares the versioned metadata sidecar with the
+/// conversation kind, lazily migrates v1 metadata, and is removed with its
+/// conversation rather than inheriting into a fork.
+#[test]
+fn transcript_store_persists_user_objective_without_overwriting_kind() {
+    let root = temp_root("user-objective-metadata");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("source", 1, TranscriptRole::User))
+        .unwrap();
+    store
+        .save_conversation_kind("source", mez_agent::AgentConversationKind::Subagent)
+        .unwrap();
+    assert!(
+        store
+            .save_user_objective("source", Some("  Ship\tthe\nobjective contract  "))
+            .unwrap()
+    );
+    assert_eq!(
+        store.user_objective("source").unwrap().as_deref(),
+        Some("Ship the objective contract")
+    );
+    assert_eq!(
+        store.conversation_kind("source").unwrap(),
+        mez_agent::AgentConversationKind::Subagent
+    );
+    store.fork("source", "fork", 2).unwrap();
+    assert_eq!(store.user_objective("fork").unwrap(), None);
+
+    fs::write(
+        root.join("source").join("metadata.json"),
+        b"{\"version\":1,\"conversation_kind\":\"subagent\"}\n",
+    )
+    .unwrap();
+    assert_eq!(store.user_objective("source").unwrap(), None);
+    assert!(
+        store
+            .save_user_objective("source", Some("Migrated objective"))
+            .unwrap()
+    );
+    let metadata = fs::read_to_string(root.join("source").join("metadata.json")).unwrap();
+    assert!(metadata.contains("\"version\":2"));
+    assert!(metadata.contains("\"conversation_kind\":\"subagent\""));
+    assert!(store.delete("source").unwrap());
+    assert!(!root.join("source").join("metadata.json").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies an objective set and clear remain successful after their atomic
+/// metadata commits when the rebuildable discovery catalog cannot refresh.
+#[test]
+fn transcript_store_user_objective_commit_survives_catalog_refresh_failure() {
+    let root = temp_root("user-objective-catalog-refresh-failure");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("source", 1, TranscriptRole::User))
+        .unwrap();
+    let catalog_path = store.catalog_path();
+    fs::remove_file(&catalog_path).unwrap();
+    fs::create_dir(&catalog_path).unwrap();
+
+    assert!(
+        store
+            .save_user_objective("source", Some("Committed despite catalog failure"))
+            .unwrap()
+    );
+    assert_eq!(
+        store.user_objective("source").unwrap().as_deref(),
+        Some("Committed despite catalog failure")
+    );
+    assert!(store.save_user_objective("source", None).unwrap());
+    assert_eq!(store.user_objective("source").unwrap(), None);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies oversized presentation tails are moved into concatenated zstd
 /// frames while later cleartext appends remain replayable after them.
 #[test]
@@ -2512,6 +2589,9 @@ fn transcript_store_archives_and_restores_session_round_trip() {
             false,
         )
         .unwrap();
+    store
+        .save_user_objective("archive-round-trip", Some("Preserve archived objective"))
+        .unwrap();
 
     let archived = store.archive_session("archive-round-trip", 100).unwrap();
 
@@ -2563,9 +2643,443 @@ fn transcript_store_archives_and_restores_session_round_trip() {
             .len(),
         1
     );
+    assert_eq!(
+        store
+            .user_objective("archive-round-trip")
+            .unwrap()
+            .as_deref(),
+        Some("Preserve archived objective")
+    );
     let active_record = store.saved_session("archive-round-trip").unwrap().unwrap();
     assert_eq!(active_record.archived_at_unix_seconds, None);
     assert_eq!(active_record.name.as_deref(), Some("Archived work"));
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies writing objective metadata promotes a legacy root TSV into the
+/// directory payload that archive, restore, and delete all manage atomically.
+///
+/// Older roots can have only `<conversation-id>.tsv`. An objective write must
+/// not leave that transcript outside the metadata directory, or archive would
+/// retain an empty directory and delete would leave the legacy payload behind.
+#[test]
+fn transcript_store_promotes_legacy_tsv_before_archiving_objective_metadata() {
+    let root = temp_root("legacy-objective-archive");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let legacy = entry("legacy-objective", 1, TranscriptRole::User);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("legacy-objective.tsv"),
+        format!("{}\n", encode_transcript_entry(&legacy).unwrap()),
+    )
+    .unwrap();
+    store.initialize(10).unwrap();
+
+    assert!(
+        store
+            .save_user_objective("legacy-objective", Some("Archive this legacy objective"))
+            .unwrap()
+    );
+    assert!(!root.join("legacy-objective.tsv").exists());
+    assert!(root.join("legacy-objective/history.tsv").is_file());
+    assert!(root.join("legacy-objective/metadata.json").is_file());
+
+    store.archive_session("legacy-objective", 20).unwrap();
+    assert!(!root.join("legacy-objective").exists());
+    assert!(!root.join("legacy-objective.tsv").exists());
+
+    store.restore_archived_session("legacy-objective").unwrap();
+    assert_eq!(store.inspect("legacy-objective").unwrap(), vec![legacy]);
+    assert_eq!(
+        store.user_objective("legacy-objective").unwrap().as_deref(),
+        Some("Archive this legacy objective")
+    );
+    assert!(store.delete("legacy-objective").unwrap());
+    assert!(!root.join("legacy-objective").exists());
+    assert!(!root.join("legacy-objective.tsv").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a root legacy transcript and its directory-only presentation and
+/// metadata sidecars archive as one logical payload and restore every surface.
+///
+/// Older installations can retain `id.tsv` while a later presentation or
+/// objective write created `id/`. Archiving only the catalog-selected root TSV
+/// would silently discard the sidecar directory; this regression proves both
+/// active representations are staged, removed, and reconstructed together.
+#[test]
+fn transcript_store_archives_split_legacy_payload_with_sidecars() {
+    let root = temp_root("split-legacy-archive");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let conversation_id = "split-legacy";
+    let transcript = entry(conversation_id, 1, TranscriptRole::User);
+    fs::create_dir_all(root.join(conversation_id)).unwrap();
+    fs::write(
+        root.join(format!("{conversation_id}.tsv")),
+        format!("{}\n", encode_transcript_entry(&transcript).unwrap()),
+    )
+    .unwrap();
+    store
+        .append_presentation(&presentation(conversation_id, 1))
+        .unwrap();
+    fs::write(
+        root.join(conversation_id).join("metadata.json"),
+        b"{\"version\":2,\"conversation_kind\":\"root\",\"user_objective\":\"Restore split legacy objective\"}\n",
+    )
+    .unwrap();
+    store.initialize(10).unwrap();
+    let catalog = Connection::open(store.catalog_path()).unwrap();
+    catalog
+        .execute(
+            "UPDATE saved_conversations SET payload_layout = 'directory' WHERE conversation_id = ?1",
+            [conversation_id],
+        )
+        .unwrap();
+    drop(catalog);
+
+    store.archive_session(conversation_id, 20).unwrap();
+
+    assert!(!root.join(format!("{conversation_id}.tsv")).exists());
+    assert!(!root.join(conversation_id).exists());
+    store.restore_archived_session(conversation_id).unwrap();
+    assert_eq!(store.inspect(conversation_id).unwrap(), vec![transcript]);
+    assert_eq!(
+        store.inspect_presentation(conversation_id).unwrap().len(),
+        1
+    );
+    assert_eq!(
+        store.user_objective(conversation_id).unwrap().as_deref(),
+        Some("Restore split legacy objective")
+    );
+    assert!(store.saved_session(conversation_id).unwrap().is_some());
+    assert!(
+        !root
+            .join(format!("archived/{conversation_id}.tar.zst"))
+            .exists()
+    );
+    assert!(
+        !root
+            .join(format!("archived/{conversation_id}.json"))
+            .exists()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a duplicate directory transcript and root TSV are archived as one
+/// transaction, preserving directory metadata and presentation without leaving
+/// an active root transcript for later catalog discovery.
+///
+/// Catalog repair selects the directory representation when both histories
+/// exist. The archive transaction must nevertheless stage and remove the root
+/// TSV too, or a later startup reconstructs a duplicate active conversation
+/// alongside the restored archive payload.
+#[test]
+fn transcript_store_archives_duplicate_directory_and_legacy_transcripts_together() {
+    let root = temp_root("duplicate-transcript-archive");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let conversation_id = "duplicate-transcript";
+    let transcript = entry(conversation_id, 1, TranscriptRole::User);
+    fs::create_dir_all(root.join(conversation_id)).unwrap();
+    let encoded = format!("{}\n", encode_transcript_entry(&transcript).unwrap());
+    fs::write(root.join(conversation_id).join("history.tsv"), &encoded).unwrap();
+    fs::write(root.join(format!("{conversation_id}.tsv")), encoded).unwrap();
+    store
+        .append_presentation(&presentation(conversation_id, 1))
+        .unwrap();
+    fs::write(
+        root.join(conversation_id).join("metadata.json"),
+        b"{\"version\":2,\"conversation_kind\":\"root\",\"user_objective\":\"Preserve duplicate objective\"}\n",
+    )
+    .unwrap();
+    store.initialize(10).unwrap();
+
+    store.archive_session(conversation_id, 20).unwrap();
+
+    assert!(!root.join(conversation_id).exists());
+    assert!(!root.join(format!("{conversation_id}.tsv")).exists());
+    assert!(
+        store
+            .saved_session(conversation_id)
+            .unwrap()
+            .unwrap()
+            .archived_at_unix_seconds
+            .is_some()
+    );
+
+    store.restore_archived_session(conversation_id).unwrap();
+    assert_eq!(store.inspect(conversation_id).unwrap(), vec![transcript]);
+    assert_eq!(
+        store.inspect_presentation(conversation_id).unwrap().len(),
+        1
+    );
+    assert_eq!(
+        store.user_objective(conversation_id).unwrap().as_deref(),
+        Some("Preserve duplicate objective")
+    );
+    assert!(!root.join(format!("{conversation_id}.tsv")).exists());
+    AgentTranscriptStore::new(root.clone())
+        .initialize(30)
+        .unwrap();
+    assert_eq!(
+        AgentTranscriptStore::new(root.clone())
+            .saved_sessions()
+            .unwrap()
+            .into_iter()
+            .filter(|session| session.summary.conversation_id == conversation_id)
+            .count(),
+        1
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies startup completes an interrupted active-delete tombstone after
+/// each durable deletion boundary: directory, root TSV, and naming/catalog
+/// cleanup.
+///
+/// Split legacy layouts can contain both payload representations. A crash at
+/// any boundary must not resurrect the remaining representation or leave a
+/// stale catalog/name record after the next startup recovery pass.
+#[test]
+fn transcript_store_recovers_interrupted_active_delete_across_all_boundaries() {
+    for (suffix, remove_directory, remove_legacy) in [
+        ("directory", true, false),
+        ("legacy", true, true),
+        ("catalog", true, true),
+    ] {
+        let root = temp_root(&format!("active-delete-recovery-{suffix}"));
+        let _ = fs::remove_dir_all(&root);
+        let store = AgentTranscriptStore::new(root.clone());
+        let conversation_id = format!("delete-active-{suffix}");
+        let transcript = entry(&conversation_id, 1, TranscriptRole::User);
+        fs::create_dir_all(root.join(&conversation_id)).unwrap();
+        fs::write(
+            root.join(format!("{conversation_id}.tsv")),
+            format!("{}\n", encode_transcript_entry(&transcript).unwrap()),
+        )
+        .unwrap();
+        store
+            .append_presentation(&presentation(&conversation_id, 1))
+            .unwrap();
+        store.initialize(10).unwrap();
+        store
+            .name_session(&conversation_id, "Delete me", 11, None, false)
+            .unwrap();
+        fs::create_dir_all(root.join(".archive-recovery")).unwrap();
+        fs::write(
+            root.join(".archive-recovery").join(format!("{conversation_id}.json")),
+            format!(
+                "{{\"version\":1,\"conversation_id\":\"{conversation_id}\",\"operation\":\"delete-active\",\"payload_layout\":\"directory\"}}"
+            ),
+        )
+        .unwrap();
+        if remove_directory {
+            fs::remove_dir_all(root.join(&conversation_id)).unwrap();
+        }
+        if remove_legacy {
+            fs::remove_file(root.join(format!("{conversation_id}.tsv"))).unwrap();
+        }
+
+        store.initialize(20).unwrap();
+
+        assert!(!root.join(&conversation_id).exists(), "{suffix}");
+        assert!(
+            !root.join(format!("{conversation_id}.tsv")).exists(),
+            "{suffix}"
+        );
+        assert!(
+            store
+                .catalog_saved_session(&conversation_id)
+                .unwrap()
+                .is_none(),
+            "{suffix}"
+        );
+        assert!(
+            store.named_session(&conversation_id).unwrap().is_none(),
+            "{suffix}"
+        );
+        assert!(
+            !root
+                .join(".archive-recovery")
+                .join(format!("{conversation_id}.json"))
+                .exists(),
+            "{suffix}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+}
+
+/// Verifies a post-rename promotion permission failure restores the root TSV so
+/// the catalog's legacy layout remains valid and lifecycle archive can proceed.
+///
+/// The history rename happens before its private-mode update. A failure at that
+/// point must still carry rollback state, or the root TSV is silently stranded
+/// in a directory payload that the catalog continues to classify as legacy.
+#[test]
+fn transcript_store_rolls_back_legacy_promotion_when_permissions_fail_after_rename() {
+    let root = temp_root("legacy-objective-permission-failure");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let legacy = entry("legacy-permission-failure", 1, TranscriptRole::User);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("legacy-permission-failure.tsv"),
+        format!("{}\n", encode_transcript_entry(&legacy).unwrap()),
+    )
+    .unwrap();
+    store.initialize(10).unwrap();
+
+    store.fail_next_legacy_promotion_permissions_after_rename();
+    assert!(
+        store
+            .save_user_objective("legacy-permission-failure", Some("must not persist"))
+            .is_err()
+    );
+    assert!(root.join("legacy-permission-failure.tsv").is_file());
+    assert!(!root.join("legacy-permission-failure/history.tsv").exists());
+    assert!(
+        store
+            .catalog_saved_session("legacy-permission-failure")
+            .unwrap()
+            .is_some()
+    );
+
+    store
+        .archive_session("legacy-permission-failure", 20)
+        .unwrap();
+    assert!(!root.join("legacy-permission-failure.tsv").exists());
+    assert!(
+        store
+            .delete_archived_session("legacy-permission-failure")
+            .unwrap()
+    );
+    assert!(
+        store
+            .catalog_saved_session("legacy-permission-failure")
+            .unwrap()
+            .is_none()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies startup repairs a catalog entry that still says `legacy-tsv` after
+/// a process stops immediately after moving its root history into a directory.
+///
+/// The journal is the durable boundary between the history rename and metadata
+/// replacement. Recovery must reclassify the active payload under the lock
+/// before archive trusts the stale catalog, allowing archive to proceed without
+/// an earlier exact catalog lookup repairing the row opportunistically.
+#[test]
+fn transcript_store_recovers_legacy_promotion_after_history_rename_before_catalog_update() {
+    let root = temp_root("legacy-promotion-restart-recovery");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let conversation_id = "legacy-promotion-restart";
+    let legacy = entry(conversation_id, 1, TranscriptRole::User);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join(format!("{conversation_id}.tsv")),
+        format!("{}\n", encode_transcript_entry(&legacy).unwrap()),
+    )
+    .unwrap();
+    store.initialize(10).unwrap();
+
+    fs::create_dir_all(root.join(".archive-recovery")).unwrap();
+    fs::write(
+        root.join(format!(".archive-recovery/{conversation_id}.json")),
+        format!(
+            "{{\"version\":1,\"conversation_id\":\"{conversation_id}\",\"operation\":\"promote-legacy\",\"payload_layout\":\"directory\"}}"
+        ),
+    )
+    .unwrap();
+    fs::create_dir_all(root.join(conversation_id)).unwrap();
+    fs::rename(
+        root.join(format!("{conversation_id}.tsv")),
+        root.join(conversation_id).join("history.tsv"),
+    )
+    .unwrap();
+
+    AgentTranscriptStore::new(root.clone())
+        .initialize(20)
+        .unwrap();
+    store.archive_session(conversation_id, 30).unwrap();
+
+    assert!(!root.join(conversation_id).exists());
+    assert!(
+        root.join(format!("archived/{conversation_id}.tar.zst"))
+            .is_file()
+    );
+    assert!(
+        !root
+            .join(format!(".archive-recovery/{conversation_id}.json"))
+            .exists()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies failed metadata replacement preserves a pre-existing v1 sidecar
+/// while restoring the promoted transcript to its root TSV layout.
+///
+/// A sidecar that existed before promotion is not proof that the attempted v2
+/// replacement committed. The failed transaction must retain its original
+/// metadata, roll back the history move, keep the catalog coherent with the
+/// legacy payload, and leave archive and delete able to consume the transcript.
+#[test]
+fn transcript_store_preserves_v1_metadata_when_legacy_promotion_replacement_fails() {
+    let root = temp_root("legacy-v1-metadata-replacement-failure");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let conversation_id = "legacy-v1-metadata-failure";
+    let legacy = entry(conversation_id, 1, TranscriptRole::User);
+    let metadata_path = root.join(conversation_id).join("metadata.json");
+    fs::create_dir_all(metadata_path.parent().unwrap()).unwrap();
+    fs::write(
+        root.join(format!("{conversation_id}.tsv")),
+        format!("{}\n", encode_transcript_entry(&legacy).unwrap()),
+    )
+    .unwrap();
+    fs::write(
+        &metadata_path,
+        "{\"version\":1,\"conversation_kind\":\"subagent\"}\n",
+    )
+    .unwrap();
+    store.initialize(10).unwrap();
+
+    store.fail_next_metadata_write_after_promotion();
+    assert!(
+        store
+            .save_user_objective(conversation_id, Some("must not replace v1 metadata"))
+            .is_err()
+    );
+
+    assert!(root.join(format!("{conversation_id}.tsv")).is_file());
+    assert!(!root.join(conversation_id).join("history.tsv").exists());
+    assert_eq!(
+        fs::read_to_string(&metadata_path).unwrap(),
+        "{\"version\":1,\"conversation_kind\":\"subagent\"}\n"
+    );
+    assert_eq!(
+        store.conversation_kind(conversation_id).unwrap(),
+        mez_agent::AgentConversationKind::Subagent
+    );
+    assert!(
+        store
+            .catalog_saved_session(conversation_id)
+            .unwrap()
+            .is_some()
+    );
+
+    store.archive_session(conversation_id, 20).unwrap();
+    assert!(!root.join(format!("{conversation_id}.tsv")).exists());
+    assert!(store.delete_archived_session(conversation_id).unwrap());
+    assert!(
+        store
+            .catalog_saved_session(conversation_id)
+            .unwrap()
+            .is_none()
+    );
     let _ = fs::remove_dir_all(root);
 }
 
@@ -2699,6 +3213,338 @@ fn transcript_store_recovers_interrupted_archive_from_journal() {
             .archived_at_unix_seconds,
         None
     );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies archive reports success after its payload and catalog transition
+/// commits even if its recovery-journal removal fails, and startup replay
+/// idempotently removes the retained journal without restoring the archive.
+///
+/// Journal cleanup occurs after the durable archive pair and archived catalog
+/// row are installed. Treating that cleanup as transactional would falsely
+/// report failure for an archive that recovery can prove and preserve.
+#[test]
+fn transcript_store_archive_commit_survives_recovery_journal_cleanup_failure() {
+    let root = temp_root("archive-journal-cleanup-failure");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let conversation_id = "archive-journal-cleanup";
+    store
+        .append(&entry(conversation_id, 1, TranscriptRole::User))
+        .unwrap();
+
+    store.fail_next_archive_recovery_journal_removal();
+    assert!(store.archive_session(conversation_id, 10).is_ok());
+    assert!(
+        root.join(format!("archived/{conversation_id}.tar.zst"))
+            .is_file()
+    );
+    assert!(!root.join(conversation_id).exists());
+    assert!(
+        store
+            .catalog_saved_session(conversation_id)
+            .unwrap()
+            .unwrap()
+            .archived_at_unix_seconds
+            .is_some()
+    );
+    let journal = root.join(format!(".archive-recovery/{conversation_id}.json"));
+    assert!(journal.is_file());
+
+    AgentTranscriptStore::new(root.clone())
+        .initialize(11)
+        .unwrap();
+    AgentTranscriptStore::new(root.clone())
+        .initialize(12)
+        .unwrap();
+    assert!(!journal.exists());
+    assert!(
+        root.join(format!("archived/{conversation_id}.tar.zst"))
+            .is_file()
+    );
+    assert!(!root.join(conversation_id).exists());
+    assert!(
+        store
+            .catalog_saved_session(conversation_id)
+            .unwrap()
+            .unwrap()
+            .archived_at_unix_seconds
+            .is_some()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies restore reports success after installing its active payload and
+/// catalog row when journal removal fails, while startup replay removes only
+/// the retained journal and leaves the restored durable state intact.
+///
+/// A cleanup error follows removal of the archive pair, so returning it would
+/// misrepresent a completed restore and invite callers to retry incorrectly.
+#[test]
+fn transcript_store_restore_commit_survives_recovery_journal_cleanup_failure() {
+    let root = temp_root("restore-journal-cleanup-failure");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let conversation_id = "restore-journal-cleanup";
+    store
+        .append(&entry(conversation_id, 1, TranscriptRole::User))
+        .unwrap();
+    store.archive_session(conversation_id, 10).unwrap();
+
+    store.fail_next_archive_recovery_journal_removal();
+    assert!(store.restore_archived_session(conversation_id).is_ok());
+    assert!(root.join(conversation_id).join("history.tsv").is_file());
+    assert!(
+        !root
+            .join(format!("archived/{conversation_id}.tar.zst"))
+            .exists()
+    );
+    assert_eq!(
+        store
+            .catalog_saved_session(conversation_id)
+            .unwrap()
+            .unwrap()
+            .archived_at_unix_seconds,
+        None
+    );
+    let journal = root.join(format!(".archive-recovery/{conversation_id}.json"));
+    assert!(journal.is_file());
+
+    AgentTranscriptStore::new(root.clone())
+        .initialize(11)
+        .unwrap();
+    AgentTranscriptStore::new(root.clone())
+        .initialize(12)
+        .unwrap();
+    assert!(!journal.exists());
+    assert!(root.join(conversation_id).join("history.tsv").is_file());
+    assert!(
+        !root
+            .join(format!("archived/{conversation_id}.tar.zst"))
+            .exists()
+    );
+    assert_eq!(
+        store
+            .catalog_saved_session(conversation_id)
+            .unwrap()
+            .unwrap()
+            .archived_at_unix_seconds,
+        None
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies archived deletion reports success after deleting its archive pair
+/// and catalog row when journal cleanup fails, and repeated startup recovery
+/// preserves the deletion while removing the retained journal.
+///
+/// The journal is a replayable deletion tombstone after this commit boundary;
+/// it must not turn a durable archived delete into a caller-visible failure.
+#[test]
+fn transcript_store_archived_delete_commit_survives_recovery_journal_cleanup_failure() {
+    let root = temp_root("archived-delete-journal-cleanup-failure");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let conversation_id = "archived-delete-journal-cleanup";
+    store
+        .append(&entry(conversation_id, 1, TranscriptRole::User))
+        .unwrap();
+    store.archive_session(conversation_id, 10).unwrap();
+
+    store.fail_next_archive_recovery_journal_removal();
+    assert!(store.delete_archived_session(conversation_id).unwrap());
+    assert!(
+        !root
+            .join(format!("archived/{conversation_id}.tar.zst"))
+            .exists()
+    );
+    assert!(
+        store
+            .catalog_saved_session(conversation_id)
+            .unwrap()
+            .is_none()
+    );
+    let journal = root.join(format!(".archive-recovery/{conversation_id}.json"));
+    assert!(journal.is_file());
+
+    AgentTranscriptStore::new(root.clone())
+        .initialize(11)
+        .unwrap();
+    AgentTranscriptStore::new(root.clone())
+        .initialize(12)
+        .unwrap();
+    assert!(!journal.exists());
+    assert!(
+        !root
+            .join(format!("archived/{conversation_id}.tar.zst"))
+            .exists()
+    );
+    assert!(
+        store
+            .catalog_saved_session(conversation_id)
+            .unwrap()
+            .is_none()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies active deletion reports success after removing its payload and
+/// catalog row when journal cleanup fails, and repeated startup recovery
+/// idempotently completes the retained deletion tombstone.
+///
+/// This protects callers from retrying a delete whose requested lifecycle
+/// transition is already durable solely because optional journal cleanup lost
+/// a filesystem race or encountered a transient error.
+#[test]
+fn transcript_store_active_delete_commit_survives_recovery_journal_cleanup_failure() {
+    let root = temp_root("active-delete-journal-cleanup-failure");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let conversation_id = "active-delete-journal-cleanup";
+    store
+        .append(&entry(conversation_id, 1, TranscriptRole::User))
+        .unwrap();
+
+    store.fail_next_archive_recovery_journal_removal();
+    assert!(store.delete(conversation_id).unwrap());
+    assert!(!root.join(conversation_id).exists());
+    assert!(
+        store
+            .catalog_saved_session(conversation_id)
+            .unwrap()
+            .is_none()
+    );
+    let journal = root.join(format!(".archive-recovery/{conversation_id}.json"));
+    assert!(journal.is_file());
+
+    AgentTranscriptStore::new(root.clone())
+        .initialize(11)
+        .unwrap();
+    AgentTranscriptStore::new(root.clone())
+        .initialize(12)
+        .unwrap();
+    assert!(!journal.exists());
+    assert!(!root.join(conversation_id).exists());
+    assert!(
+        store
+            .catalog_saved_session(conversation_id)
+            .unwrap()
+            .is_none()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a committed delete journal left by cleanup failure is retired when
+/// the same conversation id is recreated, so restart recovery cannot erase the
+/// replacement payload.
+#[test]
+fn transcript_store_recreated_conversation_survives_stale_delete_journal_replay() {
+    let root = temp_root("active-delete-journal-recreate");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let conversation_id = "active-delete-journal-recreate";
+    store
+        .append(&entry(conversation_id, 1, TranscriptRole::User))
+        .unwrap();
+
+    store.fail_next_archive_recovery_journal_removal();
+    assert!(store.delete(conversation_id).unwrap());
+    let journal = root.join(format!(".archive-recovery/{conversation_id}.json"));
+    assert!(journal.is_file());
+
+    let mut recreated = entry(conversation_id, 1, TranscriptRole::User);
+    recreated.content = "replacement content survives restart".to_string();
+    store.append(&recreated).unwrap();
+    assert!(!journal.exists());
+
+    AgentTranscriptStore::new(root.clone())
+        .initialize(20)
+        .unwrap();
+    assert_eq!(
+        AgentTranscriptStore::new(root.clone())
+            .inspect(conversation_id)
+            .unwrap(),
+        vec![recreated]
+    );
+    assert!(!journal.exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies restore recovery finalizes an installed active payload by removing
+/// its matching archive pair, retaining objective metadata and a coherent
+/// active catalog row, and allowing the conversation to complete a later
+/// archive-and-delete lifecycle without reappearing after initialization.
+///
+/// A crash after restore installs the extracted directory but before it removes
+/// the archive files leaves both representations on disk. The restore journal
+/// makes the active payload authoritative, so recovery must remove both stale
+/// archive files rather than retaining a duplicate that can resurrect later.
+#[test]
+fn transcript_store_recovers_installed_restore_by_removing_archive_pair() {
+    let root = temp_root("restore-journal-installed-payload");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let conversation_id = "restore-journal-installed";
+    store
+        .append(&entry(conversation_id, 1, TranscriptRole::User))
+        .unwrap();
+    store
+        .save_user_objective(conversation_id, Some("Finish interrupted restore recovery"))
+        .unwrap();
+    store.archive_session(conversation_id, 100).unwrap();
+
+    let archive_path = root.join(format!("archived/{conversation_id}.tar.zst"));
+    let sidecar_path = root.join(format!("archived/{conversation_id}.json"));
+    let archive = fs::read(&archive_path).unwrap();
+    let sidecar = fs::read(&sidecar_path).unwrap();
+    store.restore_archived_session(conversation_id).unwrap();
+    fs::write(&archive_path, archive).unwrap();
+    fs::write(&sidecar_path, sidecar).unwrap();
+    fs::create_dir_all(root.join(".archive-recovery")).unwrap();
+    fs::write(
+        root.join(format!(".archive-recovery/{conversation_id}.json")),
+        format!(
+            "{{\"version\":1,\"conversation_id\":\"{conversation_id}\",\"operation\":\"restore\",\"payload_layout\":\"directory\"}}"
+        ),
+    )
+    .unwrap();
+
+    store.initialize(101).unwrap();
+
+    assert!(root.join(conversation_id).join("history.tsv").is_file());
+    assert!(!archive_path.exists());
+    assert!(!sidecar_path.exists());
+    assert!(
+        !root
+            .join(format!(".archive-recovery/{conversation_id}.json"))
+            .exists()
+    );
+    assert_eq!(
+        store.user_objective(conversation_id).unwrap().as_deref(),
+        Some("Finish interrupted restore recovery")
+    );
+    assert_eq!(
+        store
+            .catalog_saved_session(conversation_id)
+            .unwrap()
+            .unwrap()
+            .archived_at_unix_seconds,
+        None
+    );
+
+    store.archive_session(conversation_id, 102).unwrap();
+    assert!(store.delete_archived_session(conversation_id).unwrap());
+    assert!(
+        store
+            .catalog_saved_session(conversation_id)
+            .unwrap()
+            .is_none()
+    );
+    store.initialize(103).unwrap();
+    assert!(store.saved_session(conversation_id).unwrap().is_none());
+    assert!(!root.join(conversation_id).exists());
+    assert!(!archive_path.exists());
+    assert!(!sidecar_path.exists());
     let _ = fs::remove_dir_all(root);
 }
 
@@ -3362,6 +4208,72 @@ fn deleting_a_conversation_keeps_a_late_generated_title_out_of_the_index() {
         None
     );
     let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies archived deletion and replay of its delete journal prune generated
+/// title mirrors and retain the same late-worker tombstone as active deletion.
+///
+/// Archived payloads have no active session directory, so both the ordinary
+/// delete path and startup recovery must explicitly retire display cache state;
+/// otherwise a title worker started before archival deletion can resurrect a
+/// deleted conversation in the generated-title index.
+#[test]
+fn archived_deletion_and_recovery_prune_generated_titles_and_tombstone_late_workers() {
+    for interrupted in [false, true] {
+        let root = temp_root(if interrupted {
+            "archived-title-delete-recovery"
+        } else {
+            "archived-title-delete"
+        });
+        let _ = fs::remove_dir_all(&root);
+        let store = AgentTranscriptStore::new(root.clone());
+        let conversation_id = if interrupted {
+            "archived-title-recovery"
+        } else {
+            "archived-title-direct"
+        };
+        store
+            .append(&entry(conversation_id, 1, TranscriptRole::User))
+            .unwrap();
+        assert!(
+            store
+                .mirror_session_generated_title(conversation_id, "Archived title", 10)
+                .unwrap()
+        );
+        store.archive_session(conversation_id, 20).unwrap();
+
+        if interrupted {
+            fs::create_dir_all(root.join(".archive-recovery")).unwrap();
+            fs::write(
+                root.join(format!(".archive-recovery/{conversation_id}.json")),
+                format!(
+                    "{{\"version\":1,\"conversation_id\":\"{conversation_id}\",\"operation\":\"delete\",\"payload_layout\":\"directory\"}}"
+                ),
+            )
+            .unwrap();
+            fs::remove_file(root.join(format!("archived/{conversation_id}.tar.zst"))).unwrap();
+            store.initialize(30).unwrap();
+        } else {
+            assert!(store.delete_archived_session(conversation_id).unwrap());
+        }
+
+        assert_eq!(
+            store.session_generated_title(conversation_id).unwrap(),
+            None
+        );
+        assert!(
+            !store
+                .mirror_session_generated_title(conversation_id, "Late archived title", 40)
+                .unwrap(),
+            "{} deletion must reject a late title worker",
+            if interrupted { "recovered" } else { "direct" }
+        );
+        assert_eq!(
+            store.session_generated_title(conversation_id).unwrap(),
+            None
+        );
+        let _ = fs::remove_dir_all(root);
+    }
 }
 
 /// Verifies the persisted objective mirror tracks published refreshes and that

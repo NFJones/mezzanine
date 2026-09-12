@@ -291,6 +291,12 @@ fn execute_agent_shell_command_with_context_inner(
             command,
             reason: "session naming requires durable transcript metadata".to_string(),
         },
+        "objective" => AgentShellCommandOutcome::RequiresRuntime {
+            command,
+            reason:
+                "conversation objectives require durable transcript metadata and live MMP identity"
+                    .to_string(),
+        },
         "list-macros" => AgentShellCommandOutcome::RequiresRuntime {
             command,
             reason: "macro listing requires live runtime macro discovery".to_string(),

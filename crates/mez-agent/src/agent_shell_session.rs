@@ -950,6 +950,9 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "latency" => "inspect or change latency/cost preference.",
         "routing" => "toggle pane-local automatic model sizing.",
         "directive" => "inspect or set a session-scoped developer-instruction addendum.",
+        "objective" => {
+            "inspect, set, or clear the current conversation's durable published objective."
+        }
         "personality" => "inspect or change response personality.",
         "list-personalities" => "browse and select configured response personalities.",
         "loop" => {

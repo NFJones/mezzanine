@@ -650,6 +650,13 @@ impl RuntimeSessionService {
                     .map(|work| work.turn_id.clone())
             })
             .ok_or_else(|| MezError::invalid_state("agent shell session has no running turn"))?;
+        let prepared_loop_parent_objective = if let Some(loop_turn) = self.agent_loop_turn(&turn_id)
+            && let Some(state) = self.agent_loop_state_by_id(&loop_turn.loop_id)
+        {
+            Some(self.preflight_agent_loop_parent_objective(state)?)
+        } else {
+            None
+        };
         let scheduler_cancelled = self.cancel_agent_work(&turn_id);
         let interrupted_shell_transactions =
             self.cancel_live_shell_transactions_for_turn(&turn_id)?;
@@ -720,10 +727,15 @@ impl RuntimeSessionService {
             }
         };
         if !awaiting_redirection
-            && let Some(loop_turn) = self.remove_agent_loop_turn(&turn_id)
-            && let Some(state) = self.remove_agent_loop_state(&loop_turn.pane_id)
+            && let Some(loop_turn) = self.agent_loop_turn(&turn_id).cloned()
+            && let Some(state) = self.agent_loop_state_by_id(&loop_turn.loop_id).cloned()
         {
-            self.restore_agent_loop_parent_conversation(&loop_turn.pane_id, &state)?;
+            self.restore_agent_loop_parent_conversation(
+                &loop_turn.pane_id,
+                &state,
+                prepared_loop_parent_objective.flatten().as_deref(),
+            )?;
+            self.remove_agent_loop_state_by_id(&loop_turn.loop_id);
         }
         self.append_lifecycle_event(
             EventKind::AgentStatus,
@@ -898,8 +910,10 @@ impl RuntimeSessionService {
 
     /// Clears stale loop controller metadata for a pane that no longer has active loop work.
     fn clear_stale_agent_loop_state_for_pane(&mut self, pane_id: &str) -> Result<()> {
-        if let Some(state) = self.remove_agent_loop_state(pane_id) {
-            self.restore_agent_loop_parent_conversation(pane_id, &state)?;
+        if let Some(state) = self.agent_loop_state(pane_id).cloned() {
+            let objective = self.preflight_agent_loop_parent_objective(&state)?;
+            self.restore_agent_loop_parent_conversation(pane_id, &state, objective.as_deref())?;
+            self.remove_agent_loop_state_by_id(&state.loop_id);
         }
         self.clear_agent_loop_turns_for_pane(pane_id);
         Ok(())
@@ -960,8 +974,14 @@ impl RuntimeSessionService {
         let started = match self.start_agent_loop_work_turn(pane_id) {
             Ok(started) => started,
             Err(error) => {
-                if let Some(state) = self.remove_agent_loop_state(pane_id) {
-                    self.restore_agent_loop_parent_conversation(pane_id, &state)?;
+                if let Some(state) = self.agent_loop_state(pane_id).cloned() {
+                    let objective = self.preflight_agent_loop_parent_objective(&state)?;
+                    self.restore_agent_loop_parent_conversation(
+                        pane_id,
+                        &state,
+                        objective.as_deref(),
+                    )?;
+                    self.remove_agent_loop_state_by_id(&state.loop_id);
                 }
                 return Err(error);
             }
@@ -1090,6 +1110,7 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
         state: &RuntimeAgentLoopState,
+        objective: Option<&str>,
     ) -> Result<()> {
         if state.mode == RuntimeAgentLoopMode::ReuseCurrentConversation {
             return Ok(());
@@ -1107,6 +1128,11 @@ impl RuntimeSessionService {
                     state.parent_prompt_cache_lineage_id.clone(),
                 )?;
             self.restore_agent_loop_parent_projection(&state.loop_id, pane_id);
+            self.sync_prepared_runtime_agent_objective_for_conversation(
+                pane_id,
+                &state.parent_conversation_id,
+                objective,
+            )?;
             return Ok(());
         }
         self.agent_shell_store_mut()
@@ -1117,7 +1143,32 @@ impl RuntimeSessionService {
                 state.parent_prompt_cache_lineage_id.clone(),
             )?;
         self.restore_agent_loop_parent_projection(&state.loop_id, pane_id);
+        self.sync_prepared_runtime_agent_objective_for_conversation(
+            pane_id,
+            &state.parent_conversation_id,
+            objective,
+        )?;
         Ok(())
+    }
+
+    /// Reads the fallible parent objective metadata before loop restoration mutates bindings.
+    pub(crate) fn preflight_agent_loop_parent_objective(
+        &self,
+        state: &RuntimeAgentLoopState,
+    ) -> Result<Option<String>> {
+        if state.mode == RuntimeAgentLoopMode::ReuseCurrentConversation
+            || (state.routed_parent_turn_id.is_some()
+                && self
+                    .agent_shell_store()
+                    .get(&state.invoking_pane_id)
+                    .is_none())
+        {
+            return Ok(None);
+        }
+        let Some(store) = self.persistence.cloned_transcript_store() else {
+            return Ok(None);
+        };
+        store.user_objective(&state.parent_conversation_id)
     }
 
     /// Injects user steering input into the currently running pane turn.
@@ -1276,13 +1327,20 @@ impl RuntimeSessionService {
         let fresh_context = self.apply_persisted_context_documents(pane_id, context)?;
         let agent_id = format!("agent-{pane_id}");
         self.reset_agent_peer_message_turns(&agent_id);
-        let objective = Self::runtime_agent_objective_from_prompt(prompt);
-        self.publish_runtime_agent_objective(&agent_id, objective.as_deref());
         let conversation_id = self
             .agent_shell_store()
             .get(pane_id)
             .map(|session| session.session_id.clone())
             .ok_or_else(|| MezError::invalid_state("agent turn conversation is unavailable"))?;
+        let Some(objective) = self.runtime_agent_effective_objective(
+            &conversation_id,
+            Self::runtime_agent_objective_from_prompt(prompt).as_deref(),
+        ) else {
+            return Err(MezError::invalid_state(
+                "conversation objective metadata is unavailable",
+            ));
+        };
+        self.publish_prepared_runtime_agent_objective(&agent_id, objective.as_deref());
         let (context, continued_interrupted_turn, active_imported_history_events) = self
             .prepare_interrupted_agent_continuation_context(
                 &agent_id,

@@ -1081,9 +1081,15 @@ impl RuntimeSessionService {
             .values()
             .find(|loop_state| loop_state.routed_parent_turn_id.as_deref() == Some(parent_turn_id))
             .map(|loop_state| loop_state.loop_id.clone())
-            && let Some(loop_state) = self.remove_agent_loop_state_by_id(&loop_id)
+            && let Some(loop_state) = self.agent_loop_state_by_id(&loop_id).cloned()
         {
-            self.restore_agent_loop_parent_conversation(&loop_state.invoking_pane_id, &loop_state)?;
+            let objective = self.preflight_agent_loop_parent_objective(&loop_state)?;
+            self.restore_agent_loop_parent_conversation(
+                &loop_state.invoking_pane_id,
+                &loop_state,
+                objective.as_deref(),
+            )?;
+            self.remove_agent_loop_state_by_id(&loop_id);
             if let Some(completion) = loop_state.completion {
                 self.retain_routed_loop_completion(parent_turn_id, completion)?;
             }
@@ -1514,7 +1520,7 @@ impl RuntimeSessionService {
             &["agent-harness"],
             current_unix_seconds().saturating_mul(1000),
         );
-        self.publish_runtime_agent_objective(
+        self.publish_prepared_runtime_agent_objective(
             child_agent_id,
             Self::runtime_agent_objective_from_prompt(prompt).as_deref(),
         );

@@ -52,17 +52,21 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         execution: &AgentTurnExecution,
     ) -> Result<RuntimeAgentLoopSettlement> {
-        let Some(loop_turn) = self.agent.agent_loop_turns.remove(&turn.turn_id) else {
+        let Some(loop_turn) = self.agent_loop_turn(&turn.turn_id).cloned() else {
             return Ok(RuntimeAgentLoopSettlement::NotOwned);
         };
         if execution.terminal_state != AgentTurnState::Completed {
-            let completion =
-                if let Some(state) = self.remove_agent_loop_state_by_id(&loop_turn.loop_id) {
-                    self.restore_agent_loop_parent_conversation(&state.invoking_pane_id, &state)?;
-                    state.completion
-                } else {
-                    None
-                };
+            let Some(state) = self.agent_loop_state_by_id(&loop_turn.loop_id).cloned() else {
+                return Ok(RuntimeAgentLoopSettlement::Terminal { completion: None });
+            };
+            let objective = self.preflight_agent_loop_parent_objective(&state)?;
+            self.restore_agent_loop_parent_conversation(
+                &state.invoking_pane_id,
+                &state,
+                objective.as_deref(),
+            )?;
+            self.remove_agent_loop_state_by_id(&loop_turn.loop_id);
+            let completion = state.completion;
             return Ok(RuntimeAgentLoopSettlement::Terminal { completion });
         }
         match loop_turn.kind {
@@ -79,10 +83,13 @@ impl RuntimeSessionService {
                     emitted_apply_patch
                 };
                 if !iteration_requires_continuation {
-                    let state = self
-                        .remove_agent_loop_state_by_id(&loop_turn.loop_id)
-                        .expect("logical loop state was read immediately before removal");
-                    self.restore_agent_loop_parent_conversation(&state.invoking_pane_id, &state)?;
+                    let objective = self.preflight_agent_loop_parent_objective(&state)?;
+                    self.restore_agent_loop_parent_conversation(
+                        &state.invoking_pane_id,
+                        &state,
+                        objective.as_deref(),
+                    )?;
+                    self.remove_agent_loop_state_by_id(&loop_turn.loop_id);
                     let completion_reason = if state.goal.is_some() {
                         "goal met"
                     } else {
@@ -100,10 +107,13 @@ impl RuntimeSessionService {
                     });
                 }
                 if state.iteration >= state.max_iterations {
-                    let state = self
-                        .remove_agent_loop_state_by_id(&loop_turn.loop_id)
-                        .expect("logical loop state was read immediately before removal");
-                    self.restore_agent_loop_parent_conversation(&state.invoking_pane_id, &state)?;
+                    let objective = self.preflight_agent_loop_parent_objective(&state)?;
+                    self.restore_agent_loop_parent_conversation(
+                        &state.invoking_pane_id,
+                        &state,
+                        objective.as_deref(),
+                    )?;
+                    self.remove_agent_loop_state_by_id(&loop_turn.loop_id);
                     self.append_agent_status_text_to_terminal_buffer(
                         &state.invoking_pane_id,
                         &format!(
@@ -129,11 +139,14 @@ impl RuntimeSessionService {
                     .expect("logical loop state was read immediately before update") =
                     next_state.clone();
                 if let Err(error) = self.start_agent_loop_work_turn(&next_state.execution_pane_id) {
-                    if let Some(state) = self.remove_agent_loop_state_by_id(&loop_turn.loop_id) {
+                    if let Some(state) = self.agent_loop_state_by_id(&loop_turn.loop_id).cloned() {
+                        let objective = self.preflight_agent_loop_parent_objective(&state)?;
                         self.restore_agent_loop_parent_conversation(
                             &state.invoking_pane_id,
                             &state,
+                            objective.as_deref(),
                         )?;
+                        self.remove_agent_loop_state_by_id(&loop_turn.loop_id);
                         if let Some(parent_turn_id) = state.routed_parent_turn_id.as_deref() {
                             self.fail_routed_loop_continuation(
                                 parent_turn_id,

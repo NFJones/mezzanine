@@ -31,7 +31,7 @@ turning the command into an ordinary model request:
 | Goal | Commands |
 | --- | --- |
 | Inspect or change authority and execution mode | `/status`, `/permissions`, `/approval`, `/approve`, `/show-approvals`, `/sandbox`, and `/shell-mode` |
-| Control the current task | `/plan`, `/directive`, `/loop`, `/stop`, `/new`, `/fork`, `/resume`, and `/name-session` |
+| Control the current task | `/plan`, `/directive`, `/objective`, `/loop`, `/stop`, `/new`, `/fork`, `/resume`, and `/name-session` |
 | Inspect or preserve context | `/compact`, `/context-doc`, `/show-context`, `/copy`, `/copy-context`, `/copy-patches`, `/copy-trace-log`, and `/list-modified-files` |
 | Select model behavior | `/model`, `/routing`, `/latency`, `/thinking`, `/personality`, and `/list-personalities` |
 | Work with local stores | `/memory`, `/remember`, `/show-memories`, `/issue`, and `/show-issues` |
@@ -42,6 +42,10 @@ reports or changes pane-local sandbox state, while advanced setup, profiles,
 and managed-home cache operations remain under `mez sandbox`. `/plan on`
 keeps the conversation in plan-only mode and removes write scopes for later
 turns; use `/plan off` before asking the agent to edit files.
+
+`/objective <text>` persists and immediately publishes a conversation-scoped
+user objective. It wins over prompt and model-generated objectives until
+`/objective --clear`; bare `/objective` reports the current source and value.
 
 `/shell-mode status` reports whether local shell work uses fresh native shells
 or the interactive pane shell. `/shell-mode native|pane` changes the current

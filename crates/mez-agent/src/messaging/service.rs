@@ -192,6 +192,38 @@ impl MessageService {
         Ok(true)
     }
 
+    /// Explicitly clears one registered agent's published objective.
+    ///
+    /// Unlike [`Self::update_agent_objective`], this is an intentional state
+    /// transition. Protocol `null` and an omitted objective remain no-ops so a
+    /// malformed or objective-less refresh can never accidentally clear peer
+    /// discovery state.
+    pub fn clear_agent_objective(
+        &mut self,
+        agent_id: &AgentId,
+        updated_at_ms: u64,
+    ) -> Result<bool> {
+        let current = self
+            .registered
+            .get(agent_id)
+            .ok_or_else(|| {
+                MessageError::not_found("agent objective clear requires a registered agent")
+            })?
+            .objective
+            .clone();
+        if current.is_none() {
+            return Ok(false);
+        }
+        if let Some(identity) = self.registered.get_mut(agent_id) {
+            identity.objective = None;
+        }
+        if let Some(record) = self.presence.get_mut(agent_id) {
+            record.identity.objective = None;
+            record.updated_at_ms = updated_at_ms;
+        }
+        Ok(true)
+    }
+
     /// Runs the accept operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -1594,6 +1626,43 @@ mod tests {
         assert_eq!(
             service.presence()[0].identity.objective.as_deref(),
             Some("Review the backlog")
+        );
+    }
+
+    /// Verifies explicit clearing removes discovery state while a protocol-like
+    /// absent refresh remains a no-op and cannot accidentally clear it.
+    #[test]
+    fn explicit_objective_clear_is_distinct_from_an_absent_refresh() {
+        let mut service = MessageService::default();
+        let identity = service
+            .register_agent_with_objective(
+                None,
+                None,
+                "agent",
+                Vec::new(),
+                Some("Inspect the backlog"),
+            )
+            .unwrap();
+        assert!(
+            !service
+                .update_agent_objective(&identity.agent_id, None, 10)
+                .unwrap()
+        );
+        assert!(
+            service
+                .clear_agent_objective(&identity.agent_id, 20)
+                .unwrap()
+        );
+        assert!(
+            service
+                .registered_identity(&identity.agent_id)
+                .and_then(|identity| identity.objective.as_deref())
+                .is_none()
+        );
+        assert!(
+            !service
+                .clear_agent_objective(&identity.agent_id, 30)
+                .unwrap()
         );
     }
 

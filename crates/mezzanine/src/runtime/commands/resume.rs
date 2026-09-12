@@ -130,6 +130,88 @@ fn derived_session_title(
 }
 
 impl RuntimeSessionService {
+    /// Inspects, sets, or clears the current conversation's durable objective.
+    ///
+    /// This command is intentionally runtime-backed: it requires a durable
+    /// conversation and synchronizes the authenticated pane identity in MMP as
+    /// soon as a user selection changes.
+    pub(super) fn execute_agent_shell_objective_command(
+        &mut self,
+        pane_id: &str,
+        input: &str,
+    ) -> Result<AgentShellCommandOutcome> {
+        let invocation = parse_slash_command(input)?
+            .ok_or_else(|| MezError::invalid_args("objective command must be a slash command"))?;
+        let arguments = invocation.args.trim();
+        let session = self
+            .agent_shell_store()
+            .get(pane_id)
+            .ok_or_else(|| MezError::invalid_state("agent shell session not found for pane"))?;
+        if session.ephemeral {
+            return Err(MezError::invalid_state(
+                "ephemeral agent sessions cannot set objectives",
+            ));
+        }
+        let conversation_id = session.session_id.clone();
+        let visibility = session.visibility;
+        let store = self
+            .persistence
+            .cloned_transcript_store()
+            .ok_or_else(|| MezError::invalid_state("transcript persistence is unavailable"))?;
+        if arguments.is_empty() {
+            let user_objective = store.user_objective(&conversation_id)?;
+            let published =
+                mez_core::ids::AgentId::opaque(format!("agent-{pane_id}")).and_then(|agent_id| {
+                    self.message_service()
+                        .registered_identity(&agent_id)
+                        .and_then(|identity| identity.objective.clone())
+                });
+            return Ok(AgentShellCommandOutcome::Display {
+                command: "objective".to_string(),
+                body: format!(
+                    "conversation_id={} source={} objective={}",
+                    conversation_id,
+                    if user_objective.is_some() {
+                        "user"
+                    } else if published.is_some() {
+                        "automatic"
+                    } else {
+                        "none"
+                    },
+                    user_objective
+                        .or(published)
+                        .unwrap_or_else(|| "not set".to_string())
+                ),
+            });
+        }
+        if arguments == "--clear" {
+            let changed = store.save_user_objective(&conversation_id, None)?;
+            self.sync_runtime_agent_objectives_for_conversation(&conversation_id, None)?;
+            return Ok(AgentShellCommandOutcome::Mutated {
+                command: "objective".to_string(),
+                body: format!(
+                    "conversation_id={} source=automatic cleared={changed}",
+                    conversation_id
+                ),
+                visibility,
+            });
+        }
+        if arguments.starts_with("--") {
+            return Err(MezError::invalid_args("usage: /objective [<text>|--clear]"));
+        }
+        let objective = mez_agent::messaging::normalize_objective(arguments)?;
+        let changed = store.save_user_objective(&conversation_id, Some(&objective))?;
+        self.sync_runtime_agent_objectives_for_conversation(&conversation_id, Some(&objective))?;
+        Ok(AgentShellCommandOutcome::Mutated {
+            command: "objective".to_string(),
+            body: format!(
+                "conversation_id={} source=user changed={} objective={}",
+                conversation_id, changed, objective
+            ),
+            visibility,
+        })
+    }
+
     /// Assigns or replaces the user-assigned display name for the current
     /// conversation.
     ///
@@ -281,6 +363,7 @@ impl RuntimeSessionService {
         let presentation_entries = store.inspect_presentation(&conversation_id)?;
         let resume_directory = runtime_resume_directory_from_summary(&summary)
             .or_else(|| runtime_resume_directory_from_entries(&entries));
+        let prepared_objective = store.user_objective(&conversation_id)?;
         let prepared_resume_state =
             self.prepare_agent_resume_state_for_conversation(&conversation_id)?;
         let previous_session = self
@@ -339,6 +422,11 @@ impl RuntimeSessionService {
             }
             self.restore_agent_resume_directory(pane_id, resume_directory.as_deref())?;
             self.record_pane_transcript_ref(pane_id, format!("transcript:{pane_id}:{session_id}"))?;
+            self.sync_prepared_runtime_agent_objective_for_conversation(
+                pane_id,
+                &session_id,
+                prepared_objective.as_deref(),
+            )?;
             self.commit_prepared_agent_resume_state(pane_id, &session_id, prepared_resume_state)?;
             Ok((session_id, transcript_entries, visibility))
         })();
@@ -1022,6 +1110,7 @@ impl RuntimeSessionService {
                     .buffer
                     .apply(ReadlineEdit::InsertText(seed));
             }
+            self.sync_runtime_agent_objective_for_conversation(&started.pane_id, &session_id)?;
             Ok((session_id, transcript_entries, visibility))
         })();
         let (session_id, transcript_entries, visibility) = match setup_result {

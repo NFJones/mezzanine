@@ -8526,6 +8526,18 @@ The baseline command capabilities are:
   forms, `--clear` combined with `--ephemeral`, unknown `--` flags, control
   characters, names longer than 80 Unicode scalar values, ephemeral
   conversations, active turns, and unavailable transcript persistence.
+- `/objective [<text>|--clear]`: Inspect, set, or clear the current durable
+  conversation's published objective. A bare command MUST display the effective
+  source and value. A supplied value MUST use the shared MMP objective
+  normalization and MUST be persisted in the versioned conversation metadata
+  sidecar before it is immediately published through the authenticated pane MMP
+  identity. A user value MUST override every prompt-derived and model-authored
+  candidate until `/objective --clear` explicitly removes it. Clearing MUST use
+  an explicit MMP clear transition; an absent or `null` protocol objective MUST
+  remain a no-op. The command MUST reject ephemeral conversations, invalid
+  values, and unavailable transcript persistence. Forked and fresh
+  conversations MUST NOT inherit a user objective; archive and restore preserve
+  it, and deletion removes it with the conversation metadata.
 - `/list-skills`: Show the effective skills available to the active pane,
   including each skill name, source scope, and description. The display MUST
   use the same catalog that backs `$<skill-name>` prompt expansion. It SHOULD
