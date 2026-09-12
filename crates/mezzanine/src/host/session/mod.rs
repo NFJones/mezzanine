@@ -621,6 +621,7 @@ fn start_session(
             restart_command,
         } => {
             service.seed_terminal_screens_from_snapshot_payload(&payload)?;
+            service.restore_agent_sessions_for_restored_snapshot()?;
             service.restart_restored_pane_processes(restart_command.as_deref())?;
             Ok(())
         }
@@ -985,6 +986,379 @@ mod tests {
         assert!(!root.join("x11-sessions").exists());
         drop(runtime);
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// Restored-session fixture for restored agent-pane startup tests.
+    struct RestoredAgentBindingFixture {
+        service: RuntimeSessionService,
+        payload: Box<SessionSnapshotPayload>,
+        transcript_root: PathBuf,
+        daemon_environment: Vec<mez_mux::process::RawEnvironmentEntry>,
+        bound_pane_id: String,
+        unbound_pane_id: String,
+    }
+
+    impl RestoredAgentBindingFixture {
+        /// Builds one restored session with a single durable pane-to-agent binding.
+        ///
+        /// The mocked daemon environment carries the ambient environment plus a
+        /// daemon-only sentinel so the agent-owned creation boundary is observable
+        /// without mutating process-global state.
+        fn new(name: &str) -> Self {
+            let mut original = Session::new_default(
+                ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+                Size::new(80, 24).unwrap(),
+            );
+            let primary = original.attach_primary("primary", true).unwrap();
+            original
+                .split_active_pane(&primary, mez_mux::layout::SplitDirection::Vertical)
+                .unwrap();
+            let payload = SessionSnapshotPayload::from_session(&original);
+            let restore_input = crate::storage::snapshot::session_restore_input(&payload).unwrap();
+            let restored = Session::from_restore_input(
+                ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+                restore_input,
+            )
+            .unwrap();
+            let restored_pane_ids = restored
+                .windows()
+                .iter()
+                .flat_map(|window| window.panes().iter().map(|pane| pane.id.to_string()))
+                .collect::<Vec<_>>();
+            assert_eq!(restored_pane_ids.len(), 2);
+            let bound_pane_id = restored_pane_ids[0].clone();
+            let unbound_pane_id = restored_pane_ids[1].clone();
+            let transcript_root = test_root(&format!("restored-agent-binding-{name}"));
+            let mut service = RuntimeSessionService::with_event_log(
+                restored,
+                transcript_root.join("restored.sock"),
+                100,
+                10,
+                1024,
+            )
+            .unwrap();
+            let transcript_store = AgentTranscriptStore::new(transcript_root.clone());
+            let mezzanine_session_id = service.session().id.as_str().to_string();
+            transcript_store
+                .save_agent_session_metadata(
+                    &mezzanine_session_id,
+                    &[mez_agent::transcript::AgentSessionMetadata {
+                        mezzanine_session_id: mezzanine_session_id.clone(),
+                        pane_id: bound_pane_id.clone(),
+                        conversation_id: "restored-agent-bound".to_string(),
+                        prompt_cache_lineage_id: "lineage-restored-agent-bound".to_string(),
+                        visibility: "visible".to_string(),
+                        running_turn_id: None,
+                        running_turn_kind: None,
+                        transcript_entries: 1,
+                        log_level: "normal".to_string(),
+                        pane_model_profile: None,
+                        planning_enabled: false,
+                        response_style: None,
+                        directive: None,
+                        routing_enabled: None,
+                        root_routing_policy: None,
+                        approval_policy: None,
+                        pane_permission_preset_override: None,
+                        pane_approval_policy_override: None,
+                        working_directory: None,
+                        project_root: None,
+                        context_usage: None,
+                        context_usage_snapshot: None,
+                        latest_request_usage: None,
+                        token_usage: Default::default(),
+                        token_usage_by_model: Default::default(),
+                    }],
+                )
+                .unwrap();
+            service.set_agent_transcript_store(transcript_store);
+            let mut daemon_environment = ambient_environment_entries();
+            daemon_environment.push(mez_mux::process::RawEnvironmentEntry {
+                key: b"MEZ_AGENT_OWNED_DAEMON_SENTINEL".to_vec(),
+                value: b"daemon-only".to_vec(),
+            });
+            service
+                .inject_agent_owned_pane_daemon_environment_for_tests(daemon_environment.clone());
+            Self {
+                service,
+                payload: Box::new(payload),
+                transcript_root,
+                daemon_environment,
+                bound_pane_id,
+                unbound_pane_id,
+            }
+        }
+
+        /// Returns the daemon-only variable that pane creation must not forward.
+        fn daemon_only_probe(&self) -> mez_mux::process::RawEnvironmentEntry {
+            crate::runtime::daemon_only_probe_key_for_tests(
+                &self.daemon_environment,
+                Path::new("/bin/sh"),
+            )
+            .expect("the injected daemon environment must expose a daemon-only variable")
+        }
+
+        /// Starts the restored session through the private session startup entry point.
+        fn start(&mut self, restart_command: Option<&str>) {
+            start_session(
+                &mut self.service,
+                SessionRuntimeStartup::RestoredSnapshot {
+                    payload: self.payload.clone(),
+                    restart_command: restart_command.map(str::to_string),
+                },
+            )
+            .unwrap();
+        }
+
+        /// Terminates restored panes and removes the fixture transcript root.
+        fn cleanup(mut self) {
+            self.service.terminate_all_pane_processes().unwrap();
+            let _ = fs::remove_dir_all(&self.transcript_root);
+        }
+    }
+
+    /// Reads one restored pane root process's exec-time environment.
+    ///
+    /// Host metadata can briefly lag a freshly spawned child, so the read retries
+    /// without mutating process-global state or serializing tests.
+    fn restored_pane_root_environment(
+        service: &mut RuntimeSessionService,
+        pane_id: &str,
+    ) -> Vec<mez_mux::process::RawEnvironmentEntry> {
+        let process = service
+            .take_running_pane_process_for_adapter(pane_id)
+            .expect("a restored pane process should be adapter-takeable");
+        for _ in 0..200 {
+            if let Some(environment) = process.environment()
+                && !environment.is_empty()
+            {
+                return environment;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!("the restored pane root process did not expose an exec-time environment");
+    }
+
+    /// Returns true when one raw environment snapshot forwards an exact key.
+    fn environment_forwards_key(
+        environment: &[mez_mux::process::RawEnvironmentEntry],
+        key: &[u8],
+    ) -> bool {
+        environment.iter().any(|entry| entry.key == key)
+    }
+
+    /// Captures the ambient Mezzanine process environment as raw entries.
+    ///
+    /// Restored-pane tests install this snapshot as the daemon environment so the
+    /// agent-owned creation boundary is observable without mutating process-global
+    /// state.
+    fn ambient_environment_entries() -> Vec<mez_mux::process::RawEnvironmentEntry> {
+        use std::os::unix::ffi::OsStringExt;
+
+        std::env::vars_os()
+            .map(|(key, value)| mez_mux::process::RawEnvironmentEntry {
+                key: key.into_vec(),
+                value: value.into_vec(),
+            })
+            .collect()
+    }
+
+    /// Verifies restored snapshot startup restores durable agent bindings before
+    /// pane processes are restarted.
+    ///
+    /// Reverting the restore ordering leaves the bound pane without its durable
+    /// binding at restart time, so it is re-created as a user shell: it owns no
+    /// mode-specific startup owner and it keeps inheriting the daemon
+    /// environment. Both ordering-sensitive facts below, the startup owner and
+    /// the probe comparison against the injected daemon slice, fail under that
+    /// reversion.
+    #[test]
+    fn restored_snapshot_startup_restores_agent_bindings_before_restarting_pane_processes() {
+        let mut fixture = RestoredAgentBindingFixture::new("restore-order");
+        let probe = fixture.daemon_only_probe();
+        fixture.start(None);
+
+        assert!(
+            fixture
+                .service
+                .runtime_agent_surface_startup_phase_for_tests(&fixture.bound_pane_id)
+                .is_some(),
+            "the bound restored pane must own its durable mode-specific startup owner"
+        );
+        assert_eq!(
+            fixture
+                .service
+                .runtime_agent_surface_startup_phase_for_tests(&fixture.unbound_pane_id),
+            None,
+            "a restored pane without a durable binding must not own a startup surface"
+        );
+
+        let unbound_environment =
+            restored_pane_root_environment(&mut fixture.service, &fixture.unbound_pane_id);
+        let bound_environment =
+            restored_pane_root_environment(&mut fixture.service, &fixture.bound_pane_id);
+
+        assert!(
+            environment_forwards_key(&unbound_environment, &probe.key),
+            "an unbound restored pane must keep inheriting the daemon environment"
+        );
+        assert!(
+            !environment_forwards_key(&bound_environment, &probe.key),
+            "daemon-only {} must not reach a bound restored pane root",
+            String::from_utf8_lossy(&probe.key)
+        );
+        assert!(
+            environment_forwards_key(&bound_environment, b"PATH"),
+            "the bound restored pane root must still receive a working PATH"
+        );
+
+        fixture.cleanup();
+    }
+
+    /// Verifies a restored agent-owned pane in pane shell mode keeps its managed
+    /// admission pending instead of adopting a ready startup it never earned.
+    ///
+    /// The durable binding selects only the creation path. Pane mode therefore
+    /// still waits for the authenticated managed admission handshake: the owner
+    /// stays admitting, the pane bootstrap stays pending, environment authority
+    /// stays uncertified, and the scheduler stays fenced.
+    #[test]
+    fn runtime_restored_agent_pane_mode_restart_keeps_managed_admission_pending() {
+        let mut fixture = RestoredAgentBindingFixture::new("pane-mode-admission");
+        fixture
+            .service
+            .replace_config_layers(vec![ConfigLayer {
+                name: "restored-pane-mode-admission".to_string(),
+                path: None,
+                format: ConfigFormat::Toml,
+                scope: ConfigScope::Primary,
+                trusted: true,
+                text: "[agents]\nshell_mode = \"pane\"\n".to_string(),
+            }])
+            .unwrap();
+        assert_eq!(
+            fixture.service.agent_default_shell_mode().name(),
+            "pane",
+            "the pane-mode admission fixture must select pane shell mode"
+        );
+        fixture.start(None);
+
+        assert_eq!(
+            fixture
+                .service
+                .runtime_agent_surface_startup_phase_for_tests(&fixture.bound_pane_id),
+            Some("managed-admitting"),
+            "a restored pane-mode startup must wait for authenticated admission"
+        );
+        assert!(
+            fixture
+                .service
+                .pane_bootstrap_is_pending_for_tests(&fixture.bound_pane_id),
+            "pane-mode restore must keep the pane bootstrap pending"
+        );
+        assert!(
+            !fixture
+                .service
+                .pane_environment_authority_is_certified_for_tests(&fixture.bound_pane_id),
+            "bootstrap authority must stay uncertified before admission"
+        );
+        assert!(
+            !fixture
+                .service
+                .agent_surface_allows_scheduler_start(&fixture.bound_pane_id)
+        );
+        assert_eq!(
+            fixture
+                .service
+                .recover_expired_runtime_agent_surface_startups(
+                    crate::runtime::current_unix_millis()
+                )
+                .unwrap(),
+            0,
+            "a fresh admission owner must not expire before its timeout"
+        );
+
+        fixture.cleanup();
+    }
+
+    /// Verifies restored snapshot startup degrades instead of failing when the
+    /// durable agent session metadata is malformed.
+    ///
+    /// Snapshot resume must never block daemon startup on a corrupt binding
+    /// store. The runtime reports one diagnostic and restarts the restored panes
+    /// on the user-shell creation path, so both pane roots keep the user
+    /// environment and every pane still becomes live.
+    #[test]
+    fn restored_snapshot_startup_degrades_when_agent_session_metadata_is_malformed() {
+        let mut fixture = RestoredAgentBindingFixture::new("malformed-metadata");
+        let probe = fixture.daemon_only_probe();
+        let metadata_path = AgentTranscriptStore::new(fixture.transcript_root.clone())
+            .agent_session_metadata_path_for_tests();
+        let mut contents = fs::read_to_string(&metadata_path).unwrap();
+        contents.push_str("malformed-agent-session-record\n");
+        fs::write(&metadata_path, contents).unwrap();
+
+        fixture.start(None);
+
+        assert!(
+            fixture
+                .service
+                .agent_shell_store()
+                .get(&fixture.bound_pane_id)
+                .is_none(),
+            "a failed binding restore must leave the pane unbound"
+        );
+        assert_eq!(
+            fixture
+                .service
+                .runtime_agent_surface_startup_phase_for_tests(&fixture.bound_pane_id),
+            None,
+            "a pane that fell back to the user-shell path must own no startup surface"
+        );
+        let replayed = fixture
+            .service
+            .event_log()
+            .unwrap()
+            .replay_for(&crate::protocol::event::EventAudience::AllPrimaries);
+        assert!(
+            replayed.iter().any(|event| event
+                .payload
+                .contains("snapshot resume agent session restore failed")),
+            "a failed binding restore must report one diagnostic"
+        );
+        assert_eq!(
+            replayed
+                .iter()
+                .filter(|event| event.payload.contains(r#""restarted":true"#))
+                .count(),
+            2,
+            "every restored pane must still be restarted with a fresh primary pid"
+        );
+
+        let bound_environment =
+            restored_pane_root_environment(&mut fixture.service, &fixture.bound_pane_id);
+        let unbound_environment =
+            restored_pane_root_environment(&mut fixture.service, &fixture.unbound_pane_id);
+        assert!(
+            environment_forwards_key(&bound_environment, &probe.key),
+            "a pane that fell back to the user-shell path keeps the daemon environment"
+        );
+        assert!(
+            environment_forwards_key(&unbound_environment, &probe.key),
+            "an unbound restored pane keeps the daemon environment"
+        );
+        assert!(
+            fixture
+                .service
+                .session()
+                .windows()
+                .iter()
+                .flat_map(|window| window.panes())
+                .all(|pane| pane.live),
+            "a degraded restore must still leave every restored pane live"
+        );
+
+        fixture.cleanup();
     }
 
     async fn create_test_runtime(name: &str) -> SessionRuntime {

@@ -674,6 +674,27 @@ pub fn shell_action_structured_content_json(
     }).to_string()
 }
 
+/// Adds one bounded sandbox-boundary projection to existing shell structured
+/// content under the fixed `sandbox_effective` key.
+///
+/// Only the supplied object is inserted and no other field is rewritten, so
+/// callers keep the original bounded document. Content that is not one JSON
+/// object is returned unchanged.
+pub fn shell_structured_content_with_sandbox_effective_json(
+    structured_content_json: &str,
+    sandbox_effective: serde_json::Value,
+) -> String {
+    let Ok(mut document) = serde_json::from_str::<serde_json::Value>(structured_content_json)
+    else {
+        return structured_content_json.to_string();
+    };
+    let Some(object) = document.as_object_mut() else {
+        return structured_content_json.to_string();
+    };
+    object.insert("sandbox_effective".to_string(), sandbox_effective);
+    document.to_string()
+}
+
 /// Returns whether the action has a stable explanation for auto-allow metadata.
 pub fn action_supports_auto_allow(action: &AgentAction, input: ActionPlanningInput<'_>) -> bool {
     !action_auto_allow_reason(action, input).trim().is_empty()

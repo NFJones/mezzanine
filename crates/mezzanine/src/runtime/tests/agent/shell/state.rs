@@ -6,6 +6,37 @@ use crate::runtime::processes::{
 
 use super::*;
 
+/// Configures Bubblewrap with an executable that exists on every test host.
+///
+/// The resolver checks executable availability, so tests that observe a live
+/// backend boundary must not depend on a fixed host path.
+fn configure_available_bubblewrap(service: &mut RuntimeSessionService) {
+    let executable = std::env::current_exe()
+        .expect("test executable path is available")
+        .to_string_lossy()
+        .into_owned();
+    let configured =
+        crate::runtime::config::runtime_configured_permissions_from_config(&serde_json::json!({
+            "permissions": {
+                "sandbox": "bubblewrap",
+                "read_scopes": ["."],
+                "write_scopes": ["."],
+                "network_policy": "deny",
+                "bubblewrap": {
+                    "executable": executable,
+                    "unavailable": "fail",
+                    "network": "isolated",
+                    "environment": "minimal",
+                    "env_whitelist": []
+                }
+            }
+        }))
+        .unwrap();
+    service
+        .integration
+        .replace_configured_permissions(configured);
+}
+
 /// Builds one concrete pane environment identity for path-resolution tests.
 fn path_resolution_environment(working_directory: &Path) -> mez_agent::EnvironmentSignature {
     mez_agent::EnvironmentSignature::new(
@@ -227,6 +258,10 @@ fn runtime_policy_only_shell_audit_omits_plan_metadata() {
         serde_json::from_str(fs::read_to_string(&audit_path).unwrap().trim()).unwrap();
     let metadata = record["metadata"].as_object().unwrap();
     assert_eq!(metadata["sandbox_backend"], "policy-only");
+    assert_eq!(metadata["sandbox_effective"], "policy-only");
+    assert_eq!(metadata["sandbox_enforcement"], "none");
+    assert_eq!(metadata["network_mode"], "unenforced");
+    assert_eq!(metadata["sandbox_reason"], "policy-only");
     assert!(!metadata.contains_key("sandbox_plan_sha256"));
     assert!(!metadata.contains_key("sandbox_authority_source"));
     assert!(
@@ -264,7 +299,11 @@ fn runtime_host_access_shell_audit_records_distinct_policy_bypass() {
     assert_eq!(record["approval_state"], "host-policy-bypass");
     assert_eq!(record["metadata"]["sandbox_bypass"], "host-policy-bypass");
     assert_eq!(record["metadata"]["sandbox_configured"], "bubblewrap");
-    assert_eq!(record["metadata"]["sandbox_effective"], "host");
+    assert_eq!(record["metadata"]["sandbox_effective"], "host-bypass");
+    assert_eq!(record["metadata"]["sandbox_backend"], "host-bypass");
+    assert_eq!(record["metadata"]["sandbox_enforcement"], "none");
+    assert_eq!(record["metadata"]["network_mode"], "unenforced");
+    assert_eq!(record["metadata"]["sandbox_reason"], "host-access-bypass");
     assert!(record["metadata"].get("sandbox_fallback").is_none());
     fs::remove_dir_all(root).unwrap();
 }
@@ -277,6 +316,7 @@ fn runtime_bubblewrap_shell_audit_records_redacted_plan_metadata() {
     let audit_path = root.join("audit.jsonl");
     let mut service = test_runtime_service();
     configure_path_resolution_bubblewrap(&mut service);
+    configure_available_bubblewrap(&mut service);
     service.set_audit_log(AuditLog::new(crate::security::audit::AuditConfig {
         enabled: true,
         path: audit_path.clone(),
@@ -320,9 +360,257 @@ fn runtime_bubblewrap_shell_audit_records_redacted_plan_metadata() {
     assert_eq!(metadata["sandbox_read_write_grant_count"], "1");
     assert_eq!(metadata["sandbox_network"], "isolated");
     assert_eq!(metadata["sandbox_plan_sha256"], plan_sha256);
+    assert_eq!(metadata["sandbox_effective"], "bubblewrap");
+    assert_eq!(metadata["sandbox_enforcement"], "none");
+    assert_eq!(metadata["network_mode"], "unknown");
+    assert_eq!(metadata["sandbox_reason"], "not-probed");
     assert!(!serialized.contains("/private/workspace/secret.txt"));
     assert!(!serialized.contains("--ro-bind"));
     fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies a configured backend without a compiled plan writes no backend
+/// name and reports unproven enforcement instead of falling back to config.
+#[test]
+fn runtime_bubblewrap_audit_without_plan_omits_backend_name() {
+    let root = temp_root("runtime-bubblewrap-audit-without-plan");
+    let audit_path = root.join("audit.jsonl");
+    let mut service = test_runtime_service();
+    configure_available_bubblewrap(&mut service);
+    service.set_audit_log(AuditLog::new(crate::security::audit::AuditConfig {
+        enabled: true,
+        path: audit_path.clone(),
+        hash_chain: false,
+        required: true,
+    }));
+    let turn = path_resolution_turn();
+    let action = sandbox_audit_action();
+
+    service
+        .append_agent_shell_command_audit(&turn, &action, "pwd", None, None, "sent")
+        .unwrap();
+
+    let record: serde_json::Value =
+        serde_json::from_str(fs::read_to_string(&audit_path).unwrap().trim()).unwrap();
+    let metadata = record["metadata"].as_object().unwrap();
+    assert_eq!(metadata["sandbox_effective"], "bubblewrap");
+    assert!(!metadata.contains_key("sandbox_backend"));
+    assert_eq!(metadata["sandbox_enforcement"], "none");
+    assert_eq!(metadata["network_mode"], "unknown");
+    assert_eq!(metadata["sandbox_reason"], "not-probed");
+    assert!(!metadata.contains_key("sandbox_plan_sha256"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies an unavailable backend executable reports unavailable and never
+/// writes a backend name from configuration alone.
+#[test]
+fn runtime_missing_executable_audit_reports_unavailable() {
+    let root = temp_root("runtime-missing-executable-audit");
+    let audit_path = root.join("audit.jsonl");
+    let mut service = test_runtime_service();
+    let configured =
+        crate::runtime::config::runtime_configured_permissions_from_config(&serde_json::json!({
+            "permissions": {
+                "sandbox": "bubblewrap",
+                "network_policy": "deny",
+                "bubblewrap": {
+                    "executable": "/nonexistent/mez-audit-test-bwrap",
+                    "unavailable": "fail",
+                    "network": "isolated",
+                    "environment": "minimal",
+                    "env_whitelist": []
+                }
+            }
+        }))
+        .unwrap();
+    service
+        .integration
+        .replace_configured_permissions(configured);
+    service.set_audit_log(AuditLog::new(crate::security::audit::AuditConfig {
+        enabled: true,
+        path: audit_path.clone(),
+        hash_chain: false,
+        required: true,
+    }));
+    let turn = path_resolution_turn();
+    let action = sandbox_audit_action();
+
+    service
+        .append_agent_shell_command_audit(&turn, &action, "pwd", None, None, "sent")
+        .unwrap();
+
+    let record: serde_json::Value =
+        serde_json::from_str(fs::read_to_string(&audit_path).unwrap().trim()).unwrap();
+    let metadata = record["metadata"].as_object().unwrap();
+    assert_eq!(metadata["sandbox_effective"], "unavailable");
+    assert!(!metadata.contains_key("sandbox_backend"));
+    assert_eq!(metadata["sandbox_enforcement"], "none");
+    assert_eq!(metadata["network_mode"], "unknown");
+    assert_eq!(metadata["sandbox_reason"], "backend-unavailable");
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies a foreign pane reports remote-unattested in status and audit and
+/// never inherits the configured Bubblewrap backend.
+#[test]
+fn runtime_foreign_pane_reports_remote_unattested() {
+    let root = temp_root("runtime-foreign-pane-audit");
+    let audit_path = root.join("audit.jsonl");
+    let mut service = test_runtime_service();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    configure_available_bubblewrap(&mut service);
+    let primary_pid = service.pane_processes().primary_pid("%1").unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test("%1", None);
+    service
+        .apply_pane_foreground_process_event("%1", "ssh", primary_pid.saturating_add(1), None)
+        .unwrap();
+    assert!(service.begin_uncertified_foreign_shell_boundary_for_current_foreground("%1"));
+
+    let state = service.effective_sandbox_state_for_pane("%1");
+    assert_eq!(state.boundary_str(), "remote-unattested");
+    assert_eq!(state.enforcement_str(), "none");
+    assert_eq!(state.network_mode_str(), "unknown");
+    assert_eq!(state.reason_str(), "remote-shell-unattested");
+
+    service.set_audit_log(AuditLog::new(crate::security::audit::AuditConfig {
+        enabled: true,
+        path: audit_path.clone(),
+        hash_chain: false,
+        required: true,
+    }));
+    let turn = path_resolution_turn();
+    let action = sandbox_audit_action();
+    service
+        .append_agent_shell_command_audit(&turn, &action, "pwd", None, None, "sent")
+        .unwrap();
+    let record: serde_json::Value =
+        serde_json::from_str(fs::read_to_string(&audit_path).unwrap().trim()).unwrap();
+    let metadata = record["metadata"].as_object().unwrap();
+    assert_eq!(metadata["sandbox_effective"], "remote-unattested");
+    assert!(!metadata.contains_key("sandbox_backend"));
+    assert_eq!(metadata["sandbox_reason"], "remote-shell-unattested");
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies shell action results carry only the bounded resolver projection by
+/// fixed keys and never expose argv, paths, or probe output.
+#[test]
+fn runtime_shell_result_carries_bounded_sandbox_effective_fields() {
+    let mut service = test_runtime_service();
+    configure_available_bubblewrap(&mut service);
+    let turn = path_resolution_turn();
+    let action = sandbox_audit_action();
+    let plan = mez_agent::local_action_plan(&action).unwrap().unwrap();
+    let mut result = mez_agent::ActionResult::succeeded(
+        &turn,
+        &action,
+        vec!["ok".to_string()],
+        Some(mez_agent::shell_action_structured_content_json(
+            &action,
+            &plan,
+            Some("pane_shell"),
+            true,
+            serde_json::Value::Null,
+            &[],
+            serde_json::json!({"source": "test"}),
+        )),
+    );
+
+    service.attach_effective_sandbox_to_shell_result(&turn, &action, None, None, &mut result);
+
+    let structured = result.structured_content_json.as_deref().unwrap();
+    let document: serde_json::Value = serde_json::from_str(structured).unwrap();
+    let effective = document["sandbox_effective"].as_object().unwrap();
+    assert_eq!(effective.len(), 4);
+    assert_eq!(effective["execution_boundary"], "bubblewrap");
+    assert_eq!(effective["enforcement"], "none");
+    assert_eq!(effective["network_mode"], "unknown");
+    assert_eq!(effective["reason"], "not-probed");
+    for value in effective.values() {
+        let value = value.as_str().unwrap();
+        assert!(!value.contains('/'), "{value}");
+        assert!(!value.contains(' '), "{value}");
+    }
+
+    let mut failed = mez_agent::ActionResult::failed(
+        &turn,
+        &action,
+        ActionStatus::Failed,
+        "test_failure",
+        "failed",
+    )
+    .unwrap();
+    failed.structured_content_json = Some(mez_agent::shell_action_structured_content_json(
+        &action,
+        &plan,
+        Some("pane_shell"),
+        true,
+        serde_json::Value::Null,
+        &[],
+        serde_json::json!({"source": "test"}),
+    ));
+    service.attach_effective_sandbox_to_shell_result(&turn, &action, None, None, &mut failed);
+    let failed_document: serde_json::Value =
+        serde_json::from_str(failed.structured_content_json.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        failed_document["sandbox_effective"]["execution_boundary"],
+        "bubblewrap"
+    );
+    assert_eq!(failed_document["sandbox_effective"]["reason"], "not-probed");
+}
+
+/// Verifies the sandbox fallback approval discloses the configured intent, the
+/// unenforced retry, and reachable host networking without changing binding.
+#[test]
+fn runtime_sandbox_fallback_approval_discloses_unenforced_host_networking() {
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    configure_path_resolution_bubblewrap(&mut service);
+    assert!(
+        service
+            .offer_sandbox_fallback_approval(
+                "sandbox-disclosure-marker",
+                &turn_id,
+                &action_id,
+                crate::runtime::RuntimeSandboxFallbackAudit {
+                    backend: crate::runtime::SandboxBackend::Bubblewrap,
+                    reason: "pre_payload_failure".to_string(),
+                    proof: "trusted status closed without an exit-code event".to_string(),
+                    partial_effect_warning: false,
+                    approving_client_id: None,
+                },
+            )
+            .unwrap()
+    );
+
+    let execution = service.agent_turn_executions().get(&turn_id).unwrap();
+    let result = execution
+        .action_results
+        .iter()
+        .find(|result| result.action_id == action_id)
+        .unwrap();
+    let disclosure = result
+        .content
+        .iter()
+        .map(|block| block.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        disclosure.contains("the configured bubblewrap intent remains selected"),
+        "{disclosure}"
+    );
+    assert!(disclosure.contains("runs unenforced"), "{disclosure}");
+    assert!(
+        disclosure.contains("can reach host networking"),
+        "{disclosure}"
+    );
+    assert!(!service.sandbox_bypass_active_for_action(&turn_id, &action_id));
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Builds shell-dispatch and retry-result audit records for one approved
@@ -1409,15 +1697,32 @@ fn withheld_implicit_authority_reports_policy_only_without_confinement_claim() {
     let policy_only_boundary = crate::security::sandbox::effective_sandbox_boundary(
         &configured.sandbox,
         service.permission_policy().approval_policy,
+        crate::security::sandbox::SandboxExecutionHost::Pane,
     );
     assert_eq!(policy_only_boundary, "policy-only");
+    let policy_only_state = crate::security::sandbox::effective_sandbox_status(
+        &configured.sandbox,
+        service.permission_policy().approval_policy,
+        crate::security::sandbox::SandboxExecutionHost::Pane,
+    );
+    assert_eq!(policy_only_state.enforcement_str(), "none");
+    assert_eq!(policy_only_state.network_mode_str(), "unenforced");
+    assert_eq!(policy_only_state.reason_str(), "policy-only");
 
     configure_trusted_project_bubblewrap(&mut service);
     let bubblewrap_boundary = crate::security::sandbox::effective_sandbox_boundary(
         &service.configured_permissions().sandbox,
         service.permission_policy().approval_policy,
+        crate::security::sandbox::SandboxExecutionHost::Pane,
     );
-    assert_eq!(bubblewrap_boundary, "bubblewrap");
+    let expected_bubblewrap_boundary = if crate::security::sandbox::sandbox_executable_available(
+        std::path::Path::new("/usr/bin/bwrap"),
+    ) {
+        "bubblewrap"
+    } else {
+        "unavailable"
+    };
+    assert_eq!(bubblewrap_boundary, expected_bubblewrap_boundary);
     assert_eq!(
         service.primary_path_scope_status("%1").provenance,
         "project-trust-rejected"
@@ -1766,6 +2071,11 @@ fn runtime_host_access_does_not_enforce_network_policy() {
     assert_eq!(execution.action_results[0].status, ActionStatus::Running);
     assert!(execution.action_results[0].error.is_none());
     assert_eq!(service.running_shell_transactions_for_tests().len(), 1);
+    let sandbox_state = service.effective_sandbox_state_for_pane("%1");
+    assert_eq!(sandbox_state.boundary_str(), "host-bypass");
+    assert_eq!(sandbox_state.enforcement_str(), "none");
+    assert_eq!(sandbox_state.network_mode_str(), "unenforced");
+    assert_eq!(sandbox_state.reason_str(), "host-access-bypass");
     service.terminate_all_pane_processes().unwrap();
 }
 
@@ -2097,6 +2407,797 @@ fn runtime_sandbox_fallback_bypass_is_exact_and_cleared_on_settlement() {
 
     service.clear_sandbox_bypass_for_action("turn-1", "action-1");
     assert!(!service.activate_sandbox_bypass_after_approval("turn-1", "action-1"));
+}
+
+/// Verifies a settled approved one-shot unsandboxed retry reports its true
+/// effective state instead of falling through to an unproven backend claim.
+#[test]
+fn runtime_settled_sandbox_bypass_reports_policy_only_effective_state() {
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    configure_available_bubblewrap(&mut service);
+    assert!(
+        service
+            .offer_sandbox_fallback_approval(
+                "sandbox-bypass-settlement-marker",
+                &turn_id,
+                &action_id,
+                crate::runtime::RuntimeSandboxFallbackAudit {
+                    backend: crate::runtime::SandboxBackend::Bubblewrap,
+                    reason: "pre_payload_failure".to_string(),
+                    proof: "trusted status closed without an exit-code event".to_string(),
+                    partial_effect_warning: false,
+                    approving_client_id: None,
+                },
+            )
+            .unwrap()
+    );
+    service.grant_sandbox_bypass_after_approval(&turn_id, &action_id);
+    assert!(service.activate_sandbox_bypass_after_approval(&turn_id, &action_id));
+    // The fallback offer blocked the action and replaced its result, so restore
+    // the running result the approved resume dispatches from.
+    {
+        let execution = service
+            .agent_turn_executions_mut()
+            .get_mut(&turn_id)
+            .unwrap();
+        execution.action_results[0].status = ActionStatus::Running;
+        execution.terminal_state = AgentTurnState::Running;
+    }
+    // Register the unwrapped pane transaction an approved bypass dispatches:
+    // no sandbox plan is retained, mirroring dispatch with sandbox_bypassed.
+    let marker = "sandbox-bypass-settlement-marker".to_string();
+    service.running_shell_transactions_mut_for_tests().insert(
+        marker.clone(),
+        RunningShellTransactionRef {
+            turn_id: turn_id.clone(),
+            kind: RunningShellTransactionKind::AgentAction {
+                action_id: action_id.clone(),
+            },
+            pane_id: "%1".to_string(),
+            command: "env".to_string(),
+            started_at_unix_ms: 0,
+            timeout_ms: None,
+            pending_input_payload: None,
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+    );
+    assert!(!service.shell_transaction_is_sandboxed_for_tests(&marker));
+    // The synthetic fixture has no owning assistant execution block, so the
+    // settlement's transcript commit reports a context semantic violation after
+    // the action result and bounded sandbox projection are already stored.
+    let _ =
+        service.observe_agent_shell_transaction_end("%1", &marker, &turn_id, "agent-%1", "%1", 0);
+
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .unwrap();
+    let execution = service.agent_turn_executions().get(&turn_id).unwrap();
+    assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
+    let structured = execution.action_results[0]
+        .structured_content_json
+        .as_deref()
+        .expect("the settled result must carry structured content");
+    let document: serde_json::Value = serde_json::from_str(structured).unwrap();
+    let effective = document["sandbox_effective"]
+        .as_object()
+        .expect("the settled result must carry the bounded sandbox projection");
+    assert_eq!(effective.len(), 4);
+    assert_eq!(effective["execution_boundary"], "policy-only");
+    assert_eq!(effective["enforcement"], "none");
+    assert_eq!(effective["network_mode"], "unenforced");
+    assert_eq!(effective["reason"], "sandbox-bypass-approved");
+    assert!(!service.sandbox_bypass_active_for_action(&turn_id, &action_id));
+
+    // The ordinary sandboxed pane path still reports the configured backend
+    // without inheriting the one-shot bypass.
+    let evaluation = execution.action_results[0].permission_evaluation.clone();
+    let action = execution
+        .response
+        .action_batch
+        .as_ref()
+        .unwrap()
+        .actions
+        .first()
+        .unwrap()
+        .clone();
+    let ordinary =
+        service.effective_sandbox_state_for_action(&turn, &action, None, evaluation.as_deref());
+    assert_eq!(ordinary.boundary_str(), "bubblewrap");
+    assert_eq!(ordinary.enforcement_str(), "none");
+    assert_eq!(ordinary.network_mode_str(), "unknown");
+    assert_eq!(ordinary.reason_str(), "not-probed");
+
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Builds one unwrapped pane transaction for approved-bypass failure tests.
+fn sandbox_bypass_settlement_transaction(
+    turn_id: &str,
+    action_id: &str,
+) -> RunningShellTransactionRef {
+    RunningShellTransactionRef {
+        turn_id: turn_id.to_string(),
+        kind: RunningShellTransactionKind::AgentAction {
+            action_id: action_id.to_string(),
+        },
+        pane_id: "%1".to_string(),
+        command: "env".to_string(),
+        started_at_unix_ms: 0,
+        timeout_ms: None,
+        pending_input_payload: None,
+        observed_output_bytes: 0,
+        observed_output_preview: String::new(),
+        observed_output_truncated: false,
+    }
+}
+
+/// Offers, grants, and activates one approved one-shot unsandboxed retry.
+fn arm_sandbox_bypass_for_action(
+    service: &mut RuntimeSessionService,
+    turn_id: &str,
+    action_id: &str,
+    marker: &str,
+) {
+    assert!(
+        service
+            .offer_sandbox_fallback_approval(
+                marker,
+                turn_id,
+                action_id,
+                crate::runtime::RuntimeSandboxFallbackAudit {
+                    backend: crate::runtime::SandboxBackend::Bubblewrap,
+                    reason: "pre_payload_failure".to_string(),
+                    proof: "trusted status closed without an exit-code event".to_string(),
+                    partial_effect_warning: false,
+                    approving_client_id: None,
+                },
+            )
+            .unwrap()
+    );
+    service.grant_sandbox_bypass_after_approval(turn_id, action_id);
+    assert!(service.activate_sandbox_bypass_after_approval(turn_id, action_id));
+}
+
+/// Returns the bounded sandbox projection one shell result reports.
+fn bounded_sandbox_projection(result: &mez_agent::ActionResult) -> serde_json::Value {
+    let structured = result
+        .structured_content_json
+        .as_deref()
+        .expect("the shell result must carry structured content");
+    let document: serde_json::Value = serde_json::from_str(structured).unwrap();
+    let effective = document["sandbox_effective"]
+        .as_object()
+        .expect("the shell result must carry the bounded sandbox projection");
+    assert_eq!(effective.len(), 4);
+    serde_json::Value::Object(effective.clone())
+}
+
+/// Asserts one settled result carries exactly the bounded projection of an
+/// approved unsandboxed retry rather than the configured backend.
+fn assert_policy_only_sandbox_bypass_result(result: &mez_agent::ActionResult) {
+    let effective = bounded_sandbox_projection(result);
+    assert_eq!(effective["execution_boundary"], "policy-only");
+    assert_eq!(effective["enforcement"], "none");
+    assert_eq!(effective["network_mode"], "unenforced");
+    assert_eq!(effective["reason"], "sandbox-bypass-approved");
+}
+
+/// Verifies a failed shell transaction settlement reports the approved
+/// one-shot unsandboxed retry it settled under instead of the configured
+/// backend.
+#[test]
+fn runtime_failed_shell_transaction_settlement_reports_policy_only_effective_state() {
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    configure_available_bubblewrap(&mut service);
+    arm_sandbox_bypass_for_action(
+        &mut service,
+        &turn_id,
+        &action_id,
+        "sandbox-bypass-settlement-failure-marker",
+    );
+    // The fallback offer blocked the action and replaced its result, so restore
+    // the running result the approved resume dispatches from.
+    {
+        let execution = service
+            .agent_turn_executions_mut()
+            .get_mut(&turn_id)
+            .unwrap();
+        execution.action_results[0].status = ActionStatus::Running;
+        execution.terminal_state = AgentTurnState::Running;
+    }
+    let transaction_ref = sandbox_bypass_settlement_transaction(&turn_id, &action_id);
+    // The synthetic fixture registers no agent turn context, so the settlement's
+    // commit_settled_action_results_context step fails with "runtime agent turn
+    // context is unavailable" after the failed result and its bounded sandbox
+    // projection are already stored.
+    let _ = service.fail_running_shell_transaction_action(
+        &transaction_ref,
+        "sandbox-bypass-settlement-failure-marker",
+        crate::runtime::RuntimeShellTransactionActionFailure {
+            action_id: action_id.clone(),
+            status: ActionStatus::Failed,
+            code: "pane_input_write_failed".to_string(),
+            message: "pane input write failed while sending shell action: test fixture".to_string(),
+            sent_to_pane: false,
+            terminal_observation: serde_json::json!({"state": "failed"}),
+            trace_reason: "shell_transaction_runtime_failure".to_string(),
+        },
+    );
+
+    let execution = service.agent_turn_executions().get(&turn_id).unwrap();
+    assert_eq!(execution.action_results[0].status, ActionStatus::Failed);
+    assert_policy_only_sandbox_bypass_result(&execution.action_results[0]);
+    assert!(!service.sandbox_bypass_active_for_action(&turn_id, &action_id));
+
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a batched shell transaction failure settlement reports the approved
+/// one-shot unsandboxed retry for every action it settles.
+#[test]
+fn runtime_failed_shell_transaction_batch_settlement_reports_policy_only_effective_state() {
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    configure_available_bubblewrap(&mut service);
+    let waiter_action_id = "sandbox-fallback-batch-waiter".to_string();
+    add_sandbox_fallback_probe_waiter(&mut service, &turn_id, &waiter_action_id);
+    arm_sandbox_bypass_for_action(
+        &mut service,
+        &turn_id,
+        &action_id,
+        "sandbox-bypass-batch-lead-marker",
+    );
+    arm_sandbox_bypass_for_action(
+        &mut service,
+        &turn_id,
+        &waiter_action_id,
+        "sandbox-bypass-batch-waiter-marker",
+    );
+    // The fallback offers blocked both actions and replaced their results, so
+    // restore the running results the approved resume dispatches from.
+    {
+        let execution = service
+            .agent_turn_executions_mut()
+            .get_mut(&turn_id)
+            .unwrap();
+        for result in &mut execution.action_results {
+            result.status = ActionStatus::Running;
+        }
+        execution.terminal_state = AgentTurnState::Running;
+    }
+    let settlement_failure =
+        |action_id: &str| crate::runtime::RuntimeShellTransactionActionFailure {
+            action_id: action_id.to_string(),
+            status: ActionStatus::Failed,
+            code: "pane_input_write_failed".to_string(),
+            message: "pane input write failed while sending shell action: test fixture".to_string(),
+            sent_to_pane: false,
+            terminal_observation: serde_json::json!({"state": "failed"}),
+            trace_reason: "shell_transaction_runtime_failure".to_string(),
+        };
+    let transaction_ref = sandbox_bypass_settlement_transaction(&turn_id, &action_id);
+    // The synthetic fixture registers no agent turn context, so the settlement's
+    // commit_settled_action_results_context step fails with "runtime agent turn
+    // context is unavailable" after the failed results and their bounded sandbox
+    // projections are already stored.
+    let _ = service.fail_running_shell_transaction_actions(
+        &transaction_ref,
+        "sandbox-bypass-batch-marker",
+        vec![
+            settlement_failure(&action_id),
+            settlement_failure(&waiter_action_id),
+        ],
+    );
+
+    let execution = service.agent_turn_executions().get(&turn_id).unwrap();
+    for (index, candidate) in [&action_id, &waiter_action_id].into_iter().enumerate() {
+        assert_eq!(execution.action_results[index].action_id, *candidate);
+        assert_eq!(execution.action_results[index].status, ActionStatus::Failed);
+        assert_policy_only_sandbox_bypass_result(&execution.action_results[index]);
+        assert!(!service.sandbox_bypass_active_for_action(&turn_id, candidate));
+    }
+
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Forces the dispatcher's pane-not-ready terminal result for one stored
+/// running shell action.
+///
+/// The dispatcher only reports `pane_not_ready` for a readiness state it will
+/// not write into, and only while the pane foreground group is not the certified
+/// shell, so the fixture moves the pane into that pair of conditions.
+fn force_pane_not_ready_dispatch(service: &mut RuntimeSessionService) {
+    let primary_pid = service
+        .pane_processes()
+        .primary_pid("%1")
+        .expect("the dispatch fixture keeps a live pane shell");
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test("%1", Some(primary_pid.saturating_add(1)));
+    service.set_pane_readiness("%1", PaneReadinessState::FullScreen);
+}
+
+/// Registers the owning assistant execution for one stored dispatch fixture.
+///
+/// A dispatch-time terminal result settles into the turn chronology, which
+/// rejects evidence whose assistant execution is not part of that chronology.
+fn register_dispatch_fixture_chronology(service: &mut RuntimeSessionService, turn_id: &str) {
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .expect("the dispatch fixture keeps its turn");
+    let execution = service
+        .agent_turn_executions()
+        .get(turn_id)
+        .cloned()
+        .expect("the dispatch fixture keeps its execution");
+    append_test_execution_assistant_context(service, &turn, &execution);
+}
+
+/// Verifies a dispatch-time terminal failure reports the approved one-shot
+/// unsandboxed retry that was armed when the dispatcher refused the pane,
+/// instead of the configured backend a later settlement-time read would report
+/// once the bypass marker and fallback audit entry are consumed.
+#[test]
+fn runtime_dispatch_failure_reports_armed_sandbox_bypass_effective_state() {
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    configure_available_bubblewrap(&mut service);
+    arm_sandbox_bypass_for_action(
+        &mut service,
+        &turn_id,
+        &action_id,
+        "sandbox-bypass-dispatch-failure-marker",
+    );
+    // The fallback offer blocked the action and replaced its result, so restore
+    // the running result the approved resume dispatches from.
+    {
+        let execution = service
+            .agent_turn_executions_mut()
+            .get_mut(&turn_id)
+            .unwrap();
+        execution.action_results[0].status = ActionStatus::Running;
+        execution.terminal_state = AgentTurnState::Running;
+    }
+    force_pane_not_ready_dispatch(&mut service);
+    register_dispatch_fixture_chronology(&mut service, &turn_id);
+
+    let execution = service
+        .dispatch_stored_running_shell_actions(&turn_id)
+        .unwrap()
+        .expect("the stored running action should be dispatched");
+    assert_eq!(execution.action_results[0].status, ActionStatus::Failed);
+    assert_eq!(
+        execution.action_results[0]
+            .error
+            .as_ref()
+            .map(|error| error.code.as_str()),
+        Some("pane_not_ready")
+    );
+    assert_policy_only_sandbox_bypass_result(&execution.action_results[0]);
+
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a dispatch-time terminal failure that never entered an approved
+/// unsandboxed retry reports the configured backend with a plan-less
+/// projection instead of claiming enforcement nothing proved.
+#[test]
+fn runtime_dispatch_failure_reports_configured_backend_without_a_bypass() {
+    let (mut service, turn_id, _) = sandbox_fallback_execution_service();
+    configure_available_bubblewrap(&mut service);
+    force_pane_not_ready_dispatch(&mut service);
+    register_dispatch_fixture_chronology(&mut service, &turn_id);
+
+    let execution = service
+        .dispatch_stored_running_shell_actions(&turn_id)
+        .unwrap()
+        .expect("the stored running action should be dispatched");
+    assert_eq!(execution.action_results[0].status, ActionStatus::Failed);
+    let effective = bounded_sandbox_projection(&execution.action_results[0]);
+    assert_eq!(effective["execution_boundary"], "bubblewrap");
+    assert_eq!(effective["enforcement"], "none");
+    assert_eq!(effective["network_mode"], "unknown");
+    assert_eq!(effective["reason"], "not-probed");
+
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a dispatch-time terminal result for a semantic patch action carries
+/// the same bounded sandbox projection its shell sibling reports.
+///
+/// The dispatch-time terminal boundaries resolve their sandbox projection
+/// before the terminal result is stored. Existing coverage only drove shell
+/// payloads through those boundaries, so this regression pins the
+/// `apply_patch` payload to the same four conservative keys.
+#[test]
+fn runtime_dispatch_time_apply_patch_terminal_reports_effective_sandbox_boundary() {
+    let (mut service, turn_id, action_id) = apply_patch_dispatch_execution_service();
+    force_pane_not_ready_dispatch(&mut service);
+    register_dispatch_fixture_chronology(&mut service, &turn_id);
+
+    let execution = service
+        .dispatch_stored_running_shell_actions(&turn_id)
+        .unwrap()
+        .expect("the stored running patch action should be dispatched");
+    assert_eq!(execution.action_results[0].action_id, action_id);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Failed);
+    assert_eq!(
+        execution.action_results[0]
+            .error
+            .as_ref()
+            .map(|error| error.code.as_str()),
+        Some("pane_not_ready")
+    );
+    let effective = bounded_sandbox_projection(&execution.action_results[0]);
+    assert_eq!(effective["execution_boundary"], "policy-only");
+    assert_eq!(effective["enforcement"], "none");
+    assert_eq!(effective["network_mode"], "unenforced");
+    assert_eq!(effective["reason"], "policy-only");
+
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a dispatch-time denial for a semantic patch action blocked behind a
+/// persistent uncertified foreground program carries the bounded sandbox
+/// projection its shell sibling reports.
+///
+/// The `foreground_process_blocked_dispatch` terminal resolves its sandbox
+/// projection before the denial is stored. The shell sibling only drove a
+/// `ShellCommand` payload through that boundary, so this regression pins the
+/// `apply_patch` payload to the same four conservative keys.
+#[test]
+fn runtime_dispatch_time_apply_patch_denial_reports_effective_sandbox_boundary() {
+    let (mut service, turn_id, action_id) = apply_patch_dispatch_execution_service();
+    force_foreground_blocked_dispatch(&mut service, &turn_id, &action_id);
+    register_dispatch_fixture_chronology(&mut service, &turn_id);
+
+    let execution = service
+        .dispatch_stored_running_shell_actions(&turn_id)
+        .unwrap()
+        .expect("the stored running patch action should be dispatched");
+    assert_eq!(execution.action_results[0].action_id, action_id);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Denied);
+    assert_eq!(
+        execution.action_results[0]
+            .error
+            .as_ref()
+            .map(|error| error.code.as_str()),
+        Some("foreground_process_blocked_dispatch")
+    );
+    let effective = bounded_sandbox_projection(&execution.action_results[0]);
+    assert_eq!(effective["execution_boundary"], "policy-only");
+    assert_eq!(effective["enforcement"], "none");
+    assert_eq!(effective["network_mode"], "unenforced");
+    assert_eq!(effective["reason"], "policy-only");
+
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Forces the dispatcher's uncertified-foreground denial for one stored running
+/// patch action.
+///
+/// The dispatcher only fails closed once the pane is busy, its foreground
+/// process group is not the certified shell, and the bounded recovery loop has
+/// confirmed enough fresh foreign foreground observations. The fixture records
+/// those confirmations through the same counter the recovery observation
+/// transition fills, so the denial is reached without replaying four rounds of
+/// pane foreground observation transport.
+fn force_foreground_blocked_dispatch(
+    service: &mut RuntimeSessionService,
+    turn_id: &str,
+    action_id: &str,
+) {
+    let primary_pid = service
+        .pane_processes()
+        .primary_pid("%1")
+        .expect("the dispatch fixture keeps a live pane shell");
+    let foreign_process_group = primary_pid.saturating_add(1);
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test("%1", Some(foreign_process_group));
+    service.set_pane_readiness("%1", PaneReadinessState::Busy);
+    for expected_confirmations in 1..=3 {
+        assert_eq!(
+            service.record_pending_shell_dispatch_blocked_recovery_observation(
+                turn_id,
+                action_id,
+                primary_pid,
+                0,
+                foreign_process_group,
+            ),
+            expected_confirmations
+        );
+    }
+}
+
+/// Proves the Bubblewrap capability one semantic patch preflight requires.
+///
+/// The dispatcher resolves path authority and starts the no-forwarding
+/// capability probe for the patch action instead of dispatching it. The fixture
+/// parses that probe's expected stdout exactly as a settled probe would and
+/// records the proven capability, so the next dispatch resumes the same action
+/// under an applied Bubblewrap boundary without replaying the probe transport,
+/// which would otherwise reset pane readiness and re-dispatch the action.
+fn prove_bubblewrap_capability_for_patch(service: &mut RuntimeSessionService, turn_id: &str) {
+    let in_flight = service
+        .dispatch_stored_running_shell_actions(turn_id)
+        .unwrap()
+        .expect("the stored running patch action should be offered to the pane");
+    assert_eq!(in_flight.action_results[0].status, ActionStatus::Running);
+    let (_marker, transaction) = take_bubblewrap_probe_transaction(service);
+    let RunningShellTransactionKind::BubblewrapCapabilityProbe {
+        cache_key,
+        probe_plan,
+        ..
+    } = transaction.kind.clone()
+    else {
+        unreachable!();
+    };
+    let capability = crate::security::sandbox::parse_bubblewrap_capability_probe(
+        &cache_key.pane_id,
+        &cache_key.pane_environment_signature,
+        cache_key.config_generation,
+        &probe_plan,
+        0,
+        probe_plan.expected_stdout,
+    )
+    .unwrap();
+    service.record_bubblewrap_capability(*cache_key, capability);
+}
+
+/// Verifies a dispatch-time terminal result for a semantic patch action reports
+/// the Bubblewrap boundary that applied to its permission policy.
+///
+/// Unlike a shell payload, a semantic patch action resolves Bubblewrap path
+/// authority and settles its no-forwarding capability probe before it reaches a
+/// dispatch-time terminal, so this variant needs the write-scope and
+/// path-resolution fixture. The stored terminal result must still carry only the
+/// bounded four-key projection.
+#[test]
+fn runtime_dispatch_time_apply_patch_terminal_reports_applied_bubblewrap_boundary() {
+    let root = temp_root("runtime-dispatch-patch-bubblewrap-boundary");
+    fs::create_dir_all(&root).unwrap();
+    let (mut service, turn_id, action_id) = apply_patch_dispatch_execution_service();
+    configure_available_bubblewrap(&mut service);
+    service.set_pane_environment_signature_for_tests("%1", path_resolution_environment(&root));
+    cache_path_resolution_maximum(&mut service, &root);
+    // Both the probe settlement and the readiness terminal settle action
+    // results, so the turn chronology must already own the assistant execution
+    // before the patch action is offered to the pane.
+    register_dispatch_fixture_chronology(&mut service, &turn_id);
+    prove_bubblewrap_capability_for_patch(&mut service, &turn_id);
+
+    force_pane_not_ready_dispatch(&mut service);
+    let execution = service
+        .dispatch_stored_running_shell_actions(&turn_id)
+        .unwrap()
+        .expect("the stored running patch action should be dispatched");
+    assert_eq!(execution.action_results[0].action_id, action_id);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Failed);
+    assert_eq!(
+        execution.action_results[0]
+            .error
+            .as_ref()
+            .map(|error| error.code.as_str()),
+        Some("pane_not_ready")
+    );
+    let effective = bounded_sandbox_projection(&execution.action_results[0]);
+    assert_eq!(effective["execution_boundary"], "bubblewrap");
+    assert_eq!(effective["enforcement"], "none");
+    assert_eq!(effective["network_mode"], "unknown");
+    assert_eq!(effective["reason"], "not-probed");
+
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies the pre-shell hook block terminal reports the effective boundary
+/// the retained action settled under.
+///
+/// A failing blocking program hook reaches
+/// `fail_pending_shell_action_for_hook_block`, which owns the hook-blocked
+/// denial for the async completion, hook transaction, and expiry callers. The
+/// stored terminal result must carry the same bounded four-key projection as
+/// its dispatch-time siblings rather than structured hook content alone.
+#[test]
+fn runtime_dispatch_time_apply_patch_terminal_reports_hook_blocked_boundary() {
+    let (mut service, turn_id, action_id) = apply_patch_dispatch_execution_service();
+    // The terminal settles into the turn chronology, which rejects evidence
+    // whose assistant execution is not part of that chronology.
+    register_dispatch_fixture_chronology(&mut service, &turn_id);
+    // A sibling action left blocked keeps the turn open: the hook-blocked
+    // denial alone settles the execution out of the running map before the
+    // stored terminal result can be read.
+    add_blocked_sibling_action(&mut service, &turn_id);
+    service.use_hook_effect_adapter();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            // Replacing the fixture layers must restate the configured pane
+            // boundary, or the resolver falls back to the host backend.
+            text: "[permissions]\nsandbox = \"policy-only\"\n\n[hooks.guard]\nevent = \"pre_shell_command\"\nprogram = \"/bin/sh\"\nargs = [\"-c\", \"false\"]\non_failure = \"block\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    let decision = service
+        .run_configured_pre_action_hooks_with_continuation(
+            HookEvent::PreShellCommand,
+            r#"{"command":"apply patch guarded"}"#,
+            Some(crate::runtime::PendingFocusedShellHookContinuation {
+                turn_id: turn_id.clone(),
+                action_id: action_id.clone(),
+                phase_command_sha256: "phase-digest".to_string(),
+            }),
+        )
+        .unwrap();
+    assert_eq!(
+        decision,
+        crate::runtime::RuntimeHookPipelineDecision::Pending
+    );
+    let mut effects = service.drain_program_hook_transition().side_effects;
+    assert_eq!(effects.len(), 1);
+    let RuntimeSideEffect::RunProgramHook {
+        plan,
+        triggering_event_completed,
+        continuation: pending,
+    } = effects.pop().unwrap()
+    else {
+        panic!("a blocking program hook should produce a hook-worker side effect");
+    };
+    assert!(!triggering_event_completed);
+    let pending = pending.expect("the blocking program hook should retain its continuation");
+    let result = crate::integrations::hooks::HookExecutionResult {
+        hook_id: plan.hook_id.clone(),
+        event: plan.event,
+        status: crate::integrations::hooks::HookExecutionStatus::Failed,
+        exit_code: Some(1),
+        stdout: String::new(),
+        stderr: String::new(),
+        stdout_bytes: 0,
+        stderr_bytes: 0,
+        stdout_truncated: false,
+        stderr_truncated: false,
+        failure: Some(crate::integrations::hooks::HookFailure {
+            hook_id: plan.hook_id.clone(),
+            event: plan.event,
+            kind: crate::integrations::hooks::HookFailureKind::ExitNonZero,
+            message: "guard rejected the retained action".to_string(),
+            retryable: false,
+        }),
+    };
+
+    service
+        .apply_hook_transition(crate::runtime::AsyncHookEvent::ProgramCompleted {
+            plan,
+            result: Box::new(result),
+            triggering_event_completed: false,
+            continuation: Some(pending),
+        })
+        .unwrap();
+
+    let execution = service
+        .agent_turn_executions()
+        .get(&turn_id)
+        .cloned()
+        .expect("the hook-blocked terminal keeps the fixture execution");
+    assert_eq!(execution.action_results[0].action_id, action_id);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Denied);
+    assert_eq!(
+        execution.action_results[0]
+            .error
+            .as_ref()
+            .map(|error| error.code.as_str()),
+        Some("hook_blocked")
+    );
+    let effective = bounded_sandbox_projection(&execution.action_results[0]);
+    assert_eq!(effective["execution_boundary"], "policy-only");
+    assert_eq!(effective["enforcement"], "none");
+    assert_eq!(effective["network_mode"], "unenforced");
+    assert_eq!(effective["reason"], "policy-only");
+    assert!(
+        service
+            .integration
+            .pending_program_hook_continuations()
+            .is_empty()
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Adds one blocked sibling action to a running dispatch fixture turn.
+///
+/// A hook-blocked denial carries an error status, so the resulting failed turn
+/// would settle the execution out of the running map. An unrelated blocked
+/// approval keeps the turn open and the stored terminal result readable, which
+/// is what a genuinely pending approval does.
+fn add_blocked_sibling_action(service: &mut RuntimeSessionService, turn_id: &str) {
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .expect("the dispatch fixture keeps its turn");
+    let mut sibling = service
+        .agent_turn_executions()
+        .get(turn_id)
+        .and_then(|execution| execution.response.action_batch.as_ref())
+        .and_then(|batch| batch.actions.first())
+        .cloned()
+        .expect("the dispatch fixture keeps its action batch");
+    sibling.id = "sandbox-fallback-patch-sibling".to_string();
+    let result = mez_agent::ActionResult::blocked(
+        &turn,
+        &sibling,
+        vec!["blocked pending approval".to_string()],
+        serde_json::json!({"state":"pending"}).to_string(),
+    );
+    let execution = service
+        .agent_turn_executions_mut()
+        .get_mut(turn_id)
+        .expect("the dispatch fixture keeps its execution");
+    execution
+        .response
+        .action_batch
+        .as_mut()
+        .expect("the dispatch fixture keeps its action batch")
+        .actions
+        .push(sibling);
+    execution.action_results.push(result);
+}
+
+/// Builds a live prompt turn whose sole `apply_patch` action awaits dispatch.
+///
+/// The pane-not-ready siblings drive a shell payload through the same
+/// dispatcher. A semantic patch action needs no Bubblewrap write-scope setup
+/// while the fixture stays policy-only, because `apply_patch` only resolves
+/// sandbox path authority when a backend applies to the permission policy.
+fn apply_patch_dispatch_execution_service() -> (RuntimeSessionService, String, String) {
+    let (mut service, turn_id, _) = sandbox_fallback_execution_service();
+    let action_id = "sandbox-fallback-patch".to_string();
+    let action = mez_agent::AgentAction {
+        id: action_id.clone(),
+
+        payload: mez_agent::AgentActionPayload::ApplyPatch {
+            patch: "*** Begin Patch\n*** Add File: dispatch-boundary-note.txt\n+bounded sandbox projection\n*** End Patch"
+                .to_string(),
+            strip: None,
+        },
+    };
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .expect("the dispatch fixture keeps its turn");
+    let mut result = mez_agent::ActionResult::running(&turn, &action, Vec::new(), None);
+    // The shell fixture already completed permission approval, so the patch
+    // action reuses that settled evaluation instead of re-entering admission.
+    result.permission_evaluation = Some(Box::new(sandbox_fallback_allowed_evaluation()));
+    let execution = service
+        .agent_turn_executions_mut()
+        .get_mut(&turn_id)
+        .expect("the dispatch fixture keeps its execution");
+    execution.response.action_batch = Some(mez_agent::MaapBatch {
+        rationale: "exercise the dispatch-time patch boundary".to_string(),
+
+        actions: vec![action],
+    });
+    execution.action_results = vec![result];
+    (service, turn_id, action_id)
 }
 
 /// Builds one settled Bubblewrap payload transaction for assessment tests.

@@ -105,7 +105,15 @@ fn runtime_shell_transaction_observation_retains_trailing_bubblewrap_status() {
     );
     service.register_sandboxed_shell_transaction_backend(
         "marker-1",
-        crate::runtime::SandboxBackend::Bubblewrap,
+        &crate::security::sandbox::SandboxAuditSummary {
+            backend: crate::runtime::SandboxBackend::Bubblewrap,
+            runtime_profile_version: crate::security::sandbox::BUBBLEWRAP_RUNTIME_PROFILE_VERSION,
+            authority_source: crate::security::sandbox::SandboxAuthoritySource::Maximum,
+            read_only_grant_count: 1,
+            read_write_grant_count: 0,
+            network: crate::runtime::SandboxNetworkMode::Isolated,
+            plan_sha256: "f".repeat(64),
+        },
     );
     let encoded_bytes = mez_agent::SHELL_OUTPUT_BASE64_MAX_RAW_BYTES
         .div_ceil(3)
@@ -2017,6 +2025,28 @@ fn runtime_managed_bash_admission_timeout_creates_no_shell_work() {
     process.terminate(Duration::from_millis(100)).unwrap();
 }
 
+/// Verifies a cancelled interrupt boundary cannot survive into a child session.
+///
+/// Admission is not gated on the cancelled marker, so a hide-then-show sequence
+/// can admit a child shell while the cancelled record is still outstanding. The
+/// new child's own prompt boundary must replace the stale record instead of the
+/// child's output settling it as if the cancelled admission were still current.
+#[test]
+fn cancelled_input_clear_boundary_does_not_survive_child_admission() {
+    let mut service = test_runtime_service();
+    service.begin_agent_subshell_input_clear("%1");
+    assert!(service.cancel_pending_agent_subshell_input_clear("%1"));
+    assert!(service.agent_subshell_input_clear_is_cancelled("%1"));
+
+    service.enter_agent_subshell("%1");
+
+    assert!(
+        !service.agent_subshell_input_clear_is_cancelled("%1"),
+        "a new child session must replace a stale cancelled boundary"
+    );
+    assert!(service.agent_subshell_is_active("%1"));
+}
+
 /// Verifies that a live POSIX shell discards an unsubmitted process draft
 /// before agent-shell admission instead of concatenating generated transport
 /// with the user's command.
@@ -2088,6 +2118,31 @@ fn runtime_posix_dirty_prompt_is_interrupted_before_agent_admission() {
         .unwrap();
     assert!(hide.contains("visibility=hidden"), "{hide}");
     assert!(!service.agent_subshell_is_active("%1"));
+    assert!(
+        service.agent_subshell_input_clear_is_cancelled("%1"),
+        "cancelled admission must retain the delivered interrupt boundary"
+    );
+
+    // Hide cancels admission before any child exists, so the parent prompt is
+    // restored only by the interrupt the show command already wrote. A POSIX
+    // shell discards the draft and repaints its prompt only after it has handled
+    // that interrupt, so the cancelled admission keeps the boundary outstanding
+    // until the parent prompt is observed. Input written while the boundary is
+    // outstanding still belongs to the interrupted line and is discarded with
+    // the draft, so sequence on the product's own boundary evidence instead of
+    // assuming the hide command already settled the shell.
+    let boundary_deadline = Instant::now() + Duration::from_secs(15);
+    while service.agent_subshell_input_clear_is_cancelled("%1")
+        && Instant::now() < boundary_deadline
+    {
+        let _ = service.poll_pane_outputs(8192).unwrap();
+        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+    }
+    assert!(
+        !service.agent_subshell_input_clear_is_cancelled("%1"),
+        "the interrupted POSIX parent prompt was not confirmed before fresh input; readiness={:?}",
+        service.pane_readiness_state("%1")
+    );
 
     let responsive_side_effect = root.join("post-interrupt-parent-responsive");
     service

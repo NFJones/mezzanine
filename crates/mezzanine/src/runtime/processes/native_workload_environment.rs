@@ -12,8 +12,8 @@
 //! The guarantee is composition, not credential non-possession: a value the
 //! pane root itself carries, including one the pane inherited when it was
 //! created, is authoritative pane evidence and is forwarded by design. Pane
-//! creation owns its own environment-inheritance boundary, which this module
-//! does not filter.
+//! creation owns its own environment-inheritance boundary in
+//! `pane_creation_environment.rs`, which this module does not filter.
 //!
 //! Composition rules:
 //! - Every entry key MUST be a portable environment name
@@ -51,13 +51,13 @@ use crate::error::{MezError, Result};
 /// evidence nor the declared ambient forwarding source supplies `PATH`.
 pub(crate) const NATIVE_WORKLOAD_PATH_FALLBACK: &str = "/usr/local/bin:/usr/bin:/bin";
 /// Maximum validated entries accepted for one composed native environment.
-const NATIVE_WORKLOAD_MAX_ENTRIES: usize = 512;
+pub(crate) const NATIVE_WORKLOAD_MAX_ENTRIES: usize = 512;
 /// Maximum validated variable-name bytes.
 const NATIVE_WORKLOAD_MAX_NAME_BYTES: usize = 128;
 /// Maximum validated variable-value bytes.
 const NATIVE_WORKLOAD_MAX_VALUE_BYTES: usize = 16 * 1024;
 /// Maximum aggregate validated value bytes for one composed environment.
-const NATIVE_WORKLOAD_MAX_TOTAL_VALUE_BYTES: usize = 256 * 1024;
+pub(crate) const NATIVE_WORKLOAD_MAX_TOTAL_VALUE_BYTES: usize = 256 * 1024;
 
 /// Which launch role consumes one composed environment bucket.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -622,7 +622,7 @@ fn environment_entry_is_valid(entry: &RawEnvironmentEntry) -> bool {
 }
 
 /// Returns true when one raw key is a portable environment name.
-fn portable_environment_key(key: &[u8]) -> bool {
+pub(crate) fn portable_environment_key(key: &[u8]) -> bool {
     !key.is_empty()
         && key.len() <= NATIVE_WORKLOAD_MAX_NAME_BYTES
         && (key[0] == b'_' || key[0].is_ascii_alphabetic())
@@ -632,7 +632,7 @@ fn portable_environment_key(key: &[u8]) -> bool {
 }
 
 /// Returns true when one raw value stays inside the documented value budget.
-fn environment_value_is_valid(value: &[u8]) -> bool {
+pub(crate) fn environment_value_is_valid(value: &[u8]) -> bool {
     value.len() <= NATIVE_WORKLOAD_MAX_VALUE_BYTES && !value.contains(&0)
 }
 

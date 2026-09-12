@@ -1327,8 +1327,13 @@ paths.
 
 Use `mez sandbox status [PATH] [--verbose]` for a standalone configured/effective
 projection with stable readiness diagnostics. Global `--json` emits workflow
-schema version 2 with generic executable, capability, profile, managed-home,
-network, namespace, and restriction fields. This command is intentionally read-only: it
+schema version 3 with generic executable, capability, profile, managed-home,
+network, namespace, and restriction fields plus the typed `execution_boundary`,
+`enforcement`, `network_mode`, and `reason` projection. The effective boundary
+never reports an operating-system backend or network claim from configuration
+alone: a missing executable reports `unavailable`, policy-only and host access
+report no enforcement and `unenforced` networking, and only a compiled plan plus
+capability proof may report `isolated` or `connected`. This command is intentionally read-only: it
 inspects but does not migrate configuration, change project trust, create
 managed homes, or run/cache a pane or native capability probe. Only a direct
 user may apply policy changes; diagnostics never broaden authority or select

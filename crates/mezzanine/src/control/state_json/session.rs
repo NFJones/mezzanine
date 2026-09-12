@@ -139,7 +139,7 @@ pub(in crate::control) fn session_state_json_for_params(
 /// on duplicated control-flow logic.
 pub(in crate::control) fn permission_summary_json() -> String {
     format!(
-        r#"{{"preset":"read-only","approval_policy":"ask","bypass_active":false,"sandbox":"policy-only","sandbox_effective":"policy-only","network_policy":"prompt","trusted_project":false,"trusted_directories":[],"read_scopes":[],"write_scopes":[],"command_rule_generation":{}}}"#,
+        r#"{{"preset":"read-only","approval_policy":"ask","bypass_active":false,"sandbox":"policy-only","sandbox_effective":"policy-only","sandbox_enforcement":"none","network_mode":"unenforced","sandbox_reason":"policy-only","network_policy":"prompt","trusted_project":false,"trusted_directories":[],"read_scopes":[],"write_scopes":[],"command_rule_generation":{}}}"#,
         builtin_rules().len()
     )
 }

@@ -127,7 +127,7 @@ impl PersistentMemoryStore {
             return Ok(CompareAndSwapMemoryContentResult::Stale { current_revision });
         }
         record.content = content.into();
-        record.updated_at_unix_seconds = updated_at_unix_seconds;
+        record.apply_updated_at_unix_seconds(updated_at_unix_seconds);
         record.validate_for_persistence()?;
         upsert_record(&transaction, &record)?;
         transaction.commit()?;
@@ -159,7 +159,7 @@ impl PersistentMemoryStore {
     ) -> Result<MemoryRecord> {
         let mut record = self.inspect(id)?;
         record.content = content.into();
-        record.updated_at_unix_seconds = updated_at_unix_seconds;
+        record.apply_updated_at_unix_seconds(updated_at_unix_seconds);
         self.upsert(record.clone())?;
         Ok(record)
     }
@@ -186,7 +186,7 @@ impl PersistentMemoryStore {
     ) -> Result<MemoryRecord> {
         let mut record = self.inspect(id)?;
         record.state = state;
-        record.updated_at_unix_seconds = updated_at_unix_seconds;
+        record.apply_updated_at_unix_seconds(updated_at_unix_seconds);
         self.upsert(record.clone())?;
         Ok(record)
     }
@@ -196,7 +196,7 @@ impl PersistentMemoryStore {
         let mut record = self.inspect(id)?;
         record.last_used_at_unix_seconds = Some(used_at_unix_seconds);
         record.use_count = record.use_count.saturating_add(1);
-        record.updated_at_unix_seconds = used_at_unix_seconds;
+        record.apply_updated_at_unix_seconds(used_at_unix_seconds);
         if let Some(duration) = record.expiration_duration_seconds {
             record.expires_at_unix_seconds =
                 Some(used_at_unix_seconds.checked_add(duration).ok_or_else(|| {
@@ -212,7 +212,7 @@ impl PersistentMemoryStore {
         let mut record = self.inspect(id)?;
         record.confirmed_count = record.confirmed_count.saturating_add(1);
         record.last_confirmed_at_unix_seconds = Some(confirmed_at_unix_seconds);
-        record.updated_at_unix_seconds = confirmed_at_unix_seconds;
+        record.apply_updated_at_unix_seconds(confirmed_at_unix_seconds);
         self.upsert(record.clone())?;
         Ok(record)
     }
@@ -234,10 +234,10 @@ impl PersistentMemoryStore {
         let mut new_record = self.inspect(&new_id)?;
         let mut record = self.inspect(&old_id)?;
         record.state = MemoryState::Superseded;
-        record.updated_at_unix_seconds = updated_at_unix_seconds;
+        record.apply_updated_at_unix_seconds(updated_at_unix_seconds);
         self.upsert(record.clone())?;
         new_record.supersedes_id = Some(old_id);
-        new_record.updated_at_unix_seconds = updated_at_unix_seconds;
+        new_record.apply_updated_at_unix_seconds(updated_at_unix_seconds);
         self.upsert(new_record)?;
         Ok(record)
     }

@@ -11,6 +11,7 @@ use std::io::{Read, Write};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use iroh::SecretKey;
@@ -35,6 +36,9 @@ const ENDPOINT_LOCK_FILE_NAME: &str = "endpoint.lock";
 const TRUST_FILE_NAME: &str = "trust.json";
 const TRUST_LOCK_FILE_NAME: &str = "trust.lock";
 const ENDPOINT_KEY_BYTES: usize = 32;
+/// Conflict text reported when a live endpoint identity already holds the lock.
+const ENDPOINT_IDENTITY_IN_USE_MESSAGE: &str =
+    "Iroh endpoint identity is already in use by another live process";
 const INVITATION_TOKEN_BYTES: usize = 32;
 const MAX_LABEL_BYTES: usize = 128;
 const MAX_REVOCATION_REASON_BYTES: usize = 512;
@@ -73,15 +77,7 @@ impl RemoteEndpointIdentity {
         ensure_remote_directory_chain(&directory)?;
         let lock_path = directory.join(ENDPOINT_LOCK_FILE_NAME);
         let lock = open_private_lock(&lock_path)?;
-        match flock(&lock, FlockOperation::NonBlockingLockExclusive) {
-            Ok(()) => {}
-            Err(error) if error == rustix::io::Errno::WOULDBLOCK => {
-                return Err(MezError::conflict(
-                    "Iroh endpoint identity is already in use by another live process",
-                ));
-            }
-            Err(error) => return Err(std::io::Error::from(error).into()),
-        }
+        acquire_identity_lock(&lock, ENDPOINT_IDENTITY_IN_USE_MESSAGE)?;
 
         let key_path = directory.join(ENDPOINT_KEY_FILE_NAME);
         let secret_key = match fs::symlink_metadata(&key_path) {
@@ -1103,6 +1099,41 @@ pub(super) fn open_private_lock(path: &Path) -> Result<fs::File> {
     let file = fs::File::from(descriptor);
     validate_private_file_metadata(path, &file.metadata()?)?;
     Ok(file)
+}
+
+/// Bounded retry budget for nonblocking identity-lock acquisition.
+///
+/// `O_CLOEXEC` on the identity lock descriptor closes it only at `exec`, so a
+/// child forked by another thread in this process inherits the open file
+/// description and keeps the identity `flock` alive for the fork-to-exec
+/// window. Re-acquiring an identity immediately after dropping it can therefore
+/// observe that transient inherited lock instead of a live owner. The budget
+/// covers only that window: a genuinely live holder never releases the lock, so
+/// the exclusive-live-use invariant is unchanged and acquisition still fails
+/// with a conflict once the budget elapses.
+pub(super) const IDENTITY_LOCK_RETRY_BUDGET: Duration = Duration::from_millis(250);
+
+/// Delay between nonblocking identity-lock attempts.
+const IDENTITY_LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(5);
+
+/// Acquires the exclusive live-use identity lock, retrying a transient holder.
+///
+/// Returns the caller's conflict message when the lock stays held for the whole
+/// retry budget, and reports any other lock failure immediately.
+pub(super) fn acquire_identity_lock(lock: &fs::File, in_use_message: &str) -> Result<()> {
+    let started = Instant::now();
+    loop {
+        match flock(lock, FlockOperation::NonBlockingLockExclusive) {
+            Ok(()) => return Ok(()),
+            Err(error) if error == rustix::io::Errno::WOULDBLOCK => {
+                if started.elapsed() >= IDENTITY_LOCK_RETRY_BUDGET {
+                    return Err(MezError::conflict(in_use_message));
+                }
+                std::thread::sleep(IDENTITY_LOCK_RETRY_INTERVAL);
+            }
+            Err(error) => return Err(std::io::Error::from(error).into()),
+        }
+    }
 }
 
 pub(super) fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<()> {

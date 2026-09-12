@@ -568,6 +568,68 @@ impl RuntimeSessionService {
             .is_some_and(|boundary| boundary.phase != RuntimeForeignShellBootstrapPhase::Certified)
     }
 
+    /// Returns the exact cached capability identity for one pane's live
+    /// environment, configured executable, and fixed runtime profile.
+    ///
+    /// Only evidence bound to the current bootstrap signature, configuration
+    /// generation, configured executable, and profile is returned; stale,
+    /// foreign, or mismatched cache entries are ignored so status and audit
+    /// never claim a probe that does not describe the live pane.
+    pub(crate) fn sandbox_capability_proof_for_pane(
+        &self,
+        pane_id: &str,
+        backend: crate::runtime::SandboxBackend,
+    ) -> Option<crate::security::sandbox::SandboxCapabilityCacheKey> {
+        let signature = self
+            .process
+            .pane_environment_signatures
+            .get(pane_id)?
+            .stable_hash();
+        let generation = self.session.config_generation;
+        match backend {
+            crate::runtime::SandboxBackend::Bubblewrap => {
+                let crate::runtime::SandboxConfig::Bubblewrap(config) =
+                    self.sandbox_config_for_pane(pane_id)
+                else {
+                    return None;
+                };
+                self.process
+                    .pane_bubblewrap_capabilities
+                    .keys()
+                    .find(|key| {
+                        key.pane_id == pane_id
+                            && key.pane_environment_signature == signature
+                            && key.config_generation == generation
+                            && key.bubblewrap_executable == config.executable
+                            && key.runtime_profile_version
+                                == crate::security::sandbox::BUBBLEWRAP_RUNTIME_PROFILE_VERSION
+                    })
+                    .cloned()
+                    .map(crate::security::sandbox::SandboxCapabilityCacheKey::Bubblewrap)
+            }
+            crate::runtime::SandboxBackend::Seatbelt => {
+                let crate::runtime::SandboxConfig::Seatbelt(config) =
+                    self.sandbox_config_for_pane(pane_id)
+                else {
+                    return None;
+                };
+                self.process
+                    .pane_seatbelt_capabilities
+                    .keys()
+                    .find(|key| {
+                        key.pane_id == pane_id
+                            && key.pane_environment_signature == signature
+                            && key.config_generation == generation
+                            && key.sandbox_executable == config.executable
+                            && key.runtime_profile_version
+                                == crate::security::sandbox::SEATBELT_RUNTIME_PROFILE_VERSION
+                    })
+                    .cloned()
+                    .map(crate::security::sandbox::SandboxCapabilityCacheKey::Seatbelt)
+            }
+        }
+    }
+
     /// Returns the active dependency-free phase used by agent-exit admission.
     pub(crate) fn foreign_shell_bootstrap_phase_for_exit(
         &self,

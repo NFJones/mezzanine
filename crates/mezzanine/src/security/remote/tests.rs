@@ -2,11 +2,13 @@
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use iroh::SecretKey;
+use rustix::fs::{FlockOperation, flock};
 use secrecy::ExposeSecret;
 
 use super::{RemoteEndpointIdentity, RemoteRoleCeiling, RemoteTrustStore};
@@ -21,6 +23,17 @@ fn test_root(label: &str) -> PathBuf {
     ));
     let _ = fs::remove_dir_all(&root);
     root
+}
+
+/// Returns the retained endpoint identity lock for one test session root.
+fn session_identity_lock_path(root: &Path) -> PathBuf {
+    fs::read_dir(root.join("remote/sessions"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path()
+        .join("endpoint.lock")
 }
 
 /// Verifies endpoint identity survives restart and excludes duplicate live use.
@@ -65,6 +78,123 @@ fn endpoint_identity_persists_and_rejects_duplicate_live_use() {
     }
 
     drop(reloaded);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies acquisition outlasts a transient inherited identity lock.
+///
+/// `O_CLOEXEC` closes an inherited lock descriptor only at `exec`, so a child
+/// forked by another thread can hold this lock for the fork-to-exec window even
+/// though no live identity owns it. Acquisition must retry instead of failing
+/// fast, and must still succeed once that transient holder releases.
+///
+/// A sibling test's forked child can keep that inherited descriptor open past
+/// the production retry budget while the machine is loaded, so the scenario runs
+/// in a bounded attempt loop: a conflict is tolerated only when acquisition
+/// actually waited out the budget, and each such attempt is followed by a pause
+/// long enough for the inherited descriptor to reach `exec` and release the
+/// flock. The bounded retry is exactly what this test protects: acquisition must
+/// outlast a transient holder instead of failing fast, and must not report the
+/// documented live-use conflict for a holder no live identity owns.
+#[test]
+fn endpoint_identity_lock_acquisition_survives_transient_holder() {
+    // Bounds attempts at the documented transient fork-inherited lock window.
+    const MAX_ATTEMPTS: usize = 4;
+
+    let root = test_root("transient-lock");
+    let identity = RemoteEndpointIdentity::load_or_create(&root, "session-a").unwrap();
+    let endpoint_id = identity.endpoint_id().to_string();
+    drop(identity);
+
+    let lock_path = session_identity_lock_path(&root);
+    for attempt in 1..=MAX_ATTEMPTS {
+        let holder = super::store::open_private_lock(&lock_path).unwrap();
+        flock(&holder, FlockOperation::NonBlockingLockExclusive).unwrap();
+        // Keep each hold as short as the assertions allow: while it is open, any
+        // sibling test thread that forks a PTY child inherits this descriptor and
+        // keeps the flock alive until the child execs, so a longer hold widens a
+        // window this attempt would then have to wait out inside the production
+        // retry budget. The lock is already held before the acquisition starts,
+        // so a few milliseconds still guarantee that acquisition observes a
+        // holder.
+        let releasing = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(5));
+            drop(holder);
+        });
+
+        let started = Instant::now();
+        let reacquired = RemoteEndpointIdentity::load_or_create(&root, "session-a");
+        let waited = started.elapsed();
+
+        match reacquired {
+            Ok(reacquired) => {
+                assert_eq!(reacquired.endpoint_id(), endpoint_id);
+                assert!(
+                    waited >= Duration::from_millis(1),
+                    "acquisition returned after {waited:?} without waiting out the transient holder"
+                );
+                drop(reacquired);
+                releasing.join().unwrap();
+                let _ = fs::remove_dir_all(root);
+                return;
+            }
+            Err(error) if error.kind() == crate::error::MezErrorKind::Conflict => {
+                // A conflict is tolerable only once acquisition actually spent the
+                // whole retry budget waiting on the holder.
+                assert!(
+                    waited >= super::store::IDENTITY_LOCK_RETRY_BUDGET,
+                    "acquisition reported a conflict after {waited:?}, before the identity lock \
+                     retry budget was exhausted"
+                );
+                releasing.join().unwrap();
+                if attempt < MAX_ATTEMPTS {
+                    // Let an inherited descriptor held by a sibling test's forked
+                    // child pass `exec`, which finally releases the flock.
+                    thread::sleep(Duration::from_millis(50));
+                }
+            }
+            Err(error) => panic!("unexpected identity acquisition failure: {error:?}"),
+        }
+    }
+
+    panic!(
+        "endpoint identity acquisition still conflicted after {MAX_ATTEMPTS} attempts: a sibling \
+         test's forked child held the inherited descriptor past the identity lock retry budget"
+    );
+}
+
+/// Verifies a live holder still conflicts once the retry budget elapses.
+///
+/// The retry covers only a transient fork-inherited lock, so an identity that
+/// stays held past the budget must still report the documented conflict with
+/// unchanged kind and message, and must release cleanly afterwards.
+#[test]
+fn endpoint_identity_lock_conflicts_while_holder_stays_live() {
+    let root = test_root("held-lock");
+    let identity = RemoteEndpointIdentity::load_or_create(&root, "session-a").unwrap();
+    let endpoint_id = identity.endpoint_id().to_string();
+    drop(identity);
+
+    let holder = super::store::open_private_lock(&session_identity_lock_path(&root)).unwrap();
+    flock(&holder, FlockOperation::NonBlockingLockExclusive).unwrap();
+
+    let started = Instant::now();
+    let conflict = RemoteEndpointIdentity::load_or_create(&root, "session-a").unwrap_err();
+    let waited = started.elapsed();
+    assert_eq!(conflict.kind(), crate::error::MezErrorKind::Conflict);
+    assert_eq!(
+        conflict.message(),
+        "Iroh endpoint identity is already in use by another live process"
+    );
+    assert!(
+        waited >= super::store::IDENTITY_LOCK_RETRY_BUDGET,
+        "conflict returned after {waited:?} before the retry budget elapsed"
+    );
+
+    drop(holder);
+    let reacquired = RemoteEndpointIdentity::load_or_create(&root, "session-a").unwrap();
+    assert_eq!(reacquired.endpoint_id(), endpoint_id);
+    drop(reacquired);
     let _ = fs::remove_dir_all(root);
 }
 

@@ -319,8 +319,20 @@ impl MemoryRecord {
     pub fn with_content(&self, content: impl Into<String>, updated_at_unix_seconds: u64) -> Self {
         let mut record = self.clone();
         record.content = content.into();
-        record.updated_at_unix_seconds = updated_at_unix_seconds;
+        record.apply_updated_at_unix_seconds(updated_at_unix_seconds);
         record
+    }
+
+    /// Applies one update instant without ever preceding this record's creation.
+    ///
+    /// Wall-clock unix seconds truncate and can step backward, so an update
+    /// sampled after the record was created can still name an earlier second
+    /// than its stored creation time. Clamping to the record's own creation time
+    /// keeps `updated_at` at or after `created_at` by construction, while
+    /// `validate_for_persistence` keeps rejecting any record that violates the
+    /// invariant.
+    pub fn apply_updated_at_unix_seconds(&mut self, updated_at_unix_seconds: u64) {
+        self.updated_at_unix_seconds = updated_at_unix_seconds.max(self.created_at_unix_seconds);
     }
 
     /// Builds a record with the legacy default retrieval metadata.

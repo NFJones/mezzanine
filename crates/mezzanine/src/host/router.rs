@@ -180,11 +180,16 @@ impl RemoteSessionProvisioning {
 
     pub(crate) fn commit(mut self) -> Result<RemoteSessionBinding> {
         if !self.committed {
+            // Activation completes the reservation this provisioning owns, so it
+            // reuses the reservation instant instead of sampling the wall clock
+            // again: a second sample can name an earlier second than the
+            // reservation and would be rejected as a stale lease update.
+            let reservation_unix_seconds = self.lease.updated_at_unix_seconds;
             self.lease = self.leases.activate(
                 &self.lease.lease_id,
                 self.lease.boot_generation,
                 self.lease.lease_generation,
-                current_unix_seconds()?,
+                reservation_unix_seconds,
             )?;
             self.authority_epoch.send_modify(|epoch| {
                 *epoch = epoch.saturating_add(1);
@@ -209,7 +214,7 @@ impl Drop for RemoteSessionProvisioning {
         if self.committed {
             return;
         }
-        let now = current_unix_seconds().unwrap_or(self.lease.updated_at_unix_seconds);
+        let now = follow_up_instant_unix_seconds(self.lease.updated_at_unix_seconds);
         let _ = self.leases.mark_failed(
             &self.lease.lease_id,
             self.lease.boot_generation,
@@ -608,17 +613,21 @@ impl HostSessionRouter {
                     &assignment.session_id,
                     assignment.boot_generation,
                     assignment.assignment_generation,
-                    current_unix_seconds().unwrap_or(now),
+                    follow_up_instant_unix_seconds(assignment.updated_at_unix_seconds),
                     "local session runtime startup failed".to_string(),
                 );
                 return Err(error);
             }
         };
+        // Activation completes the reservation created above, so it reuses that
+        // reservation instant rather than sampling the wall clock again: a
+        // second sample can name an earlier second than the reservation and
+        // would be rejected as a stale assignment update.
         if let Err(error) = self.local_assignments.activate(
             &assignment.session_id,
             assignment.boot_generation,
             assignment.assignment_generation,
-            current_unix_seconds()?,
+            now,
         ) {
             let _ = self.supervisor.stop(runtime.session_id(), true).await;
             return Err(error);
@@ -786,7 +795,7 @@ impl HostSessionRouter {
         match recovery {
             Ok(record) => Ok(record),
             Err((error, disposition)) => {
-                let now = current_unix_seconds().unwrap_or(assignment.updated_at_unix_seconds);
+                let now = follow_up_instant_unix_seconds(assignment.updated_at_unix_seconds);
                 let persisted = match disposition {
                     RecoveryFailureDisposition::Retryable => {
                         self.local_assignments.record_retryable_recovery_failure(
@@ -1935,7 +1944,7 @@ impl HostSessionRouter {
         match recovery {
             Ok(binding) => Ok(binding),
             Err((error, disposition)) => {
-                let now = current_unix_seconds().unwrap_or(lease.updated_at_unix_seconds);
+                let now = follow_up_instant_unix_seconds(lease.updated_at_unix_seconds);
                 let persisted = match disposition {
                     RecoveryFailureDisposition::Retryable => {
                         self.leases.record_retryable_recovery_failure(
@@ -2168,7 +2177,7 @@ fn reconcile_runtime_completion(
     if assignment.state != LocalSessionAssignmentState::Active {
         return Ok(());
     }
-    let now = current_unix_seconds().unwrap_or(assignment.updated_at_unix_seconds);
+    let now = follow_up_instant_unix_seconds(assignment.updated_at_unix_seconds);
     if assignment.checkpoint.is_some() {
         local_assignments.mark_recoverable_after_runtime_exit(
             &assignment.session_id,
@@ -2194,7 +2203,7 @@ fn reconcile_active_lease_after_runtime_exit(
     lease: RemoteSessionLease,
     diagnostic: String,
 ) -> Result<()> {
-    let now = current_unix_seconds().unwrap_or(lease.updated_at_unix_seconds);
+    let now = follow_up_instant_unix_seconds(lease.updated_at_unix_seconds);
     if lease.checkpoint.is_some() {
         leases.mark_recoverable_after_runtime_exit(
             &lease.lease_id,
@@ -2372,6 +2381,20 @@ fn current_unix_seconds() -> Result<u64> {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .map_err(|_| MezError::invalid_state("system clock is before the Unix epoch"))
+}
+
+/// Returns the instant for a lease or assignment write that follows an earlier
+/// write to the same record.
+///
+/// Wall-clock unix seconds truncate and can step backward, so a follow-up write
+/// sampled after the record's stored write can still name an earlier second.
+/// Deriving the instant from the record's own `updated_at_unix_seconds` keeps
+/// the write ordered by construction; the repository staleness guard still
+/// rejects any instant that precedes it.
+fn follow_up_instant_unix_seconds(record_updated_at_unix_seconds: u64) -> u64 {
+    current_unix_seconds()
+        .unwrap_or(record_updated_at_unix_seconds)
+        .max(record_updated_at_unix_seconds)
 }
 
 #[cfg(test)]
@@ -2653,6 +2676,37 @@ mod tests {
             .unwrap();
         assert_ne!(first_fresh.session_id, second_fresh.session_id);
         assert_eq!(router.registry().list().unwrap().len(), 3);
+
+        router
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A local create derives its reservation and activation from one captured
+    /// instant, so a wall-clock second boundary cannot leave the stored update
+    /// time ahead of the creation time it completes.
+    #[tokio::test(flavor = "current_thread")]
+    async fn local_create_activates_with_the_reservation_instant() {
+        let root = test_root("local-single-instant");
+        let router = HostSessionRouter::new(test_config(&root));
+        let record = router
+            .create_local(
+                Some("local-single-instant".to_string()),
+                Size::new(80, 24).unwrap(),
+            )
+            .await
+            .unwrap();
+        let assignment = router
+            .local_assignments
+            .get(&record.session_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            assignment.updated_at_unix_seconds,
+            assignment.created_at_unix_seconds
+        );
 
         router
             .shutdown_all(true, Duration::from_secs(2))
@@ -3061,6 +3115,10 @@ mod tests {
                 &checkpoint_session,
             )
             .unwrap();
+        // Derive both checkpoint timestamps from the lease's own update fence so
+        // the reference and the write cannot straddle a wall-clock second and be
+        // rejected as a stale update.
+        let checkpoint_now = created.lease.updated_at_unix_seconds;
         let checkpointed = first_router
             .leases
             .update_checkpoint(
@@ -3071,9 +3129,9 @@ mod tests {
                     snapshot_id: snapshot.id,
                     snapshot_version: snapshot.version,
                     session_id: created.lease.session_id.clone(),
-                    recorded_at_unix_seconds: current_unix_seconds().unwrap(),
+                    recorded_at_unix_seconds: checkpoint_now,
                 },
-                current_unix_seconds().unwrap(),
+                checkpoint_now,
             )
             .unwrap();
         first_router
@@ -3094,7 +3152,7 @@ mod tests {
                 &checkpointed.lease_id,
                 checkpointed.boot_generation,
                 checkpointed.lease_generation,
-                current_unix_seconds().unwrap(),
+                checkpointed.updated_at_unix_seconds,
                 "stale prior-host callback".to_string(),
             )
             .unwrap_err();
@@ -3192,21 +3250,25 @@ mod tests {
             .force_shutdown("free owner recovery quota".to_string())
             .await
             .unwrap();
-        tokio::time::timeout(Duration::from_secs(2), async {
+        // The competing runtime drops its supervisor entry before the owner's
+        // live-session quota is released, so retry the recovery under a bound
+        // instead of racing the release. A capacity block that never clears
+        // still fails the test.
+        let recovered = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
-                if router
-                    .supervisor
-                    .lookup(&competing.lease.session_id)
-                    .is_err()
-                {
-                    break;
+                match router.recover_lease(&checkpointed.lease_id).await {
+                    Ok(recovered) => break recovered,
+                    Err(error) if error.kind() == MezErrorKind::Conflict => {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                    Err(error) => {
+                        panic!("recovery should only clear through quota release: {error}")
+                    }
                 }
-                tokio::task::yield_now().await;
             }
         })
         .await
-        .unwrap();
-        let recovered = router.recover_lease(&checkpointed.lease_id).await.unwrap();
+        .expect("the competing runtime's shutdown should release the owner recovery quota");
         assert_eq!(recovered.lease.state, RemoteSessionLeaseState::Active);
 
         router
@@ -3311,9 +3373,9 @@ mod tests {
                     snapshot_id: "absent-checkpoint".to_string(),
                     snapshot_version: 1,
                     session_id: created.lease.session_id.clone(),
-                    recorded_at_unix_seconds: current_unix_seconds().unwrap(),
+                    recorded_at_unix_seconds: created.lease.updated_at_unix_seconds,
                 },
-                current_unix_seconds().unwrap(),
+                created.lease.updated_at_unix_seconds,
             )
             .unwrap();
         first_router
@@ -3422,6 +3484,44 @@ mod tests {
         let revoked = router.get_lease(&revoked_runtime.lease.lease_id).unwrap();
         assert_eq!(revoked.state, RemoteSessionLeaseState::Revoked);
         assert_eq!(revoked.failure.as_deref(), Some("operator revoked lease"));
+
+        router
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A remote create derives its reservation and activation from one captured
+    /// instant, so a wall-clock second boundary cannot make activation carry an
+    /// older timestamp than the reservation it completes.
+    #[tokio::test(flavor = "current_thread")]
+    async fn remote_create_activates_with_the_reservation_instant() {
+        let root = test_root("create-single-instant");
+        let router = HostSessionRouter::new(test_config(&root));
+        let principal = test_principal("single-instant-owner", 2);
+        let created = router
+            .create_remote(
+                &principal,
+                RemoteSessionCreateRequest {
+                    name: Some("single-instant".to_string()),
+                    idempotency_key: "create-single-instant".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            created.lease.activated_at_unix_seconds,
+            Some(created.lease.created_at_unix_seconds)
+        );
+        assert!(created.lease.updated_at_unix_seconds >= created.lease.created_at_unix_seconds);
+        let persisted = router.leases.get(&created.lease.lease_id).unwrap().unwrap();
+        assert_eq!(
+            persisted.activated_at_unix_seconds,
+            Some(persisted.created_at_unix_seconds)
+        );
 
         router
             .shutdown_all(true, Duration::from_secs(2))

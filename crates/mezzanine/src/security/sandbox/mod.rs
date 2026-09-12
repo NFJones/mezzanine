@@ -31,6 +31,7 @@ use crate::runtime::{
     SandboxUnavailablePolicy,
 };
 
+mod effective;
 mod identity;
 mod managed_home;
 pub(crate) mod seatbelt;
@@ -39,6 +40,10 @@ pub(crate) mod seatbelt_probe;
 mod seatbelt_workload;
 mod workflow;
 
+pub(crate) use effective::{
+    EffectiveSandboxState, SandboxEffectiveBoundary, SandboxEffectiveEvidence,
+    SandboxEffectiveReason, SandboxEnforcement, SandboxExecutionHost, resolve_effective_sandbox,
+};
 pub(crate) use identity::{
     ResolvedSandboxIdentity, resolve_group_name, resolve_sandbox_identity, resolve_user_name,
 };
@@ -53,6 +58,7 @@ pub(crate) use managed_home::{
     prepare_bubblewrap_managed_home_for_workload_with_identity, prune_bubblewrap_managed_homes,
     remove_bubblewrap_managed_home,
 };
+pub(crate) use seatbelt::SEATBELT_RUNTIME_PROFILE_VERSION;
 pub(crate) use seatbelt_probe::{
     SeatbeltCapability, SeatbeltCapabilityCacheKey, SeatbeltCapabilityProbePlan,
     parse_seatbelt_capability_probe, seatbelt_capability_cache_key, seatbelt_capability_probe_plan,
@@ -60,7 +66,7 @@ pub(crate) use seatbelt_probe::{
 pub(crate) use seatbelt_workload::{SeatbeltWorkloadLease, prepare_seatbelt_workload_artifacts};
 pub(crate) use workflow::{
     SandboxDiagnosticSeverity, SandboxWorkflowPlan, SandboxWorkflowRequest,
-    effective_sandbox_boundary, plan_sandbox_workflow,
+    effective_sandbox_boundary, effective_sandbox_status, plan_sandbox_workflow,
 };
 
 /// Host platform and fixed-executable presence used for local sandbox defaults.

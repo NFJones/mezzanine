@@ -542,11 +542,11 @@ mod tests {
             "[action_result shell-1 shell_command succeeded]\noutput:\nshell-secret",
         )
         .unwrap();
-        let mcp = runtime_transcript_tool_context_content("mcp-secret").unwrap();
+        let mcp = runtime_transcript_tool_context_content("mcp-secret");
 
         assert!(shell.contains("[action_result shell-1 shell_command succeeded]"));
         assert!(shell.contains("historical_output: omitted"));
         assert!(!shell.contains("shell-secret"));
-        assert_eq!(mcp, "[historical tool result omitted from provider replay]");
+        assert_eq!(mcp, None);
     }
 }

@@ -8,12 +8,13 @@
 
 use super::{
     EventKind, HookEvent, MezError, PaneDescriptor, PaneProcessStart, Path, PathBuf, Result,
-    RuntimeSessionService, SessionSnapshotPayload, TerminalScreen, TerminalStyledLine, json_escape,
+    RuntimePaneProcessPurpose, RuntimeSessionService, SessionSnapshotPayload, TerminalScreen,
+    TerminalStyledLine, json_escape,
 };
 
 /// Returns the user's home directory when it is available and usable as a
 /// pane process start directory.
-fn runtime_home_directory() -> Option<PathBuf> {
+pub(super) fn runtime_home_directory() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .filter(|home| !home.is_empty())
         .map(PathBuf::from)
@@ -92,6 +93,21 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    ///
+    /// A non-live pane that still has a durable pane-to-agent binding is
+    /// re-created through the agent-owned creation path with the pane's
+    /// effective shell mode at restart time. Restore performs no other startup
+    /// work: `start_pane_process_with_start_directory_and_purpose` already arms
+    /// the mode-specific owner and the pane bootstrap, so pane mode runs the
+    /// real managed handshake and native mode keeps validating until first
+    /// agent entry. Panes without a durable binding remain user shells and keep
+    /// inheriting the user environment unchanged.
+    ///
+    /// A restart command replaces the managed pane shell, so pane-mode
+    /// agent-owned startup can never receive its admission handshake: the
+    /// managed fixture is skipped and no admission can arrive. That
+    /// combination is settled as an explicit failed startup instead of a silent
+    /// pending owner or a fabricated ready state.
     pub fn restart_restored_pane_processes(
         &mut self,
         explicit_command: Option<&str>,
@@ -120,6 +136,7 @@ impl RuntimeSessionService {
             .collect::<Vec<_>>();
         let mut starts = Vec::with_capacity(descriptors.len());
         for descriptor in descriptors {
+            let purpose = self.restored_pane_process_purpose(descriptor.pane_id.as_str());
             let restored_screen = self
                 .process
                 .process_pane_screens
@@ -130,7 +147,18 @@ impl RuntimeSessionService {
                 descriptor,
                 explicit_command,
                 start_directory.as_deref(),
+                purpose,
             )?;
+            if let RuntimePaneProcessPurpose::AgentOwned {
+                shell_mode: crate::runtime::config::ShellMode::Pane,
+            } = purpose
+                && explicit_command.is_some()
+            {
+                self.fail_runtime_agent_surface_startup(
+                    &started.pane_id,
+                    "restored pane restart command replaces the managed pane shell; pane-mode agent startup cannot admit",
+                )?;
+            }
             if let Some(screen) = restored_screen {
                 self.process
                     .process_pane_screens
@@ -172,18 +200,50 @@ impl RuntimeSessionService {
         Ok(starts)
     }
 
+    /// Resolves the startup purpose for one pane re-created during restore.
+    ///
+    /// The durable pane-to-agent binding decides only the creation path: a
+    /// restored pane that still owns a durable, non-ephemeral root agent
+    /// conversation is agent-owned and uses the pane's effective shell mode at
+    /// restart time, while every other restored pane remains a user shell. The
+    /// pane's mode-specific startup contract is unchanged by this decision:
+    /// pane mode still admits and certifies through the managed handshake, and
+    /// native mode still validates on first agent entry.
+    pub(crate) fn restored_pane_process_purpose(&self, pane_id: &str) -> RuntimePaneProcessPurpose {
+        let bound = self
+            .agent_shell_store()
+            .get(pane_id)
+            .is_some_and(|session| {
+                !session.ephemeral
+                    && session.conversation_kind == mez_agent::AgentConversationKind::Root
+            });
+        if bound && self.find_pane_descriptor(pane_id).is_some() {
+            RuntimePaneProcessPurpose::AgentOwned {
+                shell_mode: self.effective_agent_shell_mode_for_pane(pane_id),
+            }
+        } else {
+            RuntimePaneProcessPurpose::UserShell
+        }
+    }
+
     /// Starts one restored pane while treating its snapshot working directory
     /// as best-effort state rather than a resume-critical invariant.
+    ///
+    /// The restored purpose is preserved across the primary attempt and the
+    /// home-directory retry so an agent-owned restored pane never falls back to
+    /// the user-shell creation path.
     fn start_restored_pane_process_with_best_effort_directory(
         &mut self,
         descriptor: PaneDescriptor,
         explicit_command: Option<&str>,
         start_directory: Option<&Path>,
+        purpose: RuntimePaneProcessPurpose,
     ) -> Result<PaneProcessStart> {
-        match self.start_pane_process_with_start_directory(
+        match self.start_pane_process_with_start_directory_and_purpose(
             descriptor.clone(),
             explicit_command,
             start_directory,
+            purpose,
         ) {
             Ok(started) => Ok(started),
             Err(error) if start_directory.is_some() => {
@@ -196,10 +256,11 @@ impl RuntimeSessionService {
                         json_escape(&error.to_string())
                     ),
                 )?;
-                self.start_pane_process_with_start_directory(
+                self.start_pane_process_with_start_directory_and_purpose(
                     descriptor,
                     explicit_command,
                     home_directory.as_deref(),
+                    purpose,
                 )
             }
             Err(error) => Err(error),

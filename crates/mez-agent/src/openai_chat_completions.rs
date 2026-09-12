@@ -1558,6 +1558,61 @@ mod tests {
         );
     }
 
+    /// Verifies legacy Chat Completions tool-result reduction keeps the native
+    /// envelope while the assembled request carries only validated metadata.
+    #[test]
+    fn openai_chat_completions_replays_reduced_legacy_tool_results() {
+        let mut request = test_request();
+        let assistant =
+            crate::ProviderTranscriptEvent::validated_openai_chat_completions_assistant_tool_call(
+                request.provider.clone(),
+                String::new(),
+                vec![serde_json::json!({
+                    "id": "call-legacy-1",
+                    "type": "function",
+                    "function": {
+                        "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                        "arguments": "{}"
+                    }
+                })],
+            )
+            .unwrap();
+        let legacy = crate::ProviderTranscriptEvent::OpenAiChatCompletionsToolResult {
+            provider_id: request.provider.clone(),
+            tool_call_id: "call-legacy-1".to_string(),
+            content: "[action_result a1 shell_command succeeded]\nerror_code: shell_failed\noutput:\nchat-legacy-secret-sentinel"
+                .to_string(),
+        };
+        let reduced = legacy.sanitized_for_historical_replay().unwrap();
+        for event in [assistant, reduced] {
+            request.messages.push(ModelMessage {
+                role: ModelMessageRole::System,
+                source: ContextSourceKind::TranscriptTool,
+                placement: crate::ContextPlacement::ConversationAppend,
+                content: event.to_transcript_content(),
+            });
+        }
+        request.messages.push(ModelMessage {
+            role: ModelMessageRole::User,
+            source: ContextSourceKind::UserInstruction,
+            placement: crate::ContextPlacement::ConversationAppend,
+            content: "continue".to_string(),
+        });
+
+        let messages = openai_chat_completions_messages(&request, OpenAiDeveloperRole::Developer);
+        let rendered = serde_json::to_string(&messages).unwrap();
+        let tool_index = messages
+            .iter()
+            .position(|message| message["tool_call_id"] == "call-legacy-1")
+            .expect("reduced legacy tool result must keep its envelope");
+
+        assert_eq!(messages[tool_index]["role"], "tool");
+        let content = messages[tool_index]["content"].as_str().unwrap();
+        assert!(content.contains("error_code: shell_failed"), "{content}");
+        assert!(content.contains("historical_output: omitted"), "{content}");
+        assert!(!rendered.contains("chat-legacy-secret-sentinel"));
+    }
+
     /// Verifies runtime-derived context between hidden native records is moved
     /// after the complete assistant/tool pair on the Chat Completions wire.
     ///

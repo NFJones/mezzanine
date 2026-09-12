@@ -493,13 +493,26 @@ where
     B: AsyncPaneProcessIo,
 {
     let mut last_metadata = None;
+    let mut previous_group_id: Option<u32> = None;
     for attempt in 0..FOREGROUND_CERTIFICATION_OBSERVATION_ATTEMPTS {
         match driver.foreground_process_observation().await {
             Ok(metadata) => {
-                let matched = metadata.as_ref().is_some_and(|metadata| {
-                    expected_process_group_id
-                        .is_none_or(|expected| metadata.process_group_id == expected)
-                });
+                let matched = match expected_process_group_id {
+                    Some(expected) => metadata
+                        .as_ref()
+                        .is_some_and(|metadata| metadata.process_group_id == expected),
+                    // A start capture has no expectation yet. A job-controlling
+                    // shell can run the bootstrap body as its own short-lived
+                    // foreground job group, so accepting the first sample would
+                    // record a group that is gone by the time completion waits
+                    // for it. Require the same group across two consecutive
+                    // samples instead, which a transient job group cannot
+                    // satisfy but the persistent receiver group does.
+                    None => metadata.as_ref().is_some_and(|metadata| {
+                        previous_group_id == Some(metadata.process_group_id)
+                    }),
+                };
+                previous_group_id = metadata.as_ref().map(|metadata| metadata.process_group_id);
                 last_metadata = metadata;
                 if matched {
                     return driver.foreground_process_observation_event(
@@ -668,11 +681,13 @@ mod tests {
         );
     }
 
-    /// Verifies start-boundary capture returns the first fresh PTY observation.
+    /// Verifies start-boundary capture accepts a stable fresh PTY observation.
     ///
     /// Start capture has no expected group because it establishes the receiver
     /// identity used by completion certification. It must query the backend
-    /// instead of consulting periodic runtime metadata.
+    /// instead of consulting periodic runtime metadata, and it must see the same
+    /// group across two consecutive samples so a transient job group cannot be
+    /// recorded as the receiver identity.
     #[tokio::test(flavor = "current_thread")]
     async fn correlated_foreground_observation_captures_first_fresh_group() {
         let instance = PaneProcessInstance {
@@ -680,6 +695,11 @@ mod tests {
             generation: 8,
         };
         let mut backend = AsyncFakePaneProcessIo::default();
+        backend.push_foreground_process_result(Ok(Some(AsyncPaneForegroundProcess {
+            process_name: "bash".to_string(),
+            process_group_id: 41,
+            current_working_directory: Some(std::path::PathBuf::from("/tmp")),
+        })));
         backend.push_foreground_process_result(Ok(Some(AsyncPaneForegroundProcess {
             process_name: "bash".to_string(),
             process_group_id: 41,
@@ -709,6 +729,67 @@ mod tests {
                         process_name: Some("bash".to_string()),
                         process_group_id: Some(41),
                         current_working_directory: Some("/tmp".to_string()),
+                        error: None,
+                    }
+                ),
+            }
+        );
+    }
+
+    /// Verifies a transient start-boundary group is not captured as receiver identity.
+    ///
+    /// A job-controlling shell can run the bootstrap body as its own short-lived
+    /// foreground job group, so the first fresh sample can belong to a process
+    /// that is already gone by completion and would then be waited for in vain.
+    /// The capture must accept only a group observed across two consecutive
+    /// samples, which the persistent receiver group satisfies and the transient
+    /// job group does not.
+    #[tokio::test(flavor = "current_thread")]
+    async fn correlated_foreground_observation_ignores_transient_start_group() {
+        let instance = PaneProcessInstance {
+            pane_id: "%1".to_string(),
+            generation: 10,
+        };
+        let mut backend = AsyncFakePaneProcessIo::default();
+        backend.push_foreground_process_result(Ok(Some(AsyncPaneForegroundProcess {
+            process_name: "sh".to_string(),
+            process_group_id: 41,
+            current_working_directory: None,
+        })));
+        backend.push_foreground_process_result(Ok(Some(AsyncPaneForegroundProcess {
+            process_name: "zsh".to_string(),
+            process_group_id: 42,
+            current_working_directory: None,
+        })));
+        backend.push_foreground_process_result(Ok(Some(AsyncPaneForegroundProcess {
+            process_name: "zsh".to_string(),
+            process_group_id: 42,
+            current_working_directory: None,
+        })));
+        let mut driver = AsyncPaneProcessDriver::new_for_instance(
+            instance.clone(),
+            backend,
+            AsyncPaneProcessDriverConfig::default(),
+        )
+        .unwrap();
+
+        let event = correlated_foreground_process_observation_event(
+            &mut driver,
+            "observation-start-raced".to_string(),
+            None,
+        )
+        .await;
+
+        assert_eq!(
+            event,
+            RuntimeEvent::PaneProcess {
+                instance,
+                event: PaneProcessEvent::ForegroundProcessObservation(
+                    PaneForegroundProcessObservation {
+                        observation_id: "observation-start-raced".to_string(),
+                        process_name: Some("zsh".to_string()),
+                        process_group_id: Some(42),
+                        current_working_directory: None,
                         error: None,
                     }
                 ),

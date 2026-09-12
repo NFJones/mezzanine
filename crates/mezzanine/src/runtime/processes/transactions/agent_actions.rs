@@ -1961,11 +1961,12 @@ impl RuntimeSessionService {
         let Some(mut transaction_ref) = self.remove_running_shell_transaction(marker) else {
             return Ok(0);
         };
-        let sandbox_backend = self
+        let sandbox_plan = self
             .process
-            .sandboxed_shell_transaction_backends
+            .sandboxed_shell_transaction_plans
             .get(marker)
-            .copied();
+            .cloned();
+        let sandbox_backend = sandbox_plan.as_ref().map(|summary| summary.backend);
         self.clear_shell_transaction_protocol_state(marker);
         if transaction_ref.kind == RunningShellTransactionKind::FocusedShellHook {
             return self.observe_focused_shell_hook_transaction_end(
@@ -2252,6 +2253,25 @@ impl RuntimeSessionService {
         )? {
             return Ok(1);
         }
+        // Resolve the effective boundary before the fallback audit entry and
+        // active bypass marker are consumed: clearing them first would erase
+        // the only evidence that this retry executed outside the sandbox.
+        let sandbox_evaluation = self
+            .agent_turn_executions()
+            .get(turn_id)
+            .and_then(|execution| {
+                execution
+                    .action_results
+                    .iter()
+                    .find(|result| result.action_id == action_id.as_str())
+                    .and_then(|result| result.permission_evaluation.clone())
+            });
+        let sandbox_evidence = self.sandbox_evidence_for_action_id(
+            &turn,
+            action_id,
+            sandbox_plan.as_ref(),
+            sandbox_evaluation.as_deref(),
+        );
         self.append_sandbox_fallback_result_audit(
             turn_id,
             action_id,
@@ -2419,6 +2439,11 @@ impl RuntimeSessionService {
                     "sandbox_assessment": sandbox_assessment
                 }),
             );
+            let structured_content =
+                mez_agent::shell_structured_content_with_sandbox_effective_json(
+                    &structured_content,
+                    sandbox_evidence.resolve().structured_json(),
+                );
             let plain_shell_command =
                 matches!(action.payload, AgentActionPayload::ShellCommand { .. });
             execution.action_results[result_index] = if exit_code == 0 || plain_shell_command {

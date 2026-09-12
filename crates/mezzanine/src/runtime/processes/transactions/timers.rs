@@ -455,24 +455,25 @@ impl RuntimeSessionService {
             .sandboxed_shell_transaction_markers
             .remove(marker);
         self.process
-            .sandboxed_shell_transaction_backends
+            .sandboxed_shell_transaction_plans
             .remove(marker);
         self.process.managed_home_activity_locks.remove(marker);
         self.process.seatbelt_workload_leases.remove(marker);
     }
 
-    /// Records the exact backend owning one live sandboxed transaction.
+    /// Records the exact backend and redacted compiled plan owning one live
+    /// sandboxed transaction.
     pub(crate) fn register_sandboxed_shell_transaction_backend(
         &mut self,
         marker: &str,
-        backend: crate::runtime::SandboxBackend,
+        summary: &crate::security::sandbox::SandboxAuditSummary,
     ) {
         self.process
             .sandboxed_shell_transaction_markers
             .insert(marker.to_string());
         self.process
-            .sandboxed_shell_transaction_backends
-            .insert(marker.to_string(), backend);
+            .sandboxed_shell_transaction_plans
+            .insert(marker.to_string(), summary.clone());
     }
 
     /// Retains one managed-home activity lock until its transaction settles.

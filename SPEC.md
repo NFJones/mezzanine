@@ -2207,6 +2207,42 @@ and right-prompt equivalents MUST be removed or replaced with inert values for
 Mezzanine-owned shells. These suppressions MUST be scoped to agent-owned shells
 and MUST NOT mutate the user's parent pane shell environment.
 
+Runtime-created agent-owned panes MUST NOT use the daemon environment as pane
+evidence. Their pane root MUST start from a cleared base and receive only the
+documented validated pane-creation allowlist plus fixed harness values: `PATH`
+with the documented native workload fallback, `HOME` with the runtime home
+directory fallback, the locale names and `TZ`, `USER`, `LOGNAME`, an absolute
+`TMPDIR`, and `SHELL` pinned to the resolved launch shell when that path is
+absolute. `MEZ`, `MEZ_SESSION`, `MEZ_WINDOW`, `MEZ_PANE`, `TERM`,
+`GIT_OPTIONAL_LOCKS`, and the session X11 values remain harness-owned and MUST
+NOT be inherited from the daemon. `TERM_FEATURES` is harness-processed rather
+than inherited verbatim: the harness derives it from the daemon value with the
+progress feature appended. User-initiated panes MUST keep inheriting the user
+environment unchanged. This cleared base is scoped to every pane the runtime
+creates through the agent-owned creation path. A pane process re-created by a
+snapshot restore is agent-owned exactly when a durable non-ephemeral root agent
+binding exists for its pane id at restart. The daemon snapshot-restore path
+restores those bindings before restarting pane processes, so a bound restored
+pane is re-created through the agent-owned creation path using the pane's
+effective shell mode at restart time; a pane-local shell-mode override is not
+durable, so the configured default applies. The predicate deliberately ignores
+pane visibility: a hidden bound restored pane presents as a process surface and
+still receives the cleared base. A restored pane with no durable binding keeps
+inheriting the user environment unchanged, and if binding restore fails the
+runtime reports a diagnostic and restored panes fall back to the user-shell
+path. This automatic restore is scoped to daemon startup from a snapshot: the
+runtime control snapshot/resume path resets the in-memory agent session store
+before restarting panes, so those panes take the user-shell path unless a
+binding is re-established. Every agent-owned pane root - including a bound
+restored pane - therefore starts from a new environment signature, and
+daemon-only names in the `SSH_AUTH_SOCK`, proxy,
+toolchain, and `XDG_*` classes are no longer visible inside agent-owned panes in
+both pane mode and native mode; in pane mode user shell startup files can still
+export those names, but that is user-configuration dependent and MUST NOT be
+claimed as a guarantee. The guarantee is deliberate composition, not credential
+non-possession: a value deliberately passed at pane creation or later exported
+by the pane shell remains pane evidence and is forwarded.
+
 When agent mode is hidden through the toggle, an agent slash-command exit,
 keyboard prompt-exit bindings, or a control API hide request, Mezzanine MUST
 first submit the equivalent of `/stop` for any running pane-local agent task.
@@ -4271,7 +4307,26 @@ process. The spawned shell MUST receive a cleared-base environment composed from
 validated environment entries inferred from the pane's root process, with live
 pane values taking precedence for duplicate names, plus the narrowly enumerated
 runtime launch requirements declared by Mezzanine, and MUST NOT inherit the
-parent Mezzanine process environment. Native execution MUST NOT write to or
+parent Mezzanine process environment. The pane root that supplies that inferred
+evidence MUST itself be created from a cleared base plus the documented
+pane-creation allowlist when the runtime creates that pane through the
+agent-owned creation path, so a daemon-only name cannot enter native evidence
+through agent-owned pane creation. A pane process re-created by a snapshot
+restore is agent-owned exactly when a durable non-ephemeral root agent binding
+exists for its pane id at restart: the daemon snapshot-restore path restores
+those bindings before restarting pane processes, so a bound restored pane is
+re-created through the agent-owned creation path using the pane's effective
+shell mode at restart time. A pane-local shell-mode override is not durable, so
+the configured default applies. The predicate deliberately ignores pane
+visibility: a hidden bound restored pane presents as a process surface and
+still receives the cleared base. A restored pane with no durable binding keeps
+inheriting the user environment unchanged, and if binding restore fails the
+runtime reports a diagnostic and restored panes fall back to the user-shell
+path. This automatic restore is scoped to daemon startup from a snapshot: the
+runtime control snapshot/resume path resets the in-memory agent session store
+before restarting panes, so those panes take the user-shell path unless a
+binding is re-established.
+Native execution MUST NOT write to or
 read from the pane PTY and MUST NOT run any command through the pane shell to
 enable or perform the execution.
 `agents.loop_limit` MUST be a positive integer and MUST default to `8`. It
@@ -4696,7 +4751,10 @@ network authority by denying TCP, UDP, and Unix-domain socket operations in the
 visible host namespace. It MUST NOT describe that operation-level boundary as
 a private network namespace. Authorized Seatbelt network actions MAY use host
 networking according to the same `deny`, `prompt`, and `allow` authorization
-decisions. Every Bubblewrap profile MUST
+decisions. Reported network enforcement MUST come from a compiled launch plan
+plus an exact capability proof; configuration alone MUST NOT produce an
+`isolated` or `connected` claim, and Seatbelt reporting MUST NOT describe a
+private namespace. Every Bubblewrap profile MUST
 project the host TLS trust store at `/etc/ssl/certs` read-only, regardless of
 network mode. Brokered
 `web_search`, `fetch_url`, and MCP actions execute through product-owned
@@ -4714,6 +4772,9 @@ Trusted-project provenance MUST include the selected trusted root. A withheld
 decision MUST name the governing root so an operator can distinguish a rejected
 or revoked nested decision from the mere absence of any decision. Status MUST
 NOT report operating-system confinement for a `policy-only` configuration.
+Status, audit, and shell action results MUST report `policy-only` as no
+enforcement with an unenforced network mode and MUST NOT claim a private
+namespace or an isolated network.
 A withheld project-trust decision MUST deny `shell_command` and `apply_patch`
 admission regardless of the applied sandbox backend, including `policy-only`, a
 native shell mode, and an approved sandbox bypass, and MUST NOT dispatch a
@@ -4743,12 +4804,23 @@ configuration diagnostics. The remediation MUST NOT suggest automatic
 authority broadening or host fallback.
 
 `mez sandbox status [PATH] [--verbose]` MUST build one deterministic, read-only
-version-2 workflow projection containing configured and effective sandbox
+version-3 workflow projection containing configured and effective sandbox
 boundaries, approval policy, canonical project-root discovery and source, trust
 state, scope provenance, backend executable and capability state, runtime-profile
 version, managed-home readiness, byte usage, active state and path semantics,
 network boundary, namespace boundary, reload freshness, and stable restrictions
-and diagnostics. Bubblewrap status MUST report its private namespace boundary
+and diagnostics. The effective projection MUST add a typed execution boundary,
+enforcement mechanism, effective network mode, and closed reason resolved by one
+typed boundary resolver shared with audit and shell action results. A configured
+backend whose fixed executable is missing MUST report `unavailable` with no
+enforcement and an unknown network mode instead of the backend name. Policy-only
+execution and host access MUST report no enforcement and an unenforced network
+mode without any private-namespace claim. A configured backend without an exact
+capability proof and a compiled launch plan MUST report no enforcement and an
+unknown network mode; only a compiled plan plus capability proof may report
+`isolated` or `connected`. A foreign or unattested pane MUST report
+`remote-unattested` and MUST NOT inherit the configured backend. Bubblewrap
+status MUST report its private namespace boundary
 and synthetic mounted-home semantics. Seatbelt status MUST report operation-level
 network denial, a visible host namespace, and private canonical host-path home
 semantics without describing any of them as mounts or namespaces. Inspection
@@ -6410,6 +6482,14 @@ model. Newly persisted typed execution records MUST NOT sanitize, omit, truncate
 or rewrap those bytes at an ordinary turn, restart, resume, or provider-switch
 boundary. Defensive reduction MAY remain only for legacy transcript records
 whose original provider-visible projection or provenance is unavailable.
+Legacy tool-result reduction MUST retain only a validated `[action_result ...]`
+header and the contiguous, individually validated metadata preamble that
+historical producers emitted: exit code, signal, timeout, truncation, and
+known-safe error-code fields. Reduction MUST stop permanently at the first body
+marker (`output`, `content`, `data`, `error`, `error_data`), separator, unknown
+line, duplicated field, or invalid scalar, and MUST NOT resume scanning later
+body lines for metadata-looking text. Ambiguous header text, control characters,
+and out-of-range or unknown scalar values MUST NOT be retained.
 Compact action/audit summaries MUST NOT replace visible assistant text when that
 text is needed for later references.
 Normal provider-context construction MUST replay the complete active transcript
@@ -6456,10 +6536,14 @@ Transcript replay MUST omit durable-storage metadata that is not useful for the
 next model decision, including transcript reference handles, per-entry sequence
 numbers, timestamps, agent identifiers, pane identifiers, and raw content byte
 counts. Historical tool entries that do not have a bounded sanitized projection
-MUST be omitted rather than replaced with placeholder text. Pending local
-messages supplied to the model MUST include the message metadata needed to
-identify sender, type, content type, and expiry together with a bounded copy of
-the message payload.
+MUST be omitted rather than replaced with placeholder text. Where a provider
+protocol requires a tool-call/result envelope to preserve native pairing, that
+envelope MUST be preserved with safe empty or validated reduced output instead
+of legacy bytes. A result whose corresponding call is not retained in the
+replay MUST be omitted rather than replayed as an unpaired output. Pending
+local messages supplied to the model MUST include the
+message metadata needed to identify sender, type, content type, and expiry
+together with a bounded copy of the message payload.
 
 Scheduler context supplied to the model MUST be compact when no work is queued,
 running, blocked, or runnable. Explicit action-result context MUST include
@@ -7460,7 +7544,25 @@ the pane shell. The child MUST receive one composed native workload environment
 that starts from a cleared base instead of the parent Mezzanine process
 environment: validated environment entries inferred from the live pane root
 process, with pane-root values taking precedence for duplicate names, plus the
-narrowly enumerated runtime launch requirements declared by Mezzanine.
+narrowly enumerated runtime launch requirements declared by Mezzanine. The pane
+root that supplies that inferred evidence MUST itself be created from a cleared
+base plus the documented pane-creation allowlist when the runtime creates that
+pane through the agent-owned creation path, so a daemon-only name cannot enter
+native evidence through agent-owned pane creation. A pane process re-created by
+a snapshot restore is agent-owned exactly when a durable non-ephemeral root
+agent binding exists for its pane id at restart: the daemon snapshot-restore
+path restores those bindings before restarting pane processes, so a bound
+restored pane is re-created through the agent-owned creation path using the
+pane's effective shell mode at restart time. A pane-local shell-mode override
+is not durable, so the configured default applies. The predicate deliberately
+ignores pane visibility: a hidden bound restored pane presents as a process
+surface and still receives the cleared base. A restored pane with no durable
+binding keeps inheriting the user environment unchanged, and if binding restore
+fails the runtime reports a diagnostic and restored panes fall back to the
+user-shell path. This automatic restore is scoped to daemon startup from a
+snapshot: the runtime control snapshot/resume path resets the in-memory agent
+session store before restarting panes, so those panes take the user-shell path
+unless a binding is re-established.
 Agent entry and provider preflight in native mode MUST inspect only live root-
 process metadata and MUST NOT schedule pane bootstrap, readiness, shell-identity, or
 path-resolution transactions. Native execution MUST run outside the serialized
@@ -7520,7 +7622,8 @@ an ambient-only value that no pane and no declaration supplies MUST NOT reach a
 workload or a code-owned launcher, while a value the pane root itself carries,
 including one the pane inherited when that pane was created, is pane evidence
 that this contract does not filter. Pane-creation environment inheritance is a
-separate boundary. Absent optional values MUST fall back to documented defaults
+separate boundary that composes the documented agent-owned pane allowlist.
+Absent optional values MUST fall back to documented defaults
 instead of failing. A missing or malformed required value MUST produce a typed
 pre-dispatch error that names the requirement category and the exact key before
 any payload process is created. Workload-visible variables and launcher/control
@@ -11270,6 +11373,10 @@ safely. Writers MUST emit only version 5 after migration.
 
 A session restored from a snapshot MUST start with zero attached primaries and
 no layout owner while retaining canonical size and valid landing navigation.
+A pane restored from a snapshot that still has a durable non-ephemeral root
+agent binding MUST present its restored agent surface: the snapshot-seeded
+process screen and the fresh-primary-PID restart marker are retained in that
+pane's process-pane state and MUST NOT be the presented surface for that pane.
 Live topology replacement MUST be atomic: replace shared topology, reset every
 attached primary to valid landing navigation, clear stale pane-scoped
 presentation, retain the owner only if still attached, use owner size when
@@ -12253,14 +12360,22 @@ changes, approval prompts, approval decisions, shell commands sent by agents,
 configuration changes, subagent spawns, local protocol bridge changes, external
 connector use, credential access attempts, and logout.
 
-Agent shell-command audit records MUST identify `sandbox_backend` as
-`policy-only`, `bubblewrap`, or `seatbelt`. Sandboxed records MUST also include
+Agent shell-command audit records MUST report `sandbox_effective`,
+`sandbox_enforcement`, `network_mode`, and `sandbox_reason` from the same typed
+boundary resolver used by status and shell action results. `sandbox_backend`
+MUST name `policy-only`, `bubblewrap`, or `seatbelt` when that name applies, and
+MUST name `bubblewrap` or `seatbelt` only when a compiled plan backs the claim;
+a configured backend without a compiled plan MUST omit the backend name.
+Host-access records MUST report `host-bypass`, unavailable records MUST report
+`unavailable`, and remote-unattested records MUST report `remote-unattested`
+instead of a configured backend name. Sandboxed records MUST also include
 the fixed runtime-profile version, maximum or narrowed authority source,
 read-only and read-write grant counts, effective network mode, and deterministic
 launch-plan SHA-256. Backend-specific aggregate fields MAY distinguish
 Bubblewrap mount protection from Seatbelt operation grants but MUST remain
 path-free. An approved unsandboxed fallback MUST be recorded as `policy-only`
-and MUST identify the exact Bubblewrap or Seatbelt origin, fallback
+with reason `sandbox-bypass-approved` and MUST identify the exact Bubblewrap or
+Seatbelt origin, fallback
 classification, partial-effect warning, approving client, exact retry result,
 and a digest rather than raw proof or model rationale. These records MUST NOT
 include mount or host paths, launcher argv, generated SBPL, command content,

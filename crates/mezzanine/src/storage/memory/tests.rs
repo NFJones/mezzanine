@@ -54,6 +54,37 @@ fn persistent_memory_can_inspect_edit_export_and_delete() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A memory update whose sampled wall-clock instant names an earlier second
+/// than the record's creation time still persists, using the record's creation
+/// time as the stored update time.
+#[test]
+fn memory_update_time_never_precedes_creation_time() {
+    let root = std::env::temp_dir().join(format!("mez-memory-update-clock-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let store = PersistentMemoryStore::under_config_root(&root);
+    store
+        .upsert(record("m1", MemoryScope::Global, "prefer cargo test"))
+        .unwrap();
+
+    // The update instants are injected, so the earlier second is deterministic
+    // instead of depending on where a wall-clock boundary falls.
+    let edited = store.edit_content("m1", "prefer cargo test", 9).unwrap();
+    assert_eq!(edited.created_at_unix_seconds, 10);
+    assert_eq!(
+        edited.updated_at_unix_seconds,
+        edited.created_at_unix_seconds
+    );
+    let archived = store.set_state("m1", MemoryState::Archived, 4).unwrap();
+    assert_eq!(
+        archived.updated_at_unix_seconds,
+        archived.created_at_unix_seconds
+    );
+    let used = store.record_use("m1", 2).unwrap();
+    assert_eq!(used.updated_at_unix_seconds, used.created_at_unix_seconds);
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies memory content compare-and-swap uses a full-record token rather
 /// than second-resolution timestamps and distinguishes stale and deleted targets.
 #[test]

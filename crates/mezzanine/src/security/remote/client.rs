@@ -15,13 +15,17 @@ use crate::error::{MezError, Result};
 
 use super::RemoteRoleCeiling;
 use super::store::{
-    ensure_private_directory, open_private_file_read, open_private_lock, write_private_atomic,
+    acquire_identity_lock, ensure_private_directory, open_private_file_read, open_private_lock,
+    write_private_atomic,
 };
 
 const REMOTE_DIRECTORY_NAME: &str = "remote";
 const CLIENT_DIRECTORY_NAME: &str = "client";
 const CLIENT_KEY_FILE_NAME: &str = "endpoint.key";
 const CLIENT_KEY_LOCK_FILE_NAME: &str = "endpoint.lock";
+/// Conflict text reported when a live client identity already holds the lock.
+const CLIENT_IDENTITY_IN_USE_MESSAGE: &str =
+    "Iroh client endpoint identity is already in use by another live process";
 const PROFILES_FILE_NAME: &str = "profiles.json";
 const PROFILES_LOCK_FILE_NAME: &str = "profiles.lock";
 const CREDENTIALS_DIRECTORY_NAME: &str = "credentials";
@@ -102,15 +106,7 @@ impl RemoteClientIdentity {
         let directory = client_directory(config_root);
         ensure_client_directory_chain(&directory)?;
         let lock = open_private_lock(&directory.join(CLIENT_KEY_LOCK_FILE_NAME))?;
-        match flock(&lock, FlockOperation::NonBlockingLockExclusive) {
-            Ok(()) => {}
-            Err(error) if error == rustix::io::Errno::WOULDBLOCK => {
-                return Err(MezError::conflict(
-                    "Iroh client endpoint identity is already in use by another live process",
-                ));
-            }
-            Err(error) => return Err(std::io::Error::from(error).into()),
-        }
+        acquire_identity_lock(&lock, CLIENT_IDENTITY_IN_USE_MESSAGE)?;
         let key_path = directory.join(CLIENT_KEY_FILE_NAME);
         let secret_key = match fs::symlink_metadata(&key_path) {
             Ok(_) => {

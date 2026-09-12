@@ -315,6 +315,15 @@ impl RuntimeSessionService {
                             "error": failure.message
                         }),
                     ));
+                self.attach_effective_sandbox_to_shell_result(
+                    &turn,
+                    &action,
+                    None,
+                    execution.action_results[result_index]
+                        .permission_evaluation
+                        .as_deref(),
+                    &mut result,
+                );
                 let _ = self.reconcile_action_presentation_progress_for_execution(
                     &turn.turn_id,
                     &action.id,
@@ -458,7 +467,7 @@ impl RuntimeSessionService {
                 error.message()
             ))
         })?;
-        let result = local_execution_output_to_action_result(
+        let mut result = local_execution_output_to_action_result(
             &turn,
             &action,
             LocalExecutionOutput::spawned_shell(shell_output),
@@ -470,6 +479,15 @@ impl RuntimeSessionService {
                 error.message()
             ))
         })?;
+        self.attach_effective_sandbox_to_shell_result(
+            &turn,
+            &action,
+            None,
+            execution.action_results[result_index]
+                .permission_evaluation
+                .as_deref(),
+            &mut result,
+        );
         execution.action_results[result_index] = result.clone();
         let mut settled_results = vec![result.clone()];
         if matches!(exit_code, Some(code) if code != 0)
@@ -1186,6 +1204,10 @@ impl RuntimeSessionService {
         if execution.action_results[result_index].status != ActionStatus::Running {
             return Ok(0);
         }
+        // Resolve the boundary this hook-blocked denial settled under before the
+        // terminal result is stored: the approved bypass marker is the remaining
+        // proof that the action was admitted outside the sandbox.
+        let sandbox_evidence = self.sandbox_evidence_for_action_id(&turn, &action.id, None, None);
         let mut blocked = ActionResult::failed(
             &turn,
             &action,
@@ -1194,6 +1216,7 @@ impl RuntimeSessionService {
             block.message.clone(),
         )?;
         blocked.structured_content_json = Some(block.structured_json());
+        sandbox_evidence.attach_to_shell_result(&action, &mut blocked);
         execution.action_results[result_index] = blocked.clone();
         execution.terminal_state = runtime_agent_turn_state_from_action_results(
             &execution.action_results,
@@ -1617,6 +1640,12 @@ impl RuntimeSessionService {
                                     turn.pane_id,
                                     foreground_diagnostic.summary(),
                                 );
+                                // Resolve the boundary this blocked dispatch reports
+                                // before the terminal result is stored: the approved
+                                // bypass marker is the remaining proof that the
+                                // action was admitted outside the sandbox.
+                                let sandbox_evidence = self
+                                    .sandbox_evidence_for_action_id(turn, &action.id, None, None);
                                 let mut result = ActionResult::failed(
                                     turn,
                                     action,
@@ -1635,6 +1664,7 @@ impl RuntimeSessionService {
                                     })
                                     .to_string(),
                                 );
+                                sandbox_evidence.attach_to_shell_result(action, &mut result);
                                 execution.action_results[index] = result;
                                 self.clear_pending_shell_dispatch_blocked_recovery_attempt(
                                     &turn.turn_id,
@@ -1750,6 +1780,12 @@ impl RuntimeSessionService {
                         runtime_pane_readiness_state_name(state),
                         foreground_diagnostic.summary(),
                     );
+                    // Resolve the boundary this not-ready dispatch reports before
+                    // the terminal result is stored: the approved bypass marker is
+                    // the remaining proof that the action was admitted outside the
+                    // sandbox.
+                    let sandbox_evidence =
+                        self.sandbox_evidence_for_action_id(turn, &action.id, None, None);
                     let mut result = ActionResult::failed(
                         turn,
                         action,
@@ -1766,6 +1802,7 @@ impl RuntimeSessionService {
                         })
                         .to_string(),
                     );
+                    sandbox_evidence.attach_to_shell_result(action, &mut result);
                     execution.action_results[index] = result;
                     self.append_agent_error_text_to_terminal_buffer(
                         &turn.pane_id,
@@ -1838,6 +1875,12 @@ impl RuntimeSessionService {
                     return Ok(dispatched);
                 }
                 RuntimeHookPipelineDecision::Block(block) => {
+                    // Resolve the boundary this hook-blocked denial settled under
+                    // before the terminal result is stored: the approved bypass
+                    // marker is the remaining proof that the action was admitted
+                    // outside the sandbox.
+                    let sandbox_evidence =
+                        self.sandbox_evidence_for_action_id(turn, &action.id, None, None);
                     let mut blocked = ActionResult::failed(
                         turn,
                         action,
@@ -1846,6 +1889,7 @@ impl RuntimeSessionService {
                         block.message.clone(),
                     )?;
                     blocked.structured_content_json = Some(block.structured_json());
+                    sandbox_evidence.attach_to_shell_result(action, &mut blocked);
                     execution.action_results[index] = blocked;
                     self.append_agent_error_text_to_terminal_buffer(
                         &turn.pane_id,
@@ -2050,6 +2094,8 @@ impl RuntimeSessionService {
             ));
         }
         let backend_name = backend.as_str();
+        let configured_intent = self.sandbox_config_for_pane(&turn.pane_id);
+        let configured_intent = configured_intent.as_str();
         let mut blocked = ActionResult::blocked(
             turn,
             action,
@@ -2058,6 +2104,9 @@ impl RuntimeSessionService {
                     "{backend_name} could not represent the approved policy requirements before payload execution"
                 ),
                 "approval is required for one exact unsandboxed retry".to_string(),
+                format!(
+                    "the configured {configured_intent} intent remains selected, but this approved retry runs unenforced and can reach host networking"
+                ),
             ],
             mez_agent::shell_action_structured_content_json(
                 action,
@@ -2418,6 +2467,10 @@ impl RuntimeSessionService {
         stage: &str,
         error: &MezError,
     ) -> Result<ActionResult> {
+        // Resolve the boundary this dispatch failure settled under before the
+        // fallback audit entry and active bypass marker are consumed: both are
+        // the only evidence that an approved retry never reached the sandbox.
+        let sandbox_evidence = self.sandbox_evidence_for_action_id(turn, &action.id, None, None);
         self.append_sandbox_fallback_result_audit(&turn.turn_id, &action.id, "failed")?;
         self.clear_sandbox_bypass_for_action(&turn.turn_id, &action.id);
         let error_kind = runtime_mezzanine_error_code(error.kind());
@@ -2460,6 +2513,7 @@ impl RuntimeSessionService {
                 }
             }),
         ));
+        sandbox_evidence.attach_to_shell_result(action, &mut result);
         let _ = self.append_agent_error_text_to_terminal_buffer(
             &turn.pane_id,
             &format!(

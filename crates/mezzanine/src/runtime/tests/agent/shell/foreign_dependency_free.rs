@@ -442,6 +442,12 @@ fn runtime_dependency_free_foreign_bash_loader_is_ready_gated() {
         .apply_pane_foreground_process_event(&pane_id, "ssh", primary_pid.saturating_add(1), None)
         .unwrap();
 
+    // Declare the pane's OS-verified dialect for the fixture: the live pane
+    // process is a placeholder command whose session shell may still be
+    // observed before it execs, so a live-process probe can read the POSIX
+    // session shell and select the wrong child dialect under full-suite load.
+    service.set_pane_process_executable_for_tests(&pane_id, "/bin/bash");
+
     service
         .execute_terminal_command(&primary, "agent-shell")
         .unwrap();
@@ -1239,6 +1245,11 @@ fn runtime_dependency_free_foreign_bash_completion_preserves_loader_handoff() {
     service
         .apply_pane_foreground_process_event(&pane_id, "ssh", primary_pid.saturating_add(1), None)
         .unwrap();
+    // Declare the pane's OS-verified dialect for the fixture: the live pane
+    // process is a placeholder command whose session shell may still be
+    // observed before it execs, so a live-process probe can read the POSIX
+    // session shell and select the wrong child dialect under full-suite load.
+    service.set_pane_process_executable_for_tests(&pane_id, "/bin/bash");
     service
         .execute_terminal_command(&primary, "agent-shell")
         .unwrap();
@@ -1324,7 +1335,18 @@ fn runtime_dependency_free_foreign_bash_completion_preserves_loader_handoff() {
             .unwrap(),
         1
     );
-    service.drain_pane_io_transition();
+    let release_effects = service.drain_pane_io_transition().side_effects;
+    let release_inputs = pane_input_effects(&release_effects);
+    assert_eq!(
+        release_inputs.len(),
+        1,
+        "the observed loader launch should release only the loader payload before child installation"
+    );
+    assert!(
+        String::from_utf8_lossy(release_inputs[0].pane_input_parts().1)
+            .contains(&format!("MEZ_LOADER_END_{loader_marker}")),
+        "the loader-ready release should deliver the staged loader payload"
+    );
     service
         .pane_processes_mut()
         .set_foreground_process_group_id_for_test(&pane_id, None);

@@ -7,7 +7,7 @@ use super::{
     Result, RuntimeProviderRegistry, RuntimeSessionService, RuntimeTransition,
     agent_shell_visibility_json_name, audit_persistence_effect,
     coalesce_config_persistence_effects, compare_approval_policy_authority, current_unix_seconds,
-    discover_project_root, runtime_agent_token_usage_by_model_from_metadata,
+    discover_project_root, json_escape, runtime_agent_token_usage_by_model_from_metadata,
     runtime_agent_total_token_usage_by_model, runtime_approval_policy_name, runtime_pane_by_id,
     runtime_parse_approval_policy,
 };
@@ -472,6 +472,27 @@ impl RuntimeSessionService {
             self.checkpoint_agent_session_metadata()?;
         }
         Ok(restored)
+    }
+
+    /// Restores snapshot-resume agent session bindings without blocking startup.
+    ///
+    /// Snapshot resume restores durable pane-to-agent bindings before pane
+    /// processes restart so a bound restored pane is re-created through the
+    /// agent-owned creation path. That restore is best-effort at this boundary:
+    /// a malformed or unreadable metadata store reports one diagnostic and
+    /// leaves restored panes on the user-shell creation path instead of failing
+    /// daemon startup.
+    pub fn restore_agent_sessions_for_restored_snapshot(&mut self) -> Result<()> {
+        if let Err(error) = self.restore_agent_sessions_from_transcript_store() {
+            self.append_lifecycle_event(
+                EventKind::Diagnostic,
+                format!(
+                    r#"{{"diagnostic":"snapshot resume agent session restore failed; restored panes fall back to the user-shell creation path","error":"{}"}}"#,
+                    json_escape(&error.to_string())
+                ),
+            )?;
+        }
+        Ok(())
     }
 
     /// Persists the active pane-to-agent-session bindings for crash recovery.

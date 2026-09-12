@@ -70,7 +70,14 @@ source for intentional pane environment.
 
 Use `mez sandbox status --verbose` to inspect configured and effective state,
 including backend, executable, capability, profile, managed-home, network, and
-namespace facts. The JSON form is workflow schema version 2. Use `mez sandbox
+namespace facts. The JSON form is workflow schema version 3. The effective
+section reports a typed `execution_boundary`, `enforcement`, `network_mode`, and
+`reason` alongside the compatibility `sandbox` boundary spelling. A missing
+backend executable reports `unavailable`; policy-only and host access report
+`none` enforcement with `unenforced` networking; and a configured backend
+without a compiled plan and matching capability proof reports `not-probed` with
+`unknown` networking. `isolated` and `connected` claims require both a compiled
+launch plan and an exact capability proof. Use `mez sandbox
 plan` to preview the platform-selected backend and fixed-executable presence.
 The agent-shell `/sandbox`
 command exposes pane-local status and narrowly scoped enable/disable controls;

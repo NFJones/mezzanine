@@ -1097,6 +1097,61 @@ mod tests {
         assert_eq!(messages[4]["content"], "continue");
     }
 
+    /// Verifies DeepSeek replay assembly of a reduced legacy tool result keeps
+    /// its native envelope without re-exposing the unvalidated legacy body.
+    ///
+    /// Legacy transcript import must still satisfy DeepSeek's one-result-per-call
+    /// adjacency rule while the provider request carries only validated metadata.
+    #[test]
+    fn deepseek_request_replays_reduced_legacy_tool_results_without_body_bytes() {
+        let assistant_event = ProviderTranscriptEvent::DeepSeekAssistantToolCall {
+            content: String::new(),
+            reasoning_content: None,
+            tool_calls: vec![serde_json::json!({
+                "id": "call_legacy",
+                "type": "function",
+                "function": {
+                    "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                    "arguments": "{}"
+                }
+            })],
+        };
+        let legacy_tool_event = ProviderTranscriptEvent::DeepSeekToolResult {
+            tool_call_id: "call_legacy".to_string(),
+            content: "[action_result a1 shell_command succeeded]\nexit_code: 0\noutput:\ndeepseek-legacy-secret-sentinel"
+                .to_string(),
+        };
+        let reduced = legacy_tool_event.sanitized_for_historical_replay().unwrap();
+        let request = deepseek_test_request(vec![
+            ModelMessage {
+                role: ModelMessageRole::System,
+                source: ContextSourceKind::Transcript,
+                placement: crate::ContextPlacement::ConversationAppend,
+                content: assistant_event.to_transcript_content(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::System,
+                source: ContextSourceKind::Transcript,
+                placement: crate::ContextPlacement::ConversationAppend,
+                content: reduced.to_transcript_content(),
+            },
+        ]);
+
+        let strategy = deepseek_maap_request_strategy(&request);
+        let body_text =
+            deepseek_chat_completions_request_body_with_strategy(&request, true, strategy).unwrap();
+        let body: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+        let messages = body["messages"].as_array().unwrap();
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1]["role"], "tool");
+        assert_eq!(messages[1]["tool_call_id"], "call_legacy");
+        let content = messages[1]["content"].as_str().unwrap();
+        assert!(content.contains("exit_code: 0"), "{content}");
+        assert!(content.contains("historical_output: omitted"), "{content}");
+        assert!(!body_text.contains("deepseek-legacy-secret-sentinel"));
+    }
+
     /// Verifies malformed restored DeepSeek history is made protocol-valid
     /// before the provider receives the first request.
     ///

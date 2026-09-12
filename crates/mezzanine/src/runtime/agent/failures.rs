@@ -256,19 +256,26 @@ impl RuntimeSessionService {
         marker: &str,
         failure: RuntimeShellTransactionActionFailure,
     ) -> Result<usize> {
+        let turn = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == transaction_ref.turn_id)
+            .cloned();
+        // Resolve the boundary this settlement failed under before the fallback
+        // audit entry and active bypass marker are consumed: the audit entry and
+        // the active bypass are the only evidence that it ran outside the
+        // sandbox, and the audit append removes that entry.
+        let sandbox_evidence = turn
+            .as_ref()
+            .map(|turn| self.sandbox_evidence_for_action_id(turn, &failure.action_id, None, None));
         self.append_sandbox_fallback_result_audit(
             &transaction_ref.turn_id,
             &failure.action_id,
             "failed",
         )?;
         self.clear_sandbox_bypass_for_action(&transaction_ref.turn_id, &failure.action_id);
-        let Some(turn) = self
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .find(|turn| turn.turn_id == transaction_ref.turn_id)
-            .cloned()
-        else {
+        let Some(turn) = turn else {
             return Ok(0);
         };
         let maybe_failure = {
@@ -321,6 +328,9 @@ impl RuntimeSessionService {
                     failure.message.clone(),
                 )?;
                 result.structured_content_json = Some(structured_content);
+                if let Some(evidence) = sandbox_evidence.as_ref() {
+                    evidence.attach_to_shell_result(&action, &mut result);
+                }
                 execution.action_results[result_index] = result;
                 execution.terminal_state = runtime_agent_turn_state_from_action_results(
                     &execution.action_results,
@@ -431,6 +441,26 @@ impl RuntimeSessionService {
         if failures.is_empty() {
             return Ok(0);
         }
+        let turn = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == transaction_ref.turn_id)
+            .cloned();
+        // Resolve every settled action's boundary before the fallback audit
+        // entries and active bypass markers are consumed: they are the only
+        // evidence that these settlements ran outside the sandbox.
+        let sandbox_evidence = turn.as_ref().map(|turn| {
+            failures
+                .iter()
+                .map(|failure| {
+                    (
+                        failure.action_id.clone(),
+                        self.sandbox_evidence_for_action_id(turn, &failure.action_id, None, None),
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
         for failure in &failures {
             self.append_sandbox_fallback_result_audit(
                 &transaction_ref.turn_id,
@@ -439,13 +469,7 @@ impl RuntimeSessionService {
             )?;
             self.clear_sandbox_bypass_for_action(&transaction_ref.turn_id, &failure.action_id);
         }
-        let Some(turn) = self
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .find(|turn| turn.turn_id == transaction_ref.turn_id)
-            .cloned()
-        else {
+        let Some(turn) = turn else {
             return Ok(0);
         };
         let (mut execution, observed_results, transition_traces) = {
@@ -499,6 +523,14 @@ impl RuntimeSessionService {
                     failure.message.clone(),
                 )?;
                 result.structured_content_json = Some(structured_content);
+                if let Some(evidence) = sandbox_evidence.as_ref().and_then(|evidence| {
+                    evidence
+                        .iter()
+                        .find(|(action_id, _)| action_id == &failure.action_id)
+                        .map(|(_, evidence)| evidence)
+                }) {
+                    evidence.attach_to_shell_result(&action, &mut result);
+                }
                 execution.action_results[result_index] = result.clone();
                 observed_results.push(result);
                 transition_traces.push(format!(
