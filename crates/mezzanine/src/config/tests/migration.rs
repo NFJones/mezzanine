@@ -2953,6 +2953,7 @@ fn migrates_schema_81_static_enabled_actions() {
                 "web_search",
                 "fetch_url",
                 "send_message",
+                "wait",
                 "spawn_agent",
                 "config_change",
                 "mcp_server_search",
@@ -3457,5 +3458,108 @@ fn migrates_schema_91_by_removing_only_window_status_pill_styles() {
         let repeated = migrate_config_text(format, &plan.text).unwrap();
         assert!(!repeated.changed);
         assert_eq!(repeated.text, plan.text);
+    }
+}
+
+/// Schema v94 adds `wait` only to the exact v93 generated action allowlist.
+///
+/// Explicitly narrowed or otherwise customized allowlists remain unchanged so
+/// a migration cannot silently broaden user-authored action policy.
+#[test]
+fn migrates_schema_93_default_enabled_actions_with_wait() {
+    let old_default = [
+        "say",
+        "shell_command",
+        "apply_patch",
+        "web_search",
+        "fetch_url",
+        "send_message",
+        "spawn_agent",
+        "config_change",
+        "mcp_server_search",
+        "mcp_server_get",
+        "mcp_call",
+        "memory_search",
+        "memory_store",
+        "list_agents",
+        "issue_add",
+        "issue_update",
+        "issue_query",
+        "issue_delete",
+    ];
+    let old_default_json = serde_json::json!(old_default);
+    for (format, default_text, custom_text) in [
+        (
+            ConfigFormat::Toml,
+            format!(
+                "version = 93\n[agents]\nenabled_actions = {}\n",
+                serde_json::to_string(&old_default).unwrap()
+            ),
+            "version = 93\n[agents]\nenabled_actions = [\"say\"]\n".to_string(),
+        ),
+        (
+            ConfigFormat::Json,
+            serde_json::json!({"version":93,"agents":{"enabled_actions":old_default}}).to_string(),
+            r#"{"version":93,"agents":{"enabled_actions":["say"]}}"#.to_string(),
+        ),
+        (
+            ConfigFormat::Yaml,
+            format!(
+                "version: 93\nagents:\n  enabled_actions:\n{}",
+                old_default
+                    .iter()
+                    .map(|action| format!("    - {action}\n"))
+                    .collect::<String>()
+            ),
+            "version: 93\nagents:\n  enabled_actions:\n    - say\n".to_string(),
+        ),
+    ] {
+        let migrated = migrate_config_text(format, &default_text).unwrap();
+        let root = parse_config_json_value(format, &migrated.text).unwrap();
+        let actions = root
+            .pointer("/agents/enabled_actions")
+            .and_then(serde_json::Value::as_array)
+            .unwrap();
+        assert_eq!(root.pointer("/version"), Some(&serde_json::json!(94)));
+        assert_eq!(actions[6], serde_json::json!("wait"));
+        assert_eq!(
+            actions.len(),
+            old_default_json.as_array().unwrap().len() + 1
+        );
+
+        let custom = migrate_config_text(format, &custom_text).unwrap();
+        let custom_root = parse_config_json_value(format, &custom.text).unwrap();
+        assert_eq!(
+            custom_root.pointer("/agents/enabled_actions"),
+            Some(&serde_json::json!(["say"]))
+        );
+    }
+}
+
+/// Schema v94 never rewrites a non-string action catalog while advancing the
+/// version, leaving ordinary validation to reject the malformed configuration.
+#[test]
+fn migrates_schema_93_without_rewriting_malformed_enabled_actions() {
+    for (format, text) in [
+        (
+            ConfigFormat::Toml,
+            "version = 93\n[agents]\nenabled_actions = [\"say\", 7]\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":93,"agents":{"enabled_actions":["say",7]}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 93\nagents:\n  enabled_actions:\n    - say\n    - 7\n",
+        ),
+    ] {
+        let migrated = migrate_config_text(format, text).unwrap();
+        let root = parse_config_json_value(format, &migrated.text).unwrap();
+        assert_eq!(root.pointer("/version"), Some(&serde_json::json!(94)));
+        assert_eq!(
+            root.pointer("/agents/enabled_actions"),
+            Some(&serde_json::json!(["say", 7]))
+        );
     }
 }

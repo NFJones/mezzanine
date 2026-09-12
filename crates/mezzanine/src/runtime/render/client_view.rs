@@ -913,6 +913,11 @@ impl RuntimeSessionService {
                         "running"
                     }
                 }
+                AgentTurnState::Blocked
+                    if self.agent_turn_is_waiting_for_peer_message(&turn.turn_id) =>
+                {
+                    "waiting for peer message"
+                }
                 AgentTurnState::Blocked => "waiting approval",
                 AgentTurnState::Completed => "completed",
                 AgentTurnState::Failed => "failed",

@@ -3,7 +3,7 @@
 use super::*;
 use crate::config::{ConfigFormat, ConfigLayer, ConfigScope};
 use crate::runtime::ControlIdempotencyCache;
-use crate::runtime::current_unix_seconds;
+use crate::runtime::{current_unix_millis, current_unix_seconds};
 use mez_agent::messaging::Envelope;
 use mez_core::ids::PaneId;
 
@@ -83,6 +83,171 @@ fn runtime_active_turn_local_message_commits_once_at_arrival() {
             .unwrap()
             .last_sequence,
         delivery.sequence
+    );
+}
+
+/// Verifies `wait` releases provider capacity and model-originated MMP mail
+/// resumes the same turn instead of creating a new message-triggered turn.
+///
+/// The parked action must remain nonterminal, preserve pane and agent claims,
+/// settle exactly once after peer mail is committed, and queue one ordinary
+/// provider continuation with the original turn identity.
+#[test]
+fn runtime_wait_parks_and_peer_mail_resumes_same_turn() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "ask a peer and wait for the reply")
+        .unwrap();
+    let turn_count = service.agent_turn_ledger().turns().len();
+    let provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "wait for MMP peer mail".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "the requested MMP reply is still pending".to_string(),
+                actions: vec![mez_agent::AgentAction {
+                    id: "wait-1".to_string(),
+                    payload: mez_agent::AgentActionPayload::Wait,
+                }],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+
+    let execution = service
+        .execute_agent_turn_with_provider(
+            &started.turn_id,
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
+    assert!(service.agent_turn_is_waiting_for_peer_message(&started.turn_id));
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&started.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Blocked
+    );
+    let parked = service.agent_scheduler().snapshot();
+    assert_eq!(parked.running, 0);
+    assert_eq!(parked.waiting, 1);
+    assert_eq!(parked.active_capacity_used, 0);
+
+    let now_ms = current_unix_millis();
+    let sender = service
+        .ensure_runtime_message_identity("agent-sender", None, "agent", &[], now_ms)
+        .unwrap();
+    let recipient = AgentId::opaque(started.agent_id.clone()).unwrap();
+    service
+        .control
+        .message_service_mut()
+        .accept_at(
+            &sender.agent_id,
+            Envelope {
+                protocol: "mmp/1",
+                id: "wait-bridge-status-1".to_string(),
+                message_type: "task_status".to_string(),
+                time: format!("runtime:{now_ms}"),
+                sender: sender.clone(),
+                recipient: mez_agent::messaging::Recipient::Agent(recipient.clone()),
+                correlation_id: Some(started.turn_id.clone()),
+                ttl_ms: None,
+                content_type: "application/json".to_string(),
+                payload: mez_agent::messaging::TaskStatusPayload {
+                    task_id: "peer-task".to_string(),
+                    state: mez_agent::messaging::TaskState::Running,
+                    progress_percent: Some(50),
+                    summary: "peer task still running".to_string(),
+                }
+                .to_json(),
+                extension_fields: Vec::new(),
+            },
+            now_ms,
+        )
+        .unwrap();
+    assert_eq!(
+        service
+            .deliver_pending_runtime_agent_messages(now_ms)
+            .unwrap(),
+        1
+    );
+    assert!(
+        service.agent_turn_is_waiting_for_peer_message(&started.turn_id),
+        "runtime-owned bridge traffic must not wake a peer wait"
+    );
+    assert_eq!(service.agent_scheduler().snapshot().waiting, 1);
+
+    service
+        .control
+        .message_service_mut()
+        .accept_at(
+            &sender.agent_id,
+            Envelope {
+                protocol: "mmp/1",
+                id: "wait-reply-1".to_string(),
+                message_type: "send".to_string(),
+                time: format!("runtime:{now_ms}"),
+                sender: sender.clone(),
+                recipient: mez_agent::messaging::Recipient::Agent(recipient),
+                correlation_id: Some(started.turn_id.clone()),
+                ttl_ms: None,
+                content_type: "text/plain; charset=utf-8".to_string(),
+                payload: "the requested peer result".to_string(),
+                extension_fields: Vec::new(),
+            },
+            now_ms,
+        )
+        .unwrap();
+
+    assert_eq!(
+        service
+            .deliver_pending_runtime_agent_messages(now_ms)
+            .unwrap(),
+        1
+    );
+    assert!(!service.agent_turn_is_waiting_for_peer_message(&started.turn_id));
+    assert_eq!(service.agent_turn_ledger().turns().len(), turn_count);
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&started.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Running
+    );
+    let resumed = service.agent_scheduler().snapshot();
+    assert_eq!(resumed.waiting, 0);
+    assert_eq!(resumed.running, 1);
+    assert_eq!(resumed.active_capacity_used, 1);
+    assert_eq!(service.agent_peer_message_turn_count(&started.agent_id), 0);
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == started.turn_id)
+    );
+    let settled = service
+        .agent_turn_executions()
+        .get(&started.turn_id)
+        .unwrap();
+    assert_eq!(settled.action_results[0].status, ActionStatus::Succeeded);
+    assert!(
+        settled.action_results[0]
+            .structured_content_json
+            .as_deref()
+            .is_some_and(|value| value.contains("peer_message"))
     );
 }
 

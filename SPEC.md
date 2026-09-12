@@ -6973,6 +6973,16 @@ The baseline action types are:
   without a fresh whitelist prompt. Explicit deny rules MUST win in every mode.
   Runtime macro and bridge delivery is not model-planned and MUST remain
   ungated.
+- `wait`: Park the current turn until model-originated MMP peer mail arrives.
+  The action MUST accept no fields other than `type`, MUST require no approval,
+  and MUST be used only during active inter-agent MMP coordination when the
+  agent cannot continue until another agent replies. Provider-facing guidance
+  MUST explicitly forbid using `wait` as a general sleep, delay, retry, poll,
+  approval wait, user-input wait, subprocess wait, network wait, or for any
+  circumstance unrelated to MMP messaging. A batch containing `wait` MUST
+  contain exactly one `wait`, no other executable action, and at most one
+  `say` action whose status is `progress`. The model MUST send any required MMP
+  request in an earlier batch before emitting `wait`.
 - `list_agents`: Perform read-only peer discovery. The action MUST NOT prompt in
   any approval mode. An optional `agent_type` MUST default to `primary` and MUST
   accept only `primary`, `subagent`, `internal`, or `all`. Results MUST report
@@ -10508,6 +10518,10 @@ necessary, and must prohibit repeated URL fetches as no-op progress.
 
 The prompt MUST explain that `send_message` and `spawn_agent` are for local
 agent coordination when delegation materially helps. It MUST explain that
+`wait` is exclusively for active MMP inter-agent coordination after any needed
+message has been sent in an earlier batch, and MUST explicitly forbid using it
+for delays, retries, polling, approvals, user input, subprocesses, network
+activity, or any other non-MMP circumstance. It MUST explain that
 `config_change` is for explicit Mezzanine configuration mutations and
 that config changes follow the active approval policy like other privileged
 actions. It MUST explain that approved or policy-allowed config changes persist
@@ -10861,6 +10875,22 @@ any action, authorize work, grant or widen scope, change configuration,
 instructions, action schemas, or permission rules, or resume blocked work, and
 MUST NOT be treated as user instruction. Work requested through a peer message
 MUST run only under the recipient's own approval policy and permission rules.
+
+A model-planned `wait` MUST retain the current turn, conversation, agent, and
+pane ownership while releasing provider capacity. It MUST NOT complete the
+turn, emit a subagent task result, or create a new peer-message-triggered turn.
+Waiting time MUST NOT consume the remaining configured turn timeout. Committing
+one or more model-originated MMP messages MUST settle the pending `wait` exactly
+once and fairly reacquire provider capacity for the same turn; runtime-authored
+task status and task result bridge traffic MUST NOT wake it. Multiple messages
+committed in one delivery pass MUST queue at most one continuation. A peer
+message committed before the wait response is accepted MUST invalidate the
+older provider generation through the normal context high-water rule, and mail
+already pending when the turn parks MUST be checked immediately so no wakeup is
+lost. Resuming an existing wait MUST NOT increment
+`agents.peer_message_loop_limit`, which counts only newly created
+peer-message-triggered turns. Stop, pane shutdown, session shutdown, and parent
+cancellation MUST clear peer-wait state through normal turn cleanup.
 
 Interagent MMP traffic MUST be logged in the pane log in the prompt style with
 the peer name at the destination end of a direction arrow. A committed received

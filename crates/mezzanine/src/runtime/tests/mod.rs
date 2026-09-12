@@ -710,6 +710,7 @@ fn runtime_capability_for_response(
             | mez_agent::AgentActionPayload::RequestCapability { .. }
             | mez_agent::AgentActionPayload::RequestSkills
             | mez_agent::AgentActionPayload::CallSkill { .. }
+            | mez_agent::AgentActionPayload::Wait
             | mez_agent::AgentActionPayload::Complete
             | mez_agent::AgentActionPayload::Abort { .. }
             | mez_agent::AgentActionPayload::MemorySearch { .. }

@@ -298,6 +298,8 @@ pub enum AllowedAction {
     FetchUrl,
     /// Local agent message.
     SendMessage,
+    /// Wait for model-originated MMP peer mail.
+    Wait,
     /// Subagent spawn.
     SpawnAgent,
     /// Configuration change.
@@ -337,6 +339,7 @@ impl AllowedAction {
             AllowedAction::WebSearch => "web_search",
             AllowedAction::FetchUrl => "fetch_url",
             AllowedAction::SendMessage => "send_message",
+            AllowedAction::Wait => "wait",
             AllowedAction::SpawnAgent => "spawn_agent",
             AllowedAction::ConfigChange => "config_change",
             AllowedAction::McpServerSearch => "mcp_server_search",
@@ -364,6 +367,7 @@ impl AllowedAction {
             "web_search" => Some(AllowedAction::WebSearch),
             "fetch_url" => Some(AllowedAction::FetchUrl),
             "send_message" => Some(AllowedAction::SendMessage),
+            "wait" => Some(AllowedAction::Wait),
             "spawn_agent" => Some(AllowedAction::SpawnAgent),
             "config_change" => Some(AllowedAction::ConfigChange),
             "mcp_server_search" => Some(AllowedAction::McpServerSearch),
@@ -477,6 +481,7 @@ impl AllowedActionSet {
             AllowedAction::WebSearch,
             AllowedAction::FetchUrl,
             AllowedAction::SendMessage,
+            AllowedAction::Wait,
             AllowedAction::SpawnAgent,
             AllowedAction::ConfigChange,
             AllowedAction::McpServerSearch,

@@ -443,7 +443,11 @@ impl RuntimeSessionService {
         } else {
             let waiting_for_joined_subagents =
                 self.execution_waiting_for_live_joined_subagents(turn_id, &execution);
-            if waiting_for_joined_subagents {
+            let waiting_for_peer_message =
+                self.park_agent_turn_for_peer_message(turn, &execution)?;
+            if waiting_for_peer_message {
+                self.deliver_pending_runtime_agent_messages(crate::runtime::current_unix_millis())?;
+            } else if waiting_for_joined_subagents {
                 self.agent_turn_executions_mut()
                     .insert(turn_id.to_string(), execution.clone());
                 self.agent.agent_scheduler.wait_running(turn_id)?;
@@ -488,7 +492,7 @@ impl RuntimeSessionService {
                     "provider_task queued reason=ready_for_provider_continuation",
                 )?;
             }
-            if !waiting_for_joined_subagents {
+            if !waiting_for_joined_subagents && !waiting_for_peer_message {
                 self.agent_turn_executions_mut()
                     .insert(turn_id.to_string(), execution.clone());
             }

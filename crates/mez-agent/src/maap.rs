@@ -381,6 +381,12 @@ pub enum AgentActionPayload {
         /// answer; the runtime defaults it to the sending turn when omitted.
         correlation_id: Option<String>,
     },
+    /// Parks the current turn until model-originated MMP peer mail arrives.
+    ///
+    /// This action is exclusively for waiting on another agent after MMP
+    /// coordination. It is not a general sleep, delay, polling, user-input,
+    /// process, network, or external-event primitive.
+    Wait,
     /// Represents the Spawn Agent case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -624,6 +630,55 @@ impl MaapBatch {
         for action in &self.actions {
             action.validate(context)?;
         }
+        let wait_count = self
+            .actions
+            .iter()
+            .filter(|action| matches!(action.payload, AgentActionPayload::Wait))
+            .count();
+        if wait_count > 0 {
+            if wait_count != 1 {
+                return Err(MaapContractError::invalid_args(
+                    "agent action batch must contain exactly one wait action",
+                ));
+            }
+            let progress_say_count = self
+                .actions
+                .iter()
+                .filter(|action| {
+                    matches!(
+                        action.payload,
+                        AgentActionPayload::Say {
+                            status: SayStatus::Progress,
+                            ..
+                        }
+                    )
+                })
+                .count();
+            if progress_say_count > 1 {
+                return Err(MaapContractError::invalid_args(
+                    "wait may be paired with at most one progress say action",
+                ));
+            }
+            for action in &self.actions {
+                match action.payload {
+                    AgentActionPayload::Wait
+                    | AgentActionPayload::Say {
+                        status: SayStatus::Progress,
+                        ..
+                    } => {}
+                    AgentActionPayload::Say { .. } => {
+                        return Err(MaapContractError::invalid_args(
+                            "wait may be paired only with a progress say action",
+                        ));
+                    }
+                    _ => {
+                        return Err(MaapContractError::invalid_args(
+                            "wait must be the only executable action in its batch",
+                        ));
+                    }
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -652,6 +707,7 @@ impl AgentAction {
             AgentActionPayload::IssueQuery { .. } => "issue_query",
             AgentActionPayload::IssueDelete { .. } => "issue_delete",
             AgentActionPayload::SendMessage { .. } => "send_message",
+            AgentActionPayload::Wait => "wait",
             AgentActionPayload::SpawnAgent { .. } => "spawn_agent",
             AgentActionPayload::ConfigChange { .. } => "config_change",
             AgentActionPayload::McpServerSearch { .. } => "mcp_server_search",
@@ -845,6 +901,7 @@ impl AgentAction {
                 }
                 Ok(())
             }
+            AgentActionPayload::Wait => Ok(()),
             AgentActionPayload::SpawnAgent {
                 role,
                 placement,
@@ -1397,6 +1454,14 @@ fn parse_maap_action_value(
             payload: required_json_or_string(object, "payload")?,
             correlation_id: optional_string(object, "correlation_id")?.map(str::to_string),
         },
+        "wait" => {
+            if object.len() != 1 {
+                return Err(MaapContractError::invalid_args(
+                    "wait accepts no fields other than type",
+                ));
+            }
+            AgentActionPayload::Wait
+        }
         "spawn_agent" => {
             for unsupported in [
                 "explicit_user_approval",

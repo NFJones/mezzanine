@@ -333,6 +333,35 @@ impl AgentTurnLedger {
         Ok(())
     }
 
+    /// Replaces the absolute deadline for one active or blocked turn.
+    ///
+    /// Peer-message waits use this narrow mutation to suspend the remaining
+    /// execution budget while no provider work is running and restore that
+    /// budget when MMP mail wakes the same turn.
+    pub fn set_turn_deadline(
+        &mut self,
+        turn_id: &str,
+        deadline_at_unix_millis: u64,
+    ) -> AgentTurnLedgerResult<()> {
+        let index = self
+            .turn_indices
+            .get(turn_id)
+            .copied()
+            .ok_or_else(|| AgentTurnLedgerError::not_found("turn not found"))?;
+        let turn = self
+            .turns
+            .get_mut(index)
+            .ok_or_else(|| AgentTurnLedgerError::not_found("turn not found"))?;
+        if terminal_turn_state(turn.state) {
+            return Err(AgentTurnLedgerError::conflict(
+                "cannot change deadline for a terminal turn",
+            ));
+        }
+        turn.deadline_at_unix_millis = deadline_at_unix_millis;
+        self.semantic_generation = self.semantic_generation.wrapping_add(1);
+        Ok(())
+    }
+
     /// Runs the turns operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

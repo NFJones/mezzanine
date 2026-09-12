@@ -88,6 +88,7 @@ mod v89_v90;
 mod v90_v91;
 mod v91_v92;
 mod v92_v93;
+mod v93_v94;
 
 #[cfg(test)]
 pub use driver::migrate_config_text;

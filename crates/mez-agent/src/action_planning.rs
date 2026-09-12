@@ -265,6 +265,12 @@ pub fn plan_action_result(
             vec!["agent discovery accepted for runtime execution".to_string()],
             Some(r#"{"state":"pending_runtime_agent_discovery"}"#.to_string()),
         )),
+        AgentActionPayload::Wait => Ok(ActionResult::running(
+            turn,
+            action,
+            vec!["waiting for model-originated MMP peer mail".to_string()],
+            Some(r#"{"state":"pending_peer_message"}"#.to_string()),
+        )),
         AgentActionPayload::ConfigChange {
             setting_path,
             operation,
@@ -715,6 +721,7 @@ pub fn action_auto_allow_reason(action: &AgentAction, input: ActionPlanningInput
     match &action.payload {
         AgentActionPayload::Say { text, .. } => text.clone(),
         AgentActionPayload::Abort { reason } => reason.clone(),
+        AgentActionPayload::Wait => "wait for MMP peer mail".to_string(),
         AgentActionPayload::SendMessage {
             recipient, payload, ..
         } => {

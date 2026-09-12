@@ -574,6 +574,7 @@ fn capability_for_allowed_action(action: AllowedAction) -> Option<AgentCapabilit
         | AllowedAction::IssueDelete => Some(AgentCapability::Issues),
         AllowedAction::Say => Some(AgentCapability::RespondOnly),
         AllowedAction::ListAgents
+        | AllowedAction::Wait
         | AllowedAction::RequestCapability
         | AllowedAction::RequestSkills
         | AllowedAction::CallSkill => None,

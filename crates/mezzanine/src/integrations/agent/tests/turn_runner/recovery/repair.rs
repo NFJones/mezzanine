@@ -728,7 +728,7 @@ fn turn_runner_settles_once_after_exhausted_malformed_apply_patch_hunk_repairs()
             .content
             .contains("patch hunk lines must start with space, +, or -")
     }));
-    assert_eq!(requests[3].allowed_actions.action_type_names(), vec!["say"]);
+    assert_eq!(requests[3].allowed_actions, requests[0].allowed_actions);
 }
 
 #[test]

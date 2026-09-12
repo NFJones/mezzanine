@@ -927,6 +927,7 @@ pub(super) fn runtime_maap_action_payload_trace_json(
                 runtime_bounded_trace_string_value(payload),
             );
         }
+        AgentActionPayload::Wait => {}
         AgentActionPayload::SpawnAgent {
             role,
             placement,

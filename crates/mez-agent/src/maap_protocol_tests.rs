@@ -984,6 +984,67 @@ fn list_agents_validation_and_schema_cover_agent_types() {
 }
 
 #[test]
+/// Verifies `wait` is an argument-free MMP-only action whose schema and batch
+/// validation prevent it from becoming a generic delay or mixed-action barrier.
+fn wait_round_trips_with_strict_mmp_only_batch_contract() {
+    assert_eq!(
+        AllowedAction::from_action_type("wait"),
+        Some(AllowedAction::Wait)
+    );
+    assert!(AllowedActionSet::all_enabled().contains(AllowedAction::Wait));
+
+    let mut wait = parse_maap_action_json(r#"{"type":"wait"}"#).expect("wait action");
+    wait.id = "wait-1".to_string();
+    assert_eq!(wait.action_type(), "wait");
+    assert!(matches!(wait.payload, AgentActionPayload::Wait));
+    assert!(parse_maap_action_json(r#"{"type":"wait","timeout_ms":1}"#).is_err());
+
+    let valid = MaapBatch {
+        rationale: "await the MMP reply already requested".to_string(),
+        actions: vec![wait.clone()],
+    };
+    valid.validate(&turn(), &[], &[]).expect("valid wait batch");
+
+    let mut progress = parse_maap_action_json(
+        r#"{"type":"say","status":"progress","text":"Waiting for the peer reply"}"#,
+    )
+    .expect("progress say");
+    progress.id = "say-1".to_string();
+    MaapBatch {
+        rationale: "make the MMP wait visible".to_string(),
+        actions: vec![progress.clone(), wait.clone()],
+    }
+    .validate(&turn(), &[], &[])
+    .expect("progress plus wait");
+
+    let mut shell =
+        parse_maap_action_json(r#"{"type":"shell_command","summary":"inspect","command":"pwd"}"#)
+            .expect("shell action");
+    shell.id = "shell-1".to_string();
+    assert!(
+        MaapBatch {
+            rationale: "invalid mixed wait".to_string(),
+            actions: vec![shell, wait.clone()],
+        }
+        .validate(&turn(), &[], &[])
+        .is_err()
+    );
+    assert!(
+        MaapBatch {
+            rationale: "invalid duplicate progress".to_string(),
+            actions: vec![progress.clone(), progress, wait],
+        }
+        .validate(&turn(), &[], &[])
+        .is_err()
+    );
+
+    let schema = maap_action_batch_schema(&AllowedActionSet::all_enabled(), &[]).to_string();
+    assert!(schema.contains("\"wait\""));
+    assert!(schema.contains("Wait only for a response from another agent"));
+    assert!(schema.contains("Never use this action for delays"));
+}
+
+#[test]
 /// Verifies the turn envelope can carry a bounded objective: the provider schema
 /// exposes the optional field, the parse path reads it from a parsed batch, and a
 /// malformed objective never fails the turn.

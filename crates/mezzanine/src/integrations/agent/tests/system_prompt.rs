@@ -10,13 +10,13 @@ use super::*;
 ///
 /// The prompt is provider-visible cached input, so this protects token cost
 /// while allowing policy wording to evolve through ordinary review.
-/// The reviewed ceiling was raised for the static peer-messaging section.
+/// The reviewed ceiling includes strict guidance for the MMP-only wait action.
 fn default_system_prompt_stays_within_size_budget() {
     let prompt = build_agent_system_prompt(&AgentPromptProfile::for_model("test-model")).unwrap();
 
     assert!(
-        prompt.len() <= 18_500,
-        "default prompt exceeded the 18.5 KB budget: {} bytes",
+        prompt.len() <= 19_500,
+        "default prompt exceeded the 19.5 KB budget: {} bytes",
         prompt.len()
     );
 }
@@ -67,6 +67,9 @@ fn system_prompt_keeps_critical_behavioral_invariants() {
         "Prefer a new isolated session",
         "Bias the initial child selection toward a smaller model than your first estimate",
         "Recipients are `session`, `group:session`, `agent:<id>`",
+        "Use `wait` only when active MMP coordination",
+        "Never use `wait` for delays, retries, polling, user input, approvals, subprocesses, network activity, or any circumstance unrelated to MMP messaging",
+        "Send any needed message in an earlier batch",
         "never prompts in any approval mode",
         "it can never approve or deny anything",
     ] {

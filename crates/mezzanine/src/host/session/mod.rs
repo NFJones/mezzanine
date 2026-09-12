@@ -1066,6 +1066,7 @@ mod tests {
                         context_usage: None,
                         context_usage_snapshot: None,
                         latest_request_usage: None,
+                        allowed_actions: None,
                         token_usage: Default::default(),
                         token_usage_by_model: Default::default(),
                     }],

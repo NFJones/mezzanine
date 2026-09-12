@@ -115,7 +115,7 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     );
     assert_eq!(
         openai_tool_action_schemas(capability_tool).len(),
-        18,
+        19,
         "the all-enabled fixture exposes every currently configured action"
     );
     assert_eq!(

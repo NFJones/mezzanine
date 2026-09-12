@@ -202,6 +202,7 @@ fn maap_action_schema(allowed_actions: &AllowedActionSet) -> serde_json::Value {
             AllowedAction::MemorySearch => action_schemas.push(maap_memory_search_action_schema()),
             AllowedAction::MemoryStore => action_schemas.push(maap_memory_store_action_schema()),
             AllowedAction::ListAgents => action_schemas.push(maap_list_agents_action_schema()),
+            AllowedAction::Wait => action_schemas.push(maap_wait_action_schema()),
             AllowedAction::IssueAdd => action_schemas.push(maap_issue_add_action_schema()),
             AllowedAction::IssueUpdate => action_schemas.push(maap_issue_update_action_schema()),
             AllowedAction::IssueQuery => action_schemas.push(maap_issue_query_action_schema()),
@@ -722,6 +723,29 @@ fn maap_list_agents_action_schema() -> serde_json::Value {
         )],
         &["agent_type"],
     )
+}
+
+/// Builds the provider-facing MMP peer wait action schema.
+///
+/// The emphatic description is intentional: `wait` is not a general-purpose
+/// delay primitive and must be selected only after inter-agent MMP activity
+/// creates a concrete reason to await another agent's response.
+fn maap_wait_action_schema() -> serde_json::Value {
+    maap_action_object_schema(
+        "wait",
+        [],
+        &[],
+    )
+    .as_object()
+    .cloned()
+    .map(|mut schema| {
+        schema.insert(
+            "description".to_string(),
+            serde_json::json!("Wait only for a response from another agent during active MMP inter-agent coordination. Never use this action for delays, retries, polling, user input, approvals, subprocesses, network operations, or any circumstance unrelated to MMP messaging. Send any needed MMP message first in an earlier action batch, then emit wait as the only executable action in this batch. The current turn parks without consuming provider capacity and resumes when model-originated peer mail arrives."),
+        );
+        serde_json::Value::Object(schema)
+    })
+    .unwrap_or_else(|| serde_json::json!({}))
 }
 
 /// Runs the maap send message action schema operation for this subsystem.

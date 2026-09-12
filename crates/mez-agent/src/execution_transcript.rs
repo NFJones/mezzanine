@@ -454,6 +454,7 @@ fn assistant_transcript_action_summary(action: &AgentAction) -> String {
             bounded_transcript_field(recipient),
             payload.len()
         ),
+        AgentActionPayload::Wait => "wait for MMP peer mail".to_string(),
         AgentActionPayload::SpawnAgent {
             role,
             session_mode,

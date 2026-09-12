@@ -6,7 +6,7 @@
 //! update state without duplicating display policy.
 
 use super::{
-    AgentActionPayload, AgentTurnExecution, AgentTurnState, BTreeSet, Result,
+    ActionStatus, AgentActionPayload, AgentTurnExecution, AgentTurnState, BTreeSet, Result,
     RuntimeSessionService, SayStatus, runtime_action_result_has_error_code,
     runtime_action_result_is_terminal_failure, runtime_agent_action_error_suffix,
     runtime_agent_action_has_runtime_visible_effect, runtime_agent_action_outcome_line,
@@ -87,7 +87,14 @@ pub(super) fn runtime_agent_execution_prompt_display_lines(
             lines.push("agent: blocked pending approval".to_string());
         }
         AgentTurnState::Running => {
-            lines.push("agent: waiting for pane, tool, or provider continuation".to_string());
+            let waiting_for_peer_message = execution.action_results.iter().any(|result| {
+                result.action_type == "wait" && result.status == ActionStatus::Running
+            });
+            lines.push(if waiting_for_peer_message {
+                "agent: waiting for MMP peer message".to_string()
+            } else {
+                "agent: waiting for pane, tool, or provider continuation".to_string()
+            });
         }
         AgentTurnState::Queued | AgentTurnState::Interrupted => {}
     }
@@ -224,6 +231,7 @@ impl RuntimeSessionService {
                 | AgentActionPayload::McpServerGet { .. }
                 | AgentActionPayload::McpCall { .. }
                 | AgentActionPayload::SendMessage { .. }
+                | AgentActionPayload::Wait
                 | AgentActionPayload::SpawnAgent { .. }
                 | AgentActionPayload::ConfigChange { .. }
                 | AgentActionPayload::MemorySearch { .. }

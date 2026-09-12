@@ -82,6 +82,7 @@ impl RuntimeSessionService {
                 continue;
             }
 
+            let mut model_message_count = 0usize;
             for message in fanout.batch.messages {
                 let label = crate::runtime::control::runtime_peer_message_block_label(
                     message.sequence,
@@ -97,6 +98,9 @@ impl RuntimeSessionService {
                             })
                         });
                 if !already_committed {
+                    if !crate::runtime::control::runtime_owned_bridge_message(&message.envelope) {
+                        model_message_count = model_message_count.saturating_add(1);
+                    }
                     let content = crate::runtime::control::runtime_peer_message_context_content(
                         &message.envelope,
                     );
@@ -127,6 +131,9 @@ impl RuntimeSessionService {
                     .advance_subscription(&recipient, message.sequence)?;
             }
 
+            if model_message_count > 0 && self.resume_agent_peer_wait(&turn, model_message_count)? {
+                continue;
+            }
             if turn.state == AgentTurnState::Running
                 && !self.agent_provider_task_is_owned(&turn.turn_id)
                 && self

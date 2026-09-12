@@ -1743,6 +1743,7 @@ fn runtime_restored_agent_bound_pane_clears_daemon_environment_while_unbound_res
                 context_usage: None,
                 context_usage_snapshot: None,
                 latest_request_usage: None,
+                allowed_actions: None,
                 token_usage: Default::default(),
                 token_usage_by_model: Default::default(),
             }],
@@ -3193,6 +3194,7 @@ fn restored_agent_session_metadata(
         context_usage: None,
         context_usage_snapshot: None,
         latest_request_usage: None,
+        allowed_actions: None,
         token_usage: Default::default(),
         token_usage_by_model: Default::default(),
     }
