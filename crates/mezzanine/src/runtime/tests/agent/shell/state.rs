@@ -2845,6 +2845,160 @@ fn runtime_dispatch_time_apply_patch_terminal_reports_effective_sandbox_boundary
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies a dispatch-time denial for a semantic patch action blocked behind a
+/// persistent uncertified foreground program carries the bounded sandbox
+/// projection its shell sibling reports.
+///
+/// The `foreground_process_blocked_dispatch` terminal resolves its sandbox
+/// projection before the denial is stored. The shell sibling only drove a
+/// `ShellCommand` payload through that boundary, so this regression pins the
+/// `apply_patch` payload to the same four conservative keys.
+#[test]
+fn runtime_dispatch_time_apply_patch_denial_reports_effective_sandbox_boundary() {
+    let (mut service, turn_id, action_id) = apply_patch_dispatch_execution_service();
+    force_foreground_blocked_dispatch(&mut service, &turn_id, &action_id);
+    register_dispatch_fixture_chronology(&mut service, &turn_id);
+
+    let execution = service
+        .dispatch_stored_running_shell_actions(&turn_id)
+        .unwrap()
+        .expect("the stored running patch action should be dispatched");
+    assert_eq!(execution.action_results[0].action_id, action_id);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Denied);
+    assert_eq!(
+        execution.action_results[0]
+            .error
+            .as_ref()
+            .map(|error| error.code.as_str()),
+        Some("foreground_process_blocked_dispatch")
+    );
+    let effective = bounded_sandbox_projection(&execution.action_results[0]);
+    assert_eq!(effective["execution_boundary"], "policy-only");
+    assert_eq!(effective["enforcement"], "none");
+    assert_eq!(effective["network_mode"], "unenforced");
+    assert_eq!(effective["reason"], "policy-only");
+
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Forces the dispatcher's uncertified-foreground denial for one stored running
+/// patch action.
+///
+/// The dispatcher only fails closed once the pane is busy, its foreground
+/// process group is not the certified shell, and the bounded recovery loop has
+/// confirmed enough fresh foreign foreground observations. The fixture records
+/// those confirmations through the same counter the recovery observation
+/// transition fills, so the denial is reached without replaying four rounds of
+/// pane foreground observation transport.
+fn force_foreground_blocked_dispatch(
+    service: &mut RuntimeSessionService,
+    turn_id: &str,
+    action_id: &str,
+) {
+    let primary_pid = service
+        .pane_processes()
+        .primary_pid("%1")
+        .expect("the dispatch fixture keeps a live pane shell");
+    let foreign_process_group = primary_pid.saturating_add(1);
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test("%1", Some(foreign_process_group));
+    service.set_pane_readiness("%1", PaneReadinessState::Busy);
+    for expected_confirmations in 1..=3 {
+        assert_eq!(
+            service.record_pending_shell_dispatch_blocked_recovery_observation(
+                turn_id,
+                action_id,
+                primary_pid,
+                0,
+                foreign_process_group,
+            ),
+            expected_confirmations
+        );
+    }
+}
+
+/// Proves the Bubblewrap capability one semantic patch preflight requires.
+///
+/// The dispatcher resolves path authority and starts the no-forwarding
+/// capability probe for the patch action instead of dispatching it. The fixture
+/// parses that probe's expected stdout exactly as a settled probe would and
+/// records the proven capability, so the next dispatch resumes the same action
+/// under an applied Bubblewrap boundary without replaying the probe transport,
+/// which would otherwise reset pane readiness and re-dispatch the action.
+fn prove_bubblewrap_capability_for_patch(service: &mut RuntimeSessionService, turn_id: &str) {
+    let in_flight = service
+        .dispatch_stored_running_shell_actions(turn_id)
+        .unwrap()
+        .expect("the stored running patch action should be offered to the pane");
+    assert_eq!(in_flight.action_results[0].status, ActionStatus::Running);
+    let (_marker, transaction) = take_bubblewrap_probe_transaction(service);
+    let RunningShellTransactionKind::BubblewrapCapabilityProbe {
+        cache_key,
+        probe_plan,
+        ..
+    } = transaction.kind.clone()
+    else {
+        unreachable!();
+    };
+    let capability = crate::security::sandbox::parse_bubblewrap_capability_probe(
+        &cache_key.pane_id,
+        &cache_key.pane_environment_signature,
+        cache_key.config_generation,
+        &probe_plan,
+        0,
+        probe_plan.expected_stdout,
+    )
+    .unwrap();
+    service.record_bubblewrap_capability(*cache_key, capability);
+}
+
+/// Verifies a dispatch-time terminal result for a semantic patch action reports
+/// the Bubblewrap boundary that applied to its permission policy.
+///
+/// Unlike a shell payload, a semantic patch action resolves Bubblewrap path
+/// authority and settles its no-forwarding capability probe before it reaches a
+/// dispatch-time terminal, so this variant needs the write-scope and
+/// path-resolution fixture. The stored terminal result must still carry only the
+/// bounded four-key projection.
+#[test]
+fn runtime_dispatch_time_apply_patch_terminal_reports_applied_bubblewrap_boundary() {
+    let root = temp_root("runtime-dispatch-patch-bubblewrap-boundary");
+    fs::create_dir_all(&root).unwrap();
+    let (mut service, turn_id, action_id) = apply_patch_dispatch_execution_service();
+    configure_available_bubblewrap(&mut service);
+    service.set_pane_environment_signature_for_tests("%1", path_resolution_environment(&root));
+    cache_path_resolution_maximum(&mut service, &root);
+    // Both the probe settlement and the readiness terminal settle action
+    // results, so the turn chronology must already own the assistant execution
+    // before the patch action is offered to the pane.
+    register_dispatch_fixture_chronology(&mut service, &turn_id);
+    prove_bubblewrap_capability_for_patch(&mut service, &turn_id);
+
+    force_pane_not_ready_dispatch(&mut service);
+    let execution = service
+        .dispatch_stored_running_shell_actions(&turn_id)
+        .unwrap()
+        .expect("the stored running patch action should be dispatched");
+    assert_eq!(execution.action_results[0].action_id, action_id);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Failed);
+    assert_eq!(
+        execution.action_results[0]
+            .error
+            .as_ref()
+            .map(|error| error.code.as_str()),
+        Some("pane_not_ready")
+    );
+    let effective = bounded_sandbox_projection(&execution.action_results[0]);
+    assert_eq!(effective["execution_boundary"], "bubblewrap");
+    assert_eq!(effective["enforcement"], "none");
+    assert_eq!(effective["network_mode"], "unknown");
+    assert_eq!(effective["reason"], "not-probed");
+
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Builds a live prompt turn whose sole `apply_patch` action awaits dispatch.
 ///
 /// The pane-not-ready siblings drive a shell payload through the same
