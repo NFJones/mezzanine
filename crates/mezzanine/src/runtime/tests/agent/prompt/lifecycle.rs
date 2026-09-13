@@ -758,6 +758,82 @@ fn runtime_close_agent_retires_owned_persistent_child_runtime_state() {
     );
     assert!(service.persistent_subagent(&child_agent_id).is_some());
     assert!(service.find_pane_descriptor(&child_pane_id).is_some());
+    let unavailable = close_agent_denial_signature(&foreign_execution.action_results[0]);
+    assert_eq!(unavailable.0, ActionStatus::Rejected);
+    assert_eq!(unavailable.1.as_deref(), Some("unavailable"));
+    assert_eq!(unavailable.3, None);
+
+    for target in [parent_turn.agent_id.as_str(), "agent-%999"] {
+        let denied = execute_close_agent_for_test(&mut service, &parent_turn, target);
+        assert_eq!(close_agent_denial_signature(&denied), unavailable);
+        assert!(service.persistent_subagent(&child_agent_id).is_some());
+        assert!(service.find_pane_descriptor(&child_pane_id).is_some());
+        assert!(
+            service
+                .message_service()
+                .registered_identity(&child_identity)
+                .is_some()
+        );
+    }
+    let mut foreign_agent_turn = parent_turn.clone();
+    foreign_agent_turn.agent_id = "agent-%998".to_string();
+    let denied = execute_close_agent_for_test(&mut service, &foreign_agent_turn, &child_agent_id);
+    assert_eq!(close_agent_denial_signature(&denied), unavailable);
+    assert!(service.persistent_subagent(&child_agent_id).is_some());
+    assert!(service.find_pane_descriptor(&child_pane_id).is_some());
+    assert!(
+        service
+            .message_service()
+            .registered_identity(&child_identity)
+            .is_some()
+    );
+
+    let task_spawn = service
+        .execute_spawn_action_for_turn(
+            &parent_turn,
+            &runtime_spawn_agent_action("task-child", "one-shot task child"),
+        )
+        .expect("task child spawn");
+    let task_spawn: serde_json::Value = serde_json::from_str(
+        task_spawn
+            .structured_content_json
+            .as_deref()
+            .expect("task spawn structured content"),
+    )
+    .expect("task spawn JSON");
+    let task_child_agent_id = task_spawn["spawn"]["agent"]["id"]
+        .as_str()
+        .expect("task child agent id")
+        .to_string();
+    let task_child_pane_id = task_spawn["spawn"]["pane"]["pane_id"]
+        .as_str()
+        .expect("task child pane id")
+        .to_string();
+    let denied = execute_close_agent_for_test(&mut service, &parent_turn, &task_child_agent_id);
+    assert_eq!(close_agent_denial_signature(&denied), unavailable);
+    assert!(service.persistent_subagent(&task_child_agent_id).is_none());
+    assert!(service.find_pane_descriptor(&task_child_pane_id).is_some());
+
+    service.set_persistent_subagent(
+        "agent-%997",
+        crate::runtime::RuntimePersistentSubagent {
+            conversation_id: "stale-child-conversation".to_string(),
+            parent_agent_id: parent_turn.agent_id.clone(),
+            parent_conversation_id: parent_turn.conversation_id.clone(),
+            objective: "stale persistent child".to_string(),
+        },
+    );
+    let denied = execute_close_agent_for_test(&mut service, &parent_turn, "agent-%997");
+    assert_eq!(close_agent_denial_signature(&denied), unavailable);
+    assert!(service.persistent_subagent("agent-%997").is_some());
+    assert!(service.persistent_subagent(&child_agent_id).is_some());
+    assert!(service.find_pane_descriptor(&child_pane_id).is_some());
+    assert!(
+        service
+            .message_service()
+            .registered_identity(&child_identity)
+            .is_some()
+    );
     let planned = mez_agent::plan_action_result(
         &parent_turn,
         &close,
@@ -806,7 +882,68 @@ fn runtime_close_agent_retires_owned_persistent_child_runtime_state() {
             .registered_identity(&child_identity)
             .is_none()
     );
+    let denied = execute_close_agent_for_test(&mut service, &parent_turn, &child_agent_id);
+    assert_eq!(close_agent_denial_signature(&denied), unavailable);
+    assert!(service.persistent_subagent(&child_agent_id).is_none());
+    assert!(service.find_pane_descriptor(&child_pane_id).is_none());
     service.terminate_all_pane_processes().unwrap();
+}
+
+/// Executes one planned `close_agent` action and returns its settled result.
+fn execute_close_agent_for_test(
+    service: &mut RuntimeSessionService,
+    turn: &AgentTurnRecord,
+    agent_id: &str,
+) -> mez_agent::ActionResult {
+    let action = mez_agent::AgentAction {
+        id: "close-agent-denial".to_string(),
+        payload: mez_agent::AgentActionPayload::CloseAgent {
+            agent_id: agent_id.to_string(),
+        },
+    };
+    let planned =
+        mez_agent::plan_action_result(turn, &action, mez_agent::ActionPlanningInput::default())
+            .expect("close_agent plan");
+    let mut execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "close agent denial".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "test close-agent denial".to_string(),
+                actions: vec![action],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: vec![planned],
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+    assert_eq!(
+        service
+            .execute_running_close_agent_actions_for_turn(turn, &mut execution)
+            .expect("close_agent denial execution"),
+        1
+    );
+    execution.action_results.remove(0)
+}
+
+/// Captures the opaque fields that must stay identical for every inaccessible target.
+fn close_agent_denial_signature(
+    result: &mez_agent::ActionResult,
+) -> (ActionStatus, Option<String>, Option<String>, Option<String>) {
+    (
+        result.status,
+        result.error.as_ref().map(|error| error.code.clone()),
+        result.error.as_ref().map(|error| error.message.clone()),
+        result.structured_content_json.clone(),
+    )
 }
 
 /// Verifies persistent child bridge status and result messages commit exactly

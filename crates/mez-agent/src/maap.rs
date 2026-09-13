@@ -843,9 +843,13 @@ impl AgentAction {
             }
             AgentActionPayload::CloseAgent { agent_id } => {
                 validate_non_empty("close agent id", agent_id)?;
-                if mez_core::ids::AgentId::opaque(agent_id.clone()).is_none() {
+                let runtime_pane_id = agent_id.strip_prefix("agent-");
+                if runtime_pane_id
+                    .and_then(|pane_id| mez_core::ids::StableId::parse('%', pane_id.to_string()))
+                    .is_none()
+                {
                     return Err(MaapContractError::invalid_args(
-                        "close agent id must be a valid agent identifier",
+                        "close agent id must be a valid runtime agent identifier",
                     ));
                 }
                 Ok(())

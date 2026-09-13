@@ -1023,13 +1023,25 @@ fn close_agent_round_trips_and_rejects_malformed_agent_ids() {
         AgentActionPayload::CloseAgent { ref agent_id } if agent_id == "agent-%2"
     ));
 
-    let malformed = parse_maap_action_json(r#"{"type":"close_agent","agent_id":"not valid"}"#)
+    for malformed_id in ["not valid", "worker-%2", "agent-", "agent-%worker"] {
+        let mut malformed = parse_maap_action_json(&format!(
+            r#"{{"type":"close_agent","agent_id":"{malformed_id}"}}"#
+        ))
         .expect("malformed close_agent action still parses");
-    let batch = MaapBatch {
-        rationale: "retire worker".to_string(),
-        actions: vec![malformed],
-    };
-    assert!(batch.validate(&turn(), &[], &[]).is_err());
+        malformed.id = "close-1".to_string();
+        let error = MaapBatch {
+            rationale: "retire worker".to_string(),
+            actions: vec![malformed],
+        }
+        .validate(&turn(), &[], &[])
+        .expect_err("malformed close target must fail validation");
+        assert!(
+            error
+                .message()
+                .contains("close agent id must be a valid runtime agent identifier"),
+            "{error:?}"
+        );
+    }
 
     let schema = maap_action_batch_schema(&AllowedActionSet::all_enabled(), &[]).to_string();
     assert!(schema.contains("\"close_agent\""));
