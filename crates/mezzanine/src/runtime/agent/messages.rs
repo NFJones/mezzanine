@@ -169,21 +169,45 @@ impl RuntimeSessionService {
         pane_id: &str,
         envelope: &Envelope,
     ) {
-        // Bridge provenance comes from runtime-authored envelope metadata, so a
-        // model `send_message` always passes `false`. Persistent children use
-        // the same bridge envelope for durable assignment and reply traffic,
-        // which has no one-task lifecycle row to replace the committed echo.
-        let runtime_bridge = crate::runtime::control::runtime_bridge_peer_message(envelope)
-            && self
-                .persistent_subagent(envelope.sender.agent_id.as_str())
-                .is_none();
+        let peer_label =
+            self.runtime_peer_message_endpoint_label(envelope.sender.agent_id.as_str());
         let _ = self.append_agent_received_peer_message_to_terminal_buffer(
             pane_id,
-            envelope.sender.agent_id.as_str(),
+            &peer_label,
             envelope.content_type.as_str(),
             envelope.payload.as_str(),
-            runtime_bridge,
+            false,
         );
+    }
+
+    /// Resolves a peer label from its live pane title without exposing metadata
+    /// beyond the endpoint's already-authorized runtime identity.
+    pub(crate) fn runtime_peer_message_endpoint_label(&self, agent_id: &str) -> String {
+        let Some(pane_id) = agent_id.strip_prefix("agent-") else {
+            return agent_id.to_string();
+        };
+        self.session
+            .windows()
+            .iter()
+            .flat_map(|window| window.panes())
+            .find(|pane| pane.id.as_str() == pane_id)
+            .map(|pane| pane.title.trim())
+            .filter(|title| !title.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| agent_id.to_string())
+    }
+
+    /// Resolves a model recipient spelling to a live endpoint label when it
+    /// names exactly one runtime agent; broader recipients retain their stable
+    /// model-authored spelling because they do not identify one endpoint.
+    fn runtime_peer_message_recipient_label(&self, recipient: &str) -> String {
+        let agent_id = recipient
+            .strip_prefix("agent:")
+            .or_else(|| recipient.starts_with("agent-").then_some(recipient));
+        agent_id.map_or_else(
+            || recipient.to_string(),
+            |agent_id| self.runtime_peer_message_endpoint_label(agent_id),
+        )
     }
 
     /// Starts one peer-message-triggered turn for an idle agent.
@@ -620,9 +644,10 @@ impl RuntimeSessionService {
         // label the action result reports, so a pane log pairs the outbound
         // request with the peer reply that follows it. A rejected recipient or
         // failed transport returns before this point and logs nothing.
+        let recipient_label = self.runtime_peer_message_recipient_label(recipient);
         let _ = self.append_agent_sent_peer_message_to_terminal_buffer(
             &turn.pane_id,
-            recipient.as_str(),
+            &recipient_label,
             content_type.as_str(),
             payload.as_str(),
             false,

@@ -1470,6 +1470,14 @@ impl RuntimeSessionService {
             now_ms,
         );
         if delivery.is_ok() {
+            let parent_label = self.runtime_peer_message_endpoint_label(&parent_agent_id);
+            let _ = self.append_agent_sent_peer_message_to_terminal_buffer(
+                &turn.pane_id,
+                &parent_label,
+                "application/json",
+                &payload.to_json(),
+                false,
+            );
             self.deliver_pending_runtime_agent_messages(now_ms)?;
         }
         let child_label =
@@ -1789,6 +1797,14 @@ impl RuntimeSessionService {
             mez_agent::messaging::MessageScope::Session,
             now_ms,
         )?;
+        let parent_label = self.runtime_peer_message_endpoint_label(parent_agent_id);
+        let _ = self.append_agent_sent_peer_message_to_terminal_buffer(
+            &turn.pane_id,
+            &parent_label,
+            "application/json",
+            &payload.to_json(),
+            false,
+        );
         self.deliver_pending_runtime_agent_messages(now_ms)?;
         Ok(())
     }

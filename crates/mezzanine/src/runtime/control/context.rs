@@ -413,6 +413,11 @@ pub(crate) fn runtime_owned_bridge_message(envelope: &Envelope) -> bool {
 /// inspecting payload text, sender identity, or delegation lineage.
 pub(crate) const RUNTIME_BRIDGE_EXTENSION_FIELD: &str = "runtime_bridge";
 
+/// Envelope extension identifying the initial spawn status paired with a child
+/// pane's parent-prompt presentation.
+pub(crate) const RUNTIME_BRIDGE_INITIAL_SPAWN_EXTENSION_FIELD: &str =
+    "runtime_bridge_initial_spawn";
+
 /// JSON string literal the runtime writes into `runtime_bridge`.
 ///
 /// The value is quoted exactly like the existing `subagent_display_name` values
@@ -427,19 +432,15 @@ pub(crate) fn runtime_bridge_extension_fields() -> Vec<(String, String)> {
     )]
 }
 
-/// Returns whether one envelope is a runtime-owned subagent bridge notification.
-///
-/// The predicate reads runtime-authored envelope metadata only: the always-present
-/// `runtime_bridge` provenance field plus a bridge message type. A model
-/// `send_message` action always emits `message_type = "send"` and never sets the
-/// provenance field, so model mail can never satisfy this predicate, and lineage or
-/// route-based detection is deliberately not used.
-pub(crate) fn runtime_bridge_peer_message(envelope: &Envelope) -> bool {
-    runtime_owned_bridge_message(envelope)
-        && envelope
-            .extension_fields
-            .iter()
-            .any(|(name, _)| name == RUNTIME_BRIDGE_EXTENSION_FIELD)
+/// Returns bridge provenance for the one initial spawn status whose prompt is
+/// already presented directly in the newly created child pane.
+pub(crate) fn runtime_bridge_initial_spawn_extension_fields() -> Vec<(String, String)> {
+    let mut fields = runtime_bridge_extension_fields();
+    fields.push((
+        RUNTIME_BRIDGE_INITIAL_SPAWN_EXTENSION_FIELD.to_string(),
+        "true".to_string(),
+    ));
+    fields
 }
 
 /// Returns bounded peer-message context including sender identity and

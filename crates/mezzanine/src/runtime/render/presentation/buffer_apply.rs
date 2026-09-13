@@ -230,10 +230,10 @@ enum PeerMessageEchoBody {
 /// marker makes the text invalid JSON, so pretty-printing it would imply a
 /// completeness the line does not have.
 ///
-/// `None` means the payload must not log at all. A JSON envelope without an
-/// `output` field (`task_status`, for example) and JSON that is malformed without
-/// having been truncated both stay silent: no prefix-only row, no placeholder,
-/// and no error line.
+/// `None` means the payload is malformed without having been truncated and
+/// must not log at all. JSON envelopes without an `output` field, including
+/// `task_status`, render their bounded JSON value so every committed peer
+/// message remains visible at its endpoint.
 fn peer_message_echo_body(
     content_type: Option<&str>,
     payload: &str,
@@ -245,19 +245,21 @@ fn peer_message_echo_body(
         return Some(PeerMessageEchoBody::Literal(bounded));
     }
     let envelope = serde_json::from_str::<serde_json::Value>(&bounded).ok()?;
-    let output = envelope.get(AGENT_PEER_MESSAGE_JSON_OUTPUT_FIELD)?;
-    let value = match output {
+    let value = match envelope.get(AGENT_PEER_MESSAGE_JSON_OUTPUT_FIELD) {
+        None => envelope,
         // A string `output` logs its string value, and a value that is itself
         // JSON is pretty-printed so nested structure stays readable.
-        serde_json::Value::String(text) => match serde_json::from_str::<serde_json::Value>(text) {
-            Ok(nested) => nested,
-            Err(_) => {
-                return Some(PeerMessageEchoBody::Literal(peer_message_echo_payload(
-                    text,
-                )));
+        Some(serde_json::Value::String(text)) => {
+            match serde_json::from_str::<serde_json::Value>(text) {
+                Ok(nested) => nested,
+                Err(_) => {
+                    return Some(PeerMessageEchoBody::Literal(peer_message_echo_payload(
+                        text,
+                    )));
+                }
             }
-        },
-        value => value.clone(),
+        }
+        Some(value) => value.clone(),
     };
     let pretty = serde_json::to_string_pretty(&value).ok()?;
     let bounded_display = peer_message_echo_payload(&pretty);
@@ -694,9 +696,8 @@ impl RuntimeSessionService {
     /// decides how the payload is logged: a `application/json` payload logs only
     /// its `output` field, and every other media type logs as it always has.
     ///
-    /// `runtime_bridge` marks a notification the runtime itself authored on the
-    /// subagent bridge; `agents.peer_message_log_mode` decides whether that echo
-    /// is written at all.
+    /// `runtime_bridge` marks only the initial spawn status whose content is
+    /// already represented by the child pane's parent-prompt row.
     pub(crate) fn append_agent_received_peer_message_to_terminal_buffer(
         &mut self,
         pane_id: &str,
@@ -779,9 +780,8 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         let log_mode = self.agent_peer_message_log_mode();
         if log_mode != PeerMessageLogMode::Verbose && runtime_bridge {
-            // A runtime-owned bridge notification already has its dedicated
-            // `subagent ...` status/result line, so normal mode writes no row, no
-            // placeholder, and no presentation record for replay to resurrect.
+            // Only the initial spawn status duplicates an already-rendered child
+            // parent prompt. Other runtime bridge messages remain visible.
             return Ok(());
         }
         let body = if log_mode == PeerMessageLogMode::Verbose {
@@ -5004,25 +5004,24 @@ mod tests {
         ));
     }
 
-    /// Verifies a JSON payload logs nothing at all unless it carries a
-    /// displayable `output` field: no prefix-only row, no placeholder, and no
-    /// error line.
+    /// Verifies output-less JSON remains visible while malformed JSON stays
+    /// silent, preserving exact-once committed peer-message visibility.
     #[test]
-    fn peer_message_echo_projection_suppresses_json_without_output() {
+    fn peer_message_echo_projection_renders_json_without_output() {
         let content_type = Some("application/json");
-        // A `task_status` payload, which has no `output` field.
-        assert!(
+        // A `task_status` payload has no `output` field but still represents
+        // one committed message and therefore remains operator-visible.
+        assert!(matches!(
             peer_message_echo_body(
                 content_type,
                 r#"{"task_id":"t-1","state":"running","progress_percent":0,"summary":"working"}"#
-            )
-            .is_none()
-        );
+            ),
+            Some(PeerMessageEchoBody::Json { compact, .. })
+                if compact.contains("working") && compact.contains("task_id")
+        ));
         // Malformed JSON that was not truncated stays silent too.
         assert!(peer_message_echo_body(content_type, r#"{"output":"unterminated"#).is_none());
         assert!(peer_message_echo_body(content_type, "not json at all").is_none());
-        // Structurally valid JSON without the field is suppressed as well.
-        assert!(peer_message_echo_body(content_type, "[1,2,3]").is_none());
     }
 
     /// Verifies `output` projection: a string logs its value, a string that is

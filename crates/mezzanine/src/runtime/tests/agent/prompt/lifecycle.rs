@@ -314,8 +314,6 @@ fn runtime_subagent_spawn_bridge_notifications_log_no_parent_pane_echo() {
         )
         .unwrap();
     let spawned = serde_json::from_str::<serde_json::Value>(&spawned).unwrap();
-    let child_pane_id = spawned["pane"]["pane_id"].as_str().unwrap().to_string();
-    let child_agent_id = format!("agent-{child_pane_id}");
     let turn_id = spawned["turn"]["id"].as_str().unwrap().to_string();
     let parent_pane_text = |service: &crate::runtime::RuntimeSessionService| {
         service
@@ -324,16 +322,10 @@ fn runtime_subagent_spawn_bridge_notifications_log_no_parent_pane_echo() {
             .normal_content_lines()
             .join("\n")
     };
-    let echo_marker = format!("{child_agent_id}> ");
-
     let spawn_text = parent_pane_text(&service);
     assert!(
         spawn_text.contains("subagent ") && spawn_text.contains("started in pane"),
         "the spawn notice keeps its structural `subagent ...` line: {spawn_text}"
-    );
-    assert!(
-        !spawn_text.contains(&echo_marker),
-        "the spawn notice logs no bridge echo: {spawn_text}"
     );
 
     let child_turn = service
@@ -356,9 +348,10 @@ fn runtime_subagent_spawn_bridge_notifications_log_no_parent_pane_echo() {
         running_text.contains("subagent task running"),
         "the running update keeps its structural `subagent ...` line: {running_text}"
     );
-    assert!(
-        !running_text.contains(&echo_marker),
-        "the running update logs no bridge echo: {running_text}"
+    assert_eq!(
+        running_text.matches("subagent task running").count(),
+        2,
+        "the committed bridge status logs once alongside its structural status line: {running_text}"
     );
 
     service
@@ -370,12 +363,8 @@ fn runtime_subagent_spawn_bridge_notifications_log_no_parent_pane_echo() {
         "the terminal result keeps its structural `subagent ...` line: {result_text}"
     );
     assert!(
-        !result_text.contains(&echo_marker),
-        "the terminal result logs no bridge echo: {result_text}"
-    );
-    assert!(
-        !result_text.contains("completed without provider output"),
-        "a bridge result payload is never projected into the parent pane: {result_text}"
+        result_text.contains("completed without provider output"),
+        "the committed bridge result projects its output into the parent pane: {result_text}"
     );
     service.terminate_all_pane_processes().unwrap();
 }
@@ -1731,6 +1720,32 @@ fn runtime_subagent_spawn_logs_parent_prompt_in_child_pane() {
     assert!(
         child_text.contains("parent> inspect the renderer issue"),
         "{child_text}"
+    );
+    assert_eq!(
+        child_text
+            .matches("parent> inspect the renderer issue")
+            .count(),
+        1,
+        "the initial bridge must not duplicate the already-rendered child prompt: {child_text}"
+    );
+    assert!(
+        !child_text.contains("subagent task started"),
+        "only the child-side duplicate is suppressed: {child_text}"
+    );
+    service
+        .start_agent_prompt_turn("%1", "inspect child startup status")
+        .unwrap();
+    let parent_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(
+        parent_text
+            .matches("subagent task queued for agent surface startup")
+            .count(),
+        1,
+        "the parent receives one committed initial task-status echo: {parent_text}"
     );
     service.terminate_all_pane_processes().unwrap();
 }

@@ -506,6 +506,33 @@ fn peer_echo_pane_lines(
         .unwrap_or_default()
 }
 
+/// Verifies peer-message labels prefer a live endpoint title and otherwise
+/// preserve the canonical runtime agent id.
+#[test]
+fn runtime_peer_message_endpoint_labels_use_live_titles_with_agent_id_fallback() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(60, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .session
+        .set_pane_title_explicit("%1", "  coordinator pane  ")
+        .unwrap();
+
+    assert_eq!(
+        service.runtime_peer_message_endpoint_label("agent-%1"),
+        "coordinator pane"
+    );
+    assert_eq!(
+        service.runtime_peer_message_endpoint_label("agent-%9"),
+        "agent-%9"
+    );
+    assert_eq!(
+        service.runtime_peer_message_endpoint_label("external-agent"),
+        "external-agent"
+    );
+}
+
 /// Verifies delivered peer mail is logged prompt-style in the recipient pane
 /// with the sender named at the destination end of the direction arrow.
 ///
@@ -630,6 +657,35 @@ fn runtime_peer_message_echo_logs_sender_prefix_without_user_trust_domain() {
         "{active_turn_echoed:#?}"
     );
 
+    // Distinct accepted envelopes carrying identical text remain distinct
+    // committed messages. Logging is keyed by the canonical delivery, never
+    // by payload text.
+    service
+        .control
+        .message_service_mut()
+        .accept_at_with_scope(
+            &sender.agent_id,
+            peer_message("peer-echo-3", "cwd ok"),
+            MessageScope::Session,
+            now_ms,
+        )
+        .unwrap();
+    assert_eq!(
+        service
+            .deliver_pending_runtime_agent_messages(now_ms)
+            .unwrap(),
+        1
+    );
+    let repeated_payload_echoed = peer_echo_pane_lines(&service, "%1");
+    assert_eq!(
+        repeated_payload_echoed
+            .iter()
+            .filter(|line| line == &"▐ agent-%3> cwd ok")
+            .count(),
+        2,
+        "identical payloads from separate committed envelopes both log: {repeated_payload_echoed:#?}"
+    );
+
     let turn = service
         .agent_turn_ledger()
         .turns()
@@ -643,7 +699,7 @@ fn runtime_peer_message_echo_logs_sender_prefix_without_user_trust_domain() {
         .iter()
         .filter(|block| block.source == ContextSourceKind::PeerMessage)
         .collect::<Vec<_>>();
-    assert_eq!(peer_blocks.len(), 2, "{peer_blocks:#?}");
+    assert_eq!(peer_blocks.len(), 3, "{peer_blocks:#?}");
     assert!(
         peer_blocks[0]
             .content
@@ -987,9 +1043,8 @@ fn runtime_peer_message_echo_logs_committed_bridge_traffic_once() {
             .iter()
             .filter(|line| line.contains("agent-%3> "))
             .count(),
-        1,
-        "only the model message logs: both committed bridge notifications stay silent \
-         because each one already has its dedicated `subagent ...` line: {committed:#?}"
+        3,
+        "each committed bridge status and the model message render once: {committed:#?}"
     );
     let committed_text = compact(committed.clone());
     assert_eq!(
@@ -997,12 +1052,11 @@ fn runtime_peer_message_echo_logs_committed_bridge_traffic_once() {
         1,
         "the committed model message logs exactly once: {committed_text}"
     );
-    for suppressed in ["bridgeevidenceone", "bridgeevidencetwo", "taskid"] {
+    for summary in ["bridgeevidenceone", "bridgeevidencetwo"] {
         assert_eq!(
-            committed_text.matches(suppressed).count(),
-            0,
-            "a bridge echo is suppressed before any row exists, so {suppressed} must not \
-             reach the pane log: {committed_text}"
+            committed_text.matches(summary).count(),
+            1,
+            "each committed task-status summary renders exactly once: {committed_text}"
         );
     }
 
@@ -1024,8 +1078,8 @@ fn runtime_peer_message_echo_logs_committed_bridge_traffic_once() {
     );
     assert_eq!(
         active.matches("bridgeevidencethree").count(),
-        0,
-        "a suppressed bridge arrival on an active turn logs nothing: {active}"
+        1,
+        "an active-turn committed task status renders exactly once: {active}"
     );
 
     // A `task_result` bridge payload does carry an `output` field, so the bridge
@@ -1046,15 +1100,14 @@ fn runtime_peer_message_echo_logs_committed_bridge_traffic_once() {
             .iter()
             .filter(|line| line.contains("agent-%3> "))
             .count(),
-        1,
-        "a committed `task_result` bridge notification logs no echo row, so the model \
-         message line stays the only one: {projected:#?}"
+        5,
+        "each committed bridge status/result and the model message logs exactly once: {projected:#?}"
     );
     let projected_text = compact(projected);
     assert_eq!(
         projected_text.matches("taskcomplete").count(),
-        0,
-        "the bridge result payload is never projected in normal mode: {projected_text}"
+        1,
+        "the bridge result output projects exactly once in normal mode: {projected_text}"
     );
     for omitted in ["bridgeresult", "success"] {
         assert_eq!(
@@ -1130,8 +1183,7 @@ fn runtime_model_peer_mail_without_bridge_provenance_still_logs_both_directions(
     assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
     let sent = peer_echo_pane_lines(&service, "%1");
     assert!(
-        sent.iter()
-            .any(|line| line == "▐ agent:agent-%2< parent reply"),
+        sent.iter().any(|line| line == "▐ agent-%2< parent reply"),
         "a model-authored outbound message keeps its recipient echo: {sent:#?}"
     );
     service.terminate_all_pane_processes().unwrap();

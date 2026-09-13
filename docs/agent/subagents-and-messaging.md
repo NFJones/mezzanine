@@ -98,6 +98,11 @@ use it as a sleep, delay, retry, poll, approval wait, user-input wait, subproces
 wait, network wait, or for any other circumstance. Runtime-authored task status
 and task result bridge messages do not wake it.
 
+Every successfully accepted outbound message and every committed received message
+is written once in each participating endpoint pane log. Runtime bridge traffic
+uses the same rule; only the initial spawn status explicitly paired with the
+child pane's rendered `parent>` prompt is suppressed to avoid that one duplicate.
+
 Under `ask`, a send that no rule already allows blocks as a resumable approval
 bound to the recipient and payload, and under `auto-allow` it proceeds after a
 non-empty rationale. Configured deny rules win in every mode. Use
