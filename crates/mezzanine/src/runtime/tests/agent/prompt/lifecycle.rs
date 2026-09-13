@@ -605,7 +605,7 @@ fn runtime_persistent_subagent_reuses_identity_and_conversation_across_mmp_turns
         .registered_identity(&sender.agent_id)
         .cloned()
         .expect("parent identity remains registered after /new");
-    service
+    let error = service
         .control
         .message_service_mut()
         .accept_at(
@@ -625,7 +625,12 @@ fn runtime_persistent_subagent_reuses_identity_and_conversation_across_mmp_turns
             },
             now_ms.saturating_add(10),
         )
-        .unwrap();
+        .unwrap_err();
+    assert_eq!(
+        error.kind(),
+        mez_agent::messaging::MessageErrorKind::NotFound,
+        "a fenced persistent child must be indistinguishable from an absent recipient"
+    );
     assert_eq!(
         service
             .deliver_pending_runtime_agent_messages(now_ms.saturating_add(10))

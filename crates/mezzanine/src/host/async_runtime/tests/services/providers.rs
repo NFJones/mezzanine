@@ -1388,14 +1388,9 @@ async fn assert_routed_subagent_settles_after_in_place_selection(
     let requests = StdArc::new(Mutex::new(Vec::new()));
     let server_requests = requests.clone();
     let server = tokio::spawn(async move {
-        for (request_index, expected_model) in [
-            "router-model",
-            "selected-model",
-            "selected-model",
-            "selected-model",
-        ]
-        .into_iter()
-        .enumerate()
+        for (request_index, expected_model) in ["router-model", "selected-model", "selected-model"]
+            .into_iter()
+            .enumerate()
         {
             let (mut stream, _) = listener.accept().await.unwrap();
             let request = async_provider_concurrency_read_http_request(&mut stream).await;
@@ -1413,23 +1408,8 @@ async fn assert_routed_subagent_settles_after_in_place_selection(
                 .await;
             } else if request_index == 1 {
                 let content = serde_json::json!({
-                    "rationale": "request the sandbox action surface",
-                    "actions": [{
-                        "type": "request_capability",
-                        "capability": "shell",
-                        "reason": "Run the routed sandbox marker command."
-                    }]
-                })
-                .to_string();
-                async_provider_concurrency_write_chat_content_response(
-                    &mut stream,
-                    expected_model,
-                    &content,
-                )
-                .await;
-            } else if request_index == 2 {
-                let content = serde_json::json!({
                     "rationale": "exercise the routed subagent sandbox",
+                    "objective": null,
                     "actions": [{
                         "type": "shell_command",
                         "summary": "Print the routed sandbox marker.",
@@ -1446,6 +1426,7 @@ async fn assert_routed_subagent_settles_after_in_place_selection(
             } else {
                 let content = serde_json::json!({
                     "rationale": "complete the routed subagent turn",
+                    "objective": null,
                     "actions": [{
                         "type": "say",
                         "status": "final",
@@ -1741,27 +1722,27 @@ executable = "{bubblewrap_executable}"
     let requests = requests.lock().unwrap();
     assert_eq!(
         requests.len(),
-        4,
-        "lifecycle={lifecycle_before_actor_exit:?} report={report:?} supervisor={supervisor_report:?} requests={requests:#?}"
+        3,
+        "lifecycle={lifecycle_before_actor_exit:?} report={report:?} supervisor={supervisor_report:?} requests={requests:#?} turns={:#?} pane={pane_text} events={retained_events:#?} failed_execution={failed_execution:#?}",
+        exit.service.agent_turn_ledger().turns()
     );
     assert!(requests[0].contains(r#""model":"router-model""#));
     assert!(requests[1].contains(r#""model":"selected-model""#));
     assert!(requests[2].contains(r#""model":"selected-model""#));
-    assert!(requests[3].contains(r#""model":"selected-model""#));
     assert!(
-        !requests[2].contains(sandbox_output),
+        !requests[1].contains(sandbox_output),
         "the shell action request must not contain the expected output marker: {}",
+        requests[1]
+    );
+    assert!(
+        requests[2].contains(sandbox_output),
+        "the post-settlement selected-model request must contain the sandbox action output: {}",
         requests[2]
     );
     assert!(
-        requests[3].contains(sandbox_output),
-        "the post-settlement selected-model request must contain the sandbox action output: {}",
-        requests[3]
-    );
-    assert!(
-        !requests[3].contains("ROUTED_SANDBOX_ESCAPE"),
+        !requests[2].contains("ROUTED_SANDBOX_ESCAPE"),
         "the real Bubblewrap action must not report a successful write through the read-only mount: {}",
-        requests[3]
+        requests[2]
     );
     assert_eq!(
         exit.service.runtime_metrics().shell_actions_dispatched,

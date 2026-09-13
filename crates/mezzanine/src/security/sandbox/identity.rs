@@ -150,13 +150,11 @@ pub(crate) fn current_process_environment_signature()
     group_ids.insert(primary_group_id);
     let active_groups = group_ids
         .into_iter()
-        .map(|id| {
-            Ok(EnvironmentGroup {
-                id,
-                name: current_group_name(id)?,
-            })
+        .map(|id| EnvironmentGroup {
+            id,
+            name: current_group_name(id).unwrap_or_else(|_| id.to_string()),
         })
-        .collect::<Result<Vec<_>, SandboxCompileError>>()?;
+        .collect::<Vec<_>>();
     EnvironmentSignature::new(
         "linux",
         std::env::consts::ARCH,

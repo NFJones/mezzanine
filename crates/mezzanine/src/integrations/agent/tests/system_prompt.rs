@@ -10,13 +10,13 @@ use super::*;
 ///
 /// The prompt is provider-visible cached input, so this protects token cost
 /// while allowing policy wording to evolve through ordinary review.
-/// The reviewed ceiling includes strict guidance for the MMP-only wait action.
+/// The reviewed ceiling includes project-scoped MMP and persistent-agent guidance.
 fn default_system_prompt_stays_within_size_budget() {
     let prompt = build_agent_system_prompt(&AgentPromptProfile::for_model("test-model")).unwrap();
 
     assert!(
-        prompt.len() <= 19_500,
-        "default prompt exceeded the 19.5 KB budget: {} bytes",
+        prompt.len() <= 21_000,
+        "default prompt exceeded the 21 KB budget: {} bytes",
         prompt.len()
     );
 }

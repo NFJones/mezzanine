@@ -430,7 +430,13 @@ impl RuntimeSessionService {
         let target_latest_usage = self.agent_latest_request_usage(&conversation_id).cloned();
         let target_project_scope = prepared_resume_state
             .as_ref()
-            .and_then(|prepared| prepared.project_scope.clone());
+            .and_then(|prepared| prepared.project_scope.clone())
+            .or_else(|| {
+                let working_directory = self.pane_current_working_directory(pane_id)?;
+                let root = crate::security::project::discover_project_root(&working_directory);
+                let root = std::fs::canonicalize(root).ok()?;
+                Some(mez_agent::messaging::ProjectMembership::from_canonical_root(root))
+            });
 
         let resume_result = (|| -> Result<(String, u64, mez_agent::AgentShellVisibility)> {
             let (session_id, transcript_entries, visibility) = {

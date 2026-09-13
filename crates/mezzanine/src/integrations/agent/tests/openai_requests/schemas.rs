@@ -795,6 +795,8 @@ fn openai_responses_spawn_schema_is_strict_and_enforces_sizing_pairs() {
     assert_eq!(
         spawn["required"],
         serde_json::json!([
+            "lifetime",
+            "objective",
             "reasoning_effort",
             "role",
             "session",

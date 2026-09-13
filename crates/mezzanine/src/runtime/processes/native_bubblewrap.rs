@@ -1199,19 +1199,19 @@ fn native_environment_signature_for_context(
         ))
     })?;
     let user_name = crate::security::sandbox::resolve_user_name(credentials.user_id)
-        .map_err(|error| MezError::invalid_state(error.message()))?;
+        .unwrap_or_else(|_| credentials.user_id.to_string());
     let mut group_ids = credentials.supplementary_group_ids.clone();
     group_ids.push(credentials.primary_group_id);
     group_ids.sort_unstable();
     group_ids.dedup();
     let active_groups = group_ids
         .into_iter()
-        .map(|id| {
-            let name = crate::security::sandbox::resolve_group_name(id)
-                .map_err(|error| MezError::invalid_state(error.message()))?;
-            Ok(EnvironmentGroup { id, name })
+        .map(|id| EnvironmentGroup {
+            id,
+            name: crate::security::sandbox::resolve_group_name(id)
+                .unwrap_or_else(|_| id.to_string()),
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Vec<_>>();
     let home_directory = context
         .environment()
         .iter()

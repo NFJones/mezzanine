@@ -920,6 +920,7 @@ mod tests {
     fn zen_focus_composition_does_not_readmit_configured_provider() {
         use crate::config::{ConfigFormat, ConfigLayer, ConfigScope};
         let (mut service, primary) = fixture();
+        service.presentation.settings.terminal_zen_mode = false;
         let cwd = std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
         let quoted_cwd = serde_json::to_string(&cwd.to_string_lossy()).unwrap();
         service.replace_config_layers(vec![ConfigLayer {
