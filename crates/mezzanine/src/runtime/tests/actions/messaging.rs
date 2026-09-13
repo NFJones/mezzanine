@@ -531,6 +531,33 @@ fn runtime_peer_message_endpoint_labels_use_live_titles_with_agent_id_fallback()
         service.runtime_peer_message_endpoint_label("external-agent"),
         "external-agent"
     );
+
+    let pane_target = mez_agent::messaging::Recipient::Pane(PaneId::opaque("%1").unwrap());
+    for recipient in ["pane:%1", "%1"] {
+        assert_eq!(
+            service.runtime_peer_message_recipient_label(recipient, &pane_target),
+            "coordinator pane",
+            "exact pane spelling {recipient} resolves the live endpoint title"
+        );
+    }
+    let missing_pane = mez_agent::messaging::Recipient::Pane(PaneId::opaque("%9").unwrap());
+    for recipient in ["pane:%9", "%9"] {
+        assert_eq!(
+            service.runtime_peer_message_recipient_label(recipient, &missing_pane),
+            "agent-%9",
+            "exact pane spelling {recipient} falls back to the canonical agent id"
+        );
+    }
+    let agent_target = mez_agent::messaging::Recipient::Agent(AgentId::opaque("agent-%9").unwrap());
+    assert_eq!(
+        service.runtime_peer_message_recipient_label("agent:agent-%9", &agent_target),
+        "agent-%9"
+    );
+    let session_target = mez_agent::messaging::Recipient::Session;
+    assert_eq!(
+        service.runtime_peer_message_recipient_label("session", &session_target),
+        "session"
+    );
 }
 
 /// Verifies delivered peer mail is logged prompt-style in the recipient pane

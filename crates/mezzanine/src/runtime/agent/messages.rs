@@ -197,16 +197,22 @@ impl RuntimeSessionService {
             .unwrap_or_else(|| agent_id.to_string())
     }
 
-    /// Resolves a model recipient spelling to a live endpoint label when it
-    /// names exactly one runtime agent; broader recipients retain their stable
-    /// model-authored spelling because they do not identify one endpoint.
-    fn runtime_peer_message_recipient_label(&self, recipient: &str) -> String {
-        let agent_id = recipient
-            .strip_prefix("agent:")
-            .or_else(|| recipient.starts_with("agent-").then_some(recipient));
+    /// Resolves an exact recipient target to its live endpoint label. Broader
+    /// selectors retain their stable model-authored spelling because they do
+    /// not identify one endpoint.
+    pub(crate) fn runtime_peer_message_recipient_label(
+        &self,
+        recipient: &str,
+        recipient_target: &mez_agent::messaging::Recipient,
+    ) -> String {
+        let agent_id = match recipient_target {
+            mez_agent::messaging::Recipient::Agent(agent_id) => Some(agent_id.to_string()),
+            mez_agent::messaging::Recipient::Pane(pane_id) => Some(format!("agent-{pane_id}")),
+            _ => None,
+        };
         agent_id.map_or_else(
             || recipient.to_string(),
-            |agent_id| self.runtime_peer_message_endpoint_label(agent_id),
+            |agent_id| self.runtime_peer_message_endpoint_label(&agent_id),
         )
     }
 
@@ -600,7 +606,7 @@ impl RuntimeSessionService {
             message_type: "send".to_string(),
             time: format!("runtime:{now_ms}"),
             sender: sender.clone(),
-            recipient: recipient_target,
+            recipient: recipient_target.clone(),
             correlation_id: correlation_id
                 .clone()
                 .or_else(|| Some(turn.turn_id.clone())),
@@ -644,7 +650,8 @@ impl RuntimeSessionService {
         // label the action result reports, so a pane log pairs the outbound
         // request with the peer reply that follows it. A rejected recipient or
         // failed transport returns before this point and logs nothing.
-        let recipient_label = self.runtime_peer_message_recipient_label(recipient);
+        let recipient_label =
+            self.runtime_peer_message_recipient_label(recipient, &recipient_target);
         let _ = self.append_agent_sent_peer_message_to_terminal_buffer(
             &turn.pane_id,
             &recipient_label,
