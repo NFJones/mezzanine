@@ -819,6 +819,96 @@ impl RuntimeSessionService {
         Ok(executed)
     }
 
+    /// Executes pending `close_agent` actions for caller-owned persistent children.
+    pub(crate) fn execute_running_close_agent_actions_for_turn(
+        &mut self,
+        turn: &AgentTurnRecord,
+        execution: &mut AgentTurnExecution,
+    ) -> Result<usize> {
+        if execution.terminal_state != AgentTurnState::Running {
+            return Ok(0);
+        }
+        let Some(batch) = execution.response.action_batch.clone() else {
+            return Ok(0);
+        };
+        let mut executed = 0usize;
+        for index in 0..execution.action_results.len() {
+            if execution.action_results[index].status != ActionStatus::Running
+                || execution.action_results[index].action_type != "close_agent"
+            {
+                continue;
+            }
+            let action = batch
+                .actions
+                .iter()
+                .find(|action| action.id == execution.action_results[index].action_id)
+                .cloned()
+                .ok_or_else(|| {
+                    MezError::invalid_state("running close result does not match an action")
+                })?;
+            execution.action_results[index] =
+                self.execute_close_agent_action_for_turn(turn, &action)?;
+            executed = executed.saturating_add(1);
+        }
+        execution.terminal_state = runtime_agent_turn_state_from_action_results(
+            &execution.action_results,
+            execution.final_turn,
+        );
+        Ok(executed)
+    }
+
+    /// Closes one persistent child after verifying the authoritative ownership record.
+    fn execute_close_agent_action_for_turn(
+        &mut self,
+        turn: &AgentTurnRecord,
+        action: &AgentAction,
+    ) -> Result<ActionResult> {
+        let AgentActionPayload::CloseAgent { agent_id } = &action.payload else {
+            return Err(MezError::invalid_args(
+                "subagent close execution requires a close_agent action",
+            ));
+        };
+        let unavailable = || {
+            ActionResult::failed(
+                turn,
+                action,
+                ActionStatus::Rejected,
+                "unavailable",
+                "persistent child is unavailable; refresh list_agents before retrying",
+            )
+        };
+        let Some(persistent) = self.persistent_subagent(agent_id) else {
+            return Ok(unavailable()?);
+        };
+        if persistent.parent_agent_id != turn.agent_id
+            || persistent.parent_conversation_id != turn.conversation_id
+        {
+            return Ok(unavailable()?);
+        }
+        let Some(pane_id) = runtime_agent_pane_id(agent_id) else {
+            return Ok(unavailable()?);
+        };
+        if self.find_pane_descriptor(pane_id.as_str()).is_none() {
+            return Ok(unavailable()?);
+        }
+        let Some(primary) = self.session.layout_owner_client_id().cloned() else {
+            return Ok(unavailable()?);
+        };
+        self.dispatch_runtime_pane_close(
+            &primary,
+            &format!(
+                r#"{{"pane_id":"{}","force":true}}"#,
+                json_escape(pane_id.as_str())
+            ),
+        )?;
+        Ok(ActionResult::succeeded(
+            turn,
+            action,
+            vec!["persistent child closed".to_string()],
+            Some(serde_json::json!({"closed": true, "agent_id": agent_id}).to_string()),
+        ))
+    }
+
     /// Executes one MAAP `spawn_agent` action through the runtime subagent
     /// creation path.
     ///

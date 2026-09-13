@@ -131,6 +131,9 @@ impl RuntimeSessionService {
         let spawn_actions_executed =
             self.execute_running_spawn_actions_for_turn(turn, &mut execution)?;
         terminal_observations.observe(&execution);
+        let close_agent_actions_executed =
+            self.execute_running_close_agent_actions_for_turn(turn, &mut execution)?;
+        terminal_observations.observe(&execution);
         let config_actions_executed =
             self.execute_running_config_change_actions_for_turn(turn, &mut execution)?;
         terminal_observations.observe(&execution);
@@ -140,6 +143,7 @@ impl RuntimeSessionService {
             .saturating_add(mcp_discovery_actions_executed)
             .saturating_add(mcp_actions_executed)
             .saturating_add(spawn_actions_executed)
+            .saturating_add(close_agent_actions_executed)
             .saturating_add(config_actions_executed);
         let persistence_actions_pending = execution.terminal_state == AgentTurnState::Running
             && execution.action_results.iter().any(|result| {

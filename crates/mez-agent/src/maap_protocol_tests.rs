@@ -1006,6 +1006,37 @@ fn list_agents_validation_and_schema_cover_agent_types() {
 }
 
 #[test]
+/// Verifies `close_agent` requires a structurally valid target identity while
+/// remaining present in the configurable action catalog and provider schema.
+fn close_agent_round_trips_and_rejects_malformed_agent_ids() {
+    assert_eq!(
+        AllowedAction::from_action_type("close_agent"),
+        Some(AllowedAction::CloseAgent)
+    );
+    assert!(AllowedActionSet::all_enabled().contains(AllowedAction::CloseAgent));
+
+    let action = parse_maap_action_json(r#"{"type":"close_agent","agent_id":"agent-%2"}"#)
+        .expect("close_agent action");
+    assert_eq!(action.action_type(), "close_agent");
+    assert!(matches!(
+        action.payload,
+        AgentActionPayload::CloseAgent { ref agent_id } if agent_id == "agent-%2"
+    ));
+
+    let malformed = parse_maap_action_json(r#"{"type":"close_agent","agent_id":"not valid"}"#)
+        .expect("malformed close_agent action still parses");
+    let batch = MaapBatch {
+        rationale: "retire worker".to_string(),
+        actions: vec![malformed],
+    };
+    assert!(batch.validate(&turn(), &[], &[]).is_err());
+
+    let schema = maap_action_batch_schema(&AllowedActionSet::all_enabled(), &[]).to_string();
+    assert!(schema.contains("\"close_agent\""));
+    assert!(schema.contains("\"agent_id\""));
+}
+
+#[test]
 /// Verifies `wait` is an argument-free MMP-only action whose schema and batch
 /// validation prevent it from becoming a generic delay or mixed-action barrier.
 fn wait_round_trips_with_strict_mmp_only_batch_contract() {

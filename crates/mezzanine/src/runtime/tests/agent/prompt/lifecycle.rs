@@ -82,6 +82,7 @@ fn runtime_native_subagent_startup_bypasses_pane_bootstrap() {
             "fetch_url",
             "send_message",
             "spawn_agent",
+            "close_agent",
             "mcp_server_search",
             "mcp_server_get",
             "mcp_call",
@@ -647,6 +648,164 @@ fn runtime_persistent_subagent_reuses_identity_and_conversation_across_mmp_turns
         child_turn_count
     );
 
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a parent can close only its live persistent child and that the
+/// forced pane-close lifecycle retires the child's authority, shell, and MMP
+/// identity state rather than leaving it discoverable after the action settles.
+#[test]
+fn runtime_close_agent_retires_owned_persistent_child_runtime_state() {
+    let mut service = test_runtime_service();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    service.set_agent_transcript_store(AgentTranscriptStore::new(temp_root(
+        "runtime-close-owned-persistent-child",
+    )));
+    service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let parent = service
+        .start_agent_prompt_turn("%1", "provision then retire a reusable MMP worker")
+        .unwrap();
+    service.remove_pending_agent_provider_task(&parent.turn_id);
+    let parent_turn = service
+        .agent_turn_ledger()
+        .turn(&parent.turn_id)
+        .cloned()
+        .unwrap();
+    let mut spawn = runtime_spawn_agent_action("persistent-spawn", "");
+    let mez_agent::AgentActionPayload::SpawnAgent {
+        lifetime,
+        objective,
+        ..
+    } = &mut spawn.payload
+    else {
+        unreachable!("spawn fixture must contain spawn_agent");
+    };
+    *lifetime = mez_agent::SubagentLifetime::Persistent;
+    *objective = Some("Handle reusable MMP work".to_string());
+    let spawned = service
+        .execute_spawn_action_for_turn(&parent_turn, &spawn)
+        .unwrap();
+    let spawned: serde_json::Value = serde_json::from_str(
+        spawned
+            .structured_content_json
+            .as_deref()
+            .expect("persistent spawn structured content"),
+    )
+    .unwrap();
+    let child_agent_id = spawned["spawn"]["agent"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let child_pane_id = spawned["spawn"]["pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let child_identity = AgentId::opaque(child_agent_id.clone()).unwrap();
+    let close = mez_agent::AgentAction {
+        id: "close-persistent-child".to_string(),
+        payload: mez_agent::AgentActionPayload::CloseAgent {
+            agent_id: child_agent_id.clone(),
+        },
+    };
+    let mut foreign_turn = parent_turn.clone();
+    foreign_turn.conversation_id = "foreign-parent-conversation".to_string();
+    let foreign_planned = mez_agent::plan_action_result(
+        &foreign_turn,
+        &close,
+        mez_agent::ActionPlanningInput::default(),
+    )
+    .unwrap();
+    let mut foreign_execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(
+            &foreign_turn.turn_id,
+            &foreign_turn.agent_id,
+        ),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "reject foreign persistent child close".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "reject foreign persistent child close".to_string(),
+                actions: vec![close.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: vec![foreign_planned],
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+    assert_eq!(
+        service
+            .execute_running_close_agent_actions_for_turn(&foreign_turn, &mut foreign_execution)
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        foreign_execution.action_results[0].status,
+        ActionStatus::Rejected
+    );
+    assert!(service.persistent_subagent(&child_agent_id).is_some());
+    assert!(service.find_pane_descriptor(&child_pane_id).is_some());
+    let planned = mez_agent::plan_action_result(
+        &parent_turn,
+        &close,
+        mez_agent::ActionPlanningInput::default(),
+    )
+    .unwrap();
+    let mut execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(
+            &parent_turn.turn_id,
+            &parent_turn.agent_id,
+        ),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "close persistent child".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "retire persistent child".to_string(),
+                actions: vec![close],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: Default::default(),
+        action_results: vec![planned],
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+
+    assert_eq!(
+        service
+            .execute_running_close_agent_actions_for_turn(&parent_turn, &mut execution)
+            .unwrap(),
+        1
+    );
+    assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
+    assert!(service.persistent_subagent(&child_agent_id).is_none());
+    assert!(service.subagent_lineage(&child_agent_id).is_none());
+    assert!(service.agent_shell_store().get(&child_pane_id).is_none());
+    assert!(service.find_pane_descriptor(&child_pane_id).is_none());
+    assert!(
+        service
+            .message_service()
+            .registered_identity(&child_identity)
+            .is_none()
+    );
     service.terminate_all_pane_processes().unwrap();
 }
 

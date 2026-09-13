@@ -239,6 +239,9 @@ pub fn action_user_phrase(
                 scope.as_deref().unwrap_or("project")
             ),
         ),
+        AgentActionPayload::CloseAgent { agent_id } => {
+            ("persistent child close", action_terminal_preview(agent_id))
+        }
         AgentActionPayload::Wait => ("MMP peer wait", "another agent's reply".to_string()),
         AgentActionPayload::IssueAdd { title, .. } => ("issue add", action_terminal_preview(title)),
         AgentActionPayload::IssueUpdate { id, .. } => ("issue update", action_terminal_preview(id)),

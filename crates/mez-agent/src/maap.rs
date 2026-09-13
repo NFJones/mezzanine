@@ -443,6 +443,11 @@ pub enum AgentActionPayload {
         /// boundary and should remain aligned with the owning type invariant.
         task_prompt: String,
     },
+    /// Closes one persistent child owned by the calling parent conversation.
+    CloseAgent {
+        /// Runtime agent id of the persistent child to close.
+        agent_id: String,
+    },
     /// Represents the Config Change case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -717,6 +722,7 @@ impl AgentAction {
             AgentActionPayload::SendMessage { .. } => "send_message",
             AgentActionPayload::Wait => "wait",
             AgentActionPayload::SpawnAgent { .. } => "spawn_agent",
+            AgentActionPayload::CloseAgent { .. } => "close_agent",
             AgentActionPayload::ConfigChange { .. } => "config_change",
             AgentActionPayload::McpServerSearch { .. } => "mcp_server_search",
             AgentActionPayload::McpServerGet { .. } => "mcp_server_get",
@@ -831,6 +837,15 @@ impl AgentAction {
                 {
                     return Err(MaapContractError::invalid_args(
                         "list_agents scope must be project or session",
+                    ));
+                }
+                Ok(())
+            }
+            AgentActionPayload::CloseAgent { agent_id } => {
+                validate_non_empty("close agent id", agent_id)?;
+                if mez_core::ids::AgentId::opaque(agent_id.clone()).is_none() {
+                    return Err(MaapContractError::invalid_args(
+                        "close agent id must be a valid agent identifier",
                     ));
                 }
                 Ok(())
@@ -1461,6 +1476,9 @@ fn parse_maap_action_value(
         "list_agents" => AgentActionPayload::ListAgents {
             agent_type: optional_string(object, "agent_type")?.map(str::to_string),
             scope: optional_string(object, "scope")?.map(str::to_string),
+        },
+        "close_agent" => AgentActionPayload::CloseAgent {
+            agent_id: required_string(object, "agent_id")?.to_string(),
         },
         "issue_add" => AgentActionPayload::IssueAdd {
             kind: required_string(object, "kind")?.to_string(),

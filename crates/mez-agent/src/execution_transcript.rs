@@ -479,6 +479,12 @@ fn assistant_transcript_action_summary(action: &AgentAction) -> String {
             reasoning_effort.as_deref().unwrap_or("default"),
             task_prompt.len()
         ),
+        AgentActionPayload::CloseAgent { agent_id } => {
+            format!(
+                "close_agent agent_id={}",
+                bounded_transcript_field(agent_id)
+            )
+        }
         AgentActionPayload::ConfigChange {
             setting_path,
             operation,

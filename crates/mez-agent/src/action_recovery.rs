@@ -565,7 +565,9 @@ fn capability_for_allowed_action(action: AllowedAction) -> Option<AgentCapabilit
         AllowedAction::McpServerSearch | AllowedAction::McpServerGet | AllowedAction::McpCall => {
             Some(AgentCapability::Mcp)
         }
-        AllowedAction::SendMessage | AllowedAction::SpawnAgent => Some(AgentCapability::Subagent),
+        AllowedAction::SendMessage | AllowedAction::SpawnAgent | AllowedAction::CloseAgent => {
+            Some(AgentCapability::Subagent)
+        }
         AllowedAction::ConfigChange => Some(AgentCapability::ConfigChange),
         AllowedAction::MemorySearch | AllowedAction::MemoryStore => Some(AgentCapability::Memory),
         AllowedAction::IssueAdd

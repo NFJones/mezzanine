@@ -1017,6 +1017,12 @@ pub(super) fn runtime_maap_action_payload_trace_json(
                 runtime_bounded_trace_value_strings(runtime_json_or_string(arguments_json)),
             );
         }
+        AgentActionPayload::CloseAgent { agent_id } => {
+            data.insert(
+                "agent_id".to_string(),
+                runtime_bounded_trace_string_value(agent_id),
+            );
+        }
         AgentActionPayload::Complete => {}
         AgentActionPayload::Abort { reason } => {
             data.insert(

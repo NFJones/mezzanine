@@ -233,6 +233,7 @@ impl RuntimeSessionService {
                 | AgentActionPayload::SendMessage { .. }
                 | AgentActionPayload::Wait
                 | AgentActionPayload::SpawnAgent { .. }
+                | AgentActionPayload::CloseAgent { .. }
                 | AgentActionPayload::ConfigChange { .. }
                 | AgentActionPayload::MemorySearch { .. }
                 | AgentActionPayload::MemoryStore { .. }

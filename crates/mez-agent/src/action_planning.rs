@@ -246,6 +246,12 @@ pub fn plan_action_result(
                 .to_string(),
             ),
         )),
+        AgentActionPayload::CloseAgent { .. } => Ok(ActionResult::running(
+            turn,
+            action,
+            vec!["persistent child close accepted for runtime execution".to_string()],
+            Some(r#"{"state":"pending_runtime_persistent_child_close"}"#.to_string()),
+        )),
         AgentActionPayload::MemorySearch { .. } | AgentActionPayload::MemoryStore { .. } => {
             Ok(ActionResult::running(
                 turn,

@@ -140,6 +140,9 @@ impl RuntimeSessionService {
         let spawn_actions_executed =
             self.execute_running_spawn_actions_for_turn(turn, &mut execution)?;
         terminal_observations.observe(&execution);
+        let _close_agent_actions_executed =
+            self.execute_running_close_agent_actions_for_turn(turn, &mut execution)?;
+        terminal_observations.observe(&execution);
         let config_actions_executed =
             self.execute_running_config_change_actions_for_turn(turn, &mut execution)?;
         terminal_observations.observe(&execution);

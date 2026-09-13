@@ -564,6 +564,7 @@ pub fn builtin_subagent_profiles() -> BTreeMap<String, SubagentProfile> {
                     AllowedAction::FetchUrl,
                     AllowedAction::SendMessage,
                     AllowedAction::SpawnAgent,
+                    AllowedAction::CloseAgent,
                     AllowedAction::McpServerSearch,
                     AllowedAction::McpServerGet,
                     AllowedAction::McpCall,

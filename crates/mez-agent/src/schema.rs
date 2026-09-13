@@ -194,6 +194,7 @@ fn maap_action_schema(allowed_actions: &AllowedActionSet) -> serde_json::Value {
             AllowedAction::SpawnAgent => action_schemas.push(maap_spawn_agent_action_schema(
                 allowed_actions.spawn_agent_sizing(),
             )),
+            AllowedAction::CloseAgent => action_schemas.push(maap_close_agent_action_schema()),
             AllowedAction::ConfigChange => action_schemas.push(maap_config_change_action_schema(
                 allowed_actions
                     .config_change_setting_path_description()
@@ -743,6 +744,21 @@ fn maap_list_agents_action_schema() -> serde_json::Value {
         serde_json::Value::Object(schema)
     })
     .unwrap_or_else(|| serde_json::json!({}))
+}
+
+/// Builds the provider-facing action for closing one caller-owned persistent child.
+fn maap_close_agent_action_schema() -> serde_json::Value {
+    maap_action_object_schema(
+        "close_agent",
+        [(
+            "agent_id",
+            serde_json::json!({
+                "type": "string",
+                "description": "Runtime agent id of one live persistent child spawned by the calling parent conversation. Discover the target through list_agents first. The runtime returns the same unavailable result for unknown, non-persistent, foreign-owned, stale, or already-closed targets."
+            }),
+        )],
+        &["agent_id"],
+    )
 }
 
 /// Builds the provider-facing MMP peer wait action schema.

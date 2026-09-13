@@ -517,6 +517,7 @@ fn streaming_action_has_safe_header(payload: &AgentActionPayload) -> bool {
             | AgentActionPayload::McpServerGet { .. }
             | AgentActionPayload::McpCall { .. }
             | AgentActionPayload::SpawnAgent { .. }
+            | AgentActionPayload::CloseAgent { .. }
     )
 }
 

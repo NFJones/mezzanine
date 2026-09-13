@@ -7002,6 +7002,15 @@ The baseline action types are:
   circumstance. Such a child is owned by the current parent conversation, not
   globally, and is controlled through `list_agents`, `send_message`, and
   `wait`.
+- `close_agent`: Close one live persistent child by `agent_id`. The runtime
+  MUST authorize the action only when authoritative persistent-child metadata
+  records both the current parent agent and current parent conversation as the
+  owner. Malformed agent identifiers MUST return `invalid_params`; syntactically
+  valid unknown, foreign, non-persistent, stale, and already-closed targets
+  MUST return one opaque unavailable result that recommends refreshing
+  `list_agents`. Successful closure MUST use the ordinary forced pane-close
+  lifecycle so process, turn, scope, lineage, MMP identity, and discovery
+  cleanup remain centralized.
 - `config_change`: Propose a live configuration change.
 - `memory_search`: Search runtime-owned persistent memory records after the
   `memory` capability has been granted. This action MUST be available only when

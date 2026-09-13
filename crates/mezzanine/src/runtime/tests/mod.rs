@@ -694,7 +694,8 @@ fn runtime_capability_for_response(
                 Some(mez_agent::AgentCapability::Mcp)
             }
             mez_agent::AgentActionPayload::SendMessage { .. }
-            | mez_agent::AgentActionPayload::SpawnAgent { .. } => {
+            | mez_agent::AgentActionPayload::SpawnAgent { .. }
+            | mez_agent::AgentActionPayload::CloseAgent { .. } => {
                 Some(mez_agent::AgentCapability::Subagent)
             }
             mez_agent::AgentActionPayload::ConfigChange { .. } => {

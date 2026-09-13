@@ -302,6 +302,8 @@ pub enum AllowedAction {
     Wait,
     /// Subagent spawn.
     SpawnAgent,
+    /// Close one caller-owned persistent subagent.
+    CloseAgent,
     /// Configuration change.
     ConfigChange,
     /// Search configured MCP server metadata.
@@ -341,6 +343,7 @@ impl AllowedAction {
             AllowedAction::SendMessage => "send_message",
             AllowedAction::Wait => "wait",
             AllowedAction::SpawnAgent => "spawn_agent",
+            AllowedAction::CloseAgent => "close_agent",
             AllowedAction::ConfigChange => "config_change",
             AllowedAction::McpServerSearch => "mcp_server_search",
             AllowedAction::McpServerGet => "mcp_server_get",
@@ -369,6 +372,7 @@ impl AllowedAction {
             "send_message" => Some(AllowedAction::SendMessage),
             "wait" => Some(AllowedAction::Wait),
             "spawn_agent" => Some(AllowedAction::SpawnAgent),
+            "close_agent" => Some(AllowedAction::CloseAgent),
             "config_change" => Some(AllowedAction::ConfigChange),
             "mcp_server_search" => Some(AllowedAction::McpServerSearch),
             "mcp_server_get" => Some(AllowedAction::McpServerGet),
@@ -483,6 +487,7 @@ impl AllowedActionSet {
             AllowedAction::SendMessage,
             AllowedAction::Wait,
             AllowedAction::SpawnAgent,
+            AllowedAction::CloseAgent,
             AllowedAction::ConfigChange,
             AllowedAction::McpServerSearch,
             AllowedAction::McpServerGet,
@@ -614,9 +619,11 @@ impl AllowedActionSet {
                 AllowedAction::McpServerGet,
                 AllowedAction::McpCall,
             ]),
-            AgentCapability::Subagent => {
-                output.extend([AllowedAction::SendMessage, AllowedAction::SpawnAgent])
-            }
+            AgentCapability::Subagent => output.extend([
+                AllowedAction::SendMessage,
+                AllowedAction::SpawnAgent,
+                AllowedAction::CloseAgent,
+            ]),
             AgentCapability::ConfigChange => output.extend([AllowedAction::ConfigChange]),
             AgentCapability::Memory => {
                 output.extend([AllowedAction::MemorySearch, AllowedAction::MemoryStore])

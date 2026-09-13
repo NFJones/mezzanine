@@ -2955,6 +2955,7 @@ fn migrates_schema_81_static_enabled_actions() {
                 "send_message",
                 "wait",
                 "spawn_agent",
+                "close_agent",
                 "config_change",
                 "mcp_server_search",
                 "mcp_server_get",
