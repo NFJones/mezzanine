@@ -206,10 +206,19 @@ pub fn plan_action_result(
         _ if input.network_plan.is_some() => plan_network_action(turn, action, input),
         AgentActionPayload::SendMessage {
             recipient,
+            scope,
             content_type,
             payload,
             ..
-        } => plan_message_action(turn, action, recipient, content_type, payload, input),
+        } => plan_message_action(
+            turn,
+            action,
+            recipient,
+            scope.as_deref(),
+            content_type,
+            payload,
+            input,
+        ),
         AgentActionPayload::SpawnAgent {
             role,
             placement,
@@ -447,10 +456,12 @@ fn plan_message_action(
     turn: &(impl AgentTurnResultIdentity + ?Sized),
     action: &AgentAction,
     recipient: &str,
+    scope: Option<&str>,
     content_type: &str,
     payload: &str,
     input: ActionPlanningInput<'_>,
 ) -> ActionPlanningResult<ActionResult> {
+    let scope = scope.unwrap_or("project");
     let decision = input.message_rule_decision.unwrap_or(RuleDecision::Prompt);
     let permission_evaluation = input.message_permission_evaluation.cloned();
     let result = match decision {
@@ -472,6 +483,7 @@ fn plan_message_action(
             )],
             Some(message_action_structured_content_json(
                 recipient,
+                scope,
                 content_type,
                 payload,
                 message_allowed_approval_json(action, input),
@@ -492,6 +504,7 @@ fn plan_message_action(
                 ],
                 Some(message_action_structured_content_json(
                     recipient,
+                    scope,
                     content_type,
                     payload,
                     auto_allow_approval_json(action, action.action_type(), input),
@@ -507,9 +520,10 @@ fn plan_message_action(
             )],
             message_action_structured_content_json(
                 recipient,
+                scope,
                 content_type,
                 payload,
-                message_blocked_approval_json(action, recipient, content_type, payload),
+                message_blocked_approval_json(action, recipient, scope, content_type, payload),
                 "pending_approval",
             ),
         ),
@@ -520,13 +534,14 @@ fn plan_message_action(
 /// Builds the structured content carried by one planned message result.
 fn message_action_structured_content_json(
     recipient: &str,
+    scope: &str,
     content_type: &str,
     payload: &str,
     approval: serde_json::Value,
     delivery_status: &str,
 ) -> String {
     serde_json::json!({
-        "recipient":recipient,"content_type":content_type,"bytes":payload.len(),
+        "recipient":recipient,"scope":scope,"content_type":content_type,"bytes":payload.len(),
         "message_id":serde_json::Value::Null,"delivery_status":delivery_status,
         "protocol_error":serde_json::Value::Null,"approval":approval
     })
@@ -553,6 +568,7 @@ fn message_allowed_approval_json(
 fn message_blocked_approval_json(
     action: &AgentAction,
     recipient: &str,
+    scope: &str,
     content_type: &str,
     payload: &str,
 ) -> serde_json::Value {
@@ -561,6 +577,7 @@ fn message_blocked_approval_json(
         "kind":"send_message",
         "action_id":action.id,
         "recipient":recipient,
+        "scope":scope,
         "content_type":content_type,
         "payload_bytes":payload.len(),
         "payload_sha256":message_payload_digest(content_type, payload),
@@ -726,9 +743,16 @@ pub fn action_auto_allow_reason(action: &AgentAction, input: ActionPlanningInput
         AgentActionPayload::Abort { reason } => reason.clone(),
         AgentActionPayload::Wait => "wait for MMP peer mail".to_string(),
         AgentActionPayload::SendMessage {
-            recipient, payload, ..
+            recipient,
+            scope,
+            payload,
+            ..
         } => {
-            format!("send message to {recipient} ({} bytes)", payload.len())
+            format!(
+                "send {} message to {recipient} ({} bytes)",
+                scope.as_deref().unwrap_or("project"),
+                payload.len()
+            )
         }
         AgentActionPayload::CallSkill { name, .. } => format!("load skill {name}"),
         AgentActionPayload::RequestSkills => "request available skills".to_string(),
@@ -1412,6 +1436,7 @@ mod tests {
 
             payload: AgentActionPayload::ListAgents {
                 agent_type: agent_type.map(str::to_string),
+                scope: None,
             },
         }
     }
@@ -1423,6 +1448,7 @@ mod tests {
 
             payload: AgentActionPayload::SendMessage {
                 recipient: recipient.to_string(),
+                scope: None,
                 content_type: "text/plain; charset=utf-8".to_string(),
                 payload: payload.to_string(),
                 correlation_id: None,

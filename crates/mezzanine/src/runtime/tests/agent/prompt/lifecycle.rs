@@ -645,6 +645,146 @@ fn runtime_persistent_subagent_reuses_identity_and_conversation_across_mmp_turns
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies persistent child bridge status and result messages commit exactly
+/// once, while the reply output remains visible in the parent pane's normal
+/// peer-message log.
+///
+/// One-task children already project dedicated structural lifecycle lines, but
+/// reusable children exchange their durable assignment and reply through the
+/// MMP bridge. Their runtime-authored envelopes must therefore retain the
+/// committed peer-message echo rather than being hidden by the generic bridge
+/// suppression used for one-task and macro children. Status payloads have no
+/// `output` field, so the existing JSON projection keeps their pane row empty.
+#[test]
+fn runtime_persistent_subagent_bridge_messages_log_once_in_normal_mode() {
+    let mut service = test_runtime_service();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    service.set_agent_transcript_store(AgentTranscriptStore::new(temp_root(
+        "runtime-persistent-bridge-echo",
+    )));
+    let _primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let parent_conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let spawned = service
+        .spawn_runtime_persistent_subagent_session_owned(
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "worker".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::OwnedWrite,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: SubagentSessionMode::New,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
+                task_prompt: String::new(),
+                explicit_user_approval: false,
+                skip_initial_turn: true,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: false,
+            },
+            &parent_conversation_id,
+            "Handle durable MMP requests",
+        )
+        .unwrap();
+    let spawned: serde_json::Value = serde_json::from_str(&spawned).unwrap();
+    let child_pane_id = spawned["pane"]["pane_id"].as_str().unwrap();
+    let child_agent_id = format!("agent-{child_pane_id}");
+    let child_id = AgentId::opaque(child_agent_id.clone()).unwrap();
+    let now_ms = crate::runtime::current_unix_millis();
+    let parent = service
+        .ensure_runtime_message_identity("agent-%1", None, "agent", &[], now_ms)
+        .unwrap();
+    let child = service
+        .message_service()
+        .registered_identity(&child_id)
+        .cloned()
+        .expect("persistent child identity should be registered");
+    service
+        .start_agent_prompt_turn("%1", "supervise persistent bridge traffic")
+        .unwrap();
+
+    for (id, message_type, payload) in [
+        (
+            "persistent-bridge-status",
+            "task_status",
+            r#"{"task_id":"persistent-assignment","state":"running","summary":"persistent assignment accepted"}"#,
+        ),
+        (
+            "persistent-bridge-result",
+            "task_result",
+            r#"{"task_id":"persistent-reply","success":true,"summary":"persistent reply delivered","output":"persistent bridge reply"}"#,
+        ),
+    ] {
+        service
+            .control
+            .message_service_mut()
+            .accept_at_with_scope(
+                &child.agent_id,
+                mez_agent::messaging::Envelope {
+                    protocol: "mmp/1",
+                    id: id.to_string(),
+                    message_type: message_type.to_string(),
+                    time: format!("runtime:{now_ms}"),
+                    sender: child.clone(),
+                    recipient: mez_agent::messaging::Recipient::Agent(parent.agent_id.clone()),
+                    correlation_id: None,
+                    ttl_ms: None,
+                    content_type: "application/json".to_string(),
+                    payload: payload.to_string(),
+                    extension_fields: crate::runtime::control::runtime_bridge_extension_fields(),
+                },
+                mez_agent::messaging::MessageScope::Session,
+                now_ms,
+            )
+            .unwrap();
+        assert_eq!(
+            service
+                .deliver_pending_runtime_agent_messages(now_ms)
+                .unwrap(),
+            1
+        );
+    }
+
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    let committed = service.agent_turn_contexts().get("turn-1").unwrap();
+    assert_eq!(
+        committed
+            .blocks()
+            .iter()
+            .filter(|block| {
+                block.source == mez_agent::ContextSourceKind::PeerMessage
+                    && (block.content.contains("persistent-assignment")
+                        || block.content.contains("persistent-reply"))
+            })
+            .count(),
+        2,
+        "each persistent bridge envelope should commit exactly once"
+    );
+    assert_eq!(
+        pane_text.matches("persistent bridge reply").count(),
+        1,
+        "persistent bridge result should log exactly once: {pane_text}"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies restart rehydrates a persistent child only alongside its exact
 /// live parent binding, including durable scope and MMP subscription state.
 #[test]

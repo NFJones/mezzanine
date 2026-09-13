@@ -501,7 +501,6 @@ use commands_support::{
     runtime_write_agent_trace_log_for_pane,
 };
 pub(crate) use config::ActiveTurnSleepInhibition;
-pub(crate) use config::runtime_message_recipient_decision;
 pub(crate) use config::{
     EXTERNAL_EDITOR_MAX_CANDIDATES, PeerMessageLogMode, RuntimeExternalEditorConfig,
     RuntimeIrohAddressLookupPolicy, RuntimeIrohCompressionCodec, RuntimeIrohIdentityPolicy,
@@ -570,6 +569,7 @@ use config::{
     runtime_window_frames_enabled_from_config,
 };
 pub use config::{runtime_effective_config_value, runtime_ui_theme_from_config};
+pub(crate) use config::{runtime_message_recipient_decision, runtime_message_scope};
 
 /// Builds the client machine's clipboard adapter from its local effective configuration.
 pub(crate) fn runtime_client_host_clipboard_from_config(

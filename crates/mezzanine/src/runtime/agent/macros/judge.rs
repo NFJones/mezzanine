@@ -210,6 +210,7 @@ impl RuntimeSessionService {
 
                     payload: AgentActionPayload::SendMessage {
                         recipient: format!("agent:{child_agent_id}"),
+                        scope: Some("project".to_string()),
                         content_type: "text/plain; charset=utf-8".to_string(),
                         payload: prompt.clone(),
                         correlation_id: None,
@@ -291,6 +292,7 @@ impl RuntimeSessionService {
 
                     payload: AgentActionPayload::SendMessage {
                         recipient: format!("agent:{child_agent_id}"),
+                        scope: Some("project".to_string()),
                         content_type: "text/plain; charset=utf-8".to_string(),
                         payload: prompt.clone(),
                         correlation_id: None,

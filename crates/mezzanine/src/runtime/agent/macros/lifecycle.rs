@@ -258,6 +258,7 @@ impl RuntimeSessionService {
 
             payload: AgentActionPayload::SendMessage {
                 recipient: format!("agent:{child_agent_id}"),
+                scope: Some("project".to_string()),
                 content_type: "text/plain; charset=utf-8".to_string(),
                 payload,
                 correlation_id: None,
@@ -342,6 +343,7 @@ impl RuntimeSessionService {
     ) -> Result<Option<ActionResult>> {
         let AgentActionPayload::SendMessage {
             recipient,
+            scope,
             content_type,
             payload,
             ..
@@ -365,13 +367,21 @@ impl RuntimeSessionService {
                             && completion.parent_action_id == action.id
                     })
                 });
-        let result = self.queue_macro_managed_message_step(
+        let mut result = self.queue_macro_managed_message_step(
             parent_turn,
             action,
             recipient.as_str(),
+            scope.as_deref().unwrap_or("project"),
             content_type.as_str(),
             payload.as_str(),
         )?;
+        if let Some(result) = result.as_mut() {
+            Self::runtime_message_result_with_scope(
+                result,
+                recipient,
+                scope.as_deref().unwrap_or("project"),
+            );
+        }
         if result.is_some() {
             let child_turn_id = self
                 .agent

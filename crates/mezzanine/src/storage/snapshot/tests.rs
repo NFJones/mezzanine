@@ -10,7 +10,7 @@ use super::{
     WindowSnapshotPayload,
 };
 use crate::host::shell::{ResolvedShell, ShellSource};
-use mez_agent::messaging::{Envelope, MessageService, Recipient};
+use mez_agent::messaging::{Envelope, MessageScope, MessageService, Recipient};
 use mez_mux::layout::{LayoutNode, LayoutPolicy, PaneGeometry, Size, SplitDirection};
 use mez_mux::session::{Session, SessionState};
 use mez_terminal::TerminalSavedDecPrivateMode;
@@ -581,7 +581,7 @@ fn session_snapshot_payload_round_trips_and_builds_resume_plan() {
     let target = message_service.register_agent(None, None, "reviewer", Vec::new());
     message_service.subscribe(&target.agent_id).unwrap();
     message_service
-        .accept_at(
+        .accept_at_with_scope(
             &sender_id,
             Envelope {
                 protocol: "mmp/1",
@@ -596,6 +596,7 @@ fn session_snapshot_payload_round_trips_and_builds_resume_plan() {
                 payload: "hello reviewer".to_string(),
                 extension_fields: vec![("trace".to_string(), r#"{"span":"one"}"#.to_string())],
             },
+            MessageScope::Session,
             10,
         )
         .unwrap();
@@ -659,7 +660,7 @@ fn session_snapshot_payload_round_trips_and_builds_resume_plan() {
     assert!(loaded.agent_sessions.is_empty());
     assert!(loaded.approval_grants.is_empty());
     assert!(loaded.approval_requests.is_empty());
-    assert_eq!(loaded.message_state, None);
+    assert_eq!(loaded.message_state, Some(message_state));
     assert!(loaded.mcp_servers.is_empty());
     assert_eq!(loaded.windows[0].layout_policy, "even-vertical");
     assert_eq!(

@@ -143,7 +143,7 @@ fn mmp_transport_accepts_send_from_registered_connection() {
     let target = service.register_agent(None, None, "worker", Vec::new());
     let sender_id = sender_connection.agent_id.as_ref().unwrap();
     let body = format!(
-        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
+        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
         sender_id, target.agent_id
     );
 
@@ -187,7 +187,7 @@ fn mmp_transport_deduplicates_retried_message_ids() {
     let target_id = target_connection.agent_id.clone().unwrap();
     let sender_id = sender_connection.agent_id.as_ref().unwrap();
     let send_body = format!(
-        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
+        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
         sender_id, target_id
     );
 
@@ -229,11 +229,11 @@ fn mmp_transport_rejects_conflicting_duplicate_message_ids() {
     let target = service.register_agent(None, None, "target", Vec::new());
     let sender_id = sender_connection.agent_id.as_ref().unwrap();
     let first_body = format!(
-        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
+        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
         sender_id, target.agent_id
     );
     let second_body = format!(
-        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"different"}}"#,
+        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"different"}}"#,
         sender_id, target.agent_id
     );
 
@@ -268,7 +268,7 @@ fn mmp_transport_rejects_explicit_sender_spoofing() {
     .unwrap();
     let target = service.register_agent(None, None, "worker", Vec::new());
     let body = format!(
-        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"a999"}},"recipient":{{"agent_id":"{}"}},"correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
+        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"a999"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
         target.agent_id
     );
 
@@ -299,7 +299,7 @@ fn mmp_transport_accepts_matching_explicit_sender() {
     let target = service.register_agent(None, None, "worker", Vec::new());
     let sender_id = sender_connection.agent_id.as_ref().unwrap();
     let body = format!(
-        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
+        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
         sender_id, target.agent_id
     );
 
@@ -327,7 +327,7 @@ fn mmp_transport_rejects_recipient_with_multiple_selectors() {
     let target = service.register_agent(None, None, "worker", Vec::new());
     let sender_id = sender_connection.agent_id.as_ref().unwrap();
     let body = format!(
-        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}","role":"worker"}},"correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
+        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}","role":"worker"}},"scope":"session","correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
         sender_id, target.agent_id
     );
 
@@ -359,7 +359,7 @@ fn mmp_transport_rejects_empty_named_recipient_selector() {
     );
     let sender_id = sender_connection.agent_id.as_ref().unwrap();
     let body = format!(
-        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"group":""}},"correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
+        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"group":""}},"scope":"session","correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
         sender_id
     );
 
@@ -395,11 +395,11 @@ fn mmp_transport_rejects_send_without_content_type_or_payload() {
     let target = service.register_agent(None, None, "worker", Vec::new());
     let sender_id = sender_connection.agent_id.as_ref().unwrap();
     let missing_content_type = format!(
-        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"correlation_id":null,"ttl_ms":null,"payload":"hello"}}"#,
+        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":null,"ttl_ms":null,"payload":"hello"}}"#,
         sender_id, target.agent_id
     );
     let missing_payload = format!(
-        r#"{{"protocol":"mmp/1","type":"send","id":"m2","time":"message:client-2","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8"}}"#,
+        r#"{{"protocol":"mmp/1","type":"send","id":"m2","time":"message:client-2","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8"}}"#,
         sender_id, target.agent_id
     );
 
@@ -440,19 +440,19 @@ fn mmp_transport_validates_payload_media_type_and_encoding() {
     let target = service.register_agent(None, None, "worker", Vec::new());
     let sender_id = sender_connection.agent_id.as_ref().unwrap();
     let text_without_charset = format!(
-        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"correlation_id":null,"ttl_ms":null,"content_type":"text/plain","payload":"hello"}}"#,
+        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":null,"ttl_ms":null,"content_type":"text/plain","payload":"hello"}}"#,
         sender_id, target.agent_id
     );
     let invalid_json = format!(
-        r#"{{"protocol":"mmp/1","type":"send","id":"m2","time":"message:client-2","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"correlation_id":null,"ttl_ms":null,"content_type":"application/json","payload":"not-json"}}"#,
+        r#"{{"protocol":"mmp/1","type":"send","id":"m2","time":"message:client-2","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":null,"ttl_ms":null,"content_type":"application/json","payload":"not-json"}}"#,
         sender_id, target.agent_id
     );
     let binary_without_encoding = format!(
-        r#"{{"protocol":"mmp/1","type":"send","id":"m3","time":"message:client-3","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"correlation_id":null,"ttl_ms":null,"content_type":"application/octet-stream","payload":"AQID"}}"#,
+        r#"{{"protocol":"mmp/1","type":"send","id":"m3","time":"message:client-3","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":null,"ttl_ms":null,"content_type":"application/octet-stream","payload":"AQID"}}"#,
         sender_id, target.agent_id
     );
     let invalid_base64 = format!(
-        r#"{{"protocol":"mmp/1","type":"send","id":"m4","time":"message:client-4","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"correlation_id":null,"ttl_ms":null,"content_type":"application/octet-stream","payload_encoding":"base64","payload":"not base64"}}"#,
+        r#"{{"protocol":"mmp/1","type":"send","id":"m4","time":"message:client-4","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":null,"ttl_ms":null,"content_type":"application/octet-stream","payload_encoding":"base64","payload":"not base64"}}"#,
         sender_id, target.agent_id
     );
 
@@ -499,19 +499,19 @@ fn mmp_transport_validates_task_status_payload() {
     let target = service.register_agent(None, None, "worker", Vec::new());
     let sender_id = sender_connection.agent_id.as_ref().unwrap();
     let valid = format!(
-        r#"{{"protocol":"mmp/1","type":"task_status","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"correlation_id":"task-1","ttl_ms":null,"content_type":"application/json","payload":{{"task_id":"task-1","state":"running","progress_percent":25,"summary":"working"}}}}"#,
+        r#"{{"protocol":"mmp/1","type":"task_status","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":"task-1","ttl_ms":null,"content_type":"application/json","payload":{{"task_id":"task-1","state":"running","progress_percent":25,"summary":"working"}}}}"#,
         sender_id, target.agent_id
     );
     let invalid_state = format!(
-        r#"{{"protocol":"mmp/1","type":"task_status","id":"m2","time":"message:client-2","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"correlation_id":"task-1","ttl_ms":null,"content_type":"application/json","payload":{{"task_id":"task-1","state":"paused","progress_percent":25,"summary":"working"}}}}"#,
+        r#"{{"protocol":"mmp/1","type":"task_status","id":"m2","time":"message:client-2","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":"task-1","ttl_ms":null,"content_type":"application/json","payload":{{"task_id":"task-1","state":"paused","progress_percent":25,"summary":"working"}}}}"#,
         sender_id, target.agent_id
     );
     let invalid_progress = format!(
-        r#"{{"protocol":"mmp/1","type":"task_status","id":"m3","time":"message:client-3","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"correlation_id":"task-1","ttl_ms":null,"content_type":"application/json","payload":{{"task_id":"task-1","state":"running","progress_percent":101,"summary":"working"}}}}"#,
+        r#"{{"protocol":"mmp/1","type":"task_status","id":"m3","time":"message:client-3","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":"task-1","ttl_ms":null,"content_type":"application/json","payload":{{"task_id":"task-1","state":"running","progress_percent":101,"summary":"working"}}}}"#,
         sender_id, target.agent_id
     );
     let missing_task_id = format!(
-        r#"{{"protocol":"mmp/1","type":"task_status","id":"m4","time":"message:client-4","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"correlation_id":"task-1","ttl_ms":null,"content_type":"application/json","payload":{{"state":"running","summary":"working"}}}}"#,
+        r#"{{"protocol":"mmp/1","type":"task_status","id":"m4","time":"message:client-4","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":"task-1","ttl_ms":null,"content_type":"application/json","payload":{{"state":"running","summary":"working"}}}}"#,
         sender_id, target.agent_id
     );
 
@@ -564,19 +564,19 @@ fn mmp_transport_validates_task_result_payload() {
     let target = service.register_agent(None, None, "worker", Vec::new());
     let sender_id = sender_connection.agent_id.as_ref().unwrap();
     let valid = format!(
-        r#"{{"protocol":"mmp/1","type":"task_result","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"correlation_id":"task-1","ttl_ms":null,"content_type":"application/json","payload":{{"task_id":"task-1","success":true,"summary":"done","output":"ok"}}}}"#,
+        r#"{{"protocol":"mmp/1","type":"task_result","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":"task-1","ttl_ms":null,"content_type":"application/json","payload":{{"task_id":"task-1","success":true,"summary":"done","output":"ok"}}}}"#,
         sender_id, target.agent_id
     );
     let invalid_success = format!(
-        r#"{{"protocol":"mmp/1","type":"task_result","id":"m2","time":"message:client-2","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"correlation_id":"task-1","ttl_ms":null,"content_type":"application/json","payload":{{"task_id":"task-1","success":"yes","summary":"done","output":"ok"}}}}"#,
+        r#"{{"protocol":"mmp/1","type":"task_result","id":"m2","time":"message:client-2","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":"task-1","ttl_ms":null,"content_type":"application/json","payload":{{"task_id":"task-1","success":"yes","summary":"done","output":"ok"}}}}"#,
         sender_id, target.agent_id
     );
     let missing_output = format!(
-        r#"{{"protocol":"mmp/1","type":"task_result","id":"m3","time":"message:client-3","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"correlation_id":"task-1","ttl_ms":null,"content_type":"application/json","payload":{{"task_id":"task-1","success":true,"summary":"done"}}}}"#,
+        r#"{{"protocol":"mmp/1","type":"task_result","id":"m3","time":"message:client-3","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":"task-1","ttl_ms":null,"content_type":"application/json","payload":{{"task_id":"task-1","success":true,"summary":"done"}}}}"#,
         sender_id, target.agent_id
     );
     let text_content_type = format!(
-        r#"{{"protocol":"mmp/1","type":"task_result","id":"m4","time":"message:client-4","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"correlation_id":"task-1","ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"done"}}"#,
+        r#"{{"protocol":"mmp/1","type":"task_result","id":"m4","time":"message:client-4","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":"task-1","ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"done"}}"#,
         sender_id, target.agent_id
     );
 
@@ -632,14 +632,14 @@ fn mmp_transport_rejects_send_without_required_envelope_metadata() {
         (
             "time",
             format!(
-                r#"{{"protocol":"mmp/1","type":"send","id":"m1","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
+                r#"{{"protocol":"mmp/1","type":"send","id":"m1","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
                 sender_id, target.agent_id
             ),
         ),
         (
             "sender",
             format!(
-                r#"{{"protocol":"mmp/1","type":"send","id":"m2","time":"message:client-2","recipient":{{"agent_id":"{}"}},"correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
+                r#"{{"protocol":"mmp/1","type":"send","id":"m2","time":"message:client-2","recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
                 target.agent_id
             ),
         ),
@@ -653,7 +653,7 @@ fn mmp_transport_rejects_send_without_required_envelope_metadata() {
         (
             "ttl_ms",
             format!(
-                r#"{{"protocol":"mmp/1","type":"send","id":"m4","time":"message:client-4","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"correlation_id":null,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
+                r#"{{"protocol":"mmp/1","type":"send","id":"m4","time":"message:client-4","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":null,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
                 sender_id, target.agent_id
             ),
         ),
@@ -812,7 +812,7 @@ fn mmp_transport_delivers_envelope_with_monotonic_metadata() {
     let target_id = target_connection.agent_id.clone().unwrap();
     let sender_id = sender_connection.agent_id.as_ref().unwrap();
     let send_body = format!(
-        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
+        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
         sender_id, target_id
     );
     let _ = dispatch_mmp_body(&send_body, &mut service, &mut sender_connection, 12);
@@ -855,7 +855,7 @@ fn mmp_transport_preserves_unknown_envelope_fields_on_delivery() {
     let target_id = target_connection.agent_id.clone().unwrap();
     let sender_id = sender_connection.agent_id.as_ref().unwrap();
     let send_body = format!(
-        r#"{{"protocol":"mmp/1","type":"send","id":"m1","sequence":999,"time":"message:client-1","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"hello","trace":{{"span":"s1","sampled":true}},"priority":3}}"#,
+        r#"{{"protocol":"mmp/1","type":"send","id":"m1","sequence":999,"time":"message:client-1","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"hello","trace":{{"span":"s1","sampled":true}},"priority":3}}"#,
         sender_id, target_id
     );
     let _ = dispatch_mmp_body(&send_body, &mut service, &mut sender_connection, 12);
@@ -899,7 +899,7 @@ fn mmp_transport_delivers_base64_binary_payload_with_encoding() {
     let target_id = target_connection.agent_id.clone().unwrap();
     let sender_id = sender_connection.agent_id.as_ref().unwrap();
     let send_body = format!(
-        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"correlation_id":null,"ttl_ms":null,"content_type":"application/octet-stream","payload_encoding":"base64","payload":"AQIDBA=="}}"#,
+        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":null,"ttl_ms":null,"content_type":"application/octet-stream","payload_encoding":"base64","payload":"AQIDBA=="}}"#,
         sender_id, target_id
     );
 

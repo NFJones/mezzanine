@@ -6986,13 +6986,16 @@ The baseline action types are:
 - `list_agents`: Perform read-only peer discovery. The action MUST NOT prompt in
   any approval mode. An optional `agent_type` MUST default to `primary` and MUST
   accept only `primary`, `subagent`, `internal`, or `all`. Results MUST report
-  bounded identity rows for the requesting agent itself, offline agents, and
-  agents in other panes and windows, with each row carrying agent id, kind,
-  `is_self`, role, pane, window, capabilities, presence status, and the
-  published `objective`. One result MUST be bounded to 64 rows, 512 bytes per
-  string, and 16 capabilities per row, and MUST report truncation when the
-  matching set is larger. Each row MUST also report whether it shortened a string
-  or omitted capabilities.
+  bounded identity rows for the requesting agent itself and otherwise matching
+  identities sharing its non-empty trusted project membership. An optional
+  `scope` MUST accept only `project` or `session`; omission or null MUST mean
+  `project`, while explicit `session` MAY widen discovery to otherwise matching
+  session identities. Results MUST NOT expose project roots or project-scope
+  identifiers. Each row carries agent id, kind, `is_self`, role, pane, window,
+  capabilities, presence status, and the published `objective`. One result MUST
+  be bounded to 64 rows, 512 bytes per string, and 16 capabilities per row, and
+  MUST report truncation when the matching set is larger. Each row MUST also
+  report whether it shortened a string or omitted capabilities.
 - `spawn_agent`: Request subagent pane creation through the control endpoint.
   A `persistent` lifetime MUST be used exclusively for a reusable child that
   the parent will interact with over MMP and MUST NOT be used in any other
@@ -7301,7 +7304,12 @@ advisory even when their lexical parsing is confident; they MUST NOT become a
 complete confinement declaration or an authority decision.
 
 A `send_message` action MUST include `recipient`, `content_type`, and
-`payload`.
+`payload`. It MAY include nullable `scope` with value `project` or `session`.
+Omitted or `null` scope MUST resolve to `project`. Project delivery MUST be
+limited to the authenticated sender's trusted project membership; a sender
+without such membership MUST be rejected rather than widened. `session` is an
+explicit audience widening request and MUST NOT grant any authority other than
+wider message visibility.
 
 When a MAAP `send_message` action uses the common `text/plain` shorthand,
 Mezzanine MUST normalize it to the canonical MMP text content type
@@ -7508,8 +7516,9 @@ If spawning is blocked or fails, it MUST include the requested placement and
 reason.
 
 For `send_message` actions, `structured_content` MUST include recipient
-identity, message identity when assigned, delivery status, and any protocol
-error returned by the local message passing protocol.
+identity, resolved public scope, message identity when assigned, delivery
+status, and any protocol error returned by the local message passing protocol.
+It MUST NOT expose a project root or internal project-scope identity.
 Malformed recipient arguments MUST settle as `invalid_message_recipient` with
 accepted recipient forms and `delivery_applied=false`. They MUST enter existing
 bounded model correction without replaying completed sibling actions or changing
@@ -9032,7 +9041,12 @@ The protocol MUST provide each agent with a stable local identity.
 The protocol MUST support agent discovery by identity, pane, window, role,
 status, and declared capabilities.
 
-The protocol MUST support direct messages between agents.
+The protocol MUST support direct messages between agents. A message whose
+audience is omitted or `project` MUST reach only identities with the sender's
+trusted project membership; a cross-project direct target MUST be
+indistinguishable from an absent or unavailable target. `session` MUST be an
+explicit widening request, must not be inferred as a fallback for missing
+membership, and MUST grant no authority other than delivery visibility.
 
 The protocol SHOULD support broadcast or group messages scoped to a session,
 window, task, or configured group.
@@ -11403,8 +11417,17 @@ navigation chain. It MUST NOT persist attached or detached client IDs, client
 roles, layout ownership, terminal descriptors, primary navigation MRU or zoom,
 prompts, overlays, copy mode, mouse state, viewport, drafts, observer authority,
 event credentials or cursors, pane process state, bounded terminal history,
-agent sessions, local message protocol state, active configuration layer
-metadata, MCP server state, or approval history as resumable live state.
+agent sessions, active configuration layer metadata, MCP server state, or
+approval history as resumable live state. The payload MAY persist local MMP
+state only as schema-version-2 private routing metadata: registered and
+presence identity memberships use opaque trusted project-scope identifiers, and
+each retained or accepted message records its resolved `project` audience with
+that identifier or its `session` audience. Snapshot transport and model-visible
+projections MUST NOT disclose canonical roots or scope identifiers. Readers
+MUST reject malformed version-2 memberships or audience metadata before state
+publication. Version-1 MMP records have no resolved audience, so readers MUST
+restore their safe identities as unscoped and discard retained and accepted
+traffic rather than interpreting it as project or session delivery.
 
 Manual snapshot capture MUST update landing navigation from the invoking
 primary. Automatic capture MUST use layout-owner navigation when an owner is

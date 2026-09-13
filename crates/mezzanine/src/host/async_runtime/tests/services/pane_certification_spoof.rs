@@ -970,14 +970,33 @@ async fn async_adversarial_foreground_fixture_owns_pty_and_intercepts_input() {
 /// in-band material must not substitute for an admitted receiver that genuinely
 /// owns the pane, and it must not leave the pane certified, ready, or holding
 /// any environment, path, or command authority.
-#[tokio::test(flavor = "current_thread")]
-async fn async_spoofed_foreground_program_cannot_publish_shell_authority() {
-    let Some(bash) = available_shell(&["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"]) else {
-        eprintln!("skipping adversarial Bash certification test because Bash is unavailable");
-        return;
-    };
-    let outcome = run_foreground_spoof_case(bash, SpoofMode::Spoof, "bash-authority").await;
-    assert_no_spoofed_authority(&outcome, SpoofMode::Spoof);
+#[test]
+fn async_spoofed_foreground_program_cannot_publish_shell_authority() {
+    std::thread::Builder::new()
+        .name("spoofed-foreground-authority".to_string())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let Some(bash) =
+                        available_shell(&["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"])
+                    else {
+                        eprintln!(
+                            "skipping adversarial Bash certification test because Bash is unavailable"
+                        );
+                        return;
+                    };
+                    let outcome = run_foreground_spoof_case(bash, SpoofMode::Spoof, "bash-authority")
+                        .await;
+                    assert_no_spoofed_authority(&outcome, SpoofMode::Spoof);
+                });
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 /// Verifies a foreground program that never answers certification keeps the
@@ -1012,29 +1031,65 @@ async fn async_silent_foreground_program_keeps_pane_and_receives_no_command() {
 }
 
 /// Verifies the same spoofing contract when the pane's primary shell is Fish.
-#[tokio::test(flavor = "current_thread")]
-async fn async_spoofed_foreground_program_cannot_publish_authority_under_fish() {
-    let Some(fish) = available_shell(&[
-        "/usr/bin/fish",
-        "/usr/local/bin/fish",
-        "/opt/homebrew/bin/fish",
-    ]) else {
-        eprintln!("skipping adversarial Fish certification test because fish is unavailable");
-        return;
-    };
-    let outcome = run_foreground_spoof_case(fish, SpoofMode::Spoof, "fish-authority").await;
-    assert_no_spoofed_authority(&outcome, SpoofMode::Spoof);
+#[test]
+fn async_spoofed_foreground_program_cannot_publish_authority_under_fish() {
+    std::thread::Builder::new()
+        .name("spoofed-foreground-fish-authority".to_string())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let Some(fish) = available_shell(&[
+                        "/usr/bin/fish",
+                        "/usr/local/bin/fish",
+                        "/opt/homebrew/bin/fish",
+                    ]) else {
+                        eprintln!(
+                            "skipping adversarial Fish certification test because fish is unavailable"
+                        );
+                        return;
+                    };
+                    let outcome = run_foreground_spoof_case(fish, SpoofMode::Spoof, "fish-authority")
+                        .await;
+                    assert_no_spoofed_authority(&outcome, SpoofMode::Spoof);
+                });
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 /// Verifies the same spoofing contract when the pane's primary shell is Zsh.
-#[tokio::test(flavor = "current_thread")]
-async fn async_spoofed_foreground_program_cannot_publish_authority_under_zsh() {
-    let Some(zsh) = available_shell(&["/bin/zsh", "/usr/bin/zsh", "/usr/local/bin/zsh"]) else {
-        eprintln!("skipping adversarial Zsh certification test because zsh is unavailable");
-        return;
-    };
-    let outcome = run_foreground_spoof_case(zsh, SpoofMode::Spoof, "zsh-authority").await;
-    assert_no_spoofed_authority(&outcome, SpoofMode::Spoof);
+#[test]
+fn async_spoofed_foreground_program_cannot_publish_authority_under_zsh() {
+    std::thread::Builder::new()
+        .name("spoofed-foreground-zsh-authority".to_string())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let Some(zsh) =
+                        available_shell(&["/bin/zsh", "/usr/bin/zsh", "/usr/local/bin/zsh"])
+                    else {
+                        eprintln!(
+                            "skipping adversarial Zsh certification test because zsh is unavailable"
+                        );
+                        return;
+                    };
+                    let outcome =
+                        run_foreground_spoof_case(zsh, SpoofMode::Spoof, "zsh-authority").await;
+                    assert_no_spoofed_authority(&outcome, SpoofMode::Spoof);
+                });
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 /// Verifies replayed in-band identity and bootstrap material cannot abort the
@@ -1067,21 +1122,41 @@ async fn async_spoofed_foreground_program_cannot_publish_authority_under_zsh() {
 /// to a process group other than the fixture's, the fixture's own process group is
 /// never certified, and no environment, PATH, or path-scope authority is
 /// published for either.
-#[tokio::test(flavor = "current_thread")]
-async fn async_forged_identity_records_settle_without_abort() {
-    let Some(bash) = available_shell(&["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"]) else {
-        eprintln!("skipping forged identity regression because Bash is unavailable");
-        return;
-    };
-    let outcome = run_foreground_spoof_case(bash, SpoofMode::ForgedIdentity, "bash-forged").await;
-    // Reaching this assertion proves the runtime did not abort the process; the
-    // scenario harness fails closed on a hang before its own bound instead.
-    assert_no_spoofed_authority(&outcome, SpoofMode::ForgedIdentity);
-    assert_replay_settlement_is_terminal(&outcome);
-    eprintln!(
-        "forged identity scenario settled without aborting the runtime: {:?}",
-        outcome.snapshot
-    );
+#[test]
+fn async_forged_identity_records_settle_without_abort() {
+    std::thread::Builder::new()
+        .name("forged-identity-records".to_string())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let Some(bash) =
+                        available_shell(&["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"])
+                    else {
+                        eprintln!(
+                            "skipping forged identity regression because Bash is unavailable"
+                        );
+                        return;
+                    };
+                    let outcome =
+                        run_foreground_spoof_case(bash, SpoofMode::ForgedIdentity, "bash-forged")
+                            .await;
+                    // Reaching this assertion proves the runtime did not abort the process; the
+                    // scenario harness fails closed on a hang before its own bound instead.
+                    assert_no_spoofed_authority(&outcome, SpoofMode::ForgedIdentity);
+                    assert_replay_settlement_is_terminal(&outcome);
+                    eprintln!(
+                        "forged identity scenario settled without aborting the runtime: {:?}",
+                        outcome.snapshot
+                    );
+                });
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 /// Verifies the replayed-forgery path settles once without re-entering the
@@ -1091,28 +1166,52 @@ async fn async_forged_identity_records_settle_without_abort() {
 /// transaction (including a re-registered identity probe or bootstrap) and no
 /// pending bootstrap, so the replay cannot leave the runtime mid-transition
 /// where a later event re-enters the handoff.
-#[tokio::test(flavor = "current_thread")]
-async fn async_replayed_forgery_settles_without_bootstrap_reentry() {
-    let Some(bash) = available_shell(&["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"]) else {
-        eprintln!("skipping forged identity settlement regression because Bash is unavailable");
-        return;
-    };
-    let outcome =
-        run_foreground_spoof_case(bash, SpoofMode::ForgedIdentity, "bash-forged-settle").await;
-    assert!(
-        !outcome.service.pane_bootstrap_is_pending_for_tests("%1"),
-        "replayed forgery must not leave a pending bootstrap: {}",
-        outcome.log_text
-    );
-    assert!(
-        !outcome
-            .service
-            .running_shell_transactions_for_tests()
-            .values()
-            .any(|transaction| transaction.pane_id == "%1"),
-        "replayed forgery must settle without a running shell transaction: {}",
-        outcome.log_text
-    );
-    assert_no_spoofed_authority(&outcome, SpoofMode::ForgedIdentity);
-    assert_replay_settlement_is_terminal(&outcome);
+#[test]
+fn async_replayed_forgery_settles_without_bootstrap_reentry() {
+    std::thread::Builder::new()
+        .name("replayed-forgery-settlement".to_string())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let Some(bash) = available_shell(&[
+                        "/bin/bash",
+                        "/usr/bin/bash",
+                        "/usr/local/bin/bash",
+                    ]) else {
+                        eprintln!(
+                            "skipping forged identity settlement regression because Bash is unavailable"
+                        );
+                        return;
+                    };
+                    let outcome = run_foreground_spoof_case(
+                        bash,
+                        SpoofMode::ForgedIdentity,
+                        "bash-forged-settle",
+                    )
+                    .await;
+                    assert!(
+                        !outcome.service.pane_bootstrap_is_pending_for_tests("%1"),
+                        "replayed forgery must not leave a pending bootstrap: {}",
+                        outcome.log_text
+                    );
+                    assert!(
+                        !outcome
+                            .service
+                            .running_shell_transactions_for_tests()
+                            .values()
+                            .any(|transaction| transaction.pane_id == "%1"),
+                        "replayed forgery must settle without a running shell transaction: {}",
+                        outcome.log_text
+                    );
+                    assert_no_spoofed_authority(&outcome, SpoofMode::ForgedIdentity);
+                    assert_replay_settlement_is_terminal(&outcome);
+                });
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }

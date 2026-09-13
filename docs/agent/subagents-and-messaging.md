@@ -67,20 +67,28 @@ status, owning parent agent, and whether the requesting parent conversation owns
 them. Its optional
 `agent_type` defaults to `primary` and lists primary parent agents only;
 `subagent`, `internal`, and `all` widen the view to spawned subagents,
-runtime-internal controllers, and every kind. Rows include the requesting agent
-itself, offline agents, and agents in other panes and windows, and each row
-carries agent id, kind, `is_self`, role, pane, window, capabilities, presence
-status, and published objective. Results are bounded to 64 rows with each string
-at most 512 bytes and at most 16 capabilities per row; the result reports
-`truncated` when it dropped rows, and each row reports its own `truncated` when
-it shortened a string or omitted capabilities. `list_agents` never prompts for
-approval.
+runtime-internal controllers, and every kind. Its optional `scope` defaults to
+`project`, which includes the requester and otherwise matching identities with
+the same non-empty trusted project membership. Explicit `session` widens the
+view to otherwise matching session identities; neither scope exposes project
+roots or project-scope identifiers. Each row carries agent id, kind, `is_self`,
+role, pane, window, capabilities, presence status, and published objective.
+Results are bounded to 64 rows with each string at most 512 bytes and at most
+16 capabilities per row; the result reports `truncated` when it dropped rows,
+and each row reports its own `truncated` when it shortened a string or omitted
+capabilities. `list_agents` never prompts for approval.
 
 Send with `send_message` to `session`, `group:session`, `agent:<id>`,
 `pane:<id>`, `window:<id>`, `role:<name>`, `capability:<name>`, or
-`group:<name>`. Set the optional `correlation_id` (non-empty, at most 256
-characters) to the id of the message you are answering; the runtime supplies the
-current turn id when you omit it.
+`group:<name>`. Delivery defaults to `scope: "project"`: only agents with the
+authenticated sender's trusted project membership can receive it. Use
+`scope: "session"` only when intentionally widening delivery across projects;
+it requires its own approval or policy allow and grants no other authority.
+Without trusted project membership, default delivery is rejected rather than
+widened. Cross-project direct targets are reported like unavailable targets, so
+project identity is not disclosed. Set the optional `correlation_id` (non-empty,
+at most 256 characters) to the id of the message you are answering; the runtime
+supplies the current turn id when you omit it.
 
 When work cannot continue until another agent answers, send the MMP request in
 one action batch and use `wait` in the next. `wait` preserves the same turn,

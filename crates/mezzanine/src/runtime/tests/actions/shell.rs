@@ -1612,6 +1612,116 @@ fn runtime_native_agent_shell_command_output_is_visible_in_shell_view() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies a redispatch skips a native action already owned by a worker while
+/// later running siblings remain eligible for their own native dispatch.
+#[test]
+fn runtime_native_shell_redispatch_skips_owned_sibling_and_dispatches_later_actions() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_agent_shell_mode_override("%1", Some(crate::runtime::config::ShellMode::Native));
+    service.permission_policy_mut().set_approval_bypass(true);
+
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-native-redispatch-owned-sibling","input":"run native sibling batch"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let actions = ["first", "second", "third"]
+        .into_iter()
+        .map(|label| mez_agent::AgentAction {
+            id: format!("shell-{label}"),
+            payload: mez_agent::AgentActionPayload::ShellCommand {
+                summary: format!("Run native {label} sibling"),
+                command: format!("printf 'native-redispatch-{label}\\n'"),
+                interactive: false,
+                stateful: false,
+                timeout_ms: None,
+            },
+        })
+        .collect::<Vec<_>>();
+    let provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "native redispatch siblings".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "exercise native redispatch ownership".to_string(),
+                actions,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    service.remove_pending_agent_provider_task("turn-1");
+    let execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+
+    let first = service
+        .claim_native_shell_action("turn-1", "shell-first")
+        .unwrap()
+        .expect("first sibling should be queued");
+    let redispatched = service
+        .dispatch_stored_running_shell_actions("turn-1")
+        .unwrap()
+        .expect("later sibling should keep redispatch eligible");
+    assert_eq!(redispatched.terminal_state, AgentTurnState::Running);
+    let second = service
+        .claim_native_shell_action("turn-1", "shell-second")
+        .unwrap()
+        .expect("second sibling should be queued after skipping the owned first sibling");
+    service
+        .dispatch_stored_running_shell_actions("turn-1")
+        .unwrap()
+        .expect("third sibling should remain eligible after two owned siblings");
+    let third = service
+        .claim_native_shell_action("turn-1", "shell-third")
+        .unwrap()
+        .expect("third sibling should be queued after skipping owned predecessors");
+
+    for dispatch in [first, second, third] {
+        assert!(
+            service
+                .complete_native_shell_action(crate::runtime::execute_native_shell_dispatch(
+                    dispatch
+                ))
+                .unwrap()
+        );
+    }
+
+    assert!(service.native_shell_progress_turn_ids().is_empty());
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    for label in ["first", "second", "third"] {
+        assert_eq!(
+            pane_text
+                .matches(&format!("▐ native-redispatch-{label}\n"))
+                .count(),
+            1,
+            "native sibling {label} should execute exactly once: {pane_text}"
+        );
+    }
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies native shell actions use the configured deadline snapshotted when
 /// their owning turn starts, rather than a later live configuration value.
 #[test]

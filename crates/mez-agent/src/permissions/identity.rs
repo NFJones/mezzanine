@@ -117,6 +117,16 @@ pub trait PermissionPlanning: Send + Sync {
     fn evaluate_message_recipient(&self, _recipient: &str) -> RuleDecision {
         RuleDecision::Prompt
     }
+
+    /// Returns the product decision for one model-planned recipient and
+    /// normalized delivery scope.
+    ///
+    /// The default retains legacy project-scoped behavior. Products that
+    /// support broader MMP audiences override this so session widening is not
+    /// silently authorized by a project-only allow rule.
+    fn evaluate_message_recipient_with_scope(&self, recipient: &str, _scope: &str) -> RuleDecision {
+        self.evaluate_message_recipient(recipient)
+    }
 }
 
 /// Bounded permission state shown by agent-shell status commands.

@@ -204,39 +204,6 @@ pub enum SubagentApprovalProvenance {
     ExplicitUserApproval,
 }
 
-/// Normalizes safe descriptive read-only roles onto the built-in explorer.
-///
-/// Configured roles remain exact. Aliasing occurs only for explore-only
-/// requests without write scopes so a provider's descriptive role cannot
-/// accidentally gain authority.
-pub fn normalize_subagent_spawn_role(
-    role: &str,
-    configured_role_exists: bool,
-    cooperation_mode: CooperationMode,
-    write_scopes: &[String],
-) -> String {
-    if configured_role_exists {
-        return role.to_string();
-    }
-    if cooperation_mode == CooperationMode::ExploreOnly
-        && write_scopes.is_empty()
-        && matches!(
-            role,
-            "repo-searcher"
-                | "repository-searcher"
-                | "searcher"
-                | "researcher"
-                | "inspector"
-                | "reader"
-                | "scanner"
-                | "finder"
-        )
-    {
-        return "explorer".to_string();
-    }
-    role.to_string()
-}
-
 /// Declared scope, cooperation mode, and approval provenance for one spawned
 /// subagent child.
 ///
@@ -748,7 +715,7 @@ mod tests {
     use super::{
         CooperationMode, ScopeRegistry, SubagentApprovalProvenance, SubagentContractErrorKind,
         SubagentScopeDeclaration, SubagentSessionMode, SubagentSpawnRequest,
-        builtin_subagent_profiles, normalize_subagent_spawn_role,
+        builtin_subagent_profiles,
     };
     use crate::PermissionPreset;
 
@@ -764,34 +731,6 @@ mod tests {
         );
         assert_eq!(CooperationMode::SerialWrite.as_str(), "serial-write");
         assert_eq!(CooperationMode::Unrestricted.as_str(), "unrestricted");
-    }
-
-    /// Verifies only unconfigured, read-only descriptive aliases normalize to
-    /// explorer while configured or write-capable roles remain exact.
-    #[test]
-    fn spawn_role_normalization_preserves_authority_boundaries() {
-        assert_eq!(
-            normalize_subagent_spawn_role(
-                "repo-searcher",
-                false,
-                CooperationMode::ExploreOnly,
-                &[],
-            ),
-            "explorer"
-        );
-        assert_eq!(
-            normalize_subagent_spawn_role("repo-searcher", true, CooperationMode::ExploreOnly, &[],),
-            "repo-searcher"
-        );
-        assert_eq!(
-            normalize_subagent_spawn_role(
-                "repo-searcher",
-                false,
-                CooperationMode::OwnedWrite,
-                &["src".to_string()],
-            ),
-            "repo-searcher"
-        );
     }
 
     /// Verifies unrestricted authority is the only cooperation mode requiring

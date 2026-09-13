@@ -5,16 +5,16 @@
 //! lifecycle coordination out of the main runtime agent facade.
 
 use mez_agent::{
-    MacroRunPhase, MacroStepTaskResult, normalize_subagent_spawn_role,
+    MacroRunPhase, MacroStepTaskResult,
     outcome::{RuntimeSpawnAgentDenialReason, runtime_spawn_agent_denial_reason},
 };
 
 use super::{
-    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentId, AgentTurnExecution,
+    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTurnExecution,
     AgentTurnRecord, AgentTurnState, AuditActor, AuditRecord, Envelope, EventKind,
     JoinedSubagentDependency, MezError, PaneId, Recipient, Result, RuntimeAgentLoopCompletion,
-    RuntimeAgentLoopSettlement, RuntimeSessionService, SenderIdentity, SubagentSpawnRequest,
-    SubagentWaitPolicy, TaskResultPayload, TaskState, TaskStatusPayload, TerminalResultDisposition,
+    RuntimeAgentLoopSettlement, RuntimeSessionService, SubagentSpawnRequest, SubagentWaitPolicy,
+    TaskResultPayload, TaskState, TaskStatusPayload, TerminalResultDisposition,
     current_unix_seconds, json_escape, runtime_agent_terminal_preview,
     runtime_agent_turn_state_from_action_results, runtime_agent_turn_state_name,
     runtime_cooperation_mode, runtime_cooperation_mode_name,
@@ -856,20 +856,6 @@ impl RuntimeSessionService {
             );
         };
         let normalized_cooperation_mode = runtime_cooperation_mode(cooperation_mode)?;
-        let normalized_role = normalize_subagent_spawn_role(
-            role,
-            self.integration.subagent_profiles().contains_key(role),
-            normalized_cooperation_mode,
-            write_scopes.as_deref().unwrap_or_default(),
-        );
-        let prompt = if normalized_role != *role {
-            format!(
-                "[requested role alias: {}; using built-in profile: {}]\n{}",
-                role, normalized_role, task_prompt
-            )
-        } else {
-            task_prompt.clone()
-        };
         let normalized_cooperation_mode_name =
             runtime_cooperation_mode_name(normalized_cooperation_mode);
         let effective_session_mode = session_mode.map_or("new", |mode| mode.as_str());
@@ -879,7 +865,7 @@ impl RuntimeSessionService {
                 serde_json::json!({ "agent_id": turn.agent_id }),
             ),
             ("placement".to_string(), serde_json::json!(placement)),
-            ("role".to_string(), serde_json::json!(normalized_role)),
+            ("role".to_string(), serde_json::json!(role)),
             (
                 "cooperation_mode".to_string(),
                 serde_json::json!(normalized_cooperation_mode_name),
@@ -888,7 +874,7 @@ impl RuntimeSessionService {
                 "session".to_string(),
                 serde_json::json!(effective_session_mode),
             ),
-            ("prompt".to_string(), serde_json::json!(prompt)),
+            ("prompt".to_string(), serde_json::json!(task_prompt)),
         ]);
         if *lifetime == mez_agent::SubagentLifetime::Persistent && task_prompt.trim().is_empty() {
             params.insert("skip_initial_turn".to_string(), serde_json::json!(true));
@@ -1339,19 +1325,8 @@ impl RuntimeSessionService {
             return Ok(());
         };
         let now_ms = current_unix_seconds().saturating_mul(1000);
-        let parent_identity = self.control.message_service_mut().ensure_agent_identity(
-            SenderIdentity {
-                agent_id: AgentId::opaque(parent_agent_id.clone()).ok_or_else(|| {
-                    MezError::invalid_args("subagent parent agent id is invalid for MMP")
-                })?,
-                pane_id: None,
-                window_id: None,
-                role: Some("agent".to_string()),
-                capabilities: Vec::new(),
-                objective: None,
-            },
-            now_ms,
-        )?;
+        let parent_identity =
+            self.ensure_runtime_message_identity(&parent_agent_id, None, "agent", &[], now_ms)?;
         if self
             .control
             .message_service()
@@ -1398,9 +1373,10 @@ impl RuntimeSessionService {
             payload: payload.to_json(),
             extension_fields,
         };
-        let delivery = self.control.message_service_mut().accept_at(
+        let delivery = self.control.message_service_mut().accept_at_with_scope(
             &child_identity.agent_id,
             envelope,
+            mez_agent::messaging::MessageScope::Session,
             now_ms,
         );
         if delivery.is_ok() {
@@ -1673,19 +1649,8 @@ impl RuntimeSessionService {
         output: &str,
         now_ms: u64,
     ) -> Result<()> {
-        let parent_identity = self.control.message_service_mut().ensure_agent_identity(
-            SenderIdentity {
-                agent_id: AgentId::opaque(parent_agent_id.to_string()).ok_or_else(|| {
-                    MezError::invalid_args("subagent parent agent id is invalid for MMP")
-                })?,
-                pane_id: None,
-                window_id: None,
-                role: Some("agent".to_string()),
-                capabilities: Vec::new(),
-                objective: None,
-            },
-            now_ms,
-        )?;
+        let parent_identity =
+            self.ensure_runtime_message_identity(parent_agent_id, None, "agent", &[], now_ms)?;
         if self
             .control
             .message_service()
@@ -1728,9 +1693,12 @@ impl RuntimeSessionService {
             payload: payload.to_json(),
             extension_fields,
         };
-        self.control
-            .message_service_mut()
-            .accept_at(&child_identity.agent_id, envelope, now_ms)?;
+        self.control.message_service_mut().accept_at_with_scope(
+            &child_identity.agent_id,
+            envelope,
+            mez_agent::messaging::MessageScope::Session,
+            now_ms,
+        )?;
         self.deliver_pending_runtime_agent_messages(now_ms)?;
         Ok(())
     }

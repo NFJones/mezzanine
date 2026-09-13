@@ -388,6 +388,10 @@ impl RuntimeSessionService {
                     Some(parent_session.session_id.clone()),
                     parent_session.transcript_entries,
                 )?;
+            if let Some(project_scope) = parent_session.project_scope.clone() {
+                self.agent_shell_store_mut()
+                    .install_project_scope(&child_pane_id, project_scope)?;
+            }
             self.set_agent_routing_override(
                 &child_pane_id,
                 Some(self.agent_routing_enabled_for_pane(&turn.pane_id)),

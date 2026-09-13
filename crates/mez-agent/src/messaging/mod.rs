@@ -17,11 +17,12 @@ pub use error::{MessageError, MessageErrorKind, Result};
 pub use json::delivery_batch_json;
 pub use types::{
     AgentPresenceStatus, Delivery, DeliveryBatch, DeliveryCursor, DeliveryStatus, Envelope,
-    FanoutBatch, FanoutBudget, MMP_CONTENT_TYPE, MessageAcceptedSnapshot, MessageConnection,
-    MessageDeliveryCursorSnapshot, MessageDeliverySnapshot, MessageEnvelopeSnapshot,
-    MessageExtensionFieldSnapshot, MessageFanoutDiagnostics, MessageIdentitySnapshot,
-    MessagePresenceSnapshot, MessageQueuedEnvelopeSnapshot, MessageRecipientSnapshot,
-    MessageSequence, MessageService, MessageServiceSnapshot, PresenceRecord, Recipient,
+    FanoutBatch, FanoutBudget, MMP_CONTENT_TYPE, MessageAcceptedSnapshot, MessageAudienceSnapshot,
+    MessageConnection, MessageDeliveryCursorSnapshot, MessageDeliverySnapshot,
+    MessageEnvelopeSnapshot, MessageExtensionFieldSnapshot, MessageFanoutDiagnostics,
+    MessageIdentitySnapshot, MessagePresenceSnapshot, MessageQueuedEnvelopeSnapshot,
+    MessageRecipientSnapshot, MessageScope, MessageSequence, MessageService,
+    MessageServiceSnapshot, PresenceRecord, ProjectMembership, ProjectScopeId, Recipient,
     SenderIdentity, SequencedEnvelope, TaskResultPayload, TaskState, TaskStatusPayload,
 };
 pub use validation::{

@@ -72,12 +72,17 @@ Use `mez snapshot create` to save layout state, and `mez snapshot` to list
 saved snapshots. The `inspect`, `delete`, `resume`, and `resume-latest`
 subcommands operate on those saved layouts. Snapshot payload version 5 retains
 shared session topology, canonical geometry, names, known pane working
-directories, and a client-independent landing view. It never restores attached
-client IDs, layout ownership, client-local focus/history/zoom, transient
-presentation, observer authority, event credentials or cursors, provider
-credentials, terminal history, agent conversations, local message state, live
-MCP state, pending approvals, approval grants, or pane processes. Restored
-sessions begin with zero attached primaries by default; `--serve
+directories, a client-independent landing view, and version-2 local MMP state.
+MMP state retains private trusted project membership and each retained message's
+resolved project or session audience; roots and opaque scope identifiers are
+not exposed through transport or model-visible output. Snapshot version 1 has
+no resolved audience metadata, so its retained and accepted MMP traffic is
+discarded rather than replayed with a widened audience. It never restores
+attached client IDs, layout ownership, client-local focus/history/zoom,
+transient presentation, observer authority, event credentials or cursors,
+provider credentials, terminal history, agent conversations, live MCP state,
+pending approvals, approval grants, or pane processes. Restored sessions begin
+with zero attached primaries by default; `--serve
 --attach-primary` creates the documented interactive primary during live
 restore.
 

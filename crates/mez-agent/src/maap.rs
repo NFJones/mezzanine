@@ -287,12 +287,14 @@ pub enum AgentActionPayload {
         /// Optional retention period in days.
         expires_in_days: Option<u64>,
     },
-    /// Lists discoverable session agents through runtime-owned discovery.
+    /// Lists requester-visible agents through runtime-owned discovery.
     ListAgents {
         /// Optional agent-type filter: primary, subagent, internal, or all.
         ///
         /// Absent means the primary-agent-only default.
         agent_type: Option<String>,
+        /// Optional discovery audience; omission or null defaults to the requester project.
+        scope: Option<String>,
     },
     /// Adds one local project issue through the runtime-owned issue store.
     IssueAdd {
@@ -365,6 +367,8 @@ pub enum AgentActionPayload {
         /// The field is part of structured state exchanged across this module
         /// boundary and should remain aligned with the owning type invariant.
         recipient: String,
+        /// Optional delivery audience; omission defaults to the sender project.
+        scope: Option<String>,
         /// Stores the content type value for this data structure.
         ///
         /// The field is part of structured state exchanged across this module
@@ -814,12 +818,19 @@ impl AgentAction {
                 }
                 Ok(())
             }
-            AgentActionPayload::ListAgents { agent_type } => {
+            AgentActionPayload::ListAgents { agent_type, scope } => {
                 if let Some(agent_type) = agent_type.as_deref()
                     && !matches!(agent_type, "primary" | "subagent" | "internal" | "all")
                 {
                     return Err(MaapContractError::invalid_args(
                         "list_agents agent_type must be primary, subagent, internal, or all",
+                    ));
+                }
+                if let Some(scope) = scope
+                    && !matches!(scope.as_str(), "project" | "session")
+                {
+                    return Err(MaapContractError::invalid_args(
+                        "list_agents scope must be project or session",
                     ));
                 }
                 Ok(())
@@ -888,11 +899,19 @@ impl AgentAction {
             AgentActionPayload::IssueDelete { id } => validate_non_empty("issue id", id),
             AgentActionPayload::SendMessage {
                 recipient,
+                scope,
                 content_type,
                 payload,
                 correlation_id,
             } => {
                 validate_non_empty("message recipient", recipient)?;
+                if let Some(scope) = scope
+                    && !matches!(scope.as_str(), "project" | "session")
+                {
+                    return Err(MaapContractError::invalid_args(
+                        "message scope must be project or session",
+                    ));
+                }
                 validate_non_empty("message content type", content_type)?;
                 validate_non_empty("message payload", payload)?;
                 if let Some(correlation_id) = correlation_id.as_deref() {
@@ -1441,6 +1460,7 @@ fn parse_maap_action_value(
         },
         "list_agents" => AgentActionPayload::ListAgents {
             agent_type: optional_string(object, "agent_type")?.map(str::to_string),
+            scope: optional_string(object, "scope")?.map(str::to_string),
         },
         "issue_add" => AgentActionPayload::IssueAdd {
             kind: required_string(object, "kind")?.to_string(),
@@ -1476,6 +1496,7 @@ fn parse_maap_action_value(
         },
         "send_message" => AgentActionPayload::SendMessage {
             recipient: required_string(object, "recipient")?.to_string(),
+            scope: optional_string(object, "scope")?.map(str::to_string),
             content_type: required_string(object, "content_type")?.to_string(),
             payload: required_json_or_string(object, "payload")?,
             correlation_id: optional_string(object, "correlation_id")?.map(str::to_string),

@@ -620,10 +620,21 @@ fn start_session(
             payload,
             restart_command,
         } => {
-            service.seed_terminal_screens_from_snapshot_payload(&payload)?;
-            service.restore_agent_sessions_for_restored_snapshot()?;
-            service.restart_restored_pane_processes(restart_command.as_deref())?;
-            Ok(())
+            let prior_message_state = service.message_service().snapshot_state();
+            let restored = (|| -> Result<()> {
+                service.restore_message_state_for_restored_snapshot(&payload)?;
+                service.seed_terminal_screens_from_snapshot_payload(&payload)?;
+                service.restore_agent_sessions_for_restored_snapshot()?;
+                service.restart_restored_pane_processes(restart_command.as_deref())?;
+                Ok(())
+            })();
+            if restored.is_err() {
+                *service.message_service_mut() =
+                    mez_agent::messaging::MessageService::from_snapshot_state(
+                        &prior_message_state,
+                    )?;
+            }
+            restored
         }
     }
 }

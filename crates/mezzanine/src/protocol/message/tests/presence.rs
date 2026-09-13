@@ -31,6 +31,7 @@ fn discovery_filters_by_identity_presence_and_capability() {
     let mut service = MessageService::default();
     let reviewer = SenderIdentity {
         agent_id: AgentId::parse('a', "a42").unwrap(),
+        project_scope: None,
         pane_id: Some(PaneId::parse('%', "%7").unwrap()),
         window_id: Some(WindowId::parse('@', "@3").unwrap()),
         role: Some("reviewer".to_string()),
@@ -39,6 +40,7 @@ fn discovery_filters_by_identity_presence_and_capability() {
     };
     let writer = SenderIdentity {
         agent_id: AgentId::parse('a', "a43").unwrap(),
+        project_scope: None,
         pane_id: Some(PaneId::parse('%', "%8").unwrap()),
         window_id: Some(WindowId::parse('@', "@3").unwrap()),
         role: Some("writer".to_string()),
@@ -51,7 +53,7 @@ fn discovery_filters_by_identity_presence_and_capability() {
         .update_presence(&reviewer.agent_id, AgentPresenceStatus::Blocked, 20)
         .unwrap();
 
-    let matches = service.discover_agents_filtered(
+    let matches = service.discover_agents_filtered_session_wide(
         Some("a42"),
         Some("%7"),
         Some("@3"),
@@ -59,7 +61,7 @@ fn discovery_filters_by_identity_presence_and_capability() {
         Some(AgentPresenceStatus::Blocked),
         &["rust".to_string(), "tests".to_string()],
     );
-    let misses = service.discover_agents_filtered(
+    let misses = service.discover_agents_filtered_session_wide(
         Some("a42"),
         Some("%7"),
         Some("@3"),
@@ -125,7 +127,7 @@ fn mmp_transport_discover_applies_presence_and_capability_filters() {
     let worker_hello = r#"{"protocol":"mmp/1","type":"hello","id":"h1","role":"worker","capabilities":["rust","tests"]}"#;
     let reviewer_hello = r#"{"protocol":"mmp/1","type":"hello","id":"h2","role":"reviewer","capabilities":["docs"]}"#;
     let presence = r#"{"protocol":"mmp/1","type":"presence","id":"p1","status":"busy"}"#;
-    let discover = r#"{"protocol":"mmp/1","type":"discover","role":"worker","status":"busy","capabilities":["rust"]}"#;
+    let discover = r#"{"protocol":"mmp/1","type":"discover","role":"worker","status":"busy","capabilities":["rust"],"scope":"session"}"#;
 
     dispatch_mmp_body(worker_hello, &mut service, &mut worker_connection, 10);
     dispatch_mmp_body(reviewer_hello, &mut service, &mut reviewer_connection, 10);

@@ -19,6 +19,8 @@ pub const MESSAGE_APPROVAL_PREVIEW_BYTES: usize = 200;
 pub struct MessageActionPlan {
     /// Recipient exactly as the model supplied it.
     pub recipient: String,
+    /// Normalized public audience selected for delivery.
+    pub scope: String,
     /// User-facing summary of the message action.
     pub summary: String,
     /// Shell-shaped pseudo command evaluated by product recipient rules.
@@ -30,22 +32,31 @@ pub struct MessageActionPlan {
 
 /// Lowers one `send_message` action into its message action plan.
 pub fn message_action_plan(action: &AgentAction) -> Option<MessageActionPlan> {
-    let AgentActionPayload::SendMessage { recipient, .. } = &action.payload else {
+    let AgentActionPayload::SendMessage {
+        recipient, scope, ..
+    } = &action.payload
+    else {
         return None;
     };
+    let scope = scope.as_deref().unwrap_or("project");
     Some(MessageActionPlan {
         recipient: recipient.clone(),
+        scope: scope.to_string(),
         summary: format!(
             "I’ll send a message to `{}`.",
             message_payload_preview(recipient)
         ),
-        policy_command: message_action_policy_command(recipient),
+        policy_command: message_action_policy_command(recipient, scope),
     })
 }
 
 /// Returns the permission-facing pseudo command for one message recipient.
-pub fn message_action_policy_command(recipient: &str) -> String {
-    format!("send_message {}", shell_quote(recipient))
+pub fn message_action_policy_command(recipient: &str, scope: &str) -> String {
+    format!(
+        "send_message {} --scope {}",
+        shell_quote(recipient),
+        shell_quote(scope)
+    )
 }
 
 /// Returns the stable payload identity digest binding one send approval.
@@ -113,6 +124,7 @@ mod tests {
             id: "message-1".to_string(),
             payload: AgentActionPayload::SendMessage {
                 recipient: recipient.to_string(),
+                scope: None,
                 content_type: "text/plain; charset=utf-8".to_string(),
                 payload: payload.to_string(),
                 correlation_id: None,
@@ -130,7 +142,7 @@ mod tests {
         assert_eq!(plan.recipient, "role:reviewer; rm -rf /tmp/x");
         assert_eq!(
             plan.policy_command,
-            "send_message 'role:reviewer; rm -rf /tmp/x'"
+            "send_message 'role:reviewer; rm -rf /tmp/x' --scope 'project'"
         );
         assert!(plan.summary.contains("role:reviewer"));
     }

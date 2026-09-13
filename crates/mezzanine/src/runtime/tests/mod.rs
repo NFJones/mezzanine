@@ -1412,6 +1412,7 @@ fn execute_runtime_send_message_to(
         .ensure_agent_identity(
             SenderIdentity {
                 agent_id: target_agent.clone(),
+                project_scope: None,
                 pane_id: None,
                 window_id: None,
                 role: Some("worker".to_string()),
@@ -1454,6 +1455,7 @@ fn execute_runtime_send_message_to(
 
                     payload: mez_agent::AgentActionPayload::SendMessage {
                         recipient: recipient.to_string(),
+                        scope: Some("session".to_string()),
                         content_type: content_type.to_string(),
                         payload: payload.to_string(),
                         correlation_id: None,

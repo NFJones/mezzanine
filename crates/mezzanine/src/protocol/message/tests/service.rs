@@ -13,7 +13,12 @@ fn accepts_message_from_registered_sender() {
     let sender = service.register_agent(None, None, "default", Vec::new());
 
     let delivery = service
-        .accept(&sender.agent_id.clone(), envelope(sender))
+        .accept_at_with_scope(
+            &sender.agent_id.clone(),
+            envelope(sender),
+            MessageScope::Session,
+            0,
+        )
         .unwrap();
 
     assert!(delivery.accepted);
@@ -46,7 +51,7 @@ fn message_service_snapshot_round_trips_delivery_state() {
     message.extension_fields = vec![("trace".to_string(), r#"{"span":"one"}"#.to_string())];
 
     let delivery = service
-        .accept_at(&sender.agent_id, message.clone(), 10)
+        .accept_at_with_scope(&sender.agent_id, message.clone(), MessageScope::Session, 10)
         .unwrap();
     let snapshot = service.snapshot_state();
     let mut restored = MessageService::from_snapshot_state(&snapshot).unwrap();
@@ -70,7 +75,9 @@ fn message_service_snapshot_round_trips_delivery_state() {
     assert_eq!(batch.messages.len(), 1);
     assert_eq!(batch.messages[0].envelope.payload, "hello");
     assert_eq!(
-        restored.accept_at(&sender.agent_id, message, 20).unwrap(),
+        restored
+            .accept_at_with_scope(&sender.agent_id, message, MessageScope::Session, 20)
+            .unwrap(),
         delivery
     );
 }
@@ -87,9 +94,11 @@ fn duplicate_message_ids_are_idempotent_for_matching_envelopes() {
     message.recipient = Recipient::Agent(target.agent_id.clone());
 
     let first = service
-        .accept_at(&sender.agent_id, message.clone(), 10)
+        .accept_at_with_scope(&sender.agent_id, message.clone(), MessageScope::Session, 10)
         .unwrap();
-    let second = service.accept_at(&sender.agent_id, message, 11).unwrap();
+    let second = service
+        .accept_at_with_scope(&sender.agent_id, message, MessageScope::Session, 11)
+        .unwrap();
     let received = service.receive_for(&target.agent_id, 12);
 
     assert_eq!(second, first);
@@ -111,8 +120,12 @@ fn conflicting_duplicate_message_ids_are_rejected() {
     let mut second = first.clone();
     second.payload = "different".to_string();
 
-    service.accept_at(&sender.agent_id, first, 10).unwrap();
-    let error = service.accept_at(&sender.agent_id, second, 11).unwrap_err();
+    service
+        .accept_at_with_scope(&sender.agent_id, first, MessageScope::Session, 10)
+        .unwrap();
+    let error = service
+        .accept_at_with_scope(&sender.agent_id, second, MessageScope::Session, 11)
+        .unwrap_err();
 
     assert_eq!(error.kind(), MessageErrorKind::Conflict);
     assert_eq!(mmp_error_code(&error), "invalid_envelope");
@@ -132,7 +145,12 @@ fn rejects_sender_spoofing() {
     spoofed.role = Some("other".to_string());
 
     let error = service
-        .accept(&sender.agent_id, envelope(spoofed))
+        .accept_at_with_scope(
+            &sender.agent_id,
+            envelope(spoofed),
+            MessageScope::Session,
+            0,
+        )
         .unwrap_err();
 
     assert_eq!(error.kind(), MessageErrorKind::Forbidden);

@@ -20,7 +20,9 @@ fn fanout_ready_batches_subscribed_recipients_without_advancing() {
     let mut fanout = envelope(sender.clone());
     fanout.id = "fanout".to_string();
     fanout.recipient = Recipient::Session;
-    service.accept_at(&sender.agent_id, fanout, 10).unwrap();
+    service
+        .accept_at_with_scope(&sender.agent_id, fanout, MessageScope::Session, 10)
+        .unwrap();
 
     let ready = service.fanout_ready(11, 10);
 
@@ -59,7 +61,9 @@ fn acknowledging_fanout_batch_advances_only_that_recipient() {
     let mut fanout = envelope(sender.clone());
     fanout.id = "fanout".to_string();
     fanout.recipient = Recipient::Session;
-    let delivery = service.accept_at(&sender.agent_id, fanout, 10).unwrap();
+    let delivery = service
+        .accept_at_with_scope(&sender.agent_id, fanout, MessageScope::Session, 10)
+        .unwrap();
     let ready = service.fanout_ready(11, 10);
 
     service.acknowledge_fanout_batch(&ready[0]).unwrap();
@@ -90,7 +94,9 @@ fn flush_message_fanout_writes_frames_and_advances_cursors() {
     service.subscribe(&target.agent_id).unwrap();
     let mut message = envelope(sender.clone());
     message.recipient = Recipient::Agent(target.agent_id.clone());
-    service.accept_at(&sender.agent_id, message, 10).unwrap();
+    service
+        .accept_at_with_scope(&sender.agent_id, message, MessageScope::Session, 10)
+        .unwrap();
     let mut sink = CollectingFanoutSink::default();
 
     let sent = flush_message_fanout(&mut service, 11, 10, &mut sink).unwrap();
@@ -128,7 +134,9 @@ fn flush_message_fanout_for_writes_only_requested_recipient() {
     service.subscribe(&second.agent_id).unwrap();
     let mut message = envelope(sender.clone());
     message.recipient = Recipient::Session;
-    service.accept_at(&sender.agent_id, message, 10).unwrap();
+    service
+        .accept_at_with_scope(&sender.agent_id, message, MessageScope::Session, 10)
+        .unwrap();
     let mut sink = CollectingFanoutSink::default();
 
     let sent = flush_message_fanout_for(&mut service, &second.agent_id, 11, 10, &mut sink).unwrap();
@@ -166,7 +174,9 @@ fn failed_fanout_write_does_not_advance_cursor() {
     service.subscribe(&target.agent_id).unwrap();
     let mut message = envelope(sender.clone());
     message.recipient = Recipient::Agent(target.agent_id.clone());
-    service.accept_at(&sender.agent_id, message, 10).unwrap();
+    service
+        .accept_at_with_scope(&sender.agent_id, message, MessageScope::Session, 10)
+        .unwrap();
     let mut sink = FailingFanoutSink;
 
     let error = flush_message_fanout(&mut service, 11, 10, &mut sink).unwrap_err();
@@ -195,7 +205,9 @@ fn fanout_batches_share_retained_envelopes() {
     service.subscribe(&second.agent_id).unwrap();
     let mut message = envelope(sender.clone());
     message.recipient = Recipient::Session;
-    service.accept_at(&sender.agent_id, message, 10).unwrap();
+    service
+        .accept_at_with_scope(&sender.agent_id, message, MessageScope::Session, 10)
+        .unwrap();
 
     let ready = service.fanout_ready(11, 10);
 
@@ -221,7 +233,9 @@ fn bounded_fanout_resumes_fairly_across_subscribers() {
     }
     let mut message = envelope(sender.clone());
     message.recipient = Recipient::Session;
-    service.accept_at(&sender.agent_id, message, 10).unwrap();
+    service
+        .accept_at_with_scope(&sender.agent_id, message, MessageScope::Session, 10)
+        .unwrap();
     let budget = FanoutBudget {
         max_recipients: 1,
         max_messages: 1,
@@ -261,7 +275,9 @@ fn fanout_honors_aggregate_message_and_payload_budgets() {
         let mut message = envelope(sender.clone());
         message.id = id.to_string();
         message.recipient = Recipient::Session;
-        service.accept_at(&sender.agent_id, message, 10).unwrap();
+        service
+            .accept_at_with_scope(&sender.agent_id, message, MessageScope::Session, 10)
+            .unwrap();
     }
     let budget = FanoutBudget {
         max_recipients: 2,
@@ -299,13 +315,15 @@ fn direct_fanout_uses_recipient_index_for_lookup_work() {
         let mut message = envelope(sender.clone());
         message.id = format!("unrelated-{index}");
         message.recipient = Recipient::Agent(recipient.agent_id.clone());
-        service.accept_at(&sender.agent_id, message, 10).unwrap();
+        service
+            .accept_at_with_scope(&sender.agent_id, message, MessageScope::Session, 10)
+            .unwrap();
     }
     let mut target_message = envelope(sender.clone());
     target_message.id = "target-message".to_string();
     target_message.recipient = Recipient::Agent(target.agent_id.clone());
     service
-        .accept_at(&sender.agent_id, target_message, 10)
+        .accept_at_with_scope(&sender.agent_id, target_message, MessageScope::Session, 10)
         .unwrap();
 
     let ready = service.fanout_ready_with_budget(
@@ -339,7 +357,9 @@ fn indexed_fanout_deduplicates_overlapping_recipient_selectors() {
     service.subscribe(&target.agent_id).unwrap();
     let mut message = envelope(sender.clone());
     message.recipient = Recipient::Group("session".to_string());
-    service.accept_at(&sender.agent_id, message, 10).unwrap();
+    service
+        .accept_at_with_scope(&sender.agent_id, message, MessageScope::Session, 10)
+        .unwrap();
 
     let ready = service.fanout_ready(11, 10);
 

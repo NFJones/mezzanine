@@ -1035,7 +1035,18 @@ impl RuntimeSessionService {
     ) -> Result<SenderIdentity> {
         let agent_id = AgentId::opaque(agent_id.to_string())
             .ok_or_else(|| MezError::invalid_args("agent id is invalid for MMP"))?;
+        if self.subagent_lineage(agent_id.as_str()).is_some()
+            && let Some(identity) = self
+                .control
+                .message_service()
+                .registered_identity(&agent_id)
+        {
+            return Ok(identity.clone());
+        }
         let pane_id = pane_id.or_else(|| pane_id_from_runtime_agent_id(agent_id.as_str()));
+        let project_scope = pane_id
+            .as_ref()
+            .and_then(|pane_id| self.runtime_message_project_scope(pane_id));
         let window_id = pane_id
             .as_ref()
             .and_then(|pane_id| self.find_pane_descriptor(pane_id.as_str()))
@@ -1043,6 +1054,7 @@ impl RuntimeSessionService {
         Ok(self.control.message_service_mut().ensure_agent_identity(
             SenderIdentity {
                 agent_id,
+                project_scope,
                 pane_id,
                 window_id,
                 role: Some(role.to_string()),
@@ -1054,6 +1066,80 @@ impl RuntimeSessionService {
             },
             now_ms,
         )?)
+    }
+
+    /// Returns the stable trusted project membership for one runtime agent pane.
+    ///
+    /// A session receives its scope only once, using the canonical project root
+    /// known when identity is first established. Later `cd` observations must
+    /// not silently move an existing conversation into another audience.
+    pub(crate) fn runtime_message_project_scope(
+        &mut self,
+        pane_id: &PaneId,
+    ) -> Option<mez_agent::messaging::ProjectScopeId> {
+        if let Some(scope) = self
+            .agent_shell_store()
+            .get(pane_id.as_str())
+            .and_then(|session| session.project_scope.clone())
+        {
+            return Some(scope.scope_id());
+        }
+        let working_directory = self.pane_current_working_directory(pane_id.as_str())?;
+        let root = crate::security::project::discover_project_root(&working_directory);
+        let root = std::fs::canonicalize(root).ok()?;
+        let membership = mez_agent::messaging::ProjectMembership::from_canonical_root(root);
+        let scope = membership.scope_id();
+        if self.agent_shell_store().get(pane_id.as_str()).is_some() {
+            self.agent_shell_store_mut()
+                .capture_project_scope(pane_id.as_str(), membership)
+                .ok()?;
+        }
+        Some(scope)
+    }
+
+    /// Derives trusted membership from a canonicalized durable project root.
+    ///
+    /// A persisted root is authoritative for restore and resume. Failure to
+    /// canonicalize it deliberately leaves the lifecycle operation failed
+    /// rather than deriving a replacement audience from the live pane CWD.
+    pub(crate) fn runtime_project_scope_from_persisted_root(
+        &self,
+        project_root: Option<&str>,
+    ) -> Result<Option<mez_agent::messaging::ProjectMembership>> {
+        project_root
+            .map(|project_root| {
+                let canonical_root = std::fs::canonicalize(project_root).map_err(|error| {
+                    MezError::invalid_state(format!(
+                        "persisted project root cannot be canonicalized: {error}"
+                    ))
+                })?;
+                Ok(mez_agent::messaging::ProjectMembership::from_canonical_root(canonical_root))
+            })
+            .transpose()
+    }
+
+    /// Rebinds an existing runtime identity after a trusted lifecycle change.
+    ///
+    /// The message service updates only the membership metadata, retaining
+    /// presence, objective, subscription cursor, and queued delivery state.
+    pub(crate) fn rebind_runtime_message_project_scope(
+        &mut self,
+        pane_id: &str,
+        project_scope: Option<mez_agent::messaging::ProjectScopeId>,
+    ) -> Result<()> {
+        let agent_id = AgentId::opaque(format!("agent-{pane_id}"))
+            .ok_or_else(|| MezError::invalid_args("agent id is invalid for MMP"))?;
+        if self
+            .control
+            .message_service()
+            .registered_identity(&agent_id)
+            .is_some()
+        {
+            self.control
+                .message_service_mut()
+                .rebind_agent_project_scope(&agent_id, project_scope)?;
+        }
+        Ok(())
     }
 
     /// Runs the dispatch runtime pane capture operation for this subsystem.

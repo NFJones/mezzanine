@@ -428,6 +428,9 @@ impl RuntimeSessionService {
             .agent_latest_request_usage(&previous_session.session_id)
             .cloned();
         let target_latest_usage = self.agent_latest_request_usage(&conversation_id).cloned();
+        let target_project_scope = prepared_resume_state
+            .as_ref()
+            .and_then(|prepared| prepared.project_scope.clone());
 
         let resume_result = (|| -> Result<(String, u64, mez_agent::AgentShellVisibility)> {
             let (session_id, transcript_entries, visibility) = {
@@ -452,6 +455,16 @@ impl RuntimeSessionService {
                     session.visibility,
                 )
             };
+            if let Some(project_scope) = target_project_scope.clone() {
+                self.agent_shell_store_mut()
+                    .install_project_scope(pane_id, project_scope)?;
+            }
+            self.rebind_runtime_message_project_scope(
+                pane_id,
+                target_project_scope
+                    .as_ref()
+                    .map(|membership| membership.scope_id()),
+            )?;
             self.reload_agent_prompt_history_for_pane(pane_id)?;
             if let Some(size) = self
                 .agent_pane_screen(pane_id)
@@ -543,6 +556,13 @@ impl RuntimeSessionService {
             Err(error) => {
                 self.agent_shell_store_mut()
                     .restore_session(pane_id, previous_session.clone())?;
+                self.rebind_runtime_message_project_scope(
+                    pane_id,
+                    previous_session
+                        .project_scope
+                        .as_ref()
+                        .map(|membership| membership.scope_id()),
+                )?;
                 if let Some((conversation_id, screen)) = previous_agent_screen {
                     self.set_agent_pane_screen(pane_id, conversation_id, screen);
                 } else {

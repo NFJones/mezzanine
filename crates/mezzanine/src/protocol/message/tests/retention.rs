@@ -15,7 +15,9 @@ fn expired_messages_are_not_delivered() {
     message.recipient = Recipient::Agent(sender.agent_id.clone());
     message.ttl_ms = Some(5);
 
-    service.accept_at(&sender.agent_id, message, 10).unwrap();
+    service
+        .accept_at_with_scope(&sender.agent_id, message, MessageScope::Session, 10)
+        .unwrap();
 
     assert!(service.receive_for(&sender.agent_id, 16).is_empty());
 }
@@ -34,7 +36,7 @@ fn zero_ttl_messages_are_rejected_before_delivery() {
     message.ttl_ms = Some(0);
 
     let error = service
-        .accept_at(&sender.agent_id, message, 10)
+        .accept_at_with_scope(&sender.agent_id, message, MessageScope::Session, 10)
         .unwrap_err();
 
     assert_eq!(error.kind(), MessageErrorKind::InvalidState);
@@ -56,8 +58,12 @@ fn queue_retention_evicts_oldest_messages() {
     let mut second = envelope(sender.clone());
     second.id = "m2".to_string();
 
-    service.accept(&sender.agent_id, first).unwrap();
-    service.accept(&sender.agent_id, second).unwrap();
+    service
+        .accept_at_with_scope(&sender.agent_id, first, MessageScope::Session, 0)
+        .unwrap();
+    service
+        .accept_at_with_scope(&sender.agent_id, second, MessageScope::Session, 0)
+        .unwrap();
 
     let received = service.receive_for(&sender.agent_id, 0);
     assert_eq!(received.len(), 1);
@@ -77,8 +83,12 @@ fn accepted_message_retention_tracks_retained_queue() {
     let mut second = envelope(sender.clone());
     second.id = "m2".to_string();
 
-    service.accept(&sender.agent_id, first).unwrap();
-    service.accept(&sender.agent_id, second).unwrap();
+    service
+        .accept_at_with_scope(&sender.agent_id, first, MessageScope::Session, 0)
+        .unwrap();
+    service
+        .accept_at_with_scope(&sender.agent_id, second, MessageScope::Session, 0)
+        .unwrap();
     let snapshot = service.snapshot_state();
 
     assert_eq!(snapshot.retained_messages.len(), 1);

@@ -812,7 +812,7 @@ pub(super) fn runtime_maap_action_payload_trace_json(
                 serde_json::json!(expires_in_days),
             );
         }
-        AgentActionPayload::ListAgents { agent_type } => {
+        AgentActionPayload::ListAgents { agent_type, scope } => {
             data.insert(
                 "agent_type".to_string(),
                 serde_json::json!(
@@ -820,6 +820,10 @@ pub(super) fn runtime_maap_action_payload_trace_json(
                         .as_deref()
                         .unwrap_or(mez_agent::AgentListFilter::default_filter().as_str())
                 ),
+            );
+            data.insert(
+                "scope".to_string(),
+                serde_json::json!(scope.as_deref().unwrap_or("project")),
             );
         }
         AgentActionPayload::IssueAdd {
@@ -910,11 +914,13 @@ pub(super) fn runtime_maap_action_payload_trace_json(
         }
         AgentActionPayload::SendMessage {
             recipient,
+            scope,
             content_type,
             payload,
             correlation_id,
         } => {
             data.insert("recipient".to_string(), serde_json::json!(recipient));
+            data.insert("scope".to_string(), serde_json::json!(scope));
             data.insert("content_type".to_string(), serde_json::json!(content_type));
             if let Some(correlation_id) = correlation_id {
                 data.insert(

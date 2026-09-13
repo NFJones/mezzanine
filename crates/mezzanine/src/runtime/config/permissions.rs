@@ -469,6 +469,22 @@ pub(crate) fn runtime_message_recipient(value: &str) -> Result<Recipient> {
     ))
 }
 
+/// Normalizes one optional model-selected delivery audience.
+///
+/// Omission deliberately remains project-scoped so widening delivery requires
+/// an explicit `session` declaration.
+pub(crate) fn runtime_message_scope(
+    value: Option<&str>,
+) -> Result<mez_agent::messaging::MessageScope> {
+    match value.unwrap_or("project") {
+        "project" => Ok(mez_agent::messaging::MessageScope::Project),
+        "session" => Ok(mez_agent::messaging::MessageScope::Session),
+        _ => Err(MezError::invalid_args(
+            "send_message scope must be project or session",
+        )),
+    }
+}
+
 /// Returns the product permission decision for one model-planned recipient.
 ///
 /// The recipient grammar is the same one the delivery path uses, so an
@@ -484,14 +500,20 @@ pub(crate) fn runtime_message_recipient(value: &str) -> Result<Recipient> {
 pub(crate) fn runtime_message_recipient_decision(
     policy: &PermissionPolicy,
     recipient: &str,
+    scope: Option<&str>,
 ) -> RuleDecision {
     if runtime_message_recipient(recipient).is_err() {
         return RuleDecision::Allow;
     }
-    let policy_command = mez_agent::message_action_policy_command(recipient);
+    let scope = scope.unwrap_or("project");
+    let policy_command = mez_agent::message_action_policy_command(recipient, scope);
     match policy.evaluate_policy_command_rules(&policy_command) {
         RuleDecision::Forbid => RuleDecision::Forbid,
-        RuleDecision::Allow => RuleDecision::Allow,
+        RuleDecision::Allow if scope == "project" => RuleDecision::Allow,
+        RuleDecision::Allow => policy
+            .evaluate_exact_policy_command_rules(&policy_command)
+            .filter(|decision| *decision == RuleDecision::Allow)
+            .unwrap_or(RuleDecision::Prompt),
         RuleDecision::Prompt => policy.evaluate_shell_command(&policy_command),
     }
 }

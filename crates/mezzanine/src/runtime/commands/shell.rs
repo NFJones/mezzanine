@@ -966,6 +966,7 @@ impl RuntimeSessionService {
                 .get(&pane_id)
                 .map(|session| session.session_id.clone())
                 .ok_or_else(|| MezError::invalid_state("agent shell session not found for pane"))?;
+            self.rebind_runtime_message_project_scope(&pane_id, None)?;
             self.capture_agent_session_allowed_actions_for_pane(&pane_id)?;
             self.sync_runtime_agent_objective_for_conversation(&pane_id, &conversation_id)?;
             self.clear_agent_modified_files(&pane_id);

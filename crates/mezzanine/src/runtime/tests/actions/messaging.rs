@@ -4,7 +4,7 @@ use super::*;
 use crate::config::{ConfigFormat, ConfigLayer, ConfigScope};
 use crate::runtime::ControlIdempotencyCache;
 use crate::runtime::{current_unix_millis, current_unix_seconds};
-use mez_agent::messaging::Envelope;
+use mez_agent::messaging::{Envelope, MessageScope};
 use mez_core::ids::PaneId;
 
 /// Verifies a message accepted while a turn is active becomes one canonical
@@ -44,7 +44,7 @@ fn runtime_active_turn_local_message_commits_once_at_arrival() {
     let delivery = service
         .control
         .message_service_mut()
-        .accept_at(&sender.agent_id, envelope, now_ms)
+        .accept_at_with_scope(&sender.agent_id, envelope, MessageScope::Session, now_ms)
         .unwrap();
 
     assert_eq!(
@@ -153,7 +153,7 @@ fn runtime_wait_parks_and_peer_mail_resumes_same_turn() {
     service
         .control
         .message_service_mut()
-        .accept_at(
+        .accept_at_with_scope(
             &sender.agent_id,
             Envelope {
                 protocol: "mmp/1",
@@ -174,6 +174,7 @@ fn runtime_wait_parks_and_peer_mail_resumes_same_turn() {
                 .to_json(),
                 extension_fields: Vec::new(),
             },
+            MessageScope::Session,
             now_ms,
         )
         .unwrap();
@@ -192,7 +193,7 @@ fn runtime_wait_parks_and_peer_mail_resumes_same_turn() {
     service
         .control
         .message_service_mut()
-        .accept_at(
+        .accept_at_with_scope(
             &sender.agent_id,
             Envelope {
                 protocol: "mmp/1",
@@ -207,6 +208,7 @@ fn runtime_wait_parks_and_peer_mail_resumes_same_turn() {
                 payload: "the requested peer result".to_string(),
                 extension_fields: Vec::new(),
             },
+            MessageScope::Session,
             now_ms,
         )
         .unwrap();
@@ -292,7 +294,7 @@ async fn runtime_local_message_discards_older_provider_generation() {
     service
         .control
         .message_service_mut()
-        .accept_at(
+        .accept_at_with_scope(
             &sender.agent_id,
             Envelope {
                 protocol: "mmp/1",
@@ -307,6 +309,7 @@ async fn runtime_local_message_discards_older_provider_generation() {
                 payload: "newer local evidence".to_string(),
                 extension_fields: Vec::new(),
             },
+            MessageScope::Session,
             now_ms,
         )
         .unwrap();
@@ -416,7 +419,7 @@ fn runtime_idle_agent_peer_message_starts_local_message_turn() {
     let delivery = service
         .control
         .message_service_mut()
-        .accept_at(&sender.agent_id, envelope, now_ms)
+        .accept_at_with_scope(&sender.agent_id, envelope, MessageScope::Session, now_ms)
         .unwrap();
 
     assert_eq!(
@@ -561,9 +564,10 @@ fn runtime_peer_message_echo_logs_sender_prefix_without_user_trust_domain() {
     service
         .control
         .message_service_mut()
-        .accept_at(
+        .accept_at_with_scope(
             &sender.agent_id,
             peer_message("peer-echo-1", "alpha beta gamma delta epsilon"),
+            MessageScope::Session,
             now_ms,
         )
         .unwrap();
@@ -605,9 +609,10 @@ fn runtime_peer_message_echo_logs_sender_prefix_without_user_trust_domain() {
     service
         .control
         .message_service_mut()
-        .accept_at(
+        .accept_at_with_scope(
             &sender.agent_id,
             peer_message("peer-echo-2", "cwd ok"),
+            MessageScope::Session,
             now_ms,
         )
         .unwrap();
@@ -771,7 +776,7 @@ fn runtime_peer_message_echo_logs_one_line_for_user_prompt_turn_commit() {
     let delivery = service
         .control
         .message_service_mut()
-        .accept_at(
+        .accept_at_with_scope(
             &sender.agent_id,
             Envelope {
                 protocol: "mmp/1",
@@ -788,6 +793,7 @@ fn runtime_peer_message_echo_logs_one_line_for_user_prompt_turn_commit() {
                 payload: "pending peer evidence".to_string(),
                 extension_fields: Vec::new(),
             },
+            MessageScope::Session,
             now_ms,
         )
         .unwrap();
@@ -935,7 +941,7 @@ fn runtime_peer_message_echo_logs_committed_bridge_traffic_once() {
         service
             .control
             .message_service_mut()
-            .accept_at(&sender, envelope, now_ms)
+            .accept_at_with_scope(&sender, envelope, MessageScope::Session, now_ms)
             .unwrap();
     };
     let compact = |lines: Vec<String>| {
@@ -1193,7 +1199,7 @@ fn runtime_model_peer_mail_without_bridge_provenance_still_logs_both_directions(
         service
             .control
             .message_service_mut()
-            .accept_at(&sender, envelope, now_ms)
+            .accept_at_with_scope(&sender, envelope, MessageScope::Session, now_ms)
             .unwrap();
     }
     assert_eq!(
@@ -1276,7 +1282,12 @@ fn runtime_idle_agent_runtime_owned_bridge_notifications_start_no_turn() {
     service
         .control
         .message_service_mut()
-        .accept_at(&child_identity.agent_id, status_envelope, now_ms)
+        .accept_at_with_scope(
+            &child_identity.agent_id,
+            status_envelope,
+            MessageScope::Session,
+            now_ms,
+        )
         .unwrap();
 
     assert_eq!(
@@ -1318,7 +1329,12 @@ fn runtime_idle_agent_runtime_owned_bridge_notifications_start_no_turn() {
     service
         .control
         .message_service_mut()
-        .accept_at(&child_identity.agent_id, peer_envelope, now_ms)
+        .accept_at_with_scope(
+            &child_identity.agent_id,
+            peer_envelope,
+            MessageScope::Session,
+            now_ms,
+        )
         .unwrap();
 
     assert_eq!(
@@ -1405,7 +1421,7 @@ fn runtime_expired_peer_message_is_not_injected_or_acknowledged() {
     service
         .control
         .message_service_mut()
-        .accept_at(&sender.agent_id, envelope, now_ms)
+        .accept_at_with_scope(&sender.agent_id, envelope, MessageScope::Session, now_ms)
         .unwrap();
 
     let after_expiry = now_ms.saturating_add(5_000);
@@ -1458,7 +1474,7 @@ fn runtime_peer_message_delivery_timer_arms_delivers_and_stops() {
     service
         .control
         .message_service_mut()
-        .accept_at(
+        .accept_at_with_scope(
             &sender.agent_id,
             Envelope {
                 protocol: "mmp/1",
@@ -1475,6 +1491,7 @@ fn runtime_peer_message_delivery_timer_arms_delivers_and_stops() {
                 payload: "timer-driven peer evidence".to_string(),
                 extension_fields: Vec::new(),
             },
+            MessageScope::Session,
             now_ms,
         )
         .unwrap();
@@ -1551,7 +1568,7 @@ fn runtime_peer_message_loop_limit_stops_message_turns() {
     service
         .control
         .message_service_mut()
-        .accept_at(
+        .accept_at_with_scope(
             &sender.agent_id,
             Envelope {
                 protocol: "mmp/1",
@@ -1568,6 +1585,7 @@ fn runtime_peer_message_loop_limit_stops_message_turns() {
                 payload: "loop-limited peer evidence".to_string(),
                 extension_fields: Vec::new(),
             },
+            MessageScope::Session,
             now_ms,
         )
         .unwrap();
@@ -1653,7 +1671,10 @@ fn runtime_model_authored_objective_wins_over_prompt_fallback() {
     let turn = messaging_test_turn(&service, &started.turn_id);
     let action = mez_agent::AgentAction {
         id: "list-agents-objective".to_string(),
-        payload: mez_agent::AgentActionPayload::ListAgents { agent_type: None },
+        payload: mez_agent::AgentActionPayload::ListAgents {
+            agent_type: None,
+            scope: None,
+        },
     };
     let planned =
         mez_agent::plan_action_result(&turn, &action, mez_agent::ActionPlanningInput::default())
@@ -1720,7 +1741,10 @@ fn runtime_prepared_objectives_survive_would_be_second_metadata_reads() {
     let turn = messaging_test_turn(&service, &started.turn_id);
     let action = mez_agent::AgentAction {
         id: "prepared-objective-response".to_string(),
-        payload: mez_agent::AgentActionPayload::ListAgents { agent_type: None },
+        payload: mez_agent::AgentActionPayload::ListAgents {
+            agent_type: None,
+            scope: None,
+        },
     };
     let planned =
         mez_agent::plan_action_result(&turn, &action, mez_agent::ActionPlanningInput::default())
@@ -1789,7 +1813,10 @@ fn runtime_unreadable_objective_metadata_preserves_published_prompt_and_model_va
 
     let action = mez_agent::AgentAction {
         id: "list-agents-corrupt-objective".to_string(),
-        payload: mez_agent::AgentActionPayload::ListAgents { agent_type: None },
+        payload: mez_agent::AgentActionPayload::ListAgents {
+            agent_type: None,
+            scope: None,
+        },
     };
     let planned =
         mez_agent::plan_action_result(&turn, &action, mez_agent::ActionPlanningInput::default())
@@ -1864,7 +1891,7 @@ fn limited_peer_message(service: &mut crate::runtime::RuntimeSessionService, now
     service
         .control
         .message_service_mut()
-        .accept_at(
+        .accept_at_with_scope(
             &sender.agent_id,
             Envelope {
                 protocol: "mmp/1",
@@ -1881,6 +1908,7 @@ fn limited_peer_message(service: &mut crate::runtime::RuntimeSessionService, now
                 payload: "loop-limit episode evidence".to_string(),
                 extension_fields: Vec::new(),
             },
+            MessageScope::Session,
             now_ms,
         )
         .unwrap();
@@ -2016,7 +2044,7 @@ fn runtime_local_message_cursor_restores_exactly_once_in_arrival_order() {
         before_restart
             .control
             .message_service_mut()
-            .accept_at(
+            .accept_at_with_scope(
                 &sender.agent_id,
                 Envelope {
                     protocol: "mmp/1",
@@ -2033,6 +2061,7 @@ fn runtime_local_message_cursor_restores_exactly_once_in_arrival_order() {
                     payload: payload.to_string(),
                     extension_fields: Vec::new(),
                 },
+                MessageScope::Session,
                 now_ms,
             )
             .unwrap();
@@ -2276,6 +2305,14 @@ fn runtime_executes_send_message_action_through_message_service() {
 
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
     assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
+    let structured: serde_json::Value = serde_json::from_str(
+        execution.action_results[0]
+            .structured_content_json
+            .as_deref()
+            .expect("delivery structured content"),
+    )
+    .unwrap();
+    assert_eq!(structured["scope"], "session");
     assert!(
         execution.action_results[0]
             .structured_content_json
@@ -2303,6 +2340,12 @@ fn runtime_invalid_message_recipient_queues_correction_without_delivery() {
     assert_eq!(
         result.error.as_ref().unwrap().code,
         "invalid_message_recipient"
+    );
+    assert!(
+        result
+            .structured_content_json
+            .as_deref()
+            .is_some_and(|structured| structured.contains(r#""scope":"session""#))
     );
     assert!(
         result
@@ -2392,6 +2435,7 @@ fn runtime_spawned_child_corrects_parent_recipient_without_replaying_sibling() {
         .ensure_agent_identity(
             SenderIdentity {
                 agent_id: sibling_target.clone(),
+                project_scope: None,
                 pane_id: None,
                 window_id: None,
                 role: Some("worker".to_string()),
@@ -2424,7 +2468,7 @@ fn runtime_spawned_child_corrects_parent_recipient_without_replaying_sibling() {
             provider_transcript_events: Vec::new(),
         },
     };
-    service
+    let _spawned_execution = service
         .execute_agent_turn_with_provider(
             &parent.turn_id,
             &spawn_provider,
@@ -2438,7 +2482,12 @@ fn runtime_spawned_child_corrects_parent_recipient_without_replaying_sibling() {
         .find(|turn| turn.turn_id != parent.turn_id)
         .cloned()
         .expect("spawned child turn");
-    assert_eq!(child.state, AgentTurnState::Running);
+    assert_eq!(
+        child.state,
+        AgentTurnState::Running,
+        "{child:?}; execution={:?}",
+        service.agent_turn_executions().get(&child.turn_id)
+    );
     // The child uses its own effective approval policy; this scenario exercises
     // sibling-then-parent delivery ordering rather than the approval gate.
     service.set_pane_approval_policy_override(
@@ -2451,6 +2500,7 @@ fn runtime_spawned_child_corrects_parent_recipient_without_replaying_sibling() {
 
         payload: mez_agent::AgentActionPayload::SendMessage {
             recipient,
+            scope: Some("session".to_string()),
             content_type: "text/plain".to_string(),
             payload: payload.to_string(),
             correlation_id: None,
@@ -2672,6 +2722,7 @@ fn runtime_rejects_send_message_action_with_invalid_mmp_payload_metadata() {
             Some(expected_message)
         );
         let structured = result.structured_content_json.as_deref().unwrap();
+        assert!(structured.contains(r#""scope":"session""#));
         assert!(structured.contains(r#""delivery_status":"rejected""#));
         assert!(structured.contains(r#""code":"invalid_params""#));
         assert!(structured.contains(expected_message), "{structured}");
@@ -2889,12 +2940,14 @@ fn execute_list_agents_action(
     service: &mut crate::runtime::RuntimeSessionService,
     turn: &mez_agent::AgentTurnRecord,
     agent_type: Option<&str>,
+    scope: Option<&str>,
 ) -> serde_json::Value {
     let action = mez_agent::AgentAction {
         id: "list-agents-1".to_string(),
 
         payload: mez_agent::AgentActionPayload::ListAgents {
             agent_type: agent_type.map(str::to_string),
+            scope: scope.map(str::to_string),
         },
     };
     let planned =
@@ -2944,7 +2997,7 @@ fn runtime_list_agents_defaults_to_primary_and_includes_self() {
         "review",
     );
 
-    let primary = execute_list_agents_action(&mut service, &turn, None);
+    let primary = execute_list_agents_action(&mut service, &turn, None, Some("session"));
     assert_eq!(primary["agent_type"], "primary");
     assert_eq!(primary["truncated"], false);
     let rows = primary["agents"].as_array().unwrap();
@@ -2957,7 +3010,8 @@ fn runtime_list_agents_defaults_to_primary_and_includes_self() {
     assert!(rows.iter().any(|row| row["agent_id"] == "agent-peer"));
     assert!(!rows.iter().any(|row| row["agent_id"] == "agent-internal"));
 
-    let internal = execute_list_agents_action(&mut service, &turn, Some("internal"));
+    let internal =
+        execute_list_agents_action(&mut service, &turn, Some("internal"), Some("session"));
     let internal_ids = internal["agents"]
         .as_array()
         .unwrap()
@@ -2973,7 +3027,7 @@ fn runtime_list_agents_defaults_to_primary_and_includes_self() {
             .all(|row| row["kind"] == "internal")
     );
 
-    let all = execute_list_agents_action(&mut service, &turn, Some("all"));
+    let all = execute_list_agents_action(&mut service, &turn, Some("all"), Some("session"));
     let all_ids = all["agents"]
         .as_array()
         .unwrap()
@@ -2984,9 +3038,86 @@ fn runtime_list_agents_defaults_to_primary_and_includes_self() {
         assert!(all_ids.contains(&agent_id.to_string()), "{agent_id}");
     }
 
-    let subagents = execute_list_agents_action(&mut service, &turn, Some("subagent"));
+    let subagents =
+        execute_list_agents_action(&mut service, &turn, Some("subagent"), Some("session"));
     assert_eq!(subagents["count"], 0);
     assert!(subagents["agents"].as_array().unwrap().is_empty());
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Project-default discovery returns the requester and same-project peers,
+/// while an explicit session scope widens the same list without exposing roots.
+#[test]
+fn runtime_list_agents_defaults_to_requester_project_and_session_widens() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "discover project peers")
+        .unwrap();
+    let turn = messaging_test_turn(&service, &started.turn_id);
+    let requester = service.runtime_message_sender_identity(&turn).unwrap();
+    let project_scope = mez_agent::messaging::ProjectScopeId::from_canonical_root_bytes(
+        b"/workspace/requester-project",
+    );
+    service
+        .message_service_mut()
+        .rebind_agent_project_scope(&requester.agent_id, Some(project_scope.clone()))
+        .unwrap();
+    let same_project = mez_agent::messaging::SenderIdentity {
+        agent_id: AgentId::opaque("agent-same-project").unwrap(),
+        project_scope: Some(project_scope),
+        pane_id: None,
+        window_id: None,
+        role: Some("agent".to_string()),
+        capabilities: Vec::new(),
+        objective: None,
+    };
+    let other_project = mez_agent::messaging::SenderIdentity {
+        agent_id: AgentId::opaque("agent-other-project").unwrap(),
+        project_scope: Some(
+            mez_agent::messaging::ProjectScopeId::from_canonical_root_bytes(
+                b"/workspace/other-project",
+            ),
+        ),
+        pane_id: None,
+        window_id: None,
+        role: Some("agent".to_string()),
+        capabilities: Vec::new(),
+        objective: None,
+    };
+    service
+        .message_service_mut()
+        .ensure_agent_identity(same_project.clone(), 0)
+        .unwrap();
+    service
+        .message_service_mut()
+        .ensure_agent_identity(other_project.clone(), 0)
+        .unwrap();
+
+    let project = execute_list_agents_action(&mut service, &turn, Some("all"), None);
+    assert_eq!(project["scope"], "project");
+    let project_ids = project["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["agent_id"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(project_ids.contains(&turn.agent_id.as_str()));
+    assert!(project_ids.contains(&same_project.agent_id.as_str()));
+    assert!(!project_ids.contains(&other_project.agent_id.as_str()));
+
+    let session = execute_list_agents_action(&mut service, &turn, Some("all"), Some("session"));
+    assert_eq!(session["scope"], "session");
+    assert!(
+        session["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["agent_id"] == other_project.agent_id.as_str())
+    );
     service.terminate_all_pane_processes().unwrap();
 }
 
@@ -3033,7 +3164,7 @@ fn runtime_list_agents_reports_persistent_parent_ownership() {
         },
     );
 
-    let listed = execute_list_agents_action(&mut service, &turn, Some("subagent"));
+    let listed = execute_list_agents_action(&mut service, &turn, Some("subagent"), Some("session"));
     let row = listed["agents"]
         .as_array()
         .unwrap()
@@ -3073,7 +3204,7 @@ fn runtime_list_agents_bounds_rows_and_rejects_unknown_agent_type() {
             .unwrap();
     }
 
-    let all = execute_list_agents_action(&mut service, &turn, Some("all"));
+    let all = execute_list_agents_action(&mut service, &turn, Some("all"), Some("session"));
     let rows = all["agents"].as_array().unwrap();
     assert_eq!(rows.len(), mez_agent::AGENT_LIST_MAX_ROWS);
     assert_eq!(all["truncated"], true);
@@ -3096,6 +3227,7 @@ fn runtime_list_agents_bounds_rows_and_rejects_unknown_agent_type() {
 
         payload: mez_agent::AgentActionPayload::ListAgents {
             agent_type: Some("peers".to_string()),
+            scope: None,
         },
     };
     let planned =
@@ -3123,6 +3255,7 @@ fn block_runtime_send_message(
 
         payload: mez_agent::AgentActionPayload::SendMessage {
             recipient: recipient.to_string(),
+            scope: Some("session".to_string()),
             content_type: "text/plain; charset=utf-8".to_string(),
             payload: payload.to_string(),
             correlation_id: None,
@@ -3236,6 +3369,7 @@ fn runtime_send_message_approval_blocks_and_resumes_after_approve() {
             .expect("delivery structured content"),
     )
     .unwrap();
+    assert_eq!(structured["scope"], "session");
     assert_eq!(structured["delivery_status"], "accepted");
     let messages = service.message_service().receive_for(&target, u64::MAX);
     assert_eq!(messages.len(), 1);
@@ -3372,7 +3506,7 @@ fn runtime_list_agents_bounds_capabilities_and_signals_row_truncation() {
         .ensure_runtime_message_identity("agent-oversized", None, "worker", &capabilities, now_ms)
         .unwrap();
 
-    let all = execute_list_agents_action(&mut service, &turn, Some("all"));
+    let all = execute_list_agents_action(&mut service, &turn, Some("all"), Some("session"));
     let rows = all["agents"].as_array().unwrap();
     let row = rows
         .iter()
@@ -3416,6 +3550,7 @@ fn runtime_peer_message_context_bounds_evil_sender_identity() {
         time: "runtime:1".to_string(),
         sender: mez_agent::messaging::SenderIdentity {
             agent_id: AgentId::opaque(oversized.clone()).unwrap(),
+            project_scope: None,
             pane_id: None,
             window_id: None,
             role: Some(oversized.clone()),
@@ -3452,4 +3587,81 @@ fn runtime_peer_message_context_bounds_evil_sender_identity() {
     assert!(label.starts_with("peer message sequence 7 id "));
     assert!(!label.contains(&oversized));
     assert!(label.len() <= mez_agent::AGENT_LIST_MAX_STRING_BYTES + 32);
+}
+
+/// A sparse early runtime identity must reconcile to pane-backed authoritative
+/// metadata, while a later conflicting refresh cannot partially mutate either
+/// the registered identity or its matching presence projection.
+#[test]
+fn runtime_identity_reconciliation_fills_placeholder_and_rejects_conflicting_repeat() {
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let agent_id = AgentId::opaque("agent-%1").unwrap();
+    service
+        .message_service_mut()
+        .ensure_agent_identity(
+            mez_agent::messaging::SenderIdentity {
+                agent_id: agent_id.clone(),
+                project_scope: None,
+                pane_id: None,
+                window_id: None,
+                role: None,
+                capabilities: Vec::new(),
+                objective: None,
+            },
+            7,
+        )
+        .unwrap();
+
+    let authoritative = service
+        .ensure_runtime_message_identity(
+            "agent-%1",
+            PaneId::opaque("%1".to_string()),
+            "agent",
+            &["agent-harness"],
+            99,
+        )
+        .unwrap();
+    assert_eq!(
+        authoritative.pane_id.as_ref().map(PaneId::as_str),
+        Some("%1")
+    );
+    assert!(authoritative.window_id.is_some());
+    assert_eq!(authoritative.role.as_deref(), Some("agent"));
+    assert_eq!(authoritative.capabilities, vec!["agent-harness"]);
+    let presence_before = service
+        .message_service()
+        .presence()
+        .into_iter()
+        .find(|presence| presence.identity.agent_id == agent_id)
+        .unwrap();
+
+    let mut conflicting = authoritative.clone();
+    conflicting.role = Some("worker".to_string());
+    assert!(
+        service
+            .message_service_mut()
+            .ensure_agent_identity(conflicting, 100)
+            .is_err()
+    );
+    assert_eq!(
+        service.message_service().registered_identity(&agent_id),
+        Some(&authoritative)
+    );
+    assert_eq!(
+        service
+            .message_service()
+            .presence()
+            .into_iter()
+            .find(|presence| presence.identity.agent_id == agent_id),
+        Some(presence_before)
+    );
+    service.terminate_all_pane_processes().unwrap();
 }

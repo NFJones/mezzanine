@@ -38,7 +38,9 @@ fn oversized_payload_is_rejected() {
     let mut message = envelope(sender.clone());
     message.payload = "too-large".to_string();
 
-    let error = service.accept(&sender.agent_id, message).unwrap_err();
+    let error = service
+        .accept_at_with_scope(&sender.agent_id, message, MessageScope::Session, 0)
+        .unwrap_err();
 
     assert_eq!(error.kind(), MessageErrorKind::InvalidArgs);
     assert_eq!(mmp_error_code(&error), "payload_too_large");
@@ -60,7 +62,7 @@ fn mmp_transport_reports_payload_too_large_for_oversized_payload() {
     let target = service.register_agent(None, None, "worker", Vec::new());
     let sender_id = sender_connection.agent_id.as_ref().unwrap();
     let body = format!(
-        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"too-large"}}"#,
+        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"too-large"}}"#,
         sender_id, target.agent_id
     );
 
@@ -94,7 +96,7 @@ fn mmp_transport_reports_undeliverable_for_unavailable_recipient() {
     let sender_id = sender_connection.agent_id.as_ref().unwrap();
     let missing_agent = AgentId::parse('a', "a999").unwrap();
     let body = format!(
-        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
+        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
         sender_id, missing_agent
     );
 
@@ -141,7 +143,7 @@ fn mmp_transport_reports_undeliverable_for_offline_recipient() {
     let sender_id = sender_connection.agent_id.as_ref().unwrap();
     let target_id = target_connection.agent_id.as_ref().unwrap();
     let body = format!(
-        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
+        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
         sender_id, target_id
     );
 
@@ -172,7 +174,7 @@ fn mmp_transport_reports_expired_for_zero_ttl_payload() {
     let target = service.register_agent(None, None, "worker", Vec::new());
     let sender_id = sender_connection.agent_id.as_ref().unwrap();
     let body = format!(
-        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"correlation_id":null,"ttl_ms":0,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
+        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":null,"ttl_ms":0,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
         sender_id, target.agent_id
     );
 
@@ -204,7 +206,7 @@ fn mmp_transport_reports_expired_status_for_accepted_ttl_retry() {
     let target = service.register_agent(None, None, "worker", Vec::new());
     let sender_id = sender_connection.agent_id.as_ref().unwrap();
     let body = format!(
-        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"correlation_id":null,"ttl_ms":5,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
+        r#"{{"protocol":"mmp/1","type":"send","id":"m1","time":"message:client-1","sender":{{"agent_id":"{}","role":"default"}},"recipient":{{"agent_id":"{}"}},"scope":"session","correlation_id":null,"ttl_ms":5,"content_type":"text/plain; charset=utf-8","payload":"hello"}}"#,
         sender_id, target.agent_id
     );
 

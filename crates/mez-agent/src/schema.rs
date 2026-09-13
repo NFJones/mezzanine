@@ -713,16 +713,36 @@ fn maap_memory_store_action_schema() -> serde_json::Value {
 fn maap_list_agents_action_schema() -> serde_json::Value {
     maap_action_object_schema(
         "list_agents",
-        [(
-            "agent_type",
-            serde_json::json!({
-                "type": ["string", "null"],
-                "enum": ["primary", "subagent", "internal", "all", null],
-                "description": "Optional agent-type filter. `primary` is the default and lists primary parent agents only, `subagent` lists spawned subagents, `internal` lists runtime-internal controllers, and `all` lists every kind. Results include the requesting agent, offline agents, and agents in other panes and windows, bounded to 64 rows with each string bounded to 512 bytes and at most 16 capabilities per row. Each row reports `truncated: true` when it shortened a string or omitted capabilities."
-            }),
-        )],
-        &["agent_type"],
+        [
+            (
+                "agent_type",
+                serde_json::json!({
+                    "type": ["string", "null"],
+                    "enum": ["primary", "subagent", "internal", "all", null],
+                    "description": "Optional agent-type filter. `primary` is the default and lists primary parent agents only, `subagent` lists spawned subagents, `internal` lists runtime-internal controllers, and `all` lists every kind."
+                }),
+            ),
+            (
+                "scope",
+                serde_json::json!({
+                    "type": ["string", "null"],
+                    "enum": ["project", "session", null],
+                    "description": "Optional discovery audience. Omitted or null uses the requesting agent's trusted project membership; session deliberately widens discovery."
+                }),
+            ),
+        ],
+        &["agent_type", "scope"],
     )
+    .as_object()
+    .cloned()
+    .map(|mut schema| {
+        schema.insert(
+            "description".to_string(),
+            serde_json::json!("Lists discoverable agents. Project scope is the default and includes only the requesting agent plus identities with the same trusted project membership; session deliberately widens to otherwise matching session identities. Results are bounded to 64 rows, 512 bytes per string, and 16 capabilities per row."),
+        );
+        serde_json::Value::Object(schema)
+    })
+    .unwrap_or_else(|| serde_json::json!({}))
 }
 
 /// Builds the provider-facing MMP peer wait action schema.
@@ -764,6 +784,14 @@ fn maap_send_message_action_schema() -> serde_json::Value {
                 }),
             ),
             (
+                "scope",
+                serde_json::json!({
+                    "type": ["string", "null"],
+                    "enum": ["project", "session", null],
+                    "description": "Optional audience. Omit or use project to deliver only within the sender's trusted project; session deliberately widens delivery across the Mezzanine session."
+                }),
+            ),
+            (
                 "content_type",
                 serde_json::json!({
                     "type": "string",
@@ -786,7 +814,13 @@ fn maap_send_message_action_schema() -> serde_json::Value {
                 }),
             ),
         ],
-        &["recipient", "content_type", "payload", "correlation_id"],
+        &[
+            "recipient",
+            "scope",
+            "content_type",
+            "payload",
+            "correlation_id",
+        ],
     )
 }
 
@@ -804,7 +838,7 @@ fn maap_spawn_agent_action_schema(sizing: Option<&SpawnAgentSizing>) -> serde_js
                 "role",
                 serde_json::json!({
                     "type": "string",
-                    "description": "Subagent role/profile. Use explorer for read-only search and inspection, worker for implementation, or a configured custom role."
+                    "description": "Exact subagent role/profile identifier. Use built-in explorer for read-only search and inspection, worker for implementation, default for general delegation, or an exactly configured custom role; semantic aliases are unsupported."
                 }),
             ),
             (
@@ -1310,6 +1344,28 @@ mod tests {
                 .is_some_and(|description| description.contains("Prefer new")
                     && description.contains("truly requires"))
         );
+    }
+
+    /// Verifies role guidance names only exact built-in or configured profiles.
+    #[test]
+    fn spawn_agent_schema_requires_exact_role_profile_identifier() {
+        let schema = maap_action_batch_schema(&AllowedActionSet::all_enabled(), &[]);
+        let spawn = schema["properties"]["actions"]["items"]["anyOf"]
+            .as_array()
+            .and_then(|variants| {
+                variants.iter().find(|variant| {
+                    variant["properties"]["type"]["enum"] == serde_json::json!(["spawn_agent"])
+                })
+            })
+            .expect("spawn_agent schema variant");
+
+        let description = spawn["properties"]["role"]["description"]
+            .as_str()
+            .expect("role description");
+        assert!(description.contains("Exact subagent role/profile identifier"));
+        assert!(description.contains("semantic aliases are unsupported"));
+        assert!(description.contains("explorer"));
+        assert!(description.contains("worker"));
     }
 
     /// Verifies spawned-child sizing guidance favors the smallest adequate

@@ -1110,7 +1110,7 @@ fn runtime_correctable_spawn_shape_error_reports_no_child_and_queues_correction(
         .enter_or_resume("%1")
         .unwrap();
     let started = service
-        .start_agent_prompt_turn("%1", "delegate to a missing profile")
+        .start_agent_prompt_turn("%1", "delegate to a semantic alias")
         .unwrap();
     service.remove_pending_agent_provider_task(&started.turn_id);
     let turn = service
@@ -1121,9 +1121,9 @@ fn runtime_correctable_spawn_shape_error_reports_no_child_and_queues_correction(
         .cloned()
         .unwrap();
     let action = runtime_spawn_agent_action_with_authority(
-        "spawn-unsupported-role",
-        "delegate to a missing profile",
-        "missing-profile",
+        "spawn-semantic-alias",
+        "delegate to a semantic alias",
+        "repo-searcher",
         "explore-only",
     );
     let mut execution = runtime_spawn_execution_for_actions(&turn, vec![action]);
@@ -1162,9 +1162,62 @@ fn runtime_correctable_spawn_shape_error_reports_no_child_and_queues_correction(
     let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
     assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
-            && block.content.contains("spawn-unsupported-role")
+            && block.content.contains("spawn-semantic-alias")
             && block.content.contains("unsupported subagent role")
     }));
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies an exactly configured custom role remains spawnable.
+#[test]
+fn runtime_configured_custom_spawn_role_creates_child() {
+    let mut service = test_runtime_service();
+    let mut profiles = service.integration.subagent_profiles().clone();
+    let custom_profile = profiles
+        .get("explorer")
+        .cloned()
+        .expect("built-in explorer profile");
+    profiles.insert("repo-searcher".to_string(), custom_profile);
+    service.integration.replace_subagent_profiles(profiles);
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "delegate to configured profile")
+        .unwrap();
+    service.remove_pending_agent_provider_task(&started.turn_id);
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let action = runtime_spawn_agent_action_with_authority(
+        "spawn-configured-custom-role",
+        "inspect the repository",
+        "repo-searcher",
+        "explore-only",
+    );
+    let mut execution = runtime_spawn_execution_for_actions(&turn, vec![action]);
+    let window_count = service.session().windows().len();
+
+    assert_eq!(
+        service
+            .execute_running_spawn_actions_for_turn(&turn, &mut execution)
+            .unwrap(),
+        1
+    );
+    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
+    assert!(execution.action_results[0].error.is_none());
+    assert_eq!(service.session().windows().len(), window_count + 1);
+    assert_eq!(service.joined_subagent_dependency_count(), 1);
     service.terminate_all_pane_processes().unwrap();
 }
 

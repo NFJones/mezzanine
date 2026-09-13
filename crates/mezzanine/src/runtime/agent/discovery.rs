@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 
-use mez_agent::messaging::AgentPresenceStatus;
+use mez_agent::messaging::{AgentPresenceStatus, MessageScope};
 use mez_agent::{
     AGENT_LIST_MAX_CAPABILITIES, AGENT_LIST_MAX_ROWS, ActionResult, ActionStatus, AgentAction,
     AgentActionPayload, AgentKind, AgentListFilter, agent_list_bounded_text,
@@ -86,15 +86,22 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         action: &AgentAction,
     ) -> Result<ActionResult> {
-        let AgentActionPayload::ListAgents { agent_type } = &action.payload else {
+        let AgentActionPayload::ListAgents { agent_type, scope } = &action.payload else {
             return Err(MezError::invalid_args(
                 "agent discovery execution requires a list_agents action",
             ));
         };
         let filter = super::super::json::runtime_list_agents_agent_type(agent_type.as_deref())?;
-        let RuntimeAgentListRows { rows, truncated } = self.runtime_agent_list_rows(turn, filter);
+        let scope = super::super::json::runtime_list_agents_scope(scope.as_deref())?;
+        let RuntimeAgentListRows { rows, truncated } =
+            self.runtime_agent_list_rows(turn, filter, scope);
+        let scope_name = match scope {
+            MessageScope::Project => "project",
+            MessageScope::Session => "session",
+        };
         let structured = serde_json::json!({
             "agent_type": filter.as_str(),
+            "scope": scope_name,
             "count": rows.len(),
             "truncated": truncated,
             "agents": rows,
@@ -104,9 +111,10 @@ impl RuntimeSessionService {
             turn,
             action,
             vec![format!(
-                "agent discovery returned {} agent(s) for agent_type={}",
+                "agent discovery returned {} agent(s) for agent_type={} scope={}",
                 rows.len(),
-                filter.as_str()
+                filter.as_str(),
+                scope_name
             )],
             Some(structured),
         ))
@@ -117,6 +125,7 @@ impl RuntimeSessionService {
         &self,
         turn: &AgentTurnRecord,
         filter: AgentListFilter,
+        scope: MessageScope,
     ) -> RuntimeAgentListRows {
         let service = self.control.message_service();
         let presence = service
@@ -130,7 +139,18 @@ impl RuntimeSessionService {
             })
             .collect::<BTreeMap<String, &'static str>>();
         let mut candidates = BTreeMap::new();
-        for identity in service.discover_agents_filtered(None, None, None, None, None, &[]) {
+        let requester = mez_core::ids::AgentId::opaque(turn.agent_id.clone())
+            .expect("runtime turn agent id is a valid MMP identity");
+        for identity in service.discover_agents_filtered_for_requester(
+            &requester,
+            scope,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[],
+        ) {
             let agent_id = identity.agent_id.as_str().to_string();
             let persistent = self.persistent_subagent(&agent_id);
             let capabilities = identity

@@ -314,7 +314,7 @@ pub enum AllowedAction {
     MemorySearch,
     /// Store one persistent memory record.
     MemoryStore,
-    /// List discoverable session agents (read-only discovery).
+    /// List requester-visible agents (read-only discovery).
     ListAgents,
     /// Add one local project issue.
     IssueAdd,

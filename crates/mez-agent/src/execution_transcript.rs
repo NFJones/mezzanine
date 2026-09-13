@@ -390,9 +390,10 @@ fn assistant_transcript_action_summary(action: &AgentAction) -> String {
             content.len(),
             keywords.len()
         ),
-        AgentActionPayload::ListAgents { agent_type } => format!(
-            "list_agents agent_type={}",
-            agent_type.as_deref().unwrap_or("primary")
+        AgentActionPayload::ListAgents { agent_type, scope } => format!(
+            "list_agents agent_type={} scope={}",
+            agent_type.as_deref().unwrap_or("primary"),
+            scope.as_deref().unwrap_or("project")
         ),
         AgentActionPayload::IssueAdd {
             kind,
@@ -448,10 +449,14 @@ fn assistant_transcript_action_summary(action: &AgentAction) -> String {
             format!("issue_delete id={}", bounded_transcript_field(id))
         }
         AgentActionPayload::SendMessage {
-            recipient, payload, ..
+            recipient,
+            scope,
+            payload,
+            ..
         } => format!(
-            "send_message recipient={} payload_bytes={}",
+            "send_message recipient={} scope={} payload_bytes={}",
             bounded_transcript_field(recipient),
+            scope.as_deref().unwrap_or("project"),
             payload.len()
         ),
         AgentActionPayload::Wait => "wait for MMP peer mail".to_string(),

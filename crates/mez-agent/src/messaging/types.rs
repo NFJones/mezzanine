@@ -48,6 +48,106 @@ pub(super) const MMP_UNSUPPORTED_PROTOCOL_MESSAGE: &str = "unsupported message p
 /// boundary and avoids relying on call-site inference.
 pub const MMP_CONTENT_TYPE: &str = "application/vnd.mezzanine.mmp+json; version=1";
 
+/// Opaque trusted identity for one canonical project root.
+///
+/// The digest is service/runtime-owned routing state. It must not be included
+/// in model-visible identity projections or transport sender JSON.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ProjectScopeId(String);
+
+impl ProjectScopeId {
+    /// Derives a versioned full SHA-256 identity from canonical project-root bytes.
+    pub fn from_canonical_root_bytes(root: &[u8]) -> Self {
+        use sha2::{Digest, Sha256};
+
+        let mut hasher = Sha256::new();
+        hasher.update(b"mezzanine-mmp-project-scope-v1\0");
+        hasher.update(root);
+        let digest = hasher.finalize();
+        Self(digest.iter().map(|byte| format!("{byte:02x}")).collect())
+    }
+
+    /// Restores one canonical opaque scope identifier from snapshot state.
+    pub(crate) fn from_snapshot_value(value: &str) -> Option<Self> {
+        (value.len() == 64
+            && value.bytes().all(|byte| {
+                byte.is_ascii_digit() || (byte.is_ascii_lowercase() && byte.is_ascii_hexdigit())
+            }))
+        .then(|| Self(value.to_string()))
+    }
+
+    /// Returns the canonical opaque value for durable private snapshot state.
+    pub(crate) fn snapshot_value(&self) -> &str {
+        &self.0
+    }
+
+    /// Derives a scope from an already-canonical project-root path.
+    #[cfg(unix)]
+    pub fn from_canonical_root_path(root: &std::path::Path) -> Self {
+        use std::os::unix::ffi::OsStrExt;
+
+        Self::from_canonical_root_bytes(root.as_os_str().as_bytes())
+    }
+}
+
+/// Runtime-trusted project membership captured for one agent conversation.
+///
+/// The canonical root remains private runtime state used for durable
+/// checkpointing and restoration, while the opaque scope identifier is used
+/// only for in-memory routing metadata. Neither value is part of message
+/// transport or model-visible identity JSON.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectMembership {
+    canonical_root: std::path::PathBuf,
+    scope_id: ProjectScopeId,
+}
+
+impl ProjectMembership {
+    /// Builds membership from a root the runtime has already canonicalized.
+    #[cfg(unix)]
+    pub fn from_canonical_root(canonical_root: std::path::PathBuf) -> Self {
+        let scope_id = ProjectScopeId::from_canonical_root_path(&canonical_root);
+        Self {
+            canonical_root,
+            scope_id,
+        }
+    }
+
+    /// Returns the immutable canonical root retained for durable checkpoints.
+    pub fn canonical_root(&self) -> &std::path::Path {
+        &self.canonical_root
+    }
+
+    /// Clones the opaque routing identifier without exposing the root.
+    pub fn scope_id(&self) -> ProjectScopeId {
+        self.scope_id.clone()
+    }
+}
+
+/// Audience selected for a discovery or delivery operation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MessageScope {
+    /// Restrict the operation to the requester's trusted project membership.
+    #[default]
+    Project,
+    /// Deliberately widen the operation to the containing Mezzanine session.
+    Session,
+}
+
+/// Resolved in-memory delivery audience for one accepted message.
+///
+/// Project delivery records the authenticated sender's opaque membership at
+/// acceptance time; session delivery deliberately crosses that boundary. This
+/// runtime-only value is not serialized into message snapshots or transport
+/// payloads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ResolvedMessageAudience {
+    /// Recipients must share this opaque trusted project membership.
+    Project(ProjectScopeId),
+    /// Recipients may belong to any trusted project in the current session.
+    Session,
+}
+
 /// Carries Sender Identity state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -59,6 +159,8 @@ pub struct SenderIdentity {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub agent_id: AgentId,
+    /// Trusted opaque project membership assigned by the runtime.
+    pub project_scope: Option<ProjectScopeId>,
     /// Stores the pane id value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -349,6 +451,8 @@ pub(super) struct AcceptedMessage {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) envelope: Arc<Envelope>,
+    /// Audience resolved when the envelope was accepted.
+    pub(super) audience: ResolvedMessageAudience,
     /// Stores the delivery value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -545,6 +649,8 @@ pub(super) struct QueuedEnvelope {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) envelope: Arc<Envelope>,
+    /// Audience resolved from the authenticated sender at acceptance time.
+    pub(super) audience: ResolvedMessageAudience,
     /// Stores the accepted at ms value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -727,6 +833,9 @@ pub struct MessageIdentitySnapshot {
     /// without it deserialize to `None` and it is omitted again when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub objective: Option<String>,
+    /// Opaque trusted project membership retained only in durable routing state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_scope: Option<String>,
 }
 
 /// Serializable MMP presence record.
@@ -782,6 +891,9 @@ pub struct MessageQueuedEnvelopeSnapshot {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub envelope: MessageEnvelopeSnapshot,
+    /// Resolved routing audience captured when the message was accepted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audience: Option<MessageAudienceSnapshot>,
 }
 
 /// Serializable accepted MMP message idempotency record.
@@ -802,6 +914,21 @@ pub struct MessageAcceptedSnapshot {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub delivery: MessageDeliverySnapshot,
+    /// Resolved routing audience captured when the message was accepted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audience: Option<MessageAudienceSnapshot>,
+}
+
+/// Serializable resolved MMP routing audience.
+///
+/// The scope identifier is private snapshot routing metadata and is never
+/// included in model-visible or MMP transport projections.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageAudienceSnapshot {
+    /// Audience kind: `project` or `session`.
+    pub kind: String,
+    /// Opaque trusted project scope for a project audience only.
+    pub project_scope: Option<String>,
 }
 
 /// Serializable MMP delivery metadata.

@@ -490,6 +490,9 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
         .capture_agent_session_allowed_actions_for_pane("%1")
         .expect("active test session should capture its action catalog");
     service.set_pane_current_working_directory("%1".to_string(), cwd.clone());
+    service
+        .ensure_runtime_message_identity("agent-%1", None, "agent", &[], 0)
+        .expect("initial runtime identity should capture the project membership");
 
     let resumed = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"restore-resume","method":"agent/shell/command","params":{"idempotency_key":"restore-resume","input":"/resume saved"}}"#,
@@ -531,6 +534,10 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
         &primary,
     );
     assert!(directive.contains("Prefer focused tests."), "{directive}");
+    let later_cwd = temp_root("runtime-agent-active-restore-later-cwd");
+    fs::create_dir_all(&later_cwd).unwrap();
+    service.set_pane_current_working_directory("%1".to_string(), later_cwd.clone());
+    service.checkpoint_agent_session_metadata().unwrap();
     let saved_metadata = transcript_store
         .load_agent_session_metadata(service.session().id.as_str())
         .unwrap();
@@ -541,7 +548,12 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
         .expect("active agent checkpoint should retain its captured action catalog");
     assert_eq!(
         saved_metadata[0].working_directory.as_deref(),
-        Some(cwd.to_string_lossy().as_ref())
+        Some(later_cwd.to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        saved_metadata[0].project_root.as_deref(),
+        Some(cwd.to_string_lossy().as_ref()),
+        "checkpoint must retain the root captured when the conversation identity was established"
     );
     assert_eq!(saved_metadata[0].token_usage, saved_token_usage);
     assert_eq!(
@@ -606,7 +618,7 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
     );
     assert_eq!(
         restored.pane_current_working_directory("%1").as_deref(),
-        Some(cwd.as_path())
+        Some(later_cwd.as_path())
     );
     assert_eq!(restored.agent_response_style("%1"), Some("concise"));
     assert_eq!(
@@ -668,6 +680,7 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
             && block.content.contains("saved restart context")
     }));
     let _ = fs::remove_dir_all(cwd);
+    let _ = fs::remove_dir_all(later_cwd);
 }
 
 /// Verifies daemon restart rejects a malformed root catalog before it can

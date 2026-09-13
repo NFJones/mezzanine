@@ -32,7 +32,9 @@ fn delivers_direct_and_role_messages() {
     let mut message = envelope(sender.clone());
     message.recipient = Recipient::Role("reviewer".to_string());
 
-    service.accept_at(&sender.agent_id, message, 10).unwrap();
+    service
+        .accept_at_with_scope(&sender.agent_id, message, MessageScope::Session, 10)
+        .unwrap();
 
     let received = service.receive_for(&reviewer.agent_id, 11);
     assert_eq!(received.len(), 1);
@@ -63,14 +65,14 @@ fn delivers_to_pane_window_and_capability_recipients() {
     pane_message.id = "pane".to_string();
     pane_message.recipient = Recipient::Pane(pane);
     service
-        .accept_at(&sender.agent_id, pane_message, 10)
+        .accept_at_with_scope(&sender.agent_id, pane_message, MessageScope::Session, 10)
         .unwrap();
 
     let mut window_message = envelope(sender.clone());
     window_message.id = "window".to_string();
     window_message.recipient = Recipient::Window(window.clone());
     service
-        .accept_at(&sender.agent_id, window_message, 11)
+        .accept_at_with_scope(&sender.agent_id, window_message, MessageScope::Session, 11)
         .unwrap();
     assert_eq!(service.queued_window_message_count(&window), 1);
     assert_eq!(service.queued_window_message_count(&ids.window()), 0);
@@ -79,7 +81,12 @@ fn delivers_to_pane_window_and_capability_recipients() {
     capability_message.id = "capability".to_string();
     capability_message.recipient = Recipient::Capability("search".to_string());
     service
-        .accept_at(&sender.agent_id, capability_message, 12)
+        .accept_at_with_scope(
+            &sender.agent_id,
+            capability_message,
+            MessageScope::Session,
+            12,
+        )
         .unwrap();
 
     let received = service.receive_for(&target.agent_id, 13);
@@ -111,14 +118,14 @@ fn subscribers_receive_only_their_own_visible_messages() {
     first_message.id = "to-first".to_string();
     first_message.recipient = Recipient::Agent(first.agent_id.clone());
     let first_delivery = service
-        .accept_at(&sender.agent_id, first_message, 10)
+        .accept_at_with_scope(&sender.agent_id, first_message, MessageScope::Session, 10)
         .unwrap();
 
     let mut second_message = envelope(sender.clone());
     second_message.id = "to-second".to_string();
     second_message.recipient = Recipient::Agent(second.agent_id.clone());
     let second_delivery = service
-        .accept_at(&sender.agent_id, second_message, 11)
+        .accept_at_with_scope(&sender.agent_id, second_message, MessageScope::Session, 11)
         .unwrap();
 
     let first_batch = service
@@ -155,13 +162,15 @@ fn subscribed_delivery_excludes_expired_messages() {
     expired.recipient = Recipient::Agent(target.agent_id.clone());
     expired.ttl_ms = Some(5);
     let expired_delivery = service
-        .accept_at(&sender.agent_id, expired.clone(), 10)
+        .accept_at_with_scope(&sender.agent_id, expired.clone(), MessageScope::Session, 10)
         .unwrap();
 
     let mut live = envelope(sender.clone());
     live.id = "live".to_string();
     live.recipient = Recipient::Agent(target.agent_id.clone());
-    service.accept_at(&sender.agent_id, live, 11).unwrap();
+    service
+        .accept_at_with_scope(&sender.agent_id, live, MessageScope::Session, 11)
+        .unwrap();
 
     let batch = service
         .receive_subscribed(&target.agent_id, 16, usize::MAX)
@@ -169,7 +178,9 @@ fn subscribed_delivery_excludes_expired_messages() {
 
     assert_eq!(batch.messages.len(), 1);
     assert_eq!(batch.messages[0].envelope.id, "live");
-    let expired_retry = service.accept_at(&sender.agent_id, expired, 16).unwrap();
+    let expired_retry = service
+        .accept_at_with_scope(&sender.agent_id, expired, MessageScope::Session, 16)
+        .unwrap();
     assert_eq!(expired_retry.sequence, expired_delivery.sequence);
     assert_eq!(expired_retry.status, DeliveryStatus::Expired);
 }
@@ -189,12 +200,16 @@ fn cursor_advance_limits_delivery_to_newer_messages() {
     let mut first = envelope(sender.clone());
     first.id = "first".to_string();
     first.recipient = Recipient::Agent(target.agent_id.clone());
-    let first_delivery = service.accept_at(&sender.agent_id, first, 10).unwrap();
+    let first_delivery = service
+        .accept_at_with_scope(&sender.agent_id, first, MessageScope::Session, 10)
+        .unwrap();
 
     let mut second = envelope(sender.clone());
     second.id = "second".to_string();
     second.recipient = Recipient::Agent(target.agent_id.clone());
-    let second_delivery = service.accept_at(&sender.agent_id, second, 11).unwrap();
+    let second_delivery = service
+        .accept_at_with_scope(&sender.agent_id, second, MessageScope::Session, 11)
+        .unwrap();
 
     let initial = service
         .receive_subscribed(&target.agent_id, 12, usize::MAX)
@@ -246,7 +261,9 @@ fn cursor_advance_retains_messages_for_other_subscribers() {
     let mut fanout = envelope(sender.clone());
     fanout.id = "fanout".to_string();
     fanout.recipient = Recipient::Session;
-    let delivery = service.accept_at(&sender.agent_id, fanout, 10).unwrap();
+    let delivery = service
+        .accept_at_with_scope(&sender.agent_id, fanout, MessageScope::Session, 10)
+        .unwrap();
 
     service
         .advance_subscription(&first.agent_id, delivery.sequence)

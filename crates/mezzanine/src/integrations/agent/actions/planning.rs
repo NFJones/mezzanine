@@ -47,9 +47,10 @@ impl<'a, P> AgentTurnRunner<'a, P> {
             _ => false,
         };
         let message_plan = mez_agent::message_action_plan(action);
-        let message_rule_decision = message_plan
-            .as_ref()
-            .map(|plan| self.permissions.evaluate_message_recipient(&plan.recipient));
+        let message_rule_decision = message_plan.as_ref().map(|plan| {
+            self.permissions
+                .evaluate_message_recipient_with_scope(&plan.recipient, &plan.scope)
+        });
         let message_permission_evaluation = message_plan.as_ref().map(|plan| {
             self.permissions
                 .evaluate_command_structured(&plan.policy_command)

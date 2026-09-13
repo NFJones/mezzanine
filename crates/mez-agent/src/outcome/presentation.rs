@@ -201,8 +201,14 @@ pub fn action_user_phrase(
                 action_terminal_preview(tool)
             ),
         ),
-        AgentActionPayload::SendMessage { recipient, .. } => {
-            ("message", action_terminal_preview(recipient))
+        AgentActionPayload::SendMessage {
+            recipient, scope, ..
+        } => {
+            let scope = scope.as_deref().unwrap_or("project");
+            (
+                "message",
+                format!("{} ({scope})", action_terminal_preview(recipient)),
+            )
         }
         AgentActionPayload::SpawnAgent { role, .. } => {
             ("subagent spawn", action_terminal_preview(role))
@@ -225,9 +231,13 @@ pub fn action_user_phrase(
         AgentActionPayload::MemoryStore { kind, .. } => {
             ("memory store", action_terminal_preview(kind))
         }
-        AgentActionPayload::ListAgents { agent_type } => (
+        AgentActionPayload::ListAgents { agent_type, scope } => (
             "agent list",
-            action_terminal_preview(agent_type.as_deref().unwrap_or("primary")),
+            format!(
+                "{} ({})",
+                action_terminal_preview(agent_type.as_deref().unwrap_or("primary")),
+                scope.as_deref().unwrap_or("project")
+            ),
         ),
         AgentActionPayload::Wait => ("MMP peer wait", "another agent's reply".to_string()),
         AgentActionPayload::IssueAdd { title, .. } => ("issue add", action_terminal_preview(title)),

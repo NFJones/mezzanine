@@ -86,6 +86,19 @@ pub(crate) fn runtime_list_agents_agent_type(
     })
 }
 
+/// Parses one `list_agents` discovery audience, defaulting to the requester project.
+pub(crate) fn runtime_list_agents_scope(
+    value: Option<&str>,
+) -> Result<mez_agent::messaging::MessageScope> {
+    match value.unwrap_or("project") {
+        "project" => Ok(mez_agent::messaging::MessageScope::Project),
+        "session" => Ok(mez_agent::messaging::MessageScope::Session),
+        _ => Err(MezError::invalid_args(
+            "list_agents scope must be project or session",
+        )),
+    }
+}
+
 /// Runs the agent state control method operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

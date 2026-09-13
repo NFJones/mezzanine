@@ -217,7 +217,7 @@ impl SessionSnapshotPayload {
             agent_sessions: Vec::new(),
             approval_grants: Vec::new(),
             approval_requests: Vec::new(),
-            message_state: None,
+            message_state: context.message_state.cloned(),
             mcp_servers: Vec::new(),
             window_groups,
             windows,

@@ -24,6 +24,7 @@ impl RuntimeSessionService {
     /// - `parent_turn`: Parent turn that emitted the `send_message` action.
     /// - `action`: Parent action whose result should wait for the child step.
     /// - `recipient`: Model-supplied recipient string from the action.
+    /// - `scope`: Normalized public delivery audience for result projection.
     /// - `content_type`: Canonical MMP content type for the payload.
     /// - `payload`: Text prompt to queue in the child agent shell.
     pub(crate) fn queue_macro_managed_message_step(
@@ -31,9 +32,11 @@ impl RuntimeSessionService {
         parent_turn: &AgentTurnRecord,
         action: &AgentAction,
         recipient: &str,
+        scope: &str,
         content_type: &str,
         payload: &str,
     ) -> Result<Option<ActionResult>> {
+        let _ = scope;
         if content_type != "text/plain; charset=utf-8" {
             return Ok(None);
         }

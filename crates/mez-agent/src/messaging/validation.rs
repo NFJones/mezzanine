@@ -488,6 +488,7 @@ mod tests {
     fn sender_identity_validation_bounds_the_objective() {
         let mut identity = SenderIdentity {
             agent_id: AgentId::opaque("agent-%1").unwrap(),
+            project_scope: None,
             pane_id: None,
             window_id: None,
             role: Some("agent".to_string()),

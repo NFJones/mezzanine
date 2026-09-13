@@ -616,7 +616,7 @@ impl PermissionPolicy {
                 continue;
             }
             if analysis.unsafe_syntax {
-                if let Some(exact_decision) = self.evaluate_exact_token_candidate(&candidate) {
+                if let Some(exact_decision) = self.evaluate_exact_policy_command_rules(&candidate) {
                     decision = decision.min(exact_decision);
                     if decision == RuleDecision::Forbid {
                         return RuleDecision::Forbid;
@@ -667,7 +667,11 @@ impl PermissionPolicy {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(super) fn evaluate_exact_token_candidate(&self, candidate: &str) -> Option<RuleDecision> {
+    /// Evaluates an exact token policy command without applying approval mode.
+    ///
+    /// Product adapters use this to distinguish an exact, scope-qualified
+    /// command grant from a broader legacy rule that also happens to match.
+    pub fn evaluate_exact_policy_command_rules(&self, candidate: &str) -> Option<RuleDecision> {
         let tokens = tokenize_shell_words(candidate)?;
         self.rules
             .iter()

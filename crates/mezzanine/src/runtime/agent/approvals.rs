@@ -587,11 +587,16 @@ impl RuntimeSessionService {
                     action,
                     mez_agent::ActionPlanningInput::default(),
                 )),
-            AgentActionPayload::SendMessage { recipient, .. } => Ok(matches!(
-                crate::runtime::runtime_message_recipient_decision(&permission_policy, recipient),
+            AgentActionPayload::SendMessage {
+                recipient, scope, ..
+            } => Ok(matches!(
+                crate::runtime::runtime_message_recipient_decision(
+                    &permission_policy,
+                    recipient,
+                    scope.as_deref(),
+                ),
                 RuleDecision::Allow
-            ) || (permission_policy
-                .approval_policy
+            ) || (permission_policy.approval_policy
                 == mez_agent::ApprovalPolicy::AutoAllow
                 && mez_agent::action_supports_auto_allow(
                     action,
@@ -956,6 +961,7 @@ impl RuntimeSessionService {
             AgentActionPayload::SendMessage { .. } => {
                 let AgentActionPayload::SendMessage {
                     recipient,
+                    scope,
                     content_type,
                     payload,
                     ..
@@ -980,6 +986,8 @@ impl RuntimeSessionService {
                     .get("recipient")
                     .and_then(serde_json::Value::as_str)
                     == Some(recipient.as_str())
+                    && approved.get("scope").and_then(serde_json::Value::as_str)
+                        == Some(scope.as_deref().unwrap_or("project"))
                     && approved
                         .get("content_type")
                         .and_then(serde_json::Value::as_str)

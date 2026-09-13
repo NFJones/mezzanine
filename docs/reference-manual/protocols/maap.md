@@ -52,7 +52,7 @@ family; otherwise the current surface is final for that response.
 | `web_search` | `query` | Runtime-owned web search, only for user-requested current web information. |
 | `fetch_url` | `url` | Runtime-owned HTTP(S) retrieval, never a local-path reader. |
 | `send_message` | `recipient`, `content_type`, `payload` | Requests local MMP delivery to one recipient or scope. Optional `correlation_id` names the message being answered. Approval is per message and per recipient. A recipient that fails the grammar is not policy-gated: the planner neither admits nor denies it, and delivery fails with `invalid_message_recipient` so the recipient can be corrected. |
-| `list_agents` | none | Read-only peer discovery over the session message service; no approval mode prompts for it. Optional `agent_type` narrows or widens the view. |
+| `list_agents` | none | Read-only peer discovery; no approval mode prompts for it. Optional `agent_type` filters kinds. Omitted or null `scope` uses the requester's trusted project membership; explicit `session` widens to otherwise matching session identities. |
 | `wait` | none | Parks the same turn until model-originated MMP peer mail arrives. It is valid only for active inter-agent MMP coordination, must be the only executable action in its batch, and is not a general delay or external-event primitive. |
 | `spawn_agent` | `role`, `task_prompt` | Requests pane-backed delegation. Optional `session: fork | new` selects a bounded immutable parent-history snapshot or an isolated child session. Optional atomic `size` and `reasoning_effort`, advertised per configured size, select the initial child turn only. `lifetime: persistent` is exclusively for reusable inter-agent MMP actors and requires `objective`; it must never be used for another purpose. Scope and policy remain runtime-controlled. |
 | `config_change` | `setting_path`, `operation`, `value` | Proposes a supported live leaf configuration mutation. Set values accept strings, signed integers, booleans, or string arrays; objects, null set-values, floats, and mixed arrays are rejected. Provider schemas carry the value as a string containing a JSON scalar or string array, while plain non-JSON text is a string value. |
@@ -86,7 +86,8 @@ provider schema may omit from a particular turn:
 - `send_message`: optional `correlation_id`, a non-empty correlation id of at
   most 256 characters; the runtime defaults it to the current turn id.
 - `list_agents`: optional `agent_type` of `primary` (the default), `subagent`,
-  `internal`, or `all`.
+  `internal`, or `all`; optional nullable `scope` of `project` (the default) or
+  `session`.
 - `memory_search`: optional `limit`; `memory_store`: optional `priority`,
   `scope`, and `expires_in_days`.
 - `mcp_server_search`: optional `limit` from 1 through 20.
@@ -151,11 +152,14 @@ agents only; `subagent` and `internal` select spawned subagents and
 runtime-internal controllers, and `all` selects every kind. Each row carries
 `agent_id`, `kind`, `is_self`, `role`, `pane_id`, `window_id`, `capabilities`,
 presence `status`, and the peer's published `objective`. Rows include the
-requesting agent itself, offline agents, and agents in other panes and windows,
-and the result is bounded to 64 rows with 512 bytes per string, reporting
-at most 16 capabilities per row. The result reports `truncated: true` when the
-matching set is larger, and each row reports its own `truncated: true` when it
-shortened a string or omitted capabilities.
+requesting agent itself plus otherwise matching identities sharing its non-empty
+trusted project membership. Optional `scope` defaults to `project`; explicit
+`session` widens the same filters to session identities. Scope selection adds no
+authority and never exposes project roots or project-scope identifiers. The
+result is bounded to 64 rows with 512 bytes per string, reporting at most 16
+capabilities per row. The result reports `truncated: true` when the matching set
+is larger, and each row reports its own `truncated: true` when it shortened a
+string or omitted capabilities.
 
 `send_message` lowers to MMP delivery. The recipient grammar is `session` or
 `group:session`, `agent:<id>`, `pane:<id>`, `window:<id>`, `role:<name>`,

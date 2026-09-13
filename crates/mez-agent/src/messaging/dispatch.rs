@@ -13,7 +13,7 @@ use super::json::{
 };
 use super::types::{
     AgentPresenceStatus, DeliveryStatus, Envelope, MMP_PROTOCOL, MMP_UNSUPPORTED_PROTOCOL_MESSAGE,
-    MessageConnection, MessageSequence, MessageService, Recipient, SenderIdentity,
+    MessageConnection, MessageScope, MessageSequence, MessageService, Recipient, SenderIdentity,
 };
 use super::validation::{
     normalize_objective, validate_message_type, validate_mmp_payload_metadata, validate_protocol,
@@ -93,6 +93,10 @@ fn dispatch_mmp_body_result(
         }
         "discover" => {
             require_registered_connection(connection)?;
+            let requester = connection
+                .agent_id
+                .as_ref()
+                .ok_or_else(|| MessageError::forbidden("unregistered agent connection"))?;
             let agent_id = json_string_field(body, "agent_id");
             let pane_id = json_string_field(body, "pane_id");
             let window_id = json_string_field(body, "window_id");
@@ -102,10 +106,18 @@ fn dispatch_mmp_body_result(
                 .map(parse_presence_status)
                 .transpose()?;
             let capabilities = optional_message_string_array_field(body, "capabilities")?;
+            let scope = parse_transport_message_scope(body)?;
+            let scope_name = match scope {
+                MessageScope::Project => "project",
+                MessageScope::Session => "session",
+            };
             Ok(format!(
-                r#"{{"protocol":"mmp/1","type":"discover_result","agents":[{}]}}"#,
+                r#"{{"protocol":"mmp/1","type":"discover_result","scope":"{}","agents":[{}]}}"#,
+                scope_name,
                 service
-                    .discover_agents_filtered(
+                    .discover_agents_filtered_for_requester(
+                        requester,
+                        scope,
                         agent_id.as_deref(),
                         pane_id.as_deref(),
                         window_id.as_deref(),
@@ -149,8 +161,9 @@ fn dispatch_mmp_body_result(
                 .registered_identity(&agent_id)
                 .cloned()
                 .ok_or_else(|| MessageError::forbidden("unregistered agent connection"))?;
+            let scope = parse_transport_message_scope(body)?;
             let envelope = parse_transport_envelope(body, message_type, sender)?;
-            let delivery = service.accept_at(&agent_id, envelope, now_ms)?;
+            let delivery = service.accept_at_with_scope(&agent_id, envelope, scope, now_ms)?;
             Ok(format!(
                 r#"{{"protocol":"mmp/1","type":"ack","message_id":"{}","queued_recipients":{},"status":"{}"}}"#,
                 json_escape(&delivery.message_id),
@@ -262,6 +275,7 @@ fn is_reserved_envelope_field(field: &str) -> bool {
             | "time"
             | "sender"
             | "recipient"
+            | "scope"
             | "correlation_id"
             | "ttl_ms"
             | "content_type"
@@ -332,6 +346,31 @@ fn optional_transport_string(
         .as_str()
         .map(|value| Some(value.to_string()))
         .ok_or_else(|| MessageError::invalid_args(format!("MMP envelope {field} must be a string")))
+}
+
+/// Parses an optional raw MMP delivery audience, defaulting to project.
+fn parse_transport_message_scope(body: &str) -> Result<MessageScope> {
+    let body = serde_json::from_str::<serde_json::Value>(body)
+        .map_err(|_| MessageError::invalid_args("MMP envelope scope must be project or session"))?;
+    let object = body.as_object().ok_or_else(|| {
+        MessageError::invalid_args("MMP envelope scope must be project or session")
+    })?;
+    let scope = match object.get("scope") {
+        None | Some(serde_json::Value::Null) => "project",
+        Some(serde_json::Value::String(scope)) => scope,
+        Some(_) => {
+            return Err(MessageError::invalid_args(
+                "MMP envelope scope must be project or session",
+            ));
+        }
+    };
+    match scope {
+        "project" => Ok(MessageScope::Project),
+        "session" => Ok(MessageScope::Session),
+        _ => Err(MessageError::invalid_args(
+            "MMP envelope scope must be project or session",
+        )),
+    }
 }
 
 /// Runs the required nullable transport string operation for this subsystem.
@@ -700,6 +739,126 @@ fn validate_message_label(field: &str, value: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{MessageConnection, MessageService, dispatch_mmp_body};
+
+    /// Discover defaults to the authenticated requester's project membership
+    /// and widens only when the caller explicitly requests session scope.
+    #[test]
+    fn discover_defaults_to_project_and_session_scope_widens() {
+        let mut service = MessageService::default();
+        let mut connection = MessageConnection::default();
+        dispatch_mmp_body(
+            r#"{"protocol":"mmp/1","type":"hello","role":"agent"}"#,
+            &mut service,
+            &mut connection,
+            10,
+        );
+        let requester = connection.agent_id.clone().unwrap();
+        let alpha = super::super::ProjectScopeId::from_canonical_root_bytes(b"/workspace/alpha");
+        let beta = super::super::ProjectScopeId::from_canonical_root_bytes(b"/workspace/beta");
+        service
+            .rebind_agent_project_scope(&requester, Some(alpha.clone()))
+            .unwrap();
+        let same_project = service.register_agent(None, None, "agent", Vec::new());
+        service
+            .rebind_agent_project_scope(&same_project.agent_id, Some(alpha))
+            .unwrap();
+        let other_project = service.register_agent(None, None, "agent", Vec::new());
+        service
+            .rebind_agent_project_scope(&other_project.agent_id, Some(beta))
+            .unwrap();
+
+        let project = dispatch_mmp_body(
+            r#"{"protocol":"mmp/1","type":"discover"}"#,
+            &mut service,
+            &mut connection,
+            20,
+        );
+        assert!(project.contains(r#""scope":"project""#), "{project}");
+        assert!(
+            project.contains(same_project.agent_id.as_str()),
+            "{project}"
+        );
+        assert!(
+            !project.contains(other_project.agent_id.as_str()),
+            "{project}"
+        );
+
+        let null_scope = dispatch_mmp_body(
+            r#"{"protocol":"mmp/1","type":"discover","scope":null}"#,
+            &mut service,
+            &mut connection,
+            20,
+        );
+        assert!(null_scope.contains(r#""scope":"project""#), "{null_scope}");
+        assert!(
+            !null_scope.contains(other_project.agent_id.as_str()),
+            "{null_scope}"
+        );
+
+        let session = dispatch_mmp_body(
+            r#"{"protocol":"mmp/1","type":"discover","scope":"session"}"#,
+            &mut service,
+            &mut connection,
+            20,
+        );
+        assert!(session.contains(r#""scope":"session""#), "{session}");
+        assert!(
+            session.contains(other_project.agent_id.as_str()),
+            "{session}"
+        );
+
+        let service_snapshot = service.snapshot_state();
+        let invalid_scope = dispatch_mmp_body(
+            r#"{"protocol":"mmp/1","type":"discover","scope":"workspace"}"#,
+            &mut service,
+            &mut connection,
+            20,
+        );
+        assert!(
+            invalid_scope.contains("MMP envelope scope must be project or session"),
+            "{invalid_scope}"
+        );
+        assert_eq!(service.snapshot_state(), service_snapshot);
+        for invalid_scope in ["true", "1", "[]", "{}"] {
+            let response = dispatch_mmp_body(
+                &format!(r#"{{"protocol":"mmp/1","type":"discover","scope":{invalid_scope}}}"#),
+                &mut service,
+                &mut connection,
+                20,
+            );
+            assert!(
+                response.contains("MMP envelope scope must be project or session"),
+                "{response}"
+            );
+            assert!(!response.contains(requester.as_str()), "{response}");
+            assert!(
+                !response.contains(same_project.agent_id.as_str()),
+                "{response}"
+            );
+            assert!(
+                !response.contains(other_project.agent_id.as_str()),
+                "{response}"
+            );
+            assert_eq!(service.snapshot_state(), service_snapshot);
+        }
+        for malformed_body in [
+            r#"{"protocol":"mmp/1","type":"discover""#,
+            r#"{"protocol":"mmp/1","type":"discover","scope":"project""#,
+        ] {
+            let response = dispatch_mmp_body(malformed_body, &mut service, &mut connection, 20);
+            assert!(response.contains(r#""type":"error""#), "{response}");
+            assert!(!response.contains(requester.as_str()), "{response}");
+            assert!(
+                !response.contains(same_project.agent_id.as_str()),
+                "{response}"
+            );
+            assert!(
+                !response.contains(other_project.agent_id.as_str()),
+                "{response}"
+            );
+            assert_eq!(service.snapshot_state(), service_snapshot);
+        }
+    }
 
     /// Hello carries the additive objective into welcome, discovery results, and
     /// envelope senders while leaving role and capability filters unchanged.

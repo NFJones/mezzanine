@@ -564,6 +564,12 @@ impl RuntimeSessionService {
             &profile,
             child_lineage.depth,
         )?;
+        let parent_project_scope =
+            pane_id_from_runtime_agent_id(&spawn.parent_agent_id).and_then(|pane_id| {
+                self.agent_shell_store()
+                    .get(pane_id.as_str())
+                    .and_then(|session| session.project_scope.clone())
+            });
         if let Some(profile_name) = profile.model_profile.as_deref() {
             self.provider_registry().resolve_profile(profile_name)?;
         }
@@ -650,6 +656,33 @@ impl RuntimeSessionService {
             .enter_or_resume(&started.pane_id)?
             .session_id
             .clone();
+        if let Some(project_scope) = parent_project_scope {
+            self.agent_shell_store_mut()
+                .install_project_scope(&started.pane_id, project_scope)?;
+        }
+        let now_ms = current_unix_seconds().saturating_mul(1000);
+        let child_identity = match self.ensure_runtime_message_identity(
+            &child_agent_id,
+            None,
+            &spawn.requested_role,
+            &[
+                "agent-harness",
+                "subagent",
+                runtime_cooperation_mode_name(spawn.cooperation_mode),
+            ],
+            now_ms,
+        ) {
+            Ok(identity) => identity,
+            Err(error) => {
+                self.cleanup_failed_subagent_spawn(
+                    controller,
+                    &started.pane_id,
+                    &child_agent_id,
+                    None,
+                );
+                return Err(error);
+            }
+        };
         let child_transcript_entries = fork_snapshot
             .as_ref()
             .map_or(0, |snapshot| snapshot.entries.len() as u64);
@@ -731,29 +764,6 @@ impl RuntimeSessionService {
             }
         }
         if let Some((parent_conversation_id, objective)) = persistent.as_ref() {
-            let now_ms = current_unix_seconds().saturating_mul(1000);
-            let child_identity = match self.ensure_runtime_message_identity(
-                &child_agent_id,
-                None,
-                &spawn.requested_role,
-                &[
-                    "agent-harness",
-                    "subagent",
-                    runtime_cooperation_mode_name(spawn.cooperation_mode),
-                ],
-                now_ms,
-            ) {
-                Ok(identity) => identity,
-                Err(error) => {
-                    self.cleanup_failed_subagent_spawn(
-                        controller,
-                        &started.pane_id,
-                        &child_agent_id,
-                        None,
-                    );
-                    return Err(error);
-                }
-            };
             let message_setup = self
                 .control
                 .message_service_mut()
@@ -1737,9 +1747,12 @@ impl RuntimeSessionService {
             payload: task_status.to_json(),
             extension_fields,
         };
-        self.control
-            .message_service_mut()
-            .accept_at(&child_identity.agent_id, envelope, now_ms)?;
+        self.control.message_service_mut().accept_at_with_scope(
+            &child_identity.agent_id,
+            envelope,
+            mez_agent::messaging::MessageScope::Session,
+            now_ms,
+        )?;
         self.deliver_pending_runtime_agent_messages(now_ms)?;
         self.append_subagent_parent_status_line(
             initial_status.parent_agent_id,

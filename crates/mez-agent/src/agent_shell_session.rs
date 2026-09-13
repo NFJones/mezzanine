@@ -174,6 +174,13 @@ pub struct AgentShellSession {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub pane_id: String,
+    /// Trusted project membership captured when the runtime first binds this
+    /// conversation to a canonical project root.
+    ///
+    /// The value remains stable for the conversation even if the pane later
+    /// changes directories. Runtime code, rather than model or transport data,
+    /// assigns it.
+    pub project_scope: Option<crate::messaging::ProjectMembership>,
     /// Durable origin classification for this conversation.
     pub conversation_kind: AgentConversationKind,
     /// Stores the prompt-cache lineage id value for this data structure.
@@ -294,6 +301,7 @@ impl AgentShellStore {
                 AgentShellSession {
                     session_id: new_agent_session_uuid(),
                     pane_id: pane_id.clone(),
+                    project_scope: None,
                     conversation_kind: AgentConversationKind::Root,
                     prompt_cache_lineage_id: new_agent_session_uuid(),
                     visibility: AgentShellVisibility::Hidden,
@@ -691,6 +699,13 @@ impl AgentShellStore {
         session.transcript_entries = transcript_entries;
         session.conversation_kind = persistence.conversation_kind;
         session.ephemeral = persistence.ephemeral;
+        // A durable root binding begins a distinct conversation whose trusted
+        // membership must be discovered again by the runtime. Ephemeral work
+        // is an owning-turn implementation detail and retains its parent
+        // audience while it is later restored.
+        if !persistence.ephemeral && persistence.conversation_kind == AgentConversationKind::Root {
+            session.project_scope = None;
+        }
         session.ephemeral_transcript_source_conversation_id = if persistence.ephemeral {
             persistence.transcript_source_conversation_id
         } else {
@@ -766,6 +781,7 @@ impl AgentShellStore {
             AgentShellSession {
                 session_id: new_agent_session_uuid(),
                 pane_id: pane_id.to_string(),
+                project_scope: None,
                 conversation_kind: AgentConversationKind::Root,
                 prompt_cache_lineage_id: new_agent_session_uuid(),
                 visibility: AgentShellVisibility::Visible,
@@ -791,6 +807,37 @@ impl AgentShellStore {
     /// on duplicated control-flow logic.
     pub fn get(&self, pane_id: &str) -> Option<&AgentShellSession> {
         self.sessions_by_pane.get(pane_id)
+    }
+
+    /// Captures trusted project membership for a session that has not yet
+    /// received one.
+    ///
+    /// Once recorded, the value is intentionally immutable for the current
+    /// conversation so later pane directory changes cannot alter MMP routing.
+    pub fn capture_project_scope(
+        &mut self,
+        pane_id: &str,
+        project_scope: crate::messaging::ProjectMembership,
+    ) -> AgentShellSessionResult<&AgentShellSession> {
+        let session = self.session_mut(pane_id)?;
+        if session.project_scope.is_none() {
+            session.project_scope = Some(project_scope);
+        }
+        Ok(session)
+    }
+
+    /// Installs membership supplied by a trusted lifecycle owner.
+    ///
+    /// Restore and child creation derive this value from durable metadata or
+    /// the parent session rather than a transient pane working directory.
+    pub fn install_project_scope(
+        &mut self,
+        pane_id: &str,
+        project_scope: crate::messaging::ProjectMembership,
+    ) -> AgentShellSessionResult<&AgentShellSession> {
+        let session = self.session_mut(pane_id)?;
+        session.project_scope = Some(project_scope);
+        Ok(session)
     }
 
     /// Runs the sessions operation for this subsystem.
@@ -1384,6 +1431,53 @@ mod tests {
             store.get("%1").unwrap().allowed_actions.as_ref(),
             Some(&initial)
         );
+    }
+
+    /// Captured project membership is preserved across subsequent capture
+    /// attempts, preventing a later pane directory observation from moving a
+    /// live conversation into a different MMP audience.
+    #[test]
+    fn agent_shell_preserves_first_captured_project_scope() {
+        let mut store = AgentShellStore::default();
+        store.enter_or_resume("%1").unwrap();
+        let first = crate::messaging::ProjectMembership::from_canonical_root(
+            std::path::PathBuf::from("/repo/one"),
+        );
+        let second = crate::messaging::ProjectMembership::from_canonical_root(
+            std::path::PathBuf::from("/repo/two"),
+        );
+
+        store.capture_project_scope("%1", first.clone()).unwrap();
+        store.capture_project_scope("%1", second).unwrap();
+
+        assert_eq!(
+            store.get("%1").unwrap().project_scope.as_ref(),
+            Some(&first)
+        );
+    }
+
+    /// A durable root replacement deliberately drops the prior conversation's
+    /// membership, while an ephemeral bind retains the owning conversation's
+    /// stable audience for later restoration.
+    #[test]
+    fn durable_root_replacement_clears_project_scope_but_ephemeral_binding_preserves_it() {
+        let mut store = AgentShellStore::default();
+        store.enter_or_resume("%1").unwrap();
+        let scope = crate::messaging::ProjectMembership::from_canonical_root(
+            std::path::PathBuf::from("/repo/one"),
+        );
+        store.capture_project_scope("%1", scope.clone()).unwrap();
+
+        store
+            .bind_ephemeral_conversation_with_lineage("%1", "ephemeral", 0, None)
+            .unwrap();
+        assert_eq!(
+            store.get("%1").unwrap().project_scope.as_ref(),
+            Some(&scope)
+        );
+
+        store.bind_conversation("%1", "replacement", 0).unwrap();
+        assert!(store.get("%1").unwrap().project_scope.is_none());
     }
 
     /// Reports whether one string is a lowercase RFC 4122 UUIDv4.

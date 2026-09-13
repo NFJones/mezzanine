@@ -942,14 +942,24 @@ fn list_agents_round_trips_with_agent_type_filter() {
     assert_eq!(explicit.action_type(), "list_agents");
     assert!(matches!(
         explicit.payload,
-        AgentActionPayload::ListAgents { ref agent_type } if agent_type.as_deref() == Some("all")
+        AgentActionPayload::ListAgents { ref agent_type, scope: None } if agent_type.as_deref() == Some("all")
     ));
 
     let defaulted =
         parse_maap_action_json(r#"{"type":"list_agents"}"#).expect("default list_agents action");
     assert!(matches!(
         defaulted.payload,
-        AgentActionPayload::ListAgents { agent_type: None }
+        AgentActionPayload::ListAgents {
+            agent_type: None,
+            scope: None
+        }
+    ));
+
+    let session = parse_maap_action_json(r#"{"type":"list_agents","scope":"session"}"#)
+        .expect("session-scoped list_agents action");
+    assert!(matches!(
+        session.payload,
+        AgentActionPayload::ListAgents { agent_type: None, ref scope } if scope.as_deref() == Some("session")
     ));
 
     for agent_type in ["primary", "subagent", "internal", "all"] {
@@ -961,10 +971,18 @@ fn list_agents_round_trips_with_agent_type_filter() {
 }
 
 #[test]
-/// Verifies `list_agents` rejects an unsupported agent-type filter and exposes
-/// the documented filter values plus result bounds in the provider schema.
+/// Verifies `list_agents` rejects unsupported filters and scopes and exposes
+/// the documented values plus result bounds in the provider schema.
 fn list_agents_validation_and_schema_cover_agent_types() {
     let action = parse_maap_action_json(r#"{"type":"list_agents","agent_type":"peers"}"#)
+        .expect("parsed list_agents action");
+    let batch = MaapBatch {
+        rationale: "discover peers".to_string(),
+        actions: vec![action],
+    };
+    assert!(batch.validate(&turn(), &[], &[]).is_err());
+
+    let action = parse_maap_action_json(r#"{"type":"list_agents","scope":"workspace"}"#)
         .expect("parsed list_agents action");
     let batch = MaapBatch {
         rationale: "discover peers".to_string(),
@@ -977,6 +995,10 @@ fn list_agents_validation_and_schema_cover_agent_types() {
     assert!(schema.contains("\"agent_type\""));
     for agent_type in ["primary", "subagent", "internal", "all"] {
         assert!(schema.contains(&format!("\"{agent_type}\"")));
+    }
+    assert!(schema.contains("\"scope\""));
+    for scope in ["project", "session"] {
+        assert!(schema.contains(&format!("\"{scope}\"")));
     }
     assert!(schema.contains(&AGENT_LIST_MAX_ROWS.to_string()));
     assert!(schema.contains(&AGENT_LIST_MAX_STRING_BYTES.to_string()));

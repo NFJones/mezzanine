@@ -355,7 +355,7 @@ async fn async_message_listener_reaps_failed_connection_tasks_during_accept() {
 #[tokio::test(flavor = "current_thread")]
 async fn async_message_connection_flushes_fanout_after_response_write() {
     use crate::protocol::message::{decode_mmp_frame, encode_mmp_body};
-    use mez_agent::messaging::{Envelope, Recipient};
+    use mez_agent::messaging::{Envelope, MessageScope, Recipient};
     use std::time::Duration;
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -388,7 +388,7 @@ async fn async_message_connection_flushes_fanout_after_response_write() {
     };
     service
         .message_service_mut()
-        .accept_at(&sender.agent_id, message, 10)
+        .accept_at_with_scope(&sender.agent_id, message, MessageScope::Session, 10)
         .unwrap();
     let mut connection = MessageConnection {
         agent_id: Some(target.agent_id.clone()),
@@ -528,7 +528,7 @@ async fn async_message_connection_notification_flushes_later_fanout() {
         };
         let recipient_json = format!(r#"{{"agent_id":"{}"}}"#, target_id);
         let send = format!(
-            r#"{{"protocol":"mmp/1","type":"send","id":"m-idle","time":"message:client-idle","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{},"correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"idle hello"}}"#,
+            r#"{{"protocol":"mmp/1","type":"send","id":"m-idle","time":"message:client-idle","sender":{{"agent_id":"{}","role":"sender"}},"recipient":{},"scope":"session","correlation_id":null,"ttl_ms":null,"content_type":"text/plain; charset=utf-8","payload":"idle hello"}}"#,
             sender_connection.agent_id.as_ref().unwrap(),
             recipient_json
         );

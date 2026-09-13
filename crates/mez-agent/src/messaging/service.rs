@@ -14,11 +14,12 @@ use super::types::{
     AcceptedMessage, AgentPresenceStatus, Delivery, DeliveryBatch, DeliveryCursor, DeliveryStatus,
     Envelope, FanoutBatch, FanoutBudget, MMP_DUPLICATE_MESSAGE_ID_MESSAGE, MMP_EXPIRED_MESSAGE,
     MMP_PAYLOAD_TOO_LARGE_MESSAGE, MMP_PROTOCOL, MMP_UNDELIVERABLE_MESSAGE,
-    MessageAcceptedSnapshot, MessageDeliveryCursorSnapshot, MessageDeliverySnapshot,
-    MessageEnvelopeSnapshot, MessageExtensionFieldSnapshot, MessageFanoutDiagnostics,
-    MessageIdentitySnapshot, MessagePresenceSnapshot, MessageQueuedEnvelopeSnapshot,
-    MessageRecipientSnapshot, MessageSequence, MessageService, MessageServiceSnapshot,
-    PresenceRecord, QueuedEnvelope, Recipient, SenderIdentity, SequencedEnvelope,
+    MessageAcceptedSnapshot, MessageAudienceSnapshot, MessageDeliveryCursorSnapshot,
+    MessageDeliverySnapshot, MessageEnvelopeSnapshot, MessageExtensionFieldSnapshot,
+    MessageFanoutDiagnostics, MessageIdentitySnapshot, MessagePresenceSnapshot,
+    MessageQueuedEnvelopeSnapshot, MessageRecipientSnapshot, MessageScope, MessageSequence,
+    MessageService, MessageServiceSnapshot, PresenceRecord, ProjectScopeId, QueuedEnvelope,
+    Recipient, ResolvedMessageAudience, SenderIdentity, SequencedEnvelope,
 };
 use super::validation::{
     normalize_objective, normalize_optional_objective, validate_message_type, validate_protocol,
@@ -30,6 +31,38 @@ struct IndexedReceiveSelection {
     batch: DeliveryBatch,
     sequence_lookups: u64,
     payload_bytes: usize,
+}
+
+/// Reconciles one immutable optional identity field without allowing a
+/// populated registered value to be overwritten by a conflicting refresh.
+fn reconcile_identity_field<T: Clone + PartialEq>(
+    existing: &mut Option<T>,
+    incoming: &Option<T>,
+    conflict_message: &str,
+) -> Result<()> {
+    match (&*existing, incoming) {
+        (None, Some(incoming)) => *existing = Some(incoming.clone()),
+        (Some(current), Some(incoming)) if current != incoming => {
+            return Err(MessageError::conflict(conflict_message));
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Reconciles immutable capability metadata as one vector rather than merging
+/// partially overlapping capability sets.
+fn reconcile_capabilities(existing: &mut Vec<String>, incoming: &[String]) -> Result<()> {
+    if existing.is_empty() {
+        if !incoming.is_empty() {
+            *existing = incoming.to_vec();
+        }
+    } else if !incoming.is_empty() && existing.as_slice() != incoming {
+        return Err(MessageError::conflict(
+            "MMP sender capabilities cannot change after registration",
+        ));
+    }
+    Ok(())
 }
 
 impl Default for MessageService {
@@ -83,6 +116,7 @@ impl MessageService {
     ) -> SenderIdentity {
         let identity = SenderIdentity {
             agent_id: self.ids.agent(),
+            project_scope: None,
             pane_id,
             window_id,
             role: Some(role.into()),
@@ -107,6 +141,7 @@ impl MessageService {
     ) -> Result<SenderIdentity> {
         let identity = SenderIdentity {
             agent_id: self.ids.agent(),
+            project_scope: None,
             pane_id,
             window_id,
             role: Some(role.into()),
@@ -148,9 +183,59 @@ impl MessageService {
     ) -> Result<SenderIdentity> {
         validate_sender_identity(&identity)?;
         if let Some(existing) = self.registered.get(&identity.agent_id) {
-            return Ok(existing.clone());
+            let mut reconciled = existing.clone();
+            reconcile_identity_field(
+                &mut reconciled.project_scope,
+                &identity.project_scope,
+                "MMP sender project scope cannot change after registration",
+            )?;
+            reconcile_identity_field(
+                &mut reconciled.pane_id,
+                &identity.pane_id,
+                "MMP sender pane id cannot change after registration",
+            )?;
+            reconcile_identity_field(
+                &mut reconciled.window_id,
+                &identity.window_id,
+                "MMP sender window id cannot change after registration",
+            )?;
+            reconcile_identity_field(
+                &mut reconciled.role,
+                &identity.role,
+                "MMP sender role cannot change after registration",
+            )?;
+            reconcile_capabilities(&mut reconciled.capabilities, &identity.capabilities)?;
+
+            self.registered
+                .insert(identity.agent_id.clone(), reconciled.clone());
+            if let Some(presence) = self.presence.get_mut(&identity.agent_id) {
+                presence.identity = reconciled.clone();
+            }
+            return Ok(reconciled);
         }
         Ok(self.insert_registered_identity(identity, updated_at_ms))
+    }
+
+    /// Replaces an already registered agent's project membership for a
+    /// runtime-trusted conversation lifecycle transition.
+    ///
+    /// Ordinary registration intentionally rejects scope drift. This narrow
+    /// operation updates only identity and presence metadata, preserving the
+    /// discovery objective, presence status and timestamp, subscriptions,
+    /// delivery cursor, retained envelopes, and queued messages.
+    pub fn rebind_agent_project_scope(
+        &mut self,
+        agent_id: &AgentId,
+        project_scope: Option<ProjectScopeId>,
+    ) -> Result<SenderIdentity> {
+        let identity = self.registered.get_mut(agent_id).ok_or_else(|| {
+            MessageError::not_found("project-scope rebind requires a registered agent")
+        })?;
+        identity.project_scope = project_scope.clone();
+        if let Some(presence) = self.presence.get_mut(agent_id) {
+            presence.identity.project_scope = project_scope;
+        }
+        Ok(identity.clone())
     }
 
     /// Publishes one bounded agent objective with identical-value throttling.
@@ -244,6 +329,17 @@ impl MessageService {
         envelope: Envelope,
         now_ms: u64,
     ) -> Result<Delivery> {
+        self.accept_at_with_scope(connection_agent, envelope, MessageScope::Project, now_ms)
+    }
+
+    /// Accepts one authenticated envelope after resolving its requested audience.
+    pub fn accept_at_with_scope(
+        &mut self,
+        connection_agent: &AgentId,
+        envelope: Envelope,
+        scope: MessageScope,
+        now_ms: u64,
+    ) -> Result<Delivery> {
         validate_protocol(envelope.protocol)?;
         validate_message_type(&envelope.message_type)?;
 
@@ -257,8 +353,9 @@ impl MessageService {
                 "message sender does not match authenticated agent connection",
             ));
         }
+        let audience = resolve_message_audience(registered, scope)?;
         if let Some(accepted) = self.accepted_messages.get_mut(&envelope.id) {
-            if accepted.envelope.as_ref() == &envelope {
+            if accepted.envelope.as_ref() == &envelope && accepted.audience == audience {
                 if envelope_expired_at(&accepted.envelope, accepted.accepted_at_ms, now_ms) {
                     accepted.delivery.status = DeliveryStatus::Expired;
                 }
@@ -267,7 +364,7 @@ impl MessageService {
             return Err(MessageError::conflict(MMP_DUPLICATE_MESSAGE_ID_MESSAGE));
         }
 
-        let queued_recipients = self.matching_recipients(&envelope).len();
+        let queued_recipients = self.matching_recipients(&envelope, &audience).len();
         if queued_recipients == 0 {
             return Err(MessageError::new(
                 MessageErrorKind::NotFound,
@@ -279,7 +376,7 @@ impl MessageService {
         }
         let message_id = envelope.id.clone();
         let accepted_envelope = Arc::new(envelope);
-        let sequence = self.enqueue(accepted_envelope.clone(), now_ms)?;
+        let sequence = self.enqueue(accepted_envelope.clone(), audience.clone(), now_ms)?;
 
         let delivery = Delivery {
             accepted: true,
@@ -292,6 +389,7 @@ impl MessageService {
             message_id,
             AcceptedMessage {
                 envelope: accepted_envelope,
+                audience,
                 delivery: delivery.clone(),
                 accepted_at_ms: now_ms,
             },
@@ -300,13 +398,13 @@ impl MessageService {
         Ok(delivery)
     }
 
-    /// Runs the discover agents operation for this subsystem.
+    /// Runs administrative session-wide agent discovery for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn discover_agents(&self) -> Vec<SenderIdentity> {
-        self.discover_agents_filtered(None, None, None, None, None, &[])
+        self.discover_agents_filtered_session_wide(None, None, None, None, None, &[])
     }
 
     /// Counts queued local messages whose recipient is scoped to `window_id`.
@@ -321,9 +419,46 @@ impl MessageService {
             .count()
     }
 
-    /// Discovers registered agents that match every supplied identity,
-    /// presence, and capability filter.
-    pub fn discover_agents_filtered(
+    /// Discovers agents visible to one authenticated requester.
+    ///
+    /// Project scope includes the requester and peers with the same trusted
+    /// project membership. Session scope deliberately widens that view.
+    #[allow(clippy::too_many_arguments)]
+    pub fn discover_agents_filtered_for_requester(
+        &self,
+        requester: &AgentId,
+        scope: MessageScope,
+        agent_id: Option<&str>,
+        pane_id: Option<&str>,
+        window_id: Option<&str>,
+        role: Option<&str>,
+        status: Option<AgentPresenceStatus>,
+        capabilities: &[String],
+    ) -> Vec<SenderIdentity> {
+        let requester_scope = self
+            .registered
+            .get(requester)
+            .and_then(|identity| identity.project_scope.as_ref());
+        self.discover_agents_filtered_session_wide(
+            agent_id,
+            pane_id,
+            window_id,
+            role,
+            status,
+            capabilities,
+        )
+        .into_iter()
+        .filter(|identity| {
+            identity.agent_id == *requester
+                || matches!(scope, MessageScope::Session)
+                || requester_scope
+                    .is_some_and(|scope| identity.project_scope.as_ref() == Some(scope))
+        })
+        .collect()
+    }
+
+    /// Performs explicitly administrative session-wide discovery.
+    pub fn discover_agents_filtered_session_wide(
         &self,
         agent_id: Option<&str>,
         pane_id: Option<&str>,
@@ -474,7 +609,7 @@ impl MessageService {
 
         MessageServiceSnapshot {
             protocol: MMP_PROTOCOL.to_string(),
-            schema_version: 1,
+            schema_version: 2,
             next_sequence: self.next_sequence,
             retention_messages: self.retention_messages,
             retention_bytes: self.retention_bytes,
@@ -492,14 +627,15 @@ impl MessageService {
         let mut registered = HashMap::new();
         let mut agent_ids = Vec::new();
         for identity in &snapshot.registered_agents {
-            let identity = sender_identity_from_snapshot(identity)?;
+            let identity = sender_identity_from_snapshot(identity, snapshot.schema_version)?;
             agent_ids.push(identity.agent_id.clone());
             registered.insert(identity.agent_id.clone(), identity);
         }
         let ids = IdFactory::after_existing_ids(agent_ids.iter());
         let mut presence = HashMap::new();
         for record in &snapshot.presence {
-            let identity = sender_identity_from_snapshot(&record.identity)?;
+            let identity =
+                sender_identity_from_snapshot(&record.identity, snapshot.schema_version)?;
             let status = parse_presence_status(&record.status)?;
             presence.insert(
                 identity.agent_id.clone(),
@@ -527,18 +663,28 @@ impl MessageService {
         let mut retained_envelopes = HashMap::new();
         let mut queued_bytes = 0usize;
         for retained in &snapshot.retained_messages {
-            let envelope = Arc::new(envelope_from_snapshot(&retained.envelope)?);
+            if snapshot.schema_version == 1 {
+                continue;
+            }
+            let envelope = Arc::new(envelope_from_snapshot(
+                &retained.envelope,
+                snapshot.schema_version,
+            )?);
             queued_bytes = queued_bytes.saturating_add(envelope.payload.len());
             retained_envelopes.insert(envelope.id.clone(), envelope.clone());
             queue.push_back(Arc::new(QueuedEnvelope {
                 sequence: retained.sequence,
                 envelope,
+                audience: audience_from_snapshot(retained.audience.as_ref())?,
                 accepted_at_ms: retained.accepted_at_ms,
             }));
         }
         let mut accepted_messages = HashMap::new();
         for accepted in &snapshot.accepted_messages {
-            let envelope = envelope_from_snapshot(&accepted.envelope)?;
+            if snapshot.schema_version == 1 {
+                continue;
+            }
+            let envelope = envelope_from_snapshot(&accepted.envelope, snapshot.schema_version)?;
             let envelope = retained_envelopes
                 .get(&envelope.id)
                 .cloned()
@@ -554,6 +700,7 @@ impl MessageService {
                 envelope.id.clone(),
                 AcceptedMessage {
                     envelope,
+                    audience: audience_from_snapshot(accepted.audience.as_ref())?,
                     delivery,
                     accepted_at_ms: accepted.accepted_at_ms,
                 },
@@ -861,7 +1008,7 @@ impl MessageService {
                 continue;
             };
             let message_bytes = queued.envelope.payload.len();
-            if !expired(queued, now_ms) {
+            if !expired(queued, now_ms) && audience_matches(identity, &queued.audience) {
                 if payload_bytes.saturating_add(message_bytes) > max_payload_bytes {
                     break;
                 }
@@ -934,6 +1081,7 @@ impl MessageService {
                 self.registered.get(recipient).is_some_and(|identity| {
                     self.recipient_is_available(&identity.agent_id)
                         && recipient_matches(identity, &queued.envelope.recipient)
+                        && audience_matches(identity, &queued.audience)
                 })
             })
             .map(|queued| queued.envelope.as_ref().clone())
@@ -962,7 +1110,12 @@ impl MessageService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn enqueue(&mut self, envelope: Arc<Envelope>, now_ms: u64) -> Result<MessageSequence> {
+    fn enqueue(
+        &mut self,
+        envelope: Arc<Envelope>,
+        audience: ResolvedMessageAudience,
+        now_ms: u64,
+    ) -> Result<MessageSequence> {
         let size = envelope.payload.len();
         if size > self.retention_bytes {
             return Err(MessageError::invalid_args(MMP_PAYLOAD_TOO_LARGE_MESSAGE));
@@ -976,6 +1129,7 @@ impl MessageService {
         let queued = Arc::new(QueuedEnvelope {
             sequence,
             envelope,
+            audience,
             accepted_at_ms: now_ms,
         });
         self.insert_queue_indexes(&queued);
@@ -1040,12 +1194,17 @@ impl MessageService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn matching_recipients(&self, envelope: &Envelope) -> Vec<&SenderIdentity> {
+    fn matching_recipients(
+        &self,
+        envelope: &Envelope,
+        audience: &ResolvedMessageAudience,
+    ) -> Vec<&SenderIdentity> {
         self.registered
             .values()
             .filter(|identity| {
                 self.recipient_is_available(&identity.agent_id)
                     && recipient_matches(identity, &envelope.recipient)
+                    && audience_matches(identity, audience)
             })
             .collect()
     }
@@ -1089,6 +1248,30 @@ fn recipient_matches(identity: &SenderIdentity, recipient: &Recipient) -> bool {
         Recipient::Group(group) => {
             group == "session" || identity.capabilities.iter().any(|cap| cap == group)
         }
+    }
+}
+
+/// Resolves a caller-selected scope into the immutable audience recorded for
+/// one accepted message.
+fn resolve_message_audience(
+    sender: &SenderIdentity,
+    scope: MessageScope,
+) -> Result<ResolvedMessageAudience> {
+    match scope {
+        MessageScope::Project => sender
+            .project_scope
+            .clone()
+            .map(ResolvedMessageAudience::Project)
+            .ok_or_else(|| MessageError::not_found(MMP_UNDELIVERABLE_MESSAGE)),
+        MessageScope::Session => Ok(ResolvedMessageAudience::Session),
+    }
+}
+
+/// Returns whether an available recipient belongs to one accepted audience.
+fn audience_matches(identity: &SenderIdentity, audience: &ResolvedMessageAudience) -> bool {
+    match audience {
+        ResolvedMessageAudience::Project(scope) => identity.project_scope.as_ref() == Some(scope),
+        ResolvedMessageAudience::Session => true,
     }
 }
 
@@ -1175,7 +1358,7 @@ fn expires_before_delivery(envelope: &Envelope) -> bool {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn validate_message_service_snapshot(snapshot: &MessageServiceSnapshot) -> Result<()> {
-    if snapshot.protocol != MMP_PROTOCOL || snapshot.schema_version == 0 {
+    if snapshot.protocol != MMP_PROTOCOL || !matches!(snapshot.schema_version, 1 | 2) {
         return Err(MessageError::invalid_args(
             "snapshot MMP state has unsupported protocol or schema version",
         ));
@@ -1188,37 +1371,151 @@ fn validate_message_service_snapshot(snapshot: &MessageServiceSnapshot) -> Resul
             "snapshot MMP state sequence and retention values must be non-zero",
         ));
     }
+    let mut registered_by_id = HashMap::new();
     for identity in &snapshot.registered_agents {
-        sender_identity_from_snapshot(identity)?;
+        sender_identity_from_snapshot(identity, snapshot.schema_version)?;
+        if registered_by_id
+            .insert(identity.agent_id.as_str(), identity)
+            .is_some()
+        {
+            return Err(MessageError::invalid_args(
+                "snapshot MMP registered agent ids must be unique",
+            ));
+        }
     }
+    let mut presence_ids = HashSet::new();
     for presence in &snapshot.presence {
-        sender_identity_from_snapshot(&presence.identity)?;
+        sender_identity_from_snapshot(&presence.identity, snapshot.schema_version)?;
         parse_presence_status(&presence.status)?;
+        if !presence_ids.insert(presence.identity.agent_id.as_str()) {
+            return Err(MessageError::invalid_args(
+                "snapshot MMP presence agent ids must be unique",
+            ));
+        }
+        if registered_by_id.get(presence.identity.agent_id.as_str()) != Some(&&presence.identity) {
+            return Err(MessageError::invalid_args(
+                "snapshot MMP presence identity must match a registered agent",
+            ));
+        }
     }
+    if snapshot.schema_version == 2 && presence_ids.len() != registered_by_id.len() {
+        return Err(MessageError::invalid_args(
+            "snapshot MMP registered agents must each have a presence record",
+        ));
+    }
+    let mut subscription_ids = HashSet::new();
     for cursor in &snapshot.subscriptions {
-        parse_opaque_id(&cursor.recipient, "MMP delivery cursor recipient")?;
+        let recipient = parse_opaque_id(&cursor.recipient, "MMP delivery cursor recipient")?;
+        if !subscription_ids.insert(cursor.recipient.as_str()) {
+            return Err(MessageError::invalid_args(
+                "snapshot MMP delivery cursor recipients must be unique",
+            ));
+        }
+        if !registered_by_id.contains_key(recipient.as_str()) {
+            return Err(MessageError::invalid_args(
+                "snapshot MMP delivery cursor recipient must be registered",
+            ));
+        }
+        if cursor.last_sequence >= snapshot.next_sequence {
+            return Err(MessageError::invalid_args(
+                "snapshot MMP delivery cursor exceeds the retained sequence range",
+            ));
+        }
     }
     let mut max_sequence = 0;
     let mut queued_bytes = 0usize;
-    for retained in &snapshot.retained_messages {
-        if retained.sequence == 0 {
+    let mut retained_by_id = HashMap::new();
+    if snapshot.schema_version == 2 {
+        let mut retained_sequences = HashSet::new();
+        for retained in &snapshot.retained_messages {
+            if retained.sequence == 0 {
+                return Err(MessageError::invalid_args(
+                    "snapshot MMP retained message sequence must be non-zero",
+                ));
+            }
+            if !retained_sequences.insert(retained.sequence) {
+                return Err(MessageError::invalid_args(
+                    "snapshot MMP retained message sequences must be unique",
+                ));
+            }
+            max_sequence = max_sequence.max(retained.sequence);
+            queued_bytes = queued_bytes.saturating_add(retained.envelope.payload.len());
+            let envelope = envelope_from_snapshot(&retained.envelope, snapshot.schema_version)?;
+            if registered_by_id.get(envelope.sender.agent_id.as_str())
+                != Some(&&retained.envelope.sender)
+            {
+                return Err(MessageError::invalid_args(
+                    "snapshot MMP envelope sender must match a registered agent",
+                ));
+            }
+            let audience = audience_from_snapshot(retained.audience.as_ref())?;
+            validate_snapshot_audience_provenance(&audience, &envelope.sender)?;
+            if retained_by_id
+                .insert(
+                    envelope.id.clone(),
+                    (
+                        envelope,
+                        audience,
+                        retained.sequence,
+                        retained.accepted_at_ms,
+                    ),
+                )
+                .is_some()
+            {
+                return Err(MessageError::invalid_args(
+                    "snapshot MMP retained message ids must be unique",
+                ));
+            }
+        }
+        let mut accepted_by_id = HashMap::new();
+        for accepted in &snapshot.accepted_messages {
+            let envelope = envelope_from_snapshot(&accepted.envelope, snapshot.schema_version)?;
+            if registered_by_id.get(envelope.sender.agent_id.as_str())
+                != Some(&&accepted.envelope.sender)
+            {
+                return Err(MessageError::invalid_args(
+                    "snapshot MMP envelope sender must match a registered agent",
+                ));
+            }
+            let audience = audience_from_snapshot(accepted.audience.as_ref())?;
+            validate_snapshot_audience_provenance(&audience, &envelope.sender)?;
+            if accepted_by_id
+                .insert(envelope.id.clone(), (envelope.clone(), audience.clone()))
+                .is_some()
+            {
+                return Err(MessageError::invalid_args(
+                    "snapshot MMP accepted message ids must be unique",
+                ));
+            }
+            let Some((retained_envelope, retained_audience, retained_sequence, retained_at_ms)) =
+                retained_by_id.get(&envelope.id)
+            else {
+                return Err(MessageError::invalid_args(
+                    "snapshot MMP accepted message must correspond to a retained message",
+                ));
+            };
+            if retained_envelope != &envelope
+                || retained_audience != &audience
+                || accepted.delivery.sequence != *retained_sequence
+                || accepted.accepted_at_ms != *retained_at_ms
+            {
+                return Err(MessageError::invalid_args(
+                    "snapshot MMP retained and accepted message records disagree",
+                ));
+            }
+            parse_delivery_status(&accepted.delivery.status)?;
+            if accepted.delivery.message_id != envelope.id {
+                return Err(MessageError::invalid_args(
+                    "snapshot MMP accepted delivery id must match envelope id",
+                ));
+            }
+            max_sequence = max_sequence.max(accepted.delivery.sequence);
+        }
+        if accepted_by_id.len() != retained_by_id.len() {
             return Err(MessageError::invalid_args(
-                "snapshot MMP retained message sequence must be non-zero",
+                "snapshot MMP retained messages must each have an accepted record",
             ));
         }
-        max_sequence = max_sequence.max(retained.sequence);
-        queued_bytes = queued_bytes.saturating_add(retained.envelope.payload.len());
-        envelope_from_snapshot(&retained.envelope)?;
-    }
-    for accepted in &snapshot.accepted_messages {
-        let envelope = envelope_from_snapshot(&accepted.envelope)?;
-        parse_delivery_status(&accepted.delivery.status)?;
-        if accepted.delivery.message_id != envelope.id {
-            return Err(MessageError::invalid_args(
-                "snapshot MMP accepted delivery id must match envelope id",
-            ));
-        }
-        max_sequence = max_sequence.max(accepted.delivery.sequence);
     }
     if snapshot.next_sequence <= max_sequence {
         return Err(MessageError::invalid_args(
@@ -1246,6 +1543,10 @@ fn identity_snapshot(identity: &SenderIdentity) -> MessageIdentitySnapshot {
         role: identity.role.clone(),
         capabilities: identity.capabilities.clone(),
         objective: identity.objective.clone(),
+        project_scope: identity
+            .project_scope
+            .as_ref()
+            .map(|scope| scope.snapshot_value().to_string()),
     }
 }
 
@@ -1254,7 +1555,10 @@ fn identity_snapshot(identity: &SenderIdentity) -> MessageIdentitySnapshot {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn sender_identity_from_snapshot(snapshot: &MessageIdentitySnapshot) -> Result<SenderIdentity> {
+fn sender_identity_from_snapshot(
+    snapshot: &MessageIdentitySnapshot,
+    schema_version: u32,
+) -> Result<SenderIdentity> {
     if snapshot
         .capabilities
         .iter()
@@ -1270,6 +1574,18 @@ fn sender_identity_from_snapshot(snapshot: &MessageIdentitySnapshot) -> Result<S
     }
     Ok(SenderIdentity {
         agent_id: parse_opaque_id(&snapshot.agent_id, "MMP agent id")?,
+        project_scope: if schema_version == 1 {
+            None
+        } else {
+            match snapshot.project_scope.as_deref() {
+                None => None,
+                Some(value) => {
+                    Some(ProjectScopeId::from_snapshot_value(value).ok_or_else(|| {
+                        MessageError::invalid_args("snapshot MMP project scope is invalid")
+                    })?)
+                }
+            }
+        },
         pane_id: snapshot
             .pane_id
             .as_deref()
@@ -1321,6 +1637,7 @@ fn queued_envelope_snapshot(queued: &QueuedEnvelope) -> MessageQueuedEnvelopeSna
         sequence: queued.sequence,
         accepted_at_ms: queued.accepted_at_ms,
         envelope: envelope_snapshot(&queued.envelope),
+        audience: Some(audience_snapshot(&queued.audience)),
     }
 }
 
@@ -1340,7 +1657,55 @@ fn accepted_message_snapshot(accepted: &AcceptedMessage) -> MessageAcceptedSnaps
             queued_recipients: accepted.delivery.queued_recipients,
             status: delivery_status_name(accepted.delivery.status).to_string(),
         },
+        audience: Some(audience_snapshot(&accepted.audience)),
     }
+}
+
+/// Converts a resolved in-memory audience into private snapshot metadata.
+fn audience_snapshot(audience: &ResolvedMessageAudience) -> MessageAudienceSnapshot {
+    match audience {
+        ResolvedMessageAudience::Project(scope) => MessageAudienceSnapshot {
+            kind: "project".to_string(),
+            project_scope: Some(scope.snapshot_value().to_string()),
+        },
+        ResolvedMessageAudience::Session => MessageAudienceSnapshot {
+            kind: "session".to_string(),
+            project_scope: None,
+        },
+    }
+}
+
+/// Restores a required resolved audience from private schema-v2 metadata.
+fn audience_from_snapshot(
+    snapshot: Option<&MessageAudienceSnapshot>,
+) -> Result<ResolvedMessageAudience> {
+    let snapshot = snapshot
+        .ok_or_else(|| MessageError::invalid_args("snapshot MMP message audience is missing"))?;
+    match (snapshot.kind.as_str(), snapshot.project_scope.as_deref()) {
+        ("session", None) => Ok(ResolvedMessageAudience::Session),
+        ("project", Some(scope)) => ProjectScopeId::from_snapshot_value(scope)
+            .map(ResolvedMessageAudience::Project)
+            .ok_or_else(|| MessageError::invalid_args("snapshot MMP project scope is invalid")),
+        _ => Err(MessageError::invalid_args(
+            "snapshot MMP message audience is invalid",
+        )),
+    }
+}
+
+/// Validates that a restored project audience remains bound to its sender's
+/// trusted registration instead of retargeting delivery across projects.
+fn validate_snapshot_audience_provenance(
+    audience: &ResolvedMessageAudience,
+    sender: &SenderIdentity,
+) -> Result<()> {
+    if let ResolvedMessageAudience::Project(scope) = audience
+        && sender.project_scope.as_ref() != Some(scope)
+    {
+        return Err(MessageError::invalid_args(
+            "snapshot MMP project audience must match the sender project scope",
+        ));
+    }
+    Ok(())
 }
 
 /// Runs the envelope snapshot operation for this subsystem.
@@ -1376,7 +1741,10 @@ fn envelope_snapshot(envelope: &Envelope) -> MessageEnvelopeSnapshot {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn envelope_from_snapshot(snapshot: &MessageEnvelopeSnapshot) -> Result<Envelope> {
+fn envelope_from_snapshot(
+    snapshot: &MessageEnvelopeSnapshot,
+    schema_version: u32,
+) -> Result<Envelope> {
     validate_protocol(&snapshot.protocol)?;
     validate_message_type(&snapshot.message_type)?;
     if snapshot.id.is_empty()
@@ -1396,7 +1764,7 @@ fn envelope_from_snapshot(snapshot: &MessageEnvelopeSnapshot) -> Result<Envelope
         id: snapshot.id.clone(),
         message_type: snapshot.message_type.clone(),
         time: snapshot.time.clone(),
-        sender: sender_identity_from_snapshot(&snapshot.sender)?,
+        sender: sender_identity_from_snapshot(&snapshot.sender, schema_version)?,
         recipient: recipient_from_snapshot(&snapshot.recipient)?,
         correlation_id: snapshot.correlation_id.clone(),
         ttl_ms: snapshot.ttl_ms,
@@ -1591,7 +1959,8 @@ mod tests {
             identity.objective.as_deref(),
             Some("Review the discovery contract")
         );
-        let discovered = service.discover_agents_filtered(None, None, None, None, None, &[]);
+        let discovered =
+            service.discover_agents_filtered_session_wide(None, None, None, None, None, &[]);
         assert_eq!(discovered.len(), 1);
         assert_eq!(
             discovered[0].objective.as_deref(),
@@ -1628,7 +1997,7 @@ mod tests {
         assert!(service.presence().is_empty());
         assert!(
             service
-                .discover_agents_filtered(None, None, None, None, None, &[])
+                .discover_agents_filtered_session_wide(None, None, None, None, None, &[])
                 .is_empty()
         );
         assert!(!service.retire_agent_identity(&identity.agent_id));
@@ -1809,9 +2178,8 @@ mod tests {
         );
 
         let legacy_payload = format!(
-            r#"{{"protocol":"{}","schema_version":{},"next_sequence":1,"retention_messages":1000,"retention_bytes":1048576,"registered_agents":[{{"agent_id":"{}","pane_id":null,"window_id":null,"role":"agent","capabilities":[]}}],"presence":[],"subscriptions":[],"retained_messages":[],"accepted_messages":[]}}"#,
+            r#"{{"protocol":"{}","schema_version":1,"next_sequence":1,"retention_messages":1000,"retention_bytes":1048576,"registered_agents":[{{"agent_id":"{}","pane_id":null,"window_id":null,"role":"agent","capabilities":[]}}],"presence":[],"subscriptions":[],"retained_messages":[],"accepted_messages":[]}}"#,
             MMP_PROTOCOL,
-            snapshot.schema_version,
             identity.agent_id.as_str()
         );
         let legacy = serde_json::from_str::<MessageServiceSnapshot>(&legacy_payload).unwrap();
@@ -1822,5 +2190,750 @@ mod tests {
                 .registered_identity(&identity.agent_id)
                 .is_some_and(|identity| identity.objective.is_none())
         );
+    }
+
+    /// Project membership derives deterministically from canonical bytes and is
+    /// immutable once two trusted registrations disagree on the same agent.
+    #[test]
+    fn project_scope_is_stable_distinct_and_immutable_per_agent() {
+        let first = ProjectScopeId::from_canonical_root_bytes(b"/workspace/alpha");
+        assert_eq!(
+            first,
+            ProjectScopeId::from_canonical_root_bytes(b"/workspace/alpha")
+        );
+        assert_ne!(
+            first,
+            ProjectScopeId::from_canonical_root_bytes(b"/workspace/beta")
+        );
+
+        let mut service = MessageService::default();
+        let identity = SenderIdentity {
+            agent_id: AgentId::opaque("agent-%1").unwrap(),
+            project_scope: Some(first),
+            pane_id: None,
+            window_id: None,
+            role: Some("agent".to_string()),
+            capabilities: Vec::new(),
+            objective: None,
+        };
+        service.ensure_agent_identity(identity.clone(), 0).unwrap();
+        let mut mismatched = identity;
+        mismatched.project_scope = Some(ProjectScopeId::from_canonical_root_bytes(
+            b"/workspace/beta",
+        ));
+        assert_eq!(
+            service
+                .ensure_agent_identity(mismatched, 1)
+                .unwrap_err()
+                .message(),
+            "MMP sender project scope cannot change after registration"
+        );
+
+        let unscoped = SenderIdentity {
+            agent_id: AgentId::opaque("agent-%2").unwrap(),
+            project_scope: None,
+            pane_id: None,
+            window_id: None,
+            role: Some("agent".to_string()),
+            capabilities: Vec::new(),
+            objective: None,
+        };
+        service.ensure_agent_identity(unscoped.clone(), 0).unwrap();
+        let mut upgraded = unscoped;
+        let trusted_scope = ProjectScopeId::from_canonical_root_bytes(b"/workspace/trusted");
+        upgraded.project_scope = Some(trusted_scope.clone());
+        assert_eq!(
+            service
+                .ensure_agent_identity(upgraded, 1)
+                .unwrap()
+                .project_scope,
+            Some(trusted_scope)
+        );
+    }
+
+    /// A sparse placeholder identity accepts trusted runtime metadata once,
+    /// mirrors that complete identity into presence, and preserves its
+    /// objective and publication timestamp.
+    #[test]
+    fn ensure_agent_identity_fills_sparse_identity_and_presence_atomically() {
+        let mut service = MessageService::default();
+        let agent_id = AgentId::opaque("agent-%1").unwrap();
+        service
+            .ensure_agent_identity(
+                SenderIdentity {
+                    agent_id: agent_id.clone(),
+                    project_scope: None,
+                    pane_id: None,
+                    window_id: None,
+                    role: None,
+                    capabilities: Vec::new(),
+                    objective: Some("Keep objective".to_string()),
+                },
+                42,
+            )
+            .unwrap();
+        let complete = SenderIdentity {
+            agent_id: agent_id.clone(),
+            project_scope: Some(ProjectScopeId::from_canonical_root_bytes(
+                b"/workspace/alpha",
+            )),
+            pane_id: Some(PaneId::parse('%', "%1").unwrap()),
+            window_id: Some(WindowId::parse('@', "@1").unwrap()),
+            role: Some("agent".to_string()),
+            capabilities: vec!["agent-harness".to_string()],
+            objective: None,
+        };
+
+        let reconciled = service.ensure_agent_identity(complete, 99).unwrap();
+
+        assert_eq!(reconciled.pane_id.as_ref().map(PaneId::as_str), Some("%1"));
+        assert_eq!(
+            reconciled.window_id.as_ref().map(WindowId::as_str),
+            Some("@1")
+        );
+        assert_eq!(reconciled.role.as_deref(), Some("agent"));
+        assert_eq!(reconciled.capabilities, vec!["agent-harness"]);
+        assert_eq!(reconciled.objective.as_deref(), Some("Keep objective"));
+        assert_eq!(service.presence()[0].identity, reconciled);
+        assert_eq!(service.presence()[0].updated_at_ms, 42);
+    }
+
+    /// Every populated immutable identity field conflicts rather than replacing
+    /// registered metadata, and a mixed fill plus scope conflict leaves both
+    /// identity and presence exactly unchanged.
+    #[test]
+    fn ensure_agent_identity_rejects_conflicts_without_partial_mutation() {
+        let mut service = MessageService::default();
+        let agent_id = AgentId::opaque("agent-%2").unwrap();
+        let original = SenderIdentity {
+            agent_id: agent_id.clone(),
+            project_scope: Some(ProjectScopeId::from_canonical_root_bytes(
+                b"/workspace/alpha",
+            )),
+            pane_id: Some(PaneId::parse('%', "%2").unwrap()),
+            window_id: Some(WindowId::parse('@', "@2").unwrap()),
+            role: Some("agent".to_string()),
+            capabilities: vec!["agent-harness".to_string()],
+            objective: Some("Preserve objective".to_string()),
+        };
+        service.ensure_agent_identity(original.clone(), 42).unwrap();
+
+        for conflicting in [
+            SenderIdentity {
+                pane_id: Some(PaneId::parse('%', "%3").unwrap()),
+                ..original.clone()
+            },
+            SenderIdentity {
+                window_id: Some(WindowId::parse('@', "@3").unwrap()),
+                ..original.clone()
+            },
+            SenderIdentity {
+                role: Some("worker".to_string()),
+                ..original.clone()
+            },
+            SenderIdentity {
+                capabilities: vec!["worker".to_string()],
+                ..original.clone()
+            },
+        ] {
+            assert!(service.ensure_agent_identity(conflicting, 99).is_err());
+            assert_eq!(service.registered_identity(&agent_id), Some(&original));
+            assert_eq!(service.presence()[0].identity, original);
+            assert_eq!(service.presence()[0].updated_at_ms, 42);
+        }
+
+        let sparse_id = AgentId::opaque("agent-%3").unwrap();
+        let sparse = SenderIdentity {
+            agent_id: sparse_id.clone(),
+            project_scope: Some(ProjectScopeId::from_canonical_root_bytes(
+                b"/workspace/alpha",
+            )),
+            pane_id: None,
+            window_id: None,
+            role: None,
+            capabilities: Vec::new(),
+            objective: None,
+        };
+        service.ensure_agent_identity(sparse.clone(), 7).unwrap();
+        let mixed_conflict = SenderIdentity {
+            agent_id: sparse_id.clone(),
+            project_scope: Some(ProjectScopeId::from_canonical_root_bytes(
+                b"/workspace/beta",
+            )),
+            pane_id: Some(PaneId::parse('%', "%3").unwrap()),
+            window_id: Some(WindowId::parse('@', "@3").unwrap()),
+            role: Some("agent".to_string()),
+            capabilities: vec!["agent-harness".to_string()],
+            objective: None,
+        };
+        assert!(service.ensure_agent_identity(mixed_conflict, 99).is_err());
+        assert_eq!(service.registered_identity(&sparse_id), Some(&sparse));
+        assert_eq!(
+            service
+                .presence()
+                .into_iter()
+                .find(|presence| presence.identity.agent_id == sparse_id)
+                .map(|presence| presence.identity),
+            Some(sparse)
+        );
+    }
+
+    /// Project-default delivery excludes cross-project direct recipients while
+    /// an explicit session audience deliberately widens the same selector.
+    #[test]
+    fn project_audience_isolates_direct_recipients_and_session_scope_widens() {
+        let mut service = MessageService::default();
+        let alpha = ProjectScopeId::from_canonical_root_bytes(b"/workspace/alpha");
+        let beta = ProjectScopeId::from_canonical_root_bytes(b"/workspace/beta");
+        let sender = SenderIdentity {
+            agent_id: AgentId::opaque("agent-alpha").unwrap(),
+            project_scope: Some(alpha),
+            pane_id: None,
+            window_id: None,
+            role: Some("agent".to_string()),
+            capabilities: Vec::new(),
+            objective: None,
+        };
+        let target = SenderIdentity {
+            agent_id: AgentId::opaque("agent-beta").unwrap(),
+            project_scope: Some(beta),
+            pane_id: None,
+            window_id: None,
+            role: Some("agent".to_string()),
+            capabilities: Vec::new(),
+            objective: None,
+        };
+        service.ensure_agent_identity(sender.clone(), 0).unwrap();
+        service.ensure_agent_identity(target.clone(), 0).unwrap();
+        service
+            .subscribe_from_retained_start(&target.agent_id)
+            .unwrap();
+        let envelope = |id: &str| Envelope {
+            protocol: MMP_PROTOCOL,
+            id: id.to_string(),
+            message_type: "send".to_string(),
+            time: "runtime:0".to_string(),
+            sender: sender.clone(),
+            recipient: Recipient::Agent(target.agent_id.clone()),
+            correlation_id: None,
+            ttl_ms: None,
+            content_type: "text/plain; charset=utf-8".to_string(),
+            payload: "scope test".to_string(),
+            extension_fields: Vec::new(),
+        };
+
+        assert_eq!(
+            service
+                .accept_at(&sender.agent_id, envelope("project"), 0)
+                .unwrap_err()
+                .message(),
+            MMP_UNDELIVERABLE_MESSAGE
+        );
+        assert!(service.receive_for(&target.agent_id, 0).is_empty());
+        service
+            .accept_at_with_scope(
+                &sender.agent_id,
+                envelope("session"),
+                MessageScope::Session,
+                0,
+            )
+            .unwrap();
+        assert_eq!(service.receive_for(&target.agent_id, 0).len(), 1);
+        assert_eq!(
+            service
+                .receive_subscribed(&target.agent_id, 0, 10)
+                .unwrap()
+                .messages
+                .len(),
+            1
+        );
+        assert_eq!(service.fanout_ready(0, 10).len(), 1);
+    }
+
+    /// Schema-v2 snapshots preserve private trusted memberships and resolved
+    /// delivery audiences without widening restored project traffic.
+    #[test]
+    fn snapshot_v2_preserves_project_membership_and_resolved_audiences() {
+        let mut service = MessageService::default();
+        let alpha = ProjectScopeId::from_canonical_root_bytes(b"/workspace/alpha");
+        let sender = SenderIdentity {
+            agent_id: AgentId::opaque("agent-snapshot-alpha").unwrap(),
+            project_scope: Some(alpha.clone()),
+            pane_id: None,
+            window_id: None,
+            role: Some("agent".to_string()),
+            capabilities: Vec::new(),
+            objective: None,
+        };
+        let target = SenderIdentity {
+            agent_id: AgentId::opaque("agent-snapshot-target").unwrap(),
+            project_scope: Some(alpha),
+            pane_id: None,
+            window_id: None,
+            role: Some("agent".to_string()),
+            capabilities: Vec::new(),
+            objective: None,
+        };
+        service.ensure_agent_identity(sender.clone(), 0).unwrap();
+        service.ensure_agent_identity(target.clone(), 0).unwrap();
+        service
+            .subscribe_from_retained_start(&target.agent_id)
+            .unwrap();
+        let envelope = |id: &str| Envelope {
+            protocol: MMP_PROTOCOL,
+            id: id.to_string(),
+            message_type: "send".to_string(),
+            time: "runtime:0".to_string(),
+            sender: sender.clone(),
+            recipient: Recipient::Agent(target.agent_id.clone()),
+            correlation_id: None,
+            ttl_ms: None,
+            content_type: "text/plain; charset=utf-8".to_string(),
+            payload: "snapshot audience".to_string(),
+            extension_fields: Vec::new(),
+        };
+        service
+            .accept_at(&sender.agent_id, envelope("project"), 0)
+            .unwrap();
+        service
+            .accept_at_with_scope(
+                &sender.agent_id,
+                envelope("session"),
+                MessageScope::Session,
+                0,
+            )
+            .unwrap();
+
+        let snapshot = service.snapshot_state();
+        assert_eq!(snapshot.schema_version, 2);
+        assert!(
+            snapshot
+                .registered_agents
+                .iter()
+                .all(|identity| identity.project_scope.is_some())
+        );
+        assert!(
+            snapshot
+                .retained_messages
+                .iter()
+                .all(|message| message.audience.is_some())
+        );
+        assert!(
+            snapshot
+                .accepted_messages
+                .iter()
+                .all(|message| message.audience.is_some())
+        );
+
+        let restored = MessageService::from_snapshot_state(&snapshot).unwrap();
+        assert_eq!(restored.snapshot_state(), snapshot);
+        assert_eq!(restored.receive_for(&target.agent_id, 0).len(), 2);
+    }
+
+    /// Schema-v2 snapshots reject missing or inconsistent resolved-audience
+    /// metadata instead of widening restored traffic.
+    #[test]
+    fn snapshot_v2_rejects_missing_and_inconsistent_audience_metadata() {
+        let mut service = MessageService::default();
+        let project = ProjectScopeId::from_canonical_root_bytes(b"/workspace/snapshot-invalid");
+        let sender = SenderIdentity {
+            agent_id: AgentId::opaque("agent-snapshot-invalid-sender").unwrap(),
+            project_scope: Some(project.clone()),
+            pane_id: None,
+            window_id: None,
+            role: Some("agent".to_string()),
+            capabilities: Vec::new(),
+            objective: None,
+        };
+        let target = SenderIdentity {
+            agent_id: AgentId::opaque("agent-snapshot-invalid-target").unwrap(),
+            project_scope: Some(project),
+            pane_id: None,
+            window_id: None,
+            role: Some("agent".to_string()),
+            capabilities: Vec::new(),
+            objective: None,
+        };
+        service.ensure_agent_identity(sender.clone(), 0).unwrap();
+        service.ensure_agent_identity(target.clone(), 0).unwrap();
+        service
+            .subscribe_from_retained_start(&target.agent_id)
+            .unwrap();
+        service
+            .accept_at(
+                &sender.agent_id,
+                Envelope {
+                    protocol: MMP_PROTOCOL,
+                    id: "snapshot-invalid-audience".to_string(),
+                    message_type: "send".to_string(),
+                    time: "runtime:0".to_string(),
+                    sender: sender.clone(),
+                    recipient: Recipient::Agent(target.agent_id),
+                    correlation_id: None,
+                    ttl_ms: None,
+                    content_type: "text/plain; charset=utf-8".to_string(),
+                    payload: "snapshot validation".to_string(),
+                    extension_fields: Vec::new(),
+                },
+                0,
+            )
+            .unwrap();
+
+        let snapshot = service.snapshot_state();
+        let mut missing = snapshot.clone();
+        missing.retained_messages[0].audience = None;
+        assert!(MessageService::from_snapshot_state(&missing).is_err());
+
+        let mut inconsistent = snapshot;
+        inconsistent.accepted_messages[0].audience = Some(MessageAudienceSnapshot {
+            kind: "session".to_string(),
+            project_scope: None,
+        });
+        assert!(MessageService::from_snapshot_state(&inconsistent).is_err());
+
+        let mut duplicate = service.snapshot_state();
+        let mut duplicate_record = duplicate.accepted_messages[0].clone();
+        duplicate_record.audience = Some(MessageAudienceSnapshot {
+            kind: "session".to_string(),
+            project_scope: None,
+        });
+        duplicate.accepted_messages.push(duplicate_record);
+        assert!(MessageService::from_snapshot_state(&duplicate).is_err());
+
+        let mut malformed_scope = service.snapshot_state();
+        malformed_scope.registered_agents[0].project_scope = Some("not-a-scope-id".to_string());
+        assert!(MessageService::from_snapshot_state(&malformed_scope).is_err());
+
+        let valid = service.snapshot_state();
+        let mut retargeted = valid.clone();
+        let replacement_scope = ProjectScopeId::from_canonical_root_bytes(b"/workspace/other")
+            .snapshot_value()
+            .to_string();
+        retargeted.retained_messages[0]
+            .audience
+            .as_mut()
+            .unwrap()
+            .project_scope = Some(replacement_scope.clone());
+        retargeted.accepted_messages[0]
+            .audience
+            .as_mut()
+            .unwrap()
+            .project_scope = Some(replacement_scope);
+        assert!(MessageService::from_snapshot_state(&retargeted).is_err());
+
+        let mut unscoped_sender = valid.clone();
+        for identity in &mut unscoped_sender.registered_agents {
+            identity.project_scope = None;
+        }
+        for presence in &mut unscoped_sender.presence {
+            presence.identity.project_scope = None;
+        }
+        unscoped_sender.retained_messages[0]
+            .envelope
+            .sender
+            .project_scope = None;
+        unscoped_sender.accepted_messages[0]
+            .envelope
+            .sender
+            .project_scope = None;
+        assert!(MessageService::from_snapshot_state(&unscoped_sender).is_err());
+
+        let mut duplicate_presence = valid.clone();
+        duplicate_presence
+            .presence
+            .push(duplicate_presence.presence[0].clone());
+        assert!(MessageService::from_snapshot_state(&duplicate_presence).is_err());
+
+        let mut missing_presence = valid.clone();
+        missing_presence.presence.pop();
+        assert!(MessageService::from_snapshot_state(&missing_presence).is_err());
+
+        let mut duplicate_subscription = valid.clone();
+        duplicate_subscription
+            .subscriptions
+            .push(duplicate_subscription.subscriptions[0].clone());
+        assert!(MessageService::from_snapshot_state(&duplicate_subscription).is_err());
+
+        let mut unknown_subscription = valid.clone();
+        unknown_subscription.subscriptions[0].recipient = "agent-unknown".to_string();
+        assert!(MessageService::from_snapshot_state(&unknown_subscription).is_err());
+
+        let mut advanced_cursor = valid.clone();
+        advanced_cursor.subscriptions[0].last_sequence = advanced_cursor.next_sequence;
+        assert!(MessageService::from_snapshot_state(&advanced_cursor).is_err());
+
+        let mut duplicate_sequence = valid.clone();
+        let mut duplicate_retained = duplicate_sequence.retained_messages[0].clone();
+        duplicate_retained.envelope.id = "snapshot-invalid-duplicate-sequence".to_string();
+        duplicate_sequence
+            .retained_messages
+            .push(duplicate_retained);
+        assert!(MessageService::from_snapshot_state(&duplicate_sequence).is_err());
+
+        let mut orphan_accepted = valid.clone();
+        orphan_accepted.retained_messages.clear();
+        assert!(MessageService::from_snapshot_state(&orphan_accepted).is_err());
+
+        let mut retained_without_accepted = valid.clone();
+        retained_without_accepted.accepted_messages.clear();
+        assert!(MessageService::from_snapshot_state(&retained_without_accepted).is_err());
+
+        let mut mismatched_sequence = valid.clone();
+        mismatched_sequence.accepted_messages[0].delivery.sequence = 9;
+        assert!(MessageService::from_snapshot_state(&mismatched_sequence).is_err());
+
+        let mut mismatched_acceptance_time = valid;
+        mismatched_acceptance_time.accepted_messages[0].accepted_at_ms = 9;
+        assert!(MessageService::from_snapshot_state(&mismatched_acceptance_time).is_err());
+    }
+
+    /// Schema-v1 records lacked resolved audiences, so retained traffic is
+    /// discarded rather than being reinterpreted as session or project traffic.
+    #[test]
+    fn snapshot_v1_discards_audience_less_retained_and_accepted_messages() {
+        let mut service = MessageService::default();
+        let project = ProjectScopeId::from_canonical_root_bytes(b"/workspace/legacy");
+        let sender = SenderIdentity {
+            agent_id: AgentId::opaque("agent-legacy-sender").unwrap(),
+            project_scope: Some(project.clone()),
+            pane_id: None,
+            window_id: None,
+            role: Some("agent".to_string()),
+            capabilities: Vec::new(),
+            objective: None,
+        };
+        let target = SenderIdentity {
+            agent_id: AgentId::opaque("agent-legacy-target").unwrap(),
+            project_scope: Some(project),
+            pane_id: None,
+            window_id: None,
+            role: Some("agent".to_string()),
+            capabilities: Vec::new(),
+            objective: None,
+        };
+        service.ensure_agent_identity(sender.clone(), 0).unwrap();
+        service.ensure_agent_identity(target.clone(), 0).unwrap();
+        service
+            .subscribe_from_retained_start(&target.agent_id)
+            .unwrap();
+        service
+            .accept_at(
+                &sender.agent_id,
+                Envelope {
+                    protocol: MMP_PROTOCOL,
+                    id: "legacy-message".to_string(),
+                    message_type: "send".to_string(),
+                    time: "runtime:0".to_string(),
+                    sender: sender.clone(),
+                    recipient: Recipient::Agent(target.agent_id.clone()),
+                    correlation_id: None,
+                    ttl_ms: None,
+                    content_type: "text/plain; charset=utf-8".to_string(),
+                    payload: "must not replay".to_string(),
+                    extension_fields: Vec::new(),
+                },
+                0,
+            )
+            .unwrap();
+
+        let mut legacy = service.snapshot_state();
+        legacy.schema_version = 1;
+        for identity in &mut legacy.registered_agents {
+            identity.project_scope = None;
+        }
+        for presence in &mut legacy.presence {
+            presence.identity.project_scope = None;
+        }
+        for message in &mut legacy.retained_messages {
+            message.audience = None;
+            message.envelope.sender.project_scope = None;
+        }
+        for message in &mut legacy.accepted_messages {
+            message.audience = None;
+            message.envelope.sender.project_scope = None;
+        }
+        legacy.retained_messages[0].envelope.message_type = "invalid legacy type".to_string();
+        legacy.accepted_messages[0].delivery.status = "invalid legacy status".to_string();
+
+        let restored = MessageService::from_snapshot_state(&legacy).unwrap();
+        assert!(restored.receive_for(&target.agent_id, 0).is_empty());
+        assert!(restored.snapshot_state().retained_messages.is_empty());
+        assert!(restored.snapshot_state().accepted_messages.is_empty());
+        assert!(
+            restored
+                .registered_identity(&target.agent_id)
+                .is_some_and(|identity| identity.project_scope.is_none())
+        );
+    }
+
+    /// Scope-less acceptance is always project-scoped: matching membership
+    /// succeeds while an unscoped sender fails closed instead of widening.
+    #[test]
+    fn default_acceptance_requires_sender_project_membership() {
+        let mut service = MessageService::default();
+        let project = ProjectScopeId::from_canonical_root_bytes(b"/workspace/alpha");
+        let sender = SenderIdentity {
+            agent_id: AgentId::opaque("agent-alpha-sender").unwrap(),
+            project_scope: Some(project.clone()),
+            pane_id: None,
+            window_id: None,
+            role: Some("agent".to_string()),
+            capabilities: Vec::new(),
+            objective: None,
+        };
+        let target = SenderIdentity {
+            agent_id: AgentId::opaque("agent-alpha-target").unwrap(),
+            project_scope: Some(project),
+            pane_id: None,
+            window_id: None,
+            role: Some("agent".to_string()),
+            capabilities: Vec::new(),
+            objective: None,
+        };
+        service.ensure_agent_identity(sender.clone(), 0).unwrap();
+        service.ensure_agent_identity(target.clone(), 0).unwrap();
+        let envelope = |id: &str, sender: SenderIdentity| Envelope {
+            protocol: MMP_PROTOCOL,
+            id: id.to_string(),
+            message_type: "send".to_string(),
+            time: "runtime:0".to_string(),
+            sender,
+            recipient: Recipient::Agent(target.agent_id.clone()),
+            correlation_id: None,
+            ttl_ms: None,
+            content_type: "text/plain; charset=utf-8".to_string(),
+            payload: "scope test".to_string(),
+            extension_fields: Vec::new(),
+        };
+        assert!(
+            service
+                .accept_at(
+                    &sender.agent_id,
+                    envelope("same-project", sender.clone()),
+                    0
+                )
+                .is_ok()
+        );
+
+        let unscoped = service.register_agent(None, None, "agent", Vec::new());
+        assert_eq!(
+            service
+                .accept(
+                    &unscoped.agent_id,
+                    envelope("unscoped-accept", unscoped.clone())
+                )
+                .unwrap_err()
+                .message(),
+            MMP_UNDELIVERABLE_MESSAGE
+        );
+        assert_eq!(
+            service
+                .accept_at(
+                    &unscoped.agent_id,
+                    envelope("unscoped-accept-at", unscoped.clone()),
+                    0,
+                )
+                .unwrap_err()
+                .message(),
+            MMP_UNDELIVERABLE_MESSAGE
+        );
+        assert_eq!(service.receive_for(&target.agent_id, 0).len(), 1);
+    }
+
+    /// Project discovery exposes only the requester and trusted same-project
+    /// peers, while an explicit session scope widens that visibility.
+    #[test]
+    fn requester_scoped_discovery_isolates_projects_and_unscoped_peers() {
+        let mut service = MessageService::default();
+        let alpha = ProjectScopeId::from_canonical_root_bytes(b"/workspace/alpha");
+        let beta = ProjectScopeId::from_canonical_root_bytes(b"/workspace/beta");
+        let identity = |agent_id: &str, project_scope: Option<ProjectScopeId>| SenderIdentity {
+            agent_id: AgentId::opaque(agent_id).unwrap(),
+            project_scope,
+            pane_id: None,
+            window_id: None,
+            role: Some("agent".to_string()),
+            capabilities: Vec::new(),
+            objective: None,
+        };
+        let requester = identity("agent-alpha", Some(alpha.clone()));
+        let same_project = identity("agent-alpha-peer", Some(alpha));
+        let other_project = identity("agent-beta", Some(beta));
+        let unscoped = identity("agent-unscoped", None);
+        for candidate in [
+            requester.clone(),
+            same_project.clone(),
+            other_project.clone(),
+            unscoped.clone(),
+        ] {
+            service.ensure_agent_identity(candidate, 0).unwrap();
+        }
+
+        let project = service.discover_agents_filtered_for_requester(
+            &requester.agent_id,
+            MessageScope::Project,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[],
+        );
+        assert_eq!(
+            project
+                .iter()
+                .map(|identity| identity.agent_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["agent-alpha", "agent-alpha-peer"]
+        );
+        let session = service.discover_agents_filtered_for_requester(
+            &requester.agent_id,
+            MessageScope::Session,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[],
+        );
+        assert_eq!(session.len(), 4);
+        let unscoped_project = service.discover_agents_filtered_for_requester(
+            &unscoped.agent_id,
+            MessageScope::Project,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[],
+        );
+        assert_eq!(unscoped_project, vec![unscoped]);
+    }
+
+    /// Trusted lifecycle rebinding changes only project membership, retaining
+    /// the registered objective, presence status, and delivery subscription.
+    #[test]
+    fn lifecycle_project_scope_rebind_preserves_identity_delivery_state() {
+        let mut service = MessageService::default();
+        let identity = service
+            .register_agent_with_objective(None, None, "agent", Vec::new(), Some("Keep state"))
+            .unwrap();
+        service
+            .subscribe_from_retained_start(&identity.agent_id)
+            .unwrap();
+        service
+            .update_presence(&identity.agent_id, AgentPresenceStatus::Busy, 42)
+            .unwrap();
+        let scope = ProjectScopeId::from_canonical_root_bytes(b"/workspace/rebound");
+
+        let rebound = service
+            .rebind_agent_project_scope(&identity.agent_id, Some(scope.clone()))
+            .unwrap();
+
+        assert_eq!(rebound.project_scope, Some(scope));
+        assert_eq!(rebound.objective.as_deref(), Some("Keep state"));
+        assert!(service.subscription(&identity.agent_id).is_some());
+        assert_eq!(service.presence()[0].status, AgentPresenceStatus::Busy);
+        assert_eq!(service.presence()[0].updated_at_ms, 42);
     }
 }

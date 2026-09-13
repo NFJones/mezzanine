@@ -1102,9 +1102,46 @@ fn sandbox_cache_status_and_clear_require_confirmation() {
     fs::create_dir_all(project.join(".git")).unwrap();
     let canonical_project = project.canonicalize().unwrap();
     let config_root = home.join(".config/mezzanine");
-    let managed =
-        crate::security::sandbox::prepare_bubblewrap_managed_home(&config_root, &canonical_project)
-            .unwrap();
+    let environment = mez_agent::EnvironmentSignature::new(
+        "linux",
+        "x86_64",
+        None,
+        "test-host",
+        "alice",
+        Some("/home/alice".to_string()),
+        "/bin/sh",
+        mez_agent::ShellClassification::PosixSh,
+        None,
+        None,
+        "/workspace",
+        None,
+        false,
+        None,
+        Vec::new(),
+    )
+    .unwrap()
+    .with_process_identity(
+        1000,
+        1000,
+        vec![mez_agent::EnvironmentGroup {
+            id: 1000,
+            name: "alice".to_string(),
+        }],
+    )
+    .unwrap();
+    let identity = crate::security::sandbox::resolve_sandbox_identity(
+        &crate::runtime::ConfiguredSandboxGroups::default(),
+        &environment,
+    )
+    .unwrap();
+    let (managed, activity) =
+        crate::security::sandbox::prepare_bubblewrap_managed_home_for_workload_with_identity(
+            &config_root,
+            &canonical_project,
+            &identity,
+        )
+        .unwrap();
+    drop(activity);
     fs::write(managed.host_path.join(".cache/cli-payload"), b"payload").unwrap();
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
@@ -1189,15 +1226,53 @@ fn sandbox_cache_prune_skips_active_managed_homes() {
     fs::create_dir_all(inactive_project.join(".git")).unwrap();
     let active_project = active_project.canonicalize().unwrap();
     let inactive_project = inactive_project.canonicalize().unwrap();
+    let environment = mez_agent::EnvironmentSignature::new(
+        "linux",
+        "x86_64",
+        None,
+        "test-host",
+        "alice",
+        Some("/home/alice".to_string()),
+        "/bin/sh",
+        mez_agent::ShellClassification::PosixSh,
+        None,
+        None,
+        "/workspace",
+        None,
+        false,
+        None,
+        Vec::new(),
+    )
+    .unwrap()
+    .with_process_identity(
+        1000,
+        1000,
+        vec![mez_agent::EnvironmentGroup {
+            id: 1000,
+            name: "alice".to_string(),
+        }],
+    )
+    .unwrap();
+    let identity = crate::security::sandbox::resolve_sandbox_identity(
+        &crate::runtime::ConfiguredSandboxGroups::default(),
+        &environment,
+    )
+    .unwrap();
     let (active_home, activity) =
-        crate::security::sandbox::prepare_bubblewrap_managed_home_for_workload(
+        crate::security::sandbox::prepare_bubblewrap_managed_home_for_workload_with_identity(
             &config_root,
             &active_project,
+            &identity,
         )
         .unwrap();
-    let inactive_home =
-        crate::security::sandbox::prepare_bubblewrap_managed_home(&config_root, &inactive_project)
-            .unwrap();
+    let (inactive_home, inactive_activity) =
+        crate::security::sandbox::prepare_bubblewrap_managed_home_for_workload_with_identity(
+            &config_root,
+            &inactive_project,
+            &identity,
+        )
+        .unwrap();
+    drop(inactive_activity);
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 

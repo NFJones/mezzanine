@@ -16,7 +16,9 @@ fn undeliverable_messages_are_rejected() {
     let _registered_id = ids.agent();
     message.recipient = Recipient::Agent(ids.agent());
 
-    let error = service.accept(&sender.agent_id, message).unwrap_err();
+    let error = service
+        .accept_at_with_scope(&sender.agent_id, message, MessageScope::Session, 0)
+        .unwrap_err();
 
     assert_eq!(error.kind(), MessageErrorKind::NotFound);
     assert_eq!(mmp_error_code(&error), "undeliverable");
@@ -39,7 +41,7 @@ fn offline_recipients_are_rejected_and_not_delivered() {
     rejected.recipient = Recipient::Agent(target.agent_id.clone());
 
     let error = service
-        .accept_at(&sender.agent_id, rejected, 11)
+        .accept_at_with_scope(&sender.agent_id, rejected, MessageScope::Session, 11)
         .unwrap_err();
 
     assert_eq!(mmp_error_code(&error), "undeliverable");
@@ -50,7 +52,9 @@ fn offline_recipients_are_rejected_and_not_delivered() {
     let mut accepted = envelope(sender.clone());
     accepted.id = "accepted-before-offline".to_string();
     accepted.recipient = Recipient::Agent(target.agent_id.clone());
-    service.accept_at(&sender.agent_id, accepted, 13).unwrap();
+    service
+        .accept_at_with_scope(&sender.agent_id, accepted, MessageScope::Session, 13)
+        .unwrap();
     service
         .update_presence(&target.agent_id, AgentPresenceStatus::Offline, 14)
         .unwrap();
@@ -78,7 +82,7 @@ fn responses_can_be_filtered_by_correlation_id() {
     response.correlation_id = Some("request-1".to_string());
 
     service
-        .accept_at(&responder.agent_id, response, 10)
+        .accept_at_with_scope(&responder.agent_id, response, MessageScope::Session, 10)
         .unwrap();
 
     let responses = service.responses_for(&requester.agent_id, "request-1", 11);

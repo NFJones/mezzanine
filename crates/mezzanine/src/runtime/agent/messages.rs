@@ -11,7 +11,8 @@ use super::{
     RuntimeSessionService, RuntimeSideEffect, ScheduledWork, SenderIdentity, current_unix_seconds,
     json_escape, runtime_agent_turn_state_from_action_results,
     runtime_execution_ready_for_provider_continuation, runtime_maap_message_content_type,
-    runtime_message_recipient, runtime_mezzanine_error_code, validate_mmp_payload_metadata,
+    runtime_message_recipient, runtime_message_scope, runtime_mezzanine_error_code,
+    validate_mmp_payload_metadata,
 };
 use crate::runtime::{RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition};
 
@@ -169,8 +170,13 @@ impl RuntimeSessionService {
         envelope: &Envelope,
     ) {
         // Bridge provenance comes from runtime-authored envelope metadata, so a
-        // model `send_message` always passes `false` and keeps logging unchanged.
-        let runtime_bridge = crate::runtime::control::runtime_bridge_peer_message(envelope);
+        // model `send_message` always passes `false`. Persistent children use
+        // the same bridge envelope for durable assignment and reply traffic,
+        // which has no one-task lifecycle row to replace the committed echo.
+        let runtime_bridge = crate::runtime::control::runtime_bridge_peer_message(envelope)
+            && self
+                .persistent_subagent(envelope.sender.agent_id.as_str())
+                .is_none();
         let _ = self.append_agent_received_peer_message_to_terminal_buffer(
             pane_id,
             envelope.sender.agent_id.as_str(),
@@ -463,6 +469,7 @@ impl RuntimeSessionService {
     ) -> Result<ActionResult> {
         let AgentActionPayload::SendMessage {
             recipient,
+            scope,
             content_type,
             payload,
             correlation_id,
@@ -471,6 +478,36 @@ impl RuntimeSessionService {
             return Err(MezError::invalid_args(
                 "message execution requires a send_message action",
             ));
+        };
+        let scope = match runtime_message_scope(scope.as_deref()) {
+            Ok(scope) => scope,
+            Err(error) => {
+                let mut result = ActionResult::failed(
+                    turn,
+                    action,
+                    ActionStatus::Failed,
+                    "invalid_message_scope",
+                    error.message().to_string(),
+                )?;
+                result.structured_content_json = Some(
+                    serde_json::json!({
+                        "recipient": recipient,
+                        "scope": scope,
+                        "message_id": null,
+                        "delivery_status": "rejected",
+                        "protocol_error": {
+                            "code": "invalid_message_scope",
+                            "message": error.message(),
+                        }
+                    })
+                    .to_string(),
+                );
+                return Ok(result);
+            }
+        };
+        let scope = match scope {
+            mez_agent::messaging::MessageScope::Project => "project",
+            mez_agent::messaging::MessageScope::Session => "session",
         };
         let content_type = runtime_maap_message_content_type(content_type);
         if let Err(error) = validate_mmp_payload_metadata("send", &content_type, payload, None) {
@@ -483,17 +520,24 @@ impl RuntimeSessionService {
                 error.message().to_string(),
             )?;
             result.structured_content_json = Some(format!(
-                r#"{{"recipient":"{}","content_type":"{}","message_id":null,"delivery_status":"rejected","protocol_error":{{"code":"{}","message":"{}"}}}}"#,
+                r#"{{"recipient":"{}","scope":"{}","content_type":"{}","message_id":null,"delivery_status":"rejected","protocol_error":{{"code":"{}","message":"{}"}}}}"#,
                 json_escape(recipient),
+                scope,
                 json_escape(&content_type),
                 runtime_mezzanine_error_code(error.kind()),
                 json_escape(error.message())
             ));
             return Ok(result);
         }
-        if let Some(result) =
-            self.queue_macro_managed_message_step(turn, action, recipient, &content_type, payload)?
-        {
+        if let Some(mut result) = self.queue_macro_managed_message_step(
+            turn,
+            action,
+            recipient,
+            scope,
+            &content_type,
+            payload,
+        )? {
+            Self::runtime_message_result_with_scope(&mut result, recipient, scope);
             return Ok(result);
         }
         let sender = self.runtime_message_sender_identity(turn)?;
@@ -510,6 +554,7 @@ impl RuntimeSessionService {
                 result.structured_content_json = Some(
                     serde_json::json!({
                         "recipient": recipient,
+                        "scope": scope,
                         "message_id": null,
                         "delivery_status": "rejected",
                         "delivery_applied": false,
@@ -540,9 +585,15 @@ impl RuntimeSessionService {
             payload: payload.clone(),
             extension_fields: Vec::new(),
         };
-        let delivery = match self.control.message_service_mut().accept_at(
+        let message_scope = match scope {
+            "project" => mez_agent::messaging::MessageScope::Project,
+            "session" => mez_agent::messaging::MessageScope::Session,
+            _ => unreachable!("message scope was normalized above"),
+        };
+        let delivery = match self.control.message_service_mut().accept_at_with_scope(
             &sender.agent_id,
             envelope,
+            message_scope,
             now_ms,
         ) {
             Ok(delivery) => delivery,
@@ -556,8 +607,9 @@ impl RuntimeSessionService {
                     error.message().to_string(),
                 )?;
                 result.structured_content_json = Some(format!(
-                    r#"{{"recipient":"{}","message_id":null,"delivery_status":"failed","protocol_error":{{"code":"{}","message":"{}"}}}}"#,
+                    r#"{{"recipient":"{}","scope":"{}","message_id":null,"delivery_status":"failed","protocol_error":{{"code":"{}","message":"{}"}}}}"#,
                     json_escape(recipient),
+                    scope,
                     runtime_mezzanine_error_code(error.kind()),
                     json_escape(error.message())
                 ));
@@ -584,13 +636,43 @@ impl RuntimeSessionService {
                 delivery.message_id, delivery.queued_recipients
             )],
             Some(format!(
-                r#"{{"recipient":"{}","message_id":"{}","delivery_status":"accepted","queued_recipients":{},"sequence":{},"protocol_error":null}}"#,
+                r#"{{"recipient":"{}","scope":"{}","message_id":"{}","delivery_status":"accepted","queued_recipients":{},"sequence":{},"protocol_error":null}}"#,
                 json_escape(recipient),
+                scope,
                 json_escape(&delivery.message_id),
                 delivery.queued_recipients,
                 delivery.sequence
             )),
         ))
+    }
+
+    /// Adds the public resolved audience to one macro-managed message result.
+    ///
+    /// Macro bridge outcomes are synthesized by a separate subsystem, so this
+    /// final common boundary keeps their result contract aligned with normal
+    /// message execution without exposing trusted project membership details.
+    pub(crate) fn runtime_message_result_with_scope(
+        result: &mut ActionResult,
+        recipient: &str,
+        scope: &str,
+    ) {
+        let mut structured = result
+            .structured_content_json
+            .as_deref()
+            .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok())
+            .filter(serde_json::Value::is_object)
+            .unwrap_or_else(|| serde_json::json!({}));
+        let object = structured
+            .as_object_mut()
+            .expect("macro message structured result is an object");
+        object
+            .entry("recipient")
+            .or_insert_with(|| serde_json::Value::String(recipient.to_string()));
+        object.insert(
+            "scope".to_string(),
+            serde_json::Value::String(scope.to_string()),
+        );
+        result.structured_content_json = Some(structured.to_string());
     }
 
     /// Runs the runtime message sender identity operation for this subsystem.
@@ -604,25 +686,37 @@ impl RuntimeSessionService {
     ) -> Result<SenderIdentity> {
         let agent_id = AgentId::opaque(turn.agent_id.clone())
             .ok_or_else(|| MezError::invalid_args("turn agent id is invalid for MMP"))?;
-        let pane_id = PaneId::parse('%', turn.pane_id.clone());
-        let window_id = self
-            .find_pane_descriptor(&turn.pane_id)
-            .map(|descriptor| descriptor.window_id);
         let objective = self.runtime_agent_effective_objective(
             &turn.conversation_id,
             self.runtime_agent_turn_objective(turn).as_deref(),
         );
-        let identity = self.control.message_service_mut().ensure_agent_identity(
-            SenderIdentity {
-                agent_id,
-                pane_id,
-                window_id,
-                role: Some("agent".to_string()),
-                capabilities: vec!["agent-harness".to_string()],
-                objective: objective.clone().flatten(),
-            },
-            current_unix_seconds().saturating_mul(1000),
-        )?;
+        let identity = if let Some(identity) = self
+            .control
+            .message_service()
+            .registered_identity(&agent_id)
+        {
+            identity.clone()
+        } else {
+            let pane_id = PaneId::parse('%', turn.pane_id.clone());
+            let project_scope = pane_id
+                .as_ref()
+                .and_then(|pane_id| self.runtime_message_project_scope(pane_id));
+            let window_id = self
+                .find_pane_descriptor(&turn.pane_id)
+                .map(|descriptor| descriptor.window_id);
+            self.control.message_service_mut().ensure_agent_identity(
+                SenderIdentity {
+                    agent_id,
+                    project_scope,
+                    pane_id,
+                    window_id,
+                    role: Some("agent".to_string()),
+                    capabilities: vec!["agent-harness".to_string()],
+                    objective: objective.clone().flatten(),
+                },
+                current_unix_seconds().saturating_mul(1000),
+            )?
+        };
         if let Some(objective) = objective {
             self.publish_prepared_runtime_agent_objective(&turn.agent_id, objective.as_deref());
             self.mirror_runtime_agent_objective(&turn.conversation_id, objective.as_deref());
@@ -714,15 +808,26 @@ impl RuntimeSessionService {
         objective: Option<&str>,
     ) -> Result<()> {
         let agent_id = format!("agent-{pane_id}");
-        self.ensure_runtime_message_identity(
-            &agent_id,
-            None,
-            "agent",
-            &["agent-harness"],
-            current_unix_seconds().saturating_mul(1000),
-        )?;
-        let agent_id = mez_core::ids::AgentId::opaque(agent_id)
+        let message_agent_id = mez_core::ids::AgentId::opaque(agent_id.clone())
             .ok_or_else(|| MezError::invalid_args("agent id is invalid for MMP"))?;
+        let identity_registered = self
+            .control
+            .message_service()
+            .registered_identity(&message_agent_id)
+            .is_some();
+        if !identity_registered {
+            if self.subagent_lineage(&agent_id).is_some() {
+                return Ok(());
+            }
+            self.ensure_runtime_message_identity(
+                &agent_id,
+                None,
+                "agent",
+                &["agent-harness"],
+                current_unix_seconds().saturating_mul(1000),
+            )?;
+        }
+        let agent_id = message_agent_id;
         if let Some(objective) = objective {
             self.control.message_service_mut().update_agent_objective(
                 &agent_id,

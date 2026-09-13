@@ -432,3 +432,29 @@ pub(super) fn json_optional(value: Option<&str>) -> String {
         .map(|value| format!(r#""{}""#, json_escape(value)))
         .unwrap_or_else(|| "null".to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::sender_identity_json;
+    use crate::messaging::{ProjectScopeId, SenderIdentity};
+    use mez_core::ids::AgentId;
+
+    /// Trusted project membership remains runtime-owned and never appears in
+    /// the MMP identity JSON projected to transport or model consumers.
+    #[test]
+    fn sender_identity_json_omits_trusted_project_scope() {
+        let scope = ProjectScopeId::from_canonical_root_bytes(b"/workspace/private-project");
+        let identity = SenderIdentity {
+            agent_id: AgentId::opaque("agent-%1").unwrap(),
+            project_scope: Some(scope.clone()),
+            pane_id: None,
+            window_id: None,
+            role: Some("agent".to_string()),
+            capabilities: Vec::new(),
+            objective: None,
+        };
+
+        let json = sender_identity_json(&identity);
+        assert!(!json.contains("project_scope"), "{json}");
+    }
+}

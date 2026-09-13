@@ -97,7 +97,7 @@ pub(crate) use permissions::{
     SandboxUnavailablePolicy, SeatbeltConfig, runtime_approval_decision_name_to_kind,
     runtime_blocked_approval_request, runtime_config_permission_preset,
     runtime_configured_permissions_from_config, runtime_message_recipient,
-    runtime_message_recipient_decision, sandbox_applies_to_policy,
+    runtime_message_recipient_decision, runtime_message_scope, sandbox_applies_to_policy,
 };
 #[cfg(test)]
 pub(crate) use permissions::{

@@ -569,8 +569,7 @@ pub use subagent::{
     SubagentContractError, SubagentContractErrorKind, SubagentContractResult, SubagentLifetime,
     SubagentParentAuthority, SubagentParentFilesystemBounds, SubagentProfile,
     SubagentScopeDeclaration, SubagentScopeEnforcement, SubagentSessionMode, SubagentSpawnRequest,
-    builtin_role_name, builtin_subagent_profiles, normalize_subagent_spawn_role,
-    subagent_action_scope_violation,
+    builtin_role_name, builtin_subagent_profiles, subagent_action_scope_violation,
 };
 pub use subagent_output::subagent_task_output_for_execution;
 pub use surface::{

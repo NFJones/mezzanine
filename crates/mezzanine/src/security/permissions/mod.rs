@@ -66,10 +66,19 @@ impl<'a> ProductPermissionPlanning<'a> {
     /// recipient, runtime macro and bridge targets stay ungated, and otherwise
     /// the effective approval policy decides whether delivery must prompt.
     pub fn message_recipient_decision(&self, recipient: &str) -> RuleDecision {
+        self.message_recipient_decision_with_scope(recipient, Some("project"))
+    }
+
+    /// Returns the product decision for one recipient and delivery scope.
+    pub fn message_recipient_decision_with_scope(
+        &self,
+        recipient: &str,
+        scope: Option<&str>,
+    ) -> RuleDecision {
         if self.message_recipient_is_macro_bridge(recipient) {
             return RuleDecision::Allow;
         }
-        runtime_message_recipient_decision(self.policy, recipient)
+        runtime_message_recipient_decision(self.policy, recipient, scope)
     }
 
     /// Reports whether one recipient names a runtime macro or bridge child.
@@ -113,6 +122,10 @@ impl PermissionPlanning for ProductPermissionPlanning<'_> {
 
     fn evaluate_message_recipient(&self, recipient: &str) -> RuleDecision {
         self.message_recipient_decision(recipient)
+    }
+
+    fn evaluate_message_recipient_with_scope(&self, recipient: &str, scope: &str) -> RuleDecision {
+        self.message_recipient_decision_with_scope(recipient, Some(scope))
     }
 }
 
@@ -256,6 +269,58 @@ mod tests {
         assert_eq!(
             planning.message_recipient_decision("not a recipient"),
             RuleDecision::Allow
+        );
+    }
+
+    /// Verifies a legacy recipient rule can deny either audience while an
+    /// explicit session widening requires a scope-qualified allow rule.
+    #[test]
+    fn message_recipient_scope_rules_require_explicit_session_allow() {
+        let approvals = SessionApprovalStore::default();
+        let denied = message_rule_policy(RuleDecision::Forbid, ApprovalPolicy::FullAccess);
+        let planning = ProductPermissionPlanning::new(&denied, &approvals, None);
+        assert_eq!(
+            planning.message_recipient_decision_with_scope("agent:agent-9", Some("project")),
+            RuleDecision::Forbid
+        );
+        assert_eq!(
+            planning.message_recipient_decision_with_scope("agent:agent-9", Some("session")),
+            RuleDecision::Forbid
+        );
+
+        let legacy_allow = message_rule_policy(RuleDecision::Allow, ApprovalPolicy::Ask);
+        let planning = ProductPermissionPlanning::new(&legacy_allow, &approvals, None);
+        assert_eq!(
+            planning.message_recipient_decision_with_scope("agent:agent-9", Some("project")),
+            RuleDecision::Allow
+        );
+        assert_eq!(
+            planning.message_recipient_decision_with_scope("agent:agent-9", Some("session")),
+            RuleDecision::Prompt
+        );
+
+        let mut session_allow =
+            PermissionPolicy::default().with_approval_policy(ApprovalPolicy::Ask);
+        session_allow.add_rule(mez_agent::permissions::CommandRule {
+            id: Some("session-message-rule".to_string()),
+            pattern: vec![
+                "send_message".to_string(),
+                "agent:agent-9".to_string(),
+                "--scope".to_string(),
+                "session".to_string(),
+            ],
+            decision: RuleDecision::Allow,
+            rule_match: mez_agent::permissions::RuleMatch::Exact,
+            argument_policy: mez_agent::permissions::ArgumentPolicy::None,
+            scope: mez_agent::permissions::CommandRuleScope::User,
+            justification: None,
+            declared_effects: None,
+        });
+        let planning = ProductPermissionPlanning::new(&session_allow, &approvals, None);
+        assert_eq!(
+            planning.message_recipient_decision_with_scope("agent:agent-9", Some("session")),
+            RuleDecision::Allow,
+            "an exact scope-qualified allow admits the explicit session widening"
         );
     }
 }

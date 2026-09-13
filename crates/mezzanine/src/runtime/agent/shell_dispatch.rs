@@ -1295,6 +1295,9 @@ impl RuntimeSessionService {
                 .ok_or_else(|| {
                     MezError::invalid_state("running shell result does not match an action")
                 })?;
+            if self.agent_action_has_native_shell_owner(&turn.turn_id, &action.id) {
+                continue;
+            }
             let action_index = batch
                 .actions
                 .iter()

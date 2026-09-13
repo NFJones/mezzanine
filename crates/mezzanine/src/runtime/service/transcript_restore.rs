@@ -7,7 +7,7 @@ use super::{
     Result, RuntimeProviderRegistry, RuntimeSessionService, RuntimeTransition,
     agent_shell_visibility_json_name, audit_persistence_effect,
     coalesce_config_persistence_effects, compare_approval_policy_authority, current_unix_seconds,
-    discover_project_root, json_escape, runtime_agent_token_usage_by_model_from_metadata,
+    json_escape, runtime_agent_token_usage_by_model_from_metadata,
     runtime_agent_total_token_usage_by_model, runtime_approval_policy_name, runtime_pane_by_id,
     runtime_parse_approval_policy,
 };
@@ -25,6 +25,7 @@ const AGENT_RESTART_TRANSCRIPT_REPLAY_BYTES: u64 = 2 * 1024 * 1024;
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedAgentResumeState {
     metadata: AgentSessionMetadata,
+    pub(crate) project_scope: Option<mez_agent::messaging::ProjectMembership>,
     root_routing_policy: Option<AutoSizingRoutingPolicy>,
     permission_preset: Option<PermissionPreset>,
     approval_policy: Option<ApprovalPolicy>,
@@ -244,6 +245,8 @@ impl RuntimeSessionService {
                     metadata.pane_approval_policy_override.as_deref(),
                     metadata.approval_policy.as_deref(),
                 )?;
+            let target_project_scope =
+                self.runtime_project_scope_from_persisted_root(metadata.project_root.as_deref())?;
             let prompt_history = match store.structured_prompt_history(&conversation_id) {
                 Ok(history) => history,
                 Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Vec::new(),
@@ -280,6 +283,7 @@ impl RuntimeSessionService {
             let mut target_session = AgentShellSession {
                 session_id: conversation_id.clone(),
                 pane_id: pane_id.clone(),
+                project_scope: target_project_scope.clone(),
                 conversation_kind,
                 prompt_cache_lineage_id: metadata.prompt_cache_lineage_id.clone(),
                 visibility,
@@ -366,6 +370,12 @@ impl RuntimeSessionService {
             let hydrate_result = (|| -> Result<()> {
                 self.agent_shell_store_mut()
                     .restore_session(&pane_id, target_session)?;
+                self.rebind_runtime_message_project_scope(
+                    &pane_id,
+                    target_project_scope
+                        .as_ref()
+                        .map(|membership| membership.scope_id()),
+                )?;
                 self.presentation.remove_agent_presentation_state(&pane_id);
                 self.set_agent_pane_screen(&pane_id, &conversation_id, fresh_screen);
                 self.set_agent_prompt_history_for_pane(&pane_id, prompt_history);
@@ -466,9 +476,17 @@ impl RuntimeSessionService {
             if let Err(error) = hydrate_result {
                 if let Some(previous_session) = previous_session {
                     self.agent_shell_store_mut()
-                        .restore_session(&pane_id, previous_session)?;
+                        .restore_session(&pane_id, previous_session.clone())?;
+                    self.rebind_runtime_message_project_scope(
+                        &pane_id,
+                        previous_session
+                            .project_scope
+                            .as_ref()
+                            .map(|membership| membership.scope_id()),
+                    )?;
                 } else {
                     self.agent_shell_store_mut().remove_session(&pane_id);
+                    self.rebind_runtime_message_project_scope(&pane_id, None)?;
                 }
                 if let Some((conversation_id, screen)) = previous_agent_screen {
                     self.set_agent_pane_screen(&pane_id, conversation_id, screen);
@@ -578,6 +596,36 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Stages validated durable MMP state before restored agent bindings and
+    /// pane processes become observable.
+    pub fn restore_message_state_for_restored_snapshot(
+        &mut self,
+        payload: &crate::storage::snapshot::SessionSnapshotPayload,
+    ) -> Result<()> {
+        let Some(snapshot) = payload.message_state.as_ref() else {
+            return Ok(());
+        };
+        let discarded_retained_messages =
+            (snapshot.schema_version == 1).then_some(snapshot.retained_messages.len());
+        let discarded_accepted_messages =
+            (snapshot.schema_version == 1).then_some(snapshot.accepted_messages.len());
+        let restored = mez_agent::messaging::MessageService::from_snapshot_state(snapshot)?;
+        *self.control.message_service_mut() = restored;
+        if let (Some(retained), Some(accepted)) =
+            (discarded_retained_messages, discarded_accepted_messages)
+            && (retained > 0 || accepted > 0)
+        {
+            self.append_lifecycle_event(
+                EventKind::Diagnostic,
+                format!(
+                    r#"{{"diagnostic":"schema-v1 MMP traffic discarded because resolved audience metadata is unavailable","discarded_retained_messages":{},"discarded_accepted_messages":{}}}"#,
+                    retained, accepted
+                ),
+            )?;
+        }
+        Ok(())
+    }
+
     /// Persists the active pane-to-agent-session bindings for crash recovery.
     ///
     /// The checkpoint is intentionally metadata-only. Conversation content
@@ -626,10 +674,10 @@ impl RuntimeSessionService {
                 let working_directory = self
                     .pane_current_working_directory(&session.pane_id)
                     .map(|path| path.to_string_lossy().into_owned());
-                let project_root = working_directory
-                    .as_deref()
-                    .map(PathBuf::from)
-                    .map(|path| discover_project_root(&path).to_string_lossy().into_owned());
+                let project_root = session
+                    .project_scope
+                    .as_ref()
+                    .map(|membership| membership.canonical_root().to_string_lossy().into_owned());
                 let token_usage_by_model =
                     self.agent_token_usage_for_conversation(&conversation_id);
                 AgentSessionMetadata {
@@ -762,8 +810,11 @@ impl RuntimeSessionService {
                 metadata.pane_approval_policy_override.as_deref(),
                 metadata.approval_policy.as_deref(),
             )?;
+        let project_scope =
+            self.runtime_project_scope_from_persisted_root(metadata.project_root.as_deref())?;
         Ok(Some(PreparedAgentResumeState {
             metadata,
+            project_scope,
             root_routing_policy,
             permission_preset,
             approval_policy,
