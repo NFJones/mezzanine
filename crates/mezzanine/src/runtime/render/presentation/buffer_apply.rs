@@ -35,7 +35,8 @@ use crate::runtime::render::{
 };
 use crate::runtime::{
     PeerMessageLogMode, runtime_agent_peer_message_log_mode_from_config,
-    runtime_effective_config_value,
+    runtime_effective_config_value, runtime_peer_message_presentation_is_markdown,
+    runtime_peer_message_presentation_is_visible,
 };
 use mez_agent::{
     AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, AgentShellVisibility, agent_output_content_type_is_diff,
@@ -172,26 +173,6 @@ fn peer_message_echo_label(peer_label: &str) -> String {
 /// and the model-visible peer block truncate at the same limit.
 fn peer_message_echo_payload(payload: &str) -> String {
     crate::runtime::control::runtime_peer_message_logged_payload(payload)
-}
-
-/// Canonical media type accepted for normal peer-message pane presentation.
-///
-/// Normal mode uses an exact media-type match rather than parsing payload text,
-/// so JSON-looking plaintext remains literal while every non-plaintext payload
-/// remains durable and model-visible without creating pane presentation state.
-const AGENT_PEER_MESSAGE_TEXT_PLAIN_CONTENT_TYPE: &str = "text/plain; charset=utf-8";
-
-/// Returns whether a peer message may render in normal pane-log mode.
-fn peer_message_is_canonical_plaintext(content_type: Option<&str>) -> bool {
-    content_type == Some(AGENT_PEER_MESSAGE_TEXT_PLAIN_CONTENT_TYPE)
-}
-
-/// Returns whether a peer media type uses the safe Markdown pane renderer.
-fn peer_message_is_markdown(content_type: Option<&str>) -> bool {
-    matches!(
-        content_type,
-        Some("text/markdown") | Some("text/markdown; charset=utf-8")
-    )
 }
 
 /// Renders one Markdown peer payload while preserving its sender indicator.
@@ -662,9 +643,7 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         let log_mode = self.agent_peer_message_log_mode();
         if !presentation.presentation_eligible
-            && log_mode != PeerMessageLogMode::Verbose
-            && !peer_message_is_canonical_plaintext(presentation.content_type)
-            && !peer_message_is_markdown(presentation.content_type)
+            && !runtime_peer_message_presentation_is_visible(log_mode, presentation.content_type)
         {
             return Ok(());
         }
@@ -675,7 +654,7 @@ impl RuntimeSessionService {
         let copy_group = presentation
             .receive_identity
             .unwrap_or(presentation.peer_label);
-        let markdown = peer_message_is_markdown(presentation.content_type);
+        let markdown = runtime_peer_message_presentation_is_markdown(presentation.content_type);
         let mut rendered_lines = if markdown {
             peer_message_markdown_rendered_lines(
                 prefix.as_str(),
@@ -4964,8 +4943,9 @@ impl RuntimeSessionService {
 mod tests {
     use super::{
         catch_agent_terminal_presentation_panic, peer_message_echo_rendered_lines,
-        peer_message_is_canonical_plaintext, styled_agent_presentation_source_lines,
+        styled_agent_presentation_source_lines,
     };
+    use crate::runtime::{PeerMessageLogMode, runtime_peer_message_presentation_is_visible};
 
     /// Verifies typed styled presentation source preserves valid style and text
     /// pairs while rejecting malformed payloads before replay reaches a pane.
@@ -4999,14 +4979,20 @@ mod tests {
         );
     }
 
-    /// Verifies normal peer-message presentation accepts only the exact
-    /// canonical plaintext media type, regardless of whether the payload looks
-    /// like structured data.
+    /// Verifies the shared normal-mode predicate accepts canonical plaintext and
+    /// both supported Markdown media types while rejecting other raw payloads.
     #[test]
-    fn peer_message_normal_mode_accepts_only_canonical_plaintext() {
-        assert!(peer_message_is_canonical_plaintext(Some(
-            "text/plain; charset=utf-8"
-        )));
+    fn peer_message_normal_mode_accepts_safe_text_and_markdown() {
+        for content_type in [
+            Some("text/plain; charset=utf-8"),
+            Some("text/markdown"),
+            Some("text/markdown; charset=utf-8"),
+        ] {
+            assert!(runtime_peer_message_presentation_is_visible(
+                PeerMessageLogMode::Normal,
+                content_type
+            ));
+        }
         for content_type in [
             None,
             Some("text/plain"),
@@ -5014,8 +5000,15 @@ mod tests {
             Some("application/json"),
             Some("application/octet-stream"),
         ] {
-            assert!(!peer_message_is_canonical_plaintext(content_type));
+            assert!(!runtime_peer_message_presentation_is_visible(
+                PeerMessageLogMode::Normal,
+                content_type
+            ));
         }
+        assert!(runtime_peer_message_presentation_is_visible(
+            PeerMessageLogMode::Verbose,
+            Some("application/json")
+        ));
     }
 
     /// Verifies canonical plaintext remains literal, including JSON-looking

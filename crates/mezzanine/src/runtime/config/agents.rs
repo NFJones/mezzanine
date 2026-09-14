@@ -314,7 +314,7 @@ pub(crate) fn runtime_agent_peer_message_loop_limit_from_config(root: &Value) ->
 /// Pane echo verbosity for peer and runtime bridge MMP traffic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum PeerMessageLogMode {
-    /// Only exact canonical plaintext payloads create pane presentation rows.
+    /// Canonical plaintext and supported Markdown payloads create pane rows.
     #[default]
     Normal,
     /// Every peer echo logs its full bounded raw payload, bridge traffic included.
@@ -332,11 +332,32 @@ impl PeerMessageLogMode {
     }
 }
 
+/// Returns whether a peer media type uses the safe Markdown pane renderer.
+pub(crate) fn runtime_peer_message_presentation_is_markdown(content_type: Option<&str>) -> bool {
+    matches!(
+        content_type,
+        Some("text/markdown") | Some("text/markdown; charset=utf-8")
+    )
+}
+
+/// Returns whether a peer payload may create a pane presentation row.
+///
+/// Normal mode accepts the canonical plaintext type and the supported Markdown
+/// types; verbose mode displays every accepted bounded payload as raw text or
+/// through its safe specialized renderer. This is presentation-only and does
+/// not affect peer delivery, context, approval, or turn-trigger behavior.
+pub(crate) fn runtime_peer_message_presentation_is_visible(
+    log_mode: PeerMessageLogMode,
+    content_type: Option<&str>,
+) -> bool {
+    log_mode == PeerMessageLogMode::Verbose
+        || content_type == Some("text/plain; charset=utf-8")
+        || runtime_peer_message_presentation_is_markdown(content_type)
+}
+
 /// Parses the pane peer-message log mode from `[agents]`.
 ///
-/// An absent, unreadable, or unknown key keeps the documented `normal` default,
-/// which presents only payloads whose media type is exactly
-/// `text/plain; charset=utf-8`.
+/// An absent, unreadable, or unknown key keeps the documented `normal` default.
 pub(crate) fn runtime_agent_peer_message_log_mode_from_config(root: &Value) -> PeerMessageLogMode {
     let Some(agents) = runtime_json_object(root, "agents") else {
         return PeerMessageLogMode::Normal;

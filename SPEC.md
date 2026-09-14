@@ -10983,13 +10983,14 @@ cancellation MUST clear peer-wait state through normal turn cleanup.
 Interagent MMP traffic is presentation-only. Only a recipient's committed
 inbound message can create a pane-log row, so fanout creates at most one
 `{sender}> {payload}` row per committing recipient and never creates a sender
-row. In normal pane-log mode, the committed message content type MUST be exactly
-`text/plain; charset=utf-8`; all other media types MUST remain durable and
-model-visible without creating terminal rows, copy metadata, or presentation
-records. Verbose mode MUST log the full bounded raw payload for every accepted
-media type at the receiving endpoint. The logged payload MUST NOT exceed the
-peer-context payload bound, and the line MUST wrap inside the pane the way a user
-prompt does.
+row. In normal pane-log mode, the committed message content type MUST be
+canonical `text/plain; charset=utf-8` or supported `text/markdown`; plaintext
+MUST render literally and Markdown through the safe Markdown renderer. All
+other media types MUST remain durable and model-visible without creating
+terminal rows, copy metadata, or presentation records. Verbose mode MUST log
+the full bounded raw payload for every accepted media type at the receiving
+endpoint. The logged payload MUST NOT exceed the peer-context payload bound,
+and the line MUST wrap inside the pane the way a user prompt does.
 A committed message from a recipient's exact direct parent MUST use the stable
 `parent>` label rather than the parent's mutable pane title. This is a
 presentation-only identity rule: validated restored lineage remains sufficient

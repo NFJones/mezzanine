@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::runtime::{
     PeerMessageLogMode, runtime_agent_peer_message_log_mode_from_config,
-    runtime_effective_config_value,
+    runtime_effective_config_value, runtime_peer_message_presentation_is_visible,
 };
 use crate::storage::snapshot::MAX_UNSETTLED_PEER_PRESENTATIONS;
 
@@ -798,11 +798,7 @@ impl RuntimeSessionService {
         let log_mode = runtime_effective_config_value(self.integration.config_layers())
             .map(|value| runtime_agent_peer_message_log_mode_from_config(&value))
             .unwrap_or(PeerMessageLogMode::Normal);
-        log_mode == PeerMessageLogMode::Verbose
-            || matches!(
-                content_type,
-                "text/plain; charset=utf-8" | "text/markdown" | "text/markdown; charset=utf-8"
-            )
+        runtime_peer_message_presentation_is_visible(log_mode, Some(content_type))
     }
 
     /// Returns whether the receipt's delivery cursor confirms its transport commit.

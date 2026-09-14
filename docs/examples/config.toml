@@ -474,10 +474,11 @@ shell_mode = "native"
 loop_limit = 8
 # Default bounded peer-message-triggered turn count per agent.
 peer_message_loop_limit = 1000
-# Pane echo of peer and runtime bridge MMP traffic: `normal` logs only canonical
-# `text/plain; charset=utf-8` payloads; JSON, binary, and absent media types
-# remain durable and model-visible without pane rows. `verbose` logs the full
-# bounded raw payload for every peer echo, bridge traffic included.
+# Pane echo of peer and runtime bridge MMP traffic: `normal` logs canonical
+# `text/plain; charset=utf-8` and supported `text/markdown` payloads; JSON,
+# binary, and absent media types remain durable and model-visible without pane
+# rows. `verbose` logs the full bounded raw payload for every peer echo, bridge
+# traffic included.
 peer_message_log_mode = "normal"
 # Saved-session title source: `generated` stores one bounded model-authored
 # title per conversation, else falls back to the agent objective and then the

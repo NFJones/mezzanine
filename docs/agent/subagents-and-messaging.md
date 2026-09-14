@@ -107,9 +107,10 @@ wait, network wait, or for any other circumstance. Runtime-authored task status
 and task result bridge messages do not wake it.
 
 Normal pane logs show only messages committed by their receiving endpoint whose
-content type is exactly `text/plain; charset=utf-8`; JSON, binary, and absent
-media types remain durable and model-visible without a pane row. An accepted
-outbound message never creates a sender-side row. Set
+content type is canonical `text/plain; charset=utf-8` or supported
+`text/markdown`; JSON, binary, and absent media types remain durable and
+model-visible without a pane row. An accepted outbound message never creates a
+sender-side row. Set
 `agents.peer_message_log_mode = "verbose"` to show the full bounded raw payload
 for every accepted media type at the receiving endpoint, including runtime bridge
 traffic.
