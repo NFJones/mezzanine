@@ -750,7 +750,7 @@ fn runtime_agent_shell_list_skills_displays_effective_catalog() {
     );
     assert!(
         response.contains(
-            "| `$fix-issues` | user | Work the current project's mez issues to verified resolution, keeping concise issue plans and progress notes. |"
+            "| `$fix-issues` | user | Work the current project's mez issues to verified resolution in the main agent, using one persistent subagent only for independent review. |"
         ),
         "{response}"
     );
@@ -791,7 +791,7 @@ fn runtime_agent_shell_list_skills_reports_builtin_catalog_without_external_skil
     );
     assert!(
         response.contains(
-            "| `$fix-issues` | user | Work the current project's mez issues to verified resolution, keeping concise issue plans and progress notes. |"
+            "| `$fix-issues` | user | Work the current project's mez issues to verified resolution in the main agent, using one persistent subagent only for independent review. |"
         ),
         "{response}"
     );

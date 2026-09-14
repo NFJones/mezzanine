@@ -57,7 +57,7 @@ const BUILTIN_ADD_ISSUES_SKILL_DESCRIPTION: &str =
     "Use when recent findings should be turned into Mezzanine project issue tracker entries.";
 const BUILTIN_ADD_RESEARCH_SKILL_DESCRIPTION: &str =
     "Use when the user asks to save durable research findings into memory.";
-const BUILTIN_FIX_ISSUES_SKILL_DESCRIPTION: &str = "Work the current project's mez issues to verified resolution, keeping concise issue plans and progress notes.";
+const BUILTIN_FIX_ISSUES_SKILL_DESCRIPTION: &str = "Work the current project's mez issues to verified resolution in the main agent, using one persistent subagent only for independent review.";
 const BUILTIN_MEZ_REFERENCE_SKILL_DESCRIPTION: &str = "Use Mezzanine terminal commands, agent slash commands, skill invocation, common workflows, and live config_change schema guidance without rediscovering the command or config surface.";
 
 #[derive(Debug, Deserialize)]
@@ -925,12 +925,12 @@ mod tests {
         assert!(
             fix_issues_document
                 .text
-                .contains("large** model plan the work, then spawn a **medium** model")
+                .contains("Provision exactly one reusable review subagent")
         );
         assert!(
             fix_issues_document
                 .text
-                .contains("use a **small** model only for tightly scoped, low-risk implementation")
+                .contains("close the persistent review agent before producing the final report")
         );
         assert!(
             fix_issues_document
