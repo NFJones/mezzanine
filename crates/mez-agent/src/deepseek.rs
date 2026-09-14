@@ -648,6 +648,42 @@ mod tests {
         ContextSourceKind, ModelCapabilities, ModelMessage, PROVIDER_TRANSCRIPT_EVENT_MARKER,
     };
 
+    /// Verifies pruning and patch specialization preserve actionable guidance.
+    /// DeepSeek must retain moved recipient syntax and exact patch-context rules.
+    #[test]
+    fn deepseek_retains_relocated_action_guidance() {
+        let schema = deepseek_maap_action_batch_schema(
+            &AllowedActionSet::from_actions([
+                crate::AllowedAction::SendMessage,
+                crate::AllowedAction::ApplyPatch,
+            ]),
+            &[],
+        );
+        let variants = schema["properties"]["actions"]["items"]["anyOf"]
+            .as_array()
+            .unwrap();
+        let send = variants
+            .iter()
+            .find(|action| action["properties"]["type"]["enum"][0] == "send_message")
+            .unwrap();
+        assert!(
+            send["properties"]["recipient"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("agent:<id>")
+        );
+        let patch = variants
+            .iter()
+            .find(|action| action["properties"]["type"]["enum"][0] == "apply_patch")
+            .unwrap();
+        assert!(
+            patch["properties"]["patch"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("Copy old/context lines verbatim")
+        );
+    }
+
     /// Returns model-declared DeepSeek capabilities built from the same
     /// metadata lists a configured model record would carry.
     fn known_deepseek_capabilities() -> ModelCapabilities {

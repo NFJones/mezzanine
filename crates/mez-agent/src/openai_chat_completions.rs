@@ -1151,6 +1151,35 @@ mod tests {
     use super::*;
     use crate::{AllowedActionSet, ContextSourceKind, ModelInteractionKind, ModelMessage};
 
+    /// Verifies compatible Chat Completions retains relocated recipient guidance.
+    /// The shared schema must preserve descriptions inside function parameters.
+    #[test]
+    fn openai_chat_retains_relocated_action_guidance() {
+        let mut request = test_request();
+        request.allowed_actions =
+            AllowedActionSet::from_actions([crate::AllowedAction::SendMessage]);
+        let tool = openai_chat_completions_maap_tool(&request);
+        let variants = tool["function"]["parameters"]["properties"]["actions"]["items"]["anyOf"]
+            .as_array()
+            .unwrap();
+        let send = variants
+            .iter()
+            .find(|action| action["properties"]["type"]["enum"][0] == "send_message")
+            .unwrap();
+        assert!(
+            send["properties"]["recipient"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("agent:<id>")
+        );
+        assert!(
+            tool["function"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("runtime validation remains authoritative")
+        );
+    }
+
     /// Builds one action request used by generic Chat Completions unit tests.
     fn test_request() -> ModelRequest {
         ModelRequest {

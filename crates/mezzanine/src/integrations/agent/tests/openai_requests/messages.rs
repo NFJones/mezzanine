@@ -75,15 +75,16 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert!(capability_description.contains("Return a function call, not prose"));
     assert!(
         capability_description
-            .contains("exactly the executable action subset enabled by runtime configuration")
+            .contains("runtime validation remains authoritative for configured actions")
     );
     assert!(capability_description.contains("transport envelope"));
     assert!(capability_description.contains("not a prerequisite task step"));
     assert!(capability_description.contains("required-function-call"));
     assert!(capability_description.contains("Choose the smallest action"));
-    assert!(capability_description.contains("Safely gather task-local facts"));
-    assert!(capability_description.contains("Do not ask for identifiers, URLs, versions"));
-    assert!(capability_description.contains("facts already present in current action results"));
+    assert!(
+        capability_description.contains("Safely discover task-local facts before asking the user")
+    );
+    assert!(capability_description.contains("do not use memory to rehydrate current evidence"));
     assert!(capability_description.contains("without capability negotiation"));
     assert!(!capability_description.contains("request_capability(capability=\"shell\""));
     assert!(schema_properties.contains_key("rationale"));
@@ -123,9 +124,10 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         1
     );
     assert!(
-        capability_tool["description"].as_str().unwrap().contains(
-            "Model-selected skill lookup/loading and capability negotiation are not valid actions"
-        ),
+        capability_tool["description"]
+            .as_str()
+            .unwrap()
+            .contains("Model-selected skill lookup/loading is disabled"),
         "{}",
         capability_tool["description"]
     );

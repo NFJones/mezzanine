@@ -103,7 +103,7 @@ pub fn maap_cache_stable_action_batch_description() -> String {
 /// Builds shared MAAP tool guidance with the selected MCP routing contract.
 fn maap_action_batch_description_with_mcp_manifest(mcp_manifest: &str) -> String {
     format!(
-        "Submit one validated Mezzanine MAAP action batch. {} {} The schema contains exactly the executable action subset enabled by runtime configuration; runtime validation rejects unavailable integrations, contextually unavailable actions, or invalid arguments. Use only action objects in this function schema and use enabled actions directly without capability negotiation. The function call is only the transport envelope for the chosen action batch, not a prerequisite task step; do not put required-function-call or schema-wrapper compliance language in the batch rationale. Choose the smallest action that makes concrete progress: direct inspection or execution beats placeholder setup. If an executable action is useful, put that action in this function call now. Safely gather task-local facts from current context, action results, local artifacts, web results, MCP results, or another enabled action instead of asking the user. Do not ask for identifiers, URLs, versions, paths, command forms, config names, repository metadata, or CI targets when they can be safely discovered. Do not use memory actions to rehydrate facts already present in current action results. Model-selected skill lookup/loading and capability negotiation are not valid actions. {} {}",
+        "Submit one validated Mezzanine MAAP action batch. {} {} Use only action objects exposed by this schema; runtime validation remains authoritative for configured actions, integrations, permissions, and arguments. Use enabled actions directly without capability negotiation. Choose the smallest action that makes concrete progress: direct inspection or execution beats placeholder setup. Safely discover task-local facts before asking the user; do not use memory to rehydrate current evidence. Model-selected skill lookup/loading is disabled. {} {}",
         OpenAiMaapToolSurface::FUNCTION_CALL_DISCIPLINE,
         OpenAiMaapToolSurface::ACTION_BATCH_ENVELOPE_RULE,
         mcp_manifest,
@@ -796,7 +796,8 @@ fn maap_send_message_action_schema() -> serde_json::Value {
             (
                 "recipient",
                 serde_json::json!({
-                    "type": "string"
+                    "type": "string",
+                    "description": "Recipient: session, group:session, agent:<id>, pane:<id>, window:<id>, role:<name>, capability:<name>, or group:<name>. Discover peers with list_agents before sending."
                 }),
             ),
             (

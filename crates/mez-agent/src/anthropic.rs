@@ -1245,6 +1245,34 @@ fn anthropic_usage_u64(value: &serde_json::Value, key: &str) -> u64 {
 mod tests {
     use super::*;
 
+    /// Verifies Anthropic retains relocated recipient guidance in its input schema.
+    /// Prompt consolidation must not make action syntax Responses-API-only.
+    #[test]
+    fn anthropic_retains_relocated_action_guidance() {
+        let mut request = anthropic_cache_test_request(Vec::new());
+        request.allowed_actions =
+            crate::AllowedActionSet::from_actions([crate::AllowedAction::SendMessage]);
+        let tool = anthropic_maap_tool(&request);
+        let variants = tool["input_schema"]["properties"]["actions"]["items"]["anyOf"]
+            .as_array()
+            .unwrap();
+        let send = variants
+            .iter()
+            .find(|action| action["properties"]["type"]["enum"][0] == "send_message")
+            .unwrap();
+        let description = send["properties"]["recipient"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(description.contains("agent:<id>"));
+        assert!(description.contains("Discover peers with list_agents"));
+        assert!(
+            tool["description"]
+                .as_str()
+                .unwrap()
+                .contains("runtime validation remains authoritative")
+        );
+    }
+
     /// Builds a minimal Anthropic request for cache-segmentation tests.
     fn anthropic_cache_test_request(messages: Vec<crate::ModelMessage>) -> ModelRequest {
         ModelRequest {

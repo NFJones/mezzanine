@@ -10211,6 +10211,19 @@ unstated harness behavior. It MUST avoid duplicating runtime-owned MAAP schema
 detail or audit-only fields, but it MAY use longer explanatory rules when they
 reduce ambiguous or unsafe action choice.
 
+Each behavioral rule SHOULD have one owning section; specialized reminders
+SHOULD add a distinct constraint rather than repeat the general rule. Tool
+schemas own argument syntax and limits; runtime diagnostics own internal
+approval and delivery mechanics. The prompt MUST describe exposed actions
+without assuming every schema entry is executable in the current context.
+Patch failures MUST NOT authorize ordinary shell-edit fallback: refresh context
+and repair the patch, or report a concrete blocker. Formatting and bulk
+transforms not expressible as patches remain legitimate shell operations.
+Progress SHOULD explain meaningful edits before execution unless already
+explained; repeated patch batches MUST NOT require redundant announcements.
+Prompt regression checks MUST distinguish structural/content contracts from
+model-behavior evaluations; substring assertions alone do not prove efficacy.
+
 The prompt profile MUST identify a pane-scoped Mezzanine agent and SHOULD
 express behavior as execution rules instead of broad persona prose. It MUST
 nonetheless establish the intended persona as a careful, pragmatic engineering

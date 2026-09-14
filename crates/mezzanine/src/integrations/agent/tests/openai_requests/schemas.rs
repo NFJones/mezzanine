@@ -650,9 +650,15 @@ fn openai_responses_request_body_exposes_configured_shell_action_catalog() {
     );
     let shell_description = shell_tool["description"].as_str().unwrap();
     assert!(shell_description.contains("Return a function call, not prose"));
-    assert!(shell_description.contains("Use only action objects in this function schema"));
+    assert!(shell_description.contains("Use only action objects exposed by this schema"));
     assert!(
-        shell_description.contains("use enabled actions directly without capability negotiation")
+        shell_description.contains("Use enabled actions directly without capability negotiation")
+    );
+    assert_eq!(
+        shell_description
+            .matches("The function call is only the transport envelope")
+            .count(),
+        1
     );
     assert!(shell_description.contains("Wrong: *** Replace File"));
     assert!(shell_description.contains("copy old/context lines verbatim"));

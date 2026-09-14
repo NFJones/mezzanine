@@ -21,6 +21,7 @@ This section owns the following agent guidance:
 - [Providers and models](providers-and-models.md)
 - [AWS Bedrock through the OpenAI-compatible API](aws-bedrock-openai-compatible.md)
 - [MCP integration](mcp-integration.md)
+- [System prompt maintenance and evaluation](system-prompt.md)
 
 ## Related pages
 
