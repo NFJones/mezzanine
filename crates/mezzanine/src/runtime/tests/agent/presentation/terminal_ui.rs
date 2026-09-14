@@ -1921,6 +1921,97 @@ fn runtime_streaming_outbound_message_renders_verbose_json_until_settlement() {
     assert!(!settled.contains("rejected sibling payload"), "{settled}");
 }
 
+/// Verifies an accepted outbound row persists a sent-only semantic source and
+/// replays through the outbound renderer without becoming a receiver receipt.
+#[test]
+fn runtime_accepted_outbound_message_persists_sent_source_for_replay() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("accepted-outbound-source"));
+    service
+        .attach_primary("primary", true, Size::new(40, 12).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let turn = service
+        .start_agent_prompt_turn("%1", "persist accepted outbound presentation")
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(40, 12).unwrap(), 120).unwrap(),
+    );
+    let action = mez_agent::AgentAction {
+        id: "accepted-outbound-action".to_string(),
+        payload: mez_agent::AgentActionPayload::SendMessage {
+            recipient: "agent-%2".to_string(),
+            scope: None,
+            content_type: "text/plain".to_string(),
+            payload: "accepted outbound replay evidence".to_string(),
+            correlation_id: None,
+        },
+    };
+
+    service
+        .settle_accepted_outbound_message_preview("%1", &turn.turn_id, 0, &action)
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let entries = transcript_store
+        .inspect_presentation(&conversation_id)
+        .unwrap();
+    let entry = entries
+        .iter()
+        .find(|entry| {
+            entry
+                .source_text
+                .as_deref()
+                .is_some_and(|source| source.contains("accepted outbound replay evidence"))
+        })
+        .expect("accepted outbound presentation entry");
+    let source = entry.source_text.as_deref().unwrap();
+    assert!(source.contains("\"direction\":\"sent\""), "{source}");
+    assert!(source.contains("accepted-outbound-action"), "{source}");
+    assert_eq!(
+        crate::runtime::render::peer_message_presentation_receive_identity(
+            entry.source_content_type.as_deref().unwrap(),
+            source,
+        ),
+        None
+    );
+
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(40, 12).unwrap(), 120).unwrap(),
+    );
+    assert!(
+        service
+            .rebuild_agent_presentation_after_resize("%1", Size::new(40, 12).unwrap())
+            .unwrap()
+    );
+    let replayed = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        replayed.contains("agent-%2< accepted outbound replay"),
+        "{replayed}"
+    );
+    assert!(replayed.contains("evidence"), "{replayed}");
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies streaming projection updates retain an active agent copy viewport.
 ///
 /// A projection replaces the backing agent terminal screen while an operator
