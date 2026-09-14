@@ -1858,7 +1858,9 @@ impl RuntimeSessionService {
             return "bootstrapping";
         }
         if turn.state == AgentTurnState::Blocked {
-            return if self.agent_turn_has_blocked_approval(&turn.turn_id) {
+            return if self.agent_turn_is_waiting_for_peer_message(&turn.turn_id) {
+                "idle"
+            } else if self.agent_turn_has_blocked_approval(&turn.turn_id) {
                 "waiting_approval"
             } else {
                 "waiting"

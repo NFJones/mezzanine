@@ -688,7 +688,7 @@ fn agent_state_dispatch_persists_visibility_and_lists_turns() {
         None,
         &mut store,
         &ledger,
-        AgentStateProjection::new(None, Some(&approval_ids_by_turn)),
+        AgentStateProjection::new(None, Some(&approval_ids_by_turn), None),
     );
     assert!(
         approval_tasks.contains(r#""state":"waiting_approval""#),

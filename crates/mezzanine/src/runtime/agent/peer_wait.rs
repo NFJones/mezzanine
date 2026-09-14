@@ -33,6 +33,16 @@ impl RuntimeSessionService {
             .contains_key(turn_id)
     }
 
+    /// Returns parked peer-wait turn ids for runtime-owned presentation projections.
+    pub(crate) fn runtime_agent_peer_wait_turn_ids(&self) -> std::collections::BTreeSet<String> {
+        self.agent_turn_ledger()
+            .turns()
+            .iter()
+            .filter(|turn| self.agent_turn_is_waiting_for_peer_message(&turn.turn_id))
+            .map(|turn| turn.turn_id.clone())
+            .collect()
+    }
+
     /// Parks a provider execution whose only pending work is `wait`.
     ///
     /// Returns `true` when the scheduler and ledger were transitioned. The

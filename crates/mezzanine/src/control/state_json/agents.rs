@@ -51,6 +51,7 @@ pub(in crate::control) fn dispatch_agent_list_with_store_and_model_profiles(
     session: &Session,
     agent_store: &AgentShellStore,
     model_profiles_by_pane: Option<&BTreeMap<String, String>>,
+    peer_wait_turn_ids: Option<&std::collections::BTreeSet<String>>,
 ) -> Result<String> {
     state_request_session_target_matches(session, request.params.as_deref(), "agent/list params")?;
     let agents = session
@@ -78,6 +79,7 @@ pub(in crate::control) fn dispatch_agent_list_with_store_and_model_profiles(
                             pane,
                             agent_session,
                             model_profile,
+                            peer_wait_turn_ids,
                         )
                     },
                 )
@@ -476,6 +478,7 @@ pub(in crate::control) fn agent_state_json_with_shell_session(
         pane,
         agent_session,
         "default",
+        None,
     )
 }
 
@@ -485,9 +488,17 @@ pub(in crate::control) fn agent_state_json_with_shell_session_and_model_profile(
     pane: &mez_mux::layout::Pane,
     agent_session: &AgentShellSession,
     model_profile: &str,
+    peer_wait_turn_ids: Option<&std::collections::BTreeSet<String>>,
 ) -> String {
     let visible = !matches!(agent_session.visibility, AgentShellVisibility::Hidden);
-    let status = if agent_session.running_turn_id.is_some() {
+    let status = if agent_session
+        .running_turn_id
+        .as_ref()
+        .is_some_and(|turn_id| {
+            peer_wait_turn_ids.is_some_and(|turn_ids| turn_ids.contains(turn_id))
+        }) {
+        "idle"
+    } else if agent_session.running_turn_id.is_some() {
         "running"
     } else {
         "idle"

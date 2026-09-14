@@ -10939,6 +10939,9 @@ MUST run only under the recipient's own approval policy and permission rules.
 A model-planned `wait` MUST retain the current turn, conversation, agent, and
 pane ownership while releasing provider capacity. It MUST NOT complete the
 turn, emit a subagent task result, or create a new peer-message-triggered turn.
+While parked, a peer wait MUST be presented as agent `idle` in pane frames and
+live agent-list projections, while its retained turn, task, and scheduler state
+remain blocked or waiting internally.
 Waiting time MUST NOT consume the remaining configured turn timeout. Committing
 one or more model-originated MMP messages MUST settle the pending `wait` exactly
 once and fairly reacquire provider capacity for the same turn; runtime-authored

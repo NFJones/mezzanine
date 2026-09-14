@@ -289,6 +289,7 @@ pub fn dispatch_control_request_for_client(
 pub struct AgentStateProjection<'a> {
     model_profiles_by_pane: Option<&'a std::collections::BTreeMap<String, String>>,
     approval_ids_by_turn: Option<&'a std::collections::BTreeMap<String, Vec<String>>>,
+    peer_wait_turn_ids: Option<&'a std::collections::BTreeSet<String>>,
 }
 
 impl<'a> AgentStateProjection<'a> {
@@ -296,10 +297,12 @@ impl<'a> AgentStateProjection<'a> {
     pub fn new(
         model_profiles_by_pane: Option<&'a std::collections::BTreeMap<String, String>>,
         approval_ids_by_turn: Option<&'a std::collections::BTreeMap<String, Vec<String>>>,
+        peer_wait_turn_ids: Option<&'a std::collections::BTreeSet<String>>,
     ) -> Self {
         Self {
             model_profiles_by_pane,
             approval_ids_by_turn,
+            peer_wait_turn_ids,
         }
     }
 }
@@ -371,6 +374,7 @@ pub fn dispatch_control_request_for_client_with_agent_state_and_model_profiles(
             session,
             agent_store,
             projection.model_profiles_by_pane,
+            projection.peer_wait_turn_ids,
         ),
         "agent/task/list" => dispatch_agent_task_list_with_ledger(
             &request,

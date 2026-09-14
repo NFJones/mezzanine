@@ -828,6 +828,7 @@ impl RuntimeSessionService {
             }
             if request.method == "agent/list" {
                 let model_profiles_by_pane = self.runtime_agent_model_profiles_by_pane();
+                let peer_wait_turn_ids = self.runtime_agent_peer_wait_turn_ids();
                 let (agent_shell_store, agent_turn_ledger) = self.agent.control_turn_state();
                 return dispatch_control_request_for_client_with_agent_state_and_model_profiles(
                     body,
@@ -836,7 +837,11 @@ impl RuntimeSessionService {
                     None,
                     agent_shell_store,
                     agent_turn_ledger,
-                    AgentStateProjection::new(Some(&model_profiles_by_pane), None),
+                    AgentStateProjection::new(
+                        Some(&model_profiles_by_pane),
+                        None,
+                        Some(&peer_wait_turn_ids),
+                    ),
                 );
             }
             if matches!(
@@ -859,7 +864,7 @@ impl RuntimeSessionService {
                     None,
                     agent_shell_store,
                     agent_turn_ledger,
-                    AgentStateProjection::new(None, Some(&approval_ids_by_turn)),
+                    AgentStateProjection::new(None, Some(&approval_ids_by_turn), None),
                 );
             }
             if request.method.starts_with("config/") {
@@ -1348,6 +1353,7 @@ impl RuntimeSessionService {
             if agent_state_control_method(&request.method) {
                 if request.method == "agent/list" {
                     let model_profiles_by_pane = self.runtime_agent_model_profiles_by_pane();
+                    let peer_wait_turn_ids = self.runtime_agent_peer_wait_turn_ids();
                     let (agent_shell_store, agent_turn_ledger) = self.agent.control_turn_state();
                     return dispatch_control_request_for_client_with_agent_state_and_model_profiles(
                         body,
@@ -1356,7 +1362,11 @@ impl RuntimeSessionService {
                         None,
                         agent_shell_store,
                         agent_turn_ledger,
-                        AgentStateProjection::new(Some(&model_profiles_by_pane), None),
+                        AgentStateProjection::new(
+                            Some(&model_profiles_by_pane),
+                            None,
+                            Some(&peer_wait_turn_ids),
+                        ),
                     );
                 }
                 if matches!(
@@ -1378,7 +1388,7 @@ impl RuntimeSessionService {
                     None,
                     agent_shell_store,
                     agent_turn_ledger,
-                    AgentStateProjection::new(None, Some(&approval_ids_by_turn)),
+                    AgentStateProjection::new(None, Some(&approval_ids_by_turn), None),
                 );
             }
             if request.method.starts_with("config/") {

@@ -95,6 +95,9 @@ fn runtime_active_turn_local_message_commits_once_at_arrival() {
 #[test]
 fn runtime_wait_parks_and_peer_mail_resumes_same_turn() {
     let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -144,6 +147,36 @@ fn runtime_wait_parks_and_peer_mail_resumes_same_turn() {
     assert_eq!(parked.running, 0);
     assert_eq!(parked.waiting, 1);
     assert_eq!(parked.active_capacity_used, 0);
+    let parked_frame = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    assert_eq!(
+        parked_frame
+            .frame_context
+            .panes
+            .get("%1")
+            .unwrap()
+            .agent_status
+            .as_deref(),
+        Some("idle")
+    );
+    assert_eq!(parked_frame.frame_context.animation_tick_ms, 0);
+    let parked_agents = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"parked-agents","method":"agent/list","params":{}}"#,
+        &primary,
+    );
+    assert!(
+        parked_agents.contains(r#""status":"idle""#),
+        "{parked_agents}"
+    );
+    let parked_tasks = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"parked-tasks","method":"agent/task/list","params":{}}"#,
+        &primary,
+    );
+    assert!(
+        parked_tasks.contains(r#""state":"waiting""#),
+        "{parked_tasks}"
+    );
 
     let now_ms = current_unix_millis();
     let sender = service
@@ -233,6 +266,28 @@ fn runtime_wait_parks_and_peer_mail_resumes_same_turn() {
     assert_eq!(resumed.waiting, 0);
     assert_eq!(resumed.running, 1);
     assert_eq!(resumed.active_capacity_used, 1);
+    let resumed_frame = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    assert_eq!(
+        resumed_frame
+            .frame_context
+            .panes
+            .get("%1")
+            .unwrap()
+            .agent_status
+            .as_deref(),
+        Some("thinking")
+    );
+    assert!(resumed_frame.frame_context.animation_tick_ms > 0);
+    let resumed_agents = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"resumed-agents","method":"agent/list","params":{}}"#,
+        &primary,
+    );
+    assert!(
+        resumed_agents.contains(r#""status":"running""#),
+        "{resumed_agents}"
+    );
     assert_eq!(service.agent_peer_message_turn_count(&started.agent_id), 0);
     assert!(
         service
@@ -250,6 +305,24 @@ fn runtime_wait_parks_and_peer_mail_resumes_same_turn() {
             .structured_content_json
             .as_deref()
             .is_some_and(|value| value.contains("peer_message"))
+    );
+
+    service
+        .agent_turn_ledger_mut()
+        .finish_turn(&started.turn_id, AgentTurnState::Blocked)
+        .unwrap();
+    let ordinary_blocked_frame = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    assert_eq!(
+        ordinary_blocked_frame
+            .frame_context
+            .panes
+            .get("%1")
+            .unwrap()
+            .agent_status
+            .as_deref(),
+        Some("waiting")
     );
 }
 

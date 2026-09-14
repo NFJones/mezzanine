@@ -92,8 +92,10 @@ supplies the current turn id when you omit it.
 
 When work cannot continue until another agent answers, send the MMP request in
 one action batch and use `wait` in the next. `wait` preserves the same turn,
-releases provider capacity, and resumes that turn when model-originated peer
-mail arrives. It is exclusively an inter-agent MMP coordination action: never
+releases provider capacity, presents the parked agent as idle, and resumes that
+turn when model-originated peer mail arrives. The retained turn, task, and
+scheduler state remain blocked or waiting while it is parked. It is exclusively
+an inter-agent MMP coordination action: never
 use it as a sleep, delay, retry, poll, approval wait, user-input wait, subprocess
 wait, network wait, or for any other circumstance. Runtime-authored task status
 and task result bridge messages do not wake it.
