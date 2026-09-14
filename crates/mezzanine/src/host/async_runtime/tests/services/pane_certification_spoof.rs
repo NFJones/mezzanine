@@ -264,8 +264,6 @@ const SPOOF_REFUSAL_WINDOW: Duration = Duration::from_secs(10);
 enum SpoofRefusal {
     /// The runtime retained a stable agent-subshell certification rejection.
     CertificationRejection(&'static str),
-    /// The pane deliberately withheld environment and path authority.
-    WithheldAuthority(&'static str),
     /// The pane's foreign bootstrap settled without shell or environment authority.
     ForeignBootstrapFailed,
 }
@@ -275,38 +273,20 @@ impl SpoofRefusal {
     fn as_str(self) -> &'static str {
         match self {
             Self::CertificationRejection(code) => code,
-            Self::WithheldAuthority(reason) => reason,
             Self::ForeignBootstrapFailed => "foreign_bootstrap_failed",
         }
     }
 }
 
-/// Withheld-authority reason production records for the dependency-free handoff.
-///
-/// The handoff records this reason when the runtime writes its own loader
-/// command, which says nothing about whether replayed frames were processed, so
-/// the reason on its own can never stand in for a frame-derived refusal.
-const STAGING_WITHHELD_AUTHORITY_REASON: &str = "dependency_free_shell_unattested";
-
 /// Returns the production refusal published for one pane snapshot, when any.
 ///
 /// Only evidence that binds to the replayed in-band frames qualifies: a recorded
-/// certification rejection, the settled failed foreign-bootstrap phase, or a
-/// withheld-authority reason other than the staging-time withholding.
-/// `withheld_authority_reason` alone is not enough, because production publishes
-/// the staging-time reason for the dependency-free handoff itself, so a run whose
-/// frames were ignored or merely inherited that handoff would otherwise satisfy
-/// the refusal contract.
+/// certification rejection or the settled failed foreign-bootstrap phase.
 fn production_refusal(
     snapshot: &crate::host::async_runtime::AsyncPaneCertificationSnapshot,
 ) -> Option<SpoofRefusal> {
     if let Some(rejection) = snapshot.certification_rejection {
         return Some(SpoofRefusal::CertificationRejection(rejection));
-    }
-    if let Some(reason) = snapshot.withheld_authority_reason
-        && reason != STAGING_WITHHELD_AUTHORITY_REASON
-    {
-        return Some(SpoofRefusal::WithheldAuthority(reason));
     }
     (!snapshot.bootstrap_pending && snapshot.foreign_bootstrap_phase == Some("failed"))
         .then_some(SpoofRefusal::ForeignBootstrapFailed)
@@ -353,15 +333,14 @@ impl SpoofObservation {
     ///
     /// Production reaches this state only after it reclaimed the pane from the
     /// fixture and launched an agent subshell of its own: the pane marks that
-    /// subshell active, certifies its foreground process group, and still
-    /// publishes no environment signature.
+    /// subshell active and certifies a foreground process group distinct from
+    /// the adversarial fixture. Pane mode may publish its environment signature.
     fn certified_reclaimed_agent_subshell(self, fixture_process_group: u64) -> bool {
         self.child_active
             && self.foreground_certified_shell == Some(true)
             && self
                 .certified_process_group
                 .is_some_and(|process_group| process_group != fixture_process_group)
-            && !self.environment_signature_present
     }
 }
 
@@ -499,17 +478,15 @@ async fn run_foreground_spoof_case(
                 snapshot.foreign_bootstrap_phase,
                 snapshot.bootstrap_pending,
                 snapshot.certification_rejection,
-                snapshot.withheld_authority_reason,
                 snapshot.child_active,
                 snapshot.foreground_certified_shell,
             );
             if step % 20 == 0 || previous_state != Some(state) {
                 timeline.push(format!(
-                    "step={step} phase={:?} pending={} rejection={:?} withheld={:?} child={} certified={:?} certified_group={:?} readiness={:?} generation={:?} env={} fg={} primary={}",
+                    "step={step} phase={:?} pending={} rejection={:?} child={} certified={:?} certified_group={:?} readiness={:?} generation={:?} env={} fg={} primary={}",
                     snapshot.foreign_bootstrap_phase,
                     snapshot.bootstrap_pending,
                     snapshot.certification_rejection,
-                    snapshot.withheld_authority_reason,
                     snapshot.child_active,
                     snapshot.foreground_certified_shell,
                     observation.certified_process_group,
@@ -619,9 +596,10 @@ async fn run_foreground_spoof_case(
 /// activate it as an agent subshell, settle a certified foreign bootstrap for it,
 /// or publish authority for it. Once the runtime has reclaimed the pane and
 /// launched its own agent subshell, the binding assertion is instead that any
-/// certified identity belongs to a process group other than the fixture's while
-/// authority stays withheld, so a certification the runtime performed for itself
-/// cannot be mistaken for an attacker certification.
+/// certified identity belongs to a process group other than the fixture's, so a
+/// certification the runtime performed for itself cannot be mistaken for an
+/// attacker certification. Pane mode may publish authority for that reclaimed
+/// runtime-owned child after its correlation checks succeed.
 ///
 /// Returns whether any reclaimed record shows the runtime's own agent subshell
 /// certified, which the forged-identity replay accepts in place of a
@@ -637,8 +615,7 @@ fn assert_timeline_certification_contract(
     );
     let mut reclaimed_subshell_certified = false;
     for observation in observations {
-        // Authority is never published for the adversarial fixture whatever the
-        // foreground group or phase, so these two assertions stay unconditional.
+        // The adversarial fixture itself must never become the certified shell.
         assert_ne!(
             observation.certified_process_group,
             Some(fixture_process_group),
@@ -646,15 +623,16 @@ fn assert_timeline_certification_contract(
              {}: {observation:?} ({log_text})",
             observation.step
         );
-        assert!(
-            !observation.environment_signature_present,
-            "spoofable material must never publish a pane environment signature at step {}: \
-             {observation:?} ({log_text})",
-            observation.step
-        );
         if observation.fixture_owns_foreground(fixture_process_group) {
             // Adversarial interval: the fixture still owns the pane, so nothing
-            // may certify it, activate it, or settle a phase for it.
+            // may certify it, activate it, publish its environment, or settle a
+            // phase for it.
+            assert!(
+                !observation.environment_signature_present,
+                "the adversarial fixture must not publish a pane environment signature at step \
+                 {}: {observation:?} ({log_text})",
+                observation.step
+            );
             assert!(
                 observation.foreground_certified_shell != Some(true),
                 "the adversarial fixture's foreground process group must never be certified at \
@@ -678,7 +656,8 @@ fn assert_timeline_certification_contract(
             // launched itself, so any certified identity must belong to a
             // different process group than the fixture's (the post-run service
             // check additionally proves the fixture's own group was never
-            // certified) while environment and path authority stay withheld.
+            // certified). Explicit pane mode permits the reclaimed child to
+            // publish its successfully correlated environment.
             assert!(
                 observation
                     .certified_process_group
@@ -686,12 +665,6 @@ fn assert_timeline_certification_contract(
                 "a certification published after the runtime reclaimed the pane must belong to \
                  a process group other than the fixture's at step {}: {observation:?} \
                  ({log_text})",
-                observation.step
-            );
-            assert!(
-                !observation.environment_signature_present,
-                "authority must stay withheld after the runtime reclaimed the pane at step {}: \
-                 {observation:?} ({log_text})",
                 observation.step
             );
             reclaimed_subshell_certified |=
@@ -756,19 +729,15 @@ fn assert_no_spoofed_authority(outcome: &SpoofCaseOutcome, mode: SpoofMode) {
         // inside `SPOOF_REFUSAL_WINDOW`, which is shorter than the runtime's
         // own fifteen-second probe and foreign-bootstrap deadlines, so a run
         // that silently ignored the frames, or merely idled an untouched pane
-        // to a deadline, records no refusal and fails here. `production_refusal`
-        // additionally rejects the loader staging-time withholding that
-        // production records for the dependency-free handoff itself, so the only
-        // evidence left is a certification rejection, a settled failed phase, or
-        // a withheld reason that the replay itself produced.
+        // to a deadline, records no refusal and fails here. The remaining
+        // evidence is a certification rejection or a settled failed phase.
         SpoofMode::Spoof => {
             let refusal = refusal.unwrap_or_else(|| {
                 panic!(
                     "production admission must record a frame-derived refusal for the replayed \
                      certification frames inside {SPOOF_REFUSAL_WINDOW:?}: a certification \
-                     rejection, a settled failed foreign bootstrap, or a withheld-authority \
-                     reason the replay itself produced. Neither the loader staging-time \
-                     withholding nor an untouched idle pane counts: {log_text}"
+                     rejection or a settled failed foreign bootstrap. An untouched idle pane \
+                     does not count: {log_text}"
                 )
             });
             assert!(
@@ -785,18 +754,17 @@ fn assert_no_spoofed_authority(outcome: &SpoofCaseOutcome, mode: SpoofMode) {
         // runtime's own `agent-shell` entry writes Ctrl-C, the fixture dies, and
         // the runtime then certifies the agent subshell it launched itself. That
         // certification belongs to a process group other than the fixture's while
-        // the fixture's own group is never certified and no environment, PATH, or
-        // path-scope authority is published, so it is not a certification of the
-        // attacker's material.
+        // the fixture's own group is never certified, so authority published for
+        // the reclaimed child is not authority for the attacker's material.
         SpoofMode::ForgedIdentity => {
             assert!(
                 refusal.is_some() || reclaimed_subshell_certified,
                 "the replayed forgery must record a frame-derived refusal inside \
-                 {SPOOF_REFUSAL_WINDOW:?} (a certification rejection, a settled failed foreign \
-                 bootstrap, or a withheld-authority reason the replay itself produced), or settle \
+                 {SPOOF_REFUSAL_WINDOW:?} (a certification rejection or a settled failed foreign \
+                 bootstrap), or settle \
                  the scoped reclaimed-subshell condition in which the runtime certifies the agent \
-                 subshell it launched itself for a process group other than the fixture's while \
-                 publishing no authority: {log_text}"
+                 subshell it launched itself for a process group other than the fixture's: \
+                 {log_text}"
             );
             if let Some(refusal) = refusal {
                 assert!(
@@ -834,15 +802,27 @@ fn assert_no_spoofed_authority(outcome: &SpoofCaseOutcome, mode: SpoofMode) {
              adversarial fixture: {snapshot:?} ({log_text})"
         );
     }
-    assert!(
-        !snapshot.environment_signature_present
-            && service.pane_environment_signature("%1").is_none(),
-        "spoofed bootstrap fields must not publish a pane environment: {snapshot:?}"
-    );
-    assert!(
-        !service.pane_environment_authority_is_certified_for_tests("%1"),
-        "spoofed output must not settle certified environment authority"
-    );
+    if reclaimed_subshell_certified {
+        assert!(
+            snapshot.environment_signature_present
+                && service.pane_environment_signature("%1").is_some(),
+            "pane mode must publish the reclaimed child environment: {snapshot:?}"
+        );
+        assert!(
+            service.pane_environment_authority_is_certified_for_tests("%1"),
+            "pane mode must certify authority for the reclaimed child"
+        );
+    } else {
+        assert!(
+            !snapshot.environment_signature_present
+                && service.pane_environment_signature("%1").is_none(),
+            "spoofed bootstrap fields must not publish a pane environment: {snapshot:?}"
+        );
+        assert!(
+            !service.pane_environment_authority_is_certified_for_tests("%1"),
+            "spoofed output must not settle certified environment authority"
+        );
+    }
     // Only a certified environment signature publishes PATH authority, so assert
     // that production state directly instead of collapsing a missing value into
     // an empty string that would pass without observing anything.
@@ -874,32 +854,42 @@ fn assert_no_spoofed_authority(outcome: &SpoofCaseOutcome, mode: SpoofMode) {
         Vec::new(),
     )
     .unwrap();
-    // The accessor fails closed while the pane environment is unpublished or
-    // unusable. Only those production states are acceptable here: a default of
-    // `true` would let an accessor error pass without observing production.
-    match service.path_scopes_for_pane_request("%1", &request) {
-        Ok(scopes) => assert!(
-            scopes.is_none(),
-            "spoofed output must not publish pane path authority"
-        ),
-        Err(error) => {
-            let message = error.message();
-            assert!(
-                message.contains("pane environment is unavailable for path resolution")
-                    || message.contains("pane path resolution failed:"),
-                "pane path authority must settle unavailable for the spoofed pane: {message}"
-            );
+    if !reclaimed_subshell_certified {
+        // The accessor fails closed while the adversarial pane environment is
+        // unpublished or unusable. A default of `true` would let an accessor
+        // error pass without observing production.
+        match service.path_scopes_for_pane_request("%1", &request) {
+            Ok(scopes) => assert!(
+                scopes.is_none(),
+                "spoofed output must not publish pane path authority"
+            ),
+            Err(error) => {
+                let message = error.message();
+                assert!(
+                    message.contains("pane environment is unavailable for path resolution")
+                        || message.contains("pane path resolution failed:"),
+                    "pane path authority must settle unavailable for the spoofed pane: {message}"
+                );
+            }
         }
     }
     assert!(
         !log_text.contains(FIXTURE_COMMAND_BODY),
         "no agent command body may reach a spoofing foreground program: {log_text}"
     );
-    assert_ne!(
-        snapshot.readiness,
-        mez_agent::PaneReadinessState::Ready,
-        "spoofable material must not publish shell-ready authority: {snapshot:?}"
-    );
+    if reclaimed_subshell_certified {
+        assert_eq!(
+            snapshot.readiness,
+            mez_agent::PaneReadinessState::Ready,
+            "the reclaimed pane-mode child must settle ready: {snapshot:?}"
+        );
+    } else {
+        assert_ne!(
+            snapshot.readiness,
+            mez_agent::PaneReadinessState::Ready,
+            "spoofable material must not publish shell-ready authority: {snapshot:?}"
+        );
+    }
 }
 
 /// Asserts the replayed forgery settled terminally instead of mid-transition.

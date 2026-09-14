@@ -269,59 +269,11 @@ pub(crate) enum RuntimePaneEnvironmentAuthorityUnavailableReason {
     UnsupportedShell,
     /// A foreign environment did not complete managed adapter admission.
     ForeignBootstrapTimedOut,
-    /// The dependency-free loader handoff cannot attest a runtime-managed
-    /// receiver because its staging payload and child token are delivered
-    /// in-band through the pane PTY.
-    DependencyFreeShellUnattested,
     /// Agent-subshell certification rejected the discovered environment.
     AgentSubshellCertification(RuntimeAgentSubshellCertificationRejection),
 }
 
 impl RuntimePaneEnvironmentAuthorityUnavailableReason {
-    /// Returns the stable label used in diagnostics and test snapshots.
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::EnvironmentSignatureMissing => "environment_signature_missing",
-            Self::BootstrapOutputTruncated => "bootstrap_output_truncated",
-            Self::BootstrapTransactionFailed => "bootstrap_transaction_failed",
-            Self::BootstrapTimedOut => "bootstrap_timed_out",
-            Self::BootstrapWriteFailed => "bootstrap_write_failed",
-            Self::BootstrapProtocolViolation => "bootstrap_protocol_violation",
-            Self::ShellIdentityProbeFailed => "shell_identity_probe_failed",
-            Self::ShellIdentityUnknown(reason) => match reason {
-                RuntimeShellIdentityUnknownReason::ProcessUnavailable => {
-                    "shell_identity_unknown_process_unavailable"
-                }
-                RuntimeShellIdentityUnknownReason::StartTokenChanged => {
-                    "shell_identity_unknown_start_token_changed"
-                }
-                RuntimeShellIdentityUnknownReason::ExecutableUnreadable => {
-                    "shell_identity_unknown_executable_unreadable"
-                }
-                RuntimeShellIdentityUnknownReason::UnrecognizedExecutable => {
-                    "shell_identity_unknown_unrecognized_executable"
-                }
-                RuntimeShellIdentityUnknownReason::DialectHintMissing => {
-                    "shell_identity_unknown_dialect_hint_missing"
-                }
-                RuntimeShellIdentityUnknownReason::LaunchTargetMissing => {
-                    "shell_identity_unknown_launch_target_missing"
-                }
-                RuntimeShellIdentityUnknownReason::IdentityFrameMissing => {
-                    "shell_identity_unknown_identity_frame_missing"
-                }
-                RuntimeShellIdentityUnknownReason::UnsupportedShell => {
-                    "shell_identity_unknown_unsupported_shell"
-                }
-            },
-            Self::ShellExecutableNotOsVerified => "shell_executable_not_os_verified",
-            Self::UnsupportedShell => "unsupported_shell",
-            Self::ForeignBootstrapTimedOut => "foreign_bootstrap_timed_out",
-            Self::DependencyFreeShellUnattested => "dependency_free_shell_unattested",
-            Self::AgentSubshellCertification(reason) => reason.as_str(),
-        }
-    }
-
     /// Returns a stable diagnostic that identifies the failed authority boundary.
     pub(crate) fn diagnostic(self) -> String {
         match self {
@@ -363,8 +315,6 @@ impl RuntimePaneEnvironmentAuthorityUnavailableReason {
                 "foreign shell bootstrap timed out; return to an empty prompt in the foreign environment and retry"
                     .to_string()
             }
-            Self::DependencyFreeShellUnattested => "the dependency-free shell handoff delivers its loader payload and child token in-band, so it cannot attest a runtime-managed receiver; environment and path authority are withheld"
-                .to_string(),
             Self::AgentSubshellCertification(reason) => format!(
                 "pane agent-subshell bootstrap certification failed: {}",
                 reason.as_str()
@@ -413,8 +363,7 @@ struct RuntimePaneCertifiedShellIdentity {
     environment_signature: EnvironmentSignature,
     /// Runtime-owned provenance for the certification.
     source: RuntimeCertifiedShellSource,
-    /// Whether this certification published the environment signature and path
-    /// authority. Dependency-free loader certifications are correlation only.
+    /// Whether this certification published the environment signature and path authority.
     authority_published: bool,
     /// Separately typed dialect, executable, and attestation evidence.
     evidence: RuntimePaneShellIdentityEvidence,
@@ -422,8 +371,8 @@ struct RuntimePaneCertifiedShellIdentity {
 
 /// Reports whether one certified identity's environment authority is current.
 ///
-/// Attested identities require the exact published environment signature.
-/// Correlation-only identities must still be unpublished, so clearing
+/// Published identities require the exact environment signature. Identities
+/// rejected by another authority gate must remain unpublished so clearing
 /// authority can never leave a stale certified identity behind.
 fn runtime_certified_identity_authority_is_current(
     published: Option<&EnvironmentSignature>,
@@ -598,9 +547,8 @@ struct RuntimeForeignShellBoundary {
     /// In-band staging source recorded for a dependency-free loader handoff.
     ///
     /// The staging command, its payload, and its receiver token all travel
-    /// through the pane PTY, so this record is correlation only: any boundary
-    /// carrying it is treated as dependency-free and can never publish
-    /// environment or path authority, whichever source is named.
+    /// through the pane PTY. This record identifies the dependency-free path so
+    /// its process, generation, loader, and receiver checks remain mandatory.
     child_staging_source: Option<String>,
     /// Identity transaction currently owned by the admitted foreign adapter.
     identity_marker: Option<String>,
@@ -610,8 +558,7 @@ impl RuntimeForeignShellBoundary {
     /// Reports whether this boundary uses the dependency-free loader handoff.
     ///
     /// Such a handoff delivers its staging payload and receiver token through
-    /// the pane PTY, so its evidence is correlation only and can never publish
-    /// environment or path authority.
+    /// the pane PTY and therefore uses the dependency-free correlation policy.
     fn is_dependency_free_handoff(&self) -> bool {
         self.loader_marker.is_some() || self.child_staging_source.is_some()
     }
@@ -785,10 +732,6 @@ struct RuntimePendingAgentSubshellCertification {
     /// Whether the boundary expected a managed child that never authenticated its
     /// receiver installation when the start evidence settled.
     receiver_unauthenticated: bool,
-    /// Whether the certification evidence came from the dependency-free loader
-    /// handoff whose payload is delivered in-band, which never publishes
-    /// environment or path authority.
-    dependency_free_handoff: bool,
 }
 
 /// One recovery-owned foreground observation for a blocked shell dispatch.
@@ -2020,37 +1963,6 @@ impl RuntimeSessionService {
             .pane_managed_shell_handoffs
             .get(pane_id)
             .is_some_and(|handoff| handoff.child_is_installed())
-    }
-
-    /// Returns the recorded pane environment authority failure reason for tests.
-    #[cfg(test)]
-    pub(crate) fn pane_environment_authority_failure_for_tests(
-        &self,
-        pane_id: &str,
-    ) -> Option<RuntimePaneEnvironmentAuthorityUnavailableReason> {
-        self.process
-            .pane_environment_authority_failures
-            .get(pane_id)
-            .copied()
-    }
-
-    /// Returns the stable label of a deliberately withheld authority reason.
-    ///
-    /// Only the dependency-free correlation-only withholding is reported here,
-    /// so callers can distinguish "authority withheld by policy" from unrelated
-    /// bootstrap failures.
-    pub(crate) fn pane_withheld_environment_authority_reason(
-        &self,
-        pane_id: &str,
-    ) -> Option<&'static str> {
-        self.process
-            .pane_environment_authority_failures
-            .get(pane_id)
-            .filter(|reason| {
-                **reason
-                    == RuntimePaneEnvironmentAuthorityUnavailableReason::DependencyFreeShellUnattested
-            })
-            .map(|reason| reason.as_str())
     }
 
     /// Returns one pane's current shell-interaction generation for tests.

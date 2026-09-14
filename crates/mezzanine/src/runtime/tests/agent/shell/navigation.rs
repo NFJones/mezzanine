@@ -846,8 +846,8 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_live_parent_cursor() {
 /// execute ordinary parent shell commands, and re-enter agent mode through a
 /// real identity probe.
 ///
-/// The dependency-free handoff is correlation only, so both entries certify the
-/// shell identity while withholding environment authority. This exercises the
+/// Pane mode explicitly accepts the dependency-free correlation boundary, so
+/// both entries certify the shell identity and publish environment authority. This exercises the
 /// PTY, private Bash receiver, transaction output parser, and deferred re-entry
 /// path together. State-only probe fixtures cannot catch a receiver or
 /// prompt-boundary failure that drops the identity frame.
@@ -922,9 +922,7 @@ fn runtime_agent_shell_reentry_after_parent_bash_commands_completes_identity_pro
         if !service.pane_bootstrap_is_pending_for_tests("%1")
             && matches!(
                 service.pane_environment_authority("%1"),
-                RuntimePaneEnvironmentAuthority::Unavailable(
-                    crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::DependencyFreeShellUnattested
-                )
+                RuntimePaneEnvironmentAuthority::Certified
             )
         {
             first_bootstrap_completed = true;
@@ -934,12 +932,12 @@ fn runtime_agent_shell_reentry_after_parent_bash_commands_completes_identity_pro
     }
     assert!(
         first_bootstrap_completed,
-        "initial unmanaged Bash agent-subshell bootstrap did not settle with withheld authority; authority={:?}",
+        "initial unmanaged Bash agent-subshell bootstrap did not publish authority; authority={:?}",
         service.pane_environment_authority("%1")
     );
     assert!(
-        service.pane_environment_signature("%1").is_none(),
-        "an unmanaged dependency-free bootstrap must not publish an environment signature"
+        service.pane_environment_signature("%1").is_some(),
+        "pane mode must publish a successful dependency-free environment signature"
     );
 
     let hide = service
@@ -1051,19 +1049,16 @@ fn runtime_agent_shell_reentry_after_parent_bash_commands_completes_identity_pro
             && !service.pane_bootstrap_is_pending_for_tests("%1")
             && matches!(
                 service.pane_environment_authority("%1"),
-                RuntimePaneEnvironmentAuthority::Unavailable(
-                    crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::DependencyFreeShellUnattested
-                )
+                RuntimePaneEnvironmentAuthority::Certified
             )
         {
             reentry_completed = true;
             break;
         }
-        if let RuntimePaneEnvironmentAuthority::Unavailable(reason) =
-            service.pane_environment_authority("%1")
-            && reason
-                != crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::DependencyFreeShellUnattested
-        {
+        if matches!(
+            service.pane_environment_authority("%1"),
+            RuntimePaneEnvironmentAuthority::Unavailable(_)
+        ) {
             break;
         }
         wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));

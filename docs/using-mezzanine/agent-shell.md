@@ -130,43 +130,32 @@ Agent work waits for that dependency-free bootstrap to validate the foreign
 shell before generated input is released. Mezzanine never silently edits remote
 startup files and never installs software in the foreign environment.
 
-The dependency-free handoff is correlation only. On a local foreign shell the
-runtime records the pane's foreground process group when it writes the loader
-command and releases the bootstrap payload only after the pane worker observes a
-different foreground group. That process-bound check raises the bar for a
-replay, but the loader payload and the fresh child token are typed into the same
-PTY, so the pane's own foreground process can read them and echo the frames back.
-In-band frames, including a child-installed frame carrying that token, are
-therefore correlation records, never attestation against the pane's own
-foreground process.
+The dependency-free handoff uses correlation rather than cryptographic
+attestation. On a local foreign shell the runtime records the pane's foreground
+process group when it writes the loader command and releases the bootstrap
+payload only after the pane worker observes a different foreground group. The
+loader payload and fresh child token are typed into the same PTY, so a process
+that controls that PTY can observe and replay them. The process-group,
+interaction-generation, marker, and managed-child admission checks protect
+against stale, mismatched, and accidental records; they do not establish an
+unforgeable boundary against the active pane environment itself.
 
-Because that path cannot be made unforgeable, Mezzanine withholds environment and
-path authority for every dependency-free handoff: a local POSIX pane, an aliased
-SSH, container, or nested transport, and a managed child whose only install
-credential is the in-band child token. Environment and path authority are
-published only for a receiver installed by Mezzanine's own managed bootstrap
-handshake, whose receiver credentials are never delivered through the pane's
-input stream. A dependency-free pane may still correlate a shell identity, but it
-settles degraded and unattested with no environment signature, PATH authority,
-or path scopes published, and the withheld reason is reported in status and
-diagnostics. Explicit user input still reaches the pane; environment- or
-path-derived authority is not published for it.
+Selecting `pane` shell mode and explicitly entering the agent shell opts into
+using a successfully correlated pane bootstrap as environment and path
+authority. After the loader and child admission checks succeed, bootstrap
+completes with a parsed environment signature, and the required foreground
+observations agree, Mezzanine publishes that signature and its derived path
+authority and marks the pane ready for typed agent shell commands. This policy
+applies to the original local pane shell and to dependency-free SSH, container,
+chroot, and other nested interactive environments. The user remains responsible
+for deciding whether the active pane environment is appropriate for agent work.
 
-Mezzanine never promotes a pane shell dialect by executing a discovered or
-self-reported executable. The runtime classifies syntax from an OS-verified
-executable identity for the pane's own process or from the attested dialect of
-its own managed receiver; a renamed or wrapper shell without that evidence is
-typed unknown, settles degraded, and remains usable only through native mode.
-In-band frames and `--version` output are correlation records, never identity.
-
-While a dependency-free pane stays unattested, typed agent shell commands are
-refused: the pane's readiness never reaches `Ready`, so the
-`require_pane_ready_for_agent_command` preflight of every typed agent shell
-command fails before any input is generated. No agent shell action, path
-resolution, environment-evidence collection, or sandbox capability probe runs
-for such a pane, and none of them receives a command body. Explicit user input
-is unaffected: it still reaches the pane, and it is never gated on that
-readiness preflight.
+Mezzanine does not promote a pane shell from version text alone. Dependency-free
+identity discovery selects an absolute launch target and shell dialect for the
+current interaction generation, and successful bootstrap binds that identity to
+the correlated child lifecycle. Failed, truncated, stale, mismatched, or
+incomplete bootstrap evidence remains degraded and typed agent shell commands
+are refused before input is generated.
 
 An unmanaged nested shell that is not at an empty, interactive prompt cannot be
 probed safely from the local `ssh` or container-client process alone; Mezzanine

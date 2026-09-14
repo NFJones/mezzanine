@@ -5688,6 +5688,24 @@ action MUST NOT revoke the loader's restoration ownership; the live loader
 marker, pane primary process, and interaction generation remain authoritative
 until correlated settlement.
 
+Configuring `agents.shell_mode` as `pane`, or explicitly selecting pane mode for
+an existing pane, MUST constitute the user's authorization to treat a
+successfully correlated pane bootstrap as environment and path authority. The
+runtime MUST NOT require a separate pane, project, SSH, container, or shell
+trust decision merely because the bootstrap payload, receiver token, or result
+travels through the pane PTY. This policy MUST apply to both the original local
+pane shell and dependency-free SSH, container, chroot, and other nested
+interactive environments.
+
+The runtime MUST publish the parsed environment signature and derived path
+authority and mark the pane `Ready` only after the applicable loader nonce,
+managed-child admission, pane-process identity, interaction generation,
+non-truncated bootstrap, and foreground-process checks succeed. Missing,
+failed, stale, mismatched, or incomplete evidence MUST still fail closed. The
+manual MUST disclose that a process controlling the pane PTY can observe and
+replay in-band bootstrap material, and that choosing pane mode accepts that
+boundary at the user's discretion.
+
 Foreign bootstrap MUST have finite phase deadlines for identity discovery,
 loader readiness, child bootstrap, and
 certification.

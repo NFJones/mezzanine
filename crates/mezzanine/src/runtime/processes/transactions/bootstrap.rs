@@ -745,14 +745,6 @@ impl RuntimeSessionService {
             current.loader_launch_proof_group = loader_launch_proof_group;
             current.loader_ready_awaits_launch_proof = false;
         }
-        // The staging payload and its receiver token travel in-band through the
-        // pane PTY, so whatever owns the pane can read and replay them. This
-        // handoff is correlation only and can never publish environment or path
-        // authority; record the withholding before the payload is released.
-        self.mark_pane_environment_authority_unavailable(
-            pane_id,
-            RuntimePaneEnvironmentAuthorityUnavailableReason::DependencyFreeShellUnattested,
-        );
         if child_shell.is_none() {
             self.enter_agent_subshell(pane_id);
             self.take_agent_subshell_command_exit(pane_id);
@@ -761,7 +753,7 @@ impl RuntimeSessionService {
         self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(
-                r#"{{"pane_id":"{}","foreign_bootstrap":"loading_child","transport":"dependency-free","authority":"withheld","marker":"{}"}}"#,
+                r#"{{"pane_id":"{}","foreign_bootstrap":"loading_child","transport":"dependency-free","marker":"{}"}}"#,
                 json_escape(pane_id),
                 json_escape(&marker)
             ),
@@ -917,10 +909,7 @@ impl RuntimeSessionService {
             }
             RuntimeAgentSubshellCertificationOutcome::Certified => {
                 self.process.pane_bootstrap_pending.remove(pane_id);
-                // Promotion publishes Ready only for the runtime's own managed
-                // bootstrap handshake; dependency-free evidence settles the
-                // pane degraded because its environment and path authority are
-                // withheld.
+                self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
             }
         }
         if self.settle_managed_agent_surface_bootstrap(pane_id)? {

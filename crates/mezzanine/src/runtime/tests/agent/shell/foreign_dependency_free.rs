@@ -1472,37 +1472,17 @@ bootstrap\tcomplete\t1714500000\n";
         "the admitted dependency-free receiver still certifies pane shell identity"
     );
     assert!(
-        !service.pane_environment_authority_is_certified_for_tests(&pane_id),
-        "dependency-free in-band evidence must never publish environment authority"
+        service.pane_environment_authority_is_certified_for_tests(&pane_id),
+        "pane mode opts into publishing successful dependency-free environment authority"
     );
     assert!(
-        service.pane_environment_signature(&pane_id).is_none(),
-        "dependency-free in-band evidence must never publish an environment signature"
-    );
-    assert_eq!(
-        service.pane_environment_authority_failure_for_tests(&pane_id),
-        Some(
-            crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::DependencyFreeShellUnattested
-        ),
-        "a correlation-only dependency-free certification must report the withheld reason"
+        service.pane_environment_signature(&pane_id).is_some(),
+        "successful dependency-free bootstrap must publish an environment signature"
     );
     assert_eq!(
         service.pane_readiness_state(&pane_id),
-        PaneReadinessState::Degraded,
-        "a correlation-only dependency-free certification must settle degraded"
-    );
-    let path_request = mez_agent::shell::PanePathResolutionRequest::new(
-        vec![".".to_string()],
-        Vec::new(),
-        Vec::new(),
-    )
-    .unwrap();
-    assert!(
-        service
-            .path_scopes_for_pane_request(&pane_id, &path_request)
-            .map(|scopes| scopes.is_none())
-            .unwrap_or(true),
-        "dependency-free in-band evidence must never publish path authority"
+        PaneReadinessState::Ready,
+        "successful dependency-free certification must settle ready"
     );
 
     service
@@ -2586,13 +2566,6 @@ fn runtime_unattested_remote_dependency_free_shell_withholds_authority() {
         "the settlement must be a receiver-authentication rejection"
     );
     assert_eq!(
-        service.pane_environment_authority_failure_for_tests(&pane_id),
-        Some(
-            crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::DependencyFreeShellUnattested
-        ),
-        "the aliased transport must report the unattested authority reason"
-    );
-    assert_eq!(
         service.pane_readiness_state(&pane_id),
         PaneReadinessState::Degraded,
         "an unattested dependency-free shell must keep the pane degraded"
@@ -2614,17 +2587,17 @@ fn runtime_unattested_remote_dependency_free_shell_withholds_authority() {
     let _ = process.terminate(Duration::from_millis(10));
 }
 
-/// Verifies a dependency-free child token read from the in-band loader payload
-/// cannot turn replayed frames into environment or path authority.
+/// Verifies pane mode accepts a dependency-free child token read from the
+/// in-band loader payload after every configured correlation check succeeds.
 ///
 /// A PTY owner can fork into a fresh process group to satisfy the process-bound
 /// loader gate without executing the loader, read the released payload (which
 /// embeds the fresh child token), and replay the child-installed frame with that
-/// token, which admission accepts because the check is token equality. Nothing
-/// delivered through the pane PTY can attest the pane's own foreground process,
-/// so the admitted install must still withhold environment and path authority.
+/// token. Selecting pane mode deliberately accepts this boundary: after loader,
+/// token, process-generation, and bootstrap checks agree, the pane publishes the
+/// resulting environment and path authority.
 #[test]
-fn runtime_leaked_dependency_free_child_token_install_withholds_authority() {
+fn runtime_dependency_free_child_token_install_publishes_pane_mode_authority() {
     let mut service = test_runtime_service();
     let (pane_id, mut process) = start_foreign_shell_pane(&mut service);
     settle_dependency_free_identity_probe(
@@ -2776,37 +2749,17 @@ bootstrap\tcomplete\t1714500000\n";
     );
 
     assert!(
-        service.pane_environment_signature(&pane_id).is_none(),
-        "a leaked in-band child token must never publish an environment signature"
+        service.pane_environment_signature(&pane_id).is_some(),
+        "pane mode must publish the successfully correlated environment signature"
     );
     assert!(
-        !service.pane_environment_authority_is_certified_for_tests(&pane_id),
-        "a leaked in-band child token must never publish environment authority"
+        service.pane_environment_authority_is_certified_for_tests(&pane_id),
+        "pane mode must publish successfully correlated environment authority"
     );
     assert_eq!(
-        service.pane_environment_authority_failure_for_tests(&pane_id),
-        Some(
-            crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::DependencyFreeShellUnattested
-        ),
-        "the withheld reason must stay visible after the admitted install"
-    );
-    assert_ne!(
         service.pane_readiness_state(&pane_id),
         PaneReadinessState::Ready,
-        "an unattested dependency-free receiver must not report ready"
-    );
-    let request = mez_agent::shell::PanePathResolutionRequest::new(
-        vec![".".to_string()],
-        Vec::new(),
-        Vec::new(),
-    )
-    .unwrap();
-    assert!(
-        service
-            .path_scopes_for_pane_request(&pane_id, &request)
-            .map(|scopes| scopes.is_none())
-            .unwrap_or(true),
-        "a leaked in-band child token must never publish path authority"
+        "a successfully correlated dependency-free receiver must report ready"
     );
 
     let _ = process.terminate(Duration::from_millis(10));
@@ -2862,13 +2815,6 @@ fn runtime_local_posix_dependency_free_loader_replay_withholds_authority() {
     );
     assert!(!service.pane_environment_authority_is_certified_for_tests(&pane_id));
     assert_eq!(
-        service.pane_environment_authority_failure_for_tests(&pane_id),
-        Some(
-            crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::DependencyFreeShellUnattested
-        ),
-        "the local POSIX path must report the equally explicit withheld reason"
-    );
-    assert_eq!(
         service.pane_readiness_state(&pane_id),
         PaneReadinessState::Degraded,
         "a refused POSIX dependency-free replay must settle degraded"
@@ -2896,10 +2842,10 @@ fn runtime_local_posix_dependency_free_loader_replay_withholds_authority() {
 /// The aliased outer group cannot discriminate the remote child, and a POSIX
 /// pane has no managed child installation at all, so the earlier receiver gate
 /// never applied to it. The dependency-free handoff is correlation only, so the
-/// pane must settle unattested with no environment or path authority and the
-/// explicit withheld reason.
+/// pane publishes the correlated environment and path authority because the
+/// user selected pane mode for this interaction boundary.
 #[test]
-fn runtime_aliased_remote_posix_dependency_free_replay_withholds_authority() {
+fn runtime_aliased_remote_posix_dependency_free_replay_publishes_pane_mode_authority() {
     let mut service = test_runtime_service();
     let _primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -2961,34 +2907,14 @@ fn runtime_aliased_remote_posix_dependency_free_replay_withholds_authority() {
     );
 
     assert!(
-        service.pane_environment_signature(&pane_id).is_none(),
-        "an aliased POSIX dependency-free pane must not publish an environment signature"
+        service.pane_environment_signature(&pane_id).is_some(),
+        "pane mode must publish the correlated aliased POSIX environment signature"
     );
-    assert!(!service.pane_environment_authority_is_certified_for_tests(&pane_id));
+    assert!(service.pane_environment_authority_is_certified_for_tests(&pane_id));
     assert_eq!(
-        service.pane_environment_authority_failure_for_tests(&pane_id),
-        Some(
-            crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::DependencyFreeShellUnattested
-        ),
-        "the aliased POSIX pane must report the unattested reason"
-    );
-    assert_ne!(
         service.pane_readiness_state(&pane_id),
         PaneReadinessState::Ready,
-        "an unattested aliased POSIX pane must not report ready"
-    );
-    let request = mez_agent::shell::PanePathResolutionRequest::new(
-        vec![".".to_string()],
-        Vec::new(),
-        Vec::new(),
-    )
-    .unwrap();
-    assert!(
-        service
-            .path_scopes_for_pane_request(&pane_id, &request)
-            .map(|scopes| scopes.is_none())
-            .unwrap_or(true),
-        "an aliased POSIX dependency-free pane must not publish path authority"
+        "a successfully correlated aliased POSIX pane must report ready"
     );
 
     let _ = process.terminate(Duration::from_millis(10));
@@ -2997,13 +2923,12 @@ fn runtime_aliased_remote_posix_dependency_free_replay_withholds_authority() {
 /// Verifies clearing a dependency-free boundary invalidates the certification it
 /// owns instead of leaving a pending promotion behind.
 ///
-/// The dependency-free authority gate reads the live foreign boundary, and the
-/// boundary is cleared when the certified primary shell regains the PTY. A
+/// The boundary is cleared when the certified primary shell regains the PTY. A
 /// certification still waiting for its correlated observation across that clear
-/// could later promote a shell identity and publish the environment and path
-/// authority the gate withheld, so clearing must invalidate it. A local POSIX
-/// child has no managed receiver to authenticate, which is exactly the shape that
-/// leaves the certification pending under an adapter-owned process instance.
+/// could later promote a shell identity and publish environment and path authority
+/// for a stale interaction generation, so clearing must invalidate it. A local
+/// POSIX child has no managed receiver to authenticate, which is exactly the shape
+/// that leaves the certification pending under an adapter-owned process instance.
 #[test]
 fn runtime_cleared_dependency_free_boundary_invalidates_pending_certification() {
     let mut service = test_runtime_service();
