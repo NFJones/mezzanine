@@ -1269,10 +1269,10 @@ fn runtime_peer_message_echo_logs_committed_bridge_traffic_once() {
 /// Verifies model-authored peer mail still logs in both directions in the
 /// default normal mode, including a child with no subagent display name.
 ///
-/// The bridge gate keys on runtime-authored envelope provenance, never on the
-/// optional `subagent_display_name` extension or on delegation lineage, so a
-/// model `send_message` between a parent and a child keeps its `{name}> ` and
-/// `{name}< ` rows exactly as before.
+/// Normal-mode presentation admits only the exact canonical
+/// `text/plain; charset=utf-8` media type. Delegation lineage and the optional
+/// `subagent_display_name` extension do not affect that decision, so canonical
+/// model `send_message` traffic keeps its `{name}> ` and `{name}< ` rows.
 #[test]
 fn runtime_model_peer_mail_without_bridge_provenance_still_logs_both_directions() {
     // Parent -> child: the accepted outbound action echo names the recipient even
@@ -1287,10 +1287,10 @@ fn runtime_model_peer_mail_without_bridge_provenance_still_logs_both_directions(
     );
     service.terminate_all_pane_processes().unwrap();
 
-    // Child -> parent: the committed inbound echo names the sender. The child has
-    // no lineage and no display name, and one case carries a
-    // `subagent_display_name` field on a `send` envelope, so the gate provably
-    // depends on neither.
+    // Child -> parent: the committed inbound echo names the sender. The child
+    // has no lineage and no display name, and one case carries a
+    // `subagent_display_name` field on a canonical plaintext `send` envelope,
+    // proving that metadata does not affect the media-type decision.
     let mut service = test_runtime_service();
     service
         .attach_primary("primary", true, Size::new(60, 24).unwrap(), 120)
