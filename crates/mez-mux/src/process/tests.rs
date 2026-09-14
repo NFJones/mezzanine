@@ -886,56 +886,80 @@ fn cleared_environment_applies_harness_values_and_overrides_only() {
     // guaranteed to be a usable directory.
     let start_directory =
         std::env::temp_dir().join(format!("mez-cleared-launch-{}", std::process::id()));
+    let environment_output = start_directory.join("environment.txt");
     let _ = fs::remove_dir_all(&start_directory);
     fs::create_dir_all(&start_directory).unwrap();
 
     let launch = test_shell()
         .with_cleared_environment()
+        .with_environment_variable(
+            "MEZ_TEST_ENVIRONMENT_OUTPUT",
+            environment_output.to_string_lossy().into_owned(),
+        )
         .with_environment_variable("MEZ_TEST_OVERRIDE", "override-value");
     let mut process = spawn_pane_process_with_start_directory(
         &launch,
-        Some("sleep 30"),
+        Some(
+            "sh -c 'temporary=\"${MEZ_TEST_ENVIRONMENT_OUTPUT}.tmp\"; env > \"$temporary\"; mv \"$temporary\" \"$MEZ_TEST_ENVIRONMENT_OUTPUT\"; exec sleep 30'",
+        ),
         &test_environment(),
         Size::new(80, 24).unwrap(),
         Some(&start_directory),
     )
     .unwrap();
 
-    let environment = wait_for_exec_environment(
-        &process,
-        &[
-            b"MEZ",
-            b"MEZ_SESSION",
-            b"MEZ_WINDOW",
-            b"MEZ_PANE",
-            b"MEZ_TEST_OVERRIDE",
-        ],
-    );
-    let value_for = |key: &[u8]| {
-        environment
-            .iter()
-            .find(|entry| entry.key == key)
-            .map(|entry| entry.value.as_slice())
+    let mut environment = None;
+    for _ in 0..200 {
+        if let Ok(contents) = fs::read_to_string(&environment_output) {
+            environment = Some(contents);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let environment = environment.expect("the spawned pane process did not write its environment");
+    let value_for = |key: &str| {
+        environment.lines().find_map(|entry| {
+            let (entry_key, value) = entry.split_once('=')?;
+            (entry_key == key).then_some(value)
+        })
     };
-    let forwards = |key: &[u8]| value_for(key).is_some();
+    let forwards = |key: &str| value_for(key).is_some();
 
-    assert!(forwards(b"MEZ"));
-    assert!(forwards(b"MEZ_SESSION"));
-    assert!(forwards(b"MEZ_WINDOW"));
-    assert!(forwards(b"MEZ_PANE"));
-    assert!(forwards(b"TERM"));
-    assert!(forwards(b"GIT_OPTIONAL_LOCKS"));
-    assert_eq!(
-        value_for(b"MEZ_TEST_OVERRIDE"),
-        Some(b"override-value".as_slice())
-    );
+    assert!(forwards("MEZ"));
+    assert!(forwards("MEZ_SESSION"));
+    assert!(forwards("MEZ_WINDOW"));
+    assert!(forwards("MEZ_PANE"));
+    assert!(forwards("TERM"));
+    assert!(forwards("GIT_OPTIONAL_LOCKS"));
+    assert_eq!(value_for("MEZ_TEST_OVERRIDE"), Some("override-value"));
+
+    #[cfg(target_os = "macos")]
+    {
+        // `KERN_PROCARGS2` can omit another process's environment. Force that
+        // fallback path and compare its code-owned launch contract against the
+        // atomic child snapshot, including portable-pty's injected `SHELL`.
+        process.primary_pid = 0;
+        let fallback = process
+            .environment()
+            .expect("the macOS fallback must retain the pane launch environment");
+        for entry in fallback {
+            let key = String::from_utf8(entry.key).expect("test launch keys are UTF-8");
+            let value = String::from_utf8(entry.value).expect("test launch values are UTF-8");
+            assert_eq!(
+                value_for(&key),
+                Some(value.as_str()),
+                "fallback {key} diverged"
+            );
+        }
+        assert!(forwards("SHELL"));
+    }
 
     assert!(
-        !forwards(b"PATH"),
+        !forwards("PATH"),
         "a cleared base must not inherit the daemon PATH"
     );
     assert!(
-        !forwards(b"HOME"),
+        !forwards("HOME"),
         "a cleared base must not inherit the daemon HOME"
     );
 
@@ -963,47 +987,11 @@ fn cleared_environment_applies_harness_values_and_overrides_only() {
             continue;
         }
         assert!(
-            !forwards(key.as_bytes()),
+            !forwards(key),
             "daemon-only {key} must not survive a cleared pane launch"
         );
     }
 
     let _status = process.terminate(Duration::from_millis(100)).unwrap();
     let _ = fs::remove_dir_all(&start_directory);
-}
-
-/// Waits for a freshly spawned pane process to expose its complete exec-time
-/// environment, which the kernel populates only after `execve`.
-///
-/// A single `/proc` (or `KERN_PROCARGS2`) read can observe the environment
-/// region while the kernel is still writing it, so this waits until every
-/// required key is present and two consecutive reads agree on the key set
-/// before returning; the caller's presence and absence assertions then describe
-/// one stable snapshot instead of a torn one.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn wait_for_exec_environment(
-    process: &super::PaneProcess,
-    required_keys: &[&[u8]],
-) -> Vec<super::RawEnvironmentEntry> {
-    let mut previous_keys: Option<Vec<Vec<u8>>> = None;
-    for _ in 0..200 {
-        if let Some(environment) = process_environment_for_pid(process.primary_pid())
-            && !environment.is_empty()
-            && required_keys
-                .iter()
-                .all(|key| environment.iter().any(|entry| entry.key.as_slice() == *key))
-        {
-            let mut keys = environment
-                .iter()
-                .map(|entry| entry.key.clone())
-                .collect::<Vec<_>>();
-            keys.sort();
-            if previous_keys.as_deref() == Some(keys.as_slice()) {
-                return environment;
-            }
-            previous_keys = Some(keys);
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    panic!("the spawned pane process did not expose a complete exec-time environment");
 }

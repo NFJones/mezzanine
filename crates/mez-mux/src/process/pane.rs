@@ -254,6 +254,12 @@ pub struct PaneProcess {
     /// backlog. Saturation preserves monotonic comparisons over process life.
     #[cfg(target_os = "macos")]
     pub(super) shell_input_acknowledgements_seen: usize,
+    /// Exact environment requested when this pane was spawned on macOS.
+    ///
+    /// Darwin can omit another process's environment from `KERN_PROCARGS2`,
+    /// so retain the launch contract as a fallback for pane-root evidence.
+    #[cfg(target_os = "macos")]
+    pub(super) launch_environment: Vec<RawEnvironmentEntry>,
     /// Stores the primary pid value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -370,11 +376,23 @@ impl PaneProcess {
     ///
     /// On Linux this reads `/proc/<pid>/environ`; the result reflects the
     /// environment captured when the process was executed and does not track
-    /// later variable changes. Platforms without an equivalent non-invasive
-    /// process query return `None`. Values may contain arbitrary non-UTF-8
-    /// bytes and must be treated as protected runtime state.
+    /// later variable changes. On macOS, `KERN_PROCARGS2` can omit a child
+    /// environment, so panes spawned by this process fall back to their exact
+    /// launch contract. Values may contain arbitrary non-UTF-8 bytes and must
+    /// be treated as protected runtime state.
     pub fn environment(&self) -> Option<Vec<RawEnvironmentEntry>> {
         process_environment_for_pid(self.primary_pid)
+            .filter(|environment| !environment.is_empty())
+            .or_else(|| {
+                #[cfg(target_os = "macos")]
+                {
+                    (!self.launch_environment.is_empty()).then(|| self.launch_environment.clone())
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    None
+                }
+            })
     }
 
     /// Runs the resize operation for this subsystem.

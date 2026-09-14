@@ -576,6 +576,35 @@ fn deepest_stored_trust_decision_governs_nested_repository_states() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies comparison canonicalization resolves a missing descendant through
+/// a symlink without changing the stored trust-root provenance.
+#[test]
+fn missing_descendant_under_symlink_uses_stored_root_provenance() {
+    let root = temp_root("resolver-missing-symlink-descendant");
+    let target = root.join("target");
+    let alias = root.join("alias");
+    fs::create_dir_all(&target).unwrap();
+    std::os::unix::fs::symlink(&target, &alias).unwrap();
+
+    let mut store = ProjectTrustStore::default();
+    store.records.insert(
+        alias.clone(),
+        stored_record(
+            alias.clone(),
+            TrustDecision::Trusted,
+            1,
+            CURRENT_CONFIG_SCHEMA_VERSION as u32,
+        ),
+    );
+
+    assert_eq!(
+        resolve_project_trust_provenance(&store, &alias.join("missing/child")),
+        ProjectTrustProvenance::TrustedRoot(alias)
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies repository markers alone never invent a project-trust decision.
 ///
 /// Project discovery finds the nearest repository, but only a stored decision

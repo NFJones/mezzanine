@@ -5,12 +5,19 @@
 
 use std::path::Path;
 
+#[cfg(target_os = "macos")]
+use std::collections::BTreeMap;
+#[cfg(target_os = "macos")]
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
 use portable_pty::{CommandBuilder, native_pty_system};
 
 use crate::{MuxError as MezError, Result};
 use mez_terminal::TerminalSize;
 
 use super::pane::{PaneProcess, configure_pty_master_nonblocking};
+#[cfg(target_os = "macos")]
+use super::process_metadata::RawEnvironmentEntry;
 use super::pty::pty_size;
 use super::types::{PaneCommandPlan, PaneProcessEnvironment, PaneProcessLaunch};
 
@@ -71,6 +78,8 @@ pub fn spawn_argv_pty_process(
         shell_input_acknowledgements_supported: false,
         #[cfg(target_os = "macos")]
         shell_input_acknowledgements_seen: 0,
+        #[cfg(target_os = "macos")]
+        launch_environment: Vec::new(),
         primary_pid,
         process_group_leader,
         initial_working_directory,
@@ -186,6 +195,8 @@ pub fn spawn_pane_process_with_start_directory(
     for (key, value) in launch.environment() {
         command.env(key, value);
     }
+    #[cfg(target_os = "macos")]
+    let launch_environment = pane_launch_environment(launch, environment, &command.get_shell());
 
     let child = pair
         .slave
@@ -211,6 +222,8 @@ pub fn spawn_pane_process_with_start_directory(
         shell_input_acknowledgements_supported: explicit_command.is_none(),
         #[cfg(target_os = "macos")]
         shell_input_acknowledgements_seen: 0,
+        #[cfg(target_os = "macos")]
+        launch_environment,
         primary_pid,
         process_group_leader,
         initial_working_directory,
@@ -230,6 +243,47 @@ fn initial_working_directory(start_directory: Option<&Path>) -> Option<std::path
             .or_else(|| Some(start_directory.to_path_buf())),
         None => std::env::current_dir().ok(),
     }
+}
+
+/// Captures the effective environment requested for one macOS pane launch.
+///
+/// Darwin can omit another process's environment from `KERN_PROCARGS2`, so a
+/// pane retains this code-owned launch contract as metadata fallback. Explicit
+/// harness and launch values replace inherited values exactly as the command
+/// builder does.
+#[cfg(target_os = "macos")]
+fn pane_launch_environment(
+    launch: &PaneProcessLaunch,
+    environment: &PaneProcessEnvironment,
+    shell: &str,
+) -> Vec<RawEnvironmentEntry> {
+    let mut entries = if launch.clears_environment() {
+        BTreeMap::new()
+    } else {
+        std::env::vars_os()
+            .map(|(key, value)| (key.into_vec(), value.into_vec()))
+            .collect::<BTreeMap<_, _>>()
+    };
+    for (key, value) in [
+        (b"MEZ".as_slice(), environment.mez.as_bytes()),
+        (b"MEZ_SESSION".as_slice(), environment.session.as_bytes()),
+        (b"MEZ_WINDOW".as_slice(), environment.window.as_bytes()),
+        (b"MEZ_PANE".as_slice(), environment.pane.as_bytes()),
+        (b"TERM".as_slice(), environment.term.as_bytes()),
+        (b"GIT_OPTIONAL_LOCKS".as_slice(), b"0".as_slice()),
+    ] {
+        entries.insert(key.to_vec(), value.to_vec());
+    }
+    for (key, value) in launch.environment() {
+        entries.insert(key.as_bytes().to_vec(), value.as_bytes().to_vec());
+    }
+    entries
+        .entry(b"SHELL".to_vec())
+        .or_insert_with(|| shell.as_bytes().to_vec());
+    entries
+        .into_iter()
+        .map(|(key, value)| RawEnvironmentEntry { key, value })
+        .collect()
 }
 
 /// Runs the validate start directory operation for this subsystem.

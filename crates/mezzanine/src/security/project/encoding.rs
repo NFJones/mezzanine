@@ -108,13 +108,35 @@ impl ProjectTrustRecord {
     }
 }
 
-/// Runs the canonicalize existing or original operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
 pub(super) fn canonicalize_existing_or_original(path: PathBuf) -> PathBuf {
     path.canonicalize().unwrap_or(path)
+}
+
+/// Canonicalizes the deepest existing ancestor while retaining a missing suffix.
+///
+/// Trust provenance can receive a not-yet-created working subdirectory. This
+/// comparison-only form preserves that suffix below the canonical ancestor so
+/// macOS `/var` aliases compare consistently without changing record identity.
+pub(super) fn canonicalize_for_comparison(path: PathBuf) -> PathBuf {
+    let mut cursor = path.as_path();
+    let mut suffix = PathBuf::new();
+    loop {
+        if let Ok(canonical) = cursor.canonicalize() {
+            return if suffix.as_os_str().is_empty() {
+                canonical
+            } else {
+                canonical.join(suffix)
+            };
+        }
+        let Some(name) = cursor.file_name() else {
+            return path;
+        };
+        suffix = Path::new(name).join(suffix);
+        let Some(parent) = cursor.parent() else {
+            return path;
+        };
+        cursor = parent;
+    }
 }
 
 /// Runs the unix now seconds operation for this subsystem.

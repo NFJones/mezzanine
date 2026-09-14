@@ -1,6 +1,9 @@
 //! Runtime tests for actions patch dispatch behavior.
 
-use crate::runtime::processes::RuntimeAgentSubshellCertificationRejection;
+use crate::runtime::processes::{
+    RuntimeAgentSubshellCertificationRejection, RuntimePaneProcessIdentityInjection,
+    RuntimePaneProcessRole,
+};
 
 use super::*;
 
@@ -280,6 +283,17 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_shell_process_
     service
         .pane_processes_mut()
         .set_primary_pid_for_test("%1", primary_pid.saturating_add(1));
+    service.inject_pane_process_identity_for_tests(
+        "%1",
+        RuntimePaneProcessIdentityInjection::Identity {
+            role: RuntimePaneProcessRole::AdapterOwnedRoot,
+            generation: None,
+            process_id: primary_pid.saturating_add(1),
+            start_token: 1,
+            executable_path: PathBuf::from("/bin/sh"),
+            live_start_token: None,
+        },
+    );
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -333,6 +347,12 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_shell_process_
             terminal_state: AgentTurnState::Running,
         },
     );
+    let execution = service
+        .agent_turn_executions()
+        .get(&turn.turn_id)
+        .cloned()
+        .unwrap();
+    append_test_execution_assistant_context(&mut service, &turn, &execution);
     service.remove_pending_agent_provider_task(&turn.turn_id);
     service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
 

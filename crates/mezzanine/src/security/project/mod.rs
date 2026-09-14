@@ -55,8 +55,8 @@ pub use types::{
 };
 
 use encoding::{
-    canonicalize_existing_or_original, parse_record_line, set_private_file_permissions,
-    unix_now_seconds,
+    canonicalize_existing_or_original, canonicalize_for_comparison, parse_record_line,
+    set_private_file_permissions, unix_now_seconds,
 };
 
 /// Exposes the tests module boundary.

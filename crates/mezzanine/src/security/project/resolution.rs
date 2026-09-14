@@ -15,7 +15,7 @@
 
 use super::{
     Path, PathBuf, ProjectTrustRecord, ProjectTrustStore, TrustDecision,
-    canonicalize_existing_or_original,
+    canonicalize_for_comparison,
 };
 
 /// Typed provenance for the deepest stored trust decision governing one path.
@@ -103,11 +103,10 @@ pub fn resolve_project_trust_provenance(
     store: &ProjectTrustStore,
     working_directory: &Path,
 ) -> ProjectTrustProvenance {
-    let canonical_working_directory =
-        canonicalize_existing_or_original(working_directory.to_path_buf());
+    let canonical_working_directory = canonicalize_for_comparison(working_directory.to_path_buf());
     let mut deepest: Option<(PathBuf, &ProjectTrustRecord)> = None;
     for record in store.records_matching_current_versions() {
-        let canonical_root = canonicalize_existing_or_original(record.project_root.clone());
+        let canonical_root = canonicalize_for_comparison(record.project_root.clone());
         if !canonical_working_directory.starts_with(&canonical_root) {
             continue;
         }
