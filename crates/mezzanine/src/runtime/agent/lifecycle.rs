@@ -103,6 +103,7 @@ impl RuntimeSessionService {
             .find(|turn| turn.turn_id == turn_id)
             .cloned()
             .ok_or_else(|| MezError::new(crate::error::MezErrorKind::NotFound, "turn not found"))?;
+        let completion_attention_eligible = self.subagent_lineage(&turn.agent_id).is_none();
         let suppress_exit_output = self
             .agent_shell_store()
             .get(pane_id)
@@ -153,7 +154,7 @@ impl RuntimeSessionService {
         self.agent_turn_ledger_mut().finish_turn(turn_id, state)?;
         self.reconcile_active_turn_sleep_inhibition();
         if !awaiting_redirection
-            && turn.parent_turn_id.is_none()
+            && completion_attention_eligible
             && matches!(
                 state,
                 AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
@@ -190,6 +191,9 @@ impl RuntimeSessionService {
             self.close_terminal_subagent_pane_if_pending(&turn)?;
         }
         self.start_ready_agent_turns()?;
+        if !completion_attention_eligible {
+            self.presentation.acknowledge_completion_attention(pane_id);
+        }
         self.checkpoint_agent_session_metadata()?;
         Ok(finished)
     }
@@ -284,6 +288,7 @@ impl RuntimeSessionService {
         let conversation_still_owned = current_conversation == Some(turn.conversation_id.as_str());
         let conversation_was_replaced = current_conversation
             .is_some_and(|conversation_id| conversation_id != turn.conversation_id);
+        let completion_attention_eligible = self.subagent_lineage(&turn.agent_id).is_none();
         if state == AgentTurnState::Interrupted {
             self.finalize_agent_streaming_say_presentation(&turn.pane_id, Some(&turn.turn_id))?;
         } else if matches!(state, AgentTurnState::Completed | AgentTurnState::Failed) {
@@ -334,7 +339,7 @@ impl RuntimeSessionService {
         if pane_present
             && conversation_still_owned
             && !awaiting_redirection
-            && turn.parent_turn_id.is_none()
+            && completion_attention_eligible
             && matches!(
                 state,
                 AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
@@ -373,6 +378,10 @@ impl RuntimeSessionService {
             self.close_terminal_subagent_pane_if_pending(turn)?;
         }
         self.start_ready_agent_turns()?;
+        if !completion_attention_eligible {
+            self.presentation
+                .acknowledge_completion_attention(&turn.pane_id);
+        }
         self.checkpoint_agent_session_metadata()?;
         Ok(session)
     }

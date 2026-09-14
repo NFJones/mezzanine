@@ -1340,6 +1340,9 @@ impl RuntimeSessionService {
             new_environment_snapshot,
         } = self.agent_context_for_pane_prompt_with_message_delivery(pane_id, prompt, 100, true)?;
         let agent_id = format!("agent-{pane_id}");
+        if self.subagent_lineage(&agent_id).is_none() {
+            self.presentation.acknowledge_completion_attention(pane_id);
+        }
         let recipient = AgentId::opaque(agent_id.clone())
             .ok_or_else(|| MezError::invalid_state("runtime agent id is invalid for MMP"))?;
         if !self.can_admit_received_peer_message_presentation_batch(&recipient, &delivered_messages)

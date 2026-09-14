@@ -170,7 +170,6 @@ fn openai_context_epoch_identity(
         static_instructions_sha256: sha256_hex(rendered.instructions.as_bytes()),
         maap_schema_version: "maap/1".to_string(),
         response_format_sha256: canonical_json_sha256(&response_format)?,
-        interaction_family: request.interaction_kind.as_str().to_string(),
         tool_schema_sha256: canonical_json_sha256(&tools)?,
         tool_choice_sha256: canonical_json_sha256(&tool_choice)?,
         request_controls_sha256: canonical_json_sha256(&request_controls)?,
@@ -604,6 +603,84 @@ mod tests {
         let body: serde_json::Value =
             serde_json::from_str(&crate::openai_responses_request_body(&changed).unwrap()).unwrap();
         assert_eq!(body["instructions"], "second epoch instructions");
+    }
+
+    /// Verifies a controller-only interaction-kind change keeps an OpenAI
+    /// request in the same epoch when every provider-visible field is unchanged.
+    ///
+    /// Capability continuation and ordinary action execution use the same MAAP
+    /// response shape in this fixture. The epoch must therefore retain the
+    /// original canonical input prefix instead of treating the internal mode
+    /// label as a provider cache boundary.
+    #[test]
+    fn openai_mode_only_transition_preserves_context_epoch_and_input_prefix() {
+        let mut first = request_chain_fixture(vec![ModelMessage {
+            role: ModelMessageRole::User,
+            source: ContextSourceKind::UserInstruction,
+            placement: crate::ContextPlacement::ConversationAppend,
+            content: "continue cache reuse".to_string(),
+        }]);
+        prepare_openai_request_prefix_extension(&mut first, None).unwrap();
+        let first_body: serde_json::Value =
+            serde_json::from_str(&crate::openai_responses_request_body(&first).unwrap()).unwrap();
+
+        let mut continued = first.clone();
+        continued.interaction_kind = ModelInteractionKind::CapabilityContinuation;
+        continued.messages.push(ModelMessage {
+            role: ModelMessageRole::Assistant,
+            source: ContextSourceKind::TranscriptAssistant,
+            placement: crate::ContextPlacement::ConversationAppend,
+            content: "continuing work".to_string(),
+        });
+        prepare_openai_request_prefix_extension(&mut continued, Some(&first)).unwrap();
+        let continued_body: serde_json::Value =
+            serde_json::from_str(&crate::openai_responses_request_body(&continued).unwrap())
+                .unwrap();
+
+        assert!(matches!(
+            continued
+                .messages
+                .provider_request_epoch()
+                .unwrap()
+                .epoch_transition,
+            ContextEpochTransition::Initial
+        ));
+        assert_eq!(
+            first_body["input"].as_array().unwrap(),
+            &continued_body["input"].as_array().unwrap()
+                [..first_body["input"].as_array().unwrap().len()]
+        );
+    }
+
+    /// Verifies a mode transition that changes rendered provider instructions
+    /// still starts a new epoch under the concrete instruction fingerprint.
+    ///
+    /// Controller mode labels themselves are not cache inputs, but the MAAP
+    /// repair transition adds a stable provider-visible instruction. That
+    /// instruction must remain an epoch boundary even after interaction-family
+    /// metadata is removed from the cache identity.
+    #[test]
+    fn openai_mode_transition_with_changed_instructions_starts_instruction_epoch() {
+        let mut first = request_chain_fixture(vec![ModelMessage {
+            role: ModelMessageRole::User,
+            source: ContextSourceKind::UserInstruction,
+            placement: crate::ContextPlacement::ConversationAppend,
+            content: "repair cache continuity".to_string(),
+        }]);
+        prepare_openai_request_prefix_extension(&mut first, None).unwrap();
+
+        let mut repair = first.clone();
+        crate::select_model_interaction_kind(&mut repair, ModelInteractionKind::MaapRepair);
+        prepare_openai_request_prefix_extension(&mut repair, Some(&first)).unwrap();
+
+        assert!(matches!(
+            repair
+                .messages
+                .provider_request_epoch()
+                .unwrap()
+                .epoch_transition,
+            ContextEpochTransition::Changed(crate::ContextEpochComponent::StaticInstructions)
+        ));
     }
 
     /// Verifies OpenAI request rendering ignores hidden provider-native

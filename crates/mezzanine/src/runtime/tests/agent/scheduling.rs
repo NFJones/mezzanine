@@ -662,6 +662,21 @@ fn runtime_background_subagent_completion_does_not_register_attention() {
         .split_active_pane(&primary, SplitDirection::Vertical)
         .unwrap();
 
+    service.set_subagent_lineage(
+        format!("agent-{background_pane}"),
+        RuntimeSubagentLineage {
+            parent_agent_id: "agent-%parent".to_string(),
+            root_agent_id: "agent-%parent".to_string(),
+            depth: 1,
+            display_name: "child".to_string(),
+            terminal: false,
+        },
+    );
+    assert!(
+        service
+            .subagent_lineage(&format!("agent-{background_pane}"))
+            .is_some()
+    );
     service
         .start_agent_turn(mez_agent::AgentTurnRecord {
             turn_id: "child-attention-turn".to_string(),
@@ -673,12 +688,24 @@ fn runtime_background_subagent_completion_does_not_register_attention() {
             deadline_at_unix_millis: 0,
             policy_profile: "default".to_string(),
             model_profile: "default".to_string(),
-            parent_turn_id: Some("root-attention-turn".to_string()),
+            parent_turn_id: None,
             cooperation_mode: None,
             state: mez_agent::AgentTurnState::Queued,
             initial_capability: None,
         })
         .unwrap();
+    assert!(
+        service
+            .subagent_lineage(&format!("agent-{background_pane}"))
+            .is_some()
+    );
+    assert!(
+        service
+            .terminal_frame_context()
+            .panes
+            .get(&background_pane)
+            .is_some_and(|pane| !pane.completion_attention)
+    );
     service
         .finish_agent_turn(
             &background_pane,
@@ -692,9 +719,169 @@ fn runtime_background_subagent_completion_does_not_register_attention() {
         pane_context
             .panes
             .get(&background_pane)
-            .is_some_and(|pane| !pane.completion_attention)
+            .is_none_or(|pane| !pane.completion_attention)
     );
     assert_eq!(pane_context.animation_tick_ms, 0);
+}
+
+/// Verifies a new user-owned turn clears only its own stale completion
+/// attention without requiring focus or any separate input acknowledgement.
+///
+/// Completion attention belongs to the completed pane, which can remain in the
+/// background while the user starts a follow-up turn programmatically. The
+/// turn-start boundary must clear that pane's prior completion marker while
+/// preserving any marker belonging to another pane.
+#[test]
+fn runtime_user_turn_start_clears_its_own_completion_attention() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    let background_pane = service.active_pane_id().unwrap();
+    let focused_pane = service
+        .session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap()
+        .to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&background_pane)
+        .unwrap();
+    service
+        .presentation
+        .register_completion_attention(&background_pane, Some(&focused_pane));
+    service
+        .presentation
+        .register_completion_attention(&focused_pane, Some(&background_pane));
+
+    service
+        .start_agent_prompt_turn(&background_pane, "continue the completed work")
+        .unwrap();
+
+    let pane_context = service.terminal_frame_context();
+    assert!(
+        pane_context
+            .panes
+            .get(&background_pane)
+            .is_some_and(|pane| !pane.completion_attention)
+    );
+    assert!(
+        pane_context
+            .panes
+            .get(&focused_pane)
+            .is_some_and(|pane| pane.completion_attention)
+    );
+}
+
+/// Verifies a lineage-free local-message turn preserves existing completion
+/// attention because it is not a new user prompt.
+///
+/// Runtime-triggered work may use the same root agent and pane as a user
+/// session, but it must not acknowledge the user's completed-turn marker. Only
+/// the explicit user-prompt lifecycle boundary is allowed to clear that state.
+#[test]
+fn runtime_local_message_turn_preserves_completion_attention() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    let background_pane = service.active_pane_id().unwrap();
+    let focused_pane = service
+        .session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap()
+        .to_string();
+    service
+        .presentation
+        .register_completion_attention(&background_pane, Some(&focused_pane));
+
+    service
+        .start_agent_turn(mez_agent::AgentTurnRecord {
+            turn_id: "local-message-attention-turn".to_string(),
+            conversation_id: "conversation-local-message".to_string(),
+            agent_id: format!("agent-{background_pane}"),
+            pane_id: background_pane.clone(),
+            trigger: mez_agent::AgentTurnTrigger::LocalMessage,
+            started_at_unix_seconds: 200,
+            deadline_at_unix_millis: 0,
+            policy_profile: "default".to_string(),
+            model_profile: "default".to_string(),
+            parent_turn_id: None,
+            cooperation_mode: None,
+            state: mez_agent::AgentTurnState::Queued,
+            initial_capability: None,
+        })
+        .unwrap();
+
+    assert!(
+        service
+            .terminal_frame_context()
+            .panes
+            .get(&background_pane)
+            .is_some_and(|pane| pane.completion_attention)
+    );
+}
+
+/// Verifies no-shell terminal cleanup clears pre-existing completion attention
+/// for a lineage-owned subagent pane.
+///
+/// Queued or blocked turns can terminate without passing through the shell-bound
+/// completion path. That sibling lifecycle path must remove a stale child marker
+/// just like normal terminal cleanup, because spawned sessions never own user
+/// completion attention.
+#[test]
+fn runtime_no_shell_subagent_completion_clears_existing_attention() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    let child_pane = service.active_pane_id().unwrap();
+    let focused_pane = service
+        .session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap()
+        .to_string();
+    let agent_id = format!("agent-{child_pane}");
+    service.set_subagent_lineage(
+        agent_id.clone(),
+        RuntimeSubagentLineage {
+            parent_agent_id: "agent-%parent".to_string(),
+            root_agent_id: "agent-%parent".to_string(),
+            depth: 1,
+            display_name: "child".to_string(),
+            terminal: false,
+        },
+    );
+    service
+        .presentation
+        .register_completion_attention(&child_pane, Some(&focused_pane));
+    let turn = mez_agent::AgentTurnRecord {
+        turn_id: "no-shell-child-attention-turn".to_string(),
+        conversation_id: "conversation-no-shell-child".to_string(),
+        agent_id,
+        pane_id: child_pane.clone(),
+        trigger: mez_agent::AgentTurnTrigger::SubagentEvent,
+        started_at_unix_seconds: 200,
+        deadline_at_unix_millis: 0,
+        policy_profile: "default".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        cooperation_mode: None,
+        state: mez_agent::AgentTurnState::Queued,
+        initial_capability: None,
+    };
+    service.start_agent_turn(turn.clone()).unwrap();
+    service
+        .finish_agent_turn_without_shell_session(&turn, mez_agent::AgentTurnState::Completed)
+        .unwrap();
+
+    assert!(
+        service
+            .terminal_frame_context()
+            .panes
+            .get(&child_pane)
+            .is_none_or(|pane| !pane.completion_attention)
+    );
 }
 
 /// Verifies that the pane renderer blocks shell prompt repaint bytes while an

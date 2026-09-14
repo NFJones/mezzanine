@@ -2513,13 +2513,6 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         request: mez_agent::ModelRequest,
     ) {
-        if request
-            .interaction_kind
-            .expected_cache_break_reason()
-            .is_some()
-        {
-            return;
-        }
         self.agent
             .agent_turn_provider_request_chains
             .insert(turn.turn_id.clone(), request.clone());

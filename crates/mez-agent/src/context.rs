@@ -2746,8 +2746,6 @@ pub enum ContextEpochComponent {
     MaapSchema,
     /// Provider response-format contract changed.
     ResponseFormat,
-    /// Interaction family changed.
-    InteractionFamily,
     /// Provider tool schema changed.
     ToolSchema,
     /// Provider tool-choice control changed.
@@ -2774,7 +2772,6 @@ pub struct ContextEpochIdentity {
     pub static_instructions_sha256: String,
     pub maap_schema_version: String,
     pub response_format_sha256: String,
-    pub interaction_family: String,
     pub tool_schema_sha256: String,
     pub tool_choice_sha256: String,
     pub request_controls_sha256: String,
@@ -2808,10 +2805,6 @@ impl ContextEpochIdentity {
             (
                 ContextEpochComponent::ResponseFormat,
                 self.response_format_sha256 != current.response_format_sha256,
-            ),
-            (
-                ContextEpochComponent::InteractionFamily,
-                self.interaction_family != current.interaction_family,
             ),
             (
                 ContextEpochComponent::ToolSchema,

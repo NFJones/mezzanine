@@ -735,7 +735,7 @@ fn runtime_openai_request_chain_survives_completed_turn_boundary() {
     mez_agent::prepare_openai_request_prefix_extension(&mut first_request, None).unwrap();
     service.retain_agent_provider_request_chain(&first_turn, first_request.clone());
     let mut exceptional_request = first_request.clone();
-    exceptional_request.interaction_kind = mez_agent::ModelInteractionKind::MaapRepair;
+    exceptional_request.interaction_kind = mez_agent::ModelInteractionKind::OutputLimitRetry;
     service.retain_agent_provider_request_chain(&first_turn, exceptional_request);
     let first_body: serde_json::Value =
         serde_json::from_str(&mez_agent::openai_responses_request_body(&first_request).unwrap())
@@ -772,7 +772,11 @@ fn runtime_openai_request_chain_survives_completed_turn_boundary() {
     let previous = prepared
         .previous_request()
         .expect("completed turn should retain its conversation-scoped request");
-    assert_eq!(previous, &first_request);
+    assert_eq!(
+        previous.interaction_kind,
+        mez_agent::ModelInteractionKind::OutputLimitRetry,
+        "a compatible mode previously classified as a cache break retains the conversation baseline"
+    );
 
     let mut second_request = first_request.clone();
     second_request.turn_id = second_turn.turn_id;

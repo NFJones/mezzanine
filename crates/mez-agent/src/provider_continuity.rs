@@ -221,7 +221,6 @@ fn provider_native_epoch_identity(
         static_instructions_sha256: sha256_hex(&canonical_json_bytes(&static_projection)?),
         maap_schema_version: "maap/1".to_string(),
         response_format_sha256: sha256_hex(&canonical_json_bytes(&response_format)?),
-        interaction_family: request.interaction_kind.as_str().to_string(),
         tool_schema_sha256: sha256_hex(&canonical_json_bytes(&tools)?),
         tool_choice_sha256: sha256_hex(&canonical_json_bytes(&tool_choice)?),
         request_controls_sha256: sha256_hex(&canonical_json_bytes(&Value::Object(
