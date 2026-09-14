@@ -175,6 +175,7 @@ impl RuntimeSessionService {
         if execution.terminal_state == AgentTurnState::Blocked {
             self.apply_permission_request_hooks_for_execution(turn, &mut execution)?;
         }
+        self.finalize_settled_outbound_message_previews(&turn.pane_id, &turn.turn_id, &execution)?;
         self.present_agent_action_outcomes_to_terminal_buffer(&turn.pane_id, &execution)?;
         let failure_feedback_queued = self.queue_agent_failure_feedback_for_correction(
             turn,

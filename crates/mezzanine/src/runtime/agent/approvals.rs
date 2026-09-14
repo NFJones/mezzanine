@@ -1013,8 +1013,13 @@ impl RuntimeSessionService {
                         ),
                     )?;
                 }
-                let result = self.execute_message_action_for_turn(&turn, &action)?;
+                let result = self.execute_message_action_for_turn(&turn, result_index, &action)?;
                 execution.action_results[result_index] = result;
+                self.finalize_settled_outbound_message_previews(
+                    &turn.pane_id,
+                    &turn.turn_id,
+                    &execution,
+                )?;
             }
             _ => return Ok(None),
         }

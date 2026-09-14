@@ -39,8 +39,8 @@ use crate::runtime::{
     runtime_peer_message_presentation_is_visible,
 };
 use mez_agent::{
-    AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, AgentShellVisibility, agent_output_content_type_is_diff,
-    agent_output_content_type_is_markdown,
+    AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, AgentActionPayload, AgentShellVisibility,
+    agent_output_content_type_is_diff, agent_output_content_type_is_markdown,
 };
 use mez_mux::{
     copy::{COPY_WRAP_CONTINUATION, encode_copy_source_line_in_group},
@@ -3984,6 +3984,197 @@ impl RuntimeSessionService {
             .is_some_and(|indices| indices.contains(&action_index))
     }
 
+    /// Settles one accepted model-authored outbound message presentation.
+    ///
+    /// Message-service acceptance is the sole authority for this sender row.
+    /// An exact streamed source keeps its installed screen in place; an
+    /// accepted non-streaming action appends the same live-only rendition.
+    /// Neither path persists a sender source or changes receiver receipts.
+    pub(crate) fn settle_accepted_outbound_message_preview(
+        &mut self,
+        pane_id: &str,
+        turn_id: &str,
+        action_index: usize,
+        action: &AgentAction,
+    ) -> Result<()> {
+        let AgentActionPayload::SendMessage {
+            recipient,
+            content_type,
+            payload,
+            ..
+        } = &action.payload
+        else {
+            return Err(MezError::invalid_args(
+                "outbound message settlement requires a send_message action",
+            ));
+        };
+        let content_type = mez_agent::normalize_maap_message_content_type(content_type);
+        if !runtime_peer_message_presentation_is_visible(
+            self.agent_peer_message_log_mode(),
+            Some(&content_type),
+        ) {
+            return Ok(());
+        }
+        let identity = (pane_id.to_string(), turn_id.to_string(), action.id.clone());
+        if self
+            .presentation
+            .agent_settled_outbound_message_actions
+            .contains(&identity)
+        {
+            return Ok(());
+        }
+        let streamed = self
+            .presentation
+            .agent_streaming_say_presentations
+            .get(pane_id)
+            .is_some_and(|presentation| {
+                presentation.turn_id == turn_id
+                    && presentation
+                        .outbound_messages
+                        .get(&action_index)
+                        .is_some_and(|source| {
+                            source.complete
+                                && source.recipient == *recipient
+                                && source.content_type == content_type
+                                && source.text == *payload
+                        })
+            });
+        if streamed {
+            // Completion verified the complete provider source. Keep the
+            // cumulative owner until every outbound action from this response
+            // settles, so a later rejected sibling can still restore the
+            // shared baseline instead of leaving a partial sender transcript.
+            self.presentation
+                .agent_settled_outbound_message_actions
+                .insert(identity);
+            return Ok(());
+        }
+        let source = RuntimeStreamingMessageSource {
+            recipient: recipient.clone(),
+            content_type,
+            text: payload.clone(),
+            complete: true,
+        };
+        let projection = streaming_outbound_message_projection_with_theme(
+            &source,
+            self.agent_terminal_markdown_frame_width(pane_id)?,
+            self.agent_terminal_markdown_terminal_width(pane_id)?,
+            &self.presentation.settings.ui_theme,
+        );
+        self.append_agent_terminal_rendered_lines_to_buffer(
+            pane_id,
+            projection.style,
+            &projection.rendered_lines,
+            &projection.copy_lines,
+            None,
+        )?;
+        self.presentation
+            .agent_settled_outbound_message_actions
+            .insert(identity);
+        Ok(())
+    }
+
+    /// Finalizes each completed outbound preview after all message actions settle.
+    ///
+    /// Rejected sources are removed before rebuilding the cumulative screen, so
+    /// an accepted sibling remains visible. This remains presentation-only and
+    /// does not create sender persistence.
+    pub(crate) fn finalize_settled_outbound_message_previews(
+        &mut self,
+        pane_id: &str,
+        turn_id: &str,
+        execution: &mez_agent::AgentTurnExecution,
+    ) -> Result<()> {
+        let Some(presentation) = self
+            .presentation
+            .agent_streaming_say_presentations
+            .get(pane_id)
+            .filter(|presentation| presentation.turn_id == turn_id)
+        else {
+            return Ok(());
+        };
+        if presentation.outbound_messages.is_empty() {
+            return Ok(());
+        }
+        let settled = execution
+            .response
+            .action_batch
+            .as_ref()
+            .is_some_and(|batch| {
+                presentation.outbound_messages.keys().all(|action_index| {
+                    batch.actions.get(*action_index).is_some_and(|action| {
+                        matches!(action.payload, AgentActionPayload::SendMessage { .. })
+                            && execution
+                                .action_results
+                                .iter()
+                                .any(|result| result.action_id == action.id && result.is_terminal())
+                    })
+                })
+            });
+        if !settled {
+            return Ok(());
+        }
+        let rejected = execution
+            .response
+            .action_batch
+            .as_ref()
+            .map_or_else(Vec::new, |batch| {
+                presentation
+                    .outbound_messages
+                    .keys()
+                    .filter(|action_index| {
+                        batch.actions.get(**action_index).is_some_and(|action| {
+                            execution.action_results.iter().any(|result| {
+                                result.action_id == action.id
+                                    && result.status != mez_agent::ActionStatus::Succeeded
+                            })
+                        })
+                    })
+                    .copied()
+                    .collect::<Vec<_>>()
+            });
+        if !rejected.is_empty() {
+            let presentation = self
+                .presentation
+                .agent_streaming_say_presentations
+                .get_mut(pane_id)
+                .ok_or_else(|| {
+                    MezError::invalid_state("streaming outbound presentation disappeared")
+                })?;
+            for action_index in rejected {
+                presentation.outbound_messages.remove(&action_index);
+            }
+            presentation.revision = presentation.revision.wrapping_add(1);
+            presentation.projected_revision = None;
+        }
+        let has_source = self
+            .presentation
+            .agent_streaming_say_presentations
+            .get(pane_id)
+            .is_some_and(|presentation| {
+                presentation.rationale.is_some()
+                    || !presentation.actions.is_empty()
+                    || !presentation.outbound_messages.is_empty()
+                    || !presentation.shell_commands.is_empty()
+                    || !presentation.shell_summaries.is_empty()
+                    || !presentation.action_headers.is_empty()
+            });
+        if !has_source {
+            self.discard_agent_streaming_say_presentation(pane_id, Some(turn_id))?;
+            return Ok(());
+        }
+        if let Some(work) = self.take_agent_streaming_say_projection_work(pane_id, turn_id)? {
+            let result = Self::build_agent_streaming_say_projection(work)?;
+            if !self.apply_agent_streaming_say_projection_result(result)? {
+                return Err(MezError::invalid_state(
+                    "settled outbound preview projection was rejected",
+                ));
+            }
+        }
+        self.finalize_agent_streaming_say_presentation(pane_id, Some(turn_id))?;
+        Ok(())
+    }
+
     /// Reconciles live source with one validated provider execution.
     ///
     /// Every streamed action must be complete and exactly match its validated
@@ -4031,16 +4222,35 @@ impl RuntimeSessionService {
             == Some(presentation.installed_lineage);
         let batch = execution.response.action_batch.as_ref();
         let matches = presentation.turn_id == turn_id
-                && conversation_matches
-                // Sender-side message previews remain provisional until the
-                // dedicated settlement path establishes message-service
-                // acceptance. Generic stream completion must therefore
-                // restore them rather than retaining an unvalidated row.
-                && presentation.outbound_messages.is_empty()
-                && batch.is_some_and(|batch| {
-                    presentation.rationale.as_ref().is_none_or(|streamed| {
-                        streamed.complete && streamed.text == batch.rationale
-                    }) && presentation.actions.iter().all(|(action_index, streamed)| {
+            && conversation_matches
+            && batch.is_some_and(|batch| {
+                presentation
+                    .rationale
+                    .as_ref()
+                    .is_none_or(|streamed| streamed.complete && streamed.text == batch.rationale)
+                    && presentation
+                        .outbound_messages
+                        .iter()
+                        .all(|(action_index, streamed)| {
+                            let Some(mez_agent::AgentActionPayload::SendMessage {
+                                recipient,
+                                content_type,
+                                payload,
+                                ..
+                            }) = batch
+                                .actions
+                                .get(*action_index)
+                                .map(|action| &action.payload)
+                            else {
+                                return false;
+                            };
+                            streamed.complete
+                                && streamed.recipient == *recipient
+                                && streamed.text == *payload
+                                && streamed.content_type
+                                    == mez_agent::normalize_maap_message_content_type(content_type)
+                        })
+                    && presentation.actions.iter().all(|(action_index, streamed)| {
                         let Some(mez_agent::AgentActionPayload::Say {
                             status,
                             text,
@@ -4059,7 +4269,8 @@ impl RuntimeSessionService {
                                 == mez_agent::normalize_agent_output_content_type(Some(
                                     content_type,
                                 ))
-                    }) && presentation
+                    })
+                    && presentation
                         .shell_commands
                         .iter()
                         .all(|(action_index, streamed)| {
@@ -4074,23 +4285,22 @@ impl RuntimeSessionService {
                             };
                             streamed.complete && streamed.text == *command
                         })
-                        && presentation
-                            .shell_summaries
-                            .iter()
-                            .all(|(action_index, streamed)| {
-                                let Some(mez_agent::AgentActionPayload::ShellCommand {
-                                    summary,
-                                    ..
-                                }) = batch
-                                    .actions
-                                    .get(*action_index)
-                                    .map(|action| &action.payload)
-                                else {
-                                    return false;
-                                };
-                                streamed.complete && streamed.text == *summary
-                            })
-                });
+                    && presentation
+                        .shell_summaries
+                        .iter()
+                        .all(|(action_index, streamed)| {
+                            let Some(mez_agent::AgentActionPayload::ShellCommand {
+                                summary, ..
+                            }) = batch
+                                .actions
+                                .get(*action_index)
+                                .map(|action| &action.payload)
+                            else {
+                                return false;
+                            };
+                            streamed.complete && streamed.text == *summary
+                        })
+            });
         if !matches {
             self.presentation
                 .agent_promoted_streaming_say_actions
@@ -4296,6 +4506,19 @@ impl RuntimeSessionService {
         self.presentation
             .agent_promoted_streaming_say_actions
             .insert((pane_id.to_string(), turn_id.to_string()), promoted.clone());
+        let mut presentation_indices = promoted.clone();
+        presentation_indices.extend(presentation.outbound_messages.keys().copied());
+        self.presentation
+            .agent_promoted_streaming_say_actions
+            .insert(
+                (pane_id.to_string(), turn_id.to_string()),
+                presentation_indices,
+            );
+        if !presentation.outbound_messages.is_empty() {
+            self.presentation
+                .agent_streaming_say_presentations
+                .insert(pane_id.to_string(), presentation);
+        }
         Ok(
             crate::runtime::render::RuntimeStreamingSayCompletionReconciliation {
                 promoted_action_indices: promoted,
@@ -4312,6 +4535,17 @@ impl RuntimeSessionService {
         self.presentation
             .agent_promoted_streaming_say_actions
             .remove(&(pane_id.to_string(), turn_id.to_string()));
+    }
+
+    /// Clears accepted sender-row identities owned by one terminal turn.
+    ///
+    /// The identity only prevents duplicate live appends while a turn can be
+    /// retried or resumed. Terminal turn cleanup releases it because durable
+    /// sender replay is owned by the later persistence phase.
+    pub(crate) fn clear_settled_outbound_message_actions(&mut self, turn_id: &str) {
+        self.presentation
+            .agent_settled_outbound_message_actions
+            .retain(|(_pane_id, candidate_turn_id, _action_id)| candidate_turn_id != turn_id);
     }
 
     /// Removes previews whose final output has already been retained.

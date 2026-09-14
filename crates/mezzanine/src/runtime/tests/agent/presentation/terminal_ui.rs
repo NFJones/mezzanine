@@ -1705,10 +1705,10 @@ fn runtime_streaming_outbound_message_filters_json_in_normal_mode() {
 }
 
 /// Verifies verbose mode renders an established noncanonical message payload
-/// literally, while the same provisional source is retired when generic stream
-/// completion runs before the dedicated message-settlement phase.
+/// literally and retains its exact provisional source through provider
+/// reconciliation until message-service settlement decides its final fate.
 #[test]
-fn runtime_streaming_outbound_message_renders_verbose_json_and_retires_on_completion() {
+fn runtime_streaming_outbound_message_renders_verbose_json_until_settlement() {
     let mut service = test_runtime_service();
     service
         .replace_config_layers(vec![ConfigLayer {
@@ -1746,6 +1746,16 @@ fn runtime_streaming_outbound_message_renders_verbose_json_and_retires_on_comple
             text: payload.to_string(),
         },
         mez_agent::StreamingSayEvent::MessagePayloadComplete { action_index: 0 },
+        mez_agent::StreamingSayEvent::MessageStarted {
+            action_index: 1,
+            recipient: "agent-%3".to_string(),
+            content_type: "application/json".to_string(),
+        },
+        mez_agent::StreamingSayEvent::MessagePayloadDelta {
+            action_index: 1,
+            text: "rejected sibling payload".to_string(),
+        },
+        mez_agent::StreamingSayEvent::MessagePayloadComplete { action_index: 1 },
     ] {
         service
             .apply_agent_streaming_say_event_to_terminal_buffer("%1", &turn.turn_id, &event)
@@ -1792,7 +1802,19 @@ fn runtime_streaming_outbound_message_renders_verbose_json_and_retires_on_comple
             quota_usage: Default::default(),
             action_batch: Some(mez_agent::MaapBatch {
                 rationale: String::new(),
-                actions: vec![action],
+                actions: vec![
+                    action,
+                    mez_agent::AgentAction {
+                        id: "rejected-streamed-message".to_string(),
+                        payload: mez_agent::AgentActionPayload::SendMessage {
+                            recipient: "agent-%3".to_string(),
+                            scope: None,
+                            content_type: "application/json".to_string(),
+                            payload: "rejected sibling payload".to_string(),
+                            correlation_id: None,
+                        },
+                    },
+                ],
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1808,7 +1830,95 @@ fn runtime_streaming_outbound_message_renders_verbose_json_and_retires_on_comple
             .unwrap()
             .is_empty()
     );
-    assert_eq!(service.agent_pane_screen("%1").unwrap(), &baseline);
+    assert_ne!(service.agent_pane_screen("%1").unwrap(), &baseline);
+    let reconciled = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(reconciled.contains("agent-%2<"), "{reconciled}");
+    assert!(reconciled.contains(payload), "{reconciled}");
+
+    let ledger_turn = service
+        .agent_turn_ledger()
+        .turn(&turn.turn_id)
+        .expect("streamed message turn remains in the ledger")
+        .clone();
+    let mut blocked_execution = execution.clone();
+    let blocked_batch = blocked_execution.response.action_batch.as_ref().unwrap();
+    blocked_execution.action_results = vec![
+        mez_agent::ActionResult::succeeded(
+            &ledger_turn,
+            &blocked_batch.actions[0],
+            Vec::new(),
+            None,
+        ),
+        mez_agent::ActionResult::blocked(
+            &ledger_turn,
+            &blocked_batch.actions[1],
+            Vec::new(),
+            "{\"approval\":{}}".to_string(),
+        ),
+    ];
+    let blocked_action = &blocked_execution
+        .response
+        .action_batch
+        .as_ref()
+        .unwrap()
+        .actions[0];
+    service
+        .settle_accepted_outbound_message_preview("%1", &turn.turn_id, 0, blocked_action)
+        .unwrap();
+    service
+        .finalize_settled_outbound_message_previews("%1", &turn.turn_id, &blocked_execution)
+        .unwrap();
+    let blocked = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(blocked.contains("rejected sibling payload"), "{blocked}");
+
+    let mut accepted_execution = execution.clone();
+    let accepted_batch = accepted_execution.response.action_batch.as_ref().unwrap();
+    accepted_execution.action_results = vec![
+        mez_agent::ActionResult::succeeded(
+            &ledger_turn,
+            &accepted_batch.actions[0],
+            Vec::new(),
+            None,
+        ),
+        mez_agent::ActionResult::failed(
+            &ledger_turn,
+            &accepted_batch.actions[1],
+            mez_agent::ActionStatus::Failed,
+            "transport_error",
+            "recipient unavailable",
+        )
+        .unwrap(),
+    ];
+    let accepted_action = &accepted_execution
+        .response
+        .action_batch
+        .as_ref()
+        .unwrap()
+        .actions[0];
+    service
+        .settle_accepted_outbound_message_preview("%1", &turn.turn_id, 0, accepted_action)
+        .unwrap();
+    service
+        .finalize_settled_outbound_message_previews("%1", &turn.turn_id, &accepted_execution)
+        .unwrap();
+    service
+        .settle_accepted_outbound_message_preview("%1", &turn.turn_id, 0, accepted_action)
+        .unwrap();
+    let settled = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(settled.matches("agent-%2<").count(), 1, "{settled}");
+    assert!(!settled.contains("rejected sibling payload"), "{settled}");
 }
 
 /// Verifies streaming projection updates retain an active agent copy viewport.

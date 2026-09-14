@@ -511,6 +511,8 @@ pub(crate) struct RuntimePresentationComponent {
     /// Streamed action indices already installed as validated presentation.
     agent_promoted_streaming_say_actions:
         std::collections::BTreeMap<(String, String), std::collections::BTreeSet<usize>>,
+    /// Accepted sender-side message actions already represented in a pane.
+    agent_settled_outbound_message_actions: std::collections::BTreeSet<(String, String, String)>,
     /// Panes replaying durable agent presentation entries.
     agent_presentation_replay_panes: std::collections::BTreeSet<String>,
     /// Newest pane size awaiting source-backed agent presentation replay.
@@ -1538,6 +1540,8 @@ impl RuntimePresentationComponent {
         self.agent_streaming_say_presentations.remove(pane_id);
         self.agent_promoted_streaming_say_actions
             .retain(|(candidate_pane_id, _turn_id), _indices| candidate_pane_id != pane_id);
+        self.agent_settled_outbound_message_actions
+            .retain(|(candidate_pane_id, _turn_id, _action_id)| candidate_pane_id != pane_id);
         self.agent_presentation_replay_panes.remove(pane_id);
         self.pending_agent_presentation_resize_sizes.remove(pane_id);
         self.pending_agent_presentation_resize_dispatches
