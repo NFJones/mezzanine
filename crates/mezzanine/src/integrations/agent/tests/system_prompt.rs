@@ -104,6 +104,8 @@ fn system_prompt_keeps_critical_behavioral_invariants() {
                 "Default to project scope",
                 "not recipient observation",
                 "delivery-only acknowledgment",
+                "do not resend the same message merely because no acknowledgment arrives",
+                "new substantive information, a materially changed coordination need",
                 "only executable action",
                 "subprocesses, network operations",
                 "cannot approve or deny actions",
@@ -165,7 +167,7 @@ fn system_prompt_keeps_critical_behavioral_invariants() {
 /// Model identity is templated, but server configuration is not invented here.
 fn system_prompt_keeps_mcp_awareness_abstract() {
     let prompt = build_agent_system_prompt(&AgentPromptProfile::for_model("test-model")).unwrap();
-    assert!(prompt.contains("Mezzanine pane agent profile default v35, model test-model"));
+    assert!(prompt.contains("Mezzanine pane agent profile default v36, model test-model"));
     assert!(prompt.contains("Use `mcp_server_search` to discover configured MCP servers"));
     assert!(prompt.contains("`mcp_server_get` to retrieve safe metadata"));
     for absent in [

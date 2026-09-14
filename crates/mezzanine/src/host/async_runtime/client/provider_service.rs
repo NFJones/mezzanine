@@ -52,6 +52,9 @@ fn streaming_say_event_changes_projection(event: &mez_agent::StreamingSayEvent) 
         | mez_agent::StreamingSayEvent::RationaleTextComplete
         | mez_agent::StreamingSayEvent::ShellCommandTextComplete { .. }
         | mez_agent::StreamingSayEvent::ShellCommandSummaryTextComplete { .. }
+        | mez_agent::StreamingSayEvent::MessageStarted { .. }
+        | mez_agent::StreamingSayEvent::MessagePayloadDelta { .. }
+        | mez_agent::StreamingSayEvent::MessagePayloadComplete { .. }
         | mez_agent::StreamingSayEvent::ActionHeader { .. } => false,
     }
 }
@@ -90,6 +93,20 @@ fn push_coalesced_streaming_say_event(
                 return;
             }
             events.push(mez_agent::StreamingSayEvent::TextDelta { action_index, text });
+        }
+        mez_agent::StreamingSayEvent::MessagePayloadDelta { action_index, text } => {
+            if let Some(mez_agent::StreamingSayEvent::MessagePayloadDelta {
+                action_index: previous_action_index,
+                text: previous_text,
+            }) = events.last_mut()
+                && *previous_action_index == action_index
+                && previous_text.len().saturating_add(text.len())
+                    <= STREAMING_SAY_TEXT_CHUNK_LIMIT_BYTES
+            {
+                previous_text.push_str(&text);
+                return;
+            }
+            events.push(mez_agent::StreamingSayEvent::MessagePayloadDelta { action_index, text });
         }
         mez_agent::StreamingSayEvent::ShellCommandTextDelta { action_index, text } => {
             if let Some(mez_agent::StreamingSayEvent::ShellCommandTextDelta {

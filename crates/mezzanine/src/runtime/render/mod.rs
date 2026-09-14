@@ -511,6 +511,8 @@ pub(crate) struct RuntimePresentationComponent {
     /// Streamed action indices already installed as validated presentation.
     agent_promoted_streaming_say_actions:
         std::collections::BTreeMap<(String, String), std::collections::BTreeSet<usize>>,
+    /// Accepted sender-side message actions already represented in a pane.
+    agent_settled_outbound_message_actions: std::collections::BTreeSet<(String, String, String)>,
     /// Panes replaying durable agent presentation entries.
     agent_presentation_replay_panes: std::collections::BTreeSet<String>,
     /// Newest pane size awaiting source-backed agent presentation replay.
@@ -639,6 +641,8 @@ pub(crate) struct RuntimeStreamingSayPresentation {
     rationale: Option<RuntimeStreamingTextSource>,
     /// Established streamed actions keyed by their MAAP array index.
     actions: std::collections::BTreeMap<usize, RuntimeStreamingSayAction>,
+    /// Established outbound-message source keyed by MAAP action index.
+    outbound_messages: std::collections::BTreeMap<usize, RuntimeStreamingMessageSource>,
     /// Established shell-command source keyed by MAAP action index.
     shell_commands: std::collections::BTreeMap<usize, RuntimeStreamingTextSource>,
     /// Established shell-summary source keyed by MAAP action index.
@@ -688,6 +692,19 @@ pub(crate) struct RuntimeStreamingSayAction {
     /// Complete decoded source received so far.
     text: String,
     /// Whether the JSON source string has closed.
+    complete: bool,
+}
+
+/// Accumulated source and contract fields for one streamed outbound message.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeStreamingMessageSource {
+    /// Requested recipient expression supplied by the provider.
+    recipient: String,
+    /// Normalized presentation media type.
+    content_type: String,
+    /// Complete decoded payload received so far.
+    text: String,
+    /// Whether the JSON payload string has closed.
     complete: bool,
 }
 
@@ -766,6 +783,8 @@ pub(crate) struct RuntimeStreamingSayProjectionWork {
     pub(crate) rationale: Option<RuntimeStreamingTextSource>,
     /// Cumulative action state captured for this generation.
     pub(crate) actions: std::collections::BTreeMap<usize, RuntimeStreamingSayAction>,
+    /// Cumulative outbound-message state captured for this generation.
+    pub(crate) outbound_messages: std::collections::BTreeMap<usize, RuntimeStreamingMessageSource>,
     /// Cumulative shell-command state captured for this generation.
     pub(crate) shell_commands: std::collections::BTreeMap<usize, RuntimeStreamingTextSource>,
     /// Cumulative shell-summary state captured for this generation.
@@ -1521,6 +1540,8 @@ impl RuntimePresentationComponent {
         self.agent_streaming_say_presentations.remove(pane_id);
         self.agent_promoted_streaming_say_actions
             .retain(|(candidate_pane_id, _turn_id), _indices| candidate_pane_id != pane_id);
+        self.agent_settled_outbound_message_actions
+            .retain(|(candidate_pane_id, _turn_id, _action_id)| candidate_pane_id != pane_id);
         self.agent_presentation_replay_panes.remove(pane_id);
         self.pending_agent_presentation_resize_sizes.remove(pane_id);
         self.pending_agent_presentation_resize_dispatches

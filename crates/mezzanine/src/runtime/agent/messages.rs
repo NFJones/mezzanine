@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::runtime::{
     PeerMessageLogMode, runtime_agent_peer_message_log_mode_from_config,
-    runtime_effective_config_value,
+    runtime_effective_config_value, runtime_peer_message_presentation_is_visible,
 };
 use crate::storage::snapshot::MAX_UNSETTLED_PEER_PRESENTATIONS;
 
@@ -798,11 +798,7 @@ impl RuntimeSessionService {
         let log_mode = runtime_effective_config_value(self.integration.config_layers())
             .map(|value| runtime_agent_peer_message_log_mode_from_config(&value))
             .unwrap_or(PeerMessageLogMode::Normal);
-        log_mode == PeerMessageLogMode::Verbose
-            || matches!(
-                content_type,
-                "text/plain; charset=utf-8" | "text/markdown" | "text/markdown; charset=utf-8"
-            )
+        runtime_peer_message_presentation_is_visible(log_mode, Some(content_type))
     }
 
     /// Returns whether the receipt's delivery cursor confirms its transport commit.
@@ -1321,13 +1317,14 @@ impl RuntimeSessionService {
                     MezError::invalid_state("running message result does not match an action")
                 })?;
             execution.action_results[index] =
-                self.execute_message_action_for_turn(turn, &action)?;
+                self.execute_message_action_for_turn(turn, index, &action)?;
             executed = executed.saturating_add(1);
         }
         execution.terminal_state = runtime_agent_turn_state_from_action_results(
             &execution.action_results,
             execution.final_turn,
         );
+        self.finalize_settled_outbound_message_previews(&turn.pane_id, &turn.turn_id, execution)?;
         Ok(executed)
     }
 
@@ -1339,6 +1336,7 @@ impl RuntimeSessionService {
     pub(super) fn execute_message_action_for_turn(
         &mut self,
         turn: &AgentTurnRecord,
+        action_index: usize,
         action: &AgentAction,
     ) -> Result<ActionResult> {
         let AgentActionPayload::SendMessage {
@@ -1491,7 +1489,7 @@ impl RuntimeSessionService {
             }
         };
         self.deliver_pending_runtime_agent_messages(now_ms)?;
-        Ok(ActionResult::succeeded(
+        let result = ActionResult::succeeded(
             turn,
             action,
             vec![format!(
@@ -1506,7 +1504,14 @@ impl RuntimeSessionService {
                 delivery.queued_recipients,
                 delivery.sequence
             )),
-        ))
+        );
+        self.settle_accepted_outbound_message_preview(
+            &turn.pane_id,
+            &turn.turn_id,
+            action_index,
+            action,
+        )?;
+        Ok(result)
     }
 
     /// Adds the public resolved audience to one macro-managed message result.

@@ -113,6 +113,22 @@ pub fn normalize_agent_output_content_type(content_type: Option<&str>) -> String
     }
 }
 
+/// Normalizes common model-authored `send_message` media aliases before MMP delivery.
+///
+/// The MMP transport remains strict about canonical metadata. Keeping this
+/// normalization in the provider-independent contract lets streaming previews
+/// and authoritative execution classify the same message source without
+/// treating the preview as delivery acceptance.
+pub fn normalize_maap_message_content_type(content_type: &str) -> String {
+    match content_type.trim().to_ascii_lowercase().as_str() {
+        "text/plain" | "text/plain;charset=utf-8" | "text/plain; charset=utf-8" => {
+            "text/plain; charset=utf-8".to_string()
+        }
+        "application/json" => "application/json".to_string(),
+        _ => content_type.to_string(),
+    }
+}
+
 /// Returns whether a normalized or raw media type should use markdown display.
 pub fn agent_output_content_type_is_markdown(content_type: &str) -> bool {
     normalize_agent_output_content_type(Some(content_type))

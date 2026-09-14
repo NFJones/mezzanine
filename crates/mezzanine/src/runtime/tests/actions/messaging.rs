@@ -2808,19 +2808,20 @@ fn runtime_peer_message_echo_logs_sender_prefix_without_user_trust_domain() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies accepted, rejected, and undeliverable `send_message` actions create
-/// no sender-side peer rows.
+/// Verifies accepted `send_message` actions create one sender-side row while
+/// rejected and undeliverable sends remain absent from the sender transcript.
 ///
-/// Peer presentation occurs only when one recipient commits an inbound envelope,
-/// so a successful transport alone must not render the sender's payload.
+/// A sender row proves only message-service acceptance, never recipient
+/// observation or processing, so failures must not leak their raw payload.
 #[test]
-fn runtime_send_message_echoes_only_at_receiver_commit() {
+fn runtime_send_message_echoes_at_sender_only_after_acceptance() {
     let (mut service, execution, _target) =
         execute_runtime_send_message_to("agent-%2", "text/plain", "ack, running now");
     assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
     let sent = peer_echo_pane_lines(&service, "%1");
     assert!(
-        !sent.iter().any(|line| line.contains("ack, running now")),
+        sent.iter()
+            .any(|line| line.contains("agent-%2< ack, running now")),
         "{sent:#?}"
     );
     service.terminate_all_pane_processes().unwrap();
@@ -3242,22 +3243,24 @@ fn runtime_peer_message_echo_logs_committed_bridge_traffic_once() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies model-authored peer mail logs only at the committing recipient in
-/// default normal mode, including a child with no subagent display name.
+/// Verifies model-authored peer mail logs at an accepted sender and committing
+/// recipient in default normal mode, including a child with no subagent display
+/// name.
 ///
 /// Normal-mode presentation admits only the exact canonical
 /// `text/plain; charset=utf-8` media type. Delegation lineage and the optional
 /// `subagent_display_name` extension do not affect that decision, so canonical
 /// model `send_message` traffic keeps its receiver-side `{name}> ` row.
 #[test]
-fn runtime_model_peer_mail_without_bridge_provenance_logs_at_receiver_only() {
-    // Parent -> child: accepted transport creates no sender-side row.
+fn runtime_model_peer_mail_without_bridge_provenance_logs_at_sender_and_receiver() {
+    // Parent -> child: acceptance creates one sender-side row.
     let (mut service, execution, _target) =
         execute_runtime_send_message_to("agent:agent-%2", "text/plain", "parent reply");
     assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
     let sent = peer_echo_pane_lines(&service, "%1");
     assert!(
-        !sent.iter().any(|line| line.contains("parent reply")),
+        sent.iter()
+            .any(|line| line.contains("agent-%2< parent reply")),
         "{sent:#?}"
     );
     service.terminate_all_pane_processes().unwrap();

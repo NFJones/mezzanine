@@ -476,6 +476,15 @@ fn bounded_streaming_say_events(
                         text,
                     }),
                 ),
+                mez_agent::StreamingSayEvent::MessagePayloadDelta { action_index, text } => (
+                    text,
+                    Box::new(
+                        move |text| mez_agent::StreamingSayEvent::MessagePayloadDelta {
+                            action_index,
+                            text,
+                        },
+                    ),
+                ),
                 mez_agent::StreamingSayEvent::ShellCommandTextDelta { action_index, text } => (
                     text,
                     Box::new(

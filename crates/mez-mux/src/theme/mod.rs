@@ -68,6 +68,8 @@ pub const UI_COLOR_SLOT_NAMES: &[&str] = &[
     "agent_transcript_command_bg",
     "agent_transcript_peer_sender_fg",
     "agent_transcript_peer_sender_bg",
+    "agent_transcript_peer_recipient_fg",
+    "agent_transcript_peer_recipient_bg",
     "agent_transcript_parent_fg",
     "agent_transcript_parent_bg",
     "agent_model_fg",
@@ -273,6 +275,8 @@ pub struct UiThemeColors {
     pub agent_transcript_command: UiColorPair,
     /// Agent transcript name marker for a received peer message.
     pub agent_transcript_peer_sender: UiColorPair,
+    /// Agent transcript recipient marker for an outbound peer message.
+    pub agent_transcript_peer_recipient: UiColorPair,
     /// Agent transcript name marker for the parent-supplied subagent prompt.
     pub agent_transcript_parent: UiColorPair,
     /// Agent model pill in pane frame status.
@@ -744,6 +748,11 @@ pub fn resolve_ui_theme(name: &str, definition: UiThemeDefinition) -> Result<UiT
             &aliases,
             "agent_transcript_peer_sender",
         )?,
+        agent_transcript_peer_recipient: pair_from_slots(
+            &definition.colors,
+            &aliases,
+            "agent_transcript_peer_recipient",
+        )?,
         agent_transcript_parent: pair_from_slots(
             &definition.colors,
             &aliases,
@@ -882,6 +891,7 @@ pub fn deepforest_ui_theme() -> UiTheme {
             agent_transcript_error: pair("#c05f5f", "#0b1f17"),
             agent_transcript_command: pair("#d7c46a", "#0b1f17"),
             agent_transcript_peer_sender: pair("#d7c46a", "#0b1f17"),
+            agent_transcript_peer_recipient: pair("#6ea9d7", "#0b1f17"),
             agent_transcript_parent: pair("#e4efe8", "#0b1f17"),
             agent_model: pair("#0b1f17", "#3f8f68"),
             agent_reasoning: pair("#0b1f17", "#d7c46a"),
@@ -1096,6 +1106,8 @@ fn definition_from_palette(palette: UiThemePalette<'_>) -> UiThemeDefinition {
         ("agent_transcript_command_bg", "surface"),
         ("agent_transcript_peer_sender_fg", "tertiary_foreground"),
         ("agent_transcript_peer_sender_bg", "surface"),
+        ("agent_transcript_peer_recipient_fg", "thinking"),
+        ("agent_transcript_peer_recipient_bg", "surface"),
         ("agent_transcript_parent_fg", "foreground"),
         ("agent_transcript_parent_bg", "surface"),
         ("agent_model_fg", "container_secondary_foreground"),

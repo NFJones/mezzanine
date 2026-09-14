@@ -501,6 +501,10 @@ fn builtin_themes_keep_text_bearing_pairs_readable() {
                 theme.colors.agent_transcript_peer_sender,
             ),
             (
+                "agent_transcript_peer_recipient",
+                theme.colors.agent_transcript_peer_recipient,
+            ),
+            (
                 "agent_transcript_parent",
                 theme.colors.agent_transcript_parent,
             ),
@@ -577,6 +581,10 @@ fn builtin_themes_use_distinct_accents_for_agent_name_markers() {
             (
                 "agent_transcript_peer_sender",
                 theme.colors.agent_transcript_peer_sender.foreground,
+            ),
+            (
+                "agent_transcript_peer_recipient",
+                theme.colors.agent_transcript_peer_recipient.foreground,
             ),
             (
                 "agent_transcript_parent",

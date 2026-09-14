@@ -29,22 +29,23 @@ use super::{
 };
 use crate::runtime::render::{
     ActionResult, AgentPresentationEntry, MezError, Result, RuntimeAgentShellPreviewOwner,
-    RuntimeSessionService, RuntimeStreamingSayAction, RuntimeStreamingSayPresentation,
-    RuntimeStreamingSayProjectionContext, Size, TerminalScreen, current_unix_seconds,
-    default_runtime_agent_prompt_input,
+    RuntimeSessionService, RuntimeStreamingMessageSource, RuntimeStreamingSayAction,
+    RuntimeStreamingSayPresentation, RuntimeStreamingSayProjectionContext, Size, TerminalScreen,
+    current_unix_seconds, default_runtime_agent_prompt_input,
 };
 use crate::runtime::{
     PeerMessageLogMode, runtime_agent_peer_message_log_mode_from_config,
-    runtime_effective_config_value,
+    runtime_effective_config_value, runtime_peer_message_presentation_is_markdown,
+    runtime_peer_message_presentation_is_visible,
 };
 use mez_agent::{
-    AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, AgentShellVisibility, agent_output_content_type_is_diff,
-    agent_output_content_type_is_markdown,
+    AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, AgentActionPayload, AgentShellVisibility,
+    agent_output_content_type_is_diff, agent_output_content_type_is_markdown,
 };
 use mez_mux::{
     copy::{COPY_WRAP_CONTINUATION, encode_copy_source_line_in_group},
     render::{
-        markdown_block_copy_lines, wrap_rich_text_line_to_width_with_continuation_indent,
+        markdown_block_copy_lines, wrap_rich_text_line_to_width_with_continuation_indent_hard,
         wrap_rich_text_line_to_width_with_source_ranges_hard,
     },
 };
@@ -108,6 +109,9 @@ struct PeerMessagePresentationSource {
     /// Stable MMP delivery identity used to recover one receiver-owned row.
     #[serde(default)]
     receive_identity: Option<String>,
+    /// Stable sender action identity used only to distinguish durable sent rows.
+    #[serde(default)]
+    action_identity: Option<String>,
     peer: String,
     payload: String,
     /// Envelope media type the live echo gated on; absent on legacy records.
@@ -174,26 +178,6 @@ fn peer_message_echo_payload(payload: &str) -> String {
     crate::runtime::control::runtime_peer_message_logged_payload(payload)
 }
 
-/// Canonical media type accepted for normal peer-message pane presentation.
-///
-/// Normal mode uses an exact media-type match rather than parsing payload text,
-/// so JSON-looking plaintext remains literal while every non-plaintext payload
-/// remains durable and model-visible without creating pane presentation state.
-const AGENT_PEER_MESSAGE_TEXT_PLAIN_CONTENT_TYPE: &str = "text/plain; charset=utf-8";
-
-/// Returns whether a peer message may render in normal pane-log mode.
-fn peer_message_is_canonical_plaintext(content_type: Option<&str>) -> bool {
-    content_type == Some(AGENT_PEER_MESSAGE_TEXT_PLAIN_CONTENT_TYPE)
-}
-
-/// Returns whether a peer media type uses the safe Markdown pane renderer.
-fn peer_message_is_markdown(content_type: Option<&str>) -> bool {
-    matches!(
-        content_type,
-        Some("text/markdown") | Some("text/markdown; charset=utf-8")
-    )
-}
-
 /// Renders one Markdown peer payload while preserving its sender indicator.
 fn peer_message_markdown_rendered_lines(
     prefix: &str,
@@ -208,6 +192,15 @@ fn peer_message_markdown_rendered_lines(
         prefix,
         "     ",
     )
+    .into_iter()
+    .flat_map(|line| {
+        wrap_rich_text_line_to_width_with_continuation_indent_hard(
+            line,
+            table_display_width,
+            "     ",
+        )
+    })
+    .collect()
 }
 
 /// Returns presentation and source-copy rows for one canonical plaintext peer payload.
@@ -239,7 +232,7 @@ fn peer_message_echo_rendered_lines(
                 copy_text: Some(source.clone()),
                 kind: RichTextLineKind::Normal,
             };
-            wrap_rich_text_line_to_width_with_continuation_indent(
+            wrap_rich_text_line_to_width_with_continuation_indent_hard(
                 line,
                 display_width,
                 body_indent.as_str(),
@@ -254,6 +247,61 @@ fn peer_message_echo_rendered_lines(
             })
         })
         .collect()
+}
+
+/// Builds one provisional sender-side peer-message projection.
+///
+/// Provider output is only a candidate action at this point, so this helper
+/// deliberately produces terminal rows and copy metadata only. Settlement and
+/// durable presentation remain owned by the message-execution path.
+fn streaming_outbound_message_projection_with_theme(
+    message: &RuntimeStreamingMessageSource,
+    frame_width: usize,
+    table_width: usize,
+    ui_theme: &mez_mux::theme::UiTheme,
+) -> StreamingSayProjection {
+    let label = peer_message_echo_label(&message.recipient);
+    let marker = format!("{label}<");
+    let prefix = format!("{marker} ");
+    let payload = peer_message_echo_payload(&message.text);
+    let markdown = runtime_peer_message_presentation_is_markdown(Some(&message.content_type));
+    let mut rendered_lines = if markdown {
+        peer_message_markdown_rendered_lines(
+            prefix.as_str(),
+            payload.as_str(),
+            ui_theme,
+            table_width,
+        )
+    } else {
+        peer_message_echo_rendered_lines(prefix.as_str(), payload.as_str(), frame_width, &label)
+    };
+    attach_agent_name_marker_span(
+        &mut rendered_lines,
+        marker.as_str(),
+        agent_name_marker_rendition(ui_theme.colors.agent_transcript_peer_recipient),
+    );
+    let copy_lines = if markdown {
+        std::iter::once(message.text.trim_end_matches(['\r', '\n']).to_string())
+            .chain(std::iter::repeat_n(
+                AGENT_COPY_SKIP_LINE.to_string(),
+                rendered_lines.len().saturating_sub(1),
+            ))
+            .collect()
+    } else {
+        rendered_lines
+            .iter()
+            .map(|line| {
+                line.copy_text
+                    .clone()
+                    .unwrap_or_else(|| AGENT_COPY_SKIP_LINE.to_string())
+            })
+            .collect()
+    };
+    StreamingSayProjection {
+        style: AgentTerminalPresentationStyle::UserPrompt,
+        rendered_lines,
+        copy_lines,
+    }
 }
 
 /// Colored name marker prefixing the parent-supplied prompt in a subagent pane.
@@ -311,6 +359,28 @@ fn peer_message_presentation_source(
     .to_string()
 }
 
+/// Encodes one accepted sender-side peer-message source for geometry-aware replay.
+///
+/// Sender records deliberately carry no receipt identity or direct-parent state:
+/// they are operator-visible evidence of message-service acceptance only and must
+/// never participate in receiver-owned delivery recovery.
+fn sent_peer_message_presentation_source(
+    action_identity: &str,
+    recipient: &str,
+    payload: &str,
+    content_type: &str,
+) -> String {
+    serde_json::json!({
+        "direction": "sent",
+        "action_identity": action_identity,
+        "peer": recipient,
+        "payload": payload,
+        "content_type": content_type,
+        "presentation_eligible": true,
+    })
+    .to_string()
+}
+
 /// Decodes one persisted peer-message source for geometry-aware replay.
 ///
 /// The decoded peer name and payload stay unbounded: the renderer applies the
@@ -326,7 +396,22 @@ fn decoded_peer_message_presentation_source(
         return None;
     }
     let encoded = serde_json::from_str::<PeerMessagePresentationSource>(source_text).ok()?;
-    (encoded.direction == "received").then_some(encoded)
+    match encoded.direction.as_str() {
+        "received" => Some(encoded),
+        "sent"
+            if encoded.receive_identity.is_none()
+                && !encoded.direct_parent
+                && encoded
+                    .action_identity
+                    .as_deref()
+                    .is_some_and(|identity| !identity.is_empty())
+                && encoded.content_type.is_some()
+                && encoded.presentation_eligible == Some(true) =>
+        {
+            Some(encoded)
+        }
+        _ => None,
+    }
 }
 
 /// One media-type-specific projection of accumulated streamed `say` source.
@@ -662,9 +747,7 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         let log_mode = self.agent_peer_message_log_mode();
         if !presentation.presentation_eligible
-            && log_mode != PeerMessageLogMode::Verbose
-            && !peer_message_is_canonical_plaintext(presentation.content_type)
-            && !peer_message_is_markdown(presentation.content_type)
+            && !runtime_peer_message_presentation_is_visible(log_mode, presentation.content_type)
         {
             return Ok(());
         }
@@ -675,7 +758,7 @@ impl RuntimeSessionService {
         let copy_group = presentation
             .receive_identity
             .unwrap_or(presentation.peer_label);
-        let markdown = peer_message_is_markdown(presentation.content_type);
+        let markdown = runtime_peer_message_presentation_is_markdown(presentation.content_type);
         let mut rendered_lines = if markdown {
             peer_message_markdown_rendered_lines(
                 prefix.as_str(),
@@ -1086,19 +1169,29 @@ impl RuntimeSessionService {
                             // plaintext, verbose mode renders every bounded raw
                             // payload, and a pre-persistence suppression leaves no
                             // presentation record for replay to resurrect.
-                            self.append_agent_peer_message_to_terminal_buffer(
-                                pane_id,
-                                &PeerMessagePresentation {
-                                    receive_identity: encoded.receive_identity.as_deref(),
-                                    peer_label: encoded.peer.as_str(),
-                                    content_type: encoded.content_type.as_deref(),
-                                    payload: encoded.payload.as_str(),
-                                    direct_parent: encoded.direct_parent,
-                                    presentation_eligible: encoded
-                                        .presentation_eligible
-                                        .unwrap_or(false),
-                                },
-                            )?;
+                            if encoded.direction == "sent" {
+                                self.append_accepted_outbound_message_presentation(
+                                    pane_id,
+                                    encoded.action_identity.as_deref().unwrap_or_default(),
+                                    encoded.peer.as_str(),
+                                    encoded.content_type.as_deref().unwrap_or_default(),
+                                    encoded.payload.as_str(),
+                                )?;
+                            } else {
+                                self.append_agent_peer_message_to_terminal_buffer(
+                                    pane_id,
+                                    &PeerMessagePresentation {
+                                        receive_identity: encoded.receive_identity.as_deref(),
+                                        peer_label: encoded.peer.as_str(),
+                                        content_type: encoded.content_type.as_deref(),
+                                        payload: encoded.payload.as_str(),
+                                        direct_parent: encoded.direct_parent,
+                                        presentation_eligible: encoded
+                                            .presentation_eligible
+                                            .unwrap_or(false),
+                                    },
+                                )?;
+                            }
                         }
                         continue;
                     }
@@ -2567,6 +2660,7 @@ impl RuntimeSessionService {
                         provider_screen: std::sync::Arc::new(baseline_screen),
                         rationale: None,
                         actions: std::collections::BTreeMap::new(),
+                        outbound_messages: std::collections::BTreeMap::new(),
                         shell_commands: std::collections::BTreeMap::new(),
                         shell_summaries: std::collections::BTreeMap::new(),
                         action_headers: std::collections::BTreeMap::new(),
@@ -2632,6 +2726,7 @@ impl RuntimeSessionService {
                             provider_screen: std::sync::Arc::new(baseline_screen),
                             rationale: None,
                             actions: std::collections::BTreeMap::new(),
+                            outbound_messages: std::collections::BTreeMap::new(),
                             shell_commands: std::collections::BTreeMap::new(),
                             shell_summaries: std::collections::BTreeMap::new(),
                             action_headers: std::collections::BTreeMap::new(),
@@ -2711,6 +2806,85 @@ impl RuntimeSessionService {
                     )
                 })?;
                 action.complete = true;
+            }
+            mez_agent::StreamingSayEvent::MessageStarted {
+                action_index,
+                recipient,
+                content_type,
+            } => {
+                if !runtime_peer_message_presentation_is_visible(
+                    self.agent_peer_message_log_mode(),
+                    Some(content_type),
+                ) {
+                    return Ok(());
+                }
+                self.ensure_agent_streaming_presentation(pane_id, turn_id)?;
+                let presentation = self
+                    .presentation
+                    .agent_streaming_say_presentations
+                    .get_mut(pane_id)
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "streaming outbound message presentation is unavailable",
+                        )
+                    })?;
+                presentation
+                    .outbound_messages
+                    .entry(*action_index)
+                    .or_insert_with(|| RuntimeStreamingMessageSource {
+                        recipient: recipient.clone(),
+                        content_type: content_type.clone(),
+                        text: String::new(),
+                        complete: false,
+                    });
+                presentation.revision = presentation.revision.wrapping_add(1);
+                presentation.projected_revision = None;
+            }
+            mez_agent::StreamingSayEvent::MessagePayloadDelta { action_index, text } => {
+                let exists = self
+                    .presentation
+                    .agent_streaming_say_presentations
+                    .get(pane_id)
+                    .filter(|presentation| presentation.turn_id == turn_id)
+                    .is_some_and(|presentation| {
+                        presentation.outbound_messages.contains_key(action_index)
+                    });
+                if !exists {
+                    return Ok(());
+                }
+                let presentation = self
+                    .presentation
+                    .agent_streaming_say_presentations
+                    .get_mut(pane_id)
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "streaming outbound message presentation disappeared",
+                        )
+                    })?;
+                let message = presentation
+                    .outbound_messages
+                    .get_mut(action_index)
+                    .ok_or_else(|| {
+                        MezError::invalid_state("streaming outbound message source disappeared")
+                    })?;
+                message.text.push_str(text);
+                if !text.is_empty() {
+                    presentation.revision = presentation.revision.wrapping_add(1);
+                    presentation.projected_revision = None;
+                }
+            }
+            mez_agent::StreamingSayEvent::MessagePayloadComplete { action_index } => {
+                let Some(presentation) = self
+                    .presentation
+                    .agent_streaming_say_presentations
+                    .get_mut(pane_id)
+                    .filter(|presentation| presentation.turn_id == turn_id)
+                else {
+                    return Ok(());
+                };
+                if let Some(message) = presentation.outbound_messages.get_mut(action_index) {
+                    message.complete = true;
+                }
             }
             mez_agent::StreamingSayEvent::RationaleStarted => {
                 self.ensure_agent_streaming_presentation(pane_id, turn_id)?;
@@ -2976,6 +3150,7 @@ impl RuntimeSessionService {
                     provider_screen: std::sync::Arc::new(baseline_screen),
                     rationale: None,
                     actions: std::collections::BTreeMap::new(),
+                    outbound_messages: std::collections::BTreeMap::new(),
                     shell_commands: std::collections::BTreeMap::new(),
                     shell_summaries: std::collections::BTreeMap::new(),
                     action_headers: std::collections::BTreeMap::new(),
@@ -3191,6 +3366,7 @@ impl RuntimeSessionService {
         };
         let has_source = presentation.rationale.is_some()
             || !presentation.actions.is_empty()
+            || !presentation.outbound_messages.is_empty()
             || !presentation.shell_commands.is_empty()
             || !presentation.shell_summaries.is_empty()
             || !presentation.action_headers.is_empty();
@@ -3218,6 +3394,7 @@ impl RuntimeSessionService {
             baseline_screen: presentation.baseline_screen.clone(),
             rationale: presentation.rationale.clone(),
             actions: presentation.actions.clone(),
+            outbound_messages: presentation.outbound_messages.clone(),
             shell_commands: presentation.shell_commands.clone(),
             shell_summaries: presentation.shell_summaries.clone(),
             action_headers: presentation.action_headers.clone(),
@@ -3272,6 +3449,21 @@ impl RuntimeSessionService {
                 )
             })
             .collect::<Vec<_>>();
+        let outbound_message_projections = work
+            .outbound_messages
+            .iter()
+            .map(|(action_index, message)| {
+                (
+                    *action_index,
+                    streaming_outbound_message_projection_with_theme(
+                        message,
+                        work.frame_width,
+                        work.table_width,
+                        &work.ui_theme,
+                    ),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
         let rationale_projection = work.rationale.as_ref().and_then(|source| {
             work.thinking_enabled.then(|| {
                 let rendition = agent_terminal_label_rendition(
@@ -3428,6 +3620,7 @@ impl RuntimeSessionService {
         let action_indices = work
             .actions
             .keys()
+            .chain(work.outbound_messages.keys())
             .chain(work.shell_summaries.keys())
             .chain(work.action_headers.keys())
             .chain(work.shell_commands.keys())
@@ -3439,6 +3632,7 @@ impl RuntimeSessionService {
             });
             for projection in say
                 .into_iter()
+                .chain(outbound_message_projections.get(&action_index))
                 .chain(summary_projections.get(&action_index))
                 .chain(header_projections.get(&action_index))
                 .chain(command_projections.get(&action_index))
@@ -3840,6 +4034,277 @@ impl RuntimeSessionService {
             .is_some_and(|indices| indices.contains(&action_index))
     }
 
+    /// Appends one accepted sender-side message row and retains its strict
+    /// sent-only source for replay at a later geometry or theme.
+    fn append_accepted_outbound_message_presentation(
+        &mut self,
+        pane_id: &str,
+        action_identity: &str,
+        recipient: &str,
+        content_type: &str,
+        payload: &str,
+    ) -> Result<()> {
+        let source = RuntimeStreamingMessageSource {
+            recipient: recipient.to_string(),
+            content_type: content_type.to_string(),
+            text: payload.to_string(),
+            complete: true,
+        };
+        let projection = streaming_outbound_message_projection_with_theme(
+            &source,
+            self.agent_terminal_markdown_frame_width(pane_id)?,
+            self.agent_terminal_markdown_terminal_width(pane_id)?,
+            &self.presentation.settings.ui_theme,
+        );
+        let persisted_source = sent_peer_message_presentation_source(
+            action_identity,
+            recipient,
+            payload,
+            content_type,
+        );
+        self.append_agent_terminal_rendered_lines_to_buffer(
+            pane_id,
+            projection.style,
+            &projection.rendered_lines,
+            &projection.copy_lines,
+            Some((
+                persisted_source.as_str(),
+                AGENT_PRESENTATION_PEER_MESSAGE_CONTENT_TYPE,
+            )),
+        )
+    }
+
+    /// Persists an accepted sender-side source without writing another live row.
+    fn persist_accepted_outbound_message_presentation(
+        &mut self,
+        pane_id: &str,
+        action_identity: &str,
+        recipient: &str,
+        content_type: &str,
+        payload: &str,
+    ) -> Result<()> {
+        let source = RuntimeStreamingMessageSource {
+            recipient: recipient.to_string(),
+            content_type: content_type.to_string(),
+            text: payload.to_string(),
+            complete: true,
+        };
+        let projection = streaming_outbound_message_projection_with_theme(
+            &source,
+            self.agent_terminal_markdown_frame_width(pane_id)?,
+            self.agent_terminal_markdown_terminal_width(pane_id)?,
+            &self.presentation.settings.ui_theme,
+        );
+        let persisted_source = sent_peer_message_presentation_source(
+            action_identity,
+            recipient,
+            payload,
+            content_type,
+        );
+        self.persist_agent_presentation_entry(
+            pane_id,
+            vec![projection.style.persistence_name().to_string(); projection.rendered_lines.len()],
+            projection
+                .rendered_lines
+                .iter()
+                .map(|line| line.display.clone())
+                .collect(),
+            projection.copy_lines,
+            String::new(),
+            Some((
+                persisted_source.as_str(),
+                AGENT_PRESENTATION_PEER_MESSAGE_CONTENT_TYPE,
+            )),
+        );
+        Ok(())
+    }
+
+    /// Settles one accepted model-authored outbound message presentation.
+    ///
+    /// Message-service acceptance is the sole authority for this sender row.
+    /// An exact streamed source keeps its installed screen in place; an
+    /// accepted non-streaming action appends the same live-only rendition.
+    /// Neither path persists a sender source or changes receiver receipts.
+    pub(crate) fn settle_accepted_outbound_message_preview(
+        &mut self,
+        pane_id: &str,
+        turn_id: &str,
+        action_index: usize,
+        action: &AgentAction,
+    ) -> Result<()> {
+        let AgentActionPayload::SendMessage {
+            recipient,
+            content_type,
+            payload,
+            ..
+        } = &action.payload
+        else {
+            return Err(MezError::invalid_args(
+                "outbound message settlement requires a send_message action",
+            ));
+        };
+        let content_type = mez_agent::normalize_maap_message_content_type(content_type);
+        if !runtime_peer_message_presentation_is_visible(
+            self.agent_peer_message_log_mode(),
+            Some(&content_type),
+        ) {
+            return Ok(());
+        }
+        let identity = (pane_id.to_string(), turn_id.to_string(), action.id.clone());
+        if self
+            .presentation
+            .agent_settled_outbound_message_actions
+            .contains(&identity)
+        {
+            return Ok(());
+        }
+        let streamed = self
+            .presentation
+            .agent_streaming_say_presentations
+            .get(pane_id)
+            .is_some_and(|presentation| {
+                presentation.turn_id == turn_id
+                    && presentation
+                        .outbound_messages
+                        .get(&action_index)
+                        .is_some_and(|source| {
+                            source.complete
+                                && source.recipient == *recipient
+                                && source.content_type == content_type
+                                && source.text == *payload
+                        })
+            });
+        if streamed {
+            // Completion verified the complete provider source. Keep the
+            // cumulative owner until every outbound action from this response
+            // settles, so a later rejected sibling can still restore the
+            // shared baseline instead of leaving a partial sender transcript.
+            self.persist_accepted_outbound_message_presentation(
+                pane_id,
+                action.id.as_str(),
+                recipient,
+                content_type.as_str(),
+                payload,
+            )?;
+            self.presentation
+                .agent_settled_outbound_message_actions
+                .insert(identity);
+            return Ok(());
+        }
+        self.append_accepted_outbound_message_presentation(
+            pane_id,
+            action.id.as_str(),
+            recipient,
+            content_type.as_str(),
+            payload,
+        )?;
+        self.presentation
+            .agent_settled_outbound_message_actions
+            .insert(identity);
+        Ok(())
+    }
+
+    /// Finalizes each completed outbound preview after all message actions settle.
+    ///
+    /// Rejected sources are removed before rebuilding the cumulative screen, so
+    /// an accepted sibling remains visible. This remains presentation-only and
+    /// does not create sender persistence.
+    pub(crate) fn finalize_settled_outbound_message_previews(
+        &mut self,
+        pane_id: &str,
+        turn_id: &str,
+        execution: &mez_agent::AgentTurnExecution,
+    ) -> Result<()> {
+        let Some(presentation) = self
+            .presentation
+            .agent_streaming_say_presentations
+            .get(pane_id)
+            .filter(|presentation| presentation.turn_id == turn_id)
+        else {
+            return Ok(());
+        };
+        if presentation.outbound_messages.is_empty() {
+            return Ok(());
+        }
+        let settled = execution
+            .response
+            .action_batch
+            .as_ref()
+            .is_some_and(|batch| {
+                presentation.outbound_messages.keys().all(|action_index| {
+                    batch.actions.get(*action_index).is_some_and(|action| {
+                        matches!(action.payload, AgentActionPayload::SendMessage { .. })
+                            && execution
+                                .action_results
+                                .iter()
+                                .any(|result| result.action_id == action.id && result.is_terminal())
+                    })
+                })
+            });
+        if !settled {
+            return Ok(());
+        }
+        let rejected = execution
+            .response
+            .action_batch
+            .as_ref()
+            .map_or_else(Vec::new, |batch| {
+                presentation
+                    .outbound_messages
+                    .keys()
+                    .filter(|action_index| {
+                        batch.actions.get(**action_index).is_some_and(|action| {
+                            execution.action_results.iter().any(|result| {
+                                result.action_id == action.id
+                                    && result.status != mez_agent::ActionStatus::Succeeded
+                            })
+                        })
+                    })
+                    .copied()
+                    .collect::<Vec<_>>()
+            });
+        if !rejected.is_empty() {
+            let presentation = self
+                .presentation
+                .agent_streaming_say_presentations
+                .get_mut(pane_id)
+                .ok_or_else(|| {
+                    MezError::invalid_state("streaming outbound presentation disappeared")
+                })?;
+            for action_index in rejected {
+                presentation.outbound_messages.remove(&action_index);
+            }
+            presentation.revision = presentation.revision.wrapping_add(1);
+            presentation.projected_revision = None;
+        }
+        let has_source = self
+            .presentation
+            .agent_streaming_say_presentations
+            .get(pane_id)
+            .is_some_and(|presentation| {
+                presentation.rationale.is_some()
+                    || !presentation.actions.is_empty()
+                    || !presentation.outbound_messages.is_empty()
+                    || !presentation.shell_commands.is_empty()
+                    || !presentation.shell_summaries.is_empty()
+                    || !presentation.action_headers.is_empty()
+            });
+        if !has_source {
+            self.discard_agent_streaming_say_presentation(pane_id, Some(turn_id))?;
+            return Ok(());
+        }
+        if let Some(work) = self.take_agent_streaming_say_projection_work(pane_id, turn_id)? {
+            let result = Self::build_agent_streaming_say_projection(work)?;
+            if !self.apply_agent_streaming_say_projection_result(result)? {
+                return Err(MezError::invalid_state(
+                    "settled outbound preview projection was rejected",
+                ));
+            }
+        }
+        self.finalize_agent_streaming_say_presentation(pane_id, Some(turn_id))?;
+        Ok(())
+    }
+
     /// Reconciles live source with one validated provider execution.
     ///
     /// Every streamed action must be complete and exactly match its validated
@@ -3886,13 +4351,36 @@ impl RuntimeSessionService {
             .agent_pane_screen_lineage(pane_id, &presentation.conversation_id)
             == Some(presentation.installed_lineage);
         let batch = execution.response.action_batch.as_ref();
-        let matches =
-            presentation.turn_id == turn_id
-                && conversation_matches
-                && batch.is_some_and(|batch| {
-                    presentation.rationale.as_ref().is_none_or(|streamed| {
-                        streamed.complete && streamed.text == batch.rationale
-                    }) && presentation.actions.iter().all(|(action_index, streamed)| {
+        let matches = presentation.turn_id == turn_id
+            && conversation_matches
+            && batch.is_some_and(|batch| {
+                presentation
+                    .rationale
+                    .as_ref()
+                    .is_none_or(|streamed| streamed.complete && streamed.text == batch.rationale)
+                    && presentation
+                        .outbound_messages
+                        .iter()
+                        .all(|(action_index, streamed)| {
+                            let Some(mez_agent::AgentActionPayload::SendMessage {
+                                recipient,
+                                content_type,
+                                payload,
+                                ..
+                            }) = batch
+                                .actions
+                                .get(*action_index)
+                                .map(|action| &action.payload)
+                            else {
+                                return false;
+                            };
+                            streamed.complete
+                                && streamed.recipient == *recipient
+                                && streamed.text == *payload
+                                && streamed.content_type
+                                    == mez_agent::normalize_maap_message_content_type(content_type)
+                        })
+                    && presentation.actions.iter().all(|(action_index, streamed)| {
                         let Some(mez_agent::AgentActionPayload::Say {
                             status,
                             text,
@@ -3911,7 +4399,8 @@ impl RuntimeSessionService {
                                 == mez_agent::normalize_agent_output_content_type(Some(
                                     content_type,
                                 ))
-                    }) && presentation
+                    })
+                    && presentation
                         .shell_commands
                         .iter()
                         .all(|(action_index, streamed)| {
@@ -3926,23 +4415,22 @@ impl RuntimeSessionService {
                             };
                             streamed.complete && streamed.text == *command
                         })
-                        && presentation
-                            .shell_summaries
-                            .iter()
-                            .all(|(action_index, streamed)| {
-                                let Some(mez_agent::AgentActionPayload::ShellCommand {
-                                    summary,
-                                    ..
-                                }) = batch
-                                    .actions
-                                    .get(*action_index)
-                                    .map(|action| &action.payload)
-                                else {
-                                    return false;
-                                };
-                                streamed.complete && streamed.text == *summary
-                            })
-                });
+                    && presentation
+                        .shell_summaries
+                        .iter()
+                        .all(|(action_index, streamed)| {
+                            let Some(mez_agent::AgentActionPayload::ShellCommand {
+                                summary, ..
+                            }) = batch
+                                .actions
+                                .get(*action_index)
+                                .map(|action| &action.payload)
+                            else {
+                                return false;
+                            };
+                            streamed.complete && streamed.text == *summary
+                        })
+            });
         if !matches {
             self.presentation
                 .agent_promoted_streaming_say_actions
@@ -4148,6 +4636,19 @@ impl RuntimeSessionService {
         self.presentation
             .agent_promoted_streaming_say_actions
             .insert((pane_id.to_string(), turn_id.to_string()), promoted.clone());
+        let mut presentation_indices = promoted.clone();
+        presentation_indices.extend(presentation.outbound_messages.keys().copied());
+        self.presentation
+            .agent_promoted_streaming_say_actions
+            .insert(
+                (pane_id.to_string(), turn_id.to_string()),
+                presentation_indices,
+            );
+        if !presentation.outbound_messages.is_empty() {
+            self.presentation
+                .agent_streaming_say_presentations
+                .insert(pane_id.to_string(), presentation);
+        }
         Ok(
             crate::runtime::render::RuntimeStreamingSayCompletionReconciliation {
                 promoted_action_indices: promoted,
@@ -4164,6 +4665,17 @@ impl RuntimeSessionService {
         self.presentation
             .agent_promoted_streaming_say_actions
             .remove(&(pane_id.to_string(), turn_id.to_string()));
+    }
+
+    /// Clears accepted sender-row identities owned by one terminal turn.
+    ///
+    /// The identity only prevents duplicate live appends while a turn can be
+    /// retried or resumed. Terminal turn cleanup releases it because durable
+    /// sender replay is owned by the later persistence phase.
+    pub(crate) fn clear_settled_outbound_message_actions(&mut self, turn_id: &str) {
+        self.presentation
+            .agent_settled_outbound_message_actions
+            .retain(|(_pane_id, candidate_turn_id, _action_id)| candidate_turn_id != turn_id);
     }
 
     /// Removes previews whose final output has already been retained.
@@ -4964,8 +5476,9 @@ impl RuntimeSessionService {
 mod tests {
     use super::{
         catch_agent_terminal_presentation_panic, peer_message_echo_rendered_lines,
-        peer_message_is_canonical_plaintext, styled_agent_presentation_source_lines,
+        styled_agent_presentation_source_lines,
     };
+    use crate::runtime::{PeerMessageLogMode, runtime_peer_message_presentation_is_visible};
 
     /// Verifies typed styled presentation source preserves valid style and text
     /// pairs while rejecting malformed payloads before replay reaches a pane.
@@ -4999,14 +5512,20 @@ mod tests {
         );
     }
 
-    /// Verifies normal peer-message presentation accepts only the exact
-    /// canonical plaintext media type, regardless of whether the payload looks
-    /// like structured data.
+    /// Verifies the shared normal-mode predicate accepts canonical plaintext and
+    /// both supported Markdown media types while rejecting other raw payloads.
     #[test]
-    fn peer_message_normal_mode_accepts_only_canonical_plaintext() {
-        assert!(peer_message_is_canonical_plaintext(Some(
-            "text/plain; charset=utf-8"
-        )));
+    fn peer_message_normal_mode_accepts_safe_text_and_markdown() {
+        for content_type in [
+            Some("text/plain; charset=utf-8"),
+            Some("text/markdown"),
+            Some("text/markdown; charset=utf-8"),
+        ] {
+            assert!(runtime_peer_message_presentation_is_visible(
+                PeerMessageLogMode::Normal,
+                content_type
+            ));
+        }
         for content_type in [
             None,
             Some("text/plain"),
@@ -5014,8 +5533,15 @@ mod tests {
             Some("application/json"),
             Some("application/octet-stream"),
         ] {
-            assert!(!peer_message_is_canonical_plaintext(content_type));
+            assert!(!runtime_peer_message_presentation_is_visible(
+                PeerMessageLogMode::Normal,
+                content_type
+            ));
         }
+        assert!(runtime_peer_message_presentation_is_visible(
+            PeerMessageLogMode::Verbose,
+            Some("application/json")
+        ));
     }
 
     /// Verifies canonical plaintext remains literal, including JSON-looking

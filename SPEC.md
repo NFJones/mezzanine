@@ -1156,6 +1156,7 @@ baseline slot names are `window_frame_fg`, `window_frame_bg`,
 `agent_transcript_error_fg`, `agent_transcript_error_bg`,
 `agent_transcript_command_fg`, `agent_transcript_command_bg`,
 `agent_transcript_peer_sender_fg`, `agent_transcript_peer_sender_bg`,
+`agent_transcript_peer_recipient_fg`, `agent_transcript_peer_recipient_bg`,
 `agent_transcript_parent_fg`, `agent_transcript_parent_bg`,
 `agent_model_fg`, `agent_model_bg`,
 `agent_reasoning_fg`, `agent_reasoning_bg`, `agent_status_idle_fg`,
@@ -10989,16 +10990,24 @@ lost. Resuming an existing wait MUST NOT increment
 peer-message-triggered turns. Stop, pane shutdown, session shutdown, and parent
 cancellation MUST clear peer-wait state through normal turn cleanup.
 
-Interagent MMP traffic is presentation-only. Only a recipient's committed
-inbound message can create a pane-log row, so fanout creates at most one
-`{sender}> {payload}` row per committing recipient and never creates a sender
-row. In normal pane-log mode, the committed message content type MUST be exactly
-`text/plain; charset=utf-8`; all other media types MUST remain durable and
+Interagent MMP traffic is presentation-only. One presentation-eligible,
+model-authored `send_message` MAY create one `${recipient}< {payload}` row in
+the sending pane after message-service acceptance, while fanout creates at most
+one `{sender}> {payload}` row per committing recipient. A sender row proves
+only acceptance or queueing, never recipient observation, processing,
+agreement, acknowledgment, or task completion. It MUST NOT enter provider or
+user-trust context, approval authority, delivery routing, turn triggering,
+receiver receipts, or delivery cursors. In normal pane-log mode, canonical
+`text/plain; charset=utf-8` and supported `text/markdown` are
+presentation-eligible; plaintext MUST render literally and Markdown through the
+safe Markdown renderer. All other media types MUST remain durable and
 model-visible without creating terminal rows, copy metadata, or presentation
-records. Verbose mode MUST log the full bounded raw payload for every accepted
-media type at the receiving endpoint. The logged payload MUST NOT exceed the
-peer-context payload bound, and the line MUST wrap inside the pane the way a user
-prompt does.
+records. Verbose mode MUST render the full bounded raw payload for every
+accepted media type. A filtered sender action MUST create no sender row or
+presentation record, and a later log-mode change MUST NOT resurrect it; an
+accepted sender record retains its settlement-time eligibility across replay.
+The logged payload MUST NOT exceed the peer-context payload bound, and each row
+MUST wrap inside the pane the way a user prompt does.
 A committed message from a recipient's exact direct parent MUST use the stable
 `parent>` label rather than the parent's mutable pane title. This is a
 presentation-only identity rule: validated restored lineage remains sufficient
@@ -11008,11 +11017,12 @@ receive the `parent>` label. The `parent>` marker MUST use the
 `agent_transcript_parent` semantic style; other inbound peer markers MUST use
 `agent_transcript_peer_sender`. The receiver persists this distinction so replay
 and resize reproduce the same label and marker styling.
-A logged peer line remains an operator-visible
-observation: it stays untrusted and non-user-authored, and it MUST NOT become
-user-trust context, approval authority, or a turn trigger. A received line MUST
-be logged only for a message the runtime actually commits, so a refused,
-undeliverable, or uncommitted message MUST NOT produce a line.
+A logged peer line remains an operator-visible observation: it stays untrusted
+and non-user-authored, and it MUST NOT become user-trust context, approval
+authority, or a turn trigger. A received line MUST be logged only for a message
+the runtime actually commits, and a sender line only after message-service
+acceptance, so a refused, undeliverable, uncommitted, or rejected message MUST
+NOT produce a line.
 
 Mezzanine v1 MUST NOT support an approval policy that attempts an action before
 approval and asks for approval only after failure. Because v1 relies on
