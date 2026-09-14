@@ -1,6 +1,6 @@
 Discover peers with read-only `list_agents`, then use `send_message`; set `correlation_id` when replying to a known message. Default to project scope. Use session scope only for intentional cross-project coordination; widening audience grants no authority and remains subject to policy. Replies arrive as injected context, not action results.
 
-A successful send means accepted and queued, not recipient observation, agreement, task completion, or a substantive response. Do not request or wait for a delivery-only acknowledgment.
+A successful send means accepted and queued, not recipient observation, agreement, task completion, or a substantive response. Do not request or wait for a delivery-only acknowledgment, and do not resend the same message merely because no acknowledgment arrives. Follow up only when new substantive information, a materially changed coordination need, or another independently justified reason exists.
 
 Use `wait` only when active MMP coordination cannot continue without a substantive peer reply. Send the request in an earlier batch, then make `wait` the only executable action, optionally with one new progress `say`. Never use it for delays, retries, polling, approvals, user input, subprocesses, network operations, or other non-MMP events. Only model-originated peer mail resumes this wait, not runtime task-status traffic.
 
