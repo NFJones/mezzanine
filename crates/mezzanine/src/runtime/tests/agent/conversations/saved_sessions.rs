@@ -1,7 +1,10 @@
 //! Agent conversation saved sessions tests.
 
 use super::*;
-use crate::runtime::{PersistenceEvent, SessionArchiveOperation};
+use crate::runtime::{PersistenceEvent, SessionArchiveOperation, current_unix_seconds};
+use mez_agent::AgentTurnTrigger;
+use mez_agent::messaging::Envelope;
+use mez_core::ids::PaneId;
 
 /// Returns one record-browser metadata value by key.
 fn record_metadata_value(
@@ -2327,6 +2330,58 @@ fn runtime_resume_late_failure_restores_complete_prior_subagent_authority() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
+    let previous_conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let now_ms = current_unix_seconds().saturating_mul(1000);
+    let recipient = service
+        .ensure_runtime_message_identity(
+            "agent-%1",
+            PaneId::opaque("%1".to_string()),
+            "agent",
+            &[],
+            now_ms,
+        )
+        .unwrap();
+    let sender = service
+        .ensure_runtime_message_identity("agent-rollback-sender", None, "agent", &[], now_ms)
+        .unwrap();
+    service.register_received_peer_message_presentation(
+        recipient.agent_id.clone(),
+        1,
+        &AgentTurnRecord {
+            turn_id: "resume-rollback-receipt".to_string(),
+            conversation_id: previous_conversation_id,
+            agent_id: recipient.agent_id.to_string(),
+            pane_id: "%1".to_string(),
+            trigger: AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: current_unix_seconds(),
+            deadline_at_unix_millis: now_ms.saturating_add(60_000),
+            policy_profile: "runtime".to_string(),
+            model_profile: "default".to_string(),
+            parent_turn_id: None,
+            state: AgentTurnState::Queued,
+            cooperation_mode: None,
+            initial_capability: None,
+        },
+        Envelope {
+            protocol: "mmp/1",
+            id: "resume-rollback-receipt".to_string(),
+            message_type: "send".to_string(),
+            time: format!("runtime:{now_ms}"),
+            sender,
+            recipient: mez_agent::messaging::Recipient::Agent(recipient.agent_id),
+            correlation_id: None,
+            ttl_ms: None,
+            content_type: "text/plain; charset=utf-8".to_string(),
+            payload: "preserve old receipt on rollback".to_string(),
+            extension_fields: Vec::new(),
+        },
+    );
+    let receipts_before_failure = service.snapshot_unsettled_received_peer_message_presentations();
     service.checkpoint_agent_session_metadata().unwrap();
     let checkpoint_before_failure = transcript_store
         .load_agent_session_metadata(service.session().id.as_str())
@@ -2350,6 +2405,11 @@ fn runtime_resume_late_failure_restores_complete_prior_subagent_authority() {
         "{error}"
     );
     assert_eq!(service.subagent_lineage(agent_id), Some(&structural));
+    assert_eq!(
+        service.snapshot_unsettled_received_peer_message_presentations(),
+        receipts_before_failure,
+        "late resume failure must restore old-conversation unsettled receiver receipts"
+    );
     assert!(!service.subagent_lineage_has_live_parent_authority(agent_id));
     assert!(!service.has_subagent_scope_declaration(agent_id));
     assert!(

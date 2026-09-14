@@ -36,7 +36,7 @@ use super::{
 };
 use crate::runtime::config::{
     PaneSpawnPolicy, runtime_pane_spawn_directory_policy_from_config,
-    runtime_pane_spawn_view_policy_from_config,
+    runtime_pane_spawn_view_policy_from_config, runtime_subagent_name_mode_from_config,
 };
 use crate::runtime::{RuntimeConfigAffectedSubsystems, RuntimePreparedConfigReload};
 use crate::security::project::{ProjectTrustProvenance, resolve_project_trust_provenance};
@@ -596,6 +596,7 @@ impl RuntimeSessionService {
                 runtime_max_subagent_depth_from_config(&structured)?,
                 runtime_subagent_wait_policy_from_config(&structured)?,
             );
+            self.set_subagent_name_mode(runtime_subagent_name_mode_from_config(&structured)?);
             self.set_active_turn_sleep_inhibition(
                 runtime_active_turn_sleep_inhibition_from_config(&structured)?,
             );

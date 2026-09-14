@@ -12,7 +12,6 @@ use mez_agent::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
-const AGENT_LOCAL_MESSAGE_CONTEXT_PAYLOAD_CHARS: usize = 256 * 1024;
 const AGENT_TRANSCRIPT_TOOL_CONTEXT_LIMIT_BYTES: usize = 256 * 1024;
 const LEGACY_MAAP_ASSISTANT_CONTEXT: &str =
     "[legacy MAAP assistant execution omitted from transcript replay]";
@@ -524,16 +523,38 @@ pub(crate) fn runtime_peer_message_context_content(envelope: &Envelope) -> Strin
 /// line can never carry more peer payload than the model-visible peer block,
 /// and both truncate at the identical limit with the identical marker text.
 pub(crate) fn runtime_peer_message_logged_payload(payload: &str) -> String {
-    truncate_runtime_context_text(
-        payload,
-        AGENT_LOCAL_MESSAGE_CONTEXT_PAYLOAD_CHARS,
-        "peer message payload",
-    )
+    let limit = crate::storage::snapshot::MAX_UNSETTLED_PEER_PRESENTATION_PAYLOAD_BYTES;
+    if payload.len() <= limit {
+        return payload.to_string();
+    }
+    let suffix = format!(
+        "...[mez: peer message payload truncated; original_bytes={}]",
+        payload.len()
+    );
+    let mut end = limit.saturating_sub(suffix.len());
+    while !payload.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    format!("{}{}", &payload[..end], suffix)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::runtime_transcript_tool_context_content;
+    use super::{runtime_peer_message_logged_payload, runtime_transcript_tool_context_content};
+
+    /// Verifies peer receipt capture truncates UTF-8 payloads by bytes without
+    /// splitting a multibyte character, while retaining the shared limit.
+    #[test]
+    fn peer_message_logged_payload_truncates_utf8_at_shared_byte_limit() {
+        let payload = format!("{}tail", "€".repeat(100_000));
+
+        let captured = runtime_peer_message_logged_payload(&payload);
+
+        assert!(captured.len() <= 256 * 1024, "{}", captured.len());
+        assert!(captured.is_char_boundary(captured.len()));
+        assert!(captured.ends_with(']'));
+        assert!(captured.contains("original_bytes="));
+    }
 
     #[test]
     /// Verifies legacy shell and MCP transcript bodies are unavailable to

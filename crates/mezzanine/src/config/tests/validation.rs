@@ -888,6 +888,65 @@ fn validates_agent_peer_message_log_mode_values() {
     }
 }
 
+/// Verifies subagent display-name mode accepts only its three exact allocation
+/// policies and reports the shared runtime validation message for every invalid
+/// authored representation.
+///
+/// The mode selects behavior for future child creation, so accepting a typo or
+/// non-string value would silently substitute a different naming policy. Static
+/// validation must instead reject it before startup, reload, or mutation apply.
+#[test]
+fn validates_agent_subagent_name_mode_values() {
+    for (format, text) in [
+        (
+            ConfigFormat::Toml,
+            "[agents]\nsubagent_name_mode = \"nonhuman\"\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"agents":{"subagent_name_mode":"human"}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "agents:\n  subagent_name_mode: literal\n",
+        ),
+    ] {
+        let validation = validate_config_text(format, text, ConfigScope::Primary);
+
+        assert!(
+            validation.valid,
+            "rejected subagent name mode {format:?}: {:?}",
+            validation.diagnostics
+        );
+    }
+    for (format, text) in [
+        (
+            ConfigFormat::Toml,
+            "[agents]\nsubagent_name_mode = \"robot\"\n",
+        ),
+        (
+            ConfigFormat::Toml,
+            "[agents]\nsubagent_name_mode = \"Human\"\n",
+        ),
+        (ConfigFormat::Toml, "[agents]\nsubagent_name_mode = 3\n"),
+        (ConfigFormat::Toml, "[agents]\nsubagent_name_mode = \"\"\n"),
+        (ConfigFormat::Json, r#"{"agents":{"subagent_name_mode":3}}"#),
+        (ConfigFormat::Yaml, "agents:\n  subagent_name_mode: robot\n"),
+    ] {
+        let validation = validate_config_text(format, text, ConfigScope::Primary);
+
+        assert!(
+            !validation.valid,
+            "accepted subagent name mode {format:?}: {text}"
+        );
+        assert!(validation.diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == "agents.subagent_name_mode"
+                && diagnostic.message
+                    == "agents.subagent_name_mode must be nonhuman, human, or literal"
+        }));
+    }
+}
+
 /// Verifies the optional title model-profile override names a real profile.
 ///
 /// A bad name must be rejected rather than silently replaced by the

@@ -9,6 +9,7 @@ use super::agent_state::{
     RuntimeNativeShellDispatch,
 };
 use super::commands::RuntimeModelCatalog;
+use super::config::SubagentNameMode;
 #[cfg(test)]
 use super::execute_mcp_action_through_runtime;
 #[cfg(test)]
@@ -107,6 +108,48 @@ pub(crate) enum TerminalResultDisposition {
     RetainedByRoutedWorkflow,
     /// Routed parent presentation delivered the joined result.
     PresentationDelivered,
+}
+
+/// One receiver-owned peer-message presentation awaiting its idempotent pane write.
+///
+/// Receive commits install this receipt before their delivery cursor advances. The
+/// identity combines the MMP delivery sequence with the immutable envelope id, so
+/// equal payloads from distinct accepted envelopes remain distinct while retries
+/// of the same envelope cannot create another pane row. The receipt stays in
+/// actor-owned state until the renderer accepts the write, allowing the next
+/// delivery or prompt boundary to recover an interrupted receive commit.
+#[derive(Debug, Clone)]
+struct RuntimeReceivedPeerMessagePresentation {
+    /// Authoritative MMP recipient that accepted the delivery.
+    ///
+    /// A pane name is only a presentation target: group and session fanout can
+    /// deliver one envelope to several recipient identities, so it cannot be
+    /// part of the receipt's authority boundary.
+    recipient_agent_id: AgentId,
+    /// Destination pane that owns the receiver-only presentation row.
+    pane_id: String,
+    /// Durable conversation whose presentation log settles this receipt.
+    conversation_id: String,
+    /// Queued or active turn that owns the canonical context event.
+    turn_id: String,
+    /// Accepted delivery sequence that must be acknowledged before presentation.
+    sequence: mez_agent::messaging::MessageSequence,
+    /// Original media type used by the normal-versus-verbose presentation gate.
+    content_type: String,
+    /// Bounded peer payload retained for receiver-only durable presentation.
+    payload: String,
+    /// Receiver label captured at commit time for stable recovery presentation.
+    peer_label: String,
+    /// Whether the committed row uses direct-parent presentation semantics.
+    direct_parent: bool,
+    /// Whether the receive commit selected this row for pane presentation.
+    ///
+    /// The configuration may change before a persistence retry or restart, but
+    /// a receipt must preserve the eligibility decision made with its canonical
+    /// receive commit.
+    presentation_eligible: bool,
+    /// Whether the live renderer accepted the pane write and persistence is pending.
+    presentation_attempted: bool,
 }
 
 /// Parent handoff retained while an interrupted child awaits user redirection.
@@ -470,6 +513,8 @@ pub(crate) struct RuntimeAgentComponent {
     max_subagent_depth: usize,
     /// Whether parent turns join or detach spawned subagents.
     subagent_wait_policy: SubagentWaitPolicy,
+    /// Display-name allocation policy used only for future subagent spawns.
+    subagent_name_mode: SubagentNameMode,
     /// Parent agent route keyed by spawned child turn id.
     subagent_task_routes: BTreeMap<String, String>,
     /// Interrupted ordinary children awaiting a follow-up prompt, keyed by agent id.
@@ -529,6 +574,21 @@ pub(crate) struct RuntimeAgentComponent {
     /// Test-only one-shot failure injected while tracing a routed parent continuation.
     #[cfg(test)]
     fail_routed_parent_continuation_trace: bool,
+    /// Test-only one-shot failure injected before a peer-message turn commits.
+    #[cfg(test)]
+    fail_next_peer_message_turn_commit: bool,
+    /// Test-only one-shot failure injected after receive context storage.
+    #[cfg(test)]
+    fail_next_peer_message_receive_after_context_storage: bool,
+    /// Test-only one-shot failure injected after receive cursor advancement.
+    #[cfg(test)]
+    fail_next_peer_message_receive_after_cursor_advance: bool,
+    /// Test-only one-shot failure injected before receiver presentation work.
+    #[cfg(test)]
+    fail_next_received_peer_message_presentation: bool,
+    /// Test-only one-shot failure injected after idle-turn scheduler admission.
+    #[cfg(test)]
+    fail_next_peer_message_turn_post_admission: bool,
     /// Approval continuation metadata keyed by blocked approval id.
     blocked_agent_approval_refs: BTreeMap<String, BlockedAgentApprovalRef>,
     /// Exact turn/action identities granted one unsandboxed retry after a
@@ -570,6 +630,8 @@ pub(crate) struct RuntimeAgentComponent {
     agent_turn_ledger: AgentTurnLedger,
     /// Assembled provider context keyed by turn id.
     agent_turn_contexts: BTreeMap<String, AgentContext>,
+    /// Receiver-owned peer presentation receipts awaiting durable pane settlement.
+    received_peer_message_presentations: BTreeMap<String, RuntimeReceivedPeerMessagePresentation>,
     /// Number of replayed history events at the front of each active turn.
     ///
     /// Compaction refresh replaces exactly this prefix so prompt-boundary
@@ -1365,6 +1427,80 @@ impl RuntimeSessionService {
         self.agent.fail_routed_parent_continuation_trace = true;
     }
 
+    /// Injects one pre-commit failure for a turn carrying pending peer mail.
+    #[cfg(test)]
+    pub(crate) fn fail_next_peer_message_turn_commit_for_tests(&mut self) {
+        self.agent.fail_next_peer_message_turn_commit = true;
+    }
+
+    /// Consumes the test-only pre-commit peer-message turn failure.
+    #[cfg(test)]
+    pub(crate) fn take_peer_message_turn_commit_failure_for_tests(&mut self) -> bool {
+        std::mem::take(&mut self.agent.fail_next_peer_message_turn_commit)
+    }
+
+    /// Injects one recoverable receive failure immediately after context storage.
+    #[cfg(test)]
+    pub(crate) fn fail_next_peer_message_receive_after_context_storage_for_tests(&mut self) {
+        self.agent
+            .fail_next_peer_message_receive_after_context_storage = true;
+    }
+
+    /// Consumes the test-only post-context receive failure.
+    #[cfg(test)]
+    pub(crate) fn take_peer_message_receive_after_context_storage_failure_for_tests(
+        &mut self,
+    ) -> bool {
+        std::mem::take(
+            &mut self
+                .agent
+                .fail_next_peer_message_receive_after_context_storage,
+        )
+    }
+
+    /// Injects one recoverable receive failure immediately after cursor advancement.
+    #[cfg(test)]
+    pub(crate) fn fail_next_peer_message_receive_after_cursor_advance_for_tests(&mut self) {
+        self.agent
+            .fail_next_peer_message_receive_after_cursor_advance = true;
+    }
+
+    /// Consumes the test-only post-cursor receive failure.
+    #[cfg(test)]
+    pub(crate) fn take_peer_message_receive_after_cursor_advance_failure_for_tests(
+        &mut self,
+    ) -> bool {
+        std::mem::take(
+            &mut self
+                .agent
+                .fail_next_peer_message_receive_after_cursor_advance,
+        )
+    }
+
+    /// Injects one receiver presentation failure after a delivery is acknowledged.
+    #[cfg(test)]
+    pub(crate) fn fail_next_received_peer_message_presentation_for_tests(&mut self) {
+        self.agent.fail_next_received_peer_message_presentation = true;
+    }
+
+    /// Consumes the test-only receiver presentation failure.
+    #[cfg(test)]
+    pub(crate) fn take_received_peer_message_presentation_failure_for_tests(&mut self) -> bool {
+        std::mem::take(&mut self.agent.fail_next_received_peer_message_presentation)
+    }
+
+    /// Injects one idle-turn failure after scheduler admission and before tracing.
+    #[cfg(test)]
+    pub(crate) fn fail_next_peer_message_turn_post_admission_for_tests(&mut self) {
+        self.agent.fail_next_peer_message_turn_post_admission = true;
+    }
+
+    /// Consumes the test-only post-admission peer-message turn failure.
+    #[cfg(test)]
+    pub(crate) fn take_peer_message_turn_post_admission_failure_for_tests(&mut self) -> bool {
+        std::mem::take(&mut self.agent.fail_next_peer_message_turn_post_admission)
+    }
+
     /// Returns the parent macro turn for one child step turn.
     #[cfg(test)]
     pub(crate) fn macro_parent_turn_for_child(&self, child_turn_id: &str) -> Option<&String> {
@@ -1750,6 +1886,16 @@ impl RuntimeSessionService {
     #[cfg(test)]
     pub(crate) fn subagent_wait_policy(&self) -> SubagentWaitPolicy {
         self.agent.subagent_wait_policy
+    }
+
+    /// Replaces the display-name allocation policy for future subagent spawns.
+    pub(crate) fn set_subagent_name_mode(&mut self, mode: SubagentNameMode) {
+        self.agent.subagent_name_mode = mode;
+    }
+
+    /// Returns the effective display-name allocation policy.
+    pub(crate) fn subagent_name_mode(&self) -> SubagentNameMode {
+        self.agent.subagent_name_mode
     }
 
     /// Returns a cached live model catalog for one provider.

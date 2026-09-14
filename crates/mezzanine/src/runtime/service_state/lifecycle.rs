@@ -97,6 +97,9 @@ pub(crate) struct RuntimeSnapshotOwnedCreationContext {
     pub approval_requests: Vec<crate::storage::snapshot::SnapshotApprovalRequestMetadata>,
     /// Message-service state to include in the snapshot payload.
     pub message_state: mez_agent::messaging::MessageServiceSnapshot,
+    /// Receiver-scoped presentation sources awaiting durable settlement.
+    pub unsettled_peer_presentations:
+        Vec<crate::storage::snapshot::SnapshotUnsettledPeerPresentation>,
     /// MCP server state to include in the snapshot payload.
     pub mcp_servers: Vec<crate::storage::snapshot::SnapshotMcpServerState>,
 }
@@ -121,6 +124,7 @@ impl RuntimeSnapshotOwnedCreationContext {
         context
             .with_approvals(&self.approval_grants, &self.approval_requests)
             .with_message_state(&self.message_state)
+            .with_unsettled_peer_presentations(&self.unsettled_peer_presentations)
             .with_mcp_servers(&self.mcp_servers)
     }
 }

@@ -1156,7 +1156,6 @@ baseline slot names are `window_frame_fg`, `window_frame_bg`,
 `agent_transcript_error_fg`, `agent_transcript_error_bg`,
 `agent_transcript_command_fg`, `agent_transcript_command_bg`,
 `agent_transcript_peer_sender_fg`, `agent_transcript_peer_sender_bg`,
-`agent_transcript_peer_receiver_fg`, `agent_transcript_peer_receiver_bg`,
 `agent_transcript_parent_fg`, `agent_transcript_parent_bg`,
 `agent_model_fg`, `agent_model_bg`,
 `agent_reasoning_fg`, `agent_reasoning_bg`, `agent_status_idle_fg`,
@@ -3239,7 +3238,7 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 93 is the current implemented configuration schema version for this
+schema version 95 is the current implemented configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
@@ -3253,6 +3252,14 @@ The `92 -> 93` migration MUST preserve every existing subagent profile while
 advancing the document version. Schema version 93 adds optional
 `subagents.<name>.allowed_actions`, a non-empty list of provider-visible action
 names that can only narrow a child’s frozen parent action catalog.
+
+The `94 -> 95` migration MUST remove retired
+`agent_transcript_peer_receiver_fg` and `agent_transcript_peer_receiver_bg`
+slots from active `theme.colors` and every named `themes.<name>.colors` table.
+It MUST materialize `agents.subagent_name_mode = "nonhuman"` only when that
+setting is absent. It MUST preserve every authored
+`agents.subagent_name_mode` value so current-schema validation can accept or
+reject that authored value.
 
 The `90 -> 91` migration MUST advance only the schema version. It MUST preserve
 configured and omitted `frames.window.pills.<name>.foreground`,
@@ -4234,7 +4241,13 @@ The `agents` table MUST support `default_provider`, `default_model_profile`,
 `default_personality`, `subagent_placement`,
 `max_concurrent_agents`, `max_queued_turns`, `max_queued_bytes`,
 `max_root_subagents`, `max_subagents_per_subagent`,
-`max_subagent_panes_per_window`, `subagent_wait_policy`, and `max_depth`.
+`max_subagent_panes_per_window`, `subagent_wait_policy`, `subagent_name_mode`, and `max_depth`.
+`agents.subagent_name_mode` MUST be exactly one of `nonhuman`, `human`, or
+`literal`, and MUST default to `nonhuman`. It selects presentation-only
+display-name allocation for subagents created after the effective configuration
+is loaded or reloaded; it MUST NOT rename existing agents or persisted
+conversations, affect canonical agent IDs, identity, routing, authority, or
+delegation limits, or itself require a particular name corpus or allocator.
 `agents.max_queued_turns` MUST be a positive integer and MUST default to `256`.
 `agents.max_queued_bytes` MUST be a positive integer and MUST default to
 `4194304`. The scheduler MUST reject new queue admission when either budget
@@ -8092,13 +8105,12 @@ A spawn request MUST create the new agent in a dedicated subagent window in the
 same window group as the controlling pane. Subagent spawn MUST NOT focus that
 window or otherwise move the primary user's active window or pane.
 
-Each spawned subagent MUST receive a human-readable display name chosen at
-random from a built-in pool of short common first names. The pool SHOULD be
-large enough to keep concurrent subagent groups visually varied. The display
-name MUST be unique among currently active subagents when the subagent is
-spawned. The canonical agent id MUST remain the stable protocol identity, and
-protocol responses and parent coordination messages that expose a display name
-MUST also expose the canonical agent id.
+Each spawned subagent MUST receive a human-readable display name according to
+the prospective `agents.subagent_name_mode` policy in effect when it is
+spawned. The display name MUST be unique among currently active subagents when
+the subagent is spawned. The canonical agent id MUST remain the stable protocol
+identity, and protocol responses and parent coordination messages that expose a
+display name MUST also expose the canonical agent id.
 
 Subagent pane titles MUST be set to the spawned subagent's display name.
 Generated subagent window names MUST compactly reflect the display names of the
@@ -10955,20 +10967,30 @@ lost. Resuming an existing wait MUST NOT increment
 peer-message-triggered turns. Stop, pane shutdown, session shutdown, and parent
 cancellation MUST clear peer-wait state through normal turn cleanup.
 
-Interagent MMP traffic is presentation-only. In normal pane-log mode, only a
-committed received message or accepted outbound `send_message` with content type
-exactly `text/plain; charset=utf-8` MUST log `{sender}> {payload}` or
-`{recipient}< {payload}` in prompt style. All other media types MUST remain
-durable and model-visible without creating terminal rows, copy metadata, or
-presentation records. Verbose mode MUST log the full bounded raw payload for
-every accepted media type. The logged payload MUST NOT exceed the peer-context
-payload bound, and the line MUST wrap inside the pane the way a user prompt does.
+Interagent MMP traffic is presentation-only. Only a recipient's committed
+inbound message can create a pane-log row, so fanout creates at most one
+`{sender}> {payload}` row per committing recipient and never creates a sender
+row. In normal pane-log mode, the committed message content type MUST be exactly
+`text/plain; charset=utf-8`; all other media types MUST remain durable and
+model-visible without creating terminal rows, copy metadata, or presentation
+records. Verbose mode MUST log the full bounded raw payload for every accepted
+media type at the receiving endpoint. The logged payload MUST NOT exceed the
+peer-context payload bound, and the line MUST wrap inside the pane the way a user
+prompt does.
+A committed message from a recipient's exact direct parent MUST use the stable
+`parent>` label rather than the parent's mutable pane title. This is a
+presentation-only identity rule: validated restored lineage remains sufficient
+for the label, but a fenced or stale lineage edge MUST fall back to ordinary
+endpoint labeling. Siblings, unrelated agents, roots, and grandparents MUST NOT
+receive the `parent>` label. The `parent>` marker MUST use the
+`agent_transcript_parent` semantic style; other inbound peer markers MUST use
+`agent_transcript_peer_sender`. The receiver persists this distinction so replay
+and resize reproduce the same label and marker styling.
 A logged peer line remains an operator-visible
 observation: it stays untrusted and non-user-authored, and it MUST NOT become
 user-trust context, approval authority, or a turn trigger. A received line MUST
-be logged only for a message the runtime actually commits, and a sent line MUST
-be logged only after the transport accepts the message, so a refused recipient
-or a failed transport MUST NOT produce a line.
+be logged only for a message the runtime actually commits, so a refused,
+undeliverable, or uncommitted message MUST NOT produce a line.
 
 Mezzanine v1 MUST NOT support an approval policy that attempts an action before
 approval and asks for approval only after failure. Because v1 relies on

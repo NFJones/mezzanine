@@ -554,6 +554,65 @@ pub(crate) fn runtime_subagent_wait_policy_from_config(root: &Value) -> Result<S
     }
 }
 
+/// Selects how future subagent display names are allocated.
+///
+/// This config setting is deliberately prospective: it changes the mode read
+/// by a future allocator without rewriting names already stored in runtime
+/// lineage or persisted conversations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum SubagentNameMode {
+    /// Use the nonhuman display-name corpus.
+    #[default]
+    Nonhuman,
+    /// Use the human display-name corpus.
+    Human,
+    /// Use the canonical runtime agent id verbatim.
+    Literal,
+}
+
+impl SubagentNameMode {
+    /// Parses one exact configuration value into a display-name mode.
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "nonhuman" => Some(Self::Nonhuman),
+            "human" => Some(Self::Human),
+            "literal" => Some(Self::Literal),
+            _ => None,
+        }
+    }
+
+    /// Returns the canonical configuration spelling for this mode.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Nonhuman => "nonhuman",
+            Self::Human => "human",
+            Self::Literal => "literal",
+        }
+    }
+}
+
+/// Parses the prospective subagent display-name allocation mode from `[agents]`.
+pub(crate) fn runtime_subagent_name_mode_from_config(root: &Value) -> Result<SubagentNameMode> {
+    let Some(agents) = runtime_json_object(root, "agents") else {
+        return Ok(SubagentNameMode::default());
+    };
+    let Some(value) = agents.get("subagent_name_mode") else {
+        return Ok(SubagentNameMode::default());
+    };
+    let value = runtime_json_string(Some(value)).ok_or_else(|| {
+        MezError::config(format!(
+            "agents.subagent_name_mode must be {}, human, or literal",
+            SubagentNameMode::Nonhuman.name()
+        ))
+    })?;
+    SubagentNameMode::parse(value).ok_or_else(|| {
+        MezError::config(format!(
+            "agents.subagent_name_mode must be {}, human, or literal",
+            SubagentNameMode::Nonhuman.name()
+        ))
+    })
+}
+
 /// Runs the runtime subagent profiles from config operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

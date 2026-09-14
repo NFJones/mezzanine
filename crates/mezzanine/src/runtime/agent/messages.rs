@@ -5,6 +5,14 @@
 //! validation, message-service delivery, and provider-continuation context
 //! handling together.
 
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::runtime::{
+    PeerMessageLogMode, runtime_agent_peer_message_log_mode_from_config,
+    runtime_effective_config_value,
+};
+use crate::storage::snapshot::MAX_UNSETTLED_PEER_PRESENTATIONS;
+
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentId, AgentTurnExecution,
     AgentTurnRecord, AgentTurnState, Envelope, EventKind, MezError, PaneId, Result,
@@ -52,6 +60,12 @@ impl RuntimeSessionService {
     /// for the exact canonical plaintext media type; other committed payloads
     /// remain durable and model-visible without pane presentation.
     pub(crate) fn deliver_pending_runtime_agent_messages(&mut self, now_ms: u64) -> Result<usize> {
+        self.recover_received_peer_message_turn_scheduling(now_ms)?;
+        // Presentation is a recoverable receiver-side projection. Once a
+        // receipt and cursor exist, it must never block provider admission or
+        // a parked peer wait from resuming; the retained receipt retries on the
+        // next delivery sweep.
+        let _ = self.flush_received_peer_message_presentations();
         let ready = self
             .control
             .message_service_mut()
@@ -99,6 +113,13 @@ impl RuntimeSessionService {
                             })
                         });
                 if !already_committed {
+                    if !self.can_admit_received_peer_message_presentation(
+                        &recipient,
+                        message.sequence,
+                        message.envelope.as_ref(),
+                    ) {
+                        break;
+                    }
                     if !crate::runtime::control::runtime_owned_bridge_message(&message.envelope) {
                         model_message_count = model_message_count.saturating_add(1);
                     }
@@ -111,7 +132,12 @@ impl RuntimeSessionService {
                             MezError::invalid_state("runtime agent turn context is unavailable")
                         })?
                         .append_peer_message_event(label, content)?;
-                    self.echo_received_peer_message_to_pane(&turn.pane_id, &message.envelope);
+                    self.register_received_peer_message_presentation(
+                        recipient.clone(),
+                        message.sequence,
+                        &turn,
+                        message.envelope.as_ref().clone(),
+                    );
                     committed = committed.saturating_add(1);
                     self.append_agent_trace_turn_event(
                         &turn.pane_id,
@@ -130,6 +156,20 @@ impl RuntimeSessionService {
                 self.control
                     .message_service_mut()
                     .advance_subscription(&recipient, message.sequence)?;
+            }
+
+            let _ = self.flush_received_peer_message_presentations();
+
+            if turn.state == AgentTurnState::Queued && !self.agent_work_is_scheduled(&turn.turn_id)
+            {
+                self.enqueue_agent_work(ScheduledWork {
+                    turn_id: turn.turn_id.clone(),
+                    conversation_id: turn.conversation_id.clone(),
+                    agent_id: turn.agent_id.clone(),
+                    pane_id: Some(turn.pane_id.clone()),
+                    kind: mez_agent::ScheduledWorkKind::ShellCapable,
+                })?;
+                self.start_ready_agent_turns()?;
             }
 
             if model_message_count > 0 && self.resume_agent_peer_wait(&turn, model_message_count)? {
@@ -153,28 +193,795 @@ impl RuntimeSessionService {
         Ok(committed)
     }
 
-    /// Logs one committed received peer message in the recipient pane's log.
+    /// Re-admits original queued receive turns after a recoverable receive commit fault.
     ///
-    /// Every path that commits a canonical peer-message block calls this once
-    /// per committed message, so presentation attempts track the complete
-    /// committed set rather than a budget-limited fanout batch. The renderer
-    /// logs eligible payloads with the originating agent at the direction
-    /// arrow's destination and suppresses non-plaintext payloads in normal
-    /// mode. The echo is presentation-only: it reuses the peer payload bound,
-    /// appends no context block, and can never start a turn.
-    pub(crate) fn echo_received_peer_message_to_pane(
+    /// Presentation flushing deliberately does not schedule work. This recovery
+    /// boundary runs only from the delivery sweep after turn context, profile,
+    /// prompt metadata, and cursor state are committed; it therefore admits the
+    /// original turn exactly once without letting display persistence own a
+    /// partially constructed scheduler claim.
+    fn recover_received_peer_message_turn_scheduling(&mut self, now_ms: u64) -> Result<()> {
+        let receipt_groups = self
+            .agent
+            .received_peer_message_presentations
+            .iter()
+            .map(|(identity, receipt)| {
+                (
+                    (
+                        receipt.recipient_agent_id.to_string(),
+                        receipt.turn_id.clone(),
+                    ),
+                    identity.clone(),
+                )
+            })
+            .fold(
+                BTreeMap::<(String, String), Vec<String>>::new(),
+                |mut groups, (group, identity)| {
+                    groups.entry(group).or_default().push(identity);
+                    groups
+                },
+            );
+        let mut orphan_groups = Vec::new();
+        for ((recipient, turn_id), identities) in receipt_groups {
+            let group_has_unacknowledged_receipt = identities.iter().any(|identity| {
+                self.agent
+                    .received_peer_message_presentations
+                    .get(identity)
+                    .is_some_and(|receipt| {
+                        !self.received_peer_message_presentation_is_acknowledged(receipt)
+                    })
+            });
+            let group_has_delivery_path = identities.iter().any(|identity| {
+                self.agent
+                    .received_peer_message_presentations
+                    .get(identity)
+                    .is_some_and(|receipt| {
+                        self.received_peer_message_presentation_is_transport_deliverable(
+                            receipt, now_ms,
+                        )
+                    })
+            });
+            if group_has_unacknowledged_receipt && !group_has_delivery_path {
+                orphan_groups.push((recipient, turn_id, identities));
+            }
+        }
+        for (_, _, identities) in &orphan_groups {
+            for identity in identities {
+                self.agent
+                    .received_peer_message_presentations
+                    .remove(identity);
+            }
+        }
+        for (_, turn_id, _) in orphan_groups {
+            let Some(turn) = self.agent_turn_ledger().turn(&turn_id).cloned() else {
+                continue;
+            };
+            if turn.state != AgentTurnState::Queued {
+                continue;
+            }
+            let _ = self.cancel_agent_work(&turn_id);
+            self.finish_agent_turn_without_shell_session(&turn, AgentTurnState::Interrupted)?;
+        }
+        let turn_ids = self
+            .agent
+            .received_peer_message_presentations
+            .values()
+            .filter(|receipt| self.received_peer_message_presentation_is_acknowledged(receipt))
+            .filter_map(|receipt| {
+                self.agent_turn_ledger()
+                    .turn(&receipt.turn_id)
+                    .filter(|turn| turn.state == AgentTurnState::Queued)
+                    .filter(|turn| self.agent_turn_contexts().contains_key(&turn.turn_id))
+                    .filter(|turn| self.agent_turn_model_profile(&turn.turn_id).is_some())
+                    .map(|turn| turn.turn_id.clone())
+            })
+            .collect::<BTreeSet<_>>();
+        let mut recovered = 0usize;
+        for turn_id in turn_ids {
+            if self.agent_work_is_scheduled(&turn_id) {
+                continue;
+            }
+            let Some(turn) = self.agent_turn_ledger().turn(&turn_id).cloned() else {
+                continue;
+            };
+            self.enqueue_agent_work(ScheduledWork {
+                turn_id: turn.turn_id,
+                conversation_id: turn.conversation_id,
+                agent_id: turn.agent_id,
+                pane_id: Some(turn.pane_id),
+                kind: mez_agent::ScheduledWorkKind::ShellCapable,
+            })?;
+            recovered = recovered.saturating_add(1);
+        }
+        if recovered > 0 {
+            self.start_ready_agent_turns()?;
+        }
+        Ok(())
+    }
+
+    /// Renders one retained receiver source without consulting transport mail.
+    ///
+    /// Persistence retries and snapshot recovery reuse the source captured at
+    /// receive commit. They must not derive labels or payloads from the
+    /// retention-bounded MMP queue, and they may call this only before the
+    /// one-time live row has been installed.
+    fn echo_received_peer_message_presentation_to_pane(
         &mut self,
         pane_id: &str,
+        receive_identity: &str,
+        peer_label: &str,
+        direct_parent: bool,
+        content_type: &str,
+        payload: &str,
+    ) -> Result<()> {
+        if direct_parent {
+            self.append_committed_received_direct_parent_message_to_terminal_buffer(
+                pane_id,
+                receive_identity,
+                content_type,
+                payload,
+            )
+        } else {
+            self.append_committed_received_peer_message_to_terminal_buffer(
+                pane_id,
+                receive_identity,
+                peer_label,
+                content_type,
+                payload,
+            )
+        }
+    }
+
+    /// Returns the stable receiver-owned identity for one accepted MMP delivery.
+    ///
+    /// Payload text is deliberately absent: two accepted envelopes can carry the
+    /// same text and each must retain a distinct presentation row, while a retry
+    /// of one accepted envelope must reuse the exact same receipt.
+    fn received_peer_message_presentation_id(
+        recipient: &AgentId,
+        sequence: mez_agent::messaging::MessageSequence,
         envelope: &Envelope,
+    ) -> String {
+        format!(
+            "peer-message recipient={} sequence={sequence} id={}",
+            recipient, envelope.id
+        )
+    }
+
+    /// Returns whether a delivery can retain its reconstructible receiver receipt.
+    ///
+    /// The live outbox intentionally shares the snapshot's 1,024-record bound.
+    /// A new delivery is not acknowledged when its receipt cannot be retained,
+    /// preserving lossless backpressure rather than dropping a receiver row.
+    fn can_admit_received_peer_message_presentation(
+        &self,
+        recipient: &AgentId,
+        sequence: mez_agent::messaging::MessageSequence,
+        envelope: &Envelope,
+    ) -> bool {
+        if !self.received_peer_message_presentation_is_visible(&envelope.content_type) {
+            return true;
+        }
+        let identity = Self::received_peer_message_presentation_id(recipient, sequence, envelope);
+        self.agent
+            .received_peer_message_presentations
+            .contains_key(&identity)
+            || self.agent.received_peer_message_presentations.len()
+                < MAX_UNSETTLED_PEER_PRESENTATIONS
+    }
+
+    /// Returns whether an idle receive batch can retain every visible receipt.
+    ///
+    /// Idle delivery creates one turn for the entire unread batch, so capacity
+    /// must be reserved for all new identities before its cursor advances.
+    pub(crate) fn can_admit_received_peer_message_presentation_batch(
+        &self,
+        recipient: &AgentId,
+        deliveries: &[(mez_agent::messaging::MessageSequence, Envelope)],
+    ) -> bool {
+        let new_identities = deliveries
+            .iter()
+            .filter(|(_, envelope)| {
+                self.received_peer_message_presentation_is_visible(&envelope.content_type)
+            })
+            .map(|(sequence, envelope)| {
+                Self::received_peer_message_presentation_id(recipient, *sequence, envelope)
+            })
+            .filter(|identity| {
+                !self
+                    .agent
+                    .received_peer_message_presentations
+                    .contains_key(identity)
+            })
+            .collect::<BTreeSet<_>>();
+        self.agent
+            .received_peer_message_presentations
+            .len()
+            .saturating_add(new_identities.len())
+            <= MAX_UNSETTLED_PEER_PRESENTATIONS
+    }
+
+    /// Records one committed inbound delivery before its cursor acknowledgement.
+    pub(crate) fn register_received_peer_message_presentation(
+        &mut self,
+        recipient_agent_id: AgentId,
+        sequence: mez_agent::messaging::MessageSequence,
+        turn: &AgentTurnRecord,
+        envelope: Envelope,
     ) {
-        let peer_label =
-            self.runtime_peer_message_endpoint_label(envelope.sender.agent_id.as_str());
-        let _ = self.append_agent_received_peer_message_to_terminal_buffer(
-            pane_id,
-            &peer_label,
-            envelope.content_type.as_str(),
-            envelope.payload.as_str(),
+        let identity =
+            Self::received_peer_message_presentation_id(&recipient_agent_id, sequence, &envelope);
+        let direct_parent = self.runtime_peer_message_sender_is_direct_parent(
+            recipient_agent_id.as_str(),
+            envelope.sender.agent_id.as_str(),
         );
+        let peer_label = if direct_parent {
+            "parent".to_string()
+        } else {
+            self.runtime_peer_message_endpoint_label(envelope.sender.agent_id.as_str())
+        };
+        let presentation_eligible =
+            self.received_peer_message_presentation_is_visible(&envelope.content_type);
+        self.agent
+            .received_peer_message_presentations
+            .entry(identity)
+            .or_insert(super::RuntimeReceivedPeerMessagePresentation {
+                recipient_agent_id,
+                pane_id: turn.pane_id.clone(),
+                conversation_id: turn.conversation_id.clone(),
+                turn_id: turn.turn_id.clone(),
+                sequence,
+                content_type: envelope.content_type.clone(),
+                payload: crate::runtime::control::runtime_peer_message_logged_payload(
+                    &envelope.payload,
+                ),
+                peer_label,
+                direct_parent,
+                presentation_eligible,
+                presentation_attempted: false,
+            });
+    }
+
+    /// Captures durable recovery sources only after their delivery cursors commit.
+    ///
+    /// Pre-cursor receipts protect an in-memory partial receive commit until a
+    /// remaining delivery can advance the cumulative cursor. They cannot appear
+    /// in a v6 snapshot because the payload validates every receipt against its
+    /// acknowledged cursor; restart recovery instead derives those deliveries
+    /// from retained transport state.
+    pub(crate) fn snapshot_unsettled_received_peer_message_presentations(
+        &self,
+    ) -> Vec<crate::storage::snapshot::SnapshotUnsettledPeerPresentation> {
+        self.agent
+            .received_peer_message_presentations
+            .iter()
+            .filter(|(_, receipt)| self.received_peer_message_presentation_is_acknowledged(receipt))
+            .map(|(identity, receipt)| {
+                crate::storage::snapshot::SnapshotUnsettledPeerPresentation {
+                    identity: identity.clone(),
+                    recipient_agent_id: receipt.recipient_agent_id.to_string(),
+                    pane_id: receipt.pane_id.clone(),
+                    conversation_id: receipt.conversation_id.clone(),
+                    turn_id: receipt.turn_id.clone(),
+                    sequence: receipt.sequence,
+                    peer_label: receipt.peer_label.clone(),
+                    direct_parent: receipt.direct_parent,
+                    content_type: receipt.content_type.clone(),
+                    payload: receipt.payload.clone(),
+                    presentation_eligible: receipt.presentation_eligible,
+                    live_rendered: receipt.presentation_attempted,
+                }
+            })
+            .collect()
+    }
+
+    /// Restores the receiver-owned presentation outbox captured with a session
+    /// snapshot.
+    ///
+    /// The source belongs to the recipient and survives separately from MMP
+    /// transport retention. A restored receipt is still gated by its delivery
+    /// cursor before it can render or permit recovered provider work.
+    pub(crate) fn restore_unsettled_received_peer_message_presentations(
+        &mut self,
+        outbox: &[crate::storage::snapshot::SnapshotUnsettledPeerPresentation],
+    ) -> Result<()> {
+        for entry in outbox {
+            let recipient_agent_id =
+                AgentId::opaque(entry.recipient_agent_id.clone()).ok_or_else(|| {
+                    MezError::invalid_state("snapshot peer presentation recipient is invalid")
+                })?;
+            self.agent
+                .received_peer_message_presentations
+                .entry(entry.identity.clone())
+                .or_insert(super::RuntimeReceivedPeerMessagePresentation {
+                    recipient_agent_id,
+                    pane_id: entry.pane_id.clone(),
+                    conversation_id: entry.conversation_id.clone(),
+                    turn_id: entry.turn_id.clone(),
+                    sequence: entry.sequence,
+                    content_type: entry.content_type.clone(),
+                    payload: entry.payload.clone(),
+                    peer_label: entry.peer_label.clone(),
+                    direct_parent: entry.direct_parent,
+                    presentation_eligible: entry.presentation_eligible,
+                    presentation_attempted: entry.live_rendered,
+                });
+        }
+        Ok(())
+    }
+
+    /// Restores only v6 snapshot receipts that remain absent from durable presentation storage.
+    ///
+    /// Snapshot startup can inspect the durable receiver log before admitting
+    /// an outbox entry, unlike `/resume` rollback which must restore its exact
+    /// in-memory receipt set without consulting external state. Filtering here
+    /// prevents stale durable receipts from consuming capacity or scheduling.
+    pub(crate) fn restore_snapshot_unsettled_received_peer_message_presentations(
+        &mut self,
+        outbox: &[crate::storage::snapshot::SnapshotUnsettledPeerPresentation],
+    ) -> Result<()> {
+        let mut unsettled = Vec::with_capacity(outbox.len());
+        for entry in outbox {
+            if !self.received_peer_message_presentation_is_persisted(
+                &entry.conversation_id,
+                &entry.identity,
+            )? {
+                unsettled.push(entry.clone());
+            }
+        }
+        self.restore_unsettled_received_peer_message_presentations(&unsettled)
+    }
+
+    /// Reconstructs unsettled receiver receipts after durable message and pane
+    /// session state have been restored from a snapshot.
+    ///
+    /// A cursor proves that a recipient committed the canonical context event,
+    /// while the presentation log proves whether its receiver row settled. The
+    /// retained queue supplies any acknowledged envelope whose row is absent;
+    /// existing persisted identities are intentionally not reintroduced.
+    pub(crate) fn reconstruct_received_peer_message_presentations_after_restore(
+        &mut self,
+        reconstruct_from_transport: bool,
+    ) -> Result<()> {
+        if !reconstruct_from_transport {
+            return Ok(());
+        }
+        let sessions = self
+            .agent_shell_store()
+            .sessions()
+            .filter(|session| !session.ephemeral)
+            .map(|session| (session.pane_id.clone(), session.session_id.clone()))
+            .collect::<Vec<_>>();
+        let mut candidates = Vec::new();
+        let mut candidate_identities = BTreeSet::new();
+        for (pane_id, conversation_id) in sessions {
+            let recipient = AgentId::opaque(format!("agent-{pane_id}"))
+                .ok_or_else(|| MezError::invalid_state("runtime agent id is invalid for MMP"))?;
+            let Some(cursor) = self.control.message_service().subscription(&recipient) else {
+                continue;
+            };
+            let deliveries = self
+                .control
+                .message_service()
+                .historical_receive_through_subscribed(&recipient, cursor.last_sequence)
+                .map_err(|error| MezError::invalid_state(error.to_string()))?;
+            for delivery in deliveries {
+                if !self
+                    .received_peer_message_presentation_is_visible(&delivery.envelope.content_type)
+                {
+                    continue;
+                }
+                let identity = Self::received_peer_message_presentation_id(
+                    &recipient,
+                    delivery.sequence,
+                    delivery.envelope.as_ref(),
+                );
+                if self.received_peer_message_presentation_is_persisted(
+                    &conversation_id,
+                    identity.as_str(),
+                )? {
+                    continue;
+                }
+                let direct_parent = self.runtime_peer_message_sender_is_direct_parent(
+                    recipient.as_str(),
+                    delivery.envelope.sender.agent_id.as_str(),
+                );
+                let peer_label = if direct_parent {
+                    "parent".to_string()
+                } else {
+                    self.runtime_peer_message_endpoint_label(
+                        delivery.envelope.sender.agent_id.as_str(),
+                    )
+                };
+                if !self
+                    .agent
+                    .received_peer_message_presentations
+                    .contains_key(&identity)
+                    && candidate_identities.insert(identity.clone())
+                {
+                    candidates.push((
+                        identity,
+                        super::RuntimeReceivedPeerMessagePresentation {
+                            recipient_agent_id: recipient.clone(),
+                            pane_id: pane_id.clone(),
+                            conversation_id: conversation_id.clone(),
+                            turn_id: String::new(),
+                            sequence: delivery.sequence,
+                            content_type: delivery.envelope.content_type.clone(),
+                            payload: crate::runtime::control::runtime_peer_message_logged_payload(
+                                &delivery.envelope.payload,
+                            ),
+                            peer_label,
+                            direct_parent,
+                            presentation_eligible: self
+                                .received_peer_message_presentation_is_visible(
+                                    &delivery.envelope.content_type,
+                                ),
+                            presentation_attempted: false,
+                        },
+                    ));
+                }
+            }
+        }
+        if self
+            .agent
+            .received_peer_message_presentations
+            .len()
+            .saturating_add(candidates.len())
+            > MAX_UNSETTLED_PEER_PRESENTATIONS
+        {
+            return Err(MezError::invalid_state(
+                "legacy snapshot peer presentation reconstruction exceeds its receipt bound",
+            ));
+        }
+        self.agent
+            .received_peer_message_presentations
+            .extend(candidates);
+        Ok(())
+    }
+
+    /// Completes every committed receive presentation that survived a recoverable
+    /// turn-start failure.
+    ///
+    /// The receipt is removed only after the renderer succeeds. This creates the
+    /// small boundary shared by user-started and peer-triggered turns: context,
+    /// receipt, cursor, and scheduler work may be revisited, but one accepted
+    /// sequence/message identity can install at most one pane presentation row.
+    pub(crate) fn flush_received_peer_message_presentations(&mut self) -> Result<()> {
+        let pending = self
+            .agent
+            .received_peer_message_presentations
+            .iter()
+            .map(|(identity, receipt)| (identity.clone(), receipt.clone()))
+            .collect::<Vec<_>>();
+        #[cfg(test)]
+        if !pending.is_empty() && self.take_received_peer_message_presentation_failure_for_tests() {
+            return Err(MezError::invalid_state(
+                "injected received peer-message presentation failure",
+            ));
+        }
+        for (identity, receipt) in pending {
+            let pane_owns_conversation = self
+                .agent_shell_store()
+                .get(&receipt.pane_id)
+                .is_some_and(|session| {
+                    !session.ephemeral && session.session_id == receipt.conversation_id
+                });
+            if !pane_owns_conversation {
+                self.agent
+                    .received_peer_message_presentations
+                    .remove(&identity);
+                continue;
+            }
+            let acknowledged = self
+                .control
+                .message_service()
+                .subscription(&receipt.recipient_agent_id)
+                .is_some_and(|cursor| cursor.last_sequence >= receipt.sequence);
+            if !acknowledged {
+                continue;
+            }
+            if !receipt.presentation_eligible {
+                self.agent
+                    .received_peer_message_presentations
+                    .remove(&identity);
+                continue;
+            }
+            if self.persistence.transcript_store().is_none() {
+                if !receipt.presentation_attempted {
+                    self.echo_received_peer_message_presentation_to_pane(
+                        &receipt.pane_id,
+                        identity.as_str(),
+                        &receipt.peer_label,
+                        receipt.direct_parent,
+                        &receipt.content_type,
+                        &receipt.payload,
+                    )?;
+                }
+                self.agent
+                    .received_peer_message_presentations
+                    .remove(&identity);
+                continue;
+            }
+            if self.received_peer_message_presentation_is_persisted(
+                &receipt.conversation_id,
+                identity.as_str(),
+            )? {
+                self.agent
+                    .received_peer_message_presentations
+                    .remove(&identity);
+                continue;
+            }
+            if receipt.presentation_attempted {
+                if !self
+                    .persistence
+                    .presentation_write_pending(&receipt.conversation_id)
+                {
+                    self.persist_received_peer_message_presentation_only(
+                        &receipt.pane_id,
+                        &receipt.conversation_id,
+                        &receipt.turn_id,
+                        &crate::runtime::render::PeerMessagePresentation {
+                            receive_identity: Some(identity.as_str()),
+                            peer_label: &receipt.peer_label,
+                            content_type: Some(&receipt.content_type),
+                            payload: &receipt.payload,
+                            direct_parent: receipt.direct_parent,
+                            presentation_eligible: receipt.presentation_eligible,
+                        },
+                    )?;
+                    if self.received_peer_message_presentation_is_persisted(
+                        &receipt.conversation_id,
+                        identity.as_str(),
+                    )? {
+                        self.agent
+                            .received_peer_message_presentations
+                            .remove(&identity);
+                    }
+                }
+                continue;
+            }
+            self.echo_received_peer_message_presentation_to_pane(
+                &receipt.pane_id,
+                identity.as_str(),
+                &receipt.peer_label,
+                receipt.direct_parent,
+                &receipt.content_type,
+                &receipt.payload,
+            )?;
+            if let Some(receipt) = self
+                .agent
+                .received_peer_message_presentations
+                .get_mut(&identity)
+            {
+                receipt.presentation_attempted = true;
+            }
+            if !self.persistence.transcript_uses_adapter()
+                && !self.received_peer_message_presentation_is_persisted(
+                    &receipt.conversation_id,
+                    identity.as_str(),
+                )?
+            {
+                self.persist_received_peer_message_presentation_only(
+                    &receipt.pane_id,
+                    &receipt.conversation_id,
+                    &receipt.turn_id,
+                    &crate::runtime::render::PeerMessagePresentation {
+                        receive_identity: Some(identity.as_str()),
+                        peer_label: &receipt.peer_label,
+                        content_type: Some(&receipt.content_type),
+                        payload: &receipt.payload,
+                        direct_parent: receipt.direct_parent,
+                        presentation_eligible: receipt.presentation_eligible,
+                    },
+                )?;
+            }
+            if self.received_peer_message_presentation_is_persisted(
+                &receipt.conversation_id,
+                identity.as_str(),
+            )? {
+                self.agent
+                    .received_peer_message_presentations
+                    .remove(&identity);
+            }
+        }
+        Ok(())
+    }
+
+    /// Reports whether one committed envelope is eligible for a receiver pane row.
+    ///
+    /// The receipt owner must use the same normal-versus-verbose media-type gate
+    /// as the renderer. Suppressed payloads intentionally have neither a live
+    /// row nor a durable presentation source, so retaining a receipt for them
+    /// would create unbounded state that can never settle.
+    fn received_peer_message_presentation_is_visible(&self, content_type: &str) -> bool {
+        let log_mode = runtime_effective_config_value(self.integration.config_layers())
+            .map(|value| runtime_agent_peer_message_log_mode_from_config(&value))
+            .unwrap_or(PeerMessageLogMode::Normal);
+        log_mode == PeerMessageLogMode::Verbose || content_type == "text/plain; charset=utf-8"
+    }
+
+    /// Returns whether the receipt's delivery cursor confirms its transport commit.
+    fn received_peer_message_presentation_is_acknowledged(
+        &self,
+        receipt: &super::RuntimeReceivedPeerMessagePresentation,
+    ) -> bool {
+        self.control
+            .message_service()
+            .subscription(&receipt.recipient_agent_id)
+            .is_some_and(|cursor| cursor.last_sequence >= receipt.sequence)
+    }
+
+    /// Returns whether transport can still deliver an unacknowledged receipt.
+    fn received_peer_message_presentation_is_transport_deliverable(
+        &self,
+        receipt: &super::RuntimeReceivedPeerMessagePresentation,
+        now_ms: u64,
+    ) -> bool {
+        self.control
+            .message_service()
+            .fanout_ready_for(&receipt.recipient_agent_id, now_ms, usize::MAX)
+            .ok()
+            .flatten()
+            .is_some_and(|fanout| {
+                fanout
+                    .batch
+                    .messages
+                    .iter()
+                    .any(|message| message.sequence == receipt.sequence)
+            })
+    }
+
+    /// Reports whether the durable presentation owner has settled one receipt.
+    ///
+    /// The transcript store is the durable authority for receiver-visible rows.
+    /// An actor-side attempt never completes a receipt on its own: asynchronous
+    /// persistence leaves it pending until the stored source proves settlement.
+    fn received_peer_message_presentation_is_persisted(
+        &self,
+        conversation_id: &str,
+        identity: &str,
+    ) -> Result<bool> {
+        let Some(store) = self.persistence.transcript_store() else {
+            return Ok(false);
+        };
+        Ok(store
+            .inspect_presentation(conversation_id)?
+            .iter()
+            .any(|entry| {
+                entry
+                    .source_text
+                    .as_deref()
+                    .and_then(|source_text| {
+                        entry
+                            .source_content_type
+                            .as_deref()
+                            .and_then(|content_type| {
+                                crate::runtime::render::peer_message_presentation_receive_identity(
+                                    content_type,
+                                    source_text,
+                                )
+                            })
+                    })
+                    .is_some_and(|source_identity| source_identity == identity)
+            }))
+    }
+
+    /// Completes attempted receipts only after the presentation worker confirms
+    /// that their durable conversation log contains the receipt identity.
+    pub(crate) fn settle_received_peer_message_presentations(
+        &mut self,
+        conversation_id: &str,
+    ) -> Result<()> {
+        let identities = self
+            .agent
+            .received_peer_message_presentations
+            .iter()
+            .filter(|(_, receipt)| {
+                receipt.conversation_id == conversation_id && receipt.presentation_attempted
+            })
+            .filter_map(|(identity, receipt)| {
+                self.received_peer_message_presentation_is_persisted(
+                    &receipt.conversation_id,
+                    identity,
+                )
+                .ok()
+                .filter(|persisted| *persisted)
+                .map(|_| identity.clone())
+            })
+            .collect::<Vec<_>>();
+        for identity in identities {
+            self.agent
+                .received_peer_message_presentations
+                .remove(&identity);
+        }
+        Ok(())
+    }
+
+    /// Drops receipt state owned by a pane that has retired from the session.
+    ///
+    /// A closed pane can never display or replay another receiver row. Pending
+    /// and completed identities are therefore removed together, keeping the
+    /// in-memory idempotency set bounded by live pane ownership.
+    pub(crate) fn clear_received_peer_message_presentations_for_pane(&mut self, pane_id: &str) {
+        let identities = self
+            .agent
+            .received_peer_message_presentations
+            .iter()
+            .filter(|(_, receipt)| receipt.pane_id == pane_id)
+            .map(|(identity, _)| identity.clone())
+            .collect::<Vec<_>>();
+        for identity in identities {
+            self.agent
+                .received_peer_message_presentations
+                .remove(&identity);
+        }
+    }
+
+    /// Retires receipts bound to an old conversation before a pane renders a replacement.
+    ///
+    /// Once a pane leaves a conversation, its unresolved rows can no longer be
+    /// rendered or durably retried through that pane. Removing them prevents an
+    /// old receipt from crossing the conversation ownership boundary.
+    pub(crate) fn clear_received_peer_message_presentations_for_conversation(
+        &mut self,
+        pane_id: &str,
+        conversation_id: &str,
+    ) {
+        self.agent
+            .received_peer_message_presentations
+            .retain(|_, receipt| {
+                receipt.pane_id != pane_id || receipt.conversation_id != conversation_id
+            });
+    }
+
+    /// Prunes completed receipt identities whose owning turn has reached a
+    /// terminal state while retaining unresolved persistence receipts.
+    pub(crate) fn clear_completed_received_peer_message_presentations_for_turn(
+        &mut self,
+        turn_id: &str,
+    ) {
+        let identities = self
+            .agent
+            .received_peer_message_presentations
+            .iter()
+            .filter(|(_, receipt)| receipt.turn_id == turn_id)
+            .filter_map(|(identity, receipt)| {
+                self.received_peer_message_presentation_is_persisted(
+                    &receipt.conversation_id,
+                    identity,
+                )
+                .ok()
+                .filter(|persisted| *persisted)
+                .map(|_| identity.clone())
+            })
+            .collect::<Vec<_>>();
+        for identity in identities {
+            self.agent
+                .received_peer_message_presentations
+                .remove(&identity);
+        }
+    }
+
+    /// Reports whether a sender is the recipient's exact direct parent for pane
+    /// presentation.
+    ///
+    /// This intentionally differs from live-parent-authority checks: restored
+    /// lineage remains valid historical identity for a stable `parent>` marker,
+    /// while fenced descendants must fall back because their old parent edge no
+    /// longer belongs to the pane's current conversation.
+    pub(crate) fn runtime_peer_message_sender_is_direct_parent(
+        &self,
+        recipient_agent_id: &str,
+        sender_agent_id: &str,
+    ) -> bool {
+        !self.subagent_descendant_is_fenced(recipient_agent_id)
+            && self
+                .subagent_lineage(recipient_agent_id)
+                .is_some_and(|lineage| {
+                    !lineage.parent_agent_id.is_empty()
+                        && lineage.parent_agent_id == sender_agent_id
+                })
     }
 
     /// Resolves a peer label from its live pane title without exposing metadata
@@ -192,25 +999,6 @@ impl RuntimeSessionService {
             .filter(|title| !title.is_empty())
             .map(str::to_string)
             .unwrap_or_else(|| agent_id.to_string())
-    }
-
-    /// Resolves an exact recipient target to its live endpoint label. Broader
-    /// selectors retain their stable model-authored spelling because they do
-    /// not identify one endpoint.
-    pub(crate) fn runtime_peer_message_recipient_label(
-        &self,
-        recipient: &str,
-        recipient_target: &mez_agent::messaging::Recipient,
-    ) -> String {
-        let agent_id = match recipient_target {
-            mez_agent::messaging::Recipient::Agent(agent_id) => Some(agent_id.to_string()),
-            mez_agent::messaging::Recipient::Pane(pane_id) => Some(format!("agent-{pane_id}")),
-            _ => None,
-        };
-        agent_id.map_or_else(
-            || recipient.to_string(),
-            |agent_id| self.runtime_peer_message_endpoint_label(&agent_id),
-        )
     }
 
     /// Starts one peer-message-triggered turn for an idle agent.
@@ -260,12 +1048,19 @@ impl RuntimeSessionService {
         let crate::runtime::control::RuntimePeerMessageTurnContext {
             context,
             delivered_message_sequence,
+            delivered_messages,
             delivered_message_count,
             imported_history_events,
         } = self.peer_message_turn_context(pane_id)?;
         let Some(delivered_message_sequence) = delivered_message_sequence else {
             return Ok(0);
         };
+        let recipient = AgentId::opaque(agent_id.clone())
+            .ok_or_else(|| MezError::invalid_state("runtime agent id is invalid for MMP"))?;
+        if !self.can_admit_received_peer_message_presentation_batch(&recipient, &delivered_messages)
+        {
+            return Ok(0);
+        }
         let context = self.apply_agent_shell_preference_context(pane_id, context)?;
         let context = self.apply_persisted_context_documents(pane_id, context)?;
         let conversation_id = self
@@ -293,26 +1088,60 @@ impl RuntimeSessionService {
             state: AgentTurnState::Queued,
             initial_capability: None,
         };
+        #[cfg(test)]
+        if self.take_peer_message_turn_commit_failure_for_tests() {
+            return Err(MezError::invalid_state(
+                "injected peer-message idle-turn pre-commit failure",
+            ));
+        }
         self.agent_turn_ledger_mut().queue_turn(turn.clone())?;
         self.snapshot_agent_native_shell_timeout_for_turn(&turn_id);
         self.agent_turn_contexts_mut()
             .insert(turn_id.clone(), context);
         self.set_agent_turn_imported_history_events(turn_id.clone(), imported_history_events);
         self.set_agent_turn_model_profile(turn_id.clone(), model_profile);
-        let recipient = AgentId::opaque(agent_id.clone())
-            .ok_or_else(|| MezError::invalid_state("runtime agent id is invalid for MMP"))?;
+        for (sequence, envelope) in delivered_messages.iter().cloned() {
+            self.register_received_peer_message_presentation(
+                recipient.clone(),
+                sequence,
+                &turn,
+                envelope,
+            );
+        }
+        #[cfg(test)]
+        if self.take_peer_message_receive_after_context_storage_failure_for_tests() {
+            return Err(MezError::invalid_state(
+                "injected peer-message idle-turn failure after context storage",
+            ));
+        }
         self.control
             .message_service_mut()
             .advance_subscription(&recipient, delivered_message_sequence)?;
+        #[cfg(test)]
+        if self.take_peer_message_receive_after_cursor_advance_failure_for_tests() {
+            return Err(MezError::invalid_state(
+                "injected peer-message idle-turn failure after cursor advancement",
+            ));
+        }
         self.set_agent_peer_message_turn_count(&agent_id, started_turns.saturating_add(1));
         self.clear_agent_peer_message_limit_reported(&agent_id);
-        self.enqueue_agent_work(ScheduledWork {
-            turn_id: turn_id.clone(),
-            conversation_id,
-            agent_id: agent_id.clone(),
-            pane_id: Some(pane_id.to_string()),
-            kind: mez_agent::ScheduledWorkKind::ShellCapable,
-        })?;
+        if !self.agent_work_is_scheduled(&turn_id) {
+            self.enqueue_agent_work(ScheduledWork {
+                turn_id: turn_id.clone(),
+                conversation_id,
+                agent_id: agent_id.clone(),
+                pane_id: Some(pane_id.to_string()),
+                kind: mez_agent::ScheduledWorkKind::ShellCapable,
+            })?;
+        }
+        self.start_ready_agent_turns()?;
+        let _ = self.flush_received_peer_message_presentations();
+        #[cfg(test)]
+        if self.take_peer_message_turn_post_admission_failure_for_tests() {
+            return Err(MezError::invalid_state(
+                "injected peer-message idle-turn failure after scheduler admission",
+            ));
+        }
         self.append_agent_trace_turn_event(
             pane_id,
             &turn_id,
@@ -335,7 +1164,6 @@ impl RuntimeSessionService {
             pane_id,
             &format!("agent: started turn {turn_id} from pending peer mail"),
         )?;
-        self.start_ready_agent_turns()?;
         Ok(delivered_message_count)
     }
 
@@ -348,6 +1176,21 @@ impl RuntimeSessionService {
     /// bridge traffic never starts a turn, so it keeps the ordinary pending
     /// behavior that also drives TTL expiry.
     pub(crate) fn has_pending_peer_messages(&mut self, now_ms: u64) -> bool {
+        if self
+            .agent
+            .received_peer_message_presentations
+            .values()
+            .any(|receipt| {
+                self.received_peer_message_presentation_is_transport_deliverable(receipt, now_ms)
+                    || (receipt.presentation_eligible
+                        && self.received_peer_message_presentation_is_acknowledged(receipt)
+                        && !self
+                            .persistence
+                            .presentation_write_pending(&receipt.conversation_id))
+            })
+        {
+            return true;
+        }
         let loop_limit = self.agent_peer_message_loop_limit();
         let ready = self.control.message_service_mut().fanout_ready(now_ms, 1);
         ready.into_iter().any(|fanout| {
@@ -643,18 +1486,6 @@ impl RuntimeSessionService {
                 return Ok(result);
             }
         };
-        // The accepted delivery is operator-visible with the same recipient
-        // label the action result reports, so a pane log pairs the outbound
-        // request with the peer reply that follows it. A rejected recipient or
-        // failed transport returns before this point and logs nothing.
-        let recipient_label =
-            self.runtime_peer_message_recipient_label(recipient, &recipient_target);
-        let _ = self.append_agent_sent_peer_message_to_terminal_buffer(
-            &turn.pane_id,
-            &recipient_label,
-            content_type.as_str(),
-            payload.as_str(),
-        );
         self.deliver_pending_runtime_agent_messages(now_ms)?;
         Ok(ActionResult::succeeded(
             turn,

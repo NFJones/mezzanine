@@ -1,6 +1,7 @@
 //! Runtime tests for terminal command prompt behavior.
 
 use super::*;
+use crate::config::CURRENT_CONFIG_SCHEMA_VERSION;
 
 /// Verifies that agent-scoped operations with slash-command equivalents are no
 /// longer accepted through the live terminal command prompt. These workflows
@@ -454,8 +455,9 @@ fn runtime_show_pane_status_is_zen_safe_targeted_and_side_effect_free() {
             format: ConfigFormat::Toml,
             scope: ConfigScope::ProjectOverlay,
             trusted: true,
-            text: "version = 94\n[frames.pane]\nstatus_preset = \"minimal\"\nright_status = \"#{pill.model} #{pill.branch}\"\n[frames.pane.pills.model]\nfield = \"agent.model\"\nlabel = \"Selected model\"\n[frames.pane.pills.branch]\ncommand = \"printf TOP_SECRET_OUTPUT\"\ncwd = \"pane\"\nwhen = []\n"
-                .to_string(),
+            text: format!(
+                "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[frames.pane]\nstatus_preset = \"minimal\"\nright_status = \"#{{pill.model}} #{{pill.branch}}\"\n[frames.pane.pills.model]\nfield = \"agent.model\"\nlabel = \"Selected model\"\n[frames.pane.pills.branch]\ncommand = \"printf TOP_SECRET_OUTPUT\"\ncwd = \"pane\"\nwhen = []\n"
+            ),
         }])
         .unwrap();
     let primary = service

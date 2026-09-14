@@ -8,10 +8,12 @@
 
 use rand::RngExt;
 
+use crate::integrations::agent::subagent::SUBAGENT_NONHUMAN_NAMES;
+
 use super::{
     AuditActor, AuditRecord, ClientRole, Envelope, EventKind, MezError, PaneProcessStart, Path,
     PathBuf, Recipient, Result, RuntimeAutoSizingConfig, RuntimeSessionService, RuntimeSideEffect,
-    RuntimeSubagentLineage, RuntimeSubagentPlacement, SUBAGENT_FRIENDLY_NAMES, SplitDirection,
+    RuntimeSubagentLineage, RuntimeSubagentPlacement, SUBAGENT_HUMAN_NAMES, SplitDirection,
     SubagentScopeDeclaration, SubagentSpawnRequest, TaskState, TaskStatusPayload,
     compare_permission_preset_authority, current_unix_seconds, json_escape,
     pane_id_from_runtime_agent_id, runtime_agent_turn_state_json,
@@ -19,6 +21,7 @@ use super::{
     runtime_pane_by_id, runtime_subagent_placement_mode, runtime_subagent_spawn_request,
     runtime_subagent_state_json,
 };
+use crate::runtime::config::SubagentNameMode;
 use crate::runtime::{RuntimeAgentPromptTurnStart, SandboxConfig};
 use mez_agent::{
     AllowedAction, AllowedActionSet, SubagentApprovalProvenance, SubagentParentAuthority,
@@ -38,6 +41,25 @@ const SUBAGENT_BUCKET_MIN_COLUMNS: u16 = 24;
 /// compact terminals to use top/bottom or grid layouts before opening another
 /// subagent bucket window.
 const SUBAGENT_BUCKET_MIN_ROWS: u16 = 4;
+
+/// Selects one unused name from a finite corpus or returns the canonical child id.
+fn select_subagent_display_name_from_corpus<R: rand::Rng + ?Sized>(
+    corpus: &[&str],
+    active_names: &std::collections::BTreeSet<String>,
+    child_agent_id: &str,
+    rng: &mut R,
+) -> String {
+    let available_names = corpus
+        .iter()
+        .copied()
+        .filter(|name| !active_names.contains(*name))
+        .collect::<Vec<_>>();
+    if available_names.is_empty() {
+        child_agent_id.to_string()
+    } else {
+        available_names[rng.random_range(0..available_names.len())].to_string()
+    }
+}
 
 /// Captures the bounded durable parent history copied into one forked child.
 ///
@@ -317,35 +339,35 @@ impl RuntimeSessionService {
         })
     }
 
-    /// Allocates a compact random display name that is unique among active subagents.
-    fn allocate_subagent_display_name(&self) -> String {
-        self.allocate_subagent_display_name_with_rng(&mut rand::rng())
+    /// Resolves a display name for one newly-created child agent.
+    fn resolve_subagent_display_name(&self, child_agent_id: &str) -> String {
+        self.resolve_subagent_display_name_with_rng(child_agent_id, &mut rand::rng())
     }
 
-    /// Allocates a compact display name using the provided random source.
-    fn allocate_subagent_display_name_with_rng<R: rand::Rng + ?Sized>(
+    /// Resolves a display name using the provided random source.
+    fn resolve_subagent_display_name_with_rng<R: rand::Rng + ?Sized>(
         &self,
+        child_agent_id: &str,
         rng: &mut R,
     ) -> String {
         let active_names = self
             .active_subagent_display_names()
             .into_iter()
             .collect::<std::collections::BTreeSet<_>>();
-        let available_names = SUBAGENT_FRIENDLY_NAMES
-            .iter()
-            .copied()
-            .filter(|name| !active_names.contains(*name))
-            .collect::<Vec<_>>();
-        if !available_names.is_empty() {
-            return available_names[rng.random_range(0..available_names.len())].to_string();
-        }
-        let mut index = SUBAGENT_FRIENDLY_NAMES.len() + 1;
-        loop {
-            let candidate = format!("Agent {index}");
-            if !active_names.contains(candidate.as_str()) {
-                return candidate;
-            }
-            index += 1;
+        match self.subagent_name_mode() {
+            SubagentNameMode::Literal => child_agent_id.to_string(),
+            SubagentNameMode::Nonhuman => select_subagent_display_name_from_corpus(
+                SUBAGENT_NONHUMAN_NAMES.as_slice(),
+                &active_names,
+                child_agent_id,
+                rng,
+            ),
+            SubagentNameMode::Human => select_subagent_display_name_from_corpus(
+                SUBAGENT_HUMAN_NAMES,
+                &active_names,
+                child_agent_id,
+                rng,
+            ),
         }
     }
 
@@ -579,10 +601,6 @@ impl RuntimeSessionService {
         } else {
             None
         };
-        let child_display_name = self.allocate_subagent_display_name();
-        child_lineage.display_name = child_display_name.clone();
-        child_lineage.terminal = profile.terminal;
-
         let requested_window_name = match &placement {
             RuntimeSubagentPlacement::NewWindow { name, .. } => Some(name.as_str()),
             RuntimeSubagentPlacement::NewPane { .. } => None,
@@ -599,6 +617,9 @@ impl RuntimeSessionService {
             child_startup_mode,
         )?;
         let child_agent_id = format!("agent-{}", started.pane_id);
+        let child_display_name = self.resolve_subagent_display_name(&child_agent_id);
+        child_lineage.display_name = child_display_name.clone();
+        child_lineage.terminal = profile.terminal;
         if routed_root {
             child_lineage.root_agent_id = child_agent_id.clone();
         }
@@ -1753,13 +1774,6 @@ impl RuntimeSessionService {
             mez_agent::messaging::MessageScope::Session,
             now_ms,
         )?;
-        let parent_label = self.runtime_peer_message_endpoint_label(initial_status.parent_agent_id);
-        let _ = self.append_agent_sent_peer_message_to_terminal_buffer(
-            child_pane_id.as_str(),
-            &parent_label,
-            "application/json",
-            &task_status.to_json(),
-        );
         self.deliver_pending_runtime_agent_messages(now_ms)?;
         self.append_subagent_parent_status_line(
             initial_status.parent_agent_id,
@@ -1854,4 +1868,62 @@ fn normalized_subagent_scope_path(current_directory: &str, path: &str) -> PathBu
         }
     }
     normalized
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use rand::SeedableRng;
+
+    use super::select_subagent_display_name_from_corpus;
+
+    #[test]
+    /// Verifies corpus allocation excludes names held by active subagents while
+    /// remaining deterministic when the caller supplies an identically seeded RNG.
+    ///
+    /// Active display names are lineage-owned and are released when their child
+    /// exits, so the finite-corpus selector must filter them without introducing
+    /// any secondary counter or non-deterministic state outside its RNG input.
+    fn corpus_selection_excludes_active_names_and_is_seeded_deterministic() {
+        let corpus = ["Aster", "Beryl", "Cinder"];
+        let active_names = BTreeSet::from(["Aster".to_string()]);
+        let mut first_rng = rand::rngs::StdRng::seed_from_u64(41);
+        let mut second_rng = rand::rngs::StdRng::seed_from_u64(41);
+
+        let first = select_subagent_display_name_from_corpus(
+            &corpus,
+            &active_names,
+            "agent-%2",
+            &mut first_rng,
+        );
+        let second = select_subagent_display_name_from_corpus(
+            &corpus,
+            &active_names,
+            "agent-%2",
+            &mut second_rng,
+        );
+
+        assert_ne!(first, "Aster");
+        assert!(corpus.contains(&first.as_str()));
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    /// Verifies an exhausted finite corpus returns the exact canonical child id
+    /// rather than synthesizing a numbered display name.
+    ///
+    /// Literal fallback preserves the runtime identity already assigned after
+    /// pane creation, including percent signs, and therefore cannot collide with
+    /// a separate allocator sequence or predict a future pane identifier.
+    fn exhausted_corpus_returns_exact_canonical_child_id() {
+        let corpus = ["Aster", "Beryl"];
+        let active_names = BTreeSet::from(["Aster".to_string(), "Beryl".to_string()]);
+        let mut rng = rand::rngs::StdRng::seed_from_u64(9);
+
+        assert_eq!(
+            select_subagent_display_name_from_corpus(&corpus, &active_names, "agent-%27", &mut rng,),
+            "agent-%27"
+        );
+    }
 }

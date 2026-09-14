@@ -1,6 +1,10 @@
 //! Async-runtime tests owned by lifecycle behavior.
 
 use super::super::*;
+use crate::runtime::{PersistenceEvent, current_unix_millis};
+use mez_agent::messaging::{Envelope, MessageScope};
+use mez_core::ids::PaneId;
+use mez_terminal::TerminalScreen;
 
 /// Verifies that typed runtime events can cross the async actor boundary through
 /// the same serialized request channel used by legacy compatibility requests.
@@ -36,6 +40,424 @@ async fn async_actor_accepts_runtime_event_batches_in_order() {
 
     let ((), exit) = tokio::join!(client, actor.run());
     assert_eq!(exit.commands_processed, 2);
+}
+
+/// Verifies actor construction reconciles restored actionable peer mail into
+/// exactly one dedicated delivery wakeup without waiting for a new control
+/// frame or an explicit service sweep.
+///
+/// Snapshot restore installs MMP state before the async actor owns adapters and
+/// timer bookkeeping. The constructor must therefore evaluate the same
+/// actionable-work predicate used by ordinary ingress after installing those
+/// adapters. Draining timer effects twice proves the actor records the startup
+/// schedule as active rather than repeatedly publishing duplicate wakeups.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_startup_arms_peer_delivery_timer_for_restored_mail() {
+    let mut service = test_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let now_ms = current_unix_millis();
+    let recipient = service
+        .ensure_runtime_message_identity(
+            "agent-%1",
+            PaneId::opaque("%1".to_string()),
+            "agent",
+            &[],
+            now_ms,
+        )
+        .unwrap();
+    service
+        .message_service_mut()
+        .subscribe_from_retained_start(&recipient.agent_id)
+        .unwrap();
+    let sender = service
+        .ensure_runtime_message_identity("agent-restored-sender", None, "agent", &[], now_ms)
+        .unwrap();
+    service
+        .message_service_mut()
+        .accept_at_with_scope(
+            &sender.agent_id,
+            Envelope {
+                protocol: "mmp/1",
+                id: "restored-startup-mail".to_string(),
+                message_type: "send".to_string(),
+                time: format!("runtime:{now_ms}"),
+                sender: sender.clone(),
+                recipient: mez_agent::messaging::Recipient::Agent(recipient.agent_id),
+                correlation_id: None,
+                ttl_ms: None,
+                content_type: "text/plain; charset=utf-8".to_string(),
+                payload: "restored mail needs an actor wakeup".to_string(),
+                extension_fields: Vec::new(),
+            },
+            MessageScope::Session,
+            now_ms,
+        )
+        .unwrap();
+
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        let timers = handle.drain_timer_side_effects(8).await.unwrap();
+        assert_eq!(
+            timers
+                .iter()
+                .filter(|effect| matches!(
+                    effect,
+                    RuntimeSideEffect::ScheduleTimer { key, .. }
+                        if key.kind == RuntimeTimerKind::PeerMessageDelivery
+                ))
+                .count(),
+            1,
+            "restored actionable mail must schedule one peer delivery timer: {timers:?}"
+        );
+        assert!(
+            handle.drain_timer_side_effects(8).await.unwrap().is_empty(),
+            "the startup timer must remain actor-owned rather than be duplicated"
+        );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.commands_processed, 3);
+}
+
+/// Verifies actor construction also wakes a restored v6 receiver receipt whose
+/// delivery cursor has already acknowledged its canonical peer context event.
+///
+/// The transport queue is intentionally empty after the cursor advances, so
+/// this case cannot depend on unacknowledged mail to make progress. The
+/// restored receipt remains the actionable source until durable presentation
+/// settles it; startup must therefore queue the same single delivery timer as
+/// ordinary receipt retry reconciliation without requiring a manual sweep.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_startup_arms_peer_delivery_timer_for_restored_v6_receipt() {
+    let mut service = test_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let now_ms = current_unix_millis();
+    let recipient = service
+        .ensure_runtime_message_identity(
+            "agent-%1",
+            PaneId::opaque("%1".to_string()),
+            "agent",
+            &[],
+            now_ms,
+        )
+        .unwrap();
+    service
+        .message_service_mut()
+        .subscribe_from_retained_start(&recipient.agent_id)
+        .unwrap();
+    let sender = service
+        .ensure_runtime_message_identity("agent-restored-sender", None, "agent", &[], now_ms)
+        .unwrap();
+    let delivery = service
+        .message_service_mut()
+        .accept_at_with_scope(
+            &sender.agent_id,
+            Envelope {
+                protocol: "mmp/1",
+                id: "restored-v6-receipt".to_string(),
+                message_type: "send".to_string(),
+                time: format!("runtime:{now_ms}"),
+                sender: sender.clone(),
+                recipient: mez_agent::messaging::Recipient::Agent(recipient.agent_id.clone()),
+                correlation_id: None,
+                ttl_ms: None,
+                content_type: "text/plain; charset=utf-8".to_string(),
+                payload: "restored receipt needs a presentation retry".to_string(),
+                extension_fields: Vec::new(),
+            },
+            MessageScope::Session,
+            now_ms,
+        )
+        .unwrap();
+    service
+        .message_service_mut()
+        .advance_subscription(&recipient.agent_id, delivery.sequence)
+        .unwrap();
+    service
+        .restore_snapshot_unsettled_received_peer_message_presentations(&[
+            crate::storage::snapshot::SnapshotUnsettledPeerPresentation {
+                identity: format!(
+                    "peer-message recipient={} sequence={} id=restored-v6-receipt",
+                    recipient.agent_id, delivery.sequence
+                ),
+                recipient_agent_id: recipient.agent_id.to_string(),
+                pane_id: "%1".to_string(),
+                conversation_id,
+                turn_id: "restored-turn".to_string(),
+                sequence: delivery.sequence,
+                peer_label: "sender".to_string(),
+                direct_parent: false,
+                content_type: "text/plain; charset=utf-8".to_string(),
+                payload: "restored receipt needs a presentation retry".to_string(),
+                presentation_eligible: true,
+                live_rendered: true,
+            },
+        ])
+        .unwrap();
+
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        let timers = handle.drain_timer_side_effects(8).await.unwrap();
+        assert_eq!(
+            timers
+                .iter()
+                .filter(|effect| matches!(
+                    effect,
+                    RuntimeSideEffect::ScheduleTimer { key, .. }
+                        if key.kind == RuntimeTimerKind::PeerMessageDelivery
+                ))
+                .count(),
+            1,
+            "a restored v6 receipt must schedule one peer delivery timer: {timers:?}"
+        );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.commands_processed, 2);
+}
+
+/// Verifies peer delivery timing remains separate from a receiver presentation
+/// write that the persistence worker has already accepted.
+///
+/// An acknowledged receipt needs no delivery wakeup while its durable write is
+/// in flight: retrying then would spin without changing the write's outcome.
+/// The final failure must re-arm exactly one timer so the retained receipt can
+/// retry, while a subsequent durable completion settles the receipt and leaves
+/// the actor quiescent. This exercises the actor-owned timer boundary rather
+/// than relying on a direct service transition.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_peer_presentation_retry_timer_waits_for_write_and_settles() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-async-peer-presentation-timer-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let mut service = test_service();
+    service.set_agent_transcript_store(store.clone());
+    service.use_transcript_effect_adapter();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service.set_pane_screen(
+        "%1".to_string(),
+        TerminalScreen::new(Size::new(80, 12).unwrap(), 100).unwrap(),
+    );
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let now_ms = current_unix_millis();
+    let recipient = service
+        .ensure_runtime_message_identity(
+            "agent-%1",
+            PaneId::opaque("%1".to_string()),
+            "agent",
+            &[],
+            now_ms,
+        )
+        .unwrap();
+    service
+        .message_service_mut()
+        .subscribe_from_retained_start(&recipient.agent_id)
+        .unwrap();
+    let sender = service
+        .ensure_runtime_message_identity("agent-presentation-sender", None, "agent", &[], now_ms)
+        .unwrap();
+    service
+        .message_service_mut()
+        .accept_at_with_scope(
+            &sender.agent_id,
+            Envelope {
+                protocol: "mmp/1",
+                id: "actor-presentation-retry".to_string(),
+                message_type: "send".to_string(),
+                time: format!("runtime:{now_ms}"),
+                sender: sender.clone(),
+                recipient: mez_agent::messaging::Recipient::Agent(recipient.agent_id.clone()),
+                correlation_id: None,
+                ttl_ms: None,
+                content_type: "text/plain; charset=utf-8".to_string(),
+                payload: "presentation write owns this retry boundary".to_string(),
+                extension_fields: Vec::new(),
+            },
+            MessageScope::Session,
+            now_ms,
+        )
+        .unwrap();
+    assert_eq!(
+        service
+            .deliver_pending_runtime_agent_messages(now_ms)
+            .unwrap(),
+        1
+    );
+    let receive_identity = format!(
+        "peer-message recipient={} sequence=1 id=actor-presentation-retry",
+        recipient.agent_id
+    );
+    let pending_effects = service
+        .drain_transcript_persistence_transition()
+        .side_effects
+        .into_iter()
+        .filter_map(|effect| match effect {
+            RuntimeSideEffect::PersistPresentationEntries { path, entries, .. } => {
+                Some((path, entries))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let receipt_effect_index = pending_effects
+        .iter()
+        .position(|(_, entries)| {
+            entries.iter().any(|entry| {
+                entry
+                    .source_text
+                    .as_deref()
+                    .is_some_and(|source| source.contains(receive_identity.as_str()))
+            })
+        })
+        .expect("receipt presentation must be in flight before actor startup");
+    for (index, (path, entries)) in pending_effects.iter().enumerate() {
+        if index == receipt_effect_index {
+            continue;
+        }
+        let bytes = store.append_presentation_many(entries).unwrap();
+        service
+            .apply_persistence_transition(PersistenceEvent::PresentationCompleted {
+                conversation_id: conversation_id.clone(),
+                path: path.clone(),
+                entries: entries.len(),
+                bytes,
+            })
+            .unwrap();
+    }
+    let (path, entries) = pending_effects[receipt_effect_index].clone();
+
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        assert!(
+            handle
+                .drain_timer_side_effects(8)
+                .await
+                .unwrap()
+                .iter()
+                .all(|effect| !matches!(
+                    effect,
+                    RuntimeSideEffect::ScheduleTimer { key, .. }
+                        if key.kind == RuntimeTimerKind::PeerMessageDelivery
+                )),
+            "an in-flight presentation write must not arm peer delivery"
+        );
+        let mut failed = RuntimeEventBatch::new();
+        failed.push(RuntimeEvent::Persistence(
+            PersistenceEvent::PresentationFailed {
+                conversation_id: conversation_id.clone(),
+                path,
+                entries: entries.len(),
+                error: "injected write failure".to_string(),
+            },
+        ));
+        assert_eq!(
+            handle.submit_runtime_events(failed).await.unwrap().applied,
+            1
+        );
+        let retry_timer = handle
+            .drain_timer_side_effects(8)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter_map(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::PeerMessageDelivery =>
+                {
+                    Some(key)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(retry_timer.len(), 1, "a final write failure arms one retry");
+        let mut retry = RuntimeEventBatch::new();
+        retry.push(RuntimeEvent::Timer(TimerEvent {
+            key: retry_timer[0].clone(),
+            now_ms: now_ms.saturating_add(1_000),
+        }));
+        assert_eq!(
+            handle.submit_runtime_events(retry).await.unwrap().applied,
+            0
+        );
+        assert!(
+            handle.drain_timer_side_effects(8).await.unwrap().is_empty(),
+            "the retry write is in flight and must not re-arm delivery"
+        );
+        let retry_effect = handle
+            .drain_persistence_side_effects(8)
+            .await
+            .unwrap()
+            .into_iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::PersistPresentationEntries { path, entries, .. } => {
+                    Some((path, entries))
+                }
+                _ => None,
+            })
+            .expect("retry timer must queue one presentation write");
+        let bytes = store.append_presentation_many(&retry_effect.1).unwrap();
+        let mut completed = RuntimeEventBatch::new();
+        completed.push(RuntimeEvent::Persistence(
+            PersistenceEvent::PresentationCompleted {
+                conversation_id: conversation_id.clone(),
+                path: retry_effect.0,
+                entries: retry_effect.1.len(),
+                bytes,
+            },
+        ));
+        assert_eq!(
+            handle
+                .submit_runtime_events(completed)
+                .await
+                .unwrap()
+                .applied,
+            1
+        );
+        assert!(
+            handle.drain_timer_side_effects(8).await.unwrap().is_empty(),
+            "a settled receipt must leave peer delivery quiescent"
+        );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    exit.service.terminate_all_pane_processes().unwrap();
+    let _ = std::fs::remove_dir_all(root);
 }
 
 /// Verifies that status-line refresh timers are owned per attached client and
@@ -646,7 +1068,10 @@ async fn async_actor_metrics_track_event_and_side_effect_activity() {
         assert_eq!(queued.runtime_event_batch_sizes.max, Some(1));
         assert_eq!(queued.runtime_side_effects_queued, 1);
         assert_eq!(queued.runtime_side_effects_drained, 0);
-        assert_eq!(queued.runtime_side_effect_enqueue_sizes.observations, 1);
+        assert!(
+            queued.runtime_side_effect_enqueue_sizes.observations >= 1,
+            "actor construction may reconcile startup side effects before this event"
+        );
         assert_eq!(queued.runtime_side_effect_enqueue_sizes.max, Some(1));
         assert_eq!(queued.pane_output_chunks, 1);
         assert_eq!(
@@ -674,7 +1099,7 @@ async fn async_actor_metrics_track_event_and_side_effect_activity() {
         let drained = handle.metrics().await.unwrap();
         assert_eq!(drained.commands_processed, 4);
         assert_eq!(drained.runtime_side_effects_drained, 1);
-        assert_eq!(drained.runtime_side_effect_drain_sizes.observations, 1);
+        assert!(drained.runtime_side_effect_drain_sizes.observations >= 1);
         assert_eq!(drained.runtime_side_effect_drain_sizes.max, Some(1));
         assert_eq!(drained.side_effect_queue_depth, 0);
         assert_eq!(drained.side_effect_queue_high_water, 1);

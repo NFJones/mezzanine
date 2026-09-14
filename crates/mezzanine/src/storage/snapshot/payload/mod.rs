@@ -33,7 +33,7 @@ use super::types::{
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-const SNAPSHOT_PAYLOAD_FORMAT_VERSION: u32 = 5;
+const SNAPSHOT_PAYLOAD_FORMAT_VERSION: u32 = 6;
 /// Defines the MIN SUPPORTED SNAPSHOT PAYLOAD FORMAT VERSION const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module

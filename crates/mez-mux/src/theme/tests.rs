@@ -501,10 +501,6 @@ fn builtin_themes_keep_text_bearing_pairs_readable() {
                 theme.colors.agent_transcript_peer_sender,
             ),
             (
-                "agent_transcript_peer_receiver",
-                theme.colors.agent_transcript_peer_receiver,
-            ),
-            (
                 "agent_transcript_parent",
                 theme.colors.agent_transcript_parent,
             ),
@@ -541,27 +537,46 @@ fn builtin_themes_keep_text_bearing_pairs_readable() {
     }
 }
 
-/// Verifies the peer-message and parent-prompt name markers keep distinct
-/// default accents instead of collapsing onto the user or assistant label.
+/// Verifies peer-message and parent-prompt name markers retain their semantic
+/// foreground contracts instead of collapsing onto transcript error styling.
 ///
-/// These slots exist so an operator can separate a logged peer line from
-/// `user> ` and separate received from sent traffic by color. A derived palette
-/// that landed two markers on the same foreground, or reused a marker accent
-/// for the user or assistant label, would defeat the slot.
+/// These slots distinguish a logged peer line from `user> ` while keeping
+/// parent-supplied delegated-work provenance neutral. A derived palette that
+/// reused the error foreground for a parent marker, or collapsed the markers
+/// onto the user or assistant label, would defeat those semantics.
 #[test]
 fn builtin_themes_use_distinct_accents_for_agent_name_markers() {
     for name in BUILTIN_UI_THEME_NAMES {
         let definition =
             builtin_ui_theme_definition(name).unwrap_or_else(|| panic!("missing theme {name}"));
         let theme = resolve_ui_theme(name, definition).expect("built-in theme must resolve");
+        let foreground = theme
+            .aliases
+            .get("foreground")
+            .copied()
+            .expect("built-in theme must define foreground");
+        let danger_foreground = theme
+            .aliases
+            .get("danger_foreground")
+            .copied()
+            .expect("built-in theme must define danger_foreground");
+        assert_eq!(
+            theme.colors.agent_transcript_parent.foreground, foreground,
+            "{name} parent marker must use the neutral foreground alias"
+        );
+        assert_ne!(
+            theme.colors.agent_transcript_parent.foreground,
+            theme.colors.agent_transcript_error.foreground,
+            "{name} parent marker must not reuse the transcript error foreground"
+        );
+        assert_ne!(
+            theme.colors.agent_transcript_parent.foreground, danger_foreground,
+            "{name} parent marker must not reuse the danger foreground alias"
+        );
         let markers = [
             (
                 "agent_transcript_peer_sender",
                 theme.colors.agent_transcript_peer_sender.foreground,
-            ),
-            (
-                "agent_transcript_peer_receiver",
-                theme.colors.agent_transcript_peer_receiver.foreground,
             ),
             (
                 "agent_transcript_parent",

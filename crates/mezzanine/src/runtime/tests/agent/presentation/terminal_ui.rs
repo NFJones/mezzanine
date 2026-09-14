@@ -3773,10 +3773,10 @@ fn runtime_agent_macro_lifecycle_persists_source_for_replay() {
 
 /// Verifies logged peer and parent lines colorize their name markers only.
 ///
-/// The marker is the bounded name plus its direction glyph. The payload keeps
-/// the terminal's default color and the span adds no display cells, so received
-/// and sent traffic stay distinguishable without the line text or its wrapping
-/// changing.
+/// The marker is the bounded name plus its received-message glyph. The payload
+/// keeps the terminal's default color and the span adds no display cells, so a
+/// received peer line and a parent prompt retain their distinct markers without
+/// changing line text or wrapping.
 #[test]
 fn runtime_agent_peer_and_parent_lines_colorize_name_markers() {
     let mut service = test_runtime_service();
@@ -3805,11 +3805,18 @@ fn runtime_agent_peer_and_parent_lines_colorize_name_markers() {
         )
         .unwrap();
     service
-        .append_agent_sent_peer_message_to_terminal_buffer(
+        .append_agent_received_direct_parent_message_to_terminal_buffer(
             "%1",
-            "agent-%2",
             "text/plain; charset=utf-8",
-            "ack now",
+            "direct parent evidence",
+        )
+        .unwrap();
+    service
+        .append_agent_received_peer_message_to_terminal_buffer(
+            "%1",
+            "parent",
+            "text/plain; charset=utf-8",
+            "ordinary peer evidence",
         )
         .unwrap();
     service
@@ -3820,6 +3827,11 @@ fn runtime_agent_peer_and_parent_lines_colorize_name_markers() {
         .agent_pane_screen("%1")
         .unwrap()
         .normal_styled_content_lines();
+    assert_ne!(
+        service.ui_theme().colors.agent_transcript_parent.foreground,
+        service.ui_theme().colors.agent_transcript_error.foreground,
+        "the parent marker must not reuse the transcript error foreground"
+    );
     let gutter = "▐ ".chars().count();
     for (text, marker, pair) in [
         (
@@ -3828,9 +3840,14 @@ fn runtime_agent_peer_and_parent_lines_colorize_name_markers() {
             service.ui_theme().colors.agent_transcript_peer_sender,
         ),
         (
-            "▐ agent-%2< ack now",
-            "agent-%2<",
-            service.ui_theme().colors.agent_transcript_peer_receiver,
+            "▐ parent> direct parent evidence",
+            "parent>",
+            service.ui_theme().colors.agent_transcript_parent,
+        ),
+        (
+            "▐ parent> ordinary peer evidence",
+            "parent>",
+            service.ui_theme().colors.agent_transcript_peer_sender,
         ),
         (
             "▐ parent> restore parent",
@@ -3865,13 +3882,13 @@ fn runtime_agent_peer_and_parent_lines_colorize_name_markers() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies a logged peer message persists its direction, peer name, and payload
+/// Verifies a logged received peer message persists its peer name and payload
 /// so a presentation replay rebuilds the byte-identical prompt-style line.
 ///
 /// A restart must not lose the originating agent: the peer content type stores a
 /// JSON record instead of user-prompt text, so replay prints the same `{peer}> `
-/// and `{peer}< ` prefixes at the destination geometry rather than a nameless or
-/// re-trusted line. The stored record keeps the unbounded peer payload, so a
+/// prefix at the destination geometry rather than a nameless or re-trusted
+/// line. The stored record keeps the unbounded peer payload, so a
 /// payload above the peer-context bound is bounded once, at render time, and the
 /// live and replayed rows stay byte-identical, truncation marker included.
 ///
@@ -3919,11 +3936,10 @@ fn runtime_agent_peer_message_persists_source_for_replay() {
         )
         .unwrap();
     service
-        .append_agent_sent_peer_message_to_terminal_buffer(
+        .append_agent_received_direct_parent_message_to_terminal_buffer(
             "%1",
-            "agent-%2",
             "text/plain; charset=utf-8",
-            "ack, running now",
+            "direct parent replay evidence",
         )
         .unwrap();
     service
@@ -4013,18 +4029,23 @@ fn runtime_agent_peer_message_persists_source_for_replay() {
         "{received_source}"
     );
     assert!(received_source.contains("agent-%3"), "{received_source}");
-    let sent_source = entries
+    let direct_parent_source = entries
         .iter()
         .find_map(|entry| {
             let source = entry.source_text.as_deref()?;
-            source.contains("ack, running now").then_some(source)
+            source
+                .contains("direct parent replay evidence")
+                .then_some(source)
         })
-        .expect("sent peer presentation source");
+        .expect("direct-parent peer presentation source");
     assert!(
-        sent_source.contains("\"direction\":\"sent\""),
-        "{sent_source}"
+        direct_parent_source.contains("\"peer\":\"parent\""),
+        "{direct_parent_source}"
     );
-    assert!(sent_source.contains("agent-%2"), "{sent_source}");
+    assert!(
+        direct_parent_source.contains("\"direct_parent\":true"),
+        "{direct_parent_source}"
+    );
     let large_source = entries
         .iter()
         .find_map(|entry| {
@@ -4068,15 +4089,20 @@ fn runtime_agent_peer_message_persists_source_for_replay() {
     assert!(
         replayed
             .iter()
-            .any(|line| line == "▐ agent-%2< ack, running now"),
+            .any(|line| line == "▐ parent> direct parent replay evidence"),
         "{replayed:#?}"
     );
-    // Replay re-derives each name marker from the persisted direction and
-    // bounded label, so the replayed rows must keep the live spans exactly.
+    // Replay re-derives each received-message marker from the persisted label,
+    // so the replayed rows must keep the live spans exactly.
     let replayed_styled_rows = service
         .agent_pane_screen("%1")
         .unwrap()
         .normal_styled_content_lines();
+    assert_ne!(
+        service.ui_theme().colors.agent_transcript_parent.foreground,
+        service.ui_theme().colors.agent_transcript_error.foreground,
+        "the replayed parent marker must not reuse the transcript error foreground"
+    );
     assert_eq!(
         live_styled_rows.as_slice(),
         &replayed_styled_rows[replayed_styled_rows
@@ -4104,25 +4130,19 @@ fn runtime_agent_peer_message_persists_source_for_replay() {
         }),
         "{received_marker:?}"
     );
-    let sent_marker = replayed_styled_rows
+    let direct_parent_marker = replayed_styled_rows
         .iter()
-        .find(|line| line.text == "▐ agent-%2< ack, running now")
-        .expect("replayed sent peer line");
+        .find(|line| line.text == "▐ parent> direct parent replay evidence")
+        .expect("replayed direct-parent peer line");
     assert!(
-        sent_marker.style_spans.iter().any(|span| {
+        direct_parent_marker.style_spans.iter().any(|span| {
             span.start == "▐ ".chars().count()
-                && span.length == "agent-%2<".chars().count()
+                && span.length == "parent>".chars().count()
                 && span.rendition.foreground
-                    == Some(
-                        service
-                            .ui_theme()
-                            .colors
-                            .agent_transcript_peer_receiver
-                            .foreground,
-                    )
+                    == Some(service.ui_theme().colors.agent_transcript_parent.foreground)
                 && span.rendition.background.is_none()
         }),
-        "{sent_marker:?}"
+        "{direct_parent_marker:?}"
     );
     assert!(
         !replayed
@@ -4240,10 +4260,8 @@ fn runtime_agent_legacy_peer_message_record_still_replays() {
         "verbose replay preserves legacy received payloads: {verbose_rows:#?}"
     );
     assert!(
-        verbose_rows
-            .iter()
-            .any(|line| line == "▐ agent-%2< legacy ack"),
-        "verbose replay preserves legacy sent payloads: {verbose_rows:#?}"
+        !verbose_rows.iter().any(|line| line.contains("legacy ack")),
+        "verbose replay skips legacy sent records: {verbose_rows:#?}"
     );
     service.terminate_all_pane_processes().unwrap();
 }

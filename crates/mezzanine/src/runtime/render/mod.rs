@@ -2983,6 +2983,9 @@ mod mux;
 mod overlay;
 mod paste;
 mod presentation;
+pub(crate) use presentation::{
+    PeerMessagePresentation, peer_message_presentation_receive_identity,
+};
 mod time;
 
 use mez_mux::overlay::{

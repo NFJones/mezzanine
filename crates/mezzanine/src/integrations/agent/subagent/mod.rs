@@ -9,4 +9,5 @@
 /// The canonical subagent domain is owned by `mez-agent`; only product
 /// presentation naming remains in this module.
 mod names;
-pub use names::SUBAGENT_FRIENDLY_NAMES;
+#[allow(unused_imports)]
+pub use names::{SUBAGENT_HUMAN_NAMES, SUBAGENT_NONHUMAN_NAMES};

@@ -908,6 +908,12 @@ impl RuntimeSessionService {
                     outcome.as_ref()
                     && matches!(command.as_str(), "clear" | "new")
                 {
+                    if let Some(conversation_id) = replaced_conversation_id.as_deref() {
+                        self.clear_received_peer_message_presentations_for_conversation(
+                            &pane_id,
+                            conversation_id,
+                        );
+                    }
                     let cleared = self.clear_agent_shell_terminal_view(&pane_id)?;
                     let mut clear_outcome = outcome.as_ref().cloned().ok_or_else(|| {
                         MezError::invalid_state("clear/new command outcome was missing")

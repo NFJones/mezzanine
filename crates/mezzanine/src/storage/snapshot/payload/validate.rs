@@ -1,7 +1,10 @@
 //! Payload content detection, validation, and resume-plan projection.
 
+use std::collections::HashSet;
+
 use super::helpers::{validate_message_snapshot_state, validate_snapshot_window_groups};
 use super::{LayoutLoadPlan, MezError, Result, SessionSnapshotPayload};
+use crate::storage::snapshot::types::MAX_UNSETTLED_PEER_PRESENTATIONS;
 impl SessionSnapshotPayload {
     /// Runs the contains terminal history operation for this subsystem.
     ///
@@ -63,6 +66,91 @@ impl SessionSnapshotPayload {
         }
         if let Some(message_state) = &self.message_state {
             validate_message_snapshot_state(message_state)?;
+        }
+        if self.unsettled_peer_presentations.len() > MAX_UNSETTLED_PEER_PRESENTATIONS {
+            return Err(MezError::invalid_args(
+                "snapshot peer presentation outbox exceeds its entry bound",
+            ));
+        }
+        if self.payload_version >= 6
+            && !self.unsettled_peer_presentations.is_empty()
+            && self.message_state.is_none()
+        {
+            return Err(MezError::invalid_args(
+                "snapshot peer presentation outbox requires message state",
+            ));
+        }
+        let snapshot_pane_owners = self
+            .windows
+            .iter()
+            .flat_map(|window| {
+                window
+                    .panes
+                    .iter()
+                    .map(move |pane| (pane.pane_id.as_str(), window.window_id.as_str()))
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let mut peer_receipt_identities = HashSet::new();
+        for receipt in &self.unsettled_peer_presentations {
+            receipt.validate()?;
+            let Some(window_id) = snapshot_pane_owners.get(receipt.pane_id.as_str()) else {
+                return Err(MezError::invalid_args(
+                    "snapshot peer presentation outbox pane is unknown",
+                ));
+            };
+            if !peer_receipt_identities.insert(receipt.identity.as_str()) {
+                return Err(MezError::invalid_args(
+                    "snapshot peer presentation outbox identities must be unique",
+                ));
+            }
+            let Some(message_state) = self.message_state.as_ref() else {
+                continue;
+            };
+            let Some(identity) = message_state
+                .registered_agents
+                .iter()
+                .find(|identity| identity.agent_id == receipt.recipient_agent_id)
+            else {
+                return Err(MezError::invalid_args(
+                    "snapshot peer presentation outbox recipient identity is missing",
+                ));
+            };
+            if identity.pane_id.as_deref() != Some(receipt.pane_id.as_str()) {
+                return Err(MezError::invalid_args(
+                    "snapshot peer presentation outbox recipient pane does not match",
+                ));
+            }
+            if identity
+                .window_id
+                .as_deref()
+                .is_some_and(|identity_window_id| identity_window_id != *window_id)
+            {
+                return Err(MezError::invalid_args(
+                    "snapshot peer presentation outbox recipient window does not own pane",
+                ));
+            }
+            let Some(subscription) = message_state
+                .subscriptions
+                .iter()
+                .find(|subscription| subscription.recipient == receipt.recipient_agent_id)
+            else {
+                return Err(MezError::invalid_args(
+                    "snapshot peer presentation outbox recipient subscription is missing",
+                ));
+            };
+            if subscription.last_sequence < receipt.sequence {
+                return Err(MezError::invalid_args(
+                    "snapshot peer presentation outbox receipt exceeds recipient cursor",
+                ));
+            }
+            if !self.agent_sessions.iter().any(|session| {
+                session.pane_id == receipt.pane_id
+                    && session.conversation_id == receipt.conversation_id
+            }) {
+                return Err(MezError::invalid_args(
+                    "snapshot peer presentation outbox pane conversation owner is missing",
+                ));
+            }
         }
         for server in &self.mcp_servers {
             server.validate()?;

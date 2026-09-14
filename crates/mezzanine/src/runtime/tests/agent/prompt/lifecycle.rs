@@ -3,6 +3,90 @@
 use super::*;
 use mez_agent::SubagentSessionMode;
 
+/// Spawns one native child and returns its canonical id with the advertised display name.
+///
+/// The display-name contract is emitted in the spawn response after pane creation.
+/// Keeping this setup in one helper lets mode-specific tests assert that each configured
+/// policy is resolved against the same canonical child identity and lifecycle path.
+fn spawn_subagent_for_display_name_test(service: &mut RuntimeSessionService) -> (String, String) {
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let spawned = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: SubagentSessionMode::New,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
+                task_prompt: "inspect display-name allocation".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: true,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap();
+    let spawned = serde_json::from_str::<serde_json::Value>(&spawned).unwrap();
+    (
+        spawned["agent"]["id"].as_str().unwrap().to_string(),
+        spawned["agent"]["display_name"]
+            .as_str()
+            .unwrap()
+            .to_string(),
+    )
+}
+
+/// Verifies every configured naming policy is applied after a child receives its
+/// canonical runtime identity, preserving literal ids and selecting only product corpora.
+///
+/// This exercises the real pane spawn path rather than a parser-only configuration test,
+/// ensuring display names exposed through the response and stored lifecycle state honor the
+/// prospective runtime setting for nonhuman, human, and literal child allocations.
+#[test]
+fn runtime_subagent_spawn_applies_configured_display_name_mode() {
+    let mut nonhuman_service = test_runtime_service();
+    let (_child_id, nonhuman_name) = spawn_subagent_for_display_name_test(&mut nonhuman_service);
+    assert!(
+        crate::integrations::agent::subagent::SUBAGENT_NONHUMAN_NAMES
+            .contains(&nonhuman_name.as_str()),
+        "default mode must use the nonhuman corpus: {nonhuman_name}"
+    );
+    nonhuman_service.terminate_all_pane_processes().unwrap();
+
+    let mut human_service = test_runtime_service();
+    human_service.set_subagent_name_mode(crate::runtime::config::SubagentNameMode::Human);
+    let (_child_id, human_name) = spawn_subagent_for_display_name_test(&mut human_service);
+    assert!(
+        crate::integrations::agent::subagent::SUBAGENT_HUMAN_NAMES.contains(&human_name.as_str()),
+        "human mode must use the human corpus: {human_name}"
+    );
+    human_service.terminate_all_pane_processes().unwrap();
+
+    let mut literal_service = test_runtime_service();
+    literal_service.set_subagent_name_mode(crate::runtime::config::SubagentNameMode::Literal);
+    let (child_id, literal_name) = spawn_subagent_for_display_name_test(&mut literal_service);
+    assert_eq!(literal_name, child_id);
+    literal_service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies shorthand prompt words still resolve to the read-only subagent mode.
 ///
 /// Provider prompts describe cooperation mode as a safety/scope concept, and

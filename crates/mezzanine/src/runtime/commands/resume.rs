@@ -422,6 +422,8 @@ impl RuntimeSessionService {
         let previous_context_usage = self.agent_context_usage_display(&previous_session.session_id);
         let previous_context_snapshot =
             self.agent_context_usage_snapshot(&previous_session.session_id);
+        let previous_unsettled_peer_presentations =
+            self.snapshot_unsettled_received_peer_message_presentations();
         let target_context_usage = self.agent_context_usage_display(&conversation_id);
         let target_context_snapshot = self.agent_context_usage_snapshot(&conversation_id);
         let previous_latest_usage = self
@@ -471,6 +473,12 @@ impl RuntimeSessionService {
                     .as_ref()
                     .map(|membership| membership.scope_id()),
             )?;
+            if conversation_replaced {
+                self.clear_received_peer_message_presentations_for_conversation(
+                    pane_id,
+                    &previous_session.session_id,
+                );
+            }
             self.reload_agent_prompt_history_for_pane(pane_id)?;
             if let Some(size) = self
                 .agent_pane_screen(pane_id)
@@ -637,6 +645,9 @@ impl RuntimeSessionService {
                     &previous_session.session_id,
                     previous_latest_usage,
                 );
+                self.restore_unsettled_received_peer_message_presentations(
+                    &previous_unsettled_peer_presentations,
+                )?;
                 let _ = self.sync_prepared_runtime_agent_objective_for_conversation(
                     pane_id,
                     &previous_session.session_id,

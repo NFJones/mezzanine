@@ -33,8 +33,10 @@ mod providers;
 mod terminal_options;
 mod theme;
 mod trust;
+pub(crate) use agents::runtime_subagent_name_mode_from_config;
 pub(crate) use agents::{
-    ActiveTurnSleepInhibition, PeerMessageLogMode, runtime_agent_peer_message_log_mode_from_config,
+    ActiveTurnSleepInhibition, PeerMessageLogMode, SubagentNameMode,
+    runtime_agent_peer_message_log_mode_from_config,
 };
 pub(super) use agents::{
     ShellMode, runtime_active_turn_sleep_inhibition_from_config,

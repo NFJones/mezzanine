@@ -24,9 +24,8 @@ use super::text::{
 };
 use super::{
     AGENT_COPY_SKIP_LINE, AgentAction, GraphicRendition, RichTextLine, RichTextLineKind,
-    TerminalStyleSpan, UiColorPair, UiTheme, UnicodeWidthStr, diff_section_path,
-    frame_markdown_lines, parse_unified_diff_sections, prefix_rich_text_lines,
-    wrap_rich_text_lines_to_width,
+    TerminalStyleSpan, UnicodeWidthStr, diff_section_path, frame_markdown_lines,
+    parse_unified_diff_sections, prefix_rich_text_lines, wrap_rich_text_lines_to_width,
 };
 use crate::runtime::render::{
     ActionResult, AgentPresentationEntry, MezError, Result, RuntimeAgentShellPreviewOwner,
@@ -78,7 +77,7 @@ const AGENT_PRESENTATION_MACRO_LIFECYCLE_CONTENT_TYPE: &str =
 /// and the plain-text user-prompt content type cannot carry it. The record keeps
 /// the unbounded values so replay can hand the renderer the same input the live
 /// writer had and rebuild a byte-identical line.
-const AGENT_PRESENTATION_PEER_MESSAGE_CONTENT_TYPE: &str =
+pub(crate) const AGENT_PRESENTATION_PEER_MESSAGE_CONTENT_TYPE: &str =
     "application/vnd.mezzanine.agent-presentation.peer-message+json; charset=utf-8";
 /// Maximum byte length of one persisted peer-message source accepted at replay.
 ///
@@ -89,69 +88,6 @@ const AGENT_PRESENTATION_PEER_MESSAGE_SOURCE_MAX_BYTES: usize = 4 * 1024 * 1024;
 /// Placeholder peer name used when a peer identity is absent or empty.
 const AGENT_PRESENTATION_UNKNOWN_PEER_LABEL: &str = "agent-unknown";
 
-/// Direction of one logged interagent peer message.
-///
-/// The arrow points from the originating agent toward the destination and the
-/// printed name sits at the destination end of that arrow, so a received line
-/// reads `{sender}> {payload}` and a sent line reads `{recipient}< {payload}`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AgentPeerMessageDirection {
-    /// Peer mail delivered into this pane.
-    Received,
-    /// A `send_message` action this pane's turn delivered.
-    Sent,
-}
-
-impl AgentPeerMessageDirection {
-    /// Returns the persistence- and replay-stable name of this direction.
-    fn persistence_name(self) -> &'static str {
-        match self {
-            Self::Received => "received",
-            Self::Sent => "sent",
-        }
-    }
-
-    /// Decodes one persisted direction name.
-    fn from_persistence_name(name: &str) -> Option<Self> {
-        match name {
-            "received" => Some(Self::Received),
-            "sent" => Some(Self::Sent),
-            _ => None,
-        }
-    }
-
-    /// Returns the prompt-style prefix for one direction and peer name.
-    fn terminal_prefix(self, peer_label: &str) -> String {
-        match self {
-            Self::Received => format!("{peer_label}> "),
-            Self::Sent => format!("{peer_label}< "),
-        }
-    }
-
-    /// Returns the colored name marker for one direction and peer name.
-    ///
-    /// The marker is the bounded peer name plus its direction glyph. The
-    /// trailing space stays part of the unstyled prefix text so the display
-    /// text of the line is unchanged from the uncolored form.
-    fn terminal_name_marker(self, peer_label: &str) -> String {
-        match self {
-            Self::Received => format!("{peer_label}>"),
-            Self::Sent => format!("{peer_label}<"),
-        }
-    }
-
-    /// Returns the theme pair coloring this direction's peer name marker.
-    ///
-    /// Inbound traffic names the sending peer, outbound traffic names the
-    /// receiving peer, so each direction carries its own transcript slot.
-    fn name_marker_pair(self, ui_theme: &UiTheme) -> UiColorPair {
-        match self {
-            Self::Received => ui_theme.colors.agent_transcript_peer_sender,
-            Self::Sent => ui_theme.colors.agent_transcript_peer_receiver,
-        }
-    }
-}
-
 /// Persisted source for one replayable peer-message log line.
 ///
 /// The stored peer name and payload are the unbounded values the echo received.
@@ -160,15 +96,55 @@ impl AgentPeerMessageDirection {
 ///
 /// The envelope media type is stored so replay applies the same normal-mode
 /// canonical-plaintext filter as the live renderer. A record written before
-/// this field existed decodes with `None` and is suppressed in normal mode.
+/// commit-time eligibility existed keeps `None`, allowing legacy received rows
+/// to retain their historical normal/verbose replay policy.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct PeerMessagePresentationSource {
     direction: String,
+    /// Stable MMP delivery identity used to recover one receiver-owned row.
+    #[serde(default)]
+    receive_identity: Option<String>,
     peer: String,
     payload: String,
     /// Envelope media type the live echo gated on; absent on legacy records.
     #[serde(default)]
     content_type: Option<String>,
+    /// Whether the writer resolved this received row as the recipient's direct parent.
+    #[serde(default)]
+    direct_parent: bool,
+    /// Whether receive commit selected this row for receiver presentation.
+    #[serde(default)]
+    presentation_eligible: Option<bool>,
+}
+
+/// Borrowed inputs shared by live rendering and persistence-only retries.
+pub(crate) struct PeerMessagePresentation<'a> {
+    pub(crate) receive_identity: Option<&'a str>,
+    pub(crate) peer_label: &'a str,
+    pub(crate) content_type: Option<&'a str>,
+    pub(crate) payload: &'a str,
+    pub(crate) direct_parent: bool,
+    pub(crate) presentation_eligible: bool,
+}
+
+/// Returns the receiver-owned identity encoded by one peer presentation source.
+///
+/// Durable receipt settlement must compare this parsed field exactly. Searching
+/// raw JSON would let payload text masquerade as an unrelated receipt identity.
+pub(crate) fn peer_message_presentation_receive_identity(
+    source_content_type: &str,
+    source_text: &str,
+) -> Option<String> {
+    if source_content_type != AGENT_PRESENTATION_PEER_MESSAGE_CONTENT_TYPE {
+        return None;
+    }
+    if source_text.len() > AGENT_PRESENTATION_PEER_MESSAGE_SOURCE_MAX_BYTES {
+        return None;
+    }
+    let encoded = serde_json::from_str::<PeerMessagePresentationSource>(source_text).ok()?;
+    (encoded.direction == "received")
+        .then_some(encoded.receive_identity)
+        .flatten()
 }
 
 /// Returns the bounded, control-character-free peer name shown in a log line.
@@ -251,16 +227,21 @@ fn attach_agent_name_marker_span(
 
 /// Encodes one peer-message presentation source for geometry-aware replay.
 fn peer_message_presentation_source(
-    direction: AgentPeerMessageDirection,
+    receive_identity: Option<&str>,
     peer_label: &str,
     payload: &str,
     content_type: Option<&str>,
+    direct_parent: bool,
+    presentation_eligible: bool,
 ) -> String {
     serde_json::json!({
-        "direction": direction.persistence_name(),
+        "direction": "received",
+        "receive_identity": receive_identity,
         "peer": peer_label,
         "payload": payload,
         "content_type": content_type,
+        "direct_parent": direct_parent,
+        "presentation_eligible": presentation_eligible,
     })
     .to_string()
 }
@@ -275,18 +256,12 @@ fn peer_message_presentation_source(
 /// panicking or rendering from an untrusted stored length.
 fn decoded_peer_message_presentation_source(
     source_text: &str,
-) -> Option<(AgentPeerMessageDirection, String, String, Option<String>)> {
+) -> Option<PeerMessagePresentationSource> {
     if source_text.len() > AGENT_PRESENTATION_PEER_MESSAGE_SOURCE_MAX_BYTES {
         return None;
     }
     let encoded = serde_json::from_str::<PeerMessagePresentationSource>(source_text).ok()?;
-    let direction = AgentPeerMessageDirection::from_persistence_name(&encoded.direction)?;
-    Some((
-        direction,
-        encoded.peer,
-        encoded.payload,
-        encoded.content_type,
-    ))
+    (encoded.direction == "received").then_some(encoded)
 }
 
 /// One media-type-specific projection of accumulated streamed `say` source.
@@ -466,13 +441,10 @@ impl RuntimeSessionService {
 
     /// Appends one received peer message to the pane log in prompt style.
     ///
-    /// Interagent MMP traffic is operator-visible log content: a delivered peer
-    /// message logs `{sender}> {payload}` and wraps exactly like a user prompt.
-    /// The line is an observation only. It never becomes user-authored context,
-    /// approval authority, or a turn trigger, so the persisted source stays a
-    /// bounded peer record rather than user-prompt text. Normal mode logs only
-    /// the exact canonical plaintext media type; verbose mode logs each bounded
-    /// raw payload regardless of media type.
+    /// This compatibility entry point is used by direct presentation tests.
+    /// Receipt-owned delivery uses the identity-bearing variant so durable
+    /// replay and persistence settlement can remain recipient scoped.
+    #[cfg(test)]
     pub(crate) fn append_agent_received_peer_message_to_terminal_buffer(
         &mut self,
         pane_id: &str,
@@ -480,38 +452,116 @@ impl RuntimeSessionService {
         content_type: &str,
         payload: &str,
     ) -> Result<()> {
-        self.append_agent_peer_message_to_terminal_buffer(
+        self.append_agent_received_peer_message_to_terminal_buffer_with_receive_identity(
             pane_id,
+            None,
             peer_label,
-            AgentPeerMessageDirection::Received,
-            Some(content_type),
+            content_type,
             payload,
         )
     }
 
-    /// Appends one accepted outbound peer message to the pane log in prompt style.
-    ///
-    /// The line names the recipient at the destination end of the direction
-    /// arrow (`{recipient}< {payload}`) so a watching operator can pair the
-    /// outbound request with the peer reply that follows it, without confusing
-    /// the line for user-authored input. The accepted envelope's media type
-    /// reaches the renderer so sent and received traffic project identically.
-    ///
-    /// Normal and verbose mode apply the same media-type rule to sent and
-    /// received traffic.
-    pub(crate) fn append_agent_sent_peer_message_to_terminal_buffer(
+    /// Appends one received peer message with an optional stable receive identity.
+    #[cfg(test)]
+    pub(crate) fn append_agent_received_peer_message_to_terminal_buffer_with_receive_identity(
         &mut self,
         pane_id: &str,
+        receive_identity: Option<&str>,
         peer_label: &str,
         content_type: &str,
         payload: &str,
     ) -> Result<()> {
         self.append_agent_peer_message_to_terminal_buffer(
             pane_id,
-            peer_label,
-            AgentPeerMessageDirection::Sent,
-            Some(content_type),
+            &PeerMessagePresentation {
+                receive_identity,
+                peer_label,
+                content_type: Some(content_type),
+                payload,
+                direct_parent: false,
+                presentation_eligible: false,
+            },
+        )
+    }
+
+    /// Appends a receiver receipt that was selected for presentation at commit time.
+    pub(crate) fn append_committed_received_peer_message_to_terminal_buffer(
+        &mut self,
+        pane_id: &str,
+        receive_identity: &str,
+        peer_label: &str,
+        content_type: &str,
+        payload: &str,
+    ) -> Result<()> {
+        self.append_agent_peer_message_to_terminal_buffer(
+            pane_id,
+            &PeerMessagePresentation {
+                receive_identity: Some(receive_identity),
+                peer_label,
+                content_type: Some(content_type),
+                payload,
+                direct_parent: false,
+                presentation_eligible: true,
+            },
+        )
+    }
+
+    /// Appends one received direct-parent MMP message with parent marker semantics.
+    #[cfg(test)]
+    pub(crate) fn append_agent_received_direct_parent_message_to_terminal_buffer(
+        &mut self,
+        pane_id: &str,
+        content_type: &str,
+        payload: &str,
+    ) -> Result<()> {
+        self.append_agent_received_direct_parent_message_to_terminal_buffer_with_receive_identity(
+            pane_id,
+            None,
+            content_type,
             payload,
+        )
+    }
+
+    /// Appends one received direct-parent message with an optional stable receive identity.
+    #[cfg(test)]
+    pub(crate) fn append_agent_received_direct_parent_message_to_terminal_buffer_with_receive_identity(
+        &mut self,
+        pane_id: &str,
+        receive_identity: Option<&str>,
+        content_type: &str,
+        payload: &str,
+    ) -> Result<()> {
+        self.append_agent_peer_message_to_terminal_buffer(
+            pane_id,
+            &PeerMessagePresentation {
+                receive_identity,
+                peer_label: "parent",
+                content_type: Some(content_type),
+                payload,
+                direct_parent: true,
+                presentation_eligible: false,
+            },
+        )
+    }
+
+    /// Appends a direct-parent receipt selected for presentation at commit time.
+    pub(crate) fn append_committed_received_direct_parent_message_to_terminal_buffer(
+        &mut self,
+        pane_id: &str,
+        receive_identity: &str,
+        content_type: &str,
+        payload: &str,
+    ) -> Result<()> {
+        self.append_agent_peer_message_to_terminal_buffer(
+            pane_id,
+            &PeerMessagePresentation {
+                receive_identity: Some(receive_identity),
+                peer_label: "parent",
+                content_type: Some(content_type),
+                payload,
+                direct_parent: true,
+                presentation_eligible: true,
+            },
         )
     }
 
@@ -526,48 +576,64 @@ impl RuntimeSessionService {
             .unwrap_or(PeerMessageLogMode::Normal)
     }
 
-    /// Renders one directional peer-message log line at replay geometry.
+    /// Renders one received peer-message log line at live or replay geometry.
     ///
-    /// Both directions share this renderer, and both the live writer and the
-    /// replay decoder hand it the same raw peer name and payload: the peer
+    /// Both the live writer and the replay decoder hand it the same raw peer
+    /// name and payload: the peer
     /// context bound is applied here and nowhere else, so the wrapping,
     /// continuation indentation, truncation marker, and persisted source shape
-    /// stay identical for received and sent traffic and for live and replayed
-    /// lines.
+    /// stay identical for ordinary and direct-parent received traffic and for
+    /// live and replayed lines.
     ///
     /// A payload the projection suppresses writes no row and no presentation
     /// record, so replay cannot resurrect a line the live pane never showed.
     /// The same rule covers the runtime bridge echo: normal mode returns before
     /// any row or record exists, while verbose mode logs the full bounded payload
-    /// for every direction and media type.
+    /// for every received sender and media type.
     fn append_agent_peer_message_to_terminal_buffer(
         &mut self,
         pane_id: &str,
-        peer_label: &str,
-        direction: AgentPeerMessageDirection,
-        content_type: Option<&str>,
-        payload: &str,
+        presentation: &PeerMessagePresentation<'_>,
     ) -> Result<()> {
         let log_mode = self.agent_peer_message_log_mode();
-        if log_mode != PeerMessageLogMode::Verbose
-            && !peer_message_is_canonical_plaintext(content_type)
+        if !presentation.presentation_eligible
+            && log_mode != PeerMessageLogMode::Verbose
+            && !peer_message_is_canonical_plaintext(presentation.content_type)
         {
             return Ok(());
         }
-        let body = peer_message_echo_payload(payload);
+        let body = peer_message_echo_payload(presentation.payload);
         let display_width = self.agent_terminal_markdown_frame_width(pane_id)?;
-        let rendered_label = peer_message_echo_label(peer_label);
-        let prefix = direction.terminal_prefix(&rendered_label);
+        let rendered_label = peer_message_echo_label(presentation.peer_label);
+        let prefix = format!("{rendered_label}> ");
         let mut rendered_lines =
             peer_message_echo_rendered_lines(prefix.as_str(), body.as_str(), display_width);
+        let marker_rendition = if presentation.direct_parent {
+            self.presentation
+                .settings
+                .ui_theme
+                .colors
+                .agent_transcript_parent
+        } else {
+            self.presentation
+                .settings
+                .ui_theme
+                .colors
+                .agent_transcript_peer_sender
+        };
         attach_agent_name_marker_span(
             &mut rendered_lines,
-            direction.terminal_name_marker(&rendered_label).as_str(),
-            agent_name_marker_rendition(
-                direction.name_marker_pair(&self.presentation.settings.ui_theme),
-            ),
+            format!("{rendered_label}>").as_str(),
+            agent_name_marker_rendition(marker_rendition),
         );
-        let source = peer_message_presentation_source(direction, peer_label, payload, content_type);
+        let source = peer_message_presentation_source(
+            presentation.receive_identity,
+            presentation.peer_label,
+            presentation.payload,
+            presentation.content_type,
+            presentation.direct_parent,
+            true,
+        );
         self.append_agent_terminal_rendered_lines_to_buffer(
             pane_id,
             AgentTerminalPresentationStyle::UserPrompt,
@@ -578,6 +644,93 @@ impl RuntimeSessionService {
                 AGENT_PRESENTATION_PEER_MESSAGE_CONTENT_TYPE,
             )),
         )
+    }
+
+    /// Queues one retained received-peer source for durable persistence without
+    /// touching the live terminal screen.
+    ///
+    /// A receipt calls this only after its single live row was accepted and an
+    /// earlier durable append failed. Reusing the retained label, media type,
+    /// payload, and receipt identity keeps a retry source-identical while
+    /// preventing a second pane row.
+    pub(crate) fn persist_received_peer_message_presentation_only(
+        &mut self,
+        pane_id: &str,
+        conversation_id: &str,
+        turn_id: &str,
+        presentation: &PeerMessagePresentation<'_>,
+    ) -> Result<()> {
+        let Some((active_conversation_id, ephemeral)) = self
+            .agent_shell_store()
+            .get(pane_id)
+            .map(|session| (session.session_id.clone(), session.ephemeral))
+        else {
+            return Ok(());
+        };
+        if ephemeral || active_conversation_id != conversation_id {
+            return Ok(());
+        }
+        let Some(store) = self.persistence.cloned_transcript_store() else {
+            return Ok(());
+        };
+        let terminal_width = self
+            .agent_presentation_terminal_width(pane_id)
+            .ok_or_else(|| {
+                MezError::invalid_state("peer presentation retry target has no terminal width")
+            })?;
+        let display_width = self.agent_terminal_markdown_frame_width(pane_id)?;
+        let rendered_label = peer_message_echo_label(presentation.peer_label);
+        let prefix = format!("{rendered_label}> ");
+        let rendered_lines = peer_message_echo_rendered_lines(
+            prefix.as_str(),
+            peer_message_echo_payload(presentation.payload).as_str(),
+            display_width,
+        );
+        let source = peer_message_presentation_source(
+            presentation.receive_identity,
+            presentation.peer_label,
+            presentation.payload,
+            presentation.content_type,
+            presentation.direct_parent,
+            true,
+        );
+        let entry = AgentPresentationEntry {
+            conversation_id: conversation_id.to_string(),
+            sequence: 0,
+            created_at_unix_seconds: current_unix_seconds().max(1),
+            pane_id: pane_id.to_string(),
+            turn_id: (!turn_id.is_empty()).then(|| turn_id.to_string()),
+            terminal_width,
+            style_names: vec![
+                AgentTerminalPresentationStyle::UserPrompt
+                    .persistence_name()
+                    .to_string();
+                rendered_lines.len()
+            ],
+            display_lines: rendered_lines
+                .iter()
+                .map(|line| line.display.clone())
+                .collect(),
+            copy_lines: Vec::new(),
+            ansi_text: None,
+            source_text: Some(source),
+            source_content_type: Some(AGENT_PRESENTATION_PEER_MESSAGE_CONTENT_TYPE.to_string()),
+        };
+        if self.persistence.transcript_uses_adapter() {
+            let path = store.presentation_path(conversation_id)?;
+            self.persistence.queue_presentation(
+                crate::runtime::RuntimeSideEffect::PersistPresentationEntries {
+                    store,
+                    path,
+                    entries: vec![entry],
+                },
+            );
+        } else {
+            let mut entry = entry;
+            entry.sequence = store.next_presentation_sequence(conversation_id)?;
+            store.append_presentation(&entry)?;
+        }
+        Ok(())
     }
 
     /// Runs the append agent assistant text to terminal buffer operation for this subsystem.
@@ -817,8 +970,7 @@ impl RuntimeSessionService {
                         // or oversized source is corrupt log state, not model
                         // output, and printing its raw bytes would invent a
                         // transcript line that never existed.
-                        if let Some((direction, peer_label, payload, content_type)) =
-                            decoded_peer_message_presentation_source(source_text)
+                        if let Some(encoded) = decoded_peer_message_presentation_source(source_text)
                         {
                             // Replayed peer sources use the same renderer as live
                             // presentation: normal mode admits only exact canonical
@@ -827,10 +979,16 @@ impl RuntimeSessionService {
                             // presentation record for replay to resurrect.
                             self.append_agent_peer_message_to_terminal_buffer(
                                 pane_id,
-                                peer_label.as_str(),
-                                direction,
-                                content_type.as_deref(),
-                                payload.as_str(),
+                                &PeerMessagePresentation {
+                                    receive_identity: encoded.receive_identity.as_deref(),
+                                    peer_label: encoded.peer.as_str(),
+                                    content_type: encoded.content_type.as_deref(),
+                                    payload: encoded.payload.as_str(),
+                                    direct_parent: encoded.direct_parent,
+                                    presentation_eligible: encoded
+                                        .presentation_eligible
+                                        .unwrap_or(false),
+                                },
                             )?;
                         }
                         continue;

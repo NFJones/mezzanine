@@ -5502,6 +5502,7 @@ impl RuntimeSessionService {
         self.abort_external_editor_session(pane_id)?;
         self.presentation.remove_completion_attention(pane_id);
         self.presentation.remove_agent_presentation_state(pane_id);
+        self.clear_received_peer_message_presentations_for_pane(pane_id);
         self.discard_agent_loop_parent_projections_for_pane(pane_id);
         if let Some(conversation_id) = self
             .agent_shell_store()

@@ -7,10 +7,11 @@ use super::{
     SnapshotLayoutNode, SnapshotManifest, SnapshotMcpExternalCapability, SnapshotMcpServerState,
     SnapshotMcpToolEffects, SnapshotMcpToolState, SnapshotPaneCapture, SnapshotPaneGeometry,
     SnapshotRepository, SnapshotSessionState, SnapshotShellMetadata, SnapshotState,
-    WindowSnapshotPayload,
+    SnapshotUnsettledPeerPresentation, WindowSnapshotPayload,
 };
 use crate::host::shell::{ResolvedShell, ShellSource};
-use mez_agent::messaging::{Envelope, MessageScope, MessageService, Recipient};
+use mez_agent::messaging::{Envelope, MessageScope, MessageService, Recipient, SenderIdentity};
+use mez_core::ids::{AgentId, PaneId};
 use mez_mux::layout::{LayoutNode, LayoutPolicy, PaneGeometry, Size, SplitDirection};
 use mez_mux::session::{Session, SessionState};
 use mez_terminal::TerminalSavedDecPrivateMode;
@@ -578,7 +579,20 @@ fn session_snapshot_payload_round_trips_and_builds_resume_plan() {
     let mut message_service = MessageService::default();
     let sender = message_service.register_agent(None, None, "writer", vec!["code".to_string()]);
     let sender_id = sender.agent_id.clone();
-    let target = message_service.register_agent(None, None, "reviewer", Vec::new());
+    let target = message_service
+        .ensure_agent_identity(
+            SenderIdentity {
+                agent_id: AgentId::opaque("agent-%1".to_string()).unwrap(),
+                project_scope: None,
+                pane_id: PaneId::opaque("%1".to_string()),
+                window_id: None,
+                role: Some("agent".to_string()),
+                capabilities: Vec::new(),
+                objective: None,
+            },
+            0,
+        )
+        .unwrap();
     message_service.subscribe(&target.agent_id).unwrap();
     message_service
         .accept_at_with_scope(
@@ -589,7 +603,7 @@ fn session_snapshot_payload_round_trips_and_builds_resume_plan() {
                 message_type: "send".to_string(),
                 time: "2026-05-01T00:00:00Z".to_string(),
                 sender,
-                recipient: Recipient::Agent(target.agent_id),
+                recipient: Recipient::Agent(target.agent_id.clone()),
                 correlation_id: Some("turn-1".to_string()),
                 ttl_ms: Some(10_000),
                 content_type: "text/plain; charset=utf-8".to_string(),
@@ -600,7 +614,24 @@ fn session_snapshot_payload_round_trips_and_builds_resume_plan() {
             10,
         )
         .unwrap();
+    message_service
+        .advance_subscription(&target.agent_id, 1)
+        .unwrap();
     let message_state = message_service.snapshot_state();
+    let unsettled_peer_presentations = vec![SnapshotUnsettledPeerPresentation {
+        identity: "peer-message recipient=agent-%1 sequence=1 id=snapshot-message".to_string(),
+        recipient_agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        conversation_id: "as1".to_string(),
+        turn_id: "turn-1".to_string(),
+        sequence: 1,
+        peer_label: "writer".to_string(),
+        direct_parent: false,
+        content_type: "text/plain; charset=utf-8".to_string(),
+        payload: "hello reviewer".to_string(),
+        live_rendered: true,
+        presentation_eligible: true,
+    }];
     let mcp_servers = vec![SnapshotMcpServerState {
         id: "fs".to_string(),
         name: "filesystem".to_string(),
@@ -640,6 +671,7 @@ fn session_snapshot_payload_round_trips_and_builds_resume_plan() {
         SnapshotCreationContext::new(&[], &config_layers, &frame_state, &agent_sessions)
             .with_approvals(&approval_grants, &approval_requests)
             .with_message_state(&message_state)
+            .with_unsettled_peer_presentations(&unsettled_peer_presentations)
             .with_mcp_servers(&mcp_servers),
     );
 
@@ -648,7 +680,7 @@ fn session_snapshot_payload_round_trips_and_builds_resume_plan() {
     let loaded = repo.inspect_payload("snap-1").unwrap();
     let plan = payload.resume_plan();
 
-    assert!(encoded.starts_with("payload_version\t5\n"));
+    assert!(encoded.starts_with("payload_version\t6\n"));
     assert!(encoded.contains("\nwindow_layout\t@1\t"));
     assert!(encoded.contains("\npane_shell\t%1\t\texited\t\tunknown\n"));
     assert_eq!(loaded, payload);
@@ -657,10 +689,14 @@ fn session_snapshot_payload_round_trips_and_builds_resume_plan() {
     assert!(!loaded.shell.used_fallback);
     assert!(loaded.active_config_layers.is_empty());
     assert_eq!(loaded.frame_state, SnapshotFrameState::default());
-    assert!(loaded.agent_sessions.is_empty());
+    assert_eq!(loaded.agent_sessions, agent_sessions);
     assert!(loaded.approval_grants.is_empty());
     assert!(loaded.approval_requests.is_empty());
     assert_eq!(loaded.message_state, Some(message_state));
+    assert_eq!(
+        loaded.unsettled_peer_presentations,
+        unsettled_peer_presentations
+    );
     assert!(loaded.mcp_servers.is_empty());
     assert_eq!(loaded.windows[0].layout_policy, "even-vertical");
     assert_eq!(
@@ -699,7 +735,13 @@ fn session_snapshot_payload_round_trips_and_builds_resume_plan() {
     assert_eq!(plan.window_count, 1);
     assert_eq!(plan.pane_count, 2);
     assert!(plan.restart_required_panes.is_empty());
-    assert!(plan.limitations.is_empty());
+    assert_eq!(
+        plan.limitations,
+        vec![
+            "running agent turns are restored as interrupted and require explicit user confirmation before retrying non-idempotent actions"
+                .to_string()
+        ]
+    );
 
     let _ = fs::remove_dir_all(root);
 }
@@ -754,7 +796,7 @@ fn snapshot_v4_normalizes_legacy_focus_into_landing_navigation() {
     let path = root.join("legacy.payload");
     let legacy = fs::read_to_string(&path)
         .unwrap()
-        .replace("payload_version\t5\n", "payload_version\t4\n")
+        .replace("payload_version\t6\n", "payload_version\t4\n")
         .lines()
         .filter(|line| !line.starts_with("landing_navigation\t"))
         .collect::<Vec<_>>()
@@ -1027,6 +1069,7 @@ fn snapshot_restore_preserves_ambiguous_layout_ancestry() {
 #[test]
 fn snapshot_payload_rejects_windows_without_panes() {
     let payload = SessionSnapshotPayload {
+        payload_version: 6,
         session_id: "$1".to_string(),
         name: "default".to_string(),
         state: SnapshotSessionState::Running,
@@ -1041,6 +1084,7 @@ fn snapshot_payload_rejects_windows_without_panes() {
         approval_grants: Vec::new(),
         approval_requests: Vec::new(),
         message_state: None,
+        unsettled_peer_presentations: Vec::new(),
         mcp_servers: Vec::new(),
         window_groups: Vec::new(),
         windows: vec![WindowSnapshotPayload {
@@ -1156,7 +1200,7 @@ fn snapshot_payload_rejects_unsupported_format_version() {
     let repo = SnapshotRepository::new(root.clone());
     fs::write(
         root.join("snap-version.payload"),
-        "payload_version\t6\nsession\t$1\tdefault\trunning\t80\t24\t\n",
+        "payload_version\t7\nsession\t$1\tdefault\trunning\t80\t24\t\n",
     )
     .unwrap();
 
@@ -1165,6 +1209,357 @@ fn snapshot_payload_rejects_unsupported_format_version() {
     assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
 
     let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies legacy payload versions decode with an empty receiver presentation
+/// outbox, while version 5 rejects the version-6-only outbox record even when
+/// that record is empty.
+#[test]
+fn snapshot_v2_through_v5_keep_peer_presentation_outbox_empty() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-snapshot-peer-outbox-version-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let repo = SnapshotRepository::new(root.clone());
+    let session = Session::new_default(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        Size::new(80, 24).unwrap(),
+    );
+    let payload = SessionSnapshotPayload::from_session(&session);
+    repo.write_payload("legacy", &payload).unwrap();
+    let path = root.join("legacy.payload");
+    let v6 = fs::read_to_string(&path).unwrap();
+    for version in 2..=5 {
+        fs::write(
+            &path,
+            v6.replacen(
+                "payload_version\t6\n",
+                format!("payload_version\t{version}\n").as_str(),
+                1,
+            ),
+        )
+        .unwrap();
+        assert!(
+            repo.inspect_payload("legacy")
+                .unwrap()
+                .unsettled_peer_presentations
+                .is_empty()
+        );
+    }
+    fs::write(
+        &path,
+        v6.replacen("payload_version\t6\n", "payload_version\t5\n", 1)
+            + "unsettled_peer_presentations\t[]\n",
+    )
+    .unwrap();
+    assert!(repo.inspect_payload("legacy").is_err());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a second outbox record is rejected even when the first record is
+/// empty, so duplicate detection does not use vector emptiness as its marker.
+#[test]
+fn snapshot_v6_rejects_duplicate_empty_peer_presentation_outbox_records() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-snapshot-peer-outbox-duplicate-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let repo = SnapshotRepository::new(root.clone());
+    let session = Session::new_default(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        Size::new(80, 24).unwrap(),
+    );
+    repo.write_payload("duplicate", &SessionSnapshotPayload::from_session(&session))
+        .unwrap();
+    let path = root.join("duplicate.payload");
+    let encoded = fs::read_to_string(&path).unwrap();
+    fs::write(
+        &path,
+        encoded + "unsettled_peer_presentations\t[]\nunsettled_peer_presentations\t[]\n",
+    )
+    .unwrap();
+    assert!(repo.inspect_payload("duplicate").is_err());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies the v6 outbox accepts its documented 1,024-record boundary and
+/// rejects exactly one additional record without constructing a slow runtime.
+#[test]
+fn snapshot_v6_peer_presentation_outbox_enforces_boundary_without_loss() {
+    let session = Session::new_default(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        Size::new(80, 24).unwrap(),
+    );
+    let mut payload = SessionSnapshotPayload::from_session(&session);
+    let mut messages = MessageService::default();
+    let recipient = messages
+        .ensure_agent_identity(
+            SenderIdentity {
+                agent_id: AgentId::opaque("agent-%1".to_string()).unwrap(),
+                project_scope: None,
+                pane_id: PaneId::opaque("%1".to_string()),
+                window_id: None,
+                role: Some("agent".to_string()),
+                capabilities: Vec::new(),
+                objective: None,
+            },
+            0,
+        )
+        .unwrap();
+    messages.subscribe(&recipient.agent_id).unwrap();
+    let mut message_state = messages.snapshot_state();
+    message_state.subscriptions[0].last_sequence = 1_024;
+    message_state.next_sequence = 1_025;
+    payload.message_state = Some(message_state);
+    payload.agent_sessions = vec![SnapshotAgentSession {
+        pane_id: "%1".to_string(),
+        conversation_id: "conversation".to_string(),
+        visibility: "visible".to_string(),
+        running_turn_id: None,
+        transcript_entries: 0,
+    }];
+    payload.unsettled_peer_presentations = (1..=1_024)
+        .map(|sequence| SnapshotUnsettledPeerPresentation {
+            identity: format!(
+                "peer-message recipient=agent-%1 sequence={sequence} id=message-{sequence}"
+            ),
+            recipient_agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            conversation_id: "conversation".to_string(),
+            turn_id: "turn".to_string(),
+            sequence,
+            peer_label: "sender".to_string(),
+            direct_parent: false,
+            content_type: "text/plain; charset=utf-8".to_string(),
+            payload: "message".to_string(),
+            live_rendered: false,
+            presentation_eligible: true,
+        })
+        .collect();
+
+    payload.validate().unwrap();
+    let overflow = SnapshotUnsettledPeerPresentation {
+        identity: "peer-message recipient=agent-%1 sequence=1025 id=message-1025".to_string(),
+        recipient_agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        conversation_id: "conversation".to_string(),
+        turn_id: "turn".to_string(),
+        sequence: 1_025,
+        peer_label: "sender".to_string(),
+        direct_parent: false,
+        content_type: "text/plain; charset=utf-8".to_string(),
+        payload: "message".to_string(),
+        live_rendered: false,
+        presentation_eligible: true,
+    };
+    payload.unsettled_peer_presentations.push(overflow);
+
+    assert!(payload.validate().is_err());
+}
+
+/// Verifies v6 receipt payloads use the same byte-safe bound during runtime
+/// capture and snapshot encode/decode, including a multibyte character split
+/// at the raw byte limit.
+#[test]
+fn snapshot_v6_peer_presentation_payload_round_trips_utf8_at_byte_bound() {
+    let source = format!("{}tail", "€".repeat(100_000));
+    let suffix = format!(
+        "...[mez: peer message payload truncated; original_bytes={}]",
+        source.len()
+    );
+    let mut end = (256 * 1024usize).saturating_sub(suffix.len());
+    while !source.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    let captured = format!("{}{}", &source[..end], suffix);
+    assert!(captured.len() <= 256 * 1024, "{}", captured.len());
+    assert!(captured.ends_with(']'));
+
+    let session = Session::new_default(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        Size::new(80, 24).unwrap(),
+    );
+    let mut payload = SessionSnapshotPayload::from_session(&session);
+    let mut messages = MessageService::default();
+    let recipient = messages
+        .ensure_agent_identity(
+            SenderIdentity {
+                agent_id: AgentId::opaque("agent-%1".to_string()).unwrap(),
+                project_scope: None,
+                pane_id: PaneId::opaque("%1".to_string()),
+                window_id: None,
+                role: Some("agent".to_string()),
+                capabilities: Vec::new(),
+                objective: None,
+            },
+            0,
+        )
+        .unwrap();
+    messages.subscribe(&recipient.agent_id).unwrap();
+    let mut message_state = messages.snapshot_state();
+    message_state.subscriptions[0].last_sequence = 1;
+    message_state.next_sequence = 2;
+    payload.message_state = Some(message_state);
+    payload.agent_sessions = vec![SnapshotAgentSession {
+        pane_id: "%1".to_string(),
+        conversation_id: "conversation".to_string(),
+        visibility: "visible".to_string(),
+        running_turn_id: None,
+        transcript_entries: 0,
+    }];
+    payload.unsettled_peer_presentations = vec![SnapshotUnsettledPeerPresentation {
+        identity: "peer-message recipient=agent-%1 sequence=1 id=utf8".to_string(),
+        recipient_agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        conversation_id: "conversation".to_string(),
+        turn_id: "turn".to_string(),
+        sequence: 1,
+        peer_label: "sender".to_string(),
+        direct_parent: false,
+        content_type: "text/plain; charset=utf-8".to_string(),
+        payload: captured.clone(),
+        live_rendered: false,
+        presentation_eligible: true,
+    }];
+    let root =
+        std::env::temp_dir().join(format!("mez-snapshot-utf8-receipt-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let repo = SnapshotRepository::new(root.clone());
+    repo.write_payload("utf8", &payload).unwrap();
+    let decoded = repo.inspect_payload("utf8").unwrap();
+    assert_eq!(decoded.unsettled_peer_presentations[0].payload, captured);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies v6 outbox validation rejects missing message state, an
+/// unacknowledged recipient cursor, and a pane/conversation ownership mismatch.
+#[test]
+fn snapshot_v6_peer_presentation_rejects_missing_cursor_or_owner() {
+    let session = Session::new_default(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        Size::new(80, 24).unwrap(),
+    );
+    let mut payload = SessionSnapshotPayload::from_session(&session);
+    payload.unsettled_peer_presentations = vec![SnapshotUnsettledPeerPresentation {
+        identity: "peer-message recipient=agent-%1 sequence=1 id=malformed".to_string(),
+        recipient_agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        conversation_id: "conversation".to_string(),
+        turn_id: "turn".to_string(),
+        sequence: 1,
+        peer_label: "sender".to_string(),
+        direct_parent: false,
+        content_type: "text/plain; charset=utf-8".to_string(),
+        payload: "message".to_string(),
+        live_rendered: false,
+        presentation_eligible: true,
+    }];
+    assert!(payload.validate().is_err());
+
+    let mut messages = MessageService::default();
+    let recipient = messages
+        .ensure_agent_identity(
+            SenderIdentity {
+                agent_id: AgentId::opaque("agent-%1".to_string()).unwrap(),
+                project_scope: None,
+                pane_id: PaneId::opaque("%1".to_string()),
+                window_id: None,
+                role: Some("agent".to_string()),
+                capabilities: Vec::new(),
+                objective: None,
+            },
+            0,
+        )
+        .unwrap();
+    messages.subscribe(&recipient.agent_id).unwrap();
+    let mut message_state = messages.snapshot_state();
+    message_state.next_sequence = 2;
+    payload.message_state = Some(message_state.clone());
+    assert!(payload.validate().is_err());
+
+    message_state.subscriptions[0].last_sequence = 1;
+    payload.message_state = Some(message_state);
+    assert!(payload.validate().is_err());
+
+    payload.agent_sessions = vec![SnapshotAgentSession {
+        pane_id: "%1".to_string(),
+        conversation_id: "different-conversation".to_string(),
+        visibility: "visible".to_string(),
+        running_turn_id: None,
+        transcript_entries: 0,
+    }];
+    assert!(payload.validate().is_err());
+}
+
+/// Verifies v6 receipt validation rejects a recipient whose registered identity
+/// has no pane, names another pane, or claims a window that does not own the
+/// receipt pane. These malformed records must fail before snapshot startup can
+/// attach a receiver presentation to an unrelated terminal surface.
+#[test]
+fn snapshot_v6_peer_presentation_rejects_invalid_recipient_pane_ownership() {
+    let session = Session::new_default(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        Size::new(80, 24).unwrap(),
+    );
+    let mut payload = SessionSnapshotPayload::from_session(&session);
+    let mut messages = MessageService::default();
+    let recipient = messages
+        .ensure_agent_identity(
+            SenderIdentity {
+                agent_id: AgentId::opaque("agent-%1".to_string()).unwrap(),
+                project_scope: None,
+                pane_id: PaneId::opaque("%1".to_string()),
+                window_id: None,
+                role: Some("agent".to_string()),
+                capabilities: Vec::new(),
+                objective: None,
+            },
+            0,
+        )
+        .unwrap();
+    messages.subscribe(&recipient.agent_id).unwrap();
+    let mut message_state = messages.snapshot_state();
+    message_state.subscriptions[0].last_sequence = 1;
+    message_state.next_sequence = 2;
+    payload.message_state = Some(message_state);
+    payload.agent_sessions = vec![SnapshotAgentSession {
+        pane_id: "%1".to_string(),
+        conversation_id: "conversation".to_string(),
+        visibility: "visible".to_string(),
+        running_turn_id: None,
+        transcript_entries: 0,
+    }];
+    payload.unsettled_peer_presentations = vec![SnapshotUnsettledPeerPresentation {
+        identity: "peer-message recipient=agent-%1 sequence=1 id=ownership".to_string(),
+        recipient_agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        conversation_id: "conversation".to_string(),
+        turn_id: "turn".to_string(),
+        sequence: 1,
+        peer_label: "sender".to_string(),
+        direct_parent: false,
+        content_type: "text/plain; charset=utf-8".to_string(),
+        payload: "message".to_string(),
+        live_rendered: false,
+        presentation_eligible: true,
+    }];
+    payload.validate().unwrap();
+
+    payload.message_state.as_mut().unwrap().registered_agents[0].pane_id = None;
+    assert!(payload.validate().is_err());
+
+    payload.message_state.as_mut().unwrap().registered_agents[0].pane_id = Some("%2".to_string());
+    assert!(payload.validate().is_err());
+
+    let identity = &mut payload.message_state.as_mut().unwrap().registered_agents[0];
+    identity.pane_id = Some("%1".to_string());
+    identity.window_id = Some("@other".to_string());
+    assert!(payload.validate().is_err());
 }
 
 /// Verifies snapshot payload rejects invalid shell metadata.
@@ -1521,6 +1916,7 @@ fn snapshot_payload_rejects_invalid_frame_state() {
 fn session_restores_layout_from_snapshot_payload_and_seeds_ids() {
     let shell = ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh);
     let payload = SessionSnapshotPayload {
+        payload_version: 6,
         session_id: "$4".to_string(),
         name: "restored".to_string(),
         state: SnapshotSessionState::Detached,
@@ -1539,6 +1935,7 @@ fn session_restores_layout_from_snapshot_payload_and_seeds_ids() {
         approval_grants: Vec::new(),
         approval_requests: Vec::new(),
         message_state: None,
+        unsettled_peer_presentations: Vec::new(),
         mcp_servers: Vec::new(),
         window_groups: vec![super::WindowGroupSnapshotPayload {
             group_id: "g1".to_string(),

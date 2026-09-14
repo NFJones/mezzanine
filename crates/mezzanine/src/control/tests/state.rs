@@ -136,6 +136,7 @@ fn dispatches_read_only_session_methods() {
 fn generic_pane_state_serializes_restored_snapshot_metadata() {
     let shell = ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh);
     let payload = SessionSnapshotPayload {
+        payload_version: 6,
         session_id: "$8".to_string(),
         name: "restored".to_string(),
         state: SnapshotSessionState::Detached,
@@ -154,6 +155,7 @@ fn generic_pane_state_serializes_restored_snapshot_metadata() {
         approval_grants: Vec::new(),
         approval_requests: Vec::new(),
         message_state: None,
+        unsettled_peer_presentations: Vec::new(),
         mcp_servers: Vec::new(),
         window_groups: vec![crate::storage::snapshot::WindowGroupSnapshotPayload {
             group_id: "g1".to_string(),

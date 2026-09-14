@@ -1,6 +1,7 @@
 //! Runtime tests for config reload behavior.
 
 use super::*;
+use crate::config::CURRENT_CONFIG_SCHEMA_VERSION;
 
 /// Verifies runtime config reload reloads layers and applies live policy.
 ///
@@ -352,7 +353,7 @@ fn runtime_config_reload_applies_layered_zen_mode() {
     .unwrap();
     fs::write(
         &project_path,
-        "version = 94\n[terminal]\nzen_mode = false\n",
+        format!("version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[terminal]\nzen_mode = false\n"),
     )
     .unwrap();
     service
@@ -385,7 +386,11 @@ fn runtime_config_reload_applies_layered_zen_mode() {
         Size::new(100, 38).unwrap()
     );
 
-    fs::write(&project_path, "version = 94\n[terminal]\nzen_mode = true\n").unwrap();
+    fs::write(
+        &project_path,
+        format!("version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[terminal]\nzen_mode = true\n"),
+    )
+    .unwrap();
     let response = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"reload","method":"config/reload","params":{"idempotency_key":"reload-zen-mode"}}"#,
         &primary,
@@ -402,7 +407,7 @@ fn runtime_config_reload_applies_layered_zen_mode() {
 
     fs::write(
         &project_path,
-        "version = 94\n[terminal]\nzen_mode = false\n",
+        format!("version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[terminal]\nzen_mode = false\n"),
     )
     .unwrap();
     let response = service.dispatch_runtime_control_body(
@@ -419,7 +424,9 @@ fn runtime_config_reload_applies_layered_zen_mode() {
 
     fs::write(
         &project_path,
-        "version = 94\n[terminal]\nzen_mode = \"sometimes\"\n",
+        format!(
+            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[terminal]\nzen_mode = \"sometimes\"\n"
+        ),
     )
     .unwrap();
     let response = service.dispatch_runtime_control_body(
@@ -851,6 +858,180 @@ fn runtime_config_reload_applies_subagent_wait_policy() {
         error.message().contains("unsupported subagent wait policy"),
         "{error}"
     );
+}
+
+/// Verifies reload updates the prospective subagent display-name policy without
+/// rewriting any state associated with children that already exist.
+///
+/// The name allocator consumes this setting only when a later spawn begins, so
+/// configuration replacement must update the stored mode while leaving existing
+/// runtime lineage untouched. Invalid values must reject the replacement and
+/// retain the last valid effective mode rather than silently falling back.
+#[test]
+fn runtime_config_reload_applies_prospective_subagent_name_mode() {
+    let mut service = test_runtime_service();
+    assert_eq!(
+        service.subagent_name_mode(),
+        crate::runtime::config::SubagentNameMode::Nonhuman
+    );
+    service.set_subagent_lineage(
+        "agent-%existing",
+        RuntimeSubagentLineage {
+            parent_agent_id: "agent-%1".to_string(),
+            root_agent_id: "agent-%1".to_string(),
+            depth: 1,
+            display_name: "existing child".to_string(),
+            terminal: false,
+        },
+    );
+
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\nsubagent_name_mode = \"literal\"\n".to_string(),
+        }])
+        .unwrap();
+    assert_eq!(
+        service.subagent_name_mode(),
+        crate::runtime::config::SubagentNameMode::Literal
+    );
+    assert_eq!(
+        service
+            .subagent_lineage("agent-%existing")
+            .map(|lineage| lineage.display_name.as_str()),
+        Some("existing child")
+    );
+
+    let error = service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\nsubagent_name_mode = \"robot\"\n".to_string(),
+        }])
+        .unwrap_err();
+    assert!(
+        error
+            .message()
+            .contains("agents.subagent_name_mode must be nonhuman, human, or literal"),
+        "{error}"
+    );
+    assert_eq!(
+        service.subagent_name_mode(),
+        crate::runtime::config::SubagentNameMode::Literal
+    );
+}
+
+/// Verifies the production disk-backed reload path retains the last accepted
+/// subagent display-name mode when the replacement file contains an invalid
+/// value.
+///
+/// Unlike in-memory layer replacement, this exercises the control endpoint's
+/// file read and transactional application boundary. An invalid persisted
+/// value must report a reload error without replacing the live allocation
+/// policy that later spawns will consume.
+#[test]
+fn runtime_config_reload_from_disk_rolls_back_invalid_subagent_name_mode() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let root = temp_root("runtime-subagent-name-mode-disk-reload");
+    let path = root.join("config.toml");
+    fs::write(
+        &path,
+        format!(
+            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[agents]\nsubagent_name_mode = \"literal\"\n"
+        ),
+    )
+    .unwrap();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: Some(path.clone()),
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: fs::read_to_string(&path).unwrap(),
+        }])
+        .unwrap();
+    assert_eq!(
+        service.subagent_name_mode(),
+        crate::runtime::config::SubagentNameMode::Literal
+    );
+
+    fs::write(
+        &path,
+        format!(
+            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[agents]\nsubagent_name_mode = \"robot\"\n"
+        ),
+    )
+    .unwrap();
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"reload-invalid-subagent-name-mode","method":"config/reload","params":{"idempotency_key":"reload-invalid-subagent-name-mode"}}"#,
+        &primary,
+    );
+
+    assert!(response.contains(r#""error""#), "{response}");
+    assert!(
+        response.contains("agents.subagent_name_mode must be nonhuman, human, or literal"),
+        "{response}"
+    );
+    assert_eq!(
+        service.subagent_name_mode(),
+        crate::runtime::config::SubagentNameMode::Literal
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies direct runtime parsing defaults an omitted display-name mode and
+/// accepts only the three exact documented strings.
+///
+/// Config validation normally guards file-backed input, but runtime callers can
+/// construct effective JSON directly. This parser-level regression keeps that
+/// boundary fail-closed for representative wrong scalar types and spellings,
+/// while preserving the default when the agents table or key is absent.
+#[test]
+fn runtime_subagent_name_mode_parser_defaults_and_rejects_invalid_values() {
+    for root in [serde_json::json!({}), serde_json::json!({"agents": {}})] {
+        assert_eq!(
+            crate::runtime::config::runtime_subagent_name_mode_from_config(&root).unwrap(),
+            crate::runtime::config::SubagentNameMode::Nonhuman
+        );
+    }
+    for (value, expected) in [
+        (
+            "nonhuman",
+            crate::runtime::config::SubagentNameMode::Nonhuman,
+        ),
+        ("human", crate::runtime::config::SubagentNameMode::Human),
+        ("literal", crate::runtime::config::SubagentNameMode::Literal),
+    ] {
+        let root = serde_json::json!({"agents": {"subagent_name_mode": value}});
+        assert_eq!(
+            crate::runtime::config::runtime_subagent_name_mode_from_config(&root).unwrap(),
+            expected
+        );
+    }
+    for value in [
+        serde_json::json!("Human"),
+        serde_json::json!(7),
+        serde_json::json!(false),
+    ] {
+        let root = serde_json::json!({"agents": {"subagent_name_mode": value}});
+        let error =
+            crate::runtime::config::runtime_subagent_name_mode_from_config(&root).unwrap_err();
+        assert_eq!(
+            error.message(),
+            "agents.subagent_name_mode must be nonhuman, human, or literal"
+        );
+    }
 }
 
 /// Verifies that subagent width and depth limits are live agent options.

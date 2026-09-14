@@ -153,10 +153,11 @@ impl RuntimeSessionService {
                 entries,
                 bytes,
             } => {
-                if self
+                let conversation_clear = self
                     .persistence
-                    .finish_presentation_write(&conversation_id, entries)
-                {
+                    .finish_presentation_write(&conversation_id, entries);
+                if conversation_clear {
+                    self.settle_received_peer_message_presentations(&conversation_id)?;
                     self.presentation
                         .invalidate_agent_presentation_replay_cache(&conversation_id);
                     let pane_ids = self
@@ -190,10 +191,10 @@ impl RuntimeSessionService {
                 entries,
                 error,
             } => {
-                if self
+                let conversation_clear = self
                     .persistence
-                    .finish_presentation_write(&conversation_id, entries)
-                {
+                    .finish_presentation_write(&conversation_id, entries);
+                if conversation_clear {
                     self.presentation
                         .invalidate_agent_presentation_replay_cache(&conversation_id);
                     let pane_ids = self

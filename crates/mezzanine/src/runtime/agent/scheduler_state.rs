@@ -13,6 +13,34 @@ impl RuntimeSessionService {
         &self.agent.agent_scheduler
     }
 
+    /// Reports whether one turn is already represented by any scheduler state.
+    pub(crate) fn agent_work_is_scheduled(&self, turn_id: &str) -> bool {
+        self.agent
+            .agent_scheduler
+            .queued_turns()
+            .any(|work| work.turn_id == turn_id)
+            || self
+                .agent
+                .agent_scheduler
+                .running_turns()
+                .any(|work| work.turn_id == turn_id)
+            || self
+                .agent
+                .agent_scheduler
+                .blocked_turns()
+                .any(|work| work.turn_id == turn_id)
+            || self
+                .agent
+                .agent_scheduler
+                .waiting_turns()
+                .any(|work| work.turn_id == turn_id)
+            || self
+                .agent
+                .agent_scheduler
+                .reacquiring_turns()
+                .any(|work| work.turn_id == turn_id)
+    }
+
     /// Returns mutable scheduler access to crate-local regression tests.
     #[cfg(test)]
     pub(crate) fn agent_scheduler_mut(&mut self) -> &mut AgentScheduler {

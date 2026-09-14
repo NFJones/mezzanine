@@ -163,6 +163,18 @@ impl SessionSnapshotPayload {
                 .map_err(|_| MezError::invalid_state("snapshot MMP state could not be encoded"))?;
             output.push_str(&format!("message_state\t{}\n", escape_field(&encoded)));
         }
+        if !self.unsettled_peer_presentations.is_empty() {
+            let encoded =
+                serde_json::to_string(&self.unsettled_peer_presentations).map_err(|_| {
+                    MezError::invalid_state(
+                        "snapshot peer presentation outbox could not be encoded",
+                    )
+                })?;
+            output.push_str(&format!(
+                "unsettled_peer_presentations\t{}\n",
+                escape_field(&encoded)
+            ));
+        }
         if !self.mcp_servers.is_empty() {
             let encoded = serde_json::to_string(&self.mcp_servers)
                 .map_err(|_| MezError::invalid_state("snapshot MCP state could not be encoded"))?;

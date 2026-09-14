@@ -59,6 +59,7 @@ impl SessionSnapshotPayload {
         }
 
         let mut payload = Self {
+            payload_version,
             session_id: session_fields[1].clone(),
             name: session_fields[2].clone(),
             state: SnapshotSessionState::parse(&session_fields[3])?,
@@ -73,10 +74,12 @@ impl SessionSnapshotPayload {
             approval_grants: Vec::new(),
             approval_requests: Vec::new(),
             message_state: None,
+            unsettled_peer_presentations: Vec::new(),
             mcp_servers: Vec::new(),
             window_groups: Vec::new(),
             windows: Vec::new(),
         };
+        let mut saw_unsettled_peer_presentations = false;
 
         for line in lines {
             let fields = split_fields(line)?;
@@ -350,6 +353,23 @@ impl SessionSnapshotPayload {
                         Some(serde_json::from_str(&fields[1]).map_err(|_| {
                             MezError::invalid_args("invalid snapshot message state JSON")
                         })?);
+                }
+                Some("unsettled_peer_presentations") => {
+                    if payload_version < 6 {
+                        return Err(MezError::invalid_args(
+                            "snapshot peer presentation outbox requires payload version 6",
+                        ));
+                    }
+                    if fields.len() != 2 || saw_unsettled_peer_presentations {
+                        return Err(MezError::invalid_args(
+                            "invalid snapshot peer presentation outbox",
+                        ));
+                    }
+                    saw_unsettled_peer_presentations = true;
+                    payload.unsettled_peer_presentations = serde_json::from_str(&fields[1])
+                        .map_err(|_| {
+                            MezError::invalid_args("invalid snapshot peer presentation outbox JSON")
+                        })?;
                 }
                 Some("mcp_state") => {
                     if fields.len() != 2 {

@@ -3521,7 +3521,10 @@ fn migrates_schema_93_default_enabled_actions_with_wait() {
             .pointer("/agents/enabled_actions")
             .and_then(serde_json::Value::as_array)
             .unwrap();
-        assert_eq!(root.pointer("/version"), Some(&serde_json::json!(94)));
+        assert_eq!(
+            root.pointer("/version"),
+            Some(&serde_json::json!(CURRENT_CONFIG_SCHEMA_VERSION))
+        );
         assert_eq!(actions[6], serde_json::json!("wait"));
         assert_eq!(
             actions.len(),
@@ -3557,10 +3560,167 @@ fn migrates_schema_93_without_rewriting_malformed_enabled_actions() {
     ] {
         let migrated = migrate_config_text(format, text).unwrap();
         let root = parse_config_json_value(format, &migrated.text).unwrap();
-        assert_eq!(root.pointer("/version"), Some(&serde_json::json!(94)));
+        assert_eq!(
+            root.pointer("/version"),
+            Some(&serde_json::json!(CURRENT_CONFIG_SCHEMA_VERSION))
+        );
         assert_eq!(
             root.pointer("/agents/enabled_actions"),
             Some(&serde_json::json!(["say", 7]))
+        );
+    }
+}
+
+/// Verifies schema v95 removes retired peer-marker colors and materializes the
+/// absent default display-name mode across all supported formats while retaining
+/// authored values, producing current-schema-valid output, and preserving bytes.
+#[test]
+fn migrates_schema_94_by_removing_only_outbound_peer_marker_colors() {
+    for (format, text) in [
+        (
+            ConfigFormat::Toml,
+            "version = 94\n[theme.colors]\nagent_transcript_peer_receiver_fg = \"thinking\"\nagent_transcript_peer_receiver_bg = \"surface\"\nagent_transcript_peer_sender_fg = \"tertiary_foreground\"\nprompt_fg = \"primary_foreground\"\n[themes.night.colors]\nagent_transcript_peer_receiver_fg = \"thinking\"\nagent_transcript_peer_receiver_bg = \"surface\"\nprompt_fg = \"secondary_foreground\"\n[themes.day.colors]\nagent_transcript_peer_receiver_fg = \"danger\"\nagent_transcript_peer_receiver_bg = \"warning\"\nprompt_fg = \"primary_foreground\"\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":94,"theme":{"colors":{"agent_transcript_peer_receiver_fg":"thinking","agent_transcript_peer_receiver_bg":"surface","agent_transcript_peer_sender_fg":"tertiary_foreground","prompt_fg":"primary_foreground"}},"themes":{"night":{"colors":{"agent_transcript_peer_receiver_fg":"thinking","agent_transcript_peer_receiver_bg":"surface","prompt_fg":"secondary_foreground"}},"day":{"colors":{"agent_transcript_peer_receiver_fg":"danger","agent_transcript_peer_receiver_bg":"warning","prompt_fg":"primary_foreground"}}}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 94\ntheme:\n  colors:\n    agent_transcript_peer_receiver_fg: thinking\n    agent_transcript_peer_receiver_bg: surface\n    agent_transcript_peer_sender_fg: tertiary_foreground\n    prompt_fg: primary_foreground\nthemes:\n  night:\n    colors:\n      agent_transcript_peer_receiver_fg: thinking\n      agent_transcript_peer_receiver_bg: surface\n      prompt_fg: secondary_foreground\n  day:\n    colors:\n      agent_transcript_peer_receiver_fg: danger\n      agent_transcript_peer_receiver_bg: warning\n      prompt_fg: primary_foreground\n",
+        ),
+    ] {
+        let migrated = migrate_config_text(format, text).unwrap();
+        let root = parse_config_json_value(format, &migrated.text).unwrap();
+
+        assert_eq!(migrated.from_version, 94);
+        assert_eq!(migrated.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(
+            root.pointer("/version"),
+            Some(&serde_json::json!(CURRENT_CONFIG_SCHEMA_VERSION))
+        );
+        for theme in ["/theme", "/themes/night", "/themes/day"] {
+            assert!(
+                root.pointer(&format!("{theme}/colors/agent_transcript_peer_receiver_fg"))
+                    .is_none()
+            );
+            assert!(
+                root.pointer(&format!("{theme}/colors/agent_transcript_peer_receiver_bg"))
+                    .is_none()
+            );
+        }
+        assert_eq!(
+            root.pointer("/theme/colors/agent_transcript_peer_sender_fg"),
+            Some(&serde_json::json!("tertiary_foreground"))
+        );
+        assert_eq!(
+            root.pointer("/agents/subagent_name_mode"),
+            Some(&serde_json::json!("nonhuman"))
+        );
+        assert_eq!(
+            root.pointer("/theme/colors/prompt_fg"),
+            Some(&serde_json::json!("primary_foreground"))
+        );
+        assert_eq!(
+            root.pointer("/themes/night/colors/prompt_fg"),
+            Some(&serde_json::json!("secondary_foreground"))
+        );
+        assert_eq!(
+            root.pointer("/themes/day/colors/prompt_fg"),
+            Some(&serde_json::json!("primary_foreground"))
+        );
+        let validation = validate_config_text(format, &migrated.text, ConfigScope::Primary);
+        assert!(validation.valid, "{:?}", validation.diagnostics);
+
+        let repeated = migrate_config_text(format, &migrated.text).unwrap();
+        assert!(!repeated.changed);
+        assert_eq!(repeated.text, migrated.text);
+    }
+}
+
+/// Verifies schema v95 preserves authored display-name modes, including invalid
+/// authored values, while still removing retired receiver colors in every format.
+///
+/// Migration materializes only an absent default; it must not repair or replace
+/// user intent. Current-schema validation remains responsible for rejecting an
+/// invalid authored value after the migration has advanced the version.
+#[test]
+fn migrates_schema_94_without_overwriting_authored_subagent_name_mode() {
+    for (format, text, mode, valid) in [
+        (
+            ConfigFormat::Toml,
+            "version = 94\nagents = { subagent_name_mode = \"human\" }\ntheme = { colors = { agent_transcript_peer_receiver_fg = \"thinking\" } }\nthemes = { night = { colors = { agent_transcript_peer_receiver_bg = \"surface\" } } }\n",
+            "human",
+            true,
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":94,"agents":{"subagent_name_mode":"literal"},"theme":{"colors":{"agent_transcript_peer_receiver_bg":"surface"}}}"#,
+            "literal",
+            true,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 94\nagents:\n  subagent_name_mode: robot\ntheme:\n  colors:\n    agent_transcript_peer_receiver_fg: thinking\n",
+            "robot",
+            false,
+        ),
+    ] {
+        let migrated = migrate_config_text(format, text).unwrap();
+        let root = parse_config_json_value(format, &migrated.text).unwrap();
+
+        assert_eq!(
+            root.pointer("/agents/subagent_name_mode"),
+            Some(&serde_json::json!(mode))
+        );
+        assert!(
+            root.pointer("/theme/colors/agent_transcript_peer_receiver_fg")
+                .is_none()
+        );
+        assert!(
+            root.pointer("/theme/colors/agent_transcript_peer_receiver_bg")
+                .is_none()
+        );
+        assert_eq!(
+            validate_config_text(format, &migrated.text, ConfigScope::Primary).valid,
+            valid
+        );
+    }
+}
+
+/// Verifies schema v95 can materialize its absent mode inside a TOML inline
+/// agents table while preserving an invalid authored inline value verbatim.
+///
+/// TOML inline tables are valid parent containers but are not ordinary
+/// `toml_edit::Table` values. This regression prevents the migration from
+/// treating them as scalars, which previously made both insertion and unrelated
+/// receiver-color removal fail before normal validation could report bad input.
+#[test]
+fn migrates_schema_94_toml_inline_agents_without_rewriting_authored_values() {
+    for (text, expected, valid) in [
+        (
+            "version = 94\nagents = {}\ntheme = { colors = { agent_transcript_peer_receiver_fg = \"thinking\" } }\n",
+            serde_json::json!("nonhuman"),
+            true,
+        ),
+        (
+            "version = 94\nagents = { subagent_name_mode = \"literal\" }\n",
+            serde_json::json!("literal"),
+            true,
+        ),
+        (
+            "version = 94\nagents = { subagent_name_mode = 7 }\n",
+            serde_json::json!(7),
+            false,
+        ),
+    ] {
+        let migrated = migrate_config_text(ConfigFormat::Toml, text).unwrap();
+        let root = parse_config_json_value(ConfigFormat::Toml, &migrated.text).unwrap();
+
+        assert_eq!(root.pointer("/agents/subagent_name_mode"), Some(&expected));
+        assert_eq!(
+            validate_config_text(ConfigFormat::Toml, &migrated.text, ConfigScope::Primary).valid,
+            valid
         );
     }
 }

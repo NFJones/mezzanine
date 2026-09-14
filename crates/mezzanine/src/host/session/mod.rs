@@ -624,7 +624,8 @@ fn start_session(
             let restored = (|| -> Result<()> {
                 service.restore_message_state_for_restored_snapshot(&payload)?;
                 service.seed_terminal_screens_from_snapshot_payload(&payload)?;
-                service.restore_agent_sessions_for_restored_snapshot()?;
+                service
+                    .restore_agent_sessions_for_restored_snapshot(payload.payload_version < 6)?;
                 service.restart_restored_pane_processes(restart_command.as_deref())?;
                 Ok(())
             })();

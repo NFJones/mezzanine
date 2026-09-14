@@ -18,6 +18,12 @@ controlling pane's window group, creating or reusing a subagent window without
 moving the primary user's focus. The parent receives status and final results
 through local messaging and remains responsible for integrating the outcome.
 
+`agents.subagent_name_mode` selects the display-name allocation policy for
+future child spawns: `nonhuman` (the default), `human`, or `literal`. A reload
+or live config change is prospective and never renames a child that already has
+runtime lineage or a persisted conversation. The setting does not change the
+canonical `agent-%…` identity, routing, authorization, or persistence format.
+
 Use the `explorer` role for read-heavy investigation and `worker` for bounded
 implementation. A cooperation mode constrains the intended work: `explore-only`
 does not modify state; `owned-write`, `coordinated-write`, and `serial-write`
@@ -100,11 +106,23 @@ use it as a sleep, delay, retry, poll, approval wait, user-input wait, subproces
 wait, network wait, or for any other circumstance. Runtime-authored task status
 and task result bridge messages do not wake it.
 
-Normal pane logs show only accepted or committed peer messages whose content type
-is exactly `text/plain; charset=utf-8`; JSON, binary, and absent media types
-remain durable and model-visible without a pane row. Set
+Normal pane logs show only messages committed by their receiving endpoint whose
+content type is exactly `text/plain; charset=utf-8`; JSON, binary, and absent
+media types remain durable and model-visible without a pane row. An accepted
+outbound message never creates a sender-side row. Set
 `agents.peer_message_log_mode = "verbose"` to show the full bounded raw payload
-for every accepted media type, including runtime bridge traffic.
+for every accepted media type at the receiving endpoint, including runtime bridge
+traffic.
+
+For a received message, only the recipient's exact direct parent is rendered as
+`parent>`, so parent-pane renames never change that label. Validated restored
+lineage remains sufficient for this presentation alias; a fenced or stale edge,
+as well as siblings, unrelated peers, grandparents, and roots, uses ordinary
+endpoint labeling instead. This is receiver-only logging and does not change MMP
+authority or routing. The direct-parent marker uses the semantic
+`agent_transcript_parent` style, while ordinary inbound peer markers use
+`agent_transcript_peer_sender`; both semantics persist through presentation
+replay and resize.
 
 Under `ask`, a send that no rule already allows blocks as a resumable approval
 bound to the recipient and payload, and under `auto-allow` it proceeds after a

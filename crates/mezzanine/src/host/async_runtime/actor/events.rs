@@ -1140,7 +1140,11 @@ impl AsyncRuntimeSessionActor {
         &mut self,
         persistence_event: PersistenceEvent,
     ) -> Result<RuntimeTransition> {
-        self.service.apply_persistence_transition(persistence_event)
+        let transition = self
+            .service
+            .apply_persistence_transition(persistence_event)?;
+        self.queue_peer_message_delivery_timer_if_needed(async_runtime_current_unix_millis())?;
+        Ok(transition)
     }
 
     /// Runs the apply runtime agent provider event operation for this subsystem.

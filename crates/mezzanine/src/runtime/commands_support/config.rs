@@ -1089,6 +1089,7 @@ pub(crate) fn runtime_option_live_mutable(path: &str) -> bool {
                 | "agents.shell_only"
                 | "agents.subagent_placement"
                 | "agents.subagent_wait_policy"
+                | "agents.subagent_name_mode"
                 | "frames.window.enabled"
                 | "frames.window.template"
                 | "frames.window.right_status"

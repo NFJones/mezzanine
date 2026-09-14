@@ -583,7 +583,10 @@ impl RuntimeSessionService {
     /// a malformed or unreadable metadata store reports one diagnostic and
     /// leaves restored panes on the user-shell creation path instead of failing
     /// daemon startup.
-    pub fn restore_agent_sessions_for_restored_snapshot(&mut self) -> Result<()> {
+    pub fn restore_agent_sessions_for_restored_snapshot(
+        &mut self,
+        reconstruct_peer_presentations_from_transport: bool,
+    ) -> Result<()> {
         if let Err(error) = self.restore_agent_sessions_from_transcript_store() {
             self.append_lifecycle_event(
                 EventKind::Diagnostic,
@@ -593,6 +596,9 @@ impl RuntimeSessionService {
                 ),
             )?;
         }
+        self.reconstruct_received_peer_message_presentations_after_restore(
+            reconstruct_peer_presentations_from_transport,
+        )?;
         Ok(())
     }
 
@@ -611,6 +617,11 @@ impl RuntimeSessionService {
             (snapshot.schema_version == 1).then_some(snapshot.accepted_messages.len());
         let restored = mez_agent::messaging::MessageService::from_snapshot_state(snapshot)?;
         *self.control.message_service_mut() = restored;
+        if payload.payload_version >= 6 {
+            self.restore_snapshot_unsettled_received_peer_message_presentations(
+                &payload.unsettled_peer_presentations,
+            )?;
+        }
         if let (Some(retained), Some(accepted)) =
             (discarded_retained_messages, discarded_accepted_messages)
             && (retained > 0 || accepted > 0)

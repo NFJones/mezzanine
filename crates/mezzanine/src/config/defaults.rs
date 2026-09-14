@@ -162,7 +162,7 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 94
+version = 95
 
 # Persistent multi-session host policy. The host and inbound Iroh listener are
 # disabled until explicitly started or enabled by the primary user.
@@ -506,9 +506,7 @@ agent_transcript_command_fg = "tertiary_foreground"
 agent_transcript_command_bg = "surface"
 agent_transcript_peer_sender_fg = "tertiary_foreground"
 agent_transcript_peer_sender_bg = "surface"
-agent_transcript_peer_receiver_fg = "thinking"
-agent_transcript_peer_receiver_bg = "surface"
-agent_transcript_parent_fg = "danger_foreground"
+agent_transcript_parent_fg = "foreground"
 agent_transcript_parent_bg = "surface"
 agent_model_fg = "container_secondary_foreground"
 agent_model_bg = "container"
@@ -660,6 +658,8 @@ max_root_subagents = 4
 max_subagents_per_subagent = 2
 max_subagent_panes_per_window = 4
 subagent_wait_policy = "join"
+# Display-name allocation mode for future subagent spawns.
+subagent_name_mode = "nonhuman"
 max_depth = 2
 
 # Model profiles are materialized by authentication/catalog setup. When a

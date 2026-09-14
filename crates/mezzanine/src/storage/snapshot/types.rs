@@ -15,6 +15,86 @@ use mez_mux::process::PaneExitStatus;
 use mez_mux::session::Session;
 use mez_terminal::{TerminalModeState, TerminalSavedState, TerminalStyleSpan};
 
+/// Maximum number of unsettled receiver presentation receipts retained in one
+/// live outbox or durable snapshot payload.
+pub(crate) const MAX_UNSETTLED_PEER_PRESENTATIONS: usize = 1_024;
+/// Maximum UTF-8 bytes retained in one receiver presentation payload.
+pub(crate) const MAX_UNSETTLED_PEER_PRESENTATION_PAYLOAD_BYTES: usize = 256 * 1024;
+
+/// One receiver-owned presentation source that has been committed into an MMP
+/// delivery cursor but has not yet been observed in the durable presentation
+/// log.
+///
+/// This compact outbox is deliberately independent of the retention-bounded
+/// transport queue. It carries only the recipient-scoped identity and the
+/// envelope fields needed to reproduce the exact receiver row, so restart can
+/// settle an acknowledged delivery even after TTL expiry or queue eviction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotUnsettledPeerPresentation {
+    /// Stable recipient-scoped receipt identity embedded in the presentation source.
+    pub identity: String,
+    /// Authoritative recipient MMP identity.
+    pub recipient_agent_id: String,
+    /// Destination pane that owns the receiver-only row.
+    pub pane_id: String,
+    /// Durable conversation whose presentation log settles the receipt.
+    pub conversation_id: String,
+    /// Turn that committed the peer context, when the turn is still available.
+    pub turn_id: String,
+    /// Cursor sequence that must be acknowledged before the row is rendered.
+    pub sequence: u64,
+    /// Stable sender label already selected for receiver presentation.
+    pub peer_label: String,
+    /// Whether the row uses the direct-parent marker rather than the sender label.
+    pub direct_parent: bool,
+    /// Original media type used by the normal-versus-verbose presentation gate.
+    pub content_type: String,
+    /// Bounded source payload used for the durable replay record.
+    pub payload: String,
+    /// Whether the receive commit selected this row for pane presentation.
+    pub presentation_eligible: bool,
+    /// Whether the live pane row was already installed before persistence retry.
+    pub live_rendered: bool,
+}
+
+impl SnapshotUnsettledPeerPresentation {
+    /// Validates a compact recipient-scoped receipt source restored from a
+    /// snapshot.
+    ///
+    /// The outbox never preserves transport routing or unbounded raw payloads:
+    /// it holds only one already-context-bounded receiver presentation source.
+    /// Validation therefore rejects incomplete entries before they can retain
+    /// memory or attempt a pane-local persistence retry during restoration.
+    pub(crate) fn validate(&self) -> Result<()> {
+        let Some((identity_prefix, envelope_id)) = self.identity.rsplit_once(" id=") else {
+            return Err(MezError::invalid_args(
+                "snapshot peer presentation outbox identity is malformed",
+            ));
+        };
+        if self.identity.trim().is_empty()
+            || self.recipient_agent_id.trim().is_empty()
+            || self.pane_id.trim().is_empty()
+            || self.conversation_id.trim().is_empty()
+            || self.peer_label.trim().is_empty()
+            || self.content_type.trim().is_empty()
+            || self.sequence == 0
+            || envelope_id.is_empty()
+            || self.recipient_agent_id != format!("agent-{}", self.pane_id)
+            || identity_prefix
+                != format!(
+                    "peer-message recipient={} sequence={}",
+                    self.recipient_agent_id, self.sequence
+                )
+            || self.payload.len() > MAX_UNSETTLED_PEER_PRESENTATION_PAYLOAD_BYTES
+        {
+            return Err(MezError::invalid_args(
+                "snapshot peer presentation outbox entry is invalid or exceeds its source bound",
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Carries Snapshot Kind state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -163,6 +243,8 @@ pub struct SnapshotRepository {
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionSnapshotPayload {
+    /// Decoded payload format version, retained to select safe restore behavior.
+    pub(crate) payload_version: u32,
     /// Stores the session id value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -230,6 +312,8 @@ pub struct SessionSnapshotPayload {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub message_state: Option<MessageServiceSnapshot>,
+    /// Receiver-scoped presentation sources awaiting durable settlement.
+    pub unsettled_peer_presentations: Vec<SnapshotUnsettledPeerPresentation>,
     /// Stores the mcp servers value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -868,6 +952,8 @@ pub struct SnapshotCreationContext<'a> {
     pub approval_requests: &'a [SnapshotApprovalRequestMetadata],
     /// Local message protocol state.
     pub message_state: Option<&'a MessageServiceSnapshot>,
+    /// Receiver-scoped presentation sources awaiting durable settlement.
+    pub unsettled_peer_presentations: &'a [SnapshotUnsettledPeerPresentation],
     /// Sanitized MCP server state.
     pub mcp_servers: &'a [SnapshotMcpServerState],
 }
@@ -889,6 +975,7 @@ impl<'a> SnapshotCreationContext<'a> {
             approval_grants: &[],
             approval_requests: &[],
             message_state: None,
+            unsettled_peer_presentations: &[],
             mcp_servers: &[],
         }
     }
@@ -913,6 +1000,15 @@ impl<'a> SnapshotCreationContext<'a> {
     /// Adds local message protocol state to the snapshot creation context.
     pub fn with_message_state(mut self, message_state: &'a MessageServiceSnapshot) -> Self {
         self.message_state = Some(message_state);
+        self
+    }
+
+    /// Adds receiver-scoped presentation sources that must survive transport retention.
+    pub fn with_unsettled_peer_presentations(
+        mut self,
+        unsettled_peer_presentations: &'a [SnapshotUnsettledPeerPresentation],
+    ) -> Self {
+        self.unsettled_peer_presentations = unsettled_peer_presentations;
         self
     }
 

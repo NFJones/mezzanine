@@ -796,6 +796,79 @@ impl MessageService {
         self.receive_after(cursor, now_ms, limit)
     }
 
+    /// Returns retained deliveries accepted at or before one recipient cursor.
+    ///
+    /// Snapshot recovery uses this bounded historical projection to reconcile
+    /// a durable delivery acknowledgement with a separately persisted receiver
+    /// presentation. The normal live delivery API intentionally returns only
+    /// messages after its cursor; this method is therefore restricted to the
+    /// already-retained interval and preserves ordinary audience and presence
+    /// filtering without advancing any cursor.
+    pub fn receive_through_subscribed(
+        &self,
+        recipient: &AgentId,
+        sequence: MessageSequence,
+        now_ms: u64,
+    ) -> Result<Vec<SequencedEnvelope>> {
+        let cursor = self
+            .subscriptions
+            .get(recipient)
+            .ok_or_else(|| MessageError::forbidden("agent has no delivery subscription"))?;
+        let identity = self.registered.get(recipient).ok_or_else(|| {
+            MessageError::forbidden("delivery cursor recipient is not registered")
+        })?;
+        if !self.recipient_is_available(&identity.agent_id) {
+            return Ok(Vec::new());
+        }
+        let start = DeliveryCursor {
+            recipient: cursor.recipient.clone(),
+            last_sequence: 0,
+        };
+        Ok(self
+            .receive_after_indexed(&start, identity, now_ms, usize::MAX, usize::MAX)
+            .batch
+            .messages
+            .into_iter()
+            .filter(|message| message.sequence <= sequence)
+            .collect())
+    }
+
+    /// Returns retained accepted deliveries through one acknowledged cursor for recovery.
+    ///
+    /// Unlike live receive, this historical projection deliberately ignores current
+    /// presence and TTL. Snapshot recovery needs the acceptance-time audience and
+    /// recipient resolution that produced an already acknowledged context event,
+    /// even when the recipient is currently offline or the envelope has expired.
+    /// Retained queue order and sequence deduplication keep selector overlap from
+    /// creating duplicate receiver reconstruction candidates.
+    pub fn historical_receive_through_subscribed(
+        &self,
+        recipient: &AgentId,
+        sequence: MessageSequence,
+    ) -> Result<Vec<SequencedEnvelope>> {
+        if !self.subscriptions.contains_key(recipient) {
+            return Err(MessageError::forbidden(
+                "agent has no delivery subscription",
+            ));
+        }
+        let identity = self.registered.get(recipient).ok_or_else(|| {
+            MessageError::forbidden("delivery cursor recipient is not registered")
+        })?;
+        let mut sequences = std::collections::BTreeSet::new();
+        Ok(self
+            .queue
+            .iter()
+            .filter(|queued| queued.sequence <= sequence)
+            .filter(|queued| recipient_matches(identity, &queued.envelope.recipient))
+            .filter(|queued| audience_matches(identity, &queued.audience))
+            .filter(|queued| sequences.insert(queued.sequence))
+            .map(|queued| SequencedEnvelope {
+                sequence: queued.sequence,
+                envelope: queued.envelope.clone(),
+            })
+            .collect())
+    }
+
     /// Runs the fanout ready operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

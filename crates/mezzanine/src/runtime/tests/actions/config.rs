@@ -134,6 +134,104 @@ fn runtime_config_change_persists_generic_setting_and_applies_live() {
     let _ = fs::remove_dir_all(config_root);
 }
 
+/// Verifies approved config changes set and reset the prospective display-name
+/// mode, while an invalid requested value leaves the effective mode unchanged.
+///
+/// This exercises the actual MAAP action path rather than only the mutation
+/// planner. Future spawning consumes this state, so each successful operation
+/// must persist and apply immediately, whereas validation failure must not
+/// replace the last valid live policy or write an invalid configuration file.
+#[test]
+fn runtime_config_change_updates_subagent_name_mode_transactionally() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let config_root = temp_root("runtime-agent-config-change-subagent-name-mode");
+    service.set_config_root(config_root.clone());
+    let turn = mez_agent::AgentTurnRecord {
+        turn_id: "turn-config-subagent-name-mode".to_string(),
+        conversation_id: "conversation-1".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 200,
+        deadline_at_unix_millis: 0,
+        policy_profile: "default".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        cooperation_mode: None,
+        initial_capability: None,
+        state: AgentTurnState::Running,
+    };
+    let invalid = mez_agent::AgentAction {
+        id: "config-subagent-name-mode-invalid".to_string(),
+        payload: mez_agent::AgentActionPayload::ConfigChange {
+            setting_path: "agents.subagent_name_mode".to_string(),
+            operation: "set".to_string(),
+            value: Some("robot".to_string()),
+        },
+    };
+    let reset = mez_agent::AgentAction {
+        id: "config-subagent-name-mode-reset".to_string(),
+        payload: mez_agent::AgentActionPayload::ConfigChange {
+            setting_path: "agents.subagent_name_mode".to_string(),
+            operation: "reset".to_string(),
+            value: None,
+        },
+    };
+
+    for (mode, expected) in [
+        (
+            "nonhuman",
+            crate::runtime::config::SubagentNameMode::Nonhuman,
+        ),
+        ("human", crate::runtime::config::SubagentNameMode::Human),
+        ("literal", crate::runtime::config::SubagentNameMode::Literal),
+    ] {
+        let set = mez_agent::AgentAction {
+            id: format!("config-subagent-name-mode-set-{mode}"),
+            payload: mez_agent::AgentActionPayload::ConfigChange {
+                setting_path: "agents.subagent_name_mode".to_string(),
+                operation: "set".to_string(),
+                value: Some(mode.to_string()),
+            },
+        };
+        let result = service
+            .execute_config_change_action_for_turn(&turn, &set, &primary, "approved")
+            .unwrap();
+        assert_eq!(result.status, ActionStatus::Succeeded);
+        assert_eq!(service.subagent_name_mode(), expected);
+    }
+
+    let result = service
+        .execute_config_change_action_for_turn(&turn, &invalid, &primary, "approved")
+        .unwrap();
+    assert_eq!(result.status, ActionStatus::Failed);
+    assert_eq!(
+        service.subagent_name_mode(),
+        crate::runtime::config::SubagentNameMode::Literal
+    );
+    let config_text = fs::read_to_string(config_root.join("config.toml")).unwrap();
+    assert!(
+        config_text.contains("subagent_name_mode = \"literal\""),
+        "{config_text}"
+    );
+    assert!(!config_text.contains("robot"), "{config_text}");
+
+    let result = service
+        .execute_config_change_action_for_turn(&turn, &reset, &primary, "approved")
+        .unwrap();
+    assert_eq!(result.status, ActionStatus::Succeeded);
+    assert_eq!(
+        service.subagent_name_mode(),
+        crate::runtime::config::SubagentNameMode::Nonhuman
+    );
+    let config_text = fs::read_to_string(config_root.join("config.toml")).unwrap();
+    assert!(!config_text.contains("subagent_name_mode"), "{config_text}");
+    let _ = fs::remove_dir_all(config_root);
+}
+
 /// Verifies an approved agent theme change uses the shared runtime repaint path.
 ///
 /// Model-authored `theme.active` mutations materialize and persist the selected

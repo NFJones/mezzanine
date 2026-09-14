@@ -63,11 +63,17 @@ copy/replace examples such as command-rule arrays, or provider catalog fields
 that are materialized only after authentication; they are not activation
 markers.
 
-The current config schema version is `93`. On launch, Mezzanine migrates an
+The current config schema version is `95`. On launch, Mezzanine migrates an
 older supported primary user config to the current schema before validation,
 backfilling missing defaults, rewriting renamed settings, and removing settings
 that no longer exist. Config files declaring a schema version newer than the
 running binary supports are rejected instead of interpreted best-effort.
+
+The v94-to-v95 primary-config migration removes retired
+`agent_transcript_peer_receiver_fg` and `agent_transcript_peer_receiver_bg`
+slots from active and named theme color tables. It materializes
+`agents.subagent_name_mode = "nonhuman"` only when absent and preserves every
+authored mode value for current-schema validation.
 
 Project overlays can use `.mezzanine/config.toml`, `.mezzanine/config.yaml`,
 `.mezzanine/config.yml`, or `.mezzanine/config.json` under a project directory.
@@ -128,7 +134,7 @@ shown.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `version` | integer | `93` | Config schema version. Do not change this. |
+| `version` | integer | `95` | Config schema version. Do not change this. |
 | `host` | table | see below | Disabled-by-default persistent host, recovery, and durable-lease policy. |
 | `runtime` | table | see below | Process runtime settings. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |
@@ -718,9 +724,7 @@ Default color slots:
 | `agent_transcript_command_bg` | `"surface"` | Agent command background. |
 | `agent_transcript_peer_sender_fg` | `"tertiary_foreground"` | Name marker of a peer message received into this pane. |
 | `agent_transcript_peer_sender_bg` | `"surface"` | Received peer name marker background. |
-| `agent_transcript_peer_receiver_fg` | `"thinking"` | Name marker of an outbound peer message this pane sent. |
-| `agent_transcript_peer_receiver_bg` | `"surface"` | Sent peer name marker background. |
-| `agent_transcript_parent_fg` | `"danger_foreground"` | Name marker of the parent-supplied subagent prompt. |
+| `agent_transcript_parent_fg` | `"foreground"` | Neutral foreground name marker for parent-supplied delegated-work provenance. |
 | `agent_transcript_parent_bg` | `"surface"` | Parent prompt name marker background. |
 | `agent_model_fg` | `"container_secondary_foreground"` | Model, preset, and agent-name pill foreground with a restrained secondary accent. |
 | `agent_model_bg` | `"container"` | Agent model pill background. |
@@ -852,7 +856,7 @@ description.
 | `agents.native_shell_timeout_ms` | integer | `600000` | Default maximum, in milliseconds, for native-mode `shell_command` actions; 1 to 86400000. Each turn snapshots the value at creation. The effective native timeout is the earliest of this value, any explicit per-action timeout, and the remaining turn budget. Pane-shell actions do not use this setting. |
 | `agents.loop_limit` | integer | `8` | Maximum iterations for a `/loop`; must be positive. |
 | `agents.peer_message_loop_limit` | integer | `1000` | Maximum peer-message-triggered turns started for one agent before further inbox mail stays pending; must be positive. Direct user input resets the count. |
-| `agents.peer_message_log_mode` | string | `"normal"` | Pane echo verbosity for peer MMP traffic. `normal` (default) logs only messages whose content type is exactly `text/plain; charset=utf-8`; JSON, binary, missing-media-type, and other payloads create no pane rows or presentation records. `verbose` logs the full bounded raw payload for every accepted media type, including runtime bridge traffic. Suppression is presentation-only: durable peer-message blocks, delivery cursors, provider context, turn triggering, and approvals are unaffected. |
+| `agents.peer_message_log_mode` | string | `"normal"` | Pane echo verbosity for peer MMP traffic. Only a recipient's committed inbound message can create a pane row. `normal` (default) logs only messages whose content type is exactly `text/plain; charset=utf-8`; JSON, binary, missing-media-type, and other payloads create no pane rows or presentation records. `verbose` logs the full bounded raw payload for every accepted media type at the receiving endpoint, including runtime bridge traffic. Suppression is presentation-only: durable peer-message blocks, delivery cursors, provider context, turn triggering, and approvals are unaffected. |
 | `agents.session_title_policy` | string | `"generated"` | Source of the saved-session title shown in `/resume` rows and prompt completions. `generated` (default) sends one bounded side-channel request after the first prompt and then a bounded refresh every five inbound prompts (user or parent/peer), and uses the stored generated title, else the bounded objective, else the first prompt. Those requests are always optional display work that never blocks or fails a turn; `objective`, `last_prompt`, and `first_prompt` mirror that single source and never use the stored generated title. A manual `/name-session` name always wins, and `/name-session --clear` restores the derived title. Switching the policy away from `generated` is the opt-out and performs no provider call. |
 | `agents.session_title_model_profile` | string | `""` | Optional model profile used only for that bounded generated session title; empty uses the conversation's own model profile, and a configured name that no longer resolves also falls back to it. A name that is not configured in `model_profiles` is rejected by validation. |
 | `agents.custom_system_prompt` | string | `""` | User-owned system prompt appended after built-in prompt content. |
@@ -867,6 +871,7 @@ description.
 | `agents.max_subagents_per_subagent` | integer | `2` | Maximum child subagents for each subagent. |
 | `agents.max_subagent_panes_per_window` | integer | `4` | Maximum subagent panes per window. |
 | `agents.subagent_wait_policy` | string | `"join"` | Default wait behavior for spawned subagents. |
+| `agents.subagent_name_mode` | string | `"nonhuman"` | Prospective display-name allocation mode for spawned subagents: `nonhuman`, `human`, or `literal`. Reloading or a live config change affects only future spawns and never renames existing lineage or persisted conversations. This setting configures allocation policy only; it does not itself provide name corpora or alter canonical agent IDs. |
 | `agents.max_depth` | integer | `2` | Maximum subagent tree depth. |
 
 ### `agents.auto_sizing`

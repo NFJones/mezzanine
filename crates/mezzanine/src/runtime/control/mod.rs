@@ -28,7 +28,7 @@ use super::{
     PaneProcessStart, PaneReadinessState, Path, PathBuf, ProjectTrustStore, Recipient, Result,
     RuleDecision, RuleMatch, RuntimeAutoSizingConfig, RuntimeLifecycleState,
     RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeSideEffect, RuntimeSubagentLineage,
-    RuntimeSubagentPlacement, SUBAGENT_FRIENDLY_NAMES, SenderIdentity, SessionRecord,
+    RuntimeSubagentPlacement, SUBAGENT_HUMAN_NAMES, SenderIdentity, SessionRecord,
     SnapshotCreationContext, SnapshotRepository, SplitDirection, SubagentScopeDeclaration,
     SubagentSpawnRequest, TaskState, TaskStatusPayload, TerminalClientLoopAction,
     TerminalClientLoopConfig, TrustDecision, agent_state_control_method,
@@ -109,6 +109,15 @@ pub(super) struct RuntimeAgentPromptContext {
     pub(super) context: AgentContext,
     /// Highest unread local-message sequence included in the context.
     pub(super) delivered_message_sequence: Option<mez_agent::messaging::MessageSequence>,
+    /// Received deliveries whose pane presentation follows a successful commit.
+    ///
+    /// The accepted delivery sequence and immutable message id form the
+    /// receiver-owned presentation identity. Retaining both prevents equal
+    /// payloads from collapsing during recovery.
+    pub(super) delivered_messages: Vec<(
+        mez_agent::messaging::MessageSequence,
+        mez_agent::messaging::Envelope,
+    )>,
     /// Number of replayed history events at the front of the context.
     pub(super) imported_history_events: usize,
     /// Environment projection frozen for this prompt, when available.
@@ -123,6 +132,15 @@ pub(super) struct RuntimePeerMessageTurnContext {
     pub(super) context: AgentContext,
     /// Highest unread peer-message sequence included in the context.
     pub(super) delivered_message_sequence: Option<mez_agent::messaging::MessageSequence>,
+    /// Received deliveries whose pane presentation follows a successful commit.
+    ///
+    /// The accepted delivery sequence and immutable message id form the
+    /// receiver-owned presentation identity. Retaining both prevents equal
+    /// payloads from collapsing during recovery.
+    pub(super) delivered_messages: Vec<(
+        mez_agent::messaging::MessageSequence,
+        mez_agent::messaging::Envelope,
+    )>,
     /// Number of unread peer messages included in the context.
     pub(super) delivered_message_count: usize,
     /// Number of replayed history events at the front of the context.
@@ -169,6 +187,7 @@ impl RuntimeSessionService {
         let imported_execution_events = history.execution_events;
         let imported_history_events = blocks.len();
         let mut delivered_message_sequence = None;
+        let mut delivered_messages = Vec::new();
         if include_unread_messages {
             let now_ms = super::current_unix_seconds().saturating_mul(1000);
             let identity = self.ensure_runtime_message_identity(
@@ -205,12 +224,8 @@ impl RuntimeSessionService {
                         runtime_peer_message_context_content(&message.envelope),
                     ),
                 );
-                // Committing pending mail into this turn attempts pane
-                // presentation with the block. The current log mode and media
-                // type decide whether that attempt creates a row; context and
-                // acknowledgement semantics stay unchanged.
-                self.echo_received_peer_message_to_pane(pane_id, &message.envelope);
                 delivered_message_sequence = Some(message.sequence);
+                delivered_messages.push((message.sequence, message.envelope.as_ref().clone()));
             }
         }
         let previous_environment_snapshot = blocks
@@ -387,6 +402,7 @@ impl RuntimeSessionService {
         Ok(RuntimeAgentPromptContext {
             context,
             delivered_message_sequence,
+            delivered_messages,
             imported_history_events,
             current_environment_snapshot,
             new_environment_snapshot,
@@ -434,6 +450,7 @@ impl RuntimeSessionService {
             usize::MAX,
         )?;
         let mut delivered_message_sequence = None;
+        let mut delivered_messages = Vec::new();
         let mut delivered_message_count = 0usize;
         for message in pending_messages.messages {
             insert_context_block_by_placement(
@@ -447,11 +464,8 @@ impl RuntimeSessionService {
                     runtime_peer_message_context_content(&message.envelope),
                 ),
             );
-            // This loop commits the full unread set and attempts pane
-            // presentation for each message; media type and log mode decide
-            // which attempts create rows.
-            self.echo_received_peer_message_to_pane(pane_id, &message.envelope);
             delivered_message_sequence = Some(message.sequence);
+            delivered_messages.push((message.sequence, message.envelope.as_ref().clone()));
             delivered_message_count = delivered_message_count.saturating_add(1);
         }
         insert_context_block_by_placement(
@@ -479,6 +493,7 @@ impl RuntimeSessionService {
         Ok(RuntimePeerMessageTurnContext {
             context,
             delivered_message_sequence,
+            delivered_messages,
             delivered_message_count,
             imported_history_events,
         })

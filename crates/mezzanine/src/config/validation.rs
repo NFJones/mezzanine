@@ -324,15 +324,26 @@ pub fn validate_config_text(
     diagnostics.extend(validate_subagent_allowed_actions_config(format, text));
     diagnostics.extend(validate_pane_status_config(format, text));
 
-    if let Ok(root) = parse_config_json_value(format, text)
-        && let Some(value) = root.pointer("/terminal/zen_focus_label_duration_ms")
-        && !value.as_u64().is_some_and(|duration| duration <= 60000)
-    {
-        diagnostics.push(ConfigDiagnostic {
-            path: "terminal.zen_focus_label_duration_ms".to_string(),
-            message: "terminal.zen_focus_label_duration_ms must be an integer from 0 through 60000"
-                .to_string(),
-        });
+    if let Ok(root) = parse_config_json_value(format, text) {
+        if let Some(value) = root.pointer("/terminal/zen_focus_label_duration_ms")
+            && !value.as_u64().is_some_and(|duration| duration <= 60000)
+        {
+            diagnostics.push(ConfigDiagnostic {
+                path: "terminal.zen_focus_label_duration_ms".to_string(),
+                message:
+                    "terminal.zen_focus_label_duration_ms must be an integer from 0 through 60000"
+                        .to_string(),
+            });
+        }
+        if let Some(value) = root.pointer("/agents/subagent_name_mode")
+            && !matches!(value.as_str(), Some("nonhuman" | "human" | "literal"))
+        {
+            diagnostics.push(ConfigDiagnostic {
+                path: "agents.subagent_name_mode".to_string(),
+                message: "agents.subagent_name_mode must be nonhuman, human, or literal"
+                    .to_string(),
+            });
+        }
     }
 
     for (backend, display_name) in [("bubblewrap", "Bubblewrap"), ("seatbelt", "Seatbelt")] {
@@ -549,6 +560,14 @@ pub fn validate_config_text(
             diagnostics.push(ConfigDiagnostic {
                 path,
                 message: "unsupported subagent wait policy; use join or detach".to_string(),
+            });
+        } else if path == "agents.subagent_name_mode"
+            && !matches!(value.as_str(), "nonhuman" | "human" | "literal")
+        {
+            diagnostics.push(ConfigDiagnostic {
+                path,
+                message: "agents.subagent_name_mode must be nonhuman, human, or literal"
+                    .to_string(),
             });
         } else if path == "agents.auto_sizing.fallback_policy" && value != "use-default-profile" {
             diagnostics.push(ConfigDiagnostic {

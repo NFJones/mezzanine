@@ -41,6 +41,10 @@ mod mermaid;
 mod style;
 mod text;
 
+pub(crate) use buffer_apply::{
+    PeerMessagePresentation, peer_message_presentation_receive_identity,
+};
+
 #[cfg(test)]
 pub(crate) use actions::{
     agent_action_execution_display_header, agent_thinking_display_lines_for_width,

@@ -139,55 +139,54 @@ impl AsyncRuntimeSessionActor {
         service.use_registry_effect_adapter();
         service.use_config_effect_adapter();
         service.use_hook_effect_adapter();
+        let now_ms = super::coalesce::async_runtime_current_unix_millis();
         let mut initial_side_effects = service
-            .queue_saved_session_retention_operation(
-                super::coalesce::async_runtime_current_unix_millis() / 1_000,
-                true,
-            )?
+            .queue_saved_session_retention_operation(now_ms / 1_000, true)?
             .side_effects;
         initial_side_effects.extend(
             service
                 .drain_transcript_persistence_transition()
                 .side_effects,
         );
-        Ok((
-            AsyncRuntimeSessionHandle {
-                sender: sender.clone(),
-                client_clipboard_route_cleanup_tx,
-                message_delivery_notify: message_delivery_notify.clone(),
-                event_delivery_notify: event_delivery_notify.clone(),
-                event_delivery_revision_rx,
-                side_effect_delivery_notify: side_effect_delivery_notify.clone(),
-                side_effect_delivery_rx,
-                lifecycle_state_rx,
-                terminal_config_generation_rx,
-            },
-            Self {
-                service,
-                sender: sender.clone(),
-                receiver,
-                message_delivery_notify,
-                event_delivery_notify,
-                event_delivery_revision_tx,
-                client_clipboard_routes: Default::default(),
-                client_clipboard_route_generations: Default::default(),
-                next_client_clipboard_route_generation: 0,
-                client_clipboard_sequences: Default::default(),
-                client_clipboard_route_cleanup_rx,
-                side_effect_delivery_notify,
-                side_effect_delivery_tx,
-                lifecycle_state_tx,
-                terminal_config_generation: 0,
-                terminal_config_generation_tx,
-                side_effects: initial_side_effects.into_iter().collect(),
-                side_effect_queue_nonempty_since: None,
-                pane_input_leases: Default::default(),
-                timers: Default::default(),
-                side_effect_buffer: config.side_effect_buffer,
-                commands_processed: 0,
-                metrics: Default::default(),
-            },
-        ))
+        let handle = AsyncRuntimeSessionHandle {
+            sender: sender.clone(),
+            client_clipboard_route_cleanup_tx,
+            message_delivery_notify: message_delivery_notify.clone(),
+            event_delivery_notify: event_delivery_notify.clone(),
+            event_delivery_revision_rx,
+            side_effect_delivery_notify: side_effect_delivery_notify.clone(),
+            side_effect_delivery_rx,
+            lifecycle_state_rx,
+            terminal_config_generation_rx,
+        };
+        let mut actor = Self {
+            service,
+            sender: sender.clone(),
+            receiver,
+            message_delivery_notify,
+            event_delivery_notify,
+            event_delivery_revision_tx,
+            client_clipboard_routes: Default::default(),
+            client_clipboard_route_generations: Default::default(),
+            next_client_clipboard_route_generation: 0,
+            client_clipboard_sequences: Default::default(),
+            client_clipboard_route_cleanup_rx,
+            side_effect_delivery_notify,
+            side_effect_delivery_tx,
+            lifecycle_state_tx,
+            terminal_config_generation: 0,
+            terminal_config_generation_tx,
+            side_effects: Default::default(),
+            side_effect_queue_nonempty_since: None,
+            pane_input_leases: Default::default(),
+            timers: Default::default(),
+            side_effect_buffer: config.side_effect_buffer,
+            commands_processed: 0,
+            metrics: Default::default(),
+        };
+        actor.queue_runtime_side_effects(initial_side_effects)?;
+        actor.queue_peer_message_delivery_timer_if_needed(now_ms)?;
+        Ok((handle, actor))
     }
 
     /// Runs the run operation for this subsystem.

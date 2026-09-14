@@ -70,7 +70,7 @@ use crate::integrations::agent::provider::{
 use crate::integrations::agent::slash::{
     AgentShellCommandOutcome, AgentShellRuntimeContext, execute_agent_shell_command_with_context,
 };
-use crate::integrations::agent::subagent::SUBAGENT_FRIENDLY_NAMES;
+use crate::integrations::agent::subagent::SUBAGENT_HUMAN_NAMES;
 use crate::integrations::hooks::{
     FocusedShellExecutor, FocusedShellHookOutput, HookEvent, HookExecutionPlan,
     HookExecutionResult, HookExecutionStatus, HookFailure, HookFailureDecision, HookFailureKind,

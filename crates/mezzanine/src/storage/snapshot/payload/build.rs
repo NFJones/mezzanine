@@ -200,6 +200,7 @@ impl SessionSnapshotPayload {
             .collect();
 
         Self {
+            payload_version: super::SNAPSHOT_PAYLOAD_FORMAT_VERSION,
             session_id: session.id.to_string(),
             name: session.name.clone(),
             state: SnapshotSessionState::from_session_state(session.state),
@@ -214,10 +215,11 @@ impl SessionSnapshotPayload {
             shell: shell_metadata_from_session(session),
             active_config_layers: Vec::new(),
             frame_state: SnapshotFrameState::default(),
-            agent_sessions: Vec::new(),
+            agent_sessions: context.agent_sessions.to_vec(),
             approval_grants: Vec::new(),
             approval_requests: Vec::new(),
             message_state: context.message_state.cloned(),
+            unsettled_peer_presentations: context.unsettled_peer_presentations.to_vec(),
             mcp_servers: Vec::new(),
             window_groups,
             windows,

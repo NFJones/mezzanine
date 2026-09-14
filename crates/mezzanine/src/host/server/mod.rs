@@ -1623,7 +1623,7 @@ fn host_error_name(kind: MezErrorKind) -> &'static str {
 mod tests {
     use std::os::unix::fs::PermissionsExt;
 
-    use crate::config::{ConfigFormat, ConfigScope};
+    use crate::config::{CURRENT_CONFIG_SCHEMA_VERSION, ConfigFormat, ConfigScope};
     use crate::control::RequestedRole;
     use crate::host::shell::{ResolvedShell, ShellSource};
     use crate::security::audit::{AuditConfig, AuditLog};
@@ -1821,8 +1821,16 @@ mod tests {
         fs::create_dir_all(&caller_directory).unwrap();
         fs::create_dir_all(&config_root).unwrap();
         fs::set_permissions(&config_root, fs::Permissions::from_mode(0o700)).unwrap();
-        fs::write(&host_overlay, "version = 94\n[history]\nlines = 111\n").unwrap();
-        fs::write(&caller_overlay, "version = 94\n[history]\nlines = 222\n").unwrap();
+        fs::write(
+            &host_overlay,
+            format!("version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[history]\nlines = 111\n"),
+        )
+        .unwrap();
+        fs::write(
+            &caller_overlay,
+            format!("version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[history]\nlines = 222\n"),
+        )
+        .unwrap();
         let mut trust = ProjectTrustStore::default();
         trust
             .decide_at(

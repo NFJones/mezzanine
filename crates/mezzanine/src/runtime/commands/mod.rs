@@ -1334,13 +1334,22 @@ impl RuntimeSessionService {
         let crate::runtime::control::RuntimeAgentPromptContext {
             context,
             delivered_message_sequence,
+            delivered_messages,
             imported_history_events,
             current_environment_snapshot,
             new_environment_snapshot,
         } = self.agent_context_for_pane_prompt_with_message_delivery(pane_id, prompt, 100, true)?;
+        let agent_id = format!("agent-{pane_id}");
+        let recipient = AgentId::opaque(agent_id.clone())
+            .ok_or_else(|| MezError::invalid_state("runtime agent id is invalid for MMP"))?;
+        if !self.can_admit_received_peer_message_presentation_batch(&recipient, &delivered_messages)
+        {
+            return Err(MezError::conflict(
+                "peer message receiver presentation outbox is at capacity",
+            ));
+        }
         let context = self.apply_agent_shell_preference_context(pane_id, context)?;
         let fresh_context = self.apply_persisted_context_documents(pane_id, context)?;
-        let agent_id = format!("agent-{pane_id}");
         self.reset_agent_peer_message_turns(&agent_id);
         let conversation_id = self
             .agent_shell_store()
@@ -1400,6 +1409,12 @@ impl RuntimeSessionService {
             turn.model_profile = selected_profile_name.clone();
         }
         let _ = self.agent_provider_request_control_for_turn(&turn)?;
+        #[cfg(test)]
+        if self.take_peer_message_turn_commit_failure_for_tests() {
+            return Err(MezError::invalid_state(
+                "injected peer-message user-turn pre-commit failure",
+            ));
+        }
         self.agent_turn_ledger_mut().queue_turn(turn.clone())?;
         self.snapshot_agent_native_shell_timeout_for_turn(&turn_id);
         self.append_agent_trace_turn_event(
@@ -1427,13 +1442,6 @@ impl RuntimeSessionService {
         if let Some(content) = new_environment_snapshot {
             self.set_agent_turn_environment_snapshot(turn_id.clone(), content);
         }
-        if let Some(sequence) = delivered_message_sequence {
-            let recipient = AgentId::opaque(agent_id.clone())
-                .ok_or_else(|| MezError::invalid_state("runtime agent id is invalid for MMP"))?;
-            self.control
-                .message_service_mut()
-                .advance_subscription(&recipient, sequence)?;
-        }
         self.set_agent_turn_model_profile(turn_id.clone(), model_profile);
         if let Some((selected_profile_name, _)) = initial_model_selection.as_ref() {
             self.set_agent_turn_configured_model_profile(
@@ -1442,13 +1450,44 @@ impl RuntimeSessionService {
             );
             self.mark_agent_turn_routing_applied(turn_id.clone());
         }
-        self.enqueue_agent_work(ScheduledWork {
-            turn_id: turn_id.clone(),
-            conversation_id: conversation_id.clone(),
-            agent_id: agent_id.clone(),
-            pane_id: Some(pane_id.to_string()),
-            kind: ScheduledWorkKind::ShellCapable,
-        })?;
+        for (sequence, envelope) in delivered_messages.iter().cloned() {
+            self.register_received_peer_message_presentation(
+                recipient.clone(),
+                sequence,
+                &turn,
+                envelope,
+            );
+        }
+        #[cfg(test)]
+        if self.take_peer_message_receive_after_context_storage_failure_for_tests() {
+            return Err(MezError::invalid_state(
+                "injected peer-message user-turn failure after context storage",
+            ));
+        }
+        if let Some(sequence) = delivered_message_sequence {
+            self.control
+                .message_service_mut()
+                .advance_subscription(&recipient, sequence)?;
+            #[cfg(test)]
+            if self.take_peer_message_receive_after_cursor_advance_failure_for_tests() {
+                return Err(MezError::invalid_state(
+                    "injected peer-message user-turn failure after cursor advancement",
+                ));
+            }
+            // The cursor and receipt are committed. A display or persistence
+            // fault leaves that receipt pending for the delivery sweep but must
+            // not strand this user-started provider turn.
+            let _ = self.flush_received_peer_message_presentations();
+        }
+        if !self.agent_work_is_scheduled(&turn_id) {
+            self.enqueue_agent_work(ScheduledWork {
+                turn_id: turn_id.clone(),
+                conversation_id: conversation_id.clone(),
+                agent_id: agent_id.clone(),
+                pane_id: Some(pane_id.to_string()),
+                kind: ScheduledWorkKind::ShellCapable,
+            })?;
+        }
         // The enqueue above counted this prompt turn, so the generated-title
         // cadence sees the current prompt ordinal before admission runs here.
         self.mirror_runtime_agent_objective(&conversation_id, objective.as_deref());

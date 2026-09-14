@@ -176,6 +176,64 @@ fn config_mutation_rejects_validation_failure() {
     assert!(error.message().contains("permissions.approval_policy"));
 }
 
+/// Verifies generic mutations can set and reset the prospective subagent naming
+/// policy while invalid values fail before they can replace the valid document.
+///
+/// This scalar belongs to the normal mutation planner rather than a bespoke
+/// command path. The check protects both schema allowlisting and transactional
+/// validation, so a rejected requested value cannot persist as a partial edit.
+#[test]
+fn config_mutation_handles_subagent_name_mode_transactionally() {
+    let source = "[agents]\nsubagent_name_mode = \"nonhuman\"\n";
+    let mut set = plan_config_mutation(
+        ConfigFormat::Toml,
+        source,
+        ConfigScope::Primary,
+        set_string("agents.subagent_name_mode", "nonhuman"),
+    )
+    .unwrap();
+    for mode in ["human", "literal"] {
+        set = plan_config_mutation(
+            ConfigFormat::Toml,
+            &set.text,
+            ConfigScope::Primary,
+            set_string("agents.subagent_name_mode", mode),
+        )
+        .unwrap();
+        assert!(set.changed);
+        assert_eq!(
+            extract_config_values(ConfigFormat::Toml, &set.text).get("agents.subagent_name_mode"),
+            Some(&mode.to_string())
+        );
+    }
+
+    let invalid = plan_config_mutation(
+        ConfigFormat::Toml,
+        &set.text,
+        ConfigScope::Primary,
+        set_string("agents.subagent_name_mode", "robot"),
+    )
+    .unwrap_err();
+    assert!(
+        invalid
+            .message()
+            .contains("agents.subagent_name_mode must be nonhuman, human, or literal")
+    );
+
+    let reset = plan_config_mutation(
+        ConfigFormat::Toml,
+        &set.text,
+        ConfigScope::Primary,
+        unset("agents.subagent_name_mode"),
+    )
+    .unwrap();
+    assert!(reset.changed);
+    assert!(
+        !extract_config_values(ConfigFormat::Toml, &reset.text)
+            .contains_key("agents.subagent_name_mode")
+    );
+}
+
 /// Verifies config mutation rejects unsupported nested paths and container sets.
 ///
 /// This regression scenario documents the behavior being protected so a

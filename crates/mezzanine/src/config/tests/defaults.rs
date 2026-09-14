@@ -47,6 +47,45 @@ fn default_config_pane_frame_template_uses_raw_title_content() {
     );
 }
 
+/// Verifies generated defaults render parent-supplied delegated-work provenance
+/// with the neutral foreground on the normal transcript surface.
+///
+/// A parent prompt identifies source and control flow rather than a failure.
+/// The exact generated slots must therefore retain the ordinary foreground and
+/// surface background while remaining distinct from the transcript error
+/// foreground, so first-launch configuration cannot make routine delegation
+/// appear dangerous.
+#[test]
+fn default_config_uses_neutral_foreground_for_parent_prompt_marker() {
+    let parsed: toml::Value = toml::from_str(DEFAULT_CONFIG_TOML).unwrap();
+    let colors = parsed
+        .get("theme")
+        .and_then(|theme| theme.get("colors"))
+        .and_then(toml::Value::as_table)
+        .expect("generated theme colors table");
+
+    assert_eq!(
+        colors
+            .get("agent_transcript_parent_fg")
+            .and_then(toml::Value::as_str),
+        Some("foreground")
+    );
+    assert_eq!(
+        colors
+            .get("agent_transcript_parent_bg")
+            .and_then(toml::Value::as_str),
+        Some("surface")
+    );
+    assert_ne!(
+        colors
+            .get("agent_transcript_parent_fg")
+            .and_then(toml::Value::as_str),
+        colors
+            .get("agent_transcript_error_fg")
+            .and_then(toml::Value::as_str)
+    );
+}
+
 /// Generated configuration selects the standard preset without pinning either rail.
 /// This keeps a status-preset-only mutation effective on a fresh installation.
 #[test]
@@ -181,6 +220,12 @@ fn initial_config_uses_native_shell_and_platform_sandbox_defaults() {
     assert_eq!(
         agents.get("shell_mode").and_then(toml::Value::as_str),
         Some("native")
+    );
+    assert_eq!(
+        agents
+            .get("subagent_name_mode")
+            .and_then(toml::Value::as_str),
+        Some("nonhuman")
     );
     assert_eq!(
         agents
