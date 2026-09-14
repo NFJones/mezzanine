@@ -930,6 +930,11 @@ mod tests {
         assert!(
             fix_issues_document
                 .text
+                .contains("The review subagent must always use a large model")
+        );
+        assert!(
+            fix_issues_document
+                .text
                 .contains("close the persistent review agent before producing the final report")
         );
         assert!(
