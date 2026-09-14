@@ -46,6 +46,7 @@ use mez_mux::{
     copy::{COPY_WRAP_CONTINUATION, encode_copy_source_line_in_group},
     render::{
         markdown_block_copy_lines, wrap_rich_text_line_to_width_with_continuation_indent,
+        wrap_rich_text_line_to_width_with_continuation_indent_hard,
         wrap_rich_text_line_to_width_with_source_ranges_hard,
     },
 };
@@ -189,6 +190,15 @@ fn peer_message_markdown_rendered_lines(
         prefix,
         "     ",
     )
+    .into_iter()
+    .flat_map(|line| {
+        wrap_rich_text_line_to_width_with_continuation_indent_hard(
+            line,
+            table_display_width,
+            "     ",
+        )
+    })
+    .collect()
 }
 
 /// Returns presentation and source-copy rows for one canonical plaintext peer payload.

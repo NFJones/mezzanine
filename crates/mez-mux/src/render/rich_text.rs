@@ -213,6 +213,24 @@ pub fn wrap_rich_text_line_to_width_with_continuation_indent(
     .collect()
 }
 
+/// Wraps one rich-text line with an explicit continuation indent and hard-splits
+/// unbreakable overflow that would otherwise exceed the fixed display width.
+pub fn wrap_rich_text_line_to_width_with_continuation_indent_hard(
+    line: RichTextLine,
+    display_width: usize,
+    continuation_indent: &str,
+) -> Vec<RichTextLine> {
+    wrap_rich_text_line_to_width_with_overflow_policy(
+        line,
+        display_width,
+        true,
+        Some(continuation_indent),
+    )
+    .into_iter()
+    .map(|wrapped| wrapped.line)
+    .collect()
+}
+
 /// Wraps one rich-text line and reports source columns for each physical row.
 ///
 /// The source ranges let callers translate interactive ranges, such as links,

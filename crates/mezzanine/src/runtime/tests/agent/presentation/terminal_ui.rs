@@ -342,6 +342,54 @@ fn runtime_peer_message_markdown_long_label_honors_narrow_frame_width() {
     );
 }
 
+/// Verifies Markdown MMP rows hard-wrap after their directional prefix when a
+/// configured agent cap is narrower than the pane, including long tokens that
+/// Markdown layout alone cannot break to the transcript frame.
+#[test]
+fn runtime_peer_message_markdown_honors_configured_wrap_cap() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "peer-markdown-cap".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[terminal]\nagent_wrap_column_cap = 24\n".to_string(),
+        }])
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(80, 12).unwrap(), 100).unwrap(),
+    );
+    service
+        .append_agent_received_peer_message_to_terminal_buffer(
+            "%1",
+            "agent-%3",
+            "text/markdown; charset=utf-8",
+            "**supercalifragilisticexpialidocious**",
+        )
+        .unwrap();
+
+    let rows = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
+    assert!(rows.iter().any(|line| line == "▐ agent-%3>"), "{rows:#?}");
+    assert!(
+        rows.iter()
+            .any(|line| line.starts_with("▐      supercalifragilis")),
+        "{rows:#?}"
+    );
+    assert!(
+        rows.iter()
+            .filter(|line| !line.trim().is_empty())
+            .all(|line| UnicodeWidthStr::width(line.as_str()) <= 24),
+        "{rows:#?}"
+    );
+}
+
 /// Verifies rendered and source copy retain each separately logged peer payload
 /// when adjacent MMP messages share the same sender and one message wraps.
 #[test]

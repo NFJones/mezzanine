@@ -51,6 +51,7 @@ pub use rich_text::{
     rendered_line_is_numbered_diff_row, style_spans_for_rich_text_segment,
     take_rich_text_display_segment, wrap_rich_text_line_to_width,
     wrap_rich_text_line_to_width_with_continuation_indent,
+    wrap_rich_text_line_to_width_with_continuation_indent_hard,
     wrap_rich_text_line_to_width_with_source_ranges,
     wrap_rich_text_line_to_width_with_source_ranges_hard, wrap_rich_text_lines_to_width,
 };
