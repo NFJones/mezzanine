@@ -376,7 +376,6 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
         });
     }
     if let Some(backend) = request.permissions.sandbox.backend() {
-        let backend_name = backend.as_str();
         let (source, executable_id, display_name, executable_setting) = match backend {
             SandboxBackend::Bubblewrap => (
                 "bubblewrap",
@@ -435,7 +434,7 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             severity: SandboxDiagnosticSeverity::Info,
             summary: format!("{display_name} uses a controlled executable path"),
             details: format!("A successfully resolved whitelisted PATH controls sandbox command lookup; otherwise {display_name} falls back to /usr/bin:/bin."),
-            remedy: format!("Use narrow read scopes for external executable roots and include PATH in permissions.{backend_name}.env_whitelist when command lookup requires it."),
+            remedy: "Use narrow read scopes for external executable roots and include PATH in permissions.env_whitelist when command lookup requires it.".to_string(),
             affected_path: None,
             source,
         });
@@ -509,11 +508,7 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             write_scopes: request.permissions.resources.write_scopes.clone(),
             write_scopes_source: request.write_scopes_source.to_string(),
             group_whitelist: configured_group_whitelist,
-            env_whitelist: match &request.permissions.sandbox {
-                SandboxConfig::PolicyOnly => Vec::new(),
-                SandboxConfig::Bubblewrap(config) => config.env_whitelist.requested_names.clone(),
-                SandboxConfig::Seatbelt(config) => config.env_whitelist.requested_names.clone(),
-            },
+            env_whitelist: request.permissions.env_whitelist.requested_names.clone(),
         },
         effective: SandboxEffectiveState {
             sandbox: effective_sandbox,

@@ -13,6 +13,60 @@ use mez_agent::ShellClassification;
 
 const ENVIRONMENT_EVIDENCE_TIMEOUT_MS: u64 = 10_000;
 
+/// Returns the shared names safe to forward into a Seatbelt payload.
+///
+/// Seatbelt owns its HOME, SHELL, identity, XDG, and Git-isolation values, so
+/// requesting them from the pane would turn the shared native defaults into an
+/// attempted sandbox override.
+pub(crate) fn seatbelt_forwarded_environment_names(names: &[String]) -> Vec<String> {
+    names
+        .iter()
+        .filter(|name| {
+            !matches!(
+                name.as_str(),
+                "HOME"
+                    | "TMPDIR"
+                    | "LANG"
+                    | "LC_ALL"
+                    | "USER"
+                    | "LOGNAME"
+                    | "SHELL"
+                    | "XDG_CACHE_HOME"
+                    | "XDG_CONFIG_HOME"
+                    | "XDG_DATA_HOME"
+                    | "XDG_STATE_HOME"
+                    | "GIT_CONFIG_NOSYSTEM"
+                    | "GIT_CONFIG_GLOBAL"
+                    | "GIT_CONFIG_COUNT"
+            ) && !name.starts_with("GIT_CONFIG_KEY_")
+                && !name.starts_with("GIT_CONFIG_VALUE_")
+        })
+        .cloned()
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::seatbelt_forwarded_environment_names;
+
+    /// Verifies the shared native defaults retain pane PATH for Seatbelt while
+    /// excluding the backend-owned HOME and SHELL variables from forwarding.
+    #[test]
+    fn seatbelt_filter_excludes_backend_owned_default_names() {
+        let names = vec![
+            "PATH".to_string(),
+            "HOME".to_string(),
+            "SHELL".to_string(),
+            "GH_TOKEN".to_string(),
+        ];
+
+        assert_eq!(
+            seatbelt_forwarded_environment_names(&names),
+            ["PATH", "GH_TOKEN"]
+        );
+    }
+}
+
 /// Selects how one Bubblewrap workload obtains optional pane environment
 /// values without weakening the fixed sandbox environment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,13 +140,14 @@ impl RuntimeSessionService {
         let policy = self.permission_policy_for_turn(turn);
         let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
         let requested_names = match &sandbox_config {
-            crate::runtime::SandboxConfig::Bubblewrap(config) => {
-                config.env_whitelist.requested_names.clone()
-            }
-            crate::runtime::SandboxConfig::Seatbelt(config) => {
-                config.env_whitelist.requested_names.clone()
-            }
-            crate::runtime::SandboxConfig::PolicyOnly => return Ok(true),
+            crate::runtime::SandboxConfig::Seatbelt(_) => seatbelt_forwarded_environment_names(
+                &self.configured_permissions().env_whitelist.requested_names,
+            ),
+            _ => self
+                .configured_permissions()
+                .env_whitelist
+                .requested_names
+                .clone(),
         };
         if !crate::runtime::config::sandbox_applies_to_policy(&sandbox_config, &policy)
             || requested_names.is_empty()

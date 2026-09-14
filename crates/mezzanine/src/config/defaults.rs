@@ -1036,6 +1036,9 @@ approval_policy = "ask"
 # /usr/bin/sandbox-exec is executable. Either platform uses policy-only when its
 # fixed executable is absent; other platforms always use policy-only.
 sandbox = "bubblewrap"
+# Optional pane-derived variable names shared by native and sandboxed actions.
+# Values remain redacted and are never inherited from the Mez daemon environment.
+#? env_whitelist = ["PATH", "ACME_HOME"]
 # Scope paths may name files or directories. A Unix-domain socket may also be
 # placed in read_scopes for an explicitly trusted service endpoint; a read-only
 # mount does not make requests sent through that socket read-only.
@@ -1094,11 +1097,6 @@ bypass_mode = false
 # Exact host supplementary groups to project. The primary group is automatic;
 # an empty list strips all ambient supplementary groups.
 #? group_whitelist = []
-# Optional variable names are read from the active pane and always redacted.
-# When this field is omitted, PATH is forwarded by default. An explicit list
-# replaces that default, so include PATH when sandboxed command lookup should
-# use the pane's safely resolved path. Forwarding never grants filesystem authority.
-#? env_whitelist = ["PATH", "ACME_HOME"]
 #? git_user_name = "Your Name"
 #? git_user_email = "you@example.invalid"
 # macOS Seatbelt uses the same fail-closed policy surface without exposing raw
@@ -1110,7 +1108,6 @@ bypass_mode = false
 #? unavailable = "fail"
 #? network = "isolated"
 #? environment = "minimal"
-#? env_whitelist = ["PATH"]
 #? git_user_name = "Your Name"
 #? git_user_email = "you@example.invalid"
 

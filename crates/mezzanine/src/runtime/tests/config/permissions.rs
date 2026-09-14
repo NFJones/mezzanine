@@ -94,12 +94,12 @@ fn runtime_materializes_explicit_seatbelt_configuration() {
     let configured = runtime_configured_permissions_from_config(&serde_json::json!({
         "permissions": {
             "sandbox": "seatbelt",
+            "env_whitelist": ["PATH", "CI"],
             "seatbelt": {
                 "executable": "/usr/bin/sandbox-exec",
                 "unavailable": "fail",
                 "network": "isolated",
                 "environment": "minimal",
-                "env_whitelist": ["PATH", "CI"],
                 "git_user_name": "Sandbox Author",
                 "git_user_email": "sandbox@example.invalid"
             }
@@ -111,6 +111,7 @@ fn runtime_materializes_explicit_seatbelt_configuration() {
     };
 
     assert_eq!(seatbelt.executable, "/usr/bin/sandbox-exec");
+    assert_eq!(configured.env_whitelist.requested_names, ["PATH", "CI"]);
     assert_eq!(seatbelt.env_whitelist.requested_names, ["PATH", "CI"]);
     assert_eq!(seatbelt.git_user_name.as_deref(), Some("Sandbox Author"));
     assert_eq!(

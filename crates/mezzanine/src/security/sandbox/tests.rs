@@ -1411,7 +1411,11 @@ fn default_pane_environment_forwards_whitelisted_path() {
             .unwrap();
     let environment_evidence = mez_agent::shell::PaneEnvironmentEvidence::from_parts(
         &environment_request,
-        BTreeMap::from([("PATH".to_string(), "/opt/tools:/usr/bin".to_string())]),
+        BTreeMap::from([
+            ("PATH".to_string(), "/opt/tools:/usr/bin".to_string()),
+            ("HOME".to_string(), "/home/agent".to_string()),
+            ("SHELL".to_string(), "/bin/sh".to_string()),
+        ]),
         BTreeMap::new(),
     )
     .unwrap();

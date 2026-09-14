@@ -3312,7 +3312,7 @@ every configured or omitted `permissions.sandbox` and
 `permissions.seatbelt` table, or enable Seatbelt for an existing configuration.
 Schema v74 adds `sandbox = "seatbelt"` and a primary-user-only
 `permissions.seatbelt` table containing only `executable`, `unavailable`,
-`network`, `environment`, `env_whitelist`, `git_user_name`, and
+`network`, `environment`, `git_user_name`, and
 `git_user_email`. Raw Seatbelt profiles, rules, and launcher arguments MUST NOT
 be configurable. Explicit Seatbelt configuration MUST be fail-closed.
 
@@ -4630,7 +4630,11 @@ an empty mapping.
 Schema v50 adds the primary-user-only
 `permissions.bubblewrap.env_whitelist` string array. An omitted setting MUST
 default to `["PATH"]`, while an explicit `[]` remains an opt-out. Migration
-from v49 MUST write `[]`. Names MUST match
+from v49 MUST write `[]`. Schema v96 promotes this to the shared
+`permissions.env_whitelist` string array and removes the backend-scoped values,
+preferring an authored shared value over Bubblewrap and then Seatbelt legacy
+values. An omitted shared value defaults to `["PATH", "HOME", "SHELL"]`, and an
+explicit `[]` forwards none of those names. Names MUST match
 `[A-Za-z_][A-Za-z0-9_]*`, be unique, contain at most 128 entries, and total at
 most 16 KiB. Values MUST be discovered only from the active pane process using
 a bounded framed protocol. Unset, malformed, non-text, oversized, reserved, or
@@ -4929,9 +4933,10 @@ authority. Scoping one root MUST NOT implicitly expose credentials, manager
 state, caches, sockets, loaders, libraries, dependency roots, or unrelated
 installations. Every required external root MUST be authorized explicitly.
 
-The sandbox command-search `PATH` MUST equal the successfully resolved pane
-`PATH` when `PATH` is listed in `permissions.bubblewrap.env_whitelist`; it MUST
-otherwise fall back to `/usr/bin:/bin`. `permissions.bubblewrap.env_whitelist`
+The native and sandbox command-search `PATH` MUST equal the successfully resolved pane
+`PATH` only when `PATH` is listed in `permissions.env_whitelist`. A sandbox
+payload without a forwarded `PATH` MUST use its fixed `/usr/bin:/bin` fallback;
+a native workload without a forwarded `PATH` MUST omit it. `permissions.env_whitelist`
 MUST NOT override `HOME`, `SHELL`, XDG paths, locale, identity, Git isolation,
 or any other Mezzanine-owned invariant. Forwarded variables MUST already exist in the active pane, MUST
 remain value-redacted from status, warnings, telemetry, snapshots, and audit,

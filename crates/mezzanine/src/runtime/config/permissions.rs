@@ -36,6 +36,8 @@ pub(crate) struct ConfiguredPermissions {
     pub(crate) authorization: PermissionPolicy,
     /// Maximum resource authority configured for the primary agent.
     pub(crate) resources: ResourceAuthorityConfig,
+    /// Pane environment names shared by native and sandboxed workloads.
+    pub(crate) env_whitelist: ConfiguredSandboxEnvironment,
     /// Optional additive confinement backend.
     pub(crate) sandbox: SandboxConfig,
 }
@@ -56,6 +58,7 @@ impl ConfiguredPermissions {
         Self {
             authorization,
             resources: ResourceAuthorityConfig::default(),
+            env_whitelist: ConfiguredSandboxEnvironment::default(),
             sandbox: default_sandbox_config_for_platform(platform),
         }
     }
@@ -302,10 +305,10 @@ pub(crate) struct ConfiguredSandboxEnvironment {
 }
 
 impl Default for ConfiguredSandboxEnvironment {
-    /// Selects the active pane command-search path when no explicit list exists.
+    /// Selects the standard pane environment variables when no explicit list exists.
     fn default() -> Self {
         Self {
-            requested_names: vec!["PATH".to_string()],
+            requested_names: vec!["PATH".to_string(), "HOME".to_string(), "SHELL".to_string()],
         }
     }
 }
@@ -320,7 +323,7 @@ impl ConfiguredSandboxEnvironment {
     fn parse(names: Vec<String>) -> Result<Self> {
         if names.len() > Self::MAX_VARIABLES {
             return Err(MezError::config(
-                "permissions.bubblewrap.env_whitelist must contain at most 128 names",
+                "permissions.env_whitelist must contain at most 128 names",
             ));
         }
         let mut bytes = 0usize;
@@ -335,18 +338,18 @@ impl ConfiguredSandboxEnvironment {
                     .all(|character| character == '_' || character.is_ascii_alphanumeric());
             if !valid {
                 return Err(MezError::config(
-                    "permissions.bubblewrap.env_whitelist names must match [A-Za-z_][A-Za-z0-9_]*",
+                    "permissions.env_whitelist names must match [A-Za-z_][A-Za-z0-9_]*",
                 ));
             }
             if !seen.insert(name.clone()) {
                 return Err(MezError::config(
-                    "permissions.bubblewrap.env_whitelist must not contain duplicate names",
+                    "permissions.env_whitelist must not contain duplicate names",
                 ));
             }
         }
         if bytes > Self::MAX_ENCODED_BYTES {
             return Err(MezError::config(
-                "permissions.bubblewrap.env_whitelist exceeds the 16 KiB name limit",
+                "permissions.env_whitelist exceeds the 16 KiB name limit",
             ));
         }
         Ok(Self {
@@ -697,6 +700,10 @@ fn runtime_configured_permissions_from_config_unchecked_for_platform(
             "allow" => NetworkPolicy::Allow,
             _ => return Err(MezError::config("unsupported permissions.network_policy")),
         };
+    let env_whitelist = ConfiguredSandboxEnvironment::parse(
+        runtime_json_string_array(permissions.get("env_whitelist"))?
+            .unwrap_or_else(|| ConfiguredSandboxEnvironment::default().requested_names),
+    )?;
     let sandbox = match runtime_json_string(permissions.get("sandbox")) {
         None => default_sandbox_config_for_platform(platform),
         Some("policy-only") => SandboxConfig::PolicyOnly,
@@ -752,12 +759,6 @@ fn runtime_configured_permissions_from_config_unchecked_for_platform(
                 )?
                 .unwrap_or_default(),
             )?;
-            let env_whitelist = ConfiguredSandboxEnvironment::parse(
-                runtime_json_string_array(
-                    bubblewrap.and_then(|config| config.get("env_whitelist")),
-                )?
-                .unwrap_or_else(|| ConfiguredSandboxEnvironment::default().requested_names),
-            )?;
             let git_user_name = bubblewrap
                 .and_then(|config| runtime_json_string(config.get("git_user_name")))
                 .map(str::to_string);
@@ -787,7 +788,7 @@ fn runtime_configured_permissions_from_config_unchecked_for_platform(
                 network,
                 environment,
                 group_whitelist,
-                env_whitelist,
+                env_whitelist: env_whitelist.clone(),
                 git_user_name,
                 git_user_email,
             })
@@ -836,10 +837,6 @@ fn runtime_configured_permissions_from_config_unchecked_for_platform(
                     ));
                 }
             };
-            let env_whitelist = ConfiguredSandboxEnvironment::parse(
-                runtime_json_string_array(seatbelt.and_then(|config| config.get("env_whitelist")))?
-                    .unwrap_or_else(|| ConfiguredSandboxEnvironment::default().requested_names),
-            )?;
             let git_user_name = seatbelt
                 .and_then(|config| runtime_json_string(config.get("git_user_name")))
                 .map(str::to_string);
@@ -868,7 +865,7 @@ fn runtime_configured_permissions_from_config_unchecked_for_platform(
                 unavailable,
                 network,
                 environment,
-                env_whitelist,
+                env_whitelist: env_whitelist.clone(),
                 git_user_name,
                 git_user_email,
             })
@@ -883,6 +880,7 @@ fn runtime_configured_permissions_from_config_unchecked_for_platform(
             write_scopes,
             network_policy,
         },
+        env_whitelist,
         sandbox,
     })
 }

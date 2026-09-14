@@ -34,6 +34,8 @@ use mez_agent::{
     AgentAction, AgentActionPayload, AgentTurnRecord, EnvironmentGroup, EnvironmentSignature,
     LocalProgramDialect, ShellChildArgument, ShellChildLaunch,
 };
+#[cfg(test)]
+use mez_mux::process::RawEnvironmentEntry;
 
 use crate::error::{MezError, Result};
 
@@ -558,7 +560,7 @@ impl crate::runtime::RuntimeSessionService {
         )?;
         let signature_hash = signature.stable_hash();
         let request = mez_agent::shell::PaneEnvironmentRequest::new(
-            config.env_whitelist.requested_names.clone(),
+            super::seatbelt_forwarded_environment_names(&config.env_whitelist.requested_names),
         )
         .map_err(|error| MezError::invalid_args(error.message()))?;
         let evidence = if matches!(action.payload, AgentActionPayload::ApplyPatch { .. }) {
@@ -617,7 +619,7 @@ impl crate::runtime::RuntimeSessionService {
         )?;
         let signature_hash = signature.stable_hash();
         let request = mez_agent::shell::PaneEnvironmentRequest::new(
-            config.env_whitelist.requested_names.clone(),
+            super::seatbelt_forwarded_environment_names(&config.env_whitelist.requested_names),
         )
         .map_err(|error| MezError::invalid_args(error.message()))?;
         let evidence = if matches!(action.payload, AgentActionPayload::ApplyPatch { .. }) {
@@ -1616,6 +1618,46 @@ fn native_host_name() -> String {
 mod tests {
     use super::*;
     use mez_agent::permissions::PathResolutionStatus;
+
+    /// Verifies native Seatbelt evidence retains a safe forwarded PATH while
+    /// filtering the shared default HOME and SHELL names before compilation.
+    #[test]
+    fn native_seatbelt_evidence_filters_backend_owned_default_names() {
+        let context = crate::runtime::processes::NativeShellContext::for_test(
+            PathBuf::from("/bin/sh"),
+            vec![
+                RawEnvironmentEntry {
+                    key: b"PATH".to_vec(),
+                    value: b"/pane/bin".to_vec(),
+                },
+                RawEnvironmentEntry {
+                    key: b"HOME".to_vec(),
+                    value: b"/pane/home".to_vec(),
+                },
+                RawEnvironmentEntry {
+                    key: b"SHELL".to_vec(),
+                    value: b"/bin/zsh".to_vec(),
+                },
+            ],
+            std::env::temp_dir(),
+        );
+        let request = mez_agent::shell::PaneEnvironmentRequest::new(
+            super::super::seatbelt_forwarded_environment_names(&[
+                "PATH".to_string(),
+                "HOME".to_string(),
+                "SHELL".to_string(),
+            ]),
+        )
+        .unwrap();
+        let evidence = native_environment_evidence(&request, &context);
+
+        assert_eq!(
+            evidence.values.get("PATH").map(String::as_str),
+            Some("/pane/bin")
+        );
+        assert!(!evidence.values.contains_key("HOME"));
+        assert!(!evidence.values.contains_key("SHELL"));
+    }
 
     /// Verifies one admitted pane-status provider fails closed through the real
     /// required-evidence path before any sandbox plan or child process exists.

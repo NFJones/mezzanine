@@ -386,6 +386,7 @@ fn runtime_config_change_rejects_user_only_sandbox_policy() {
 
     for (index, (setting_path, value)) in [
         ("permissions.sandbox", "bubblewrap"),
+        ("permissions.env_whitelist", r#"[\"GH_TOKEN\"]"#),
         ("permissions.bubblewrap", r#"{\"toolchains\":[\"rust\"]}"#),
         ("permissions.bubblewrap.executable", "/tmp/bwrap"),
         ("permissions.seatbelt", r#"{\"network\":\"isolated\"}"#),

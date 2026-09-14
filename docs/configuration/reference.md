@@ -1249,6 +1249,7 @@ profiles when changing provider, model, or provider options.
 | `permissions.approval_policy` | string | `"full-access"` when the platform's fixed Bubblewrap or Seatbelt executable is present; `"auto-allow"` on Linux or macOS when it is absent; `"ask"` otherwise | Default approval policy: `ask`, `auto-allow`, `full-access`, or primary-user-only `host-access`. Generated configuration selects this together with the platform sandbox backend. `full-access` remains sandboxed; `host-access` executes local shell actions on the host outside the configured sandbox. |
 | `permissions.preset` | string | omitted | Optional preset, such as `read-only` or `auto`. |
 | `permissions.sandbox` | string | `"bubblewrap"` on Linux with executable `/usr/bin/bwrap`; `"seatbelt"` on macOS with executable `/usr/bin/sandbox-exec`; `"policy-only"` otherwise | Additive confinement backend. Executable presence selects generated and omitted defaults but is not runtime capability proof. Existing configurations are preserved by migration. `policy-only` does not provide OS-level isolation. |
+| `permissions.env_whitelist` | string array | `["PATH", "HOME", "SHELL"]` when omitted | Portable pane-derived variable names forwarded to ordinary native and sandboxed actions. Values are bounded and redacted from status and logs, and are never sourced from Mez's daemon environment. Set an explicit `[]` to opt out. Internal semantic `apply_patch` phases retain their fixed environment. |
 | `permissions.read_scopes` | string array | omitted | Maximum pane-resolved read authority for the primary agent. When both scope arrays are omitted, a trusted current project is granted read-write authority for its root. Paths unavailable on the active pane are omitted with a warning. |
 | `permissions.write_scopes` | string array | omitted | Maximum pane-resolved write authority; write also implies read. When both scope arrays are omitted, a trusted current project is granted read-write authority for its root. Paths unavailable on the active pane are omitted with a warning. |
 | `permissions.bubblewrap.executable` | string | `"/usr/bin/bwrap"` | Absolute Bubblewrap path resolved and probed in the pane environment. |
@@ -1256,14 +1257,12 @@ profiles when changing provider, model, or provider options.
 | `permissions.bubblewrap.network` | string | `"isolated"` | Private network namespace policy. |
 | `permissions.bubblewrap.environment` | string | `"minimal"` | Clear inherited variables and rebuild a fixed non-secret environment. |
 | `permissions.bubblewrap.group_whitelist` | string array | `[]` | Schema-v49 primary-user-only pane group mappings. The active pane's primary group is automatic and must not be listed. Names must be non-empty, non-numeric, and unique; at most 64 names and 8 KiB are accepted. A name unavailable in the active pane is omitted with a warning. Empty projects provide no supplementary group names but do not filter inherited pane credentials. |
-| `permissions.bubblewrap.env_whitelist` | string array | `["PATH"]` when omitted | Schema-v50 primary-user-only portable variable names read from the active pane process for ordinary sandboxed actions. Values are best-effort, bounded, and universally redacted from status/logs. A successfully resolved whitelisted `PATH` controls sandbox command lookup; other fixed sandbox environment invariants remain protected. Set an explicit `[]` to opt out. Internal semantic `apply_patch` phases intentionally use the fixed environment without forwarding these optional values. |
 | `permissions.bubblewrap.git_user_name` | string | omitted | Optional non-secret Git author name. Must be configured with `git_user_email`; projected only through Git command-scope configuration. |
 | `permissions.bubblewrap.git_user_email` | string | omitted | Optional non-secret Git author email. Must be configured with `git_user_name`; projected only through Git command-scope configuration. |
 | `permissions.seatbelt.executable` | string | `"/usr/bin/sandbox-exec"` | Fixed absolute Seatbelt launcher path. Runtime probing verifies the exact executable; arbitrary launcher arguments and raw profiles are not configurable. |
 | `permissions.seatbelt.unavailable` | string | `"fail"` | Fail closed when the executable, profile, probe, or launch cannot be established; never silently select policy-only or host execution. |
 | `permissions.seatbelt.network` | string | `"isolated"` | Deny network operations in the visible host namespace unless the action's network requirement is authorized. This is not a network namespace. |
 | `permissions.seatbelt.environment` | string | `"minimal"` | Clear inherited variables and reconstruct the code-owned minimal environment. |
-| `permissions.seatbelt.env_whitelist` | string array | `["PATH"]` when omitted | Optional pane-derived variable names subject to the same bounded, value-redacted forwarding rules as Bubblewrap. |
 | `permissions.seatbelt.git_user_name` | string | omitted | Optional non-secret Git author name. Must be configured with `git_user_email`; host Git configuration is not inherited. |
 | `permissions.seatbelt.git_user_email` | string | omitted | Optional non-secret Git author email. Must be configured with `git_user_name`; host Git configuration is not inherited. |
 | `permissions.command_rules` | array | `[]` | User/project command rule entries. |
@@ -1399,16 +1398,15 @@ Use ordinary scopes and environment forwarding for an installed SDK:
 ```toml
 [permissions]
 read_scopes = ["/opt/acme-sdk"]
-
-[permissions.bubblewrap]
 env_whitelist = ["ACME_HOME"]
 ```
 
 `/opt/acme-sdk` is mounted read-only at the same path. `ACME_HOME` must already
 exist in the active pane, its value remains redacted from status and audit, and
-it grants no filesystem authority. An omitted allowlist forwards `PATH` for
-sandbox command lookup; an explicit list replaces that default, so this example
-uses the fixed `/usr/bin:/bin` search path. Include `PATH` when sandboxed
+it grants no filesystem authority. The default allowlist forwards `PATH` for
+native and sandbox command lookup; an explicit list replaces that default. This
+example therefore omits `PATH` from native workloads and uses the sandbox's
+fixed `/usr/bin:/bin` search path. Include `PATH` when native or sandboxed
 commands need the pane's command-search path. Scope every required loader,
 library, or dependency root explicitly; scoping the SDK does not expose
 credentials, host caches, manager state, sockets, or unrelated installations.

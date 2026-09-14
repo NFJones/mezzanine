@@ -247,11 +247,9 @@ mod commands_support;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod config;
-#[cfg(test)]
-pub(crate) use config::ConfiguredSandboxEnvironment;
 pub(crate) use config::{
-    BubblewrapConfig, ConfiguredPermissions, ConfiguredSandboxGroups, NetworkPolicy,
-    SandboxBackend, SandboxConfig, SandboxEnvironmentPolicy, SandboxNetworkMode,
+    BubblewrapConfig, ConfiguredPermissions, ConfiguredSandboxEnvironment, ConfiguredSandboxGroups,
+    NetworkPolicy, SandboxBackend, SandboxConfig, SandboxEnvironmentPolicy, SandboxNetworkMode,
     SandboxUnavailablePolicy, SeatbeltConfig, runtime_configured_permissions_from_config,
 };
 /// Exposes the control module boundary.
@@ -346,6 +344,7 @@ pub(crate) use processes::daemon_only_probe_key_for_tests;
 pub(crate) use processes::{
     BubblewrapEnvironmentProfile, PaneSurfaceKind,
     RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES, RuntimeProcessComponent,
+    seatbelt_forwarded_environment_names,
 };
 /// Exposes the render module boundary.
 ///

@@ -67,7 +67,9 @@ impl RuntimeSessionService {
                 )
             })?;
         let request = mez_agent::shell::PaneEnvironmentRequest::new(
-            config.env_whitelist.requested_names.clone(),
+            super::environment_evidence::seatbelt_forwarded_environment_names(
+                &config.env_whitelist.requested_names,
+            ),
         )
         .map_err(|error| crate::MezError::invalid_args(error.message()))?;
         let environment_evidence = if omit_forwarded_environment || request.names.is_empty() {

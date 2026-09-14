@@ -23,7 +23,9 @@ mod zsh_compat;
 #[cfg(test)]
 pub(crate) use native_bubblewrap::NativeBubblewrapCapabilityProbe;
 pub(crate) use native_bubblewrap::{NativeBubblewrapActivityLease, NativeSandboxCapabilityProbe};
-pub(crate) use native_shell_inference::{NativeShellContext, infer_native_shell_context};
+pub(crate) use native_shell_inference::{
+    NativeShellContext, infer_native_shell_context_with_whitelist,
+};
 pub(crate) use native_workload_environment::NativeLaunchEnvironmentRole;
 #[cfg(test)]
 pub(crate) use native_workload_environment::native_ambient_environment;
@@ -39,6 +41,7 @@ pub(crate) use spawned_shell::execute_native_shell_dispatch;
 pub(crate) use spawned_shell::{
     execute_native_shell_dispatch_with_progress, execute_pane_status_provider_launch,
 };
+pub(crate) use transactions::seatbelt_forwarded_environment_names;
 
 pub(super) use managed_shell_handoff::ManagedShellKind;
 use managed_shell_handoff::{
@@ -3505,12 +3508,13 @@ impl RuntimeSessionService {
             .current_working_directory(pane_id)
             .or_else(|| primary_pid.and_then(mez_mux::process::current_working_directory_for_pid));
         let session_shell_path = self.session.shell.path().to_path_buf();
-        infer_native_shell_context(
+        infer_native_shell_context_with_whitelist(
             primary_pid,
             executable_path,
             environment,
             current_working_directory,
             &session_shell_path,
+            &self.configured_permissions().env_whitelist,
         )
     }
 

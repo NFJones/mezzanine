@@ -28,6 +28,8 @@ use super::{
     runtime_pane_readiness_state_name, runtime_post_shell_hook_payload,
     runtime_random_marker_token, shell_command_result_content,
 };
+pub(crate) use environment_evidence::seatbelt_forwarded_environment_names;
+
 use crate::runtime::{
     RenderInvalidationReason, RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind,
     RuntimeTransition,

@@ -344,7 +344,9 @@ impl RuntimeSessionService {
                     MezError::invalid_state("pane environment is unavailable for Seatbelt dispatch")
                 })?;
             let environment_request = mez_agent::shell::PaneEnvironmentRequest::new(
-                config.env_whitelist.requested_names.clone(),
+                crate::runtime::processes::seatbelt_forwarded_environment_names(
+                    &self.configured_permissions().env_whitelist.requested_names,
+                ),
             )
             .map_err(|error| MezError::invalid_args(error.message()))?;
             let environment_profile =
@@ -480,7 +482,10 @@ impl RuntimeSessionService {
                 )?;
             }
             let environment_request = mez_agent::shell::PaneEnvironmentRequest::new(
-                config.env_whitelist.requested_names.clone(),
+                self.configured_permissions()
+                    .env_whitelist
+                    .requested_names
+                    .clone(),
             )
             .map_err(|error| MezError::invalid_args(error.message()))?;
             let environment_profile =

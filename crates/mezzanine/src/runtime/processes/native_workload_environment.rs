@@ -41,6 +41,7 @@
 //!   data, so an ambient probe value is never projected into a probe sandbox.
 
 use std::os::unix::ffi::OsStringExt;
+#[cfg(test)]
 use std::path::Path;
 
 use mez_mux::process::RawEnvironmentEntry;
@@ -102,8 +103,10 @@ pub(crate) enum NativeLaunchEnvironmentPresence {
     /// A missing or malformed value is a typed pre-dispatch error.
     Required,
     /// A missing value uses the caller-owned fallback value.
+    #[allow(dead_code)]
     Fallback,
     /// A missing value omits the key unless a fallback value is supplied.
+    #[allow(dead_code)]
     Omitted,
 }
 
@@ -157,6 +160,7 @@ impl NativeLaunchEnvironmentRequirement {
     }
 
     /// Declares one workload-visible key with an optional fallback value.
+    #[allow(dead_code)]
     pub(crate) const fn workload_fallback(
         category: &'static str,
         key: &'static str,
@@ -172,6 +176,7 @@ impl NativeLaunchEnvironmentRequirement {
     }
 
     /// Declares one workload-visible key that is omitted when absent.
+    #[allow(dead_code)]
     pub(crate) const fn workload_omitted(
         category: &'static str,
         key: &'static str,
@@ -206,11 +211,13 @@ impl NativeLaunchEnvironmentRequirement {
     /// Pane-root evidence wins. The ambient `mez` `PATH` is the deliberate
     /// compatibility fallback for panes whose root-process environment is
     /// unreadable, and the documented constant closes the chain.
+    #[allow(dead_code)]
     pub(crate) const WORKLOAD_PATH: Self = Self::workload_fallback("workload_path", "PATH", true);
     /// Workload `SHELL`.
     ///
     /// Pane-root evidence wins; otherwise the shell selected by the native
     /// inference chain is recorded so the workload keeps a truthful shell name.
+    #[allow(dead_code)]
     pub(crate) const WORKLOAD_SHELL: Self =
         Self::workload_omitted("workload_shell", "SHELL", false);
     /// Workload `HOME`.
@@ -218,6 +225,7 @@ impl NativeLaunchEnvironmentRequirement {
     /// Pane-root evidence wins. The ambient `mez` home is forwarded only when
     /// the pane root supplied none, because both processes run as the same
     /// user identity; the key is omitted when neither source exists.
+    #[allow(dead_code)]
     pub(crate) const WORKLOAD_HOME: Self = Self::workload_omitted("workload_home", "HOME", true);
     /// Launcher-only command-search `PATH`.
     ///
@@ -307,6 +315,8 @@ impl NativeWorkloadEnvironment {
 pub(crate) struct NativeWorkloadEnvironmentBuilder {
     /// Validated pane-root evidence.
     evidence: Vec<RawEnvironmentEntry>,
+    /// Optional names from pane evidence that the workload may receive.
+    workload_whitelist: Option<Vec<String>>,
     /// Ambient `mez` environment consulted only for declared forwarding.
     ambient: Vec<RawEnvironmentEntry>,
     /// Declared workload defaults overridden by pane-root evidence.
@@ -322,6 +332,7 @@ impl NativeWorkloadEnvironmentBuilder {
     pub(crate) const fn new() -> Self {
         Self {
             evidence: Vec::new(),
+            workload_whitelist: None,
             ambient: Vec::new(),
             workload_defaults: Vec::new(),
             workload_required: Vec::new(),
@@ -333,6 +344,7 @@ impl NativeWorkloadEnvironmentBuilder {
     pub(crate) fn from_environment(environment: &NativeWorkloadEnvironment) -> Self {
         Self {
             evidence: environment.pane_root_evidence().to_vec(),
+            workload_whitelist: None,
             ambient: Vec::new(),
             workload_defaults: environment.workload().to_vec(),
             workload_required: Vec::new(),
@@ -343,6 +355,12 @@ impl NativeWorkloadEnvironmentBuilder {
     /// Adds validated pane-root evidence as the authoritative overlay source.
     pub(crate) fn with_pane_root_evidence(mut self, raw: &[RawEnvironmentEntry]) -> Self {
         self.evidence = validated_environment_entries(raw);
+        self
+    }
+
+    /// Restricts optional workload entries to configured pane-environment names.
+    pub(crate) fn with_workload_environment_whitelist(mut self, names: &[String]) -> Self {
+        self.workload_whitelist = Some(names.to_vec());
         self
     }
 
@@ -424,7 +442,13 @@ impl NativeWorkloadEnvironmentBuilder {
     pub(crate) fn build(mut self) -> NativeWorkloadEnvironment {
         let mut workload = std::mem::take(&mut self.workload_defaults);
         for entry in &self.evidence {
-            insert_entry(&mut workload, entry.key.clone(), entry.value.clone());
+            if self
+                .workload_whitelist
+                .as_ref()
+                .is_none_or(|names| names.iter().any(|name| name.as_bytes() == entry.key))
+            {
+                insert_entry(&mut workload, entry.key.clone(), entry.value.clone());
+            }
         }
         for entry in &self.workload_required {
             insert_entry(&mut workload, entry.key.clone(), entry.value.clone());
@@ -449,6 +473,16 @@ impl NativeWorkloadEnvironmentBuilder {
             return lookup_value(&self.ambient, key);
         }
         None
+    }
+
+    /// Records one fallback without consulting pane or daemon environment state.
+    fn with_fixed_requirement(
+        mut self,
+        requirement: NativeLaunchEnvironmentRequirement,
+        value: &str,
+    ) -> Self {
+        self.insert_requirement(requirement, value.as_bytes().to_vec());
+        self
     }
 
     /// Records one resolved requirement in its launch bucket.
@@ -477,6 +511,7 @@ impl NativeWorkloadEnvironmentBuilder {
 /// # Errors
 /// Returns the typed pre-dispatch error when a declared required requirement
 /// cannot be satisfied.
+#[cfg(test)]
 pub(crate) fn compose_native_workload_environment(
     pane_root_environment: &[RawEnvironmentEntry],
     ambient_environment: &[RawEnvironmentEntry],
@@ -499,6 +534,21 @@ pub(crate) fn compose_native_workload_environment(
             NativeLaunchEnvironmentRequirement::LAUNCHER_SEARCH_PATH,
             Some(NATIVE_WORKLOAD_PATH_FALLBACK),
         )?
+        .build())
+}
+
+/// Composes a native workload environment with an explicit pane-variable allowlist.
+pub(crate) fn compose_native_workload_environment_with_whitelist(
+    pane_root_environment: &[RawEnvironmentEntry],
+    env_whitelist: &[String],
+) -> Result<NativeWorkloadEnvironment> {
+    Ok(NativeWorkloadEnvironmentBuilder::new()
+        .with_pane_root_evidence(pane_root_environment)
+        .with_workload_environment_whitelist(env_whitelist)
+        .with_fixed_requirement(
+            NativeLaunchEnvironmentRequirement::LAUNCHER_SEARCH_PATH,
+            NATIVE_WORKLOAD_PATH_FALLBACK,
+        )
         .build())
 }
 
@@ -823,6 +873,74 @@ mod tests {
             environment.workload_value("MEZ_DUPLICATE_KEY"),
             Some("pane")
         );
+    }
+
+    /// Verifies a shared whitelist forwards only selected pane-root values and
+    /// never turns a daemon-only credential into a workload environment entry.
+    #[test]
+    fn shared_whitelist_forwards_selected_pane_values_only() {
+        let environment = compose_native_workload_environment_with_whitelist(
+            &[
+                entry("GH_TOKEN", "pane-token"),
+                entry("UNSELECTED_PANE_VALUE", "not-forwarded"),
+                entry("PATH", "/pane/bin"),
+                entry("HOME", "/pane/home"),
+            ],
+            &["GH_TOKEN".to_string()],
+        )
+        .expect("whitelisted pane environment composes");
+
+        assert_eq!(
+            lookup_value(environment.workload(), b"GH_TOKEN"),
+            Some(b"pane-token".as_slice())
+        );
+        assert_eq!(
+            lookup_value(environment.workload(), b"UNSELECTED_PANE_VALUE"),
+            None
+        );
+        assert_eq!(lookup_value(environment.workload(), b"PATH"), None);
+        assert_eq!(lookup_value(environment.workload(), b"HOME"), None);
+        assert_eq!(lookup_value(environment.workload(), b"SHELL"), None);
+
+        let daemon_only =
+            compose_native_workload_environment_with_whitelist(&[], &["GH_TOKEN".to_string()])
+                .expect("daemon-only environment composes");
+        assert_eq!(lookup_value(daemon_only.workload(), b"GH_TOKEN"), None);
+    }
+
+    /// Verifies the default shared names forward pane values but never restore
+    /// a same-named daemon value when the pane lacks that evidence.
+    #[test]
+    fn shared_whitelist_default_names_are_pane_only() {
+        let names = ["PATH".to_string(), "HOME".to_string(), "SHELL".to_string()];
+        let environment = compose_native_workload_environment_with_whitelist(
+            &[
+                entry("PATH", "/pane/bin"),
+                entry("HOME", "/pane/home"),
+                entry("SHELL", "/bin/zsh"),
+            ],
+            &names,
+        )
+        .expect("default pane environment composes");
+
+        assert_eq!(
+            lookup_value(environment.workload(), b"PATH"),
+            Some(b"/pane/bin".as_slice())
+        );
+        assert_eq!(
+            lookup_value(environment.workload(), b"HOME"),
+            Some(b"/pane/home".as_slice())
+        );
+        assert_eq!(
+            lookup_value(environment.workload(), b"SHELL"),
+            Some(b"/bin/zsh".as_slice())
+        );
+
+        let absent = compose_native_workload_environment_with_whitelist(&[], &names)
+            .expect("absent pane environment composes");
+        for key in [b"PATH".as_slice(), b"HOME".as_slice(), b"SHELL".as_slice()] {
+            assert_eq!(lookup_value(absent.workload(), key), None);
+        }
     }
 
     /// Verifies the ambient source is consulted only for declared forwarding

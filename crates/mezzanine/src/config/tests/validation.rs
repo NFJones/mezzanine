@@ -1430,7 +1430,7 @@ fn validates_paired_sanitized_bubblewrap_git_identity() {
 #[test]
 fn validates_explicit_seatbelt_configuration() {
     let valid = format!(
-        "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[permissions]\nsandbox = \"seatbelt\"\n[permissions.seatbelt]\nexecutable = \"/usr/bin/sandbox-exec\"\nunavailable = \"fail\"\nnetwork = \"isolated\"\nenvironment = \"minimal\"\nenv_whitelist = [\"PATH\", \"CI\"]\ngit_user_name = \"Sandbox Author\"\ngit_user_email = \"sandbox@example.invalid\"\n"
+        "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[permissions]\nsandbox = \"seatbelt\"\nenv_whitelist = [\"PATH\", \"CI\"]\n[permissions.seatbelt]\nexecutable = \"/usr/bin/sandbox-exec\"\nunavailable = \"fail\"\nnetwork = \"isolated\"\nenvironment = \"minimal\"\ngit_user_name = \"Sandbox Author\"\ngit_user_email = \"sandbox@example.invalid\"\n"
     );
     let primary = validate_config_text(ConfigFormat::Toml, &valid, ConfigScope::Primary);
     assert!(primary.valid, "{:?}", primary.diagnostics);
@@ -1468,14 +1468,14 @@ fn validates_explicit_seatbelt_configuration() {
     }));
 
     let bad_env = format!(
-        "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[permissions]\nsandbox = \"seatbelt\"\n[permissions.seatbelt]\nenv_whitelist = [\"BAD-NAME\"]\n"
+        "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[permissions]\nsandbox = \"seatbelt\"\nenv_whitelist = [\"BAD-NAME\"]\n"
     );
     let validation = validate_config_text(ConfigFormat::Toml, &bad_env, ConfigScope::Primary);
     assert!(
         validation
             .diagnostics
             .iter()
-            .any(|diagnostic| { diagnostic.path == "permissions.seatbelt.env_whitelist" })
+            .any(|diagnostic| { diagnostic.path == "permissions.env_whitelist" })
     );
 }
 
@@ -1547,27 +1547,27 @@ fn group_whitelist_are_structurally_validated_and_primary_only() {
 #[test]
 fn env_whitelist_is_structurally_validated_and_primary_only() {
     let valid = format!(
-        "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\nenv_whitelist = [\"TERM_PROGRAM\", \"CI\"]\n"
+        "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[permissions]\nsandbox = \"bubblewrap\"\nenv_whitelist = [\"TERM_PROGRAM\", \"CI\"]\n"
     );
     let primary = validate_config_text(ConfigFormat::Toml, &valid, ConfigScope::Primary);
     assert!(primary.valid, "{:?}", primary.diagnostics);
     let overlay = validate_config_text(ConfigFormat::Toml, &valid, ConfigScope::ProjectOverlay);
     assert!(overlay.diagnostics.iter().any(|diagnostic| {
-        diagnostic.path == "permissions.bubblewrap.env_whitelist"
+        diagnostic.path == "permissions.env_whitelist"
             && diagnostic
                 .message
                 .starts_with("primary_user_only_execution_authority:")
     }));
     for value in ["[\"\"]", "[\"BAD-NAME\"]", "[\"CI\", \"CI\"]", "[1]"] {
         let invalid = format!(
-            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\nenv_whitelist = {value}\n"
+            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[permissions]\nsandbox = \"bubblewrap\"\nenv_whitelist = {value}\n"
         );
         let validation = validate_config_text(ConfigFormat::Toml, &invalid, ConfigScope::Primary);
         assert!(
             validation
                 .diagnostics
                 .iter()
-                .any(|diagnostic| diagnostic.path == "permissions.bubblewrap.env_whitelist"),
+                .any(|diagnostic| diagnostic.path == "permissions.env_whitelist"),
             "{value}: {:?}",
             validation.diagnostics
         );

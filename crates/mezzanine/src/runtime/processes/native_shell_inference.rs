@@ -15,9 +15,13 @@ use mez_mux::process::RawEnvironmentEntry;
 
 use crate::error::{MezError, Result};
 
+#[cfg(test)]
+use super::native_workload_environment::compose_native_workload_environment;
+#[cfg(test)]
+use super::native_workload_environment::native_ambient_environment;
 use super::native_workload_environment::{
-    NativeLaunchEnvironmentRole, NativeWorkloadEnvironment, compose_native_workload_environment,
-    native_ambient_environment,
+    NativeLaunchEnvironmentRole, NativeWorkloadEnvironment,
+    compose_native_workload_environment_with_whitelist,
 };
 
 /// Fully inferred execution context for one native spawned shell.
@@ -174,6 +178,7 @@ impl NativeShellContext {
 /// Returns an error when the pane has no live primary process, the host
 /// exposes no readable working directory, or no usable shell can be selected
 /// from the fallback chain.
+#[cfg(test)]
 pub(crate) fn infer_native_shell_context(
     primary_pid: Option<u32>,
     executable_path: Option<PathBuf>,
@@ -199,6 +204,45 @@ pub(crate) fn infer_native_shell_context(
         &raw_environment,
         &native_ambient_environment(),
         &shell_path,
+    )?;
+    Ok(NativeShellContext {
+        shell_path,
+        classification,
+        environment,
+        working_directory,
+        role: NativeLaunchEnvironmentRole::Workload,
+    })
+}
+
+/// Infers a native shell context with one shared pane-variable allowlist.
+///
+/// The configured names select only validated values from the pane root; this
+/// never forwards a daemon-only value into a workload.
+pub(crate) fn infer_native_shell_context_with_whitelist(
+    primary_pid: Option<u32>,
+    executable_path: Option<PathBuf>,
+    environment: Option<Vec<RawEnvironmentEntry>>,
+    current_working_directory: Option<PathBuf>,
+    session_shell_path: &Path,
+    env_whitelist: &crate::runtime::ConfiguredSandboxEnvironment,
+) -> Result<NativeShellContext> {
+    let primary_pid = primary_pid.ok_or_else(|| {
+        MezError::invalid_state("native shell mode requires a live pane root process")
+    })?;
+    let working_directory = current_working_directory.ok_or_else(|| {
+        MezError::invalid_state(format!(
+            "native shell mode requires a readable root-process working directory for pid {primary_pid}"
+        ))
+    })?;
+    let raw_environment = environment.unwrap_or_default();
+    let (shell_path, classification) = select_native_shell_path(
+        executable_path.as_deref(),
+        &raw_environment,
+        session_shell_path,
+    )?;
+    let environment = compose_native_workload_environment_with_whitelist(
+        &raw_environment,
+        &env_whitelist.requested_names,
     )?;
     Ok(NativeShellContext {
         shell_path,

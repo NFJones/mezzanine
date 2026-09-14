@@ -626,6 +626,9 @@ network_policy = "prompt"
 destructive_action_policy = "prompt"
 # Approval bypass cannot be enabled from config; false documents the safe default.
 bypass_mode = false
+# Optional pane-derived variable names shared by native and sandboxed actions.
+# Values are always redacted and never inherit from Mez's daemon environment.
+#? env_whitelist = ["PATH", "ACME_HOME"]
 
 # Optional sanitized Git identity for sandboxed commits. Configure both fields;
 # Mezzanine never imports the host global Git configuration.
@@ -638,11 +641,6 @@ bypass_mode = false
 # Exact host supplementary groups to project. The primary group is automatic;
 # an empty list strips all ambient supplementary groups.
 #? group_whitelist = []
-# Optional variable names are read from the active pane and always redacted.
-# When this field is omitted, PATH is forwarded by default. An explicit list
-# replaces that default, so include PATH when sandboxed command lookup should
-# use the pane's safely resolved path. Forwarding never grants filesystem authority.
-#? env_whitelist = ["PATH", "ACME_HOME"]
 #? git_user_name = "Your Name"
 #? git_user_email = "you@example.invalid"
 # macOS Seatbelt uses the same fail-closed policy surface without exposing raw
@@ -654,7 +652,6 @@ bypass_mode = false
 #? unavailable = "fail"
 #? network = "isolated"
 #? environment = "minimal"
-#? env_whitelist = ["PATH"]
 #? git_user_name = "Your Name"
 #? git_user_email = "you@example.invalid"
 

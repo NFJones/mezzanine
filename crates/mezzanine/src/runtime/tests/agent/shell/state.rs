@@ -22,12 +22,12 @@ fn configure_available_bubblewrap(service: &mut RuntimeSessionService) {
                 "read_scopes": ["."],
                 "write_scopes": ["."],
                 "network_policy": "deny",
+                "env_whitelist": [],
                 "bubblewrap": {
                     "executable": executable,
                     "unavailable": "fail",
                     "network": "isolated",
-                    "environment": "minimal",
-                    "env_whitelist": []
+                    "environment": "minimal"
                 }
             }
         }))
@@ -414,12 +414,12 @@ fn runtime_missing_executable_audit_reports_unavailable() {
             "permissions": {
                 "sandbox": "bubblewrap",
                 "network_policy": "deny",
+                "env_whitelist": [],
                 "bubblewrap": {
                     "executable": "/nonexistent/mez-audit-test-bwrap",
                     "unavailable": "fail",
                     "network": "isolated",
-                    "environment": "minimal",
-                    "env_whitelist": []
+                    "environment": "minimal"
                 }
             }
         }))
@@ -733,12 +733,12 @@ fn configure_path_resolution_bubblewrap(service: &mut RuntimeSessionService) {
                 "read_scopes": ["."],
                 "write_scopes": ["."],
                 "network_policy": "deny",
+                "env_whitelist": [],
                 "bubblewrap": {
                     "executable": "/usr/bin/bwrap",
                     "unavailable": "fail",
                     "network": "isolated",
-                    "environment": "minimal",
-                    "env_whitelist": []
+                    "environment": "minimal"
                 }
             }
         }))
@@ -758,12 +758,12 @@ fn configure_path_resolution_bubblewrap_with_environment(service: &mut RuntimeSe
                 "read_scopes": ["."],
                 "write_scopes": ["."],
                 "network_policy": "deny",
+                "env_whitelist": ["CI"],
                 "bubblewrap": {
                     "executable": "/usr/bin/bwrap",
                     "unavailable": "fail",
                     "network": "isolated",
-                    "environment": "minimal",
-                    "env_whitelist": ["CI"]
+                    "environment": "minimal"
                 }
             }
         }))
@@ -781,12 +781,12 @@ fn configure_trusted_project_bubblewrap(service: &mut RuntimeSessionService) {
             "permissions": {
                 "sandbox": "bubblewrap",
                 "network_policy": "deny",
+                "env_whitelist": [],
                 "bubblewrap": {
                     "executable": "/usr/bin/bwrap",
                     "unavailable": "fail",
                     "network": "isolated",
-                    "environment": "minimal",
-                    "env_whitelist": []
+                    "environment": "minimal"
                 }
             }
         }))
@@ -1768,12 +1768,12 @@ fn seatbelt_probe_service() -> RuntimeSessionService {
                 "read_scopes": ["."],
                 "write_scopes": ["."],
                 "network_policy": "deny",
+                "env_whitelist": [],
                 "seatbelt": {
                     "executable": "/usr/bin/sandbox-exec",
                     "unavailable": "fail",
                     "network": "isolated",
-                    "environment": "minimal",
-                    "env_whitelist": []
+                    "environment": "minimal"
                 }
             }
         }))

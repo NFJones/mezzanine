@@ -669,6 +669,40 @@ mod tests {
         assert!(!environment.contains_key("SSH_AUTH_SOCK"));
     }
 
+    /// Verifies shared native defaults keep Seatbelt-owned HOME and SHELL out
+    /// of pane evidence while preserving a forwarded PATH for its payload.
+    #[test]
+    fn compiler_accepts_shared_defaults_after_filtering_seatbelt_owned_names() {
+        let names = crate::runtime::seatbelt_forwarded_environment_names(&[
+            "PATH".to_string(),
+            "HOME".to_string(),
+            "SHELL".to_string(),
+        ]);
+        let environment_request = mez_agent::shell::PaneEnvironmentRequest::new(names).unwrap();
+        let evidence = mez_agent::shell::PaneEnvironmentEvidence::from_parts(
+            &environment_request,
+            BTreeMap::from([(
+                "PATH".to_string(),
+                "/opt/tools/bin:/usr/bin:/bin".to_string(),
+            )]),
+            BTreeMap::new(),
+        )
+        .unwrap();
+
+        let plan = compile_seatbelt_launch_plan(request(
+            &config(),
+            &policy(SandboxNetworkMode::Isolated),
+            &evidence,
+        ))
+        .unwrap();
+        let environment =
+            serde_json::from_slice::<BTreeMap<String, String>>(&plan.environment_document).unwrap();
+
+        assert_eq!(environment["PATH"], "/opt/tools/bin:/usr/bin:/bin");
+        assert_eq!(environment["HOME"], "/private/tmp/mez-action/home");
+        assert_eq!(environment["SHELL"], "/bin/sh");
+    }
+
     /// Verifies Seatbelt exposes the canonical user home without granting it
     /// ordinary access, while permitting lookup beneath one allowlisted PATH
     /// directory under that home.

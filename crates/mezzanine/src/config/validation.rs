@@ -1836,23 +1836,15 @@ fn validate_env_whitelist_config(format: ConfigFormat, text: &str) -> Vec<Config
     else {
         return Vec::new();
     };
-    let mut diagnostics = Vec::new();
-    for backend in ["bubblewrap", "seatbelt"] {
-        let Some(value) = permissions
-            .get(backend)
-            .and_then(serde_json::Value::as_object)
-            .and_then(|config| config.get("env_whitelist"))
-        else {
-            continue;
-        };
-        diagnostics.extend(validate_env_whitelist_value(backend, value));
-    }
-    diagnostics
+    permissions
+        .get("env_whitelist")
+        .map(|value| validate_env_whitelist_value("permissions", value))
+        .unwrap_or_default()
 }
 
-/// Validates one backend's bounded portable environment-name list.
+/// Validates one shared bounded portable environment-name list.
 fn validate_env_whitelist_value(backend: &str, value: &serde_json::Value) -> Vec<ConfigDiagnostic> {
-    let path = format!("permissions.{backend}.env_whitelist");
+    let path = format!("{backend}.env_whitelist");
     let Some(names) = value.as_array() else {
         return vec![ConfigDiagnostic {
             path,
@@ -1924,6 +1916,7 @@ fn project_overlay_path_changes_execution_authority(path: &str) -> bool {
         "permissions.approval_policy"
             | "permissions.preset"
             | "permissions.sandbox"
+            | "permissions.env_whitelist"
             | "permissions.read_scopes"
             | "permissions.write_scopes"
             | "permissions.network_policy"

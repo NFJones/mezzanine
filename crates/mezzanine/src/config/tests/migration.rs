@@ -1394,7 +1394,7 @@ fn migrates_schema_49_with_empty_env_whitelist() {
             Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
         );
         assert_eq!(
-            values.get("permissions.bubblewrap.env_whitelist"),
+            values.get("permissions.env_whitelist"),
             Some(&"[]".to_string())
         );
     }
@@ -1429,10 +1429,10 @@ fn migrates_schema_50_without_toolchain_configuration() {
         );
         assert_eq!(
             migrated
-                .pointer("/permissions/bubblewrap/env_whitelist")
+                .pointer("/permissions/env_whitelist")
                 .and_then(serde_json::Value::as_array),
             Some(&vec![serde_json::json!("ACME_HOME")]),
-            "surviving env whitelist missing after {format:?} migration: {}",
+            "shared env whitelist missing after {format:?} migration: {}",
             plan.text
         );
         assert!(!values.contains_key("permissions.bubblewrap.toolchains"));
@@ -3721,6 +3721,43 @@ fn migrates_schema_94_toml_inline_agents_without_rewriting_authored_values() {
         assert_eq!(
             validate_config_text(ConfigFormat::Toml, &migrated.text, ConfigScope::Primary).valid,
             valid
+        );
+    }
+}
+
+/// Verifies schema v96 moves the selected legacy backend whitelist into the
+/// shared permissions setting across every supported configuration format.
+#[test]
+fn migrates_schema_95_env_whitelist_to_shared_permissions_setting() {
+    for (format, text) in [
+        (
+            ConfigFormat::Toml,
+            "version = 95\n[permissions.bubblewrap]\nenv_whitelist = [\"PATH\", \"CI\"]\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":95,"permissions":{"seatbelt":{"env_whitelist":["PATH","CI"]}}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 95\npermissions:\n  bubblewrap:\n    env_whitelist: [PATH, CI]\n",
+        ),
+    ] {
+        let migrated = migrate_config_text(format, text).unwrap();
+        let root = parse_config_json_value(format, &migrated.text).unwrap();
+
+        assert_eq!(migrated.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(
+            root.pointer("/permissions/env_whitelist"),
+            Some(&serde_json::json!(["PATH", "CI"]))
+        );
+        assert!(
+            root.pointer("/permissions/bubblewrap/env_whitelist")
+                .is_none()
+        );
+        assert!(
+            root.pointer("/permissions/seatbelt/env_whitelist")
+                .is_none()
         );
     }
 }

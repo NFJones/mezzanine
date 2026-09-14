@@ -319,6 +319,7 @@ pub fn config_change_setting_path_description() -> String {
             PERMISSION_KEYS,
             &[
                 "sandbox",
+                "env_whitelist",
                 "read_scopes",
                 "write_scopes",
                 "bubblewrap",
@@ -388,6 +389,7 @@ pub(super) const PERMISSION_KEYS: &[&str] = &[
     "approval_policy",
     "preset",
     "sandbox",
+    "env_whitelist",
     "read_scopes",
     "write_scopes",
     "bubblewrap",
@@ -428,7 +430,6 @@ pub(super) const BUBBLEWRAP_PERMISSION_KEYS: &[&str] = &[
     "network",
     "environment",
     "group_whitelist",
-    "env_whitelist",
     "git_user_name",
     "git_user_email",
 ];
@@ -439,7 +440,6 @@ pub(crate) const SEATBELT_PERMISSION_KEYS: &[&str] = &[
     "unavailable",
     "network",
     "environment",
-    "env_whitelist",
     "git_user_name",
     "git_user_email",
 ];
@@ -453,6 +453,7 @@ pub(crate) fn config_change_path_is_user_only_sandbox_policy(path: &str) -> bool
     matches!(
         path,
         "permissions.sandbox"
+            | "permissions.env_whitelist"
             | "permissions.read_scopes"
             | "permissions.write_scopes"
             | "permissions.bubblewrap"
