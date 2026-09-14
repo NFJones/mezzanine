@@ -29,9 +29,9 @@ use super::{
 };
 use crate::runtime::render::{
     ActionResult, AgentPresentationEntry, MezError, Result, RuntimeAgentShellPreviewOwner,
-    RuntimeSessionService, RuntimeStreamingSayAction, RuntimeStreamingSayPresentation,
-    RuntimeStreamingSayProjectionContext, Size, TerminalScreen, current_unix_seconds,
-    default_runtime_agent_prompt_input,
+    RuntimeSessionService, RuntimeStreamingMessageSource, RuntimeStreamingSayAction,
+    RuntimeStreamingSayPresentation, RuntimeStreamingSayProjectionContext, Size, TerminalScreen,
+    current_unix_seconds, default_runtime_agent_prompt_input,
 };
 use crate::runtime::{
     PeerMessageLogMode, runtime_agent_peer_message_log_mode_from_config,
@@ -45,8 +45,7 @@ use mez_agent::{
 use mez_mux::{
     copy::{COPY_WRAP_CONTINUATION, encode_copy_source_line_in_group},
     render::{
-        markdown_block_copy_lines, wrap_rich_text_line_to_width_with_continuation_indent,
-        wrap_rich_text_line_to_width_with_continuation_indent_hard,
+        markdown_block_copy_lines, wrap_rich_text_line_to_width_with_continuation_indent_hard,
         wrap_rich_text_line_to_width_with_source_ranges_hard,
     },
 };
@@ -230,7 +229,7 @@ fn peer_message_echo_rendered_lines(
                 copy_text: Some(source.clone()),
                 kind: RichTextLineKind::Normal,
             };
-            wrap_rich_text_line_to_width_with_continuation_indent(
+            wrap_rich_text_line_to_width_with_continuation_indent_hard(
                 line,
                 display_width,
                 body_indent.as_str(),
@@ -245,6 +244,61 @@ fn peer_message_echo_rendered_lines(
             })
         })
         .collect()
+}
+
+/// Builds one provisional sender-side peer-message projection.
+///
+/// Provider output is only a candidate action at this point, so this helper
+/// deliberately produces terminal rows and copy metadata only. Settlement and
+/// durable presentation remain owned by the message-execution path.
+fn streaming_outbound_message_projection_with_theme(
+    message: &RuntimeStreamingMessageSource,
+    frame_width: usize,
+    table_width: usize,
+    ui_theme: &mez_mux::theme::UiTheme,
+) -> StreamingSayProjection {
+    let label = peer_message_echo_label(&message.recipient);
+    let marker = format!("{label}<");
+    let prefix = format!("{marker} ");
+    let payload = peer_message_echo_payload(&message.text);
+    let markdown = runtime_peer_message_presentation_is_markdown(Some(&message.content_type));
+    let mut rendered_lines = if markdown {
+        peer_message_markdown_rendered_lines(
+            prefix.as_str(),
+            payload.as_str(),
+            ui_theme,
+            table_width,
+        )
+    } else {
+        peer_message_echo_rendered_lines(prefix.as_str(), payload.as_str(), frame_width, &label)
+    };
+    attach_agent_name_marker_span(
+        &mut rendered_lines,
+        marker.as_str(),
+        agent_name_marker_rendition(ui_theme.colors.agent_transcript_peer_recipient),
+    );
+    let copy_lines = if markdown {
+        std::iter::once(message.text.trim_end_matches(['\r', '\n']).to_string())
+            .chain(std::iter::repeat_n(
+                AGENT_COPY_SKIP_LINE.to_string(),
+                rendered_lines.len().saturating_sub(1),
+            ))
+            .collect()
+    } else {
+        rendered_lines
+            .iter()
+            .map(|line| {
+                line.copy_text
+                    .clone()
+                    .unwrap_or_else(|| AGENT_COPY_SKIP_LINE.to_string())
+            })
+            .collect()
+    };
+    StreamingSayProjection {
+        style: AgentTerminalPresentationStyle::UserPrompt,
+        rendered_lines,
+        copy_lines,
+    }
 }
 
 /// Colored name marker prefixing the parent-supplied prompt in a subagent pane.
@@ -2556,6 +2610,7 @@ impl RuntimeSessionService {
                         provider_screen: std::sync::Arc::new(baseline_screen),
                         rationale: None,
                         actions: std::collections::BTreeMap::new(),
+                        outbound_messages: std::collections::BTreeMap::new(),
                         shell_commands: std::collections::BTreeMap::new(),
                         shell_summaries: std::collections::BTreeMap::new(),
                         action_headers: std::collections::BTreeMap::new(),
@@ -2621,6 +2676,7 @@ impl RuntimeSessionService {
                             provider_screen: std::sync::Arc::new(baseline_screen),
                             rationale: None,
                             actions: std::collections::BTreeMap::new(),
+                            outbound_messages: std::collections::BTreeMap::new(),
                             shell_commands: std::collections::BTreeMap::new(),
                             shell_summaries: std::collections::BTreeMap::new(),
                             action_headers: std::collections::BTreeMap::new(),
@@ -2701,12 +2757,84 @@ impl RuntimeSessionService {
                 })?;
                 action.complete = true;
             }
-            mez_agent::StreamingSayEvent::MessageStarted { .. }
-            | mez_agent::StreamingSayEvent::MessagePayloadDelta { .. }
-            | mez_agent::StreamingSayEvent::MessagePayloadComplete { .. } => {
-                // Outbound sender rendering is intentionally implemented by the
-                // settlement and presentation phases after this parser-only
-                // event contract is established.
+            mez_agent::StreamingSayEvent::MessageStarted {
+                action_index,
+                recipient,
+                content_type,
+            } => {
+                if !runtime_peer_message_presentation_is_visible(
+                    self.agent_peer_message_log_mode(),
+                    Some(content_type),
+                ) {
+                    return Ok(());
+                }
+                self.ensure_agent_streaming_presentation(pane_id, turn_id)?;
+                let presentation = self
+                    .presentation
+                    .agent_streaming_say_presentations
+                    .get_mut(pane_id)
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "streaming outbound message presentation is unavailable",
+                        )
+                    })?;
+                presentation
+                    .outbound_messages
+                    .entry(*action_index)
+                    .or_insert_with(|| RuntimeStreamingMessageSource {
+                        recipient: recipient.clone(),
+                        content_type: content_type.clone(),
+                        text: String::new(),
+                        complete: false,
+                    });
+                presentation.revision = presentation.revision.wrapping_add(1);
+                presentation.projected_revision = None;
+            }
+            mez_agent::StreamingSayEvent::MessagePayloadDelta { action_index, text } => {
+                let exists = self
+                    .presentation
+                    .agent_streaming_say_presentations
+                    .get(pane_id)
+                    .filter(|presentation| presentation.turn_id == turn_id)
+                    .is_some_and(|presentation| {
+                        presentation.outbound_messages.contains_key(action_index)
+                    });
+                if !exists {
+                    return Ok(());
+                }
+                let presentation = self
+                    .presentation
+                    .agent_streaming_say_presentations
+                    .get_mut(pane_id)
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "streaming outbound message presentation disappeared",
+                        )
+                    })?;
+                let message = presentation
+                    .outbound_messages
+                    .get_mut(action_index)
+                    .ok_or_else(|| {
+                        MezError::invalid_state("streaming outbound message source disappeared")
+                    })?;
+                message.text.push_str(text);
+                if !text.is_empty() {
+                    presentation.revision = presentation.revision.wrapping_add(1);
+                    presentation.projected_revision = None;
+                }
+            }
+            mez_agent::StreamingSayEvent::MessagePayloadComplete { action_index } => {
+                let Some(presentation) = self
+                    .presentation
+                    .agent_streaming_say_presentations
+                    .get_mut(pane_id)
+                    .filter(|presentation| presentation.turn_id == turn_id)
+                else {
+                    return Ok(());
+                };
+                if let Some(message) = presentation.outbound_messages.get_mut(action_index) {
+                    message.complete = true;
+                }
             }
             mez_agent::StreamingSayEvent::RationaleStarted => {
                 self.ensure_agent_streaming_presentation(pane_id, turn_id)?;
@@ -2972,6 +3100,7 @@ impl RuntimeSessionService {
                     provider_screen: std::sync::Arc::new(baseline_screen),
                     rationale: None,
                     actions: std::collections::BTreeMap::new(),
+                    outbound_messages: std::collections::BTreeMap::new(),
                     shell_commands: std::collections::BTreeMap::new(),
                     shell_summaries: std::collections::BTreeMap::new(),
                     action_headers: std::collections::BTreeMap::new(),
@@ -3187,6 +3316,7 @@ impl RuntimeSessionService {
         };
         let has_source = presentation.rationale.is_some()
             || !presentation.actions.is_empty()
+            || !presentation.outbound_messages.is_empty()
             || !presentation.shell_commands.is_empty()
             || !presentation.shell_summaries.is_empty()
             || !presentation.action_headers.is_empty();
@@ -3214,6 +3344,7 @@ impl RuntimeSessionService {
             baseline_screen: presentation.baseline_screen.clone(),
             rationale: presentation.rationale.clone(),
             actions: presentation.actions.clone(),
+            outbound_messages: presentation.outbound_messages.clone(),
             shell_commands: presentation.shell_commands.clone(),
             shell_summaries: presentation.shell_summaries.clone(),
             action_headers: presentation.action_headers.clone(),
@@ -3268,6 +3399,21 @@ impl RuntimeSessionService {
                 )
             })
             .collect::<Vec<_>>();
+        let outbound_message_projections = work
+            .outbound_messages
+            .iter()
+            .map(|(action_index, message)| {
+                (
+                    *action_index,
+                    streaming_outbound_message_projection_with_theme(
+                        message,
+                        work.frame_width,
+                        work.table_width,
+                        &work.ui_theme,
+                    ),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
         let rationale_projection = work.rationale.as_ref().and_then(|source| {
             work.thinking_enabled.then(|| {
                 let rendition = agent_terminal_label_rendition(
@@ -3424,6 +3570,7 @@ impl RuntimeSessionService {
         let action_indices = work
             .actions
             .keys()
+            .chain(work.outbound_messages.keys())
             .chain(work.shell_summaries.keys())
             .chain(work.action_headers.keys())
             .chain(work.shell_commands.keys())
@@ -3435,6 +3582,7 @@ impl RuntimeSessionService {
             });
             for projection in say
                 .into_iter()
+                .chain(outbound_message_projections.get(&action_index))
                 .chain(summary_projections.get(&action_index))
                 .chain(header_projections.get(&action_index))
                 .chain(command_projections.get(&action_index))
@@ -3882,9 +4030,13 @@ impl RuntimeSessionService {
             .agent_pane_screen_lineage(pane_id, &presentation.conversation_id)
             == Some(presentation.installed_lineage);
         let batch = execution.response.action_batch.as_ref();
-        let matches =
-            presentation.turn_id == turn_id
+        let matches = presentation.turn_id == turn_id
                 && conversation_matches
+                // Sender-side message previews remain provisional until the
+                // dedicated settlement path establishes message-service
+                // acceptance. Generic stream completion must therefore
+                // restore them rather than retaining an unvalidated row.
+                && presentation.outbound_messages.is_empty()
                 && batch.is_some_and(|batch| {
                     presentation.rationale.as_ref().is_none_or(|streamed| {
                         streamed.complete && streamed.text == batch.rationale

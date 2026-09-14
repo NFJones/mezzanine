@@ -1583,6 +1583,234 @@ fn runtime_interrupted_turn_retains_partial_streamed_output_in_pane_buffer() {
     );
 }
 
+/// Verifies a presentation-eligible outbound message appears before provider
+/// completion, retains its requested recipient marker, and obeys the active
+/// transcript width cap.
+#[test]
+fn runtime_streaming_outbound_message_projects_before_completion() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[terminal]\nagent_wrap_column_cap = 24\n".to_string(),
+        }])
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(80, 12).unwrap(), 120).unwrap(),
+    );
+    let turn = service
+        .start_agent_prompt_turn("%1", "stream an outbound message")
+        .unwrap();
+
+    for event in [
+        mez_agent::StreamingSayEvent::MessageStarted {
+            action_index: 0,
+            recipient: "agent-%2".to_string(),
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+        mez_agent::StreamingSayEvent::MessagePayloadDelta {
+            action_index: 0,
+            text: "partial outbound payload with averyveryverylongtoken".to_string(),
+        },
+    ] {
+        service
+            .apply_agent_streaming_say_event_to_terminal_buffer("%1", &turn.turn_id, &event)
+            .unwrap();
+    }
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(
+        service
+            .take_agent_streaming_say_projection_work("%1", &turn.turn_id)
+            .unwrap()
+            .expect("partial outbound message should produce projection work"),
+    )
+    .unwrap();
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap()
+    );
+
+    let lines = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
+    assert!(
+        lines.iter().any(|line| line.contains("agent-%2<")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("partial")),
+        "{lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .filter(|line| !line.trim().is_empty())
+            .all(|line| unicode_width::UnicodeWidthStr::width(line.as_str()) <= 24),
+        "{lines:?}"
+    );
+}
+
+/// Verifies normal-mode filtering prevents noncanonical outbound message media
+/// from creating provisional source state or sender-pane rows.
+#[test]
+fn runtime_streaming_outbound_message_filters_json_in_normal_mode() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let turn = service
+        .start_agent_prompt_turn("%1", "stream a filtered outbound message")
+        .unwrap();
+
+    service
+        .apply_agent_streaming_say_event_to_terminal_buffer(
+            "%1",
+            &turn.turn_id,
+            &mez_agent::StreamingSayEvent::MessageStarted {
+                action_index: 0,
+                recipient: "agent-%2".to_string(),
+                content_type: "application/json".to_string(),
+            },
+        )
+        .unwrap();
+    service
+        .apply_agent_streaming_say_event_to_terminal_buffer(
+            "%1",
+            &turn.turn_id,
+            &mez_agent::StreamingSayEvent::MessagePayloadDelta {
+                action_index: 0,
+                text: "{\"hidden\":true}".to_string(),
+            },
+        )
+        .unwrap();
+
+    assert!(
+        service
+            .take_agent_streaming_say_projection_work("%1", &turn.turn_id)
+            .unwrap()
+            .is_none()
+    );
+}
+
+/// Verifies verbose mode renders an established noncanonical message payload
+/// literally, while the same provisional source is retired when generic stream
+/// completion runs before the dedicated message-settlement phase.
+#[test]
+fn runtime_streaming_outbound_message_renders_verbose_json_and_retires_on_completion() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "verbose-peer-log".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\npeer_message_log_mode = \"verbose\"\n".to_string(),
+        }])
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(80, 12).unwrap(), 120).unwrap(),
+    );
+    let turn = service
+        .start_agent_prompt_turn("%1", "stream a verbose outbound message")
+        .unwrap();
+    let baseline = service.agent_pane_screen("%1").unwrap().clone();
+    let payload = r#"{\"visible\":true}"#;
+
+    for event in [
+        mez_agent::StreamingSayEvent::MessageStarted {
+            action_index: 0,
+            recipient: "agent-%2".to_string(),
+            content_type: "application/json".to_string(),
+        },
+        mez_agent::StreamingSayEvent::MessagePayloadDelta {
+            action_index: 0,
+            text: payload.to_string(),
+        },
+        mez_agent::StreamingSayEvent::MessagePayloadComplete { action_index: 0 },
+    ] {
+        service
+            .apply_agent_streaming_say_event_to_terminal_buffer("%1", &turn.turn_id, &event)
+            .unwrap();
+    }
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(
+        service
+            .take_agent_streaming_say_projection_work("%1", &turn.turn_id)
+            .unwrap()
+            .expect("verbose outbound payload should produce projection work"),
+    )
+    .unwrap();
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap()
+    );
+    let preview = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(preview.contains("agent-%2<"), "{preview}");
+    assert!(preview.contains(payload), "{preview}");
+
+    let action = mez_agent::AgentAction {
+        id: "streamed-message".to_string(),
+        payload: mez_agent::AgentActionPayload::SendMessage {
+            recipient: "agent-%2".to_string(),
+            scope: None,
+            content_type: "application/json".to_string(),
+            payload: payload.to_string(),
+            correlation_id: None,
+        },
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture(&turn.turn_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: payload.to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: String::new(),
+                actions: vec![action],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: Vec::new(),
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+    assert!(
+        service
+            .reconcile_agent_streaming_say_completion("%1", &turn.turn_id, &execution)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(service.agent_pane_screen("%1").unwrap(), &baseline);
+}
+
 /// Verifies streaming projection updates retain an active agent copy viewport.
 ///
 /// A projection replaces the backing agent terminal screen while an operator
