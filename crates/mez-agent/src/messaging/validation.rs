@@ -273,9 +273,14 @@ pub fn validate_mmp_payload_metadata(
     payload: &str,
     payload_encoding: Option<&str>,
 ) -> Result<()> {
-    if content_type.starts_with("text/") && content_type != "text/plain; charset=utf-8" {
+    if content_type.starts_with("text/")
+        && !matches!(
+            content_type,
+            "text/plain; charset=utf-8" | "text/markdown" | "text/markdown; charset=utf-8"
+        )
+    {
         return Err(MessageError::invalid_args(
-            "MMP text payloads require content_type text/plain; charset=utf-8",
+            "MMP text payloads require text/plain; charset=utf-8 or text/markdown",
         ));
     }
     if content_type == "application/json"

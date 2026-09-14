@@ -193,6 +193,26 @@ pub fn wrap_rich_text_line_to_width(line: RichTextLine, display_width: usize) ->
         .collect()
 }
 
+/// Wraps one rich-text line with an explicit display-only continuation indent.
+///
+/// The first physical row uses the full width. Every later row reserves the
+/// requested indent within that same width, preserving source-copy metadata.
+pub fn wrap_rich_text_line_to_width_with_continuation_indent(
+    line: RichTextLine,
+    display_width: usize,
+    continuation_indent: &str,
+) -> Vec<RichTextLine> {
+    wrap_rich_text_line_to_width_with_overflow_policy(
+        line,
+        display_width,
+        false,
+        Some(continuation_indent),
+    )
+    .into_iter()
+    .map(|wrapped| wrapped.line)
+    .collect()
+}
+
 /// Wraps one rich-text line and reports source columns for each physical row.
 ///
 /// The source ranges let callers translate interactive ranges, such as links,
@@ -201,7 +221,7 @@ pub fn wrap_rich_text_line_to_width_with_source_ranges(
     line: RichTextLine,
     display_width: usize,
 ) -> Vec<WrappedRichTextLine> {
-    wrap_rich_text_line_to_width_with_overflow_policy(line, display_width, false)
+    wrap_rich_text_line_to_width_with_overflow_policy(line, display_width, false, None)
 }
 
 /// Wraps one rich-text line and hard-splits unbreakable overflow.
@@ -214,7 +234,7 @@ pub fn wrap_rich_text_line_to_width_with_source_ranges_hard(
     line: RichTextLine,
     display_width: usize,
 ) -> Vec<WrappedRichTextLine> {
-    wrap_rich_text_line_to_width_with_overflow_policy(line, display_width, true)
+    wrap_rich_text_line_to_width_with_overflow_policy(line, display_width, true, None)
 }
 
 /// Applies the selected unbreakable-token policy to one rich-text line.
@@ -222,6 +242,7 @@ fn wrap_rich_text_line_to_width_with_overflow_policy(
     line: RichTextLine,
     display_width: usize,
     hard_split_unbreakable: bool,
+    continuation_indent_override: Option<&str>,
 ) -> Vec<WrappedRichTextLine> {
     let line = if line.kind == RichTextLineKind::MarkdownRule
         && terminal_text_width(line.display.as_str()) <= display_width
@@ -239,7 +260,9 @@ fn wrap_rich_text_line_to_width_with_overflow_policy(
             display_prefix_width: 0,
         }];
     }
-    let continuation_indent = rendered_line_continuation_indent(&line.display, display_width);
+    let continuation_indent = continuation_indent_override
+        .map(str::to_string)
+        .unwrap_or_else(|| rendered_line_continuation_indent(&line.display, display_width));
     let continuation_width = terminal_text_width(continuation_indent.as_str());
     let continuation_display_width = display_width.saturating_sub(continuation_width).max(1);
     let mut wrapped = Vec::new();

@@ -243,28 +243,30 @@ impl CopyMode {
     }
 }
 
-/// Decodes one markdown source-line copy marker into its source identity and
+/// Decodes one source-line copy marker into its presentation-group identity and
 /// raw line text.
-fn decode_agent_copy_source_line(line: &str) -> Option<(usize, &str)> {
+fn decode_agent_copy_source_line(line: &str) -> Option<(&str, &str)> {
     let encoded = line.strip_prefix(AGENT_COPY_SOURCE_LINE_PREFIX)?;
-    let (source_index, raw_line) = encoded.split_once(':')?;
-    Some((source_index.parse().ok()?, raw_line))
+    encoded.split_once(':')
 }
 
 /// Formats copied selection lines by removing display-only agent gutters.
 fn normalize_copied_selection_lines(lines: Vec<String>) -> Vec<String> {
     let mut output = Vec::with_capacity(lines.len());
     let mut agent_run = Vec::new();
-    let mut emitted_markdown_source_lines = Vec::new();
+    let mut emitted_source_lines = Vec::<String>::new();
     for line in lines {
         if line == AGENT_COPY_SKIP_LINE {
             continue;
         }
-        let line = if let Some((source_index, raw_line)) = decode_agent_copy_source_line(&line) {
-            if emitted_markdown_source_lines.contains(&source_index) {
+        let line = if let Some((source_identity, raw_line)) = decode_agent_copy_source_line(&line) {
+            if emitted_source_lines
+                .iter()
+                .any(|emitted| emitted == source_identity)
+            {
                 continue;
             }
-            emitted_markdown_source_lines.push(source_index);
+            emitted_source_lines.push(source_identity.to_string());
             raw_line.to_string()
         } else {
             if line
@@ -272,7 +274,7 @@ fn normalize_copied_selection_lines(lines: Vec<String>) -> Vec<String> {
                 .unwrap_or(line.as_str())
                 == "***"
             {
-                emitted_markdown_source_lines.clear();
+                emitted_source_lines.clear();
             }
             line
         };

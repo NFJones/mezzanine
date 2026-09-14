@@ -104,17 +104,34 @@ pub(crate) fn render_agent_markdown_body_lines(
     ui_theme: &UiTheme,
     table_display_width: usize,
 ) -> Vec<RichTextLine> {
+    render_agent_markdown_body_lines_with_prefix(
+        markdown,
+        ui_theme,
+        table_display_width,
+        "mez> ",
+        "     ",
+    )
+}
+
+/// Renders Markdown body lines using caller-provided transcript prefixes.
+pub(crate) fn render_agent_markdown_body_lines_with_prefix(
+    markdown: &str,
+    ui_theme: &UiTheme,
+    table_display_width: usize,
+    first_prefix: &str,
+    continuation_prefix: &str,
+) -> Vec<RichTextLine> {
     let trimmed = markdown.trim_end_matches(['\r', '\n']);
     if trimmed.is_empty() {
         return vec![RichTextLine {
-            display: "mez> ".to_string(),
+            display: first_prefix.to_string(),
             style_spans: Vec::new(),
             copy_text: None,
             kind: RichTextLineKind::Normal,
         }];
     }
     let table_body_display_width = table_display_width
-        .saturating_sub(UnicodeWidthStr::width("mez> "))
+        .saturating_sub(UnicodeWidthStr::width(first_prefix))
         .saturating_sub(1)
         .max(1);
     let mut mermaid_fence_count = 0;
@@ -134,8 +151,8 @@ pub(crate) fn render_agent_markdown_body_lines(
             Some(table_body_display_width),
             &mut mermaid_renderer,
         ),
-        "mez> ",
-        "     ",
+        first_prefix,
+        continuation_prefix,
     )
 }
 

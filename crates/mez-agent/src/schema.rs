@@ -811,8 +811,8 @@ fn maap_send_message_action_schema() -> serde_json::Value {
                 "content_type",
                 serde_json::json!({
                     "type": "string",
-                    "enum": ["text/plain; charset=utf-8", "application/json"],
-                    "description": "Use text/plain; charset=utf-8 for plain-text coordination messages and application/json for compact JSON-string payloads."
+                    "enum": ["text/plain; charset=utf-8", "text/markdown; charset=utf-8", "application/json"],
+                    "description": "Use text/plain; charset=utf-8 for plain-text coordination messages, text/markdown; charset=utf-8 for Markdown messages, and application/json for compact JSON-string payloads."
                 }),
             ),
             (

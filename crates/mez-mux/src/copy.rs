@@ -25,6 +25,15 @@ pub fn encode_copy_source_line(source_index: usize, copy_line: &str) -> String {
     format!("{COPY_SOURCE_LINE_PREFIX}{source_index}:{copy_line}")
 }
 
+/// Encodes one source line scoped to a distinct rendered presentation group.
+pub fn encode_copy_source_line_in_group(
+    group: &str,
+    source_index: usize,
+    copy_line: &str,
+) -> String {
+    format!("{COPY_SOURCE_LINE_PREFIX}{group}/{source_index}:{copy_line}")
+}
+
 /// Identifies one terminal-cell position in a copy-mode buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CopyPosition {

@@ -798,7 +798,11 @@ impl RuntimeSessionService {
         let log_mode = runtime_effective_config_value(self.integration.config_layers())
             .map(|value| runtime_agent_peer_message_log_mode_from_config(&value))
             .unwrap_or(PeerMessageLogMode::Normal);
-        log_mode == PeerMessageLogMode::Verbose || content_type == "text/plain; charset=utf-8"
+        log_mode == PeerMessageLogMode::Verbose
+            || matches!(
+                content_type,
+                "text/plain; charset=utf-8" | "text/markdown" | "text/markdown; charset=utf-8"
+            )
     }
 
     /// Returns whether the receipt's delivery cursor confirms its transport commit.

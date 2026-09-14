@@ -19,8 +19,8 @@ use super::text::{
     append_styled_agent_terminal_line, append_styled_agent_terminal_rendered_line,
     bounded_agent_terminal_presentation_columns, bounded_command_preview_source,
     command_preview_terminal_rendered_lines, render_agent_markdown_body_lines,
-    sanitized_agent_terminal_line, shell_output_preview_visual_rows,
-    wrapped_prefixed_agent_terminal_lines,
+    render_agent_markdown_body_lines_with_prefix, sanitized_agent_terminal_line,
+    shell_output_preview_visual_rows, wrapped_prefixed_agent_terminal_lines,
 };
 use super::{
     AGENT_COPY_SKIP_LINE, AgentAction, GraphicRendition, RichTextLine, RichTextLineKind,
@@ -41,8 +41,12 @@ use mez_agent::{
     AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, AgentShellVisibility, agent_output_content_type_is_diff,
     agent_output_content_type_is_markdown,
 };
-use mez_mux::render::{
-    markdown_block_copy_lines, wrap_rich_text_line_to_width_with_source_ranges_hard,
+use mez_mux::{
+    copy::{COPY_WRAP_CONTINUATION, encode_copy_source_line_in_group},
+    render::{
+        markdown_block_copy_lines, wrap_rich_text_line_to_width_with_continuation_indent,
+        wrap_rich_text_line_to_width_with_source_ranges_hard,
+    },
 };
 
 /// Content type for width-independent styled agent presentation records.
@@ -182,13 +186,74 @@ fn peer_message_is_canonical_plaintext(content_type: Option<&str>) -> bool {
     content_type == Some(AGENT_PEER_MESSAGE_TEXT_PLAIN_CONTENT_TYPE)
 }
 
-/// Returns literal display rows for one canonical plaintext peer payload.
+/// Returns whether a peer media type uses the safe Markdown pane renderer.
+fn peer_message_is_markdown(content_type: Option<&str>) -> bool {
+    matches!(
+        content_type,
+        Some("text/markdown") | Some("text/markdown; charset=utf-8")
+    )
+}
+
+/// Renders one Markdown peer payload while preserving its sender indicator.
+fn peer_message_markdown_rendered_lines(
+    prefix: &str,
+    payload: &str,
+    ui_theme: &mez_mux::theme::UiTheme,
+    table_display_width: usize,
+) -> Vec<RichTextLine> {
+    render_agent_markdown_body_lines_with_prefix(
+        payload,
+        ui_theme,
+        table_display_width,
+        prefix,
+        "     ",
+    )
+}
+
+/// Returns presentation and source-copy rows for one canonical plaintext peer payload.
 fn peer_message_echo_rendered_lines(
     prefix: &str,
     payload: &str,
     display_width: usize,
+    copy_group: &str,
 ) -> Vec<RichTextLine> {
-    wrapped_prefixed_agent_terminal_lines(prefix, payload, display_width)
+    let body_indent = " ".repeat(5);
+    let payload = payload.trim_end_matches(['\r', '\n']);
+    let payload_lines = if payload.is_empty() {
+        vec![""]
+    } else {
+        payload.lines().collect::<Vec<_>>()
+    };
+    payload_lines
+        .iter()
+        .enumerate()
+        .flat_map(|(source_index, payload_line)| {
+            let source = encode_copy_source_line_in_group(copy_group, source_index, payload_line);
+            let line = RichTextLine {
+                display: format!(
+                    "{}{}",
+                    if source_index == 0 { prefix } else { "" },
+                    sanitized_agent_terminal_line(payload_line),
+                ),
+                style_spans: Vec::new(),
+                copy_text: Some(source.clone()),
+                kind: RichTextLineKind::Normal,
+            };
+            wrap_rich_text_line_to_width_with_continuation_indent(
+                line,
+                display_width,
+                body_indent.as_str(),
+            )
+            .into_iter()
+            .enumerate()
+            .map(move |(index, mut line)| {
+                if index > 0 || line.copy_text.as_deref() == Some(COPY_WRAP_CONTINUATION) {
+                    line.copy_text = Some(AGENT_COPY_SKIP_LINE.to_string());
+                }
+                line
+            })
+        })
+        .collect()
 }
 
 /// Colored name marker prefixing the parent-supplied prompt in a subagent pane.
@@ -599,6 +664,7 @@ impl RuntimeSessionService {
         if !presentation.presentation_eligible
             && log_mode != PeerMessageLogMode::Verbose
             && !peer_message_is_canonical_plaintext(presentation.content_type)
+            && !peer_message_is_markdown(presentation.content_type)
         {
             return Ok(());
         }
@@ -606,8 +672,25 @@ impl RuntimeSessionService {
         let display_width = self.agent_terminal_markdown_frame_width(pane_id)?;
         let rendered_label = peer_message_echo_label(presentation.peer_label);
         let prefix = format!("{rendered_label}> ");
-        let mut rendered_lines =
-            peer_message_echo_rendered_lines(prefix.as_str(), body.as_str(), display_width);
+        let copy_group = presentation
+            .receive_identity
+            .unwrap_or(presentation.peer_label);
+        let markdown = peer_message_is_markdown(presentation.content_type);
+        let mut rendered_lines = if markdown {
+            peer_message_markdown_rendered_lines(
+                prefix.as_str(),
+                body.as_str(),
+                &self.presentation.settings.ui_theme,
+                self.agent_terminal_markdown_terminal_width(pane_id)?,
+            )
+        } else {
+            peer_message_echo_rendered_lines(
+                prefix.as_str(),
+                body.as_str(),
+                display_width,
+                copy_group,
+            )
+        };
         let marker_rendition = if presentation.direct_parent {
             self.presentation
                 .settings
@@ -634,11 +717,33 @@ impl RuntimeSessionService {
             presentation.direct_parent,
             true,
         );
+        let copy_lines = if markdown {
+            std::iter::once(
+                presentation
+                    .payload
+                    .trim_end_matches(['\r', '\n'])
+                    .to_string(),
+            )
+            .chain(std::iter::repeat_n(
+                AGENT_COPY_SKIP_LINE.to_string(),
+                rendered_lines.len().saturating_sub(1),
+            ))
+            .collect::<Vec<_>>()
+        } else {
+            rendered_lines
+                .iter()
+                .map(|line| {
+                    line.copy_text
+                        .clone()
+                        .unwrap_or_else(|| AGENT_COPY_SKIP_LINE.to_string())
+                })
+                .collect::<Vec<_>>()
+        };
         self.append_agent_terminal_rendered_lines_to_buffer(
             pane_id,
             AgentTerminalPresentationStyle::UserPrompt,
             rendered_lines.as_slice(),
-            &[],
+            &copy_lines,
             Some((
                 source.as_str(),
                 AGENT_PRESENTATION_PEER_MESSAGE_CONTENT_TYPE,
@@ -681,10 +786,14 @@ impl RuntimeSessionService {
         let display_width = self.agent_terminal_markdown_frame_width(pane_id)?;
         let rendered_label = peer_message_echo_label(presentation.peer_label);
         let prefix = format!("{rendered_label}> ");
+        let copy_group = presentation
+            .receive_identity
+            .unwrap_or(presentation.peer_label);
         let rendered_lines = peer_message_echo_rendered_lines(
             prefix.as_str(),
             peer_message_echo_payload(presentation.payload).as_str(),
             display_width,
+            copy_group,
         );
         let source = peer_message_presentation_source(
             presentation.receive_identity,
@@ -4913,13 +5022,48 @@ mod tests {
     /// content, and retains the normal prompt-style wrapping path.
     #[test]
     fn peer_message_canonical_plaintext_renders_literal_payload() {
-        let lines =
-            peer_message_echo_rendered_lines("agent-%3> ", r#"{"output":"literal plaintext"}"#, 80);
+        let lines = peer_message_echo_rendered_lines(
+            "agent-%3> ",
+            r#"{"output":"literal plaintext"}"#,
+            80,
+            "peer-canonical-plaintext",
+        );
         assert_eq!(lines.len(), 1);
         assert_eq!(
             lines[0].display,
             r#"agent-%3> {"output":"literal plaintext"}"#
         );
+        assert_eq!(
+            lines[0].copy_text.as_deref(),
+            Some(
+                "\u{1e}mez-copy-source-line:peer-canonical-plaintext/0:{\"output\":\"literal plaintext\"}"
+            )
+        );
         assert!(lines[0].style_spans.is_empty());
+    }
+
+    /// Verifies wrapped peer rows retain their raw source line so copy-mode
+    /// selection omits both the presentation indent and sender marker.
+    #[test]
+    fn peer_message_wrapping_retains_one_raw_source_copy_line() {
+        let lines =
+            peer_message_echo_rendered_lines("agent-%3> ", "alpha beta gamma", 20, "peer-wrapping");
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| line.display.as_str())
+                .collect::<Vec<_>>(),
+            ["agent-%3> alpha", "     beta gamma"]
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| line.copy_text.as_deref())
+                .collect::<Vec<_>>(),
+            [
+                Some("\u{1e}mez-copy-source-line:peer-wrapping/0:alpha beta gamma"),
+                Some("\u{1e}mez-copy-skip-line"),
+            ]
+        );
     }
 }
