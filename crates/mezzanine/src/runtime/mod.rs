@@ -344,7 +344,6 @@ pub(crate) use processes::daemon_only_probe_key_for_tests;
 pub(crate) use processes::{
     BubblewrapEnvironmentProfile, PaneSurfaceKind,
     RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES, RuntimeProcessComponent,
-    seatbelt_forwarded_environment_names,
 };
 /// Exposes the render module boundary.
 ///

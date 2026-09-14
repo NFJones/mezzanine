@@ -458,7 +458,10 @@ pub(crate) enum RunningShellTransactionKind {
         /// Provider-only resolutions retain an empty collection.
         waiters: Vec<(String, String)>,
     },
-    /// Internal request-scoped pane environment evidence transaction.
+    /// Legacy request-scoped pane environment evidence transaction retained so
+    /// in-flight transactions can still settle after the server-snapshot
+    /// forwarding transition.
+    #[allow(dead_code)]
     EnvironmentEvidence {
         /// Exact cache identity captured before pane dispatch.
         cache_key: RuntimeEnvironmentEvidenceCacheKey,

@@ -560,13 +560,16 @@ impl crate::runtime::RuntimeSessionService {
         )?;
         let signature_hash = signature.stable_hash();
         let request = mez_agent::shell::PaneEnvironmentRequest::new(
-            super::seatbelt_forwarded_environment_names(&config.env_whitelist.requested_names),
+            config.env_whitelist.requested_names.clone(),
         )
         .map_err(|error| MezError::invalid_args(error.message()))?;
         let evidence = if matches!(action.payload, AgentActionPayload::ApplyPatch { .. }) {
             PaneEnvironmentEvidence::restrictive(&request, "semantic_patch_not_forwarded")
         } else {
-            native_environment_evidence(&request, context)
+            super::native_workload_environment::server_environment_evidence(
+                &request,
+                self.server_environment(),
+            )
         };
         let child_shell_path = program_dialect
             .interpreter_path()
@@ -619,13 +622,16 @@ impl crate::runtime::RuntimeSessionService {
         )?;
         let signature_hash = signature.stable_hash();
         let request = mez_agent::shell::PaneEnvironmentRequest::new(
-            super::seatbelt_forwarded_environment_names(&config.env_whitelist.requested_names),
+            config.env_whitelist.requested_names.clone(),
         )
         .map_err(|error| MezError::invalid_args(error.message()))?;
         let evidence = if matches!(action.payload, AgentActionPayload::ApplyPatch { .. }) {
             PaneEnvironmentEvidence::restrictive(&request, "semantic_patch_not_forwarded")
         } else {
-            native_environment_evidence(&request, context)
+            super::native_workload_environment::server_environment_evidence(
+                &request,
+                self.server_environment(),
+            )
         };
         let child_shell_path = program_dialect
             .interpreter_path()
@@ -1284,42 +1290,6 @@ fn provider_pane_identity(context: &NativeShellContext, pane_id: &str) -> Result
         })
 }
 
-/// Resolves configured forwarding names from the root-process environment.
-fn native_environment_evidence(
-    request: &mez_agent::shell::PaneEnvironmentRequest,
-    context: &NativeShellContext,
-) -> PaneEnvironmentEvidence {
-    if request.names.is_empty() {
-        return PaneEnvironmentEvidence::restrictive(request, "not_configured");
-    }
-    let mut values = BTreeMap::new();
-    for name in &request.names {
-        if let Some(entry) = context
-            .environment()
-            .iter()
-            .find(|entry| entry.key.as_slice() == name.as_bytes())
-            && let Ok(value) = std::str::from_utf8(&entry.value)
-        {
-            values.insert(name.clone(), value.to_string());
-        }
-    }
-    let omitted = request
-        .names
-        .iter()
-        .filter(|name| !values.contains_key(*name))
-        .map(|name| {
-            (
-                name.clone(),
-                "not_present_in_root_process_environment".to_string(),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-    match PaneEnvironmentEvidence::from_parts(request, values, omitted) {
-        Ok(evidence) => evidence,
-        Err(_) => PaneEnvironmentEvidence::restrictive(request, "root_process_values_unsafe"),
-    }
-}
-
 /// Runs the deterministic Bubblewrap capability probe as a host process.
 fn run_native_bubblewrap_capability_probe(
     pane_id: &str,
@@ -1625,41 +1595,43 @@ mod tests {
     /// Verifies native Seatbelt evidence retains a safe forwarded PATH while
     /// filtering the shared default HOME and SHELL names before compilation.
     #[test]
-    fn native_seatbelt_evidence_filters_backend_owned_default_names() {
-        let context = crate::runtime::processes::NativeShellContext::for_test(
-            PathBuf::from("/bin/sh"),
-            vec![
+    fn native_seatbelt_evidence_uses_server_values_without_name_filtering() {
+        let request = mez_agent::shell::PaneEnvironmentRequest::new(vec![
+            "PATH".to_string(),
+            "HOME".to_string(),
+            "SHELL".to_string(),
+        ])
+        .unwrap();
+        let evidence = super::super::native_workload_environment::server_environment_evidence(
+            &request,
+            &[
                 RawEnvironmentEntry {
                     key: b"PATH".to_vec(),
-                    value: b"/pane/bin".to_vec(),
+                    value: b"/server/bin".to_vec(),
                 },
                 RawEnvironmentEntry {
                     key: b"HOME".to_vec(),
-                    value: b"/pane/home".to_vec(),
+                    value: b"/server/home".to_vec(),
                 },
                 RawEnvironmentEntry {
                     key: b"SHELL".to_vec(),
                     value: b"/bin/zsh".to_vec(),
                 },
             ],
-            std::env::temp_dir(),
         );
-        let request = mez_agent::shell::PaneEnvironmentRequest::new(
-            super::super::seatbelt_forwarded_environment_names(&[
-                "PATH".to_string(),
-                "HOME".to_string(),
-                "SHELL".to_string(),
-            ]),
-        )
-        .unwrap();
-        let evidence = native_environment_evidence(&request, &context);
 
         assert_eq!(
             evidence.values.get("PATH").map(String::as_str),
-            Some("/pane/bin")
+            Some("/server/bin")
         );
-        assert!(!evidence.values.contains_key("HOME"));
-        assert!(!evidence.values.contains_key("SHELL"));
+        assert_eq!(
+            evidence.values.get("HOME").map(String::as_str),
+            Some("/server/home")
+        );
+        assert_eq!(
+            evidence.values.get("SHELL").map(String::as_str),
+            Some("/bin/zsh")
+        );
     }
 
     /// Verifies one admitted pane-status provider fails closed through the real

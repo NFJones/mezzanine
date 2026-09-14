@@ -67,9 +67,7 @@ impl RuntimeSessionService {
                 )
             })?;
         let request = mez_agent::shell::PaneEnvironmentRequest::new(
-            super::environment_evidence::seatbelt_forwarded_environment_names(
-                &config.env_whitelist.requested_names,
-            ),
+            config.env_whitelist.requested_names.clone(),
         )
         .map_err(|error| crate::MezError::invalid_args(error.message()))?;
         let environment_evidence = if omit_forwarded_environment || request.names.is_empty() {
@@ -82,12 +80,10 @@ impl RuntimeSessionService {
                 },
             )
         } else {
-            self.pane_environment_evidence(turn, action_id, &request)
-                .ok_or_else(|| {
-                    crate::MezError::invalid_state(
-                        "pane environment evidence is unavailable for Seatbelt capability probing",
-                    )
-                })?
+            crate::runtime::processes::native_workload_environment::server_environment_evidence(
+                &request,
+                self.server_environment(),
+            )
         };
         let probe_plan = crate::security::sandbox::seatbelt_capability_probe_plan(
             &config,

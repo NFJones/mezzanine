@@ -5,67 +5,9 @@
 
 use super::{
     EventKind, PaneReadinessState, Result, RunningShellTransactionKind, RunningShellTransactionRef,
-    RuntimeSessionService, ShellTransaction, current_unix_millis, json_escape,
-    runtime_marker_for_action,
+    RuntimeSessionService, json_escape,
 };
 use crate::runtime::RuntimeEnvironmentEvidenceCacheKey;
-use mez_agent::ShellClassification;
-
-const ENVIRONMENT_EVIDENCE_TIMEOUT_MS: u64 = 10_000;
-
-/// Returns the shared names safe to forward into a Seatbelt payload.
-///
-/// Seatbelt owns its HOME, SHELL, identity, XDG, and Git-isolation values, so
-/// requesting them from the pane would turn the shared native defaults into an
-/// attempted sandbox override.
-pub(crate) fn seatbelt_forwarded_environment_names(names: &[String]) -> Vec<String> {
-    names
-        .iter()
-        .filter(|name| {
-            !matches!(
-                name.as_str(),
-                "HOME"
-                    | "TMPDIR"
-                    | "LANG"
-                    | "LC_ALL"
-                    | "USER"
-                    | "LOGNAME"
-                    | "SHELL"
-                    | "XDG_CACHE_HOME"
-                    | "XDG_CONFIG_HOME"
-                    | "XDG_DATA_HOME"
-                    | "XDG_STATE_HOME"
-                    | "GIT_CONFIG_NOSYSTEM"
-                    | "GIT_CONFIG_GLOBAL"
-                    | "GIT_CONFIG_COUNT"
-            ) && !name.starts_with("GIT_CONFIG_KEY_")
-                && !name.starts_with("GIT_CONFIG_VALUE_")
-        })
-        .cloned()
-        .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::seatbelt_forwarded_environment_names;
-
-    /// Verifies the shared native defaults retain pane PATH for Seatbelt while
-    /// excluding the backend-owned HOME and SHELL variables from forwarding.
-    #[test]
-    fn seatbelt_filter_excludes_backend_owned_default_names() {
-        let names = vec![
-            "PATH".to_string(),
-            "HOME".to_string(),
-            "SHELL".to_string(),
-            "GH_TOKEN".to_string(),
-        ];
-
-        assert_eq!(
-            seatbelt_forwarded_environment_names(&names),
-            ["PATH", "GH_TOKEN"]
-        );
-    }
-}
 
 /// Selects how one Bubblewrap workload obtains optional pane environment
 /// values without weakening the fixed sandbox environment.
@@ -96,6 +38,10 @@ impl RuntimeSessionService {
         })
     }
 
+    #[allow(
+        dead_code,
+        reason = "retained for settlement of legacy in-flight transactions"
+    )]
     pub(crate) fn pane_environment_evidence(
         &self,
         turn: &mez_agent::AgentTurnRecord,
@@ -140,140 +86,10 @@ impl RuntimeSessionService {
         turn: &mez_agent::AgentTurnRecord,
         action_id: &str,
     ) -> Result<bool> {
-        let policy = self.permission_policy_for_turn(turn);
-        let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
-        if matches!(sandbox_config, crate::runtime::SandboxConfig::Bubblewrap(_)) {
-            return Ok(true);
-        }
-        let requested_names = match &sandbox_config {
-            crate::runtime::SandboxConfig::Seatbelt(_) => seatbelt_forwarded_environment_names(
-                &self.configured_permissions().env_whitelist.requested_names,
-            ),
-            _ => self
-                .configured_permissions()
-                .env_whitelist
-                .requested_names
-                .clone(),
-        };
-        if !crate::runtime::config::sandbox_applies_to_policy(&sandbox_config, &policy)
-            || requested_names.is_empty()
-        {
-            return Ok(true);
-        }
-        let request = mez_agent::shell::PaneEnvironmentRequest::new(requested_names)
-            .map_err(|error| crate::MezError::invalid_args(error.message()))?;
-        let cache_key = self
-            .environment_evidence_cache_key(&turn.pane_id, &turn.turn_id, action_id, &request)
-            .ok_or_else(|| {
-                crate::MezError::invalid_state(
-                    "pane environment is unavailable for environment forwarding",
-                )
-            })?;
-        if self
-            .process
-            .pane_environment_evidence
-            .contains_key(&cache_key)
-        {
-            return Ok(true);
-        }
-        if let Some(transaction) =
-            self.process
-                .running_shell_transactions
-                .values_mut()
-                .find(|transaction| {
-                    matches!(
-                        &transaction.kind,
-                        RunningShellTransactionKind::EnvironmentEvidence { cache_key: pending, .. }
-                            if pending == &cache_key
-                    )
-                })
-        {
-            let RunningShellTransactionKind::EnvironmentEvidence { waiters, .. } =
-                &mut transaction.kind
-            else {
-                return Ok(false);
-            };
-            let waiter = (turn.turn_id.clone(), action_id.to_string());
-            if !waiters.contains(&waiter) {
-                waiters.push(waiter);
-            }
-            return Ok(false);
-        }
-        self.require_pane_ready_for_agent_command(&turn.pane_id)?;
-        let shell_identity = self.shell_execution_identity_for_pane(&turn.pane_id)?;
-        let classification = shell_identity.classification();
-        let command = mez_agent::shell::pane_environment_evidence_command(&request, classification)
-            .map_err(|error| crate::MezError::invalid_args(error.message()))?;
-        let marker = runtime_marker_for_action(turn, &format!("environment-evidence-{action_id}"))?;
-        let marker_id = marker.as_str().to_string();
-        let transaction = self.configure_shell_transaction_for_pane(
-            &turn.pane_id,
-            ShellTransaction::new(
-                marker,
-                &turn.turn_id,
-                &turn.agent_id,
-                &turn.pane_id,
-                shell_identity.shell_path(),
-                command.clone(),
-            )?,
-        );
-        let input = transaction.render_for_classification_input(classification);
-        self.require_generated_shell_input(&input)?;
-        let receiver_payload = (!input.receiver_payload.is_empty()).then(|| {
-            mez_mux::process::ShellInputDelivery::receiver_acknowledged(
-                input.receiver_payload.clone().into_bytes(),
-                marker_id.clone(),
-                true,
-            )
-        });
-        let mut wrapper = input.wrapper;
-        if !wrapper.ends_with(char::from(10)) {
-            wrapper.push(char::from(10));
-        }
-        let requires_payload_receiver_ready =
-            classification == ShellClassification::Fish && !input.payload.is_empty();
-        self.remember_mez_wrapper_filter_command(&turn.pane_id, &command);
-        self.set_pane_readiness(&turn.pane_id, PaneReadinessState::Busy);
-        self.register_running_shell_transaction(
-            marker_id.clone(),
-            RunningShellTransactionRef {
-                turn_id: turn.turn_id.clone(),
-                kind: RunningShellTransactionKind::EnvironmentEvidence {
-                    cache_key,
-                    waiters: vec![(turn.turn_id.clone(), action_id.to_string())],
-                },
-                pane_id: turn.pane_id.clone(),
-                command,
-                started_at_unix_ms: current_unix_millis(),
-                timeout_ms: Some(ENVIRONMENT_EVIDENCE_TIMEOUT_MS),
-                pending_input_payload: (!input.payload.is_empty()).then(|| {
-                    mez_mux::process::ShellInputDelivery::receiver_acknowledged(
-                        input.payload.into_bytes(),
-                        marker_id.clone(),
-                        input.payload_receiver_acknowledgements,
-                    )
-                }),
-                observed_output_bytes: 0,
-                observed_output_preview: String::new(),
-                observed_output_truncated: false,
-            },
-            true,
-        );
-        if requires_payload_receiver_ready {
-            self.require_shell_transaction_payload_receiver_ready(&marker_id);
-        }
-        if let Some(receiver_payload) = receiver_payload {
-            self.register_shell_receiver_payload(&marker_id, receiver_payload);
-        }
-        if let Err(error) = self.write_runtime_pane_shell_input(&turn.pane_id, wrapper.as_bytes()) {
-            self.fail_shell_transactions_for_pane_write_failure(&turn.pane_id, error.message())?;
-            return Err(error);
-        }
-        self.append_lifecycle_event(EventKind::AgentStatus, format!(
-            r#"{{"pane_id":"{}","environment_evidence":"sent","marker":"{}","requested_count":{}}}"#,
-            json_escape(&turn.pane_id), json_escape(&marker_id), request.names.len()
-        ))?;
-        Ok(false)
+        let _ = (turn, action_id);
+        // Ordinary Bubblewrap and Seatbelt workloads obtain their configured
+        // environment directly from the immutable Mez-server snapshot.
+        Ok(true)
     }
 
     fn cache_restrictive_environment_evidence(

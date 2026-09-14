@@ -40,20 +40,6 @@ const FIXED_READ_SUBPATHS: &[&str] = &[
     "/private/var/db/timezone",
 ];
 const FIXED_READ_LITERALS: &[&str] = &["/dev/null", "/dev/random", "/dev/urandom"];
-const PROTECTED_ENVIRONMENT_NAMES: &[&str] = &[
-    "HOME",
-    "TMPDIR",
-    "XDG_CACHE_HOME",
-    "XDG_CONFIG_HOME",
-    "XDG_DATA_HOME",
-    "XDG_STATE_HOME",
-    "GIT_CONFIG_NOSYSTEM",
-    "GIT_CONFIG_GLOBAL",
-    "GIT_CONFIG_COUNT",
-    "USER",
-    "LOGNAME",
-    "SHELL",
-];
 
 /// Inputs required to compile one effective policy into a Seatbelt launch.
 #[derive(Debug, Clone)]
@@ -205,13 +191,6 @@ fn validate_request(request: &SeatbeltCompileRequest<'_>) -> Result<(), SandboxC
     }
     for grant in &request.policy.grants {
         validate_grant(grant)?;
-    }
-    for protected in PROTECTED_ENVIRONMENT_NAMES {
-        if request.environment_evidence.values.contains_key(*protected) {
-            return Err(invalid_input(format!(
-                "Seatbelt environment evidence must not override protected variable {protected}"
-            )));
-        }
     }
     Ok(())
 }
@@ -415,22 +394,21 @@ fn payload_environment(
         ("XDG_STATE_HOME".to_string(), format!("{xdg_root}/state")),
     ]);
     for (name, value) in &request.environment_evidence.values {
-        if PROTECTED_ENVIRONMENT_NAMES.contains(&name.as_str()) {
-            return Err(invalid_input(format!(
-                "Seatbelt environment evidence must not override protected variable {name}"
-            )));
-        }
         environment.insert(name.clone(), value.clone());
     }
     if let (Some(name), Some(email)) = (
         request.config.git_user_name.as_deref(),
         request.config.git_user_email.as_deref(),
     ) {
-        environment.insert("GIT_CONFIG_COUNT".to_string(), "2".to_string());
-        environment.insert("GIT_CONFIG_KEY_0".to_string(), "user.name".to_string());
-        environment.insert("GIT_CONFIG_VALUE_0".to_string(), name.to_string());
-        environment.insert("GIT_CONFIG_KEY_1".to_string(), "user.email".to_string());
-        environment.insert("GIT_CONFIG_VALUE_1".to_string(), email.to_string());
+        for (key, value) in [
+            ("GIT_CONFIG_COUNT", "2".to_string()),
+            ("GIT_CONFIG_KEY_0", "user.name".to_string()),
+            ("GIT_CONFIG_VALUE_0", name.to_string()),
+            ("GIT_CONFIG_KEY_1", "user.email".to_string()),
+            ("GIT_CONFIG_VALUE_1", email.to_string()),
+        ] {
+            environment.entry(key.to_string()).or_insert(value);
+        }
     }
     Ok(environment)
 }
@@ -669,22 +647,23 @@ mod tests {
         assert!(!environment.contains_key("SSH_AUTH_SOCK"));
     }
 
-    /// Verifies shared native defaults keep Seatbelt-owned HOME and SHELL out
-    /// of pane evidence while preserving a forwarded PATH for its payload.
+    /// Verifies configured evidence overrides Seatbelt defaults without
+    /// removing any declared environment name from the payload.
     #[test]
-    fn compiler_accepts_shared_defaults_after_filtering_seatbelt_owned_names() {
-        let names = crate::runtime::seatbelt_forwarded_environment_names(&[
-            "PATH".to_string(),
-            "HOME".to_string(),
-            "SHELL".to_string(),
-        ]);
-        let environment_request = mez_agent::shell::PaneEnvironmentRequest::new(names).unwrap();
+    fn compiler_accepts_configured_environment_overrides() {
+        let names = ["PATH".to_string(), "HOME".to_string(), "SHELL".to_string()];
+        let environment_request =
+            mez_agent::shell::PaneEnvironmentRequest::new(names.to_vec()).unwrap();
         let evidence = mez_agent::shell::PaneEnvironmentEvidence::from_parts(
             &environment_request,
-            BTreeMap::from([(
-                "PATH".to_string(),
-                "/opt/tools/bin:/usr/bin:/bin".to_string(),
-            )]),
+            BTreeMap::from([
+                (
+                    "PATH".to_string(),
+                    "/opt/tools/bin:/usr/bin:/bin".to_string(),
+                ),
+                ("HOME".to_string(), "/server/home".to_string()),
+                ("SHELL".to_string(), "/bin/zsh".to_string()),
+            ]),
             BTreeMap::new(),
         )
         .unwrap();
@@ -699,8 +678,8 @@ mod tests {
             serde_json::from_slice::<BTreeMap<String, String>>(&plan.environment_document).unwrap();
 
         assert_eq!(environment["PATH"], "/opt/tools/bin:/usr/bin:/bin");
-        assert_eq!(environment["HOME"], "/private/tmp/mez-action/home");
-        assert_eq!(environment["SHELL"], "/bin/sh");
+        assert_eq!(environment["HOME"], "/server/home");
+        assert_eq!(environment["SHELL"], "/bin/zsh");
     }
 
     /// Verifies Seatbelt exposes the canonical user home without granting it

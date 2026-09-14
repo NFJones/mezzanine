@@ -20,6 +20,11 @@ mod startup;
 mod transactions;
 mod zsh_compat;
 
+pub(super) use managed_shell_handoff::ManagedShellKind;
+use managed_shell_handoff::{
+    ManagedShellHandoff, ManagedShellHandoffEffect, ManagedShellHandoffEvent,
+    ManagedShellHandoffIdentity, ManagedShellRecoveryObservation, reduce_managed_shell_handoff,
+};
 #[cfg(test)]
 pub(crate) use native_bubblewrap::NativeBubblewrapCapabilityProbe;
 pub(crate) use native_bubblewrap::{NativeBubblewrapActivityLease, NativeSandboxCapabilityProbe};
@@ -36,21 +41,14 @@ pub(crate) use pane_process_identity::{
     RuntimePaneProcessIdentityInjection, RuntimePaneProcessIdentityUnavailable,
     RuntimePaneProcessRole,
 };
+pub(crate) use pane_process_identity::{
+    RuntimePaneShellIdentityEvidence, RuntimePaneShellIdentityRefresh,
+    RuntimePaneShellIdentityUnknown, RuntimeShellIdentityUnknownReason,
+};
 #[cfg(test)]
 pub(crate) use spawned_shell::execute_native_shell_dispatch;
 pub(crate) use spawned_shell::{
     execute_native_shell_dispatch_with_progress, execute_pane_status_provider_launch,
-};
-pub(crate) use transactions::seatbelt_forwarded_environment_names;
-
-pub(super) use managed_shell_handoff::ManagedShellKind;
-use managed_shell_handoff::{
-    ManagedShellHandoff, ManagedShellHandoffEffect, ManagedShellHandoffEvent,
-    ManagedShellHandoffIdentity, ManagedShellRecoveryObservation, reduce_managed_shell_handoff,
-};
-pub(crate) use pane_process_identity::{
-    RuntimePaneShellIdentityEvidence, RuntimePaneShellIdentityRefresh,
-    RuntimePaneShellIdentityUnknown, RuntimeShellIdentityUnknownReason,
 };
 
 use mez_mux::presentation::{pane_content_size_for_geometry, rendered_window_body_size};
