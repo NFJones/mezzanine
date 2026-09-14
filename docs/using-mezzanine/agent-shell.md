@@ -97,13 +97,14 @@ agent panes use bounded startup and fail with a copyable diagnostic instead of
 remaining indefinitely in bootstrap.
 
 Native launches compose their own environment instead of inheriting the
-Mezzanine daemon process environment. Validated variables read from the pane's
-root process are authoritative and win on duplicate names, so the pane `PATH`,
-exported toolchain variables, proxy settings, and intentional pane credentials
-still reach a native action. The runtime adds only its documented requirements,
-falls back to safe defaults when an optional variable is absent, and drops
-variables that exist only inside the Mezzanine process, such as harness
-transport credentials that no pane or approved launch requirement asked for.
+Mezzanine daemon process environment wholesale. For ordinary actions, only
+names in `permissions.env_whitelist` are selected from an immutable snapshot
+captured when Mez starts; selected values such as `PATH` reach native,
+Bubblewrap, and Seatbelt actions unchanged. Pane-root metadata still selects
+the native shell and working directory, but exports or startup-file changes
+made later in a pane do not alter forwarded values. The runtime adds only its
+documented requirements and drops all unselected server values, including
+harness transport credentials.
 
 ## Work inside SSH and container shells in pane mode
 

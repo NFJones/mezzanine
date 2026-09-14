@@ -4637,19 +4637,21 @@ preferring an authored shared value over Bubblewrap and then Seatbelt legacy
 values. An omitted shared value defaults to `["PATH", "HOME", "SHELL"]`, and an
 explicit `[]` forwards none of those names. Names MUST match
 `[A-Za-z_][A-Za-z0-9_]*`, be unique, contain at most 128 entries, and total at
-most 16 KiB. Values MUST be discovered only from the active pane process using
-a bounded framed protocol. Unset, malformed, non-text, oversized, reserved, or
+most 16 KiB. Values MUST be selected from an immutable environment snapshot
+captured when the Mez server runtime is created, not from the active pane
+process or interactive pane shell. Unset, malformed, non-text, oversized, or
 protocol-invalid values MUST be omitted independently with a value-redacted
-pane warning. Successful values MUST become direct Bubblewrap `--setenv`
-arguments for ordinary actions, MUST be bound by digest to the capability
-identity, and MUST never appear in status, warnings, telemetry, snapshots, or
-logs. Internal semantic `apply_patch` phases MUST NOT resolve or forward these
-optional values; their capability probe and workload compilation MUST use the
-same deterministic digest-bound no-forwarding profile. The fixed sandbox HOME,
-XDG, locale, identity, shell, and Git isolation variables MUST NOT be
-overridden. When `PATH` is successfully resolved through the whitelist, it MUST
-be used unchanged as the command-search path for ordinary actions. When `PATH`
-is absent or omitted, the command-search path MUST fall back to `/usr/bin:/bin`.
+warning. Successful values MUST become direct Bubblewrap `--setenv` arguments
+for ordinary actions, MUST be bound by digest to the capability identity, and
+MUST never appear in status, warnings, telemetry, snapshots, or logs. Internal
+semantic `apply_patch` phases MUST NOT resolve or forward these optional values;
+their capability probe and workload compilation MUST use the same deterministic
+digest-bound no-forwarding profile. Backend-owned environment values are
+defaults only: a successfully selected configured value, including `HOME`, XDG,
+locale, identity, shell, or Git configuration values, MUST take precedence.
+When `PATH` is successfully selected through the whitelist, it MUST be used
+unchanged as the command-search path for ordinary actions. When `PATH` is
+absent or omitted, the command-search path MUST fall back to `/usr/bin:/bin`.
 Forwarding MUST NOT grant filesystem, socket, network, group, or
 credential authority. The active pane
 shell's primary group MUST remain automatic and MUST NOT be listed. Entries
@@ -4934,13 +4936,12 @@ authority. Scoping one root MUST NOT implicitly expose credentials, manager
 state, caches, sockets, loaders, libraries, dependency roots, or unrelated
 installations. Every required external root MUST be authorized explicitly.
 
-The native and sandbox command-search `PATH` MUST equal the successfully resolved pane
-`PATH` only when `PATH` is listed in `permissions.env_whitelist`. A sandbox
+The native and sandbox command-search `PATH` MUST equal the successfully selected Mez-server
+snapshot `PATH` only when `PATH` is listed in `permissions.env_whitelist`. A sandbox
 payload without a forwarded `PATH` MUST use its fixed `/usr/bin:/bin` fallback;
 a native workload without a forwarded `PATH` MUST omit it. `permissions.env_whitelist`
-MUST NOT override `HOME`, `SHELL`, XDG paths, locale, identity, Git isolation,
-or any other Mezzanine-owned invariant. Forwarded variables MUST already exist in the active pane, MUST
-remain value-redacted from status, warnings, telemetry, snapshots, and audit,
+selects only configured valid values from the Mez-server snapshot. Forwarded
+variables MUST remain value-redacted from status, warnings, telemetry, snapshots, and audit,
 and MUST NOT grant filesystem, socket, network, group, or credential
 authority.
 
@@ -7630,10 +7631,11 @@ freshly spawned shell process whose executable and working directory are
 inferred from the pane's live root process, never by running commands through
 the pane shell. The child MUST receive one composed native workload environment
 that starts from a cleared base instead of the parent Mezzanine process
-environment: validated environment entries inferred from the live pane root
-process, with pane-root values taking precedence for duplicate names, plus the
-narrowly enumerated runtime launch requirements declared by Mezzanine. The pane
-root that supplies that inferred evidence MUST itself be created from a cleared
+environment: configured optional values selected from the immutable Mez-server
+snapshot, plus narrowly enumerated runtime launch requirements declared by
+Mezzanine. Pane-root metadata remains authoritative for shell executable and
+working-directory inference. The pane root that supplies that inferred evidence
+MUST itself be created from a cleared
 base plus the documented pane-creation allowlist when the runtime creates that
 pane through the agent-owned creation path, so a daemon-only name cannot enter
 native evidence through agent-owned pane creation. A pane process re-created by
@@ -7668,8 +7670,9 @@ transport metadata with `sent_to_pane` false. Native
 `apply_patch` actions MUST complete the same read and write phases as pane
 transport, materializing final content sidecar records into the spawned
 command file instead of the pane PTY. When a sandbox backend is active in native mode,
-Mezzanine MUST derive process identity and optional environment forwarding from
-the live root process, canonicalize filesystem authority directly through host
+Mezzanine MUST derive process identity from the live root process and select
+optional environment forwarding from the immutable Mez-server snapshot,
+canonicalize filesystem authority directly through host
 filesystem metadata, probe and launch the configured backend without pane
 transactions, and capture trusted backend-tagged lifecycle status outside
 command output. Native Seatbelt execution MUST use the same code-owned profile,
@@ -7694,23 +7697,21 @@ MUST be a portable environment name matching `[A-Za-z_][A-Za-z0-9_]*` of at most
 most 512 entries and at most 256 KiB of aggregate value bytes, and that budget
 MUST be enforced on the composed result rather than per source:
 runtime-required entries MUST be charged first and MUST NOT be dropped, and
-optional pane-root evidence that does not fit MUST be dropped deterministically,
-entry by entry, instead of failing a launch or being concatenated past the
-documented budget. Malformed or oversized optional pane-root evidence MUST be
-dropped deterministically instead of failing a launch. Validated pane-root
-evidence MUST be authoritative for overlapping
-keys, and the last valid occurrence of a duplicate evidence key MUST win. The
-ambient Mezzanine environment MUST be consulted only for requirement keys that
-explicitly declare forwarding, which are the workload `PATH`, the workload
-`HOME`, and the launcher command-search path, and it MUST NOT be copied
-wholesale into a workload. The guarantee is composition rather than ambient
-non-possession: the builder clears the ambient Mezzanine environment and
-forwards only validated pane-root evidence plus declared launch requirements, so
-an ambient-only value that no pane and no declaration supplies MUST NOT reach a
-workload or a code-owned launcher, while a value the pane root itself carries,
-including one the pane inherited when that pane was created, is pane evidence
-that this contract does not filter. Pane-creation environment inheritance is a
-separate boundary that composes the documented agent-owned pane allowlist.
+optional selected Mez-server snapshot entries that do not fit MUST be dropped
+deterministically, entry by entry, instead of failing a launch or being
+concatenated past the documented budget. Malformed or oversized optional
+snapshot entries MUST be dropped deterministically instead of failing a launch.
+Validated selected snapshot entries MUST be authoritative for overlapping keys,
+and the last valid occurrence of a duplicate snapshot key MUST win. The Mez
+server environment snapshot MUST be consulted only for names explicitly
+selected by `permissions.env_whitelist`; it MUST NOT be copied wholesale into a
+workload. The guarantee is composition rather than ambient inheritance: the
+builder clears the launch environment and forwards only validated selected
+snapshot values plus declared launch requirements, so an unselected server value
+MUST NOT reach a workload or a code-owned launcher. Pane-root metadata remains
+limited to native shell, working-directory, and process-identity inference.
+Pane-creation environment inheritance is a separate boundary that composes the
+documented agent-owned pane allowlist.
 Absent optional values MUST fall back to documented defaults
 instead of failing. A missing or malformed required value MUST produce a typed
 pre-dispatch error that names the requirement category and the exact key before
@@ -7720,9 +7721,10 @@ the Seatbelt child supervisor or `bwrap` MUST receive only the launcher control
 bucket and MUST NOT receive pane credentials or workload entries, while the
 sandboxed payload environment remains owned by the compiled sandbox plan
 (`--clearenv` plus `--setenv`, or the Seatbelt environment document).
-Sandbox-owned `HOME`, XDG paths, identity, locale, Git isolation, and whitelist
-projections MUST keep their existing precedence, and the contract MUST NOT
-weaken the stricter credential-free context admitted pane-status providers use.
+Backend-owned `HOME`, XDG paths, identity, locale, and Git values are defaults
+only when no configured selected snapshot value is present. The contract MUST
+NOT weaken the stricter credential-free context admitted pane-status providers
+use.
 Native local inference MUST NOT claim to represent a remote shell environment;
 it describes the local pane root process only. A required daemon variable that
 cannot be dropped safely MUST be documented rather than silently restored as
