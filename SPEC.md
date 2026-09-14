@@ -10955,16 +10955,15 @@ lost. Resuming an existing wait MUST NOT increment
 peer-message-triggered turns. Stop, pane shutdown, session shutdown, and parent
 cancellation MUST clear peer-wait state through normal turn cleanup.
 
-Interagent MMP traffic MUST be logged in the pane log in the prompt style with
-the peer name at the destination end of a direction arrow. A committed received
-peer message MUST log `{sender}> {payload}`, and an outbound `send_message` the
-transport accepted MUST log `{recipient}< {payload}`. Every committed received
-peer message MUST log exactly one line, including runtime-authored bridge and
-lifecycle traffic, so the logged set equals the committed set and never depends
-on which bounded delivery batch carried the message or whether the recipient was
-busy. The logged payload MUST NOT exceed the peer-context payload bound, and the
-line MUST wrap inside the pane the way a user prompt does. A logged peer line
-remains an operator-visible
+Interagent MMP traffic is presentation-only. In normal pane-log mode, only a
+committed received message or accepted outbound `send_message` with content type
+exactly `text/plain; charset=utf-8` MUST log `{sender}> {payload}` or
+`{recipient}< {payload}` in prompt style. All other media types MUST remain
+durable and model-visible without creating terminal rows, copy metadata, or
+presentation records. Verbose mode MUST log the full bounded raw payload for
+every accepted media type. The logged payload MUST NOT exceed the peer-context
+payload bound, and the line MUST wrap inside the pane the way a user prompt does.
+A logged peer line remains an operator-visible
 observation: it stays untrusted and non-user-authored, and it MUST NOT become
 user-trust context, approval authority, or a turn trigger. A received line MUST
 be logged only for a message the runtime actually commits, and a sent line MUST

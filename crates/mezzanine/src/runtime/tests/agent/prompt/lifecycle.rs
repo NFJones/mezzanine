@@ -350,8 +350,8 @@ fn runtime_subagent_spawn_bridge_notifications_log_no_parent_pane_echo() {
     );
     assert_eq!(
         running_text.matches("subagent task running").count(),
-        2,
-        "the committed bridge status logs once alongside its structural status line: {running_text}"
+        1,
+        "normal mode keeps only the structural status line for JSON bridge traffic: {running_text}"
     );
 
     service
@@ -363,8 +363,8 @@ fn runtime_subagent_spawn_bridge_notifications_log_no_parent_pane_echo() {
         "the terminal result keeps its structural `subagent ...` line: {result_text}"
     );
     assert!(
-        result_text.contains("completed without provider output"),
-        "the committed bridge result projects its output into the parent pane: {result_text}"
+        !result_text.contains("completed without provider output"),
+        "normal mode suppresses the JSON bridge result payload: {result_text}"
     );
     service.terminate_all_pane_processes().unwrap();
 }
@@ -936,15 +936,11 @@ fn close_agent_denial_signature(
 }
 
 /// Verifies persistent child bridge status and result messages commit exactly
-/// once, while the reply output remains visible in the parent pane's normal
-/// peer-message log.
+/// once while JSON bridge payloads remain absent from the parent normal pane log.
 ///
-/// One-task children already project dedicated structural lifecycle lines, but
-/// reusable children exchange their durable assignment and reply through the
-/// MMP bridge. Their runtime-authored envelopes must therefore retain the
-/// committed peer-message echo rather than being hidden by the generic bridge
-/// suppression used for one-task and macro children. Status payloads have no
-/// `output` field, so the existing JSON projection keeps their pane row empty.
+/// One-task and reusable children both keep their bridge envelopes durable and
+/// model-visible, but normal presentation filters the non-plaintext payloads
+/// before terminal rows or presentation records are created.
 #[test]
 fn runtime_persistent_subagent_bridge_messages_log_once_in_normal_mode() {
     let mut service = test_runtime_service();
@@ -1067,11 +1063,13 @@ fn runtime_persistent_subagent_bridge_messages_log_once_in_normal_mode() {
         2,
         "each persistent bridge envelope should commit exactly once"
     );
-    assert_eq!(
-        pane_text.matches("persistent bridge reply").count(),
-        1,
-        "persistent bridge result should log exactly once: {pane_text}"
-    );
+    for suppressed in ["persistent assignment accepted", "persistent bridge reply"] {
+        assert_eq!(
+            pane_text.matches(suppressed).count(),
+            0,
+            "normal mode must not render JSON bridge payloads: {pane_text}"
+        );
+    }
     service.terminate_all_pane_processes().unwrap();
 }
 
@@ -1744,8 +1742,8 @@ fn runtime_subagent_spawn_logs_parent_prompt_in_child_pane() {
         parent_text
             .matches("subagent task queued for agent surface startup")
             .count(),
-        1,
-        "the parent receives one committed initial task-status echo: {parent_text}"
+        0,
+        "normal mode suppresses the initial JSON task-status presentation: {parent_text}"
     );
     service.terminate_all_pane_processes().unwrap();
 }

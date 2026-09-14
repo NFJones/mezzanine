@@ -1437,8 +1437,8 @@ impl RuntimeSessionService {
         let child_display_name = self
             .subagent_lineage(&turn.agent_id)
             .map(|lineage| lineage.display_name.clone());
-        // Bridge provenance travels on the envelope itself so the parent pane echo
-        // can suppress this notification behind its `subagent ...` status line.
+        // Bridge provenance travels on the envelope so runtime consumers can
+        // distinguish this lifecycle notification from model-authored peer mail.
         let mut extension_fields = runtime_bridge_extension_fields();
         if let Some(name) = child_display_name.as_deref() {
             extension_fields.push((
@@ -1476,7 +1476,6 @@ impl RuntimeSessionService {
                 &parent_label,
                 "application/json",
                 &payload.to_json(),
-                false,
             );
             self.deliver_pending_runtime_agent_messages(now_ms)?;
         }
@@ -1769,8 +1768,8 @@ impl RuntimeSessionService {
             summary: summary.to_string(),
             output: output.to_string(),
         };
-        // Bridge provenance travels on the envelope itself so the parent pane echo
-        // can suppress this notification behind its `subagent ...` result line.
+        // Bridge provenance travels on the envelope so runtime consumers can
+        // distinguish this lifecycle notification from model-authored peer mail.
         let mut extension_fields = runtime_bridge_extension_fields();
         if let Some(name) = child_display_name.as_deref() {
             extension_fields.push((
@@ -1803,7 +1802,6 @@ impl RuntimeSessionService {
             &parent_label,
             "application/json",
             &payload.to_json(),
-            false,
         );
         self.deliver_pending_runtime_agent_messages(now_ms)?;
         Ok(())

@@ -1719,8 +1719,8 @@ impl RuntimeSessionService {
                 "subagent task started".to_string()
             },
         };
-        // This is the sole bridge notification paired with the parent-pane
-        // spawn status line, so mark it for presentation-only suppression.
+        // Mark the initial runtime-authored bridge notification so downstream
+        // lifecycle consumers can preserve its spawn provenance.
         let mut extension_fields = runtime_bridge_initial_spawn_extension_fields();
         extension_fields.push((
             "subagent_display_name".to_string(),
@@ -1759,7 +1759,6 @@ impl RuntimeSessionService {
             &parent_label,
             "application/json",
             &task_status.to_json(),
-            true,
         );
         self.deliver_pending_runtime_agent_messages(now_ms)?;
         self.append_subagent_parent_status_line(

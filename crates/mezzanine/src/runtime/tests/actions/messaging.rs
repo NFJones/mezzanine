@@ -1143,8 +1143,8 @@ fn runtime_peer_message_echo_logs_committed_bridge_traffic_once() {
             .iter()
             .filter(|line| line.contains("agent-%3> "))
             .count(),
-        3,
-        "each committed bridge status and the model message render once: {committed:#?}"
+        1,
+        "only the canonical plaintext model message renders in normal mode: {committed:#?}"
     );
     let committed_text = compact(committed.clone());
     assert_eq!(
@@ -1155,8 +1155,8 @@ fn runtime_peer_message_echo_logs_committed_bridge_traffic_once() {
     for summary in ["bridgeevidenceone", "bridgeevidencetwo"] {
         assert_eq!(
             committed_text.matches(summary).count(),
-            1,
-            "each committed task-status summary renders exactly once: {committed_text}"
+            0,
+            "normal presentation suppresses non-plaintext bridge payloads: {committed_text}"
         );
     }
 
@@ -1178,12 +1178,12 @@ fn runtime_peer_message_echo_logs_committed_bridge_traffic_once() {
     );
     assert_eq!(
         active.matches("bridgeevidencethree").count(),
-        1,
-        "an active-turn committed task status renders exactly once: {active}"
+        0,
+        "an active-turn committed task status remains presentation-silent: {active}"
     );
 
-    // A `task_result` bridge payload does carry an `output` field, so the bridge
-    // gate rather than the JSON projection has to keep it out of the log.
+    // A task-result bridge payload remains presentation-silent because normal
+    // mode admits only the canonical plaintext media type.
     accept(
         &mut service,
         result("bridge-4", "bridge-turn-4", "\"task complete\""),
@@ -1200,14 +1200,14 @@ fn runtime_peer_message_echo_logs_committed_bridge_traffic_once() {
             .iter()
             .filter(|line| line.contains("agent-%3> "))
             .count(),
-        5,
-        "each committed bridge status/result and the model message logs exactly once: {projected:#?}"
+        1,
+        "non-plaintext bridge status and result payloads remain presentation-silent: {projected:#?}"
     );
     let projected_text = compact(projected);
     assert_eq!(
         projected_text.matches("taskcomplete").count(),
-        1,
-        "the bridge result output projects exactly once in normal mode: {projected_text}"
+        0,
+        "normal mode no longer projects JSON result output: {projected_text}"
     );
     for omitted in ["bridgeresult", "success"] {
         assert_eq!(
@@ -1218,8 +1218,7 @@ fn runtime_peer_message_echo_logs_committed_bridge_traffic_once() {
         );
     }
 
-    // Verbose mode restores the bridge echo and logs the whole bounded payload
-    // instead of the `output` projection.
+    // Verbose mode logs the complete bounded raw bridge payload.
     service
         .replace_config_layers(vec![ConfigLayer {
             name: "peer-message-log-mode-verbose".to_string(),
@@ -1252,7 +1251,7 @@ fn runtime_peer_message_echo_logs_committed_bridge_traffic_once() {
     );
     assert!(
         verbose_text.contains("bridgeresult"),
-        "verbose mode logs the whole bounded payload rather than its `output` projection: \
+        "verbose mode logs the whole bounded payload: \
          {verbose_text}"
     );
     assert!(

@@ -176,7 +176,6 @@ impl RuntimeSessionService {
             &peer_label,
             envelope.content_type.as_str(),
             envelope.payload.as_str(),
-            false,
         );
     }
 
@@ -657,7 +656,6 @@ impl RuntimeSessionService {
             &recipient_label,
             content_type.as_str(),
             payload.as_str(),
-            false,
         );
         self.deliver_pending_runtime_agent_messages(now_ms)?;
         Ok(ActionResult::succeeded(

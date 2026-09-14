@@ -100,10 +100,11 @@ use it as a sleep, delay, retry, poll, approval wait, user-input wait, subproces
 wait, network wait, or for any other circumstance. Runtime-authored task status
 and task result bridge messages do not wake it.
 
-Every successfully accepted outbound message and every committed received message
-is written once in each participating endpoint pane log. Runtime bridge traffic
-uses the same rule; only the initial spawn status explicitly paired with the
-child pane's rendered `parent>` prompt is suppressed to avoid that one duplicate.
+Normal pane logs show only accepted or committed peer messages whose content type
+is exactly `text/plain; charset=utf-8`; JSON, binary, and absent media types
+remain durable and model-visible without a pane row. Set
+`agents.peer_message_log_mode = "verbose"` to show the full bounded raw payload
+for every accepted media type, including runtime bridge traffic.
 
 Under `ask`, a send that no rule already allows blocks as a resumable approval
 bound to the recipient and payload, and under `auto-allow` it proceeds after a

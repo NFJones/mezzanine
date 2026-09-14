@@ -3802,7 +3802,6 @@ fn runtime_agent_peer_and_parent_lines_colorize_name_markers() {
             "agent-%3",
             "text/plain; charset=utf-8",
             "check cwd",
-            false,
         )
         .unwrap();
     service
@@ -3811,7 +3810,6 @@ fn runtime_agent_peer_and_parent_lines_colorize_name_markers() {
             "agent-%2",
             "text/plain; charset=utf-8",
             "ack now",
-            false,
         )
         .unwrap();
     service
@@ -3877,9 +3875,9 @@ fn runtime_agent_peer_and_parent_lines_colorize_name_markers() {
 /// payload above the peer-context bound is bounded once, at render time, and the
 /// live and replayed rows stay byte-identical, truncation marker included.
 ///
-/// The stored media type keeps the JSON projection reproducible too: a projected
-/// row replays with identical syntax spans, and a payload the projection
-/// suppressed leaves no record behind for replay to resurrect.
+/// The stored media type keeps canonical plaintext filtering reproducible: a
+/// suppressed non-plaintext payload leaves no record behind for replay to
+/// resurrect.
 #[test]
 fn runtime_agent_peer_message_persists_source_for_replay() {
     let mut service = test_runtime_service();
@@ -3918,7 +3916,6 @@ fn runtime_agent_peer_message_persists_source_for_replay() {
             "agent-%3",
             "text/plain; charset=utf-8",
             "check the pane cwd",
-            false,
         )
         .unwrap();
     service
@@ -3927,7 +3924,6 @@ fn runtime_agent_peer_message_persists_source_for_replay() {
             "agent-%2",
             "text/plain; charset=utf-8",
             "ack, running now",
-            false,
         )
         .unwrap();
     service
@@ -3936,19 +3932,16 @@ fn runtime_agent_peer_message_persists_source_for_replay() {
             "agent-%3",
             "text/plain; charset=utf-8",
             large_payload.as_str(),
-            false,
         )
         .unwrap();
-    // A runtime bridge notification must leave no row and no replayable record
-    // whatever its payload, while a model JSON payload with `output` logs that
-    // value alone.
+    // JSON payloads, including runtime bridge traffic and a model-authored
+    // result payload, remain presentation-silent in normal mode.
     service
         .append_agent_received_peer_message_to_terminal_buffer(
             "%1",
             "agent-%3",
             "application/json",
             r#"{"task_id":"task-10","state":"running","progress_percent":0,"summary":"working"}"#,
-            true,
         )
         .unwrap();
     service
@@ -3957,7 +3950,6 @@ fn runtime_agent_peer_message_persists_source_for_replay() {
             "agent-%3",
             "application/json",
             r#"{"task_id":"task-9","success":true,"summary":"done","output":{"rows":41,"ok":true}}"#,
-            false,
         )
         .unwrap();
     let live_rows = service
@@ -3969,20 +3961,12 @@ fn runtime_agent_peer_message_persists_source_for_replay() {
         .chars()
         .filter(|character| character.is_alphanumeric())
         .collect::<String>();
-    assert!(
-        live_text.contains("rows41oktrue"),
-        "a JSON payload logs exactly its projected `output` value: {live_rows:#?}"
-    );
-    for suppressed in ["task9", "task10", "success", "working"] {
+    for suppressed in ["rows41oktrue", "task9", "task10", "success", "working"] {
         assert!(
             !live_text.contains(suppressed),
-            "only `output` is projected, so {suppressed} must not reach the log: {live_text}"
+            "normal mode suppresses JSON presentation, so {suppressed} must not reach the log: {live_text}"
         );
     }
-    assert!(
-        live_rows.iter().any(|line| line == "▐ agent-%3> {"),
-        "the projected body keeps the peer prefix on its first row: {live_rows:#?}"
-    );
     let live_styled_rows = service
         .agent_pane_screen("%1")
         .unwrap()
@@ -3998,15 +3982,17 @@ fn runtime_agent_peer_message_persists_source_for_replay() {
         .unwrap();
     assert_eq!(
         entries.len(),
-        4,
-        "a suppressed payload writes no presentation record: {entries:?}"
+        3,
+        "each suppressed JSON payload writes no presentation record: {entries:?}"
     );
     assert!(
-        entries.iter().all(|entry| !entry
-            .source_text
-            .as_deref()
-            .is_some_and(|source| source.contains("task-10"))),
-        "the suppressed payload must not be persisted for replay: {entries:#?}"
+        entries.iter().all(|entry| {
+            !entry
+                .source_text
+                .as_deref()
+                .is_some_and(|source| source.contains("task-10") || source.contains("task-9"))
+        }),
+        "suppressed JSON payloads must not be persisted for replay: {entries:#?}"
     );
     assert!(
         entries.iter().all(|entry| entry
@@ -4138,62 +4124,11 @@ fn runtime_agent_peer_message_persists_source_for_replay() {
         }),
         "{sent_marker:?}"
     );
-    // The projected JSON body keeps its own row shape, its name marker on the
-    // first row, and its syntax slots on the continuation rows across replay.
-    let projected_marker = replayed_styled_rows
-        .iter()
-        .find(|line| line.text == "▐ agent-%3> {")
-        .expect("replayed projected JSON row");
     assert!(
-        projected_marker.style_spans.iter().any(|span| {
-            span.start == "▐ ".chars().count()
-                && span.length == "agent-%3>".chars().count()
-                && span.rendition.foreground
-                    == Some(
-                        service
-                            .ui_theme()
-                            .colors
-                            .agent_transcript_peer_sender
-                            .foreground,
-                    )
-                && span.rendition.background.is_none()
-        }),
-        "{projected_marker:?}"
-    );
-    let key_rendition = service.ui_theme().colors.syntax_keyword.foreground;
-    let literal_rendition = service.ui_theme().colors.syntax_comment.foreground;
-    let number_rendition = service.ui_theme().colors.syntax_number.foreground;
-    let key_row = replayed_styled_rows
-        .iter()
-        .find(|line| line.text.contains("\"ok\": true"))
-        .expect("replayed JSON key row");
-    assert!(
-        key_row.style_spans.iter().any(|span| {
-            span.length == 4
-                && span.rendition.foreground == Some(key_rendition)
-                && span.rendition.background.is_none()
-        }) && key_row.style_spans.iter().any(|span| {
-            span.length == 4
-                && span.rendition.foreground == Some(literal_rendition)
-                && span.rendition.background.is_none()
-        }),
-        "{key_row:?}"
-    );
-    let number_row = replayed_styled_rows
-        .iter()
-        .find(|line| line.text.contains("\"rows\": 41"))
-        .expect("replayed JSON number row");
-    assert!(
-        number_row.style_spans.iter().any(|span| {
-            span.length == 2
-                && span.rendition.foreground == Some(number_rendition)
-                && span.rendition.background.is_none()
-        }),
-        "{number_row:?}"
-    );
-    assert!(
-        !replayed.iter().any(|line| line.contains("task-10")),
-        "a suppressed payload must stay silent after replay: {replayed:#?}"
+        !replayed
+            .iter()
+            .any(|line| line.contains("task-10") || line.contains("task-9")),
+        "suppressed JSON payloads must stay silent after replay: {replayed:#?}"
     );
     let replayed_text = replayed
         .join("\n")
@@ -4208,12 +4143,8 @@ fn runtime_agent_peer_message_persists_source_for_replay() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies a legacy persisted peer record still replays its stored line.
-///
-/// The peer presentation source never gained a bridge field, and its media type
-/// is optional, so a record written before either existed must keep decoding and
-/// rendering the same `{peer}> `/`{peer}< ` rows instead of being dropped as
-/// corrupt presentation state.
+/// Verifies legacy peer records without media types stay suppressed in normal
+/// mode while verbose replay preserves their bounded raw payloads.
 #[test]
 fn runtime_agent_legacy_peer_message_record_still_replays() {
     let mut service = test_runtime_service();
@@ -4247,7 +4178,7 @@ fn runtime_agent_legacy_peer_message_record_still_replays() {
             ),
         };
     // Neither record carries the optional media-type field, exactly like a peer
-    // presentation record written before the JSON projection existed.
+    // presentation record written before canonical plaintext filtering existed.
     let entries = vec![
         legacy_peer_entry(
             1,
@@ -4269,13 +4200,50 @@ fn runtime_agent_legacy_peer_message_record_still_replays() {
         .unwrap()
         .normal_content_lines();
     assert!(
-        rows.iter()
-            .any(|line| line == "▐ agent-%3> legacy peer evidence"),
-        "a legacy received peer record still replays: {rows:#?}"
+        !rows
+            .iter()
+            .any(|line| line.contains("legacy peer evidence")),
+        "normal mode suppresses legacy records without media types: {rows:#?}"
     );
     assert!(
-        rows.iter().any(|line| line == "▐ agent-%2< legacy ack"),
-        "a legacy sent peer record still replays: {rows:#?}"
+        !rows.iter().any(|line| line.contains("legacy ack")),
+        "normal mode suppresses legacy records without media types: {rows:#?}"
+    );
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "verbose-peer-replay".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\npeer_message_log_mode = \"verbose\"\n".to_string(),
+        }])
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(40, 12).unwrap(), 120).unwrap(),
+    );
+    assert!(
+        service
+            .replay_agent_presentation_entries_to_terminal_buffer("%1", &entries)
+            .unwrap()
+    );
+    let verbose_rows = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
+    assert!(
+        verbose_rows
+            .iter()
+            .any(|line| line == "▐ agent-%3> legacy peer evidence"),
+        "verbose replay preserves legacy received payloads: {verbose_rows:#?}"
+    );
+    assert!(
+        verbose_rows
+            .iter()
+            .any(|line| line == "▐ agent-%2< legacy ack"),
+        "verbose replay preserves legacy sent payloads: {verbose_rows:#?}"
     );
     service.terminate_all_pane_processes().unwrap();
 }

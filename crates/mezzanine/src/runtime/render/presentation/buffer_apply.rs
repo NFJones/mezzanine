@@ -12,7 +12,7 @@ use super::diff::{
 };
 use super::style::{
     AGENT_PROMPT_TEXT_PREFIX, AGENT_TERMINAL_MESSAGE_PREFIX, AgentTerminalPresentationStyle,
-    agent_name_marker_rendition, agent_text_foreground_rendition,
+    agent_name_marker_rendition,
 };
 use super::text::{
     agent_say_text_is_displayed_patch_block, agent_terminal_label_rendition,
@@ -43,8 +43,7 @@ use mez_agent::{
     agent_output_content_type_is_markdown,
 };
 use mez_mux::render::{
-    markdown_block_copy_lines, push_or_extend_style_span,
-    wrap_rich_text_line_to_width_with_source_ranges_hard,
+    markdown_block_copy_lines, wrap_rich_text_line_to_width_with_source_ranges_hard,
 };
 
 /// Content type for width-independent styled agent presentation records.
@@ -159,9 +158,9 @@ impl AgentPeerMessageDirection {
 /// Bounding and sanitizing happen once, in the renderer that the live writer and
 /// the replay decoder both call, so the two paths cannot drift apart.
 ///
-/// The envelope media type is stored as well, because the echo gates its
-/// `output` projection on it. A record written before this field existed decodes
-/// with `None` and keeps the unprojected rendering it was written with.
+/// The envelope media type is stored so replay applies the same normal-mode
+/// canonical-plaintext filter as the live renderer. A record written before
+/// this field existed decodes with `None` and is suppressed in normal mode.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct PeerMessagePresentationSource {
     direction: String,
@@ -195,246 +194,25 @@ fn peer_message_echo_payload(payload: &str) -> String {
     crate::runtime::control::runtime_peer_message_logged_payload(payload)
 }
 
-/// Envelope media type whose payload is projected onto its `output` field.
+/// Canonical media type accepted for normal peer-message pane presentation.
 ///
-/// Only this exact media type is projected. Gating on the declared media type
-/// rather than on a parse attempt is deliberate: a `text/plain` payload that
-/// happens to parse as JSON must keep rendering as the literal text it is.
-const AGENT_PEER_MESSAGE_JSON_CONTENT_TYPE: &str = "application/json";
+/// Normal mode uses an exact media-type match rather than parsing payload text,
+/// so JSON-looking plaintext remains literal while every non-plaintext payload
+/// remains durable and model-visible without creating pane presentation state.
+const AGENT_PEER_MESSAGE_TEXT_PLAIN_CONTENT_TYPE: &str = "text/plain; charset=utf-8";
 
-/// Structured peer field carrying the displayable body of a JSON payload.
-const AGENT_PEER_MESSAGE_JSON_OUTPUT_FIELD: &str = "output";
-
-/// One bounded peer-message echo body, ready to become display rows.
-///
-/// `Literal` is the pre-existing rendering path: the bounded payload is logged
-/// exactly as it arrived. `Json` is a projected `output` value whose syntax the
-/// renderer colors, and it only ever holds bounded text derived from valid JSON.
-enum PeerMessageEchoBody {
-    /// Bounded payload text logged verbatim.
-    Literal(String),
-    /// Bounded projected `output` value rendered with JSON syntax spans.
-    Json {
-        /// Pretty-printed display text the pane renders and wraps.
-        display: String,
-        /// Compact text of the same value, used as the block's copy body.
-        compact: String,
-    },
+/// Returns whether a peer message may render in normal pane-log mode.
+fn peer_message_is_canonical_plaintext(content_type: Option<&str>) -> bool {
+    content_type == Some(AGENT_PEER_MESSAGE_TEXT_PLAIN_CONTENT_TYPE)
 }
 
-/// Projects one raw peer payload into the body the pane echo should log.
-///
-/// Bounding runs before any parse, and the projected value is bounded again, so
-/// no peer text can reach the buffer past the peer-context limit. A JSON payload
-/// the bound truncated keeps the literal rendering with its existing marker: the
-/// marker makes the text invalid JSON, so pretty-printing it would imply a
-/// completeness the line does not have.
-///
-/// `None` means the payload is malformed without having been truncated and
-/// must not log at all. JSON envelopes without an `output` field, including
-/// `task_status`, render their bounded JSON value so every committed peer
-/// message remains visible at its endpoint.
-fn peer_message_echo_body(
-    content_type: Option<&str>,
-    payload: &str,
-) -> Option<PeerMessageEchoBody> {
-    let bounded = peer_message_echo_payload(payload);
-    if content_type.map(str::trim) != Some(AGENT_PEER_MESSAGE_JSON_CONTENT_TYPE)
-        || bounded != payload
-    {
-        return Some(PeerMessageEchoBody::Literal(bounded));
-    }
-    let envelope = serde_json::from_str::<serde_json::Value>(&bounded).ok()?;
-    let value = match envelope.get(AGENT_PEER_MESSAGE_JSON_OUTPUT_FIELD) {
-        None => envelope,
-        // A string `output` logs its string value, and a value that is itself
-        // JSON is pretty-printed so nested structure stays readable.
-        Some(serde_json::Value::String(text)) => {
-            match serde_json::from_str::<serde_json::Value>(text) {
-                Ok(nested) => nested,
-                Err(_) => {
-                    return Some(PeerMessageEchoBody::Literal(peer_message_echo_payload(
-                        text,
-                    )));
-                }
-            }
-        }
-        Some(value) => value.clone(),
-    };
-    let pretty = serde_json::to_string_pretty(&value).ok()?;
-    let bounded_display = peer_message_echo_payload(&pretty);
-    if bounded_display != pretty {
-        return Some(PeerMessageEchoBody::Literal(bounded_display));
-    }
-    // The display body is pretty-printed while copy mode keeps the compact form
-    // of the same value, so copying a projected line never copies its display
-    // wrapping or indentation back into another agent's context.
-    let compact = peer_message_echo_payload(&serde_json::to_string(&value).ok()?);
-    Some(PeerMessageEchoBody::Json {
-        display: bounded_display,
-        compact,
-    })
-}
-
-/// Returns the display rows for one projected peer body at a pane geometry.
-///
-/// A literal body takes the unchanged payload path, including its hanging-indent
-/// wrapping and truncation marker. A projected body carries one styled row per
-/// source line: the first row keeps the `{name}> ` prefix, the remaining rows
-/// keep the constant continuation indent the literal path produces, and every row
-/// still passes through the shared width machinery, so pretty-printed JSON stays
-/// multi-line and indented while an overwide line still wraps.
+/// Returns literal display rows for one canonical plaintext peer payload.
 fn peer_message_echo_rendered_lines(
     prefix: &str,
-    body: &PeerMessageEchoBody,
+    payload: &str,
     display_width: usize,
-    ui_theme: &UiTheme,
 ) -> Vec<RichTextLine> {
-    match body {
-        PeerMessageEchoBody::Literal(text) => {
-            wrapped_prefixed_agent_terminal_lines(prefix, text, display_width)
-        }
-        PeerMessageEchoBody::Json { display, .. } => {
-            let continuation = " ".repeat(prefix.chars().count());
-            let lines = display
-                .trim_end_matches(['\r', '\n'])
-                .lines()
-                .enumerate()
-                .map(|(index, line)| {
-                    let row_prefix = if index == 0 {
-                        prefix
-                    } else {
-                        continuation.as_str()
-                    };
-                    let offset = UnicodeWidthStr::width(row_prefix);
-                    RichTextLine {
-                        display: format!("{row_prefix}{line}"),
-                        style_spans: peer_message_json_syntax_spans(line, offset, ui_theme),
-                        copy_text: None,
-                        kind: RichTextLineKind::Normal,
-                    }
-                })
-                .collect::<Vec<_>>();
-            wrap_rich_text_lines_to_width(lines, display_width, display_width)
-        }
-    }
-}
-
-/// Returns the foreground-only JSON syntax spans for one rendered body line.
-///
-/// The mapping is intentionally small: object keys take `syntax_keyword`, string
-/// values take `syntax_string`, numbers take `syntax_number`, and the
-/// `true`/`false`/`null` literals take `syntax_comment`. Punctuation and
-/// whitespace stay unstyled, every rendition is foreground-only because the line
-/// is injected into a pane buffer the operator's terminal theme owns, and the
-/// reported columns are display cells of `line` shifted by `offset`, the width of
-/// the row prefix the line is rendered behind.
-fn peer_message_json_syntax_spans(
-    line: &str,
-    offset: usize,
-    ui_theme: &UiTheme,
-) -> Vec<TerminalStyleSpan> {
-    let key_rendition = agent_text_foreground_rendition(ui_theme.colors.syntax_keyword);
-    let string_rendition = agent_text_foreground_rendition(ui_theme.colors.syntax_string);
-    let number_rendition = agent_text_foreground_rendition(ui_theme.colors.syntax_number);
-    let literal_rendition = agent_text_foreground_rendition(ui_theme.colors.syntax_comment);
-    let mut spans = Vec::new();
-    let mut column = offset;
-    let mut rest = line;
-    while let Some(character) = rest.chars().next() {
-        if character == '"' {
-            let length = peer_message_json_string_token_len(rest);
-            let token = &rest[..length];
-            rest = &rest[length..];
-            let rendition = if rest.trim_start().starts_with(':') {
-                key_rendition
-            } else {
-                string_rendition
-            };
-            let width = UnicodeWidthStr::width(token);
-            push_or_extend_style_span(
-                &mut spans,
-                TerminalStyleSpan {
-                    start: column,
-                    length: width,
-                    rendition,
-                },
-            );
-            column += width;
-            continue;
-        }
-        if let Some((token, rendition)) = [
-            ("true", literal_rendition),
-            ("false", literal_rendition),
-            ("null", literal_rendition),
-        ]
-        .into_iter()
-        .find(|(token, _)| rest.starts_with(token))
-        {
-            push_or_extend_style_span(
-                &mut spans,
-                TerminalStyleSpan {
-                    start: column,
-                    length: token.len(),
-                    rendition,
-                },
-            );
-            column += token.len();
-            rest = &rest[token.len()..];
-            continue;
-        }
-        if let Some(length) = peer_message_json_number_token_len(rest) {
-            let token = &rest[..length];
-            let width = UnicodeWidthStr::width(token);
-            push_or_extend_style_span(
-                &mut spans,
-                TerminalStyleSpan {
-                    start: column,
-                    length: width,
-                    rendition: number_rendition,
-                },
-            );
-            column += width;
-            rest = &rest[length..];
-            continue;
-        }
-        let length = character.len_utf8();
-        column += UnicodeWidthStr::width(&rest[..length]);
-        rest = &rest[length..];
-    }
-    spans
-}
-
-/// Returns the byte length of the JSON string token starting at `text`.
-///
-/// The token spans both quotes and any backslash-escaped character inside them.
-/// A string with no closing quote consumes the rest of the line, which only
-/// happens for text that is not valid JSON; coloring that remainder
-/// conservatively is preferable to splitting it.
-fn peer_message_json_string_token_len(text: &str) -> usize {
-    let mut escaped = false;
-    for (index, character) in text.char_indices().skip(1) {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match character {
-            '\\' => escaped = true,
-            '"' => return index + character.len_utf8(),
-            _ => {}
-        }
-    }
-    text.len()
-}
-
-/// Returns the byte length of the JSON number token starting at `text`.
-fn peer_message_json_number_token_len(text: &str) -> Option<usize> {
-    let length = text
-        .char_indices()
-        .take_while(|(_, character)| matches!(character, '0'..='9' | '-' | '+' | '.' | 'e' | 'E'))
-        .map(|(index, character)| index + character.len_utf8())
-        .last()?;
-    (length > 0).then_some(length)
+    wrapped_prefixed_agent_terminal_lines(prefix, payload, display_width)
 }
 
 /// Colored name marker prefixing the parent-supplied prompt in a subagent pane.
@@ -692,19 +470,15 @@ impl RuntimeSessionService {
     /// message logs `{sender}> {payload}` and wraps exactly like a user prompt.
     /// The line is an observation only. It never becomes user-authored context,
     /// approval authority, or a turn trigger, so the persisted source stays a
-    /// bounded peer record rather than user-prompt text. The envelope media type
-    /// decides how the payload is logged: a `application/json` payload logs only
-    /// its `output` field, and every other media type logs as it always has.
-    ///
-    /// `runtime_bridge` marks only the initial spawn status whose content is
-    /// already represented by the child pane's parent-prompt row.
+    /// bounded peer record rather than user-prompt text. Normal mode logs only
+    /// the exact canonical plaintext media type; verbose mode logs each bounded
+    /// raw payload regardless of media type.
     pub(crate) fn append_agent_received_peer_message_to_terminal_buffer(
         &mut self,
         pane_id: &str,
         peer_label: &str,
         content_type: &str,
         payload: &str,
-        runtime_bridge: bool,
     ) -> Result<()> {
         self.append_agent_peer_message_to_terminal_buffer(
             pane_id,
@@ -712,7 +486,6 @@ impl RuntimeSessionService {
             AgentPeerMessageDirection::Received,
             Some(content_type),
             payload,
-            runtime_bridge,
         )
     }
 
@@ -724,15 +497,14 @@ impl RuntimeSessionService {
     /// the line for user-authored input. The accepted envelope's media type
     /// reaches the renderer so sent and received traffic project identically.
     ///
-    /// Model-authored mail is never a runtime bridge notification, so the sent
-    /// path passes `runtime_bridge = false` and keeps logging exactly as before.
+    /// Normal and verbose mode apply the same media-type rule to sent and
+    /// received traffic.
     pub(crate) fn append_agent_sent_peer_message_to_terminal_buffer(
         &mut self,
         pane_id: &str,
         peer_label: &str,
         content_type: &str,
         payload: &str,
-        runtime_bridge: bool,
     ) -> Result<()> {
         self.append_agent_peer_message_to_terminal_buffer(
             pane_id,
@@ -740,7 +512,6 @@ impl RuntimeSessionService {
             AgentPeerMessageDirection::Sent,
             Some(content_type),
             payload,
-            runtime_bridge,
         )
     }
 
@@ -776,34 +547,19 @@ impl RuntimeSessionService {
         direction: AgentPeerMessageDirection,
         content_type: Option<&str>,
         payload: &str,
-        runtime_bridge: bool,
     ) -> Result<()> {
         let log_mode = self.agent_peer_message_log_mode();
-        if log_mode != PeerMessageLogMode::Verbose && runtime_bridge {
-            // Only the initial spawn status duplicates an already-rendered child
-            // parent prompt. Other runtime bridge messages remain visible.
+        if log_mode != PeerMessageLogMode::Verbose
+            && !peer_message_is_canonical_plaintext(content_type)
+        {
             return Ok(());
         }
-        let body = if log_mode == PeerMessageLogMode::Verbose {
-            // Verbose mode restores the bridge echo and logs the bounded payload
-            // as it arrived for JSON traffic too, instead of its `output`
-            // projection.
-            PeerMessageEchoBody::Literal(peer_message_echo_payload(payload))
-        } else {
-            let Some(body) = peer_message_echo_body(content_type, payload) else {
-                return Ok(());
-            };
-            body
-        };
+        let body = peer_message_echo_payload(payload);
         let display_width = self.agent_terminal_markdown_frame_width(pane_id)?;
         let rendered_label = peer_message_echo_label(peer_label);
         let prefix = direction.terminal_prefix(&rendered_label);
-        let mut rendered_lines = peer_message_echo_rendered_lines(
-            prefix.as_str(),
-            &body,
-            display_width,
-            &self.presentation.settings.ui_theme,
-        );
+        let mut rendered_lines =
+            peer_message_echo_rendered_lines(prefix.as_str(), body.as_str(), display_width);
         attach_agent_name_marker_span(
             &mut rendered_lines,
             direction.terminal_name_marker(&rendered_label).as_str(),
@@ -812,18 +568,11 @@ impl RuntimeSessionService {
             ),
         );
         let source = peer_message_presentation_source(direction, peer_label, payload, content_type);
-        // Copy mode yields the compact logged value for a projected JSON body, so
-        // copying a pretty-printed line never copies its display indentation; a
-        // literal body keeps the pre-existing empty copy metadata.
-        let copy_lines = match &body {
-            PeerMessageEchoBody::Json { compact, .. } => vec![compact.clone()],
-            PeerMessageEchoBody::Literal(_) => Vec::new(),
-        };
         self.append_agent_terminal_rendered_lines_to_buffer(
             pane_id,
             AgentTerminalPresentationStyle::UserPrompt,
             rendered_lines.as_slice(),
-            &copy_lines,
+            &[],
             Some((
                 source.as_str(),
                 AGENT_PRESENTATION_PEER_MESSAGE_CONTENT_TYPE,
@@ -1082,7 +831,6 @@ impl RuntimeSessionService {
                                 direction,
                                 content_type.as_deref(),
                                 payload.as_str(),
-                                false,
                             )?;
                         }
                         continue;
@@ -4948,9 +4696,8 @@ impl RuntimeSessionService {
 #[cfg(test)]
 mod tests {
     use super::{
-        GraphicRendition, PeerMessageEchoBody, UiTheme, attach_agent_name_marker_span,
-        catch_agent_terminal_presentation_panic, peer_message_echo_body,
-        peer_message_echo_rendered_lines, styled_agent_presentation_source_lines,
+        catch_agent_terminal_presentation_panic, peer_message_echo_rendered_lines,
+        peer_message_is_canonical_plaintext, styled_agent_presentation_source_lines,
     };
 
     /// Verifies typed styled presentation source preserves valid style and text
@@ -4985,184 +4732,36 @@ mod tests {
         );
     }
 
-    /// Verifies the echo projection gates on the declared envelope media type
-    /// rather than on a parse attempt, so a payload that happens to be valid
-    /// JSON keeps the literal rendering its own media type has always had.
+    /// Verifies normal peer-message presentation accepts only the exact
+    /// canonical plaintext media type, regardless of whether the payload looks
+    /// like structured data.
     #[test]
-    fn peer_message_echo_projection_gates_on_declared_media_type() {
-        assert!(matches!(
-            peer_message_echo_body(Some("text/plain; charset=utf-8"), r#"{"output":"hi"}"#),
-            Some(PeerMessageEchoBody::Literal(text)) if text == r#"{"output":"hi"}"#
-        ));
-        assert!(matches!(
-            peer_message_echo_body(None, r#"{"output":"hi"}"#),
-            Some(PeerMessageEchoBody::Literal(text)) if text == r#"{"output":"hi"}"#
-        ));
-        assert!(matches!(
-            peer_message_echo_body(Some("application/octet-stream"), "aGVsbG8="),
-            Some(PeerMessageEchoBody::Literal(text)) if text == "aGVsbG8="
-        ));
+    fn peer_message_normal_mode_accepts_only_canonical_plaintext() {
+        assert!(peer_message_is_canonical_plaintext(Some(
+            "text/plain; charset=utf-8"
+        )));
+        for content_type in [
+            None,
+            Some("text/plain"),
+            Some("text/plain; charset=UTF-8"),
+            Some("application/json"),
+            Some("application/octet-stream"),
+        ] {
+            assert!(!peer_message_is_canonical_plaintext(content_type));
+        }
     }
 
-    /// Verifies output-less JSON remains visible while malformed JSON stays
-    /// silent, preserving exact-once committed peer-message visibility.
+    /// Verifies canonical plaintext remains literal, including JSON-looking
+    /// content, and retains the normal prompt-style wrapping path.
     #[test]
-    fn peer_message_echo_projection_renders_json_without_output() {
-        let content_type = Some("application/json");
-        // A `task_status` payload has no `output` field but still represents
-        // one committed message and therefore remains operator-visible.
-        assert!(matches!(
-            peer_message_echo_body(
-                content_type,
-                r#"{"task_id":"t-1","state":"running","progress_percent":0,"summary":"working"}"#
-            ),
-            Some(PeerMessageEchoBody::Json { compact, .. })
-                if compact.contains("working") && compact.contains("task_id")
-        ));
-        // Malformed JSON that was not truncated stays silent too.
-        assert!(peer_message_echo_body(content_type, r#"{"output":"unterminated"#).is_none());
-        assert!(peer_message_echo_body(content_type, "not json at all").is_none());
-    }
-
-    /// Verifies `output` projection: a string logs its value, a string that is
-    /// itself JSON is pretty-printed, and a non-string value is pretty-printed
-    /// with serde_json's deterministic key ordering, which in this build keeps
-    /// the payload's own key order rather than sorting it.
-    #[test]
-    fn peer_message_echo_projection_renders_only_the_output_value() {
-        let content_type = Some("application/json");
-        let result_payload = |output: &str| {
-            format!(r#"{{"task_id":"t-1","success":true,"summary":"done","output":{output}}}"#)
-        };
-        assert!(matches!(
-            peer_message_echo_body(content_type, result_payload("\"measured 41 rows\"").as_str()),
-            Some(PeerMessageEchoBody::Literal(text)) if text == "measured 41 rows"
-        ));
-        assert!(matches!(
-            peer_message_echo_body(
-                content_type,
-                result_payload("\"{\\\"rows\\\":41,\\\"ok\\\":true}\"").as_str()
-            ),
-            Some(PeerMessageEchoBody::Json { display, compact })
-                if display == "{\n  \"rows\": 41,\n  \"ok\": true\n}"
-                    && compact == r#"{"rows":41,"ok":true}"#
-        ));
-        assert!(matches!(
-            peer_message_echo_body(content_type, result_payload(r#"{"rows":41,"ok":true}"#).as_str()),
-            Some(PeerMessageEchoBody::Json { display, compact })
-                if display == "{\n  \"rows\": 41,\n  \"ok\": true\n}"
-                    && compact == r#"{"rows":41,"ok":true}"#
-        ));
-        assert!(matches!(
-            peer_message_echo_body(content_type, result_payload("null").as_str()),
-            Some(PeerMessageEchoBody::Json { display, compact })
-                if display == "null" && compact == "null"
-        ));
-    }
-
-    /// Verifies a payload the peer-context bound truncated logs literally with
-    /// its existing marker instead of being pretty-printed as if it were whole.
-    #[test]
-    fn peer_message_echo_projection_keeps_truncated_payload_literal() {
-        let oversized = format!(
-            r#"{{"task_id":"t-1","output":"{}"}}"#,
-            "peer output segment ".repeat(20_000)
-        );
-        assert!(oversized.len() > 256 * 1024, "{}", oversized.len());
-        let bounded = crate::runtime::control::runtime_peer_message_logged_payload(&oversized);
-        assert!(bounded.len() < oversized.len());
-        assert!(bounded.contains("truncated; original_bytes="), "{bounded}");
-        assert!(matches!(
-            peer_message_echo_body(Some("application/json"), oversized.as_str()),
-            Some(PeerMessageEchoBody::Literal(text)) if text == bounded
-        ));
-    }
-
-    /// Verifies projected rows keep the prompt prefix and the literal path's
-    /// continuation indent, that the JSON spans land on keys, strings, numbers,
-    /// and literals with foreground-only renditions, and that the name marker is
-    /// added alongside them rather than replacing them.
-    #[test]
-    fn peer_message_echo_rendered_lines_style_projected_json() {
-        let ui_theme = UiTheme::default();
-        let prefix = "agent-%3> ";
-        let projected = serde_json::to_string_pretty(
-            &serde_json::from_str::<serde_json::Value>(r#"{"rows":41,"ok":true}"#).unwrap(),
-        )
-        .unwrap();
-        let mut lines = peer_message_echo_rendered_lines(
-            prefix,
-            &PeerMessageEchoBody::Json {
-                display: projected,
-                compact: r#"{"rows":41,"ok":true}"#.to_string(),
-            },
-            80,
-            &ui_theme,
-        );
+    fn peer_message_canonical_plaintext_renders_literal_payload() {
+        let lines =
+            peer_message_echo_rendered_lines("agent-%3> ", r#"{"output":"literal plaintext"}"#, 80);
+        assert_eq!(lines.len(), 1);
         assert_eq!(
-            lines
-                .iter()
-                .map(|line| line.display.as_str())
-                .collect::<Vec<_>>(),
-            vec![
-                "agent-%3> {",
-                "            \"rows\": 41,",
-                "            \"ok\": true",
-                "          }",
-            ]
+            lines[0].display,
+            r#"agent-%3> {"output":"literal plaintext"}"#
         );
-        let key = ui_theme.colors.syntax_keyword.foreground;
-        let literal = ui_theme.colors.syntax_comment.foreground;
-        let number = ui_theme.colors.syntax_number.foreground;
-        let continuation = prefix.chars().count();
-        let number_row = lines[1]
-            .style_spans
-            .iter()
-            .map(|span| (span.start, span.length, span.rendition.foreground))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            number_row,
-            vec![
-                (continuation + 2, 6, Some(key)),
-                (continuation + 10, 2, Some(number))
-            ]
-        );
-        let key_row = lines[2]
-            .style_spans
-            .iter()
-            .map(|span| (span.start, span.length, span.rendition.foreground))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            key_row,
-            vec![
-                (continuation + 2, 4, Some(key)),
-                (continuation + 8, 4, Some(literal))
-            ]
-        );
-        assert!(
-            lines
-                .iter()
-                .flat_map(|line| line.style_spans.iter())
-                .all(|span| span.rendition.background.is_none()),
-            "every JSON span must be foreground-only"
-        );
-        attach_agent_name_marker_span(&mut lines, "agent-%3>", GraphicRendition::default());
-        assert_eq!(lines[0].style_spans.first().map(|span| span.start), Some(0));
-        assert!(
-            lines[1].style_spans.len() == 2,
-            "the name marker must not replace a body span: {:?}",
-            lines[1].style_spans
-        );
-
-        // A non-JSON body keeps the unchanged literal path: no spans at all.
-        let literal_lines = peer_message_echo_rendered_lines(
-            prefix,
-            &PeerMessageEchoBody::Literal("plain peer text".to_string()),
-            80,
-            &ui_theme,
-        );
-        assert_eq!(literal_lines.len(), 1);
-        assert_eq!(literal_lines[0].display, "agent-%3> plain peer text");
-        assert!(literal_lines[0].style_spans.is_empty());
+        assert!(lines[0].style_spans.is_empty());
     }
 }
