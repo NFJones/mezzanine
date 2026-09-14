@@ -30,6 +30,11 @@ pub(crate) use native_workload_environment::native_ambient_environment;
 #[cfg(test)]
 pub(crate) use pane_creation_environment::daemon_only_probe_key_for_tests;
 #[cfg(test)]
+pub(crate) use pane_process_identity::{
+    RuntimePaneProcessIdentityInjection, RuntimePaneProcessIdentityUnavailable,
+    RuntimePaneProcessRole,
+};
+#[cfg(test)]
 pub(crate) use spawned_shell::execute_native_shell_dispatch;
 pub(crate) use spawned_shell::{
     execute_native_shell_dispatch_with_progress, execute_pane_status_provider_launch,
@@ -501,6 +506,32 @@ struct ManagedPaneStartup {
     zsh_diagnostic: Option<String>,
 }
 
+/// Launch correlation selected for one dependency-free foreign-shell loader.
+///
+/// A host-observable local shell must transition foreground process groups after
+/// receiving the loader command. Opaque transports retain only a fresh loader
+/// record because their remote descendants have no host-visible process group.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RuntimeForeignLoaderLaunchProof {
+    /// A local shell must move away from the group that received the command.
+    ForegroundGroupTransition { write_time_process_group_id: u32 },
+    /// A fresh loader record is the available correlation boundary.
+    CorrelatedLoaderRecord {
+        /// OS identity of a distinct opaque foreground leader, when observed.
+        leader_identity: Option<pane_process_identity::RuntimePaneProcessIdentity>,
+    },
+}
+
+impl RuntimeForeignLoaderLaunchProof {
+    /// Returns the stable lifecycle diagnostic for this proof policy.
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::ForegroundGroupTransition { .. } => "foreground-group-transition",
+            Self::CorrelatedLoaderRecord { .. } => "correlated-loader-record",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeForeignShellBoundary {
     /// Bootstrap ordering is `AwaitingPrompt -> IdentityProbing` (identity
@@ -536,11 +567,8 @@ struct RuntimeForeignShellBoundary {
     loader_payload: Option<mez_mux::process::ShellInputDelivery>,
     /// Whether the correlated loader has proven terminal-input ownership.
     loader_ready: bool,
-    /// Local foreground group recorded when the loader command was written.
-    ///
-    /// `None` when the local group cannot discriminate a loader launch, as for
-    /// SSH-style transports whose outer group is aliased to the pane shell.
-    loader_launch_proof_group: Option<u32>,
+    /// Explicit launch-correlation policy resolved after identity discovery.
+    loader_launch_proof: Option<RuntimeForeignLoaderLaunchProof>,
     /// Whether the correlated loader-ready record arrived before the pane worker
     /// observed a foreground group proving the loader took the pane.
     loader_ready_awaits_launch_proof: bool,

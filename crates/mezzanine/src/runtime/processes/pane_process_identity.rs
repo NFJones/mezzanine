@@ -13,7 +13,10 @@
 //! exactly one bounded refresh per shell-interaction epoch, and a still
 //! unusable identity settles permanently unknown with a precise diagnostic.
 
-use super::{EnvironmentSignature, RuntimeSessionService, ShellClassification};
+use super::{
+    EnvironmentSignature, RuntimeForeignLoaderLaunchProof, RuntimeSessionService,
+    ShellClassification,
+};
 use std::path::{Path, PathBuf};
 
 /// Which live process supplied OS identity evidence for a pane.
@@ -639,6 +642,98 @@ impl RuntimeSessionService {
         Err(RuntimePaneProcessIdentityUnavailable::ExecutableUnreadable)
     }
 
+    /// Selects the loader launch proof using the host-visible foreground leader.
+    ///
+    /// A distinct OS-verified shell can be observed taking the pane and therefore
+    /// retains the stronger foreground-transition requirement. A distinct
+    /// non-shell leader is an opaque transport only after the foreign shell's
+    /// correlated identity probe has completed, so its matching loader record is
+    /// the available launch correlation. Unreadable or replaced leaders retain
+    /// the stronger requirement rather than silently weakening the proof.
+    pub(super) fn foreign_loader_launch_proof(
+        &self,
+        pane_id: &str,
+        primary_process_id: u32,
+        process_group_id: u32,
+    ) -> RuntimeForeignLoaderLaunchProof {
+        if process_group_id == primary_process_id
+            || process_group_id == self.pane_primary_process_group_id(pane_id, primary_process_id)
+        {
+            return RuntimeForeignLoaderLaunchProof::CorrelatedLoaderRecord {
+                leader_identity: None,
+            };
+        }
+        let leader = self.foreground_process_group_leader_identity(pane_id, process_group_id);
+        match leader {
+            Ok(identity)
+                if ShellClassification::classify(&identity.executable_path)
+                    == ShellClassification::UnknownUnix =>
+            {
+                RuntimeForeignLoaderLaunchProof::CorrelatedLoaderRecord {
+                    leader_identity: Some(identity),
+                }
+            }
+            Ok(_) | Err(_) => RuntimeForeignLoaderLaunchProof::ForegroundGroupTransition {
+                write_time_process_group_id: process_group_id,
+            },
+        }
+    }
+
+    /// Resolves OS identity for the current foreground-group leader only.
+    fn foreground_process_group_leader_identity(
+        &self,
+        pane_id: &str,
+        process_group_id: u32,
+    ) -> Result<RuntimePaneProcessIdentity, RuntimePaneProcessIdentityUnavailable> {
+        #[cfg(test)]
+        if let Some(outcome) = self
+            .process
+            .pane_process_identity_injections
+            .get(pane_id)
+            .and_then(RuntimePaneProcessIdentityInjections::next)
+        {
+            return match outcome {
+                RuntimePaneProcessIdentityInjection::Identity {
+                    process_id,
+                    start_token,
+                    executable_path,
+                    live_start_token,
+                    ..
+                } if *process_id == process_group_id
+                    && live_start_token.is_none_or(|token| token == *start_token) =>
+                {
+                    let identity = RuntimePaneProcessIdentity {
+                        role: RuntimePaneProcessRole::ForegroundProcessGroupLeader,
+                        generation: self
+                            .adapter_owned_pane_process_instance(pane_id)
+                            .map(|instance| instance.generation),
+                        process_id: *process_id,
+                        start_token: *start_token,
+                        executable_path: executable_path.clone(),
+                    };
+                    self.pin_pane_process_identity_for_tests(pane_id, &identity);
+                    Ok(identity)
+                }
+                RuntimePaneProcessIdentityInjection::Identity { .. }
+                | RuntimePaneProcessIdentityInjection::Unavailable(_) => {
+                    Err(RuntimePaneProcessIdentityUnavailable::ExecutableUnreadable)
+                }
+            };
+        }
+        match mez_mux::process::process_executable_identity_for_pid(process_group_id) {
+            Ok(identity) => Ok(RuntimePaneProcessIdentity {
+                role: RuntimePaneProcessRole::ForegroundProcessGroupLeader,
+                generation: self
+                    .adapter_owned_pane_process_instance(pane_id)
+                    .map(|instance| instance.generation),
+                process_id: identity.process_id,
+                start_token: identity.start_token,
+                executable_path: identity.executable_path,
+            }),
+            Err(reason) => Err(runtime_pane_process_identity_unavailable(reason)),
+        }
+    }
+
     /// Records one verified OS identity for test-only staleness checks.
     #[cfg(test)]
     fn pin_pane_process_identity_for_tests(
@@ -722,6 +817,21 @@ impl RuntimeSessionService {
             let (foreground_group, _) = self.pane_foreground_process_group_observation(pane_id);
             foreground_group == Some(identity.process_id)
         };
+        #[cfg(test)]
+        if process_is_observed
+            && self
+                .process
+                .pane_process_identity_pins
+                .borrow()
+                .get(pane_id)
+                .is_some_and(|pin| {
+                    pin.0 == identity.process_id
+                        && pin.1 == identity.start_token
+                        && pin.2 == identity.executable_path
+                })
+        {
+            return true;
+        }
         process_is_observed
             && mez_mux::process::process_start_token_for_pid(identity.process_id)
                 == Some(identity.start_token)

@@ -731,18 +731,17 @@ impl RuntimeSessionService {
             self.fail_shell_transactions_for_pane_write_failure(pane_id, error.message())?;
             return Err(error);
         }
-        // Bind the handoff to the process that received the loader command. The
-        // correlated loader record is replayable by whatever owns the PTY, so the
-        // staged payload stays withheld until the pane worker reports a foreground
-        // group that differs from this write-time group. Aliased SSH-style
-        // transports expose only the pane shell's outer group, where no local
-        // observation can discriminate the loader, so they keep the correlated
-        // release.
-        let loader_launch_proof_group = (!self.pane_local_foreground_group_is_aliased(pane_id))
-            .then(|| self.pane_foreground_process_group_observation(pane_id).0)
-            .flatten();
+        // Bind the handoff to an explicit host-observability policy. A distinct
+        // OS-verified shell remains subject to a foreground transition, while a
+        // verified non-shell foreground leader (such as an SSH client) is an
+        // opaque transport whose matching loader record is the available proof.
+        let loader_launch_proof = self.foreign_loader_launch_proof(
+            pane_id,
+            boundary.primary_process_id,
+            boundary.process_group_id,
+        );
         if let Some(current) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) {
-            current.loader_launch_proof_group = loader_launch_proof_group;
+            current.loader_launch_proof = Some(loader_launch_proof.clone());
             current.loader_ready_awaits_launch_proof = false;
         }
         if child_shell.is_none() {
@@ -753,9 +752,10 @@ impl RuntimeSessionService {
         self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(
-                r#"{{"pane_id":"{}","foreign_bootstrap":"loading_child","transport":"dependency-free","marker":"{}"}}"#,
+                r#"{{"pane_id":"{}","foreign_bootstrap":"loading_child","transport":"dependency-free","marker":"{}","loader_launch_proof":"{}"}}"#,
                 json_escape(pane_id),
-                json_escape(&marker)
+                json_escape(&marker),
+                loader_launch_proof.as_str()
             ),
         )?;
         Ok(())

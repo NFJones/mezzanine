@@ -1,6 +1,10 @@
 //! Dependency-free foreign-shell bootstrap regressions.
 
 use super::*;
+use crate::runtime::processes::{
+    RuntimePaneProcessIdentityInjection, RuntimePaneProcessIdentityUnavailable,
+    RuntimePaneProcessRole,
+};
 
 /// Verifies pane-write progress for a correlated foreign identity probe still
 /// refreshes both its transaction timeout and foreign phase idle deadline.
@@ -2760,6 +2764,143 @@ bootstrap\tcomplete\t1714500000\n";
         service.pane_readiness_state(&pane_id),
         PaneReadinessState::Ready,
         "a successfully correlated dependency-free receiver must report ready"
+    );
+
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
+/// Verifies an OS-verified opaque foreground transport releases a matching
+/// loader record without requiring an impossible host-side PGID transition.
+///
+/// An interactive SSH client remains the stable local foreground group while
+/// its remote loader starts. The completed foreign-shell probe selects the
+/// child dialect, while the independently verified non-shell foreground leader
+/// selects correlated-loader-record proof for this interaction generation.
+#[test]
+fn runtime_opaque_foreground_transport_releases_loader_at_fixed_process_group() {
+    let mut service = test_runtime_service();
+    let (pane_id, mut process) = start_foreign_shell_pane(&mut service);
+    let opaque_group = service
+        .primary_pid_for_live_pane_process(&pane_id)
+        .expect("the pane primary process should be live")
+        .saturating_add(1);
+    settle_dependency_free_identity_probe(
+        &mut service,
+        &pane_id,
+        "/bin/bash",
+        "GNU bash, version 5.2",
+    );
+    service.inject_pane_process_identity_for_tests(
+        &pane_id,
+        RuntimePaneProcessIdentityInjection::Identity {
+            role: RuntimePaneProcessRole::ForegroundProcessGroupLeader,
+            generation: None,
+            process_id: opaque_group,
+            start_token: 7,
+            executable_path: "/usr/bin/ssh".into(),
+            live_start_token: None,
+        },
+    );
+    assert_eq!(
+        service.maybe_bootstrap_ready_panes().unwrap(),
+        1,
+        "the reconciliation pump should launch the dependency-free child loader"
+    );
+    let loader_marker = service
+        .foreign_shell_loader_marker_for_tests(&pane_id)
+        .expect("dependency-free loader should retain its nonce")
+        .to_string();
+    service.drain_pane_io_transition();
+
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_events(
+                &pane_id,
+                &[TerminalOscEvent::ForeignShellLoaderReady {
+                    marker: loader_marker,
+                }],
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).len(),
+        1,
+        "a matching opaque-transport loader record must release its payload at the unchanged SSH PGID"
+    );
+    assert_eq!(
+        service
+            .pane_foreground_process_group_observation(&pane_id)
+            .0,
+        Some(opaque_group),
+        "the regression must retain the fixed host-side SSH foreground group"
+    );
+
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
+/// Verifies an unreadable distinct foreground leader retains the stronger
+/// foreground-transition proof instead of being treated as an opaque transport.
+///
+/// A matching loader marker alone cannot release staged source when the runtime
+/// cannot verify the leader executable. A later distinct process group remains
+/// the required host-observable launch proof.
+#[test]
+fn runtime_unreadable_foreground_leader_withholds_loader_at_fixed_process_group() {
+    let mut service = test_runtime_service();
+    let (pane_id, mut process) = start_foreign_shell_pane(&mut service);
+    let opaque_group = service
+        .primary_pid_for_live_pane_process(&pane_id)
+        .expect("the pane primary process should be live")
+        .saturating_add(1);
+    settle_dependency_free_identity_probe(
+        &mut service,
+        &pane_id,
+        "/bin/bash",
+        "GNU bash, version 5.2",
+    );
+    service.inject_pane_process_identity_for_tests(
+        &pane_id,
+        RuntimePaneProcessIdentityInjection::Unavailable(
+            RuntimePaneProcessIdentityUnavailable::ExecutableUnreadable,
+        ),
+    );
+    assert_eq!(
+        service.maybe_bootstrap_ready_panes().unwrap(),
+        1,
+        "the reconciliation pump should launch the dependency-free child loader"
+    );
+    let loader_marker = service
+        .foreign_shell_loader_marker_for_tests(&pane_id)
+        .expect("dependency-free loader should retain its nonce")
+        .to_string();
+    service.drain_pane_io_transition();
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_events(
+                &pane_id,
+                &[TerminalOscEvent::ForeignShellLoaderReady {
+                    marker: loader_marker,
+                }],
+            )
+            .unwrap(),
+        1
+    );
+    assert!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
+        "an unreadable foreground leader must not release payload at its fixed process group"
+    );
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&pane_id, Some(opaque_group.saturating_add(1)));
+    assert!(
+        service.settle_deferred_foreign_bootstrap_work().unwrap() >= 1,
+        "a distinct foreground group must release the withheld payload"
+    );
+    assert_eq!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).len(),
+        1,
+        "the proven transition must release the loader payload exactly once"
     );
 
     let _ = process.terminate(Duration::from_millis(10));

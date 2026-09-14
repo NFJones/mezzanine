@@ -50,10 +50,26 @@ impl RuntimeSessionService {
                     pane_id.clone(),
                     boundary.interaction_generation,
                     boundary.phase,
+                    boundary
+                        .loader_launch_proof
+                        .as_ref()
+                        .map_or(
+                            "unresolved",
+                            super::super::RuntimeForeignLoaderLaunchProof::as_str,
+                        )
+                        .to_string(),
+                    boundary.loader_ready_awaits_launch_proof,
                 )
             })
             .collect::<Vec<_>>();
-        for (pane_id, interaction_generation, expired_phase) in &expired {
+        for (
+            pane_id,
+            interaction_generation,
+            expired_phase,
+            loader_launch_proof,
+            loader_ready_awaits_launch_proof,
+        ) in &expired
+        {
             let Some(boundary) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) else {
                 continue;
             };
@@ -128,13 +144,18 @@ impl RuntimeSessionService {
                 pane_id,
                 "agent: foreign shell bootstrap timed out; return to an empty prompt in the foreign environment and retry",
             )?;
+            let timeout_reason = loader_ready_awaits_launch_proof
+                .then_some(r#","reason":"loader_launch_unobserved""#)
+                .unwrap_or("");
             self.append_lifecycle_event(
                 EventKind::AgentStatus,
                 format!(
-                    r#"{{"pane_id":"{}","foreign_bootstrap":"timed_out","generation":{},"phase":"{}","state":"degraded"}}"#,
+                    r#"{{"pane_id":"{}","foreign_bootstrap":"timed_out","generation":{},"phase":"{}","loader_launch_proof":"{}"{},"state":"degraded"}}"#,
                     json_escape(pane_id),
                     interaction_generation,
-                    expired_phase.as_str()
+                    expired_phase.as_str(),
+                    loader_launch_proof,
+                    timeout_reason
                 ),
             )?;
             let pending_turn_ids = self

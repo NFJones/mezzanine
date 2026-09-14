@@ -165,6 +165,10 @@ impl RuntimeSessionService {
         {
             return Ok(0);
         }
+        let loader_launch_proof = boundary.loader_launch_proof.as_ref().map_or(
+            "unresolved",
+            super::super::RuntimeForeignLoaderLaunchProof::as_str,
+        );
         if !self.foreign_loader_launch_proof_observed(pane_id) {
             // A PTY owner can replay this record, so it may not release source
             // records that only a launched loader is allowed to receive. Keep the
@@ -179,9 +183,10 @@ impl RuntimeSessionService {
             self.append_lifecycle_event(
                 EventKind::AgentStatus,
                 format!(
-                    r#"{{"pane_id":"{}","foreign_bootstrap":"loader_ready_withheld","marker":"{}","reason":"loader_launch_unobserved"}}"#,
+                    r#"{{"pane_id":"{}","foreign_bootstrap":"loader_ready_withheld","marker":"{}","reason":"loader_launch_unobserved","loader_launch_proof":"{}"}}"#,
                     json_escape(pane_id),
-                    json_escape(marker)
+                    json_escape(marker),
+                    loader_launch_proof
                 ),
             )?;
             return Ok(1);
@@ -266,9 +271,13 @@ impl RuntimeSessionService {
         self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(
-                r#"{{"pane_id":"{}","foreign_bootstrap":"loader_ready","marker":"{}","payload_bytes":{},"bootstrap_prebuffered":{},"phase_elapsed_ms":{},"lifecycle_elapsed_ms":{}}}"#,
+                r#"{{"pane_id":"{}","foreign_bootstrap":"loader_ready","marker":"{}","loader_launch_proof":"{}","payload_bytes":{},"bootstrap_prebuffered":{},"phase_elapsed_ms":{},"lifecycle_elapsed_ms":{}}}"#,
                 json_escape(pane_id),
                 json_escape(marker),
+                boundary
+                    .loader_launch_proof
+                    .as_ref()
+                    .map_or("unresolved", super::super::RuntimeForeignLoaderLaunchProof::as_str),
                 payload_len,
                 self.process
                     .pane_shell_handoffs
@@ -292,13 +301,20 @@ impl RuntimeSessionService {
         let Some(boundary) = self.process.pane_foreign_shell_boundaries.get(pane_id) else {
             return false;
         };
-        let Some(recorded_process_group) = boundary.loader_launch_proof_group else {
-            return true;
-        };
-        matches!(
-            self.pane_foreground_process_group_observation(pane_id).0,
-            Some(process_group_id) if process_group_id != recorded_process_group
-        )
+        match boundary.loader_launch_proof.as_ref() {
+            Some(super::super::RuntimeForeignLoaderLaunchProof::ForegroundGroupTransition {
+                write_time_process_group_id,
+            }) => matches!(
+                self.pane_foreground_process_group_observation(pane_id).0,
+                Some(process_group_id) if process_group_id != *write_time_process_group_id
+            ),
+            Some(super::super::RuntimeForeignLoaderLaunchProof::CorrelatedLoaderRecord {
+                leader_identity,
+            }) => leader_identity
+                .as_ref()
+                .is_none_or(|identity| self.pane_process_identity_is_current(pane_id, identity)),
+            None => false,
+        }
     }
 
     /// Releases loader payloads whose pane worker now proves the loader launch.
@@ -842,7 +858,7 @@ impl RuntimeSessionService {
                 loader_marker: None,
                 loader_payload: None,
                 loader_ready: false,
-                loader_launch_proof_group: None,
+                loader_launch_proof: None,
                 loader_ready_awaits_launch_proof: false,
                 child_staging_source: None,
                 identity_marker: None,
@@ -1047,7 +1063,7 @@ impl RuntimeSessionService {
             current.loader_marker = None;
             current.loader_payload = None;
             current.loader_ready = false;
-            current.loader_launch_proof_group = None;
+            current.loader_launch_proof = None;
             current.loader_ready_awaits_launch_proof = false;
             current.child_staging_source = None;
             current.identity_marker = None;

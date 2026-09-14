@@ -5690,7 +5690,13 @@ artifacts MUST be owner-only and MUST be removed when the synchronous child
 returns. On Darwin, the loader MUST acknowledge each payload record after it
 has been consumed and runtime MUST wait for that acknowledgement before writing
 the next record so the constrained PTY typeahead buffer cannot corrupt staged
-source. Other hosts MAY stream payload records, but the marker-correlated
+source. A host-observable local shell MUST transition its foreground process
+group after the loader command before source is released. A distinct,
+OS-verified non-shell foreground leader is an opaque terminal transport, so a
+matching fresh loader record supplies launch correlation because its remote
+descendants have no host-visible process group. Unreadable or stale leader
+identity MUST retain the foreground-transition requirement. Other hosts MAY
+stream payload records, but the marker-correlated
 terminator MUST remain an acknowledgement boundary. While a correlated
 dependency-free loader owns that return, hiding or exiting the agent shell MUST
 retain its shell-interaction generation until the matching loader-exit record

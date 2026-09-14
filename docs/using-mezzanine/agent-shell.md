@@ -131,14 +131,19 @@ shell before generated input is released. Mezzanine never silently edits remote
 startup files and never installs software in the foreign environment.
 
 The dependency-free handoff uses correlation rather than cryptographic
-attestation. On a local foreign shell the runtime records the pane's foreground
-process group when it writes the loader command and releases the bootstrap
-payload only after the pane worker observes a different foreground group. The
-loader payload and fresh child token are typed into the same PTY, so a process
-that controls that PTY can observe and replay them. The process-group,
-interaction-generation, marker, and managed-child admission checks protect
-against stale, mismatched, and accidental records; they do not establish an
-unforgeable boundary against the active pane environment itself.
+attestation. On a host-observable local foreign shell, the runtime records the
+foreground process group when it writes the loader command and releases the
+bootstrap payload only after the pane worker observes a different foreground
+group. A verified non-shell foreground leader, such as an interactive SSH
+client, is an opaque transport: its remote descendants do not expose a
+host-visible process group, so a matching fresh loader record supplies launch
+correlation without waiting for an impossible transition. Unreadable or stale
+leader identity retains the stronger transition rule. The loader payload and
+fresh child token are typed into the same PTY, so a process that controls that
+PTY can observe and replay them. The process-group, interaction-generation,
+marker, and managed-child admission checks protect against stale, mismatched,
+and accidental records; they do not establish an unforgeable boundary against
+the active pane environment itself.
 
 Selecting `pane` shell mode and explicitly entering the agent shell opts into
 using a successfully correlated pane bootstrap as environment and path
