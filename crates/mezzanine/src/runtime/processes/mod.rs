@@ -3536,6 +3536,7 @@ impl RuntimeSessionService {
             current_working_directory,
             &session_shell_path,
             &self.configured_permissions().env_whitelist,
+            self.server_environment(),
         )
     }
 

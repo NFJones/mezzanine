@@ -111,8 +111,8 @@ impl RuntimeSessionService {
     /// capability probing and workload compilation for one action profile.
     pub(crate) fn bubblewrap_environment_evidence_for_action(
         &self,
-        turn: &mez_agent::AgentTurnRecord,
-        action_id: &str,
+        _turn: &mez_agent::AgentTurnRecord,
+        _action_id: &str,
         request: &mez_agent::shell::PaneEnvironmentRequest,
         profile: BubblewrapEnvironmentProfile,
     ) -> Option<mez_agent::shell::PaneEnvironmentEvidence> {
@@ -126,9 +126,12 @@ impl RuntimeSessionService {
             BubblewrapEnvironmentProfile::ConfiguredForwarding if request.names.is_empty() => Some(
                 mez_agent::shell::PaneEnvironmentEvidence::restrictive(request, "not_configured"),
             ),
-            BubblewrapEnvironmentProfile::ConfiguredForwarding => {
-                self.pane_environment_evidence(turn, action_id, request)
-            }
+            BubblewrapEnvironmentProfile::ConfiguredForwarding => Some(
+                crate::runtime::processes::native_workload_environment::server_environment_evidence(
+                    request,
+                    self.server_environment(),
+                ),
+            ),
         }
     }
 
@@ -139,6 +142,9 @@ impl RuntimeSessionService {
     ) -> Result<bool> {
         let policy = self.permission_policy_for_turn(turn);
         let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
+        if matches!(sandbox_config, crate::runtime::SandboxConfig::Bubblewrap(_)) {
+            return Ok(true);
+        }
         let requested_names = match &sandbox_config {
             crate::runtime::SandboxConfig::Seatbelt(_) => seatbelt_forwarded_environment_names(
                 &self.configured_permissions().env_whitelist.requested_names,

@@ -214,10 +214,10 @@ pub(crate) fn infer_native_shell_context(
     })
 }
 
-/// Infers a native shell context with one shared pane-variable allowlist.
+/// Infers a native shell context with one shared server-variable allowlist.
 ///
-/// The configured names select only validated values from the pane root; this
-/// never forwards a daemon-only value into a workload.
+/// Pane-root metadata selects the shell and working directory. The configured
+/// names select only validated values from the immutable Mez-server snapshot.
 pub(crate) fn infer_native_shell_context_with_whitelist(
     primary_pid: Option<u32>,
     executable_path: Option<PathBuf>,
@@ -225,6 +225,7 @@ pub(crate) fn infer_native_shell_context_with_whitelist(
     current_working_directory: Option<PathBuf>,
     session_shell_path: &Path,
     env_whitelist: &crate::runtime::ConfiguredSandboxEnvironment,
+    server_environment: &[RawEnvironmentEntry],
 ) -> Result<NativeShellContext> {
     let primary_pid = primary_pid.ok_or_else(|| {
         MezError::invalid_state("native shell mode requires a live pane root process")
@@ -240,8 +241,13 @@ pub(crate) fn infer_native_shell_context_with_whitelist(
         &raw_environment,
         session_shell_path,
     )?;
+    let projected_server_environment =
+        super::native_workload_environment::project_server_environment(
+            server_environment,
+            &env_whitelist.requested_names,
+        );
     let environment = compose_native_workload_environment_with_whitelist(
-        &raw_environment,
+        &projected_server_environment,
         &env_whitelist.requested_names,
     )?;
     Ok(NativeShellContext {
@@ -468,6 +474,39 @@ mod tests {
         assert_eq!(value_of(workload, "PATH"), Some("/pane/bin"));
         assert_eq!(value_of(workload, "SHELL"), Some("/bin/bash"));
         assert_eq!(value_of(workload, "MEZ_PANE_PROVIDED"), Some("pane-value"));
+    }
+
+    /// Verifies the configured workload entries come from the Mez-server
+    /// snapshot rather than conflicting pane-root environment metadata.
+    #[test]
+    fn whitelisted_inference_prefers_server_environment_over_pane_metadata() {
+        let whitelist = crate::runtime::ConfiguredSandboxEnvironment {
+            requested_names: vec!["PATH".to_string(), "GH_TOKEN".to_string()],
+        };
+        let context = infer_native_shell_context_with_whitelist(
+            Some(42),
+            Some(PathBuf::from("/bin/bash")),
+            Some(vec![
+                entry("PATH", "/pane/bin"),
+                entry("GH_TOKEN", "pane-token"),
+                entry("PANE_ONLY", "must-not-forward"),
+            ]),
+            Some(PathBuf::from("/tmp/work")),
+            Path::new("/bin/sh"),
+            &whitelist,
+            &[
+                entry("PATH", "/server/bin"),
+                entry("GH_TOKEN", "server-token"),
+                entry("SERVER_ONLY", "must-not-forward"),
+            ],
+        )
+        .expect("server-backed inference succeeds");
+        let workload = context.workload_environment().workload();
+
+        assert_eq!(value_of(workload, "PATH"), Some("/server/bin"));
+        assert_eq!(value_of(workload, "GH_TOKEN"), Some("server-token"));
+        assert_eq!(value_of(workload, "PANE_ONLY"), None);
+        assert_eq!(value_of(workload, "SERVER_ONLY"), None);
     }
 
     /// Verifies one sandbox-launcher context exposes only the launcher control

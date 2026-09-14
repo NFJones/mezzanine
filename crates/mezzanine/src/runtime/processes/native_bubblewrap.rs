@@ -762,7 +762,10 @@ impl crate::runtime::RuntimeSessionService {
         let evidence = if matches!(action.payload, AgentActionPayload::ApplyPatch { .. }) {
             PaneEnvironmentEvidence::restrictive(&request, "semantic_patch_not_forwarded")
         } else {
-            native_environment_evidence(&request, context)
+            super::native_workload_environment::server_environment_evidence(
+                &request,
+                self.server_environment(),
+            )
         };
         let child_shell_path = program_dialect
             .interpreter_path()

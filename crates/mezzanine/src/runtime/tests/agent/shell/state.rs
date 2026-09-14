@@ -1908,31 +1908,44 @@ fn runtime_semantic_patch_with_env_whitelist_uses_no_forwarding_profile() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// Verifies ordinary sandboxed actions with a configured variable still start
-/// pane-local evidence acquisition instead of inheriting patch behavior.
+/// Verifies ordinary Bubblewrap actions derive configured values from the
+/// Mez-server snapshot without starting a pane-shell evidence transaction.
 #[test]
-fn runtime_ordinary_action_with_env_whitelist_requests_environment_evidence() {
+fn runtime_ordinary_action_with_env_whitelist_uses_server_environment_evidence() {
     let mut service = bubblewrap_probe_service();
     configure_path_resolution_bubblewrap_with_environment(&mut service);
+    service.set_server_environment_for_tests(vec![mez_mux::process::RawEnvironmentEntry {
+        key: b"CI".to_vec(),
+        value: b"server-ci".to_vec(),
+    }]);
     let turn = path_resolution_turn();
+    let request = mez_agent::shell::PaneEnvironmentRequest::new(vec!["CI".to_string()]).unwrap();
 
     assert!(
-        !service
+        service
             .ensure_bubblewrap_environment_evidence_for_action(&turn, "ordinary-action")
             .unwrap()
     );
+    let evidence = service
+        .bubblewrap_environment_evidence_for_action(
+            &turn,
+            "ordinary-action",
+            &request,
+            crate::runtime::BubblewrapEnvironmentProfile::ConfiguredForwarding,
+        )
+        .unwrap();
     assert!(
         service
             .running_shell_transactions_for_tests()
             .values()
-            .any(|transaction| matches!(
-                &transaction.kind,
-                RunningShellTransactionKind::EnvironmentEvidence { waiters, .. }
-                    if waiters == &vec![(
-                        "path-resolution-turn".to_string(),
-                        "ordinary-action".to_string()
-                    )]
+            .all(|transaction| !matches!(
+                transaction.kind,
+                RunningShellTransactionKind::EnvironmentEvidence { .. }
             ))
+    );
+    assert_eq!(
+        evidence.values.get("CI").map(String::as_str),
+        Some("server-ci")
     );
 
     service.terminate_all_pane_processes().unwrap();
