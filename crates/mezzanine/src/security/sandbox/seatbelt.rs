@@ -566,13 +566,15 @@ mod tests {
     fn evidence() -> mez_agent::shell::PaneEnvironmentEvidence {
         let request =
             mez_agent::shell::PaneEnvironmentRequest::new(vec!["PATH".to_string()]).unwrap();
-        let mut evidence =
-            mez_agent::shell::PaneEnvironmentEvidence::restrictive(&request, "test_default");
-        evidence.values.insert(
-            "PATH".to_string(),
-            "/opt/tools/bin:/usr/bin:/bin".to_string(),
-        );
-        evidence
+        mez_agent::shell::PaneEnvironmentEvidence::from_parts(
+            &request,
+            BTreeMap::from([(
+                "PATH".to_string(),
+                "/opt/tools/bin:/usr/bin:/bin".to_string(),
+            )]),
+            BTreeMap::new(),
+        )
+        .unwrap()
     }
 
     fn request<'a>(
@@ -781,7 +783,7 @@ mod tests {
     }
 
     #[test]
-    fn compiler_fails_closed_for_unsupported_path_kinds_and_protected_environment() {
+    fn compiler_fails_closed_for_unsupported_path_kinds_and_forwards_configured_environment() {
         let config = config();
         let environment_evidence = evidence();
         for kind in [
@@ -800,16 +802,28 @@ mod tests {
         }
 
         let policy = policy(SandboxNetworkMode::Isolated);
-        let mut protected = evidence();
-        protected
-            .values
-            .insert("HOME".to_string(), "/Users/ambient".to_string());
-        assert_eq!(
-            compile_seatbelt_launch_plan(request(&config, &policy, &protected))
-                .unwrap_err()
-                .kind(),
-            SandboxCompileErrorKind::InvalidInput
-        );
+        let request_names = mez_agent::shell::PaneEnvironmentRequest::new(vec![
+            "PATH".to_string(),
+            "HOME".to_string(),
+        ])
+        .unwrap();
+        let configured_environment = mez_agent::shell::PaneEnvironmentEvidence::from_parts(
+            &request_names,
+            BTreeMap::from([
+                (
+                    "PATH".to_string(),
+                    "/opt/tools/bin:/usr/bin:/bin".to_string(),
+                ),
+                ("HOME".to_string(), "/Users/ambient".to_string()),
+            ]),
+            BTreeMap::new(),
+        )
+        .unwrap();
+        let plan = compile_seatbelt_launch_plan(request(&config, &policy, &configured_environment))
+            .unwrap();
+        let environment =
+            serde_json::from_slice::<BTreeMap<String, String>>(&plan.environment_document).unwrap();
+        assert_eq!(environment["HOME"], "/Users/ambient");
     }
 
     #[cfg(target_os = "macos")]
