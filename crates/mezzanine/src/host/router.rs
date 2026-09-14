@@ -4194,7 +4194,7 @@ mod tests {
 
     fn test_root(label: &str) -> PathBuf {
         let label = label.chars().take(12).collect::<String>();
-        let root = std::env::temp_dir().join(format!(
+        let root = PathBuf::from("/tmp").join(format!(
             "mez-hr-{label}-{}-{}",
             std::process::id(),
             rand::random::<u64>()

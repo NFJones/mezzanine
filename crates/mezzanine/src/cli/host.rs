@@ -959,7 +959,7 @@ mod tests {
     }
 
     fn test_root(_label: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!(
+        let root = PathBuf::from("/tmp").join(format!(
             "mc-{}-{:x}",
             std::process::id(),
             rand::random::<u64>()

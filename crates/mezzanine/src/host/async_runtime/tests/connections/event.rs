@@ -548,7 +548,7 @@ async fn bound_unix_event_listener_delivers_refreshes_to_concurrent_primaries() 
     use tokio::net::{UnixListener, UnixStream};
     use tokio::time::{Duration, timeout};
 
-    let path = std::env::temp_dir().join(format!(
+    let path = std::path::PathBuf::from("/tmp").join(format!(
         "mez-bound-concurrent-event-listener-{}-{}.sock",
         std::process::id(),
         "primaries"

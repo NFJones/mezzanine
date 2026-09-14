@@ -4721,7 +4721,7 @@ mod tests {
         use crate::test_support::runtime::RuntimeServiceFixture;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let root = std::env::temp_dir().join(format!(
+        let root = std::path::PathBuf::from("/tmp").join(format!(
             "mez-iroh-live-revocation-{}-{}",
             std::process::id(),
             rand::random::<u64>()
@@ -5444,7 +5444,7 @@ mod tests {
         use crate::test_support::runtime::RuntimeServiceFixture;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let root = std::env::temp_dir().join(format!(
+        let root = std::path::PathBuf::from("/tmp").join(format!(
             "mez-iroh-unix-coexistence-{}-{}",
             std::process::id(),
             rand::random::<u64>()

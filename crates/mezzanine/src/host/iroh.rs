@@ -1675,7 +1675,7 @@ mod tests {
     use super::*;
 
     fn test_root(label: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
+        std::path::PathBuf::from("/tmp").join(format!(
             "mez-host-iroh-{label}-{}-{}",
             std::process::id(),
             rand::random::<u64>()
