@@ -820,11 +820,11 @@ impl RuntimeSessionService {
                         if let Some((direction, peer_label, payload, content_type)) =
                             decoded_peer_message_presentation_source(source_text)
                         {
-                            // A replayed row renders the record that was actually
-                            // persisted: a suppressed bridge echo left no record,
-                            // so nothing can resurrect it, and the resolved mode
-                            // still decides between the stored payload and the
-                            // projected `output` body.
+                            // Replayed peer sources use the same renderer as live
+                            // presentation: normal mode admits only exact canonical
+                            // plaintext, verbose mode renders every bounded raw
+                            // payload, and a pre-persistence suppression leaves no
+                            // presentation record for replay to resurrect.
                             self.append_agent_peer_message_to_terminal_buffer(
                                 pane_id,
                                 peer_label.as_str(),
