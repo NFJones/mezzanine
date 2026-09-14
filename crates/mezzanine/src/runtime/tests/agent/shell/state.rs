@@ -45,7 +45,7 @@ fn path_resolution_environment(working_directory: &Path) -> mez_agent::Environme
         None,
         "test-host",
         "test-user",
-        None,
+        Some(working_directory.to_string_lossy().into_owned()),
         "/bin/sh",
         mez_agent::ShellClassification::PosixSh,
         None,

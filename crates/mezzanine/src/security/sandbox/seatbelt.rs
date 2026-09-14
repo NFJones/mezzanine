@@ -8,6 +8,7 @@
 //! equivalence.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::path::{Component, Path};
 
 use mez_agent::{ShellChildArgument, ShellChildLaunch, ShellLaunchArtifact, ShellLaunchArtifactId};
@@ -69,7 +70,7 @@ pub(crate) struct SeatbeltCompileRequest<'a> {
     pub(crate) command_file_path: &'a str,
     /// Canonical owner-only environment document read by the child launcher.
     pub(crate) environment_file_path: &'a str,
-    /// Canonical private home supplied to the payload.
+    /// Canonical user home supplied to the payload.
     pub(crate) home_directory: &'a str,
     /// Canonical private temporary directory supplied to the payload.
     pub(crate) temporary_directory: &'a str,
@@ -171,7 +172,7 @@ fn validate_request(request: &SeatbeltCompileRequest<'_>) -> Result<(), SandboxC
         request.environment_file_path,
         "Seatbelt environment document",
     )?;
-    validate_printable_absolute_path(request.home_directory, "Seatbelt private home")?;
+    validate_printable_absolute_path(request.home_directory, "Seatbelt user home")?;
     validate_printable_absolute_path(request.temporary_directory, "Seatbelt temporary directory")?;
     validate_printable_absolute_path(
         &request.policy.working_directory,
@@ -273,12 +274,23 @@ fn seatbelt_profile(request: &SeatbeltCompileRequest<'_>) -> Result<String, Sand
         request.environment_file_path,
     ];
     append_filter_rule(&mut profile, "file-read*", "literal", &fixed_literals)?;
-    let private_directories = [request.home_directory, request.temporary_directory];
+    let private_directories = [request.temporary_directory];
     append_filter_rule(
         &mut profile,
         "file-read* file-write*",
         "subpath",
         &private_directories,
+    )?;
+    let executable_directories = authorized_path_directories(request);
+    let executable_directory_refs = executable_directories
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    append_filter_rule(
+        &mut profile,
+        "file-read*",
+        "subpath",
+        &executable_directory_refs,
     )?;
 
     for grant in &request.policy.grants {
@@ -302,6 +314,50 @@ fn seatbelt_profile(request: &SeatbeltCompileRequest<'_>) -> Result<String, Sand
         profile.push_str("(allow network*)\n");
     }
     Ok(profile)
+}
+
+/// Returns canonical pane PATH directories that may be read to locate binaries.
+///
+/// The canonical user home remains visible to Seatbelt workloads, but ordinary
+/// home reads still require an effective grant. This narrow exception permits
+/// metadata and executable reads only below an allowlisted PATH entry that is
+/// itself under the canonical home or an effective readable scope.
+fn authorized_path_directories(request: &SeatbeltCompileRequest<'_>) -> Vec<String> {
+    let Some(path) = request.environment_evidence.values.get("PATH") else {
+        return Vec::new();
+    };
+    let canonical_home = canonicalize_macos_alias(request.home_directory);
+    path.split(':')
+        .filter(|entry| !entry.is_empty())
+        .filter(|entry| validate_printable_absolute_path(entry, "Seatbelt PATH entry").is_ok())
+        .filter_map(canonical_path_directory)
+        .filter(|entry| {
+            Path::new(entry).starts_with(&canonical_home)
+                || request
+                    .policy
+                    .grants
+                    .iter()
+                    .map(|grant| canonicalize_macos_alias(&grant.enforcement_path))
+                    .any(|grant| Path::new(entry).starts_with(grant))
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Returns one existing ordinary PATH directory at its canonical host path.
+///
+/// Symlinked, missing, and non-directory entries never receive recursive
+/// profile authority, even when their lexical spelling appears in a permitted
+/// home or effective scope.
+fn canonical_path_directory(path: &str) -> Option<String> {
+    let metadata = fs::symlink_metadata(path).ok()?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return None;
+    }
+    let canonical = fs::canonicalize(path).ok()?;
+    let canonical = canonicalize_macos_alias(&canonical.to_string_lossy());
+    (canonical == canonicalize_macos_alias(path)).then_some(canonical)
 }
 
 fn append_filter_rule(
@@ -341,6 +397,7 @@ fn payload_environment(
 ) -> Result<BTreeMap<String, String>, SandboxCompileError> {
     let home = canonicalize_macos_alias(request.home_directory);
     let temporary = canonicalize_macos_alias(request.temporary_directory);
+    let xdg_root = format!("{temporary}/xdg");
     let mut environment = BTreeMap::from([
         ("GIT_CONFIG_GLOBAL".to_string(), "/dev/null".to_string()),
         ("GIT_CONFIG_NOSYSTEM".to_string(), "1".to_string()),
@@ -352,10 +409,10 @@ fn payload_environment(
         ("SHELL".to_string(), request.child_shell_path.to_string()),
         ("TMPDIR".to_string(), temporary),
         ("USER".to_string(), request.user_name.to_string()),
-        ("XDG_CACHE_HOME".to_string(), format!("{home}/.cache")),
-        ("XDG_CONFIG_HOME".to_string(), format!("{home}/.config")),
-        ("XDG_DATA_HOME".to_string(), format!("{home}/.local/share")),
-        ("XDG_STATE_HOME".to_string(), format!("{home}/.local/state")),
+        ("XDG_CACHE_HOME".to_string(), format!("{xdg_root}/cache")),
+        ("XDG_CONFIG_HOME".to_string(), format!("{xdg_root}/config")),
+        ("XDG_DATA_HOME".to_string(), format!("{xdg_root}/data")),
+        ("XDG_STATE_HOME".to_string(), format!("{xdg_root}/state")),
     ]);
     for (name, value) in &request.environment_evidence.values {
         if PROTECTED_ENVIRONMENT_NAMES.contains(&name.as_str()) {
@@ -610,6 +667,70 @@ mod tests {
         assert_eq!(environment["PATH"], "/opt/tools/bin:/usr/bin:/bin");
         assert_eq!(environment["GIT_CONFIG_COUNT"], "2");
         assert!(!environment.contains_key("SSH_AUTH_SOCK"));
+    }
+
+    /// Verifies Seatbelt exposes the canonical user home without granting it
+    /// ordinary access, while permitting lookup beneath one allowlisted PATH
+    /// directory under that home.
+    #[test]
+    fn compiler_uses_canonical_home_with_constrained_user_path_lookup() {
+        use std::os::unix::fs::symlink;
+
+        let root =
+            std::env::temp_dir().join(format!("mez-seatbelt-path-lookup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("home/.local/bin")).unwrap();
+        std::fs::create_dir_all(root.join("scope/tools")).unwrap();
+        std::fs::create_dir_all(root.join("outside/bin")).unwrap();
+        symlink(root.join("outside/bin"), root.join("home/escaped-bin")).unwrap();
+        let root = std::fs::canonicalize(&root).unwrap();
+        let home = root.join("home");
+        let tools = root.join("scope/tools");
+        let escaped = home.join("escaped-bin");
+        let config = config();
+        let mut policy = policy(SandboxNetworkMode::Isolated);
+        policy.grants.push(SandboxPathGrant {
+            canonical_path: tools.to_string_lossy().into_owned(),
+            enforcement_path: tools.to_string_lossy().into_owned(),
+            kind: SandboxPathKind::Directory,
+            access: SandboxPathAccess::ReadOnly,
+        });
+        let mut evidence = evidence();
+        evidence.values.insert(
+            "PATH".to_string(),
+            format!(
+                "{}:{}:{}:/opt/denied/bin:/usr/bin:/bin",
+                home.join(".local/bin").display(),
+                tools.display(),
+                escaped.display(),
+            ),
+        );
+        let mut request = request(&config, &policy, &evidence);
+        request.home_directory = home.to_str().unwrap();
+
+        let plan = compile_seatbelt_launch_plan(request).unwrap();
+        let environment =
+            serde_json::from_slice::<BTreeMap<String, String>>(&plan.environment_document).unwrap();
+        let profile = profile(&plan);
+
+        assert_eq!(environment["HOME"], home.to_string_lossy());
+        assert_eq!(environment["TMPDIR"], "/private/tmp/mez-action/tmp");
+        assert_eq!(
+            environment["XDG_CONFIG_HOME"],
+            "/private/tmp/mez-action/tmp/xdg/config"
+        );
+        assert!(profile.contains(&format!(
+            "(subpath \"{}\")",
+            home.join(".local/bin").display()
+        )));
+        assert!(profile.contains(&format!("(subpath \"{}\")", tools.display())));
+        assert!(!profile.contains(&format!("(subpath \"{}\")", escaped.display())));
+        assert!(!profile.contains("(subpath \"/opt/denied/bin\")"));
+        assert!(!profile.contains(&format!(
+            "file-read* file-write* (subpath \"{}\")",
+            home.display()
+        )));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

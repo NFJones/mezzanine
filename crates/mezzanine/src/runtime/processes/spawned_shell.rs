@@ -1702,7 +1702,9 @@ mod tests {
     #[test]
     fn native_seatbelt_timeout_cleans_workload_lease() {
         let artifacts = crate::security::sandbox::prepare_seatbelt_workload_artifacts(
-            None, None, "sleep 30", None,
+            Path::new("/tmp"),
+            "sleep 30",
+            None,
         )
         .unwrap();
         let action_directory = artifacts.action_directory.clone();

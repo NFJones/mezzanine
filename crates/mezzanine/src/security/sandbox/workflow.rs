@@ -18,7 +18,6 @@ use crate::security::project::{
     ProjectRootDiscovery, ProjectRootMarkerKind, ProjectTrustProvenance, TrustDecision,
 };
 
-use super::managed_home::inspect_seatbelt_managed_home;
 use super::seatbelt::SEATBELT_RUNTIME_PROFILE_VERSION;
 use super::{
     BUBBLEWRAP_RUNTIME_PROFILE_VERSION, EffectiveSandboxState, SandboxEffectiveBoundary,
@@ -337,23 +336,14 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             } else {
                 "unavailable"
             };
-            let (managed_home_state, managed_home_bytes, managed_home_active) = if trusted {
-                inspect_managed_home_state(
-                    SandboxBackend::Seatbelt,
-                    request.config_root,
-                    &request.discovery.canonical_root,
-                )
-            } else {
-                ("not-applicable", 0, false)
-            };
             (
                 Some(executable),
                 executable_state,
                 Some(SEATBELT_RUNTIME_PROFILE_VERSION.to_string()),
-                managed_home_state,
-                managed_home_bytes,
-                managed_home_active,
-                "private-canonical-host-path",
+                "not-applicable",
+                0,
+                false,
+                "canonical-host-home",
             )
         }
     };
@@ -461,13 +451,13 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             }),
             SandboxBackend::Seatbelt => {
                 diagnostics.push(SandboxWorkflowDiagnostic {
-                    id: "sandbox.private-host-home",
+                    id: "sandbox.visible-host-home",
                     severity: SandboxDiagnosticSeverity::Info,
-                    summary: "Seatbelt uses a private canonical host-path home".to_string(),
-                    details: "The managed home is visible at its canonical host path; Seatbelt denies operations outside authorized paths rather than mounting a synthetic namespace.".to_string(),
-                    remedy: "Store non-secret build caches in the managed home; do not grant access to host credential directories.".to_string(),
+                    summary: "Seatbelt uses the canonical host home".to_string(),
+                    details: "Seatbelt exposes the user home path because it cannot mount a synthetic home, but denies ordinary operations outside authorized paths and keeps XDG state private per workload.".to_string(),
+                    remedy: "Grant only required home paths and executable roots; do not grant credential directories.".to_string(),
                     affected_path: None,
-                    source: "managed-home",
+                    source: "seatbelt",
                 });
                 diagnostics.push(SandboxWorkflowDiagnostic {
                     id: "sandbox.visible-host-namespace",
@@ -577,10 +567,10 @@ fn inspect_managed_home_state(
     config_root: &Path,
     project_root: &Path,
 ) -> (&'static str, u64, bool) {
-    let inspection = match backend {
-        SandboxBackend::Bubblewrap => inspect_bubblewrap_managed_home(config_root, project_root),
-        SandboxBackend::Seatbelt => inspect_seatbelt_managed_home(config_root, project_root),
+    let SandboxBackend::Bubblewrap = backend else {
+        return ("not-applicable", 0, false);
     };
+    let inspection = inspect_bubblewrap_managed_home(config_root, project_root);
     match inspection {
         Ok(inspection) if inspection.exists && inspection.active => {
             ("active", inspection.bytes, true)

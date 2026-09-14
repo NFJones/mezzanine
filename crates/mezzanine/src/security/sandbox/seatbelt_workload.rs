@@ -3,10 +3,9 @@
 //! Pane and native transports share this owner so policy compilation receives
 //! concrete canonical host paths before launch. Each workload gets an
 //! owner-only action directory, command and environment files, and temporary
-//! directory. Trusted projects may reuse their backend-tagged managed HOME;
-//! other workloads receive an ephemeral HOME below the action directory. A
-//! cloneable lease retains the managed-home activity lock and removes only the
-//! private action tree after every transport owner releases it.
+//! directory. The payload keeps the verified canonical pane home because
+//! Seatbelt cannot mount-project a synthetic home. A cloneable lease removes
+//! only the private action tree after every transport owner releases it.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -15,10 +14,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::managed_home::{
-    SandboxManagedHomeActivityLock, SeatbeltEphemeralHome, prepare_seatbelt_ephemeral_home,
-    prepare_seatbelt_managed_home_for_workload,
-};
 use super::{SandboxCompileError, SandboxCompileErrorKind};
 
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
@@ -36,7 +31,7 @@ pub(crate) struct SeatbeltWorkloadArtifacts {
     pub(crate) command_file_path: PathBuf,
     /// Canonical owner-only environment document read by the child launcher.
     pub(crate) environment_file_path: PathBuf,
-    /// Canonical private HOME projected into the payload environment.
+    /// Verified canonical host HOME projected into the payload environment.
     pub(crate) home_directory: PathBuf,
     /// Canonical private temporary directory projected as `TMPDIR`.
     pub(crate) temporary_directory: PathBuf,
@@ -98,8 +93,6 @@ impl SeatbeltWorkloadLease {
 #[derive(Debug)]
 struct SeatbeltWorkloadLeaseInner {
     action_directory: PathBuf,
-    _activity_lock: Option<SandboxManagedHomeActivityLock>,
-    _ephemeral_home: Option<SeatbeltEphemeralHome>,
 }
 
 impl Drop for SeatbeltWorkloadLeaseInner {
@@ -108,11 +101,10 @@ impl Drop for SeatbeltWorkloadLeaseInner {
     }
 }
 
-/// Materializes canonical owner-only state for one pane or native Seatbelt
-/// workload without exposing the user's real HOME.
+/// Materializes owner-only transient state for one Seatbelt workload while
+/// retaining the verified canonical host home for payload environment use.
 pub(crate) fn prepare_seatbelt_workload_artifacts(
-    config_root: Option<&Path>,
-    trusted_project_root: Option<&Path>,
+    home_directory: &Path,
     command: &str,
     input_sidecar: Option<&str>,
 ) -> Result<SeatbeltWorkloadArtifacts, SandboxCompileError> {
@@ -121,18 +113,7 @@ pub(crate) fn prepare_seatbelt_workload_artifacts(
     create_private_directory(&temporary_directory)?;
     let temporary_directory = canonicalize(&temporary_directory, "temporary directory")?;
 
-    let (home_directory, activity_lock, ephemeral_home) = match (config_root, trusted_project_root)
-    {
-        (Some(config_root), Some(project_root)) => {
-            let (home, activity_lock) =
-                prepare_seatbelt_managed_home_for_workload(config_root, project_root)?;
-            (home.host_path, Some(activity_lock), None)
-        }
-        _ => {
-            let home = prepare_seatbelt_ephemeral_home(&action_directory)?;
-            (home.host_path.clone(), None, Some(home))
-        }
-    };
+    let home_directory = canonicalize(home_directory, "home directory")?;
 
     let command_file_path = action_directory.join("command");
     write_command_file(&command_file_path, command, input_sidecar)?;
@@ -143,8 +124,6 @@ pub(crate) fn prepare_seatbelt_workload_artifacts(
     let lease = SeatbeltWorkloadLease {
         inner: Arc::new(SeatbeltWorkloadLeaseInner {
             action_directory: action_directory.clone(),
-            _activity_lock: activity_lock,
-            _ephemeral_home: ephemeral_home,
         }),
     };
 
@@ -266,9 +245,12 @@ mod tests {
     /// preserve semantic-patch sidecars, and disappear with the final lease.
     #[test]
     fn workload_artifacts_are_private_and_cleanup_with_lease() {
-        let artifacts =
-            prepare_seatbelt_workload_artifacts(None, None, "printf ok", Some("0 cGF5bG9hZA==\n"))
-                .unwrap();
+        let artifacts = prepare_seatbelt_workload_artifacts(
+            Path::new("/tmp"),
+            "printf ok",
+            Some("0 cGF5bG9hZA==\n"),
+        )
+        .unwrap();
         assert_eq!(
             fs::canonicalize(&artifacts.action_directory).unwrap(),
             artifacts.action_directory

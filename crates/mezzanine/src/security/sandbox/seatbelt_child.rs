@@ -89,7 +89,7 @@ fn run_outer(
     validate_executable(sandbox_executable)?;
     validate_private_file(profile_file)?;
     validate_directory(working_directory, false)?;
-    validate_directory(home_directory, true)?;
+    validate_directory(home_directory, false)?;
     validate_directory(temporary_directory, true)?;
     validate_executable(child_shell)?;
     validate_private_file(command_file)?;
@@ -170,7 +170,7 @@ fn run_child(
     environment_file: &Path,
 ) -> Result<u8, &'static str> {
     validate_directory(working_directory, false)?;
-    validate_directory(home_directory, true)?;
+    validate_directory(home_directory, false)?;
     validate_directory(temporary_directory, true)?;
     validate_executable(child_shell)?;
     validate_private_file(command_file)?;

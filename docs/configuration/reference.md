@@ -1324,7 +1324,7 @@ the active pane's effective scopes. `effective_scope_provenance` is `explicit`,
 `trusted-project`, or `none`; trusted-project authority also reports the selected
 root. Bubblewrap status reports `authority-mounts-only`, `synthetic-home`,
 `minimal-path`, and `network-policy-enforced`. Seatbelt reports
-`host-path-authority-only`, `private-host-home`, `minimal-path`,
+`host-path-authority-only`, `visible-host-home`, `minimal-path`,
 `network-operation-policy`, and `visible-host-namespace`. These stable
 identifiers describe likely denial causes without exposing launcher arguments,
 generated SBPL, environment values, lifecycle records, probe output, or host
@@ -1427,10 +1427,13 @@ Mezzanine does not currently enforce a built-in size quota or periodic age-based
 pruning; operators may apply filesystem quotas or remove inactive private cache
 directories while no sandbox command is using them.
 
-Seatbelt managed homes use the same backend/profile-separated private storage
-and activity locking, but `HOME` and XDG variables name the private canonical
-host path directly. Seatbelt does not mount a synthetic home or hide the host
-namespace. Status reports these semantics without disclosing the path.
+Seatbelt uses the canonical pane or native root-process home for `HOME`; it does
+not mount a synthetic home or hide the host namespace. This visible path does
+not grant ordinary access to the home: effective scopes still govern file
+operations, while validated allowlisted PATH directories receive the narrow
+read access needed for executable lookup. `TMPDIR` and XDG state remain private
+per-workload paths, and status reports these semantics without disclosing the
+home path.
 
 Each Bubblewrap managed home stores immutable synthetic passwd/group records below an
 identity-hash directory. The passwd entry uses the pane UID and primary GID;

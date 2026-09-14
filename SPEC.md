@@ -4835,8 +4835,8 @@ unknown network mode; only a compiled plan plus capability proof may report
 `remote-unattested` and MUST NOT inherit the configured backend. Bubblewrap
 status MUST report its private namespace boundary
 and synthetic mounted-home semantics. Seatbelt status MUST report operation-level
-network denial, a visible host namespace, and private canonical host-path home
-semantics without describing any of them as mounts or namespaces. Inspection
+network denial, a visible host namespace, and canonical host-home semantics
+without describing any of them as mounts or namespaces. Inspection
 MUST NOT migrate or persist configuration, mutate trust, create managed homes,
 or populate probe caches. Diagnostics MUST contain stable
 `id`, `severity`, `summary`, `details`, `remedy`, `affected_path`, and `source`
@@ -4974,15 +4974,13 @@ remove the matching managed home without removing other projects' homes.
 Implementations MAY leave cleanup or storage quotas to external private
 filesystem policy; status and documentation MUST disclose that limitation.
 
-When Seatbelt authority comes from a trusted project and a private Mezzanine
-configuration root is available, Mezzanine MUST create or reuse a backend- and
-profile-separated private managed home keyed by the canonical project root.
-Seatbelt MUST use that directory at its canonical host path for `HOME` and the
-XDG home variables. It MUST NOT represent the directory as a synthetic mount or
-claim that the host namespace is hidden. Seatbelt workloads MUST retain the same
-shared activity-lock protection for their complete lifetime, and inspection and
-maintenance MUST apply the same owner-only, symbolic-link-rejecting boundaries
-without disclosing the canonical home path in status output.
+Seatbelt MUST use the canonical home reported by the pane or native root process
+for `HOME`; it cannot mount-project a synthetic home or hide the host namespace.
+That visible path MUST NOT grant ordinary reads or writes to the full home: file
+operations remain limited to effective scopes, while validated allowlisted PATH
+directories may receive the narrow read access required for executable lookup.
+`TMPDIR` and all XDG state paths MUST remain code-owned private workload paths,
+and Git configuration MUST remain isolated from host global configuration.
 
 Project configuration overlays SHOULD be created at `.mezzanine/config.toml`
 with a minimal `[permissions]` table and `approval_policy = "ask"` when a

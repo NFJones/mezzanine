@@ -209,7 +209,7 @@ pub(crate) const BUBBLEWRAP_RESTRICTION_IDS: [&str; 4] = [
 /// Stable, non-sensitive restrictions reported for Seatbelt assessment and status.
 pub(crate) const SEATBELT_RESTRICTION_IDS: [&str; 5] = [
     "host-path-authority-only",
-    "private-host-home",
+    "visible-host-home",
     "minimal-path",
     "network-operation-policy",
     "visible-host-namespace",

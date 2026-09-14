@@ -397,10 +397,11 @@ impl RuntimeSessionService {
                 config.environment,
             )
             .map_err(|error| MezError::invalid_state(error.message()))?;
-            let trusted_project_root = self.trusted_project_root_for_pane(&turn.pane_id);
+            let home_directory = signature.home_directory.as_deref().ok_or_else(|| {
+                MezError::invalid_state("canonical pane home is unavailable for Seatbelt dispatch")
+            })?;
             let artifacts = crate::security::sandbox::prepare_seatbelt_workload_artifacts(
-                self.integration.config_root(),
-                trusted_project_root.as_deref(),
+                Path::new(home_directory),
                 command,
                 input_sidecar,
             )

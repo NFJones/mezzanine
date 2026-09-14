@@ -363,7 +363,7 @@ fn sandbox_status_reports_seatbelt_operation_confinement() {
     );
     assert_eq!(
         output["effective"]["managed_home_path_semantics"],
-        "private-canonical-host-path"
+        "canonical-host-home"
     );
     assert_eq!(
         output["effective"]["network_boundary"],
@@ -381,7 +381,7 @@ fn sandbox_status_reports_seatbelt_operation_confinement() {
         output["effective"]["restrictions"],
         serde_json::json!([
             "host-path-authority-only",
-            "private-host-home",
+            "visible-host-home",
             "minimal-path",
             "network-operation-policy",
             "visible-host-namespace"
