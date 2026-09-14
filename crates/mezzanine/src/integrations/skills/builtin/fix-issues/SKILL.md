@@ -30,7 +30,7 @@ For each issue, inspect enough code, tests, docs, and specifications to make a c
 - implementation checklist and status;
 - validation steps and results.
 
-Provision exactly one reusable review subagent with `spawn_agent`, using `role: explorer` and `lifetime: persistent`. Set `size: large` and `reasoning_effort: high`. Give it a durable review-only objective and an initial prompt stating that it must not plan, implement, edit files, manage issues, or coordinate other agents. Discover its identity with `list_agents` and reuse it for every issue.
+Provision exactly one reusable review subagent with `spawn_agent`, using `role: explorer` and `lifetime: persistent`. The review subagent must always use a large model: set `size: large` and `reasoning_effort: high`. Give it a durable review-only objective and an initial prompt stating that it must not plan, implement, edit files, manage issues, or coordinate other agents. Discover its identity with `list_agents` and reuse it for every issue.
 
 Keep MMP communication simple:
 1. After the main agent has implemented and validated an issue, send the reviewer one assignment containing the issue id, intended behavior, relevant diff, and validation evidence.
