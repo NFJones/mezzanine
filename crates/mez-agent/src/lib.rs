@@ -352,9 +352,10 @@ pub use maap::{
     AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, AgentAction, AgentActionPayload, MaapBatch,
     MaapContractError, MaapContractResult, MaapValidationContext, SayStatus,
     agent_output_content_type_is_diff, agent_output_content_type_is_markdown, is_valid_skill_name,
-    normalize_agent_output_content_type, parse_fenced_maap_action_batch,
-    parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json,
-    parse_maap_action_batch_json_for_turn, parse_maap_action_json, parse_maap_batch_objective,
+    normalize_agent_output_content_type, normalize_maap_message_content_type,
+    parse_fenced_maap_action_batch, parse_fenced_maap_action_batch_for_turn,
+    parse_maap_action_batch_json, parse_maap_action_batch_json_for_turn, parse_maap_action_json,
+    parse_maap_batch_objective,
 };
 pub use macro_workflow::{
     MACRO_FILE_NAME, MACRO_STEPS_HEADING, MAX_MACRO_FILE_BYTES, MAX_MACRO_STEPS, MacroCatalog,

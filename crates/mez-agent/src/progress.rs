@@ -58,6 +58,27 @@ pub enum StreamingPresentationEvent {
         /// Zero-based position in the MAAP `actions` array.
         action_index: usize,
     },
+    /// A direct `send_message` source has established recipient and media metadata.
+    MessageStarted {
+        /// Zero-based position in the MAAP `actions` array.
+        action_index: usize,
+        /// Requested recipient expression, before resolution or delivery.
+        recipient: String,
+        /// Runtime-normalized MMP media type.
+        content_type: String,
+    },
+    /// Newly decoded payload text for one established `send_message` action.
+    MessagePayloadDelta {
+        /// Zero-based position in the MAAP `actions` array.
+        action_index: usize,
+        /// Ordered payload suffix that has not been emitted previously.
+        text: String,
+    },
+    /// The action's JSON `payload` string has closed.
+    MessagePayloadComplete {
+        /// Zero-based position in the MAAP `actions` array.
+        action_index: usize,
+    },
     /// A direct `shell_command.command` string is ready for display.
     ShellCommandStarted {
         /// Zero-based position in the MAAP `actions` array.
@@ -126,6 +147,7 @@ pub type StreamingSayEvent = StreamingPresentationEvent;
 enum StreamingSourceId {
     Rationale,
     Say(usize),
+    SendMessagePayload(usize),
     ShellCommand(usize),
     ShellCommandSummary(usize),
     ActionHeader(usize),
@@ -302,6 +324,7 @@ impl StreamingPresentationExtractor {
 struct StreamingPresentationSource {
     id: StreamingSourceId,
     status: Option<SayStatus>,
+    recipient: Option<String>,
     content_type: Option<String>,
     text: String,
     complete: bool,
@@ -319,6 +342,13 @@ impl StreamingPresentationSource {
                 status: self.status?,
                 content_type: self.content_type.clone()?,
             }),
+            StreamingSourceId::SendMessagePayload(action_index) => {
+                Some(StreamingPresentationEvent::MessageStarted {
+                    action_index,
+                    recipient: self.recipient.clone()?,
+                    content_type: self.content_type.clone()?,
+                })
+            }
             StreamingSourceId::ShellCommand(action_index) => {
                 Some(StreamingPresentationEvent::ShellCommandStarted { action_index })
             }
@@ -346,6 +376,9 @@ impl StreamingPresentationSource {
             StreamingSourceId::Say(action_index) => {
                 StreamingPresentationEvent::TextDelta { action_index, text }
             }
+            StreamingSourceId::SendMessagePayload(action_index) => {
+                StreamingPresentationEvent::MessagePayloadDelta { action_index, text }
+            }
             StreamingSourceId::ShellCommand(action_index) => {
                 StreamingPresentationEvent::ShellCommandTextDelta { action_index, text }
             }
@@ -368,6 +401,9 @@ impl StreamingPresentationSource {
             StreamingSourceId::Say(action_index) => {
                 StreamingPresentationEvent::TextComplete { action_index }
             }
+            StreamingSourceId::SendMessagePayload(action_index) => {
+                StreamingPresentationEvent::MessagePayloadComplete { action_index }
+            }
             StreamingSourceId::ShellCommand(action_index) => {
                 StreamingPresentationEvent::ShellCommandTextComplete { action_index }
             }
@@ -389,6 +425,7 @@ fn streaming_presentation_sources(input: &str) -> Option<Vec<StreamingPresentati
         extracted.push(StreamingPresentationSource {
             id: StreamingSourceId::Rationale,
             status: None,
+            recipient: None,
             content_type: None,
             text,
             complete,
@@ -418,10 +455,34 @@ fn streaming_presentation_sources(input: &str) -> Option<Vec<StreamingPresentati
                 extracted.push(StreamingPresentationSource {
                     id: StreamingSourceId::Say(action_index),
                     status: Some(status),
+                    recipient: None,
                     content_type: Some(content_type),
                     text,
                     complete,
                     raw_cursor: text_start.as_ptr() as usize - input.as_ptr() as usize + raw_cursor,
+                    header: None,
+                });
+            }
+            "send_message" => {
+                let recipient = json_string_field(action, "recipient")?;
+                let content_type = crate::normalize_maap_message_content_type(&json_string_field(
+                    action,
+                    "content_type",
+                )?);
+                if !streaming_message_content_type_is_supported(&content_type) {
+                    continue;
+                }
+                let payload_start = direct_json_field_value_start(action, "payload")?.trim_start();
+                let (text, complete, raw_cursor) = decode_incomplete_json_string(payload_start)?;
+                extracted.push(StreamingPresentationSource {
+                    id: StreamingSourceId::SendMessagePayload(action_index),
+                    status: None,
+                    recipient: Some(recipient),
+                    content_type: Some(content_type),
+                    text,
+                    complete,
+                    raw_cursor: payload_start.as_ptr() as usize - input.as_ptr() as usize
+                        + raw_cursor,
                     header: None,
                 });
             }
@@ -431,6 +492,7 @@ fn streaming_presentation_sources(input: &str) -> Option<Vec<StreamingPresentati
                 extracted.push(StreamingPresentationSource {
                     id: StreamingSourceId::ShellCommandSummary(action_index),
                     status: None,
+                    recipient: None,
                     content_type: None,
                     text: summary,
                     complete,
@@ -446,6 +508,7 @@ fn streaming_presentation_sources(input: &str) -> Option<Vec<StreamingPresentati
                     extracted.push(StreamingPresentationSource {
                         id: StreamingSourceId::ShellCommand(action_index),
                         status: None,
+                        recipient: None,
                         content_type: None,
                         text,
                         complete,
@@ -467,6 +530,7 @@ fn streaming_presentation_sources(input: &str) -> Option<Vec<StreamingPresentati
                     extracted.push(StreamingPresentationSource {
                         id: StreamingSourceId::ActionHeader(action_index),
                         status: None,
+                        recipient: None,
                         content_type: None,
                         text: String::new(),
                         complete: true,
@@ -483,6 +547,7 @@ fn streaming_presentation_sources(input: &str) -> Option<Vec<StreamingPresentati
                     extracted.push(StreamingPresentationSource {
                         id: StreamingSourceId::ActionHeader(action_index),
                         status: None,
+                        recipient: None,
                         content_type: None,
                         text: String::new(),
                         complete: true,
@@ -497,6 +562,21 @@ fn streaming_presentation_sources(input: &str) -> Option<Vec<StreamingPresentati
         }
     }
     Some(extracted)
+}
+
+/// Returns whether a message media type can safely establish a streamed payload source.
+///
+/// This mirrors the accepted text and transport media shapes before authoritative
+/// payload validation. Unknown or unsupported text variants remain fail-closed
+/// so their contents cannot enter provisional presentation.
+fn streaming_message_content_type_is_supported(content_type: &str) -> bool {
+    matches!(
+        content_type,
+        "text/plain; charset=utf-8"
+            | "text/markdown"
+            | "text/markdown; charset=utf-8"
+            | "application/json"
+    )
 }
 
 /// Reports whether a complete parsed action has a static header that is safe
@@ -1209,8 +1289,8 @@ mod tests {
         );
     }
 
-    /// Verifies a complete safe action uses the settled parser and formatter
-    /// contract, while private message payloads never enter the preview path.
+    /// Verifies complete safe actions keep their settled header contract while
+    /// direct outbound messages emit typed payload events rather than headers.
     #[test]
     fn streaming_presentation_extractor_emits_complete_safe_headers_only() {
         let events = StreamingPresentationExtractor::default().push_delta(
@@ -1247,8 +1327,79 @@ mod tests {
                         }),
                     }),
                 },
+                StreamingPresentationEvent::MessageStarted {
+                    action_index: 2,
+                    recipient: "agent-2".to_string(),
+                    content_type: "text/plain; charset=utf-8".to_string(),
+                },
+                StreamingPresentationEvent::MessagePayloadDelta {
+                    action_index: 2,
+                    text: "private".to_string(),
+                },
+                StreamingPresentationEvent::MessagePayloadComplete { action_index: 2 },
             ]
         );
+    }
+
+    /// Verifies a structurally established send action streams escaped payload
+    /// text only after closed recipient and media metadata, without an action header.
+    #[test]
+    fn streaming_presentation_extractor_streams_fragmented_message_payload() {
+        let mut extractor = StreamingPresentationExtractor::default();
+        let first = extractor.push_delta(
+            r#"{"actions":[{"type":"send_message","recipient":"agent-2","content_type":"text/plain","payload":"hello \uD83D"#,
+        );
+        assert_eq!(
+            first,
+            vec![
+                StreamingPresentationEvent::MessageStarted {
+                    action_index: 0,
+                    recipient: "agent-2".to_string(),
+                    content_type: "text/plain; charset=utf-8".to_string(),
+                },
+                StreamingPresentationEvent::MessagePayloadDelta {
+                    action_index: 0,
+                    text: "hello ".to_string(),
+                },
+            ]
+        );
+        assert!(
+            first
+                .iter()
+                .all(|event| !matches!(event, StreamingPresentationEvent::ActionHeader { .. }))
+        );
+        assert_eq!(
+            extractor.push_delta(r#"\uDE00"}] }"#),
+            vec![
+                StreamingPresentationEvent::MessagePayloadDelta {
+                    action_index: 0,
+                    text: "😀".to_string(),
+                },
+                StreamingPresentationEvent::MessagePayloadComplete { action_index: 0 },
+            ]
+        );
+    }
+
+    /// Verifies unsupported outbound media never establishes a provisional
+    /// payload source, preventing its contents from reaching typed events.
+    #[test]
+    fn streaming_presentation_extractor_rejects_unsupported_message_media() {
+        let events = StreamingPresentationExtractor::default().push_delta(
+            r#"{"actions":[{"type":"send_message","recipient":"agent-2","content_type":"text/html","payload":"<private>"}]}"#,
+        );
+
+        assert!(events.is_empty(), "events={events:?}");
+    }
+
+    /// Verifies binary media stays out of provisional message presentation
+    /// because model-authored send actions cannot supply its required encoding.
+    #[test]
+    fn streaming_presentation_extractor_rejects_binary_message_media() {
+        let events = StreamingPresentationExtractor::default().push_delta(
+            r#"{"actions":[{"type":"send_message","recipient":"agent-2","content_type":"application/octet-stream","payload":"cGF5bG9hZA=="}]}"#,
+        );
+
+        assert!(events.is_empty(), "events={events:?}");
     }
 
     /// Verifies unsupported fields fail closed without leaking nested text.

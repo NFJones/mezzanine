@@ -630,13 +630,7 @@ pub(super) fn runtime_sanitize_agent_diagnostic_text(value: &str) -> String {
 /// and delivers it as the canonical UTF-8 text media type instead of failing a
 /// useful subagent coordination message.
 pub(super) fn runtime_maap_message_content_type(content_type: &str) -> String {
-    match content_type.trim().to_ascii_lowercase().as_str() {
-        "text/plain" | "text/plain;charset=utf-8" | "text/plain; charset=utf-8" => {
-            "text/plain; charset=utf-8".to_string()
-        }
-        "application/json" => "application/json".to_string(),
-        _ => content_type.to_string(),
-    }
+    mez_agent::normalize_maap_message_content_type(content_type)
 }
 
 /// Extracts child agent, display name, and turn ids from a spawn response.

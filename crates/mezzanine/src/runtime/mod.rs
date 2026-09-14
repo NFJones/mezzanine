@@ -508,8 +508,8 @@ pub(crate) use config::{
     external_editor_argument_contains_ascii_control,
     runtime_agent_peer_message_log_mode_from_config, runtime_audit_log_from_config,
     runtime_external_editor_config_from_config, runtime_iroh_transport_policy_from_config,
-    runtime_pane_status_config_from_config, runtime_validate_key_binding_collisions,
-    runtime_peer_message_presentation_is_markdown, runtime_peer_message_presentation_is_visible,
+    runtime_pane_status_config_from_config, runtime_peer_message_presentation_is_markdown,
+    runtime_peer_message_presentation_is_visible, runtime_validate_key_binding_collisions,
 };
 use config::{
     RUNTIME_LATENCY_PREFERENCES, json_escape, optional_i32_json, runtime_active_key_preset,

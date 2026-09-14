@@ -2691,6 +2691,13 @@ impl RuntimeSessionService {
                 })?;
                 action.complete = true;
             }
+            mez_agent::StreamingSayEvent::MessageStarted { .. }
+            | mez_agent::StreamingSayEvent::MessagePayloadDelta { .. }
+            | mez_agent::StreamingSayEvent::MessagePayloadComplete { .. } => {
+                // Outbound sender rendering is intentionally implemented by the
+                // settlement and presentation phases after this parser-only
+                // event contract is established.
+            }
             mez_agent::StreamingSayEvent::RationaleStarted => {
                 self.ensure_agent_streaming_presentation(pane_id, turn_id)?;
                 let presentation = self
