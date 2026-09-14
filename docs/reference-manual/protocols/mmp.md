@@ -140,7 +140,13 @@ A MAAP `send_message` action is one way an agent asks Mezzanine to deliver an
 MMP message. Its `text/plain` shorthand is normalized to the canonical MMP
 text media type. MAAP action results report recipient identity, message ID when
 assigned, delivery status, and MMP protocol errors; MAAP and MMP remain
-separate wire protocols.
+separate wire protocols. After message-service acceptance, eligible
+model-authored sends may produce one durable `${recipient}< {payload}` sender
+presentation row; recipient rows remain separate `{sender}> {payload}` records
+created only by recipient commit. Sender retention is operator-visible evidence
+of acceptance or queueing, not delivery confirmation, acknowledgment, agreement,
+or completion, and never participates in receiver receipts, cursors, recovery,
+or MMP routing.
 
 ## Related pages
 

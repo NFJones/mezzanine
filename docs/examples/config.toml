@@ -353,6 +353,8 @@ agent_transcript_command_fg = "tertiary_foreground"
 agent_transcript_command_bg = "surface"
 agent_transcript_peer_sender_fg = "tertiary_foreground"
 agent_transcript_peer_sender_bg = "surface"
+agent_transcript_peer_recipient_fg = "thinking"
+agent_transcript_peer_recipient_bg = "surface"
 agent_transcript_parent_fg = "foreground"
 agent_transcript_parent_bg = "surface"
 agent_model_fg = "container_secondary_foreground"
@@ -477,8 +479,8 @@ peer_message_loop_limit = 1000
 # Pane echo of peer and runtime bridge MMP traffic: `normal` logs canonical
 # `text/plain; charset=utf-8` and supported `text/markdown` payloads; JSON,
 # binary, and absent media types remain durable and model-visible without pane
-# rows. `verbose` logs the full bounded raw payload for every peer echo, bridge
-# traffic included.
+# rows. Accepted eligible model sends may add one `${recipient}<` sender row,
+# while bridge traffic remains receiver-only. `verbose` adds bounded raw media.
 peer_message_log_mode = "normal"
 # Saved-session title source: `generated` stores one bounded model-authored
 # title per conversation, else falls back to the agent objective and then the
