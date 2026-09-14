@@ -647,9 +647,9 @@ fn initial_config_is_complete_annotated_and_provider_free() {
 /// Verifies the documented pane peer-message log mode default is `normal`, and
 /// that the runtime reader agrees with the documented literal.
 ///
-/// The mode only ever suppresses a bridge echo that already has its own
-/// structural line, so an absent or unreadable setting must never silence model
-/// peer mail and must never diverge from the documented default.
+/// An absent or unreadable setting resolves to normal mode, which presents only
+/// peer payloads whose media type is exactly `text/plain; charset=utf-8`; other
+/// media types remain outside pane presentation without changing parse defaults.
 #[test]
 fn defaults_agent_peer_message_log_mode_to_normal() {
     let documented = DEFAULT_CONFIG_TOML

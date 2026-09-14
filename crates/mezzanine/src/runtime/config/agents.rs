@@ -314,11 +314,10 @@ pub(crate) fn runtime_agent_peer_message_loop_limit_from_config(root: &Value) ->
 /// Pane echo verbosity for peer and runtime bridge MMP traffic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum PeerMessageLogMode {
-    /// Runtime-owned bridge notifications stay silent; JSON traffic keeps its
-    /// `output` projection.
+    /// Only exact canonical plaintext payloads create pane presentation rows.
     #[default]
     Normal,
-    /// Every peer echo logs its full bounded payload, bridge traffic included.
+    /// Every peer echo logs its full bounded raw payload, bridge traffic included.
     Verbose,
 }
 
@@ -336,8 +335,8 @@ impl PeerMessageLogMode {
 /// Parses the pane peer-message log mode from `[agents]`.
 ///
 /// An absent, unreadable, or unknown key keeps the documented `normal` default,
-/// because the mode only ever suppresses the echo of a runtime bridge
-/// notification that already has its own `subagent ...` status/result line.
+/// which presents only payloads whose media type is exactly
+/// `text/plain; charset=utf-8`.
 pub(crate) fn runtime_agent_peer_message_log_mode_from_config(root: &Value) -> PeerMessageLogMode {
     let Some(agents) = runtime_json_object(root, "agents") else {
         return PeerMessageLogMode::Normal;

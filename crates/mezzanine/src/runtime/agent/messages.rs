@@ -47,10 +47,10 @@ impl RuntimeSessionService {
     /// pre-idle-turn behavior: they wait behind the durable cursor and are
     /// injected with the recipient's next turn.
     ///
-    /// Every committed message is echoed once in the recipient pane log, and
-    /// nothing else is. The echo tracks the canonical peer-message blocks this
-    /// pass commits through either path, so it never describes a
-    /// budget-limited fanout batch and never filters by sender type.
+    /// Every committed message gets one recipient-pane presentation attempt
+    /// through its canonical peer-message block. Normal mode emits a row only
+    /// for the exact canonical plaintext media type; other committed payloads
+    /// remain durable and model-visible without pane presentation.
     pub(crate) fn deliver_pending_runtime_agent_messages(&mut self, now_ms: u64) -> Result<usize> {
         let ready = self
             .control
@@ -69,12 +69,12 @@ impl RuntimeSessionService {
                     continue;
                 }
                 let pane_id = recipient.as_str().trim_start_matches("agent-").to_string();
-                // The echo follows the commit rather than this batch. Starting
-                // the turn commits every unread message through
-                // `peer_message_turn_context`, which logs each committed
-                // message, so a message this budget-limited batch omitted is
-                // still operator-visible. The loop limit, a missing session,
-                // and any other refusal commit nothing and log nothing.
+                // The presentation attempt follows the commit rather than this
+                // batch. Starting the turn commits every unread message through
+                // `peer_message_turn_context`; media type and log mode then
+                // decide whether each committed message creates a pane row.
+                // The loop limit, a missing session, and any other refusal
+                // commit nothing and create no presentation.
                 let started = self.start_runtime_peer_message_turn(&pane_id)?;
                 committed = committed.saturating_add(started);
                 continue;
@@ -156,14 +156,12 @@ impl RuntimeSessionService {
     /// Logs one committed received peer message in the recipient pane's log.
     ///
     /// Every path that commits a canonical peer-message block calls this once
-    /// per committed message, so the logged set equals the committed set rather
-    /// than a budget-limited fanout batch. Interagent traffic becomes
-    /// operator-visible the same way a user prompt does, with the originating
-    /// agent named at the destination end of the direction arrow, and
-    /// runtime-owned bridge traffic follows the same commit rule so the log
-    /// never depends on whether the recipient happened to be busy. The echo is
-    /// presentation-only: it reuses the peer payload bound, appends no context
-    /// block, and can never start a turn.
+    /// per committed message, so presentation attempts track the complete
+    /// committed set rather than a budget-limited fanout batch. The renderer
+    /// logs eligible payloads with the originating agent at the direction
+    /// arrow's destination and suppresses non-plaintext payloads in normal
+    /// mode. The echo is presentation-only: it reuses the peer payload bound,
+    /// appends no context block, and can never start a turn.
     pub(crate) fn echo_received_peer_message_to_pane(
         &mut self,
         pane_id: &str,

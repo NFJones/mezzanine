@@ -237,9 +237,9 @@ fn attach_agent_name_marker_span(
     if length == 0 {
         return;
     }
-    // The marker starts at column zero and is prepended to whatever the body
-    // projection already produced, so a JSON body keeps its syntax slots on the
-    // first row and the marker keeps its own.
+    // The marker starts at column zero and is prepended to the literal
+    // plaintext or verbose raw-payload body, so it keeps its own span without
+    // changing the payload's terminal styling.
     let mut spans = vec![TerminalStyleSpan {
         start: 0,
         length,

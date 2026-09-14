@@ -205,9 +205,10 @@ impl RuntimeSessionService {
                         runtime_peer_message_context_content(&message.envelope),
                     ),
                 );
-                // Committing the pending mail into this turn is what makes it
-                // operator-visible, so the echo lands here with the block
-                // instead of in the caller that acknowledges the sequence.
+                // Committing pending mail into this turn attempts pane
+                // presentation with the block. The current log mode and media
+                // type decide whether that attempt creates a row; context and
+                // acknowledgement semantics stay unchanged.
                 self.echo_received_peer_message_to_pane(pane_id, &message.envelope);
                 delivered_message_sequence = Some(message.sequence);
             }
@@ -446,8 +447,9 @@ impl RuntimeSessionService {
                     runtime_peer_message_context_content(&message.envelope),
                 ),
             );
-            // This loop commits the full unread set, which is what the pane
-            // echo must track; a budget-limited fanout batch is not.
+            // This loop commits the full unread set and attempts pane
+            // presentation for each message; media type and log mode decide
+            // which attempts create rows.
             self.echo_received_peer_message_to_pane(pane_id, &message.envelope);
             delivered_message_sequence = Some(message.sequence);
             delivered_message_count = delivered_message_count.saturating_add(1);
