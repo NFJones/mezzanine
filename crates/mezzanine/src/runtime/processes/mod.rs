@@ -940,6 +940,11 @@ pub(crate) struct RuntimePendingDeferredForeignTransactionEnd {
 pub(crate) struct RuntimeProcessComponent {
     /// Live terminal and shell settings applied to process state.
     settings: RuntimeProcessSettings,
+    /// Immutable environment snapshot captured from the Mez server at runtime creation.
+    ///
+    /// It remains private runtime state and is consulted only through explicit
+    /// configured environment projections for action workloads.
+    server_environment: Vec<mez_mux::process::RawEnvironmentEntry>,
     /// Restart-fenced X11 policy applied when this session started.
     applied_x11_policy: crate::runtime::RuntimeIrohX11Policy,
     /// Stable protected X11 environment and route-facing proxy handle.
@@ -1228,6 +1233,7 @@ impl RuntimeProcessComponent {
     pub(crate) fn with_pane_processes(pane_processes: PaneProcessManager) -> Self {
         Self {
             pane_processes,
+            server_environment: native_workload_environment::native_ambient_environment(),
             ..Self::default()
         }
     }
@@ -3280,6 +3286,21 @@ impl RuntimeSessionService {
             return environment.clone();
         }
         native_workload_environment::native_ambient_environment()
+    }
+
+    /// Returns the immutable Mez-server environment snapshot for explicit
+    /// allowlisted action-environment projection.
+    pub(crate) fn server_environment(&self) -> &[mez_mux::process::RawEnvironmentEntry] {
+        &self.process.server_environment
+    }
+
+    /// Replaces the server environment snapshot for deterministic tests.
+    #[cfg(test)]
+    pub(crate) fn set_server_environment_for_tests(
+        &mut self,
+        environment: Vec<mez_mux::process::RawEnvironmentEntry>,
+    ) {
+        self.process.server_environment = environment;
     }
 
     /// Builds startup-installed shell adapters for one explicitly managed pane.

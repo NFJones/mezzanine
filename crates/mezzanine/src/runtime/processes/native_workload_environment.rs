@@ -40,10 +40,12 @@
 //!   `--setenv`, or the Seatbelt probe profile). They carry no pane or workload
 //!   data, so an ambient probe value is never projected into a probe sandbox.
 
+use std::collections::BTreeMap;
 use std::os::unix::ffi::OsStringExt;
 #[cfg(test)]
 use std::path::Path;
 
+use mez_agent::shell::{PaneEnvironmentEvidence, PaneEnvironmentRequest};
 use mez_mux::process::RawEnvironmentEntry;
 
 use crate::error::{MezError, Result};
@@ -552,6 +554,56 @@ pub(crate) fn compose_native_workload_environment_with_whitelist(
         .build())
 }
 
+/// Projects only configured, validated entries from the Mez server environment.
+///
+/// The server environment is an explicit source selected by configuration, not
+/// ambient inheritance: callers must still launch children from a cleared base.
+/// Valid duplicate entries retain the shared last-value-wins behavior.
+pub(crate) fn project_server_environment(
+    server_environment: &[RawEnvironmentEntry],
+    names: &[String],
+) -> Vec<RawEnvironmentEntry> {
+    let selected = server_environment
+        .iter()
+        .filter(|entry| names.iter().any(|name| name.as_bytes() == entry.key))
+        .cloned()
+        .collect::<Vec<_>>();
+    validated_environment_entries(&selected)
+}
+
+/// Builds redacted evidence for configured values projected from the Mez server.
+///
+/// Every requested name is represented exactly once. Invalid, non-text, or
+/// absent server values remain omitted without exposing their contents.
+pub(crate) fn server_environment_evidence(
+    request: &PaneEnvironmentRequest,
+    server_environment: &[RawEnvironmentEntry],
+) -> PaneEnvironmentEvidence {
+    let projected = project_server_environment(server_environment, &request.names);
+    let mut values = BTreeMap::new();
+    let mut omitted = BTreeMap::new();
+    for name in &request.names {
+        match projected
+            .iter()
+            .find(|entry| entry.key.as_slice() == name.as_bytes())
+            .and_then(|entry| std::str::from_utf8(&entry.value).ok())
+            .filter(|value| !value.bytes().any(|byte| byte.is_ascii_control()))
+        {
+            Some(value) => {
+                values.insert(name.clone(), value.to_string());
+            }
+            None => {
+                omitted.insert(
+                    name.clone(),
+                    "not_present_or_unsafe_in_server_environment".to_string(),
+                );
+            }
+        }
+    }
+    PaneEnvironmentEvidence::from_parts(request, values, omitted)
+        .expect("configured server environment evidence must cover every requested name")
+}
+
 /// Captures the ambient `mez` process environment as raw entries.
 ///
 /// The snapshot is consulted only for requirements that declare ambient
@@ -1036,6 +1088,71 @@ mod tests {
         assert_eq!(
             lookup_value(environment.workload(), b"MEZ_DUPLICATE_KEY"),
             Some(b"last".as_slice())
+        );
+    }
+
+    /// Verifies configured server entries are projected exactly while unlisted,
+    /// invalid, and absent entries remain unavailable to an action workload.
+    #[test]
+    fn server_projection_selects_only_requested_valid_values() {
+        let request = PaneEnvironmentRequest::new(vec![
+            "PATH".to_string(),
+            "GH_TOKEN".to_string(),
+            "MISSING".to_string(),
+        ])
+        .expect("configured names are valid");
+        let mut invalid_value = b"invalid".to_vec();
+        invalid_value.push(0);
+        let server = vec![
+            entry("PATH", "/first/bin"),
+            entry("UNLISTED_SECRET", "must-not-forward"),
+            entry("PATH", "/server/bin"),
+            RawEnvironmentEntry {
+                key: b"GH_TOKEN".to_vec(),
+                value: invalid_value,
+            },
+        ];
+
+        let projected = project_server_environment(&server, &request.names);
+        assert_eq!(
+            lookup_value(&projected, b"PATH"),
+            Some(b"/server/bin".as_slice())
+        );
+        assert_eq!(lookup_value(&projected, b"GH_TOKEN"), None);
+        assert_eq!(lookup_value(&projected, b"UNLISTED_SECRET"), None);
+
+        let evidence = server_environment_evidence(&request, &server);
+        assert_eq!(
+            evidence.values.get("PATH").map(String::as_str),
+            Some("/server/bin")
+        );
+        assert_eq!(evidence.values.get("GH_TOKEN"), None);
+        assert_eq!(
+            evidence.omitted.get("GH_TOKEN").map(String::as_str),
+            Some("not_present_or_unsafe_in_server_environment")
+        );
+        assert_eq!(
+            evidence.omitted.get("MISSING").map(String::as_str),
+            Some("not_present_or_unsafe_in_server_environment")
+        );
+    }
+
+    /// Verifies unrequested entries cannot exhaust the projection entry budget
+    /// before a configured server value is considered.
+    #[test]
+    fn server_projection_filters_unrequested_entries_before_budgeting() {
+        let request = PaneEnvironmentRequest::new(vec!["PATH".to_string()])
+            .expect("configured name is valid");
+        let mut server = (0..NATIVE_WORKLOAD_MAX_ENTRIES)
+            .map(|index| entry(&format!("UNREQUESTED_{index:04}"), "value"))
+            .collect::<Vec<_>>();
+        server.push(entry("PATH", "/server/bin"));
+
+        let projected = project_server_environment(&server, &request.names);
+        assert_eq!(projected.len(), 1);
+        assert_eq!(
+            lookup_value(&projected, b"PATH"),
+            Some(b"/server/bin".as_slice())
         );
     }
 
