@@ -1823,7 +1823,7 @@ mod outbound_policy_tests {
     /// device proof, and reconnect before either create or attach is routed.
     #[tokio::test(flavor = "current_thread")]
     async fn host_invitation_pairs_then_reconnects_for_create_and_attach() {
-        let root = std::env::temp_dir().join(format!(
+        let root = std::path::PathBuf::from("/tmp").join(format!(
             "mez-cli-two-step-pairing-{}-{}",
             std::process::id(),
             rand::random::<u64>()
@@ -2515,10 +2515,14 @@ fn validate_iroh_initialize_response(
 ) -> Result<Option<SecretString>> {
     let value: serde_json::Value = serde_json::from_str(body)
         .map_err(|_| MezError::invalid_state("invalid Iroh initialize response"))?;
-    if value.get("error").is_some() {
-        return Err(MezError::forbidden(
-            "Iroh transport connected, but Mezzanine trust initialization was rejected",
-        ));
+    if let Some(error) = value.get("error") {
+        let message = error
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("Mezzanine trust initialization was rejected");
+        return Err(MezError::forbidden(format!(
+            "Iroh transport connected, but {message}",
+        )));
     }
     let result = value
         .get("result")
