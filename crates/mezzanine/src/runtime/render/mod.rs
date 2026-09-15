@@ -700,6 +700,10 @@ pub(crate) struct RuntimeStreamingSayAction {
 pub(crate) struct RuntimeStreamingMessageSource {
     /// Requested recipient expression supplied by the provider.
     recipient: String,
+    /// Stable presentation label resolved from the recipient at message start.
+    recipient_label: String,
+    /// Whether the requested recipient is this child agent's direct parent.
+    direct_parent: bool,
     /// Normalized presentation media type.
     content_type: String,
     /// Complete decoded payload received so far.

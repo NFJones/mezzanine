@@ -33,10 +33,10 @@ For each issue, inspect enough code, tests, docs, and specifications to make a c
 Provision exactly one reusable review subagent with `spawn_agent`, using `role: explorer` and `lifetime: persistent`. The review subagent must always use a large model: set `size: large` and `reasoning_effort: high`. Give it a durable review-only objective and an initial prompt stating that it must not plan, implement, edit files, manage issues, or coordinate other agents. Discover its identity with `list_agents` and reuse it for every issue.
 
 Keep MMP communication simple:
-1. After the main agent has implemented and validated an issue, send the reviewer one assignment containing the issue id, intended behavior, relevant diff, and validation evidence.
-2. Require one reply to the main agent via `send_message`, correlated to the assignment when an assignment message id is available.
+1. After the main agent has implemented and validated an issue, discover the persistent reviewer and send it one review assignment via MMP `send_message` containing the issue id, intended behavior, relevant diff, and validation evidence. A successful send only means the assignment was queued; local prose, pane output, task-status traffic, and implicit handoffs are not review completion.
+2. The reviewer must return its verdict to the requesting main agent via MMP `send_message`, correlated to the assignment when an assignment message id is available; it must not report a review only in its local pane or task result.
 3. Require only these reply fields: issue id, verdict (`pass` or `changes-requested`), findings ordered by severity, and any validation gaps.
-4. Use `wait` as the only executable action while that required reply is outstanding. Do not create relays or ask the reviewer to message another agent.
+4. Use `wait` as the only executable action only while that required substantive reviewer MMP reply is outstanding and the pipeline cannot proceed without it. Runtime task-status notifications are not substitutes for reviewer messages. Do not create relays or ask the reviewer to message another agent.
 
 Treat stale or mismatched replies as non-authoritative. The reviewer remains available for later assignments and follow-up questions. If review requests changes, the main agent decides which findings apply, implements and validates the repairs, then sends the updated result back to the same reviewer. Review must pass before resolution.
 

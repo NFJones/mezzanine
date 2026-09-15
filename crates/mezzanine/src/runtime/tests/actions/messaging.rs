@@ -3655,6 +3655,55 @@ fn runtime_direct_parent_peer_message_uses_stable_label_only_for_valid_exact_lin
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies outbound presentation uses a spawn-owned display name while an
+/// unavailable recipient retains the model-authored recipient expression.
+#[test]
+fn runtime_outbound_recipient_display_label_preserves_spawn_name_and_fallback() {
+    let mut service = test_runtime_service();
+    service.set_subagent_lineage(
+        "agent-%2",
+        RuntimeSubagentLineage {
+            parent_agent_id: "agent-root".to_string(),
+            root_agent_id: "agent-root".to_string(),
+            depth: 1,
+            display_name: "CypherSol".to_string(),
+            terminal: false,
+        },
+    );
+    let named_recipient =
+        crate::runtime::Recipient::Agent(AgentId::opaque("agent-%2".to_string()).unwrap());
+    assert_eq!(
+        service.runtime_outbound_recipient_display_label(&named_recipient, "agent:%2"),
+        "CypherSol"
+    );
+
+    service.set_subagent_lineage(
+        "agent-%2",
+        RuntimeSubagentLineage {
+            parent_agent_id: "agent-root".to_string(),
+            root_agent_id: "agent-root".to_string(),
+            depth: 1,
+            display_name: "agent-%2".to_string(),
+            terminal: false,
+        },
+    );
+    assert_eq!(
+        service.runtime_outbound_recipient_display_label(&named_recipient, "agent:%2"),
+        "agent-%2",
+        "literal name mode must retain its assigned identity"
+    );
+
+    let unavailable_recipient =
+        crate::runtime::Recipient::Agent(AgentId::opaque("agent-missing".to_string()).unwrap());
+    assert_eq!(
+        service.runtime_outbound_recipient_display_label(
+            &unavailable_recipient,
+            "agent:agent-missing",
+        ),
+        "agent:agent-missing"
+    );
+}
+
 /// Verifies runtime-owned subagent bridge notifications for an idle parent
 /// start no turn and leave scheduler and provider-task accounting unchanged.
 ///

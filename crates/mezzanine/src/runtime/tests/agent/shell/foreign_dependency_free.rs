@@ -553,6 +553,12 @@ fn runtime_dependency_free_foreign_bash_loader_is_ready_gated() {
     // The observation frame only records the end; the deferred pass settles it
     // exactly as the reconciliation pump does after the pane-output frame.
     let _ = service.settle_deferred_foreign_transaction_ends().unwrap();
+    service.inject_pane_process_identity_for_tests(
+        &pane_id,
+        RuntimePaneProcessIdentityInjection::Unavailable(
+            RuntimePaneProcessIdentityUnavailable::ExecutableUnreadable,
+        ),
+    );
     assert_eq!(
         service.maybe_bootstrap_ready_panes().unwrap(),
         1,
@@ -1300,6 +1306,12 @@ fn runtime_dependency_free_foreign_bash_completion_preserves_loader_handoff() {
             0,
         )
         .unwrap();
+    service.inject_pane_process_identity_for_tests(
+        &pane_id,
+        RuntimePaneProcessIdentityInjection::Unavailable(
+            RuntimePaneProcessIdentityUnavailable::ExecutableUnreadable,
+        ),
+    );
     assert_eq!(
         service.maybe_bootstrap_ready_panes().unwrap(),
         1,
@@ -2610,6 +2622,12 @@ fn runtime_dependency_free_child_token_install_publishes_pane_mode_authority() {
         "/bin/bash",
         "GNU bash, version 5.2",
     );
+    service.inject_pane_process_identity_for_tests(
+        &pane_id,
+        RuntimePaneProcessIdentityInjection::Unavailable(
+            RuntimePaneProcessIdentityUnavailable::ExecutableUnreadable,
+        ),
+    );
     assert_eq!(
         service.maybe_bootstrap_ready_panes().unwrap(),
         1,
@@ -2919,6 +2937,12 @@ fn runtime_local_posix_dependency_free_loader_replay_withholds_authority() {
     let mut service = test_runtime_service();
     let (pane_id, mut process) = start_foreign_shell_pane(&mut service);
     settle_dependency_free_identity_probe(&mut service, &pane_id, "/bin/sh", "");
+    service.inject_pane_process_identity_for_tests(
+        &pane_id,
+        RuntimePaneProcessIdentityInjection::Unavailable(
+            RuntimePaneProcessIdentityUnavailable::ExecutableUnreadable,
+        ),
+    );
     assert_eq!(
         service.maybe_bootstrap_ready_panes().unwrap(),
         1,

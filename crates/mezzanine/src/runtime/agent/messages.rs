@@ -984,6 +984,47 @@ impl RuntimeSessionService {
                 })
     }
 
+    /// Reports whether an outbound recipient is the sender's exact direct parent.
+    ///
+    /// The comparison uses only spawn-owned lineage and a parsed single-agent
+    /// recipient. Selectors and fenced descendants never receive the alias.
+    pub(crate) fn runtime_outbound_recipient_is_direct_parent(
+        &self,
+        sender_agent_id: &str,
+        recipient: &crate::runtime::Recipient,
+    ) -> bool {
+        let crate::runtime::Recipient::Agent(recipient_agent_id) = recipient else {
+            return false;
+        };
+        !self.subagent_descendant_is_fenced(sender_agent_id)
+            && self
+                .subagent_lineage(sender_agent_id)
+                .is_some_and(|lineage| {
+                    !lineage.parent_agent_id.is_empty()
+                        && lineage.parent_agent_id == recipient_agent_id.as_str()
+                })
+    }
+
+    /// Resolves a stable presentation label for one outbound recipient.
+    ///
+    /// Spawn-owned lineage preserves generated names and literal-name mode
+    /// exactly. Selectors and unavailable lineage retain their provider-supplied
+    /// recipient expression without affecting routing or authority.
+    pub(crate) fn runtime_outbound_recipient_display_label(
+        &self,
+        recipient: &crate::runtime::Recipient,
+        fallback: &str,
+    ) -> String {
+        let crate::runtime::Recipient::Agent(agent_id) = recipient else {
+            return fallback.to_string();
+        };
+        self.subagent_lineage(agent_id.as_str())
+            .map(|lineage| lineage.display_name.trim())
+            .filter(|display_name| !display_name.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| fallback.to_string())
+    }
+
     /// Resolves a peer label from its live pane title without exposing metadata
     /// beyond the endpoint's already-authorized runtime identity.
     pub(crate) fn runtime_peer_message_endpoint_label(&self, agent_id: &str) -> String {

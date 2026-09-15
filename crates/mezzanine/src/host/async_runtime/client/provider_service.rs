@@ -35,10 +35,11 @@ const STREAMING_SAY_PROJECTION_DEBOUNCE: Duration = Duration::from_millis(25);
 const STREAMING_SAY_PROJECTION_SETTLE_LIMIT: usize = 3;
 
 /// Reports whether one provider event changes visible projection inputs.
-fn streaming_say_event_changes_projection(event: &mez_agent::StreamingSayEvent) -> bool {
+fn streaming_presentation_event_changes_projection(event: &mez_agent::StreamingSayEvent) -> bool {
     match event {
         mez_agent::StreamingSayEvent::RationaleTextDelta { text }
         | mez_agent::StreamingSayEvent::TextDelta { text, .. }
+        | mez_agent::StreamingSayEvent::MessagePayloadDelta { text, .. }
         | mez_agent::StreamingSayEvent::ShellCommandTextDelta { text, .. }
         | mez_agent::StreamingSayEvent::ShellCommandSummaryTextDelta { text, .. } => {
             !text.is_empty()
@@ -53,7 +54,6 @@ fn streaming_say_event_changes_projection(event: &mez_agent::StreamingSayEvent) 
         | mez_agent::StreamingSayEvent::ShellCommandTextComplete { .. }
         | mez_agent::StreamingSayEvent::ShellCommandSummaryTextComplete { .. }
         | mez_agent::StreamingSayEvent::MessageStarted { .. }
-        | mez_agent::StreamingSayEvent::MessagePayloadDelta { .. }
         | mez_agent::StreamingSayEvent::MessagePayloadComplete { .. }
         | mez_agent::StreamingSayEvent::ActionHeader { .. } => false,
     }
@@ -938,7 +938,7 @@ async fn monitor_runtime_agent_provider_dispatch(
                 }
                 let projection_changed = events
                     .iter()
-                    .any(streaming_say_event_changes_projection);
+                    .any(streaming_presentation_event_changes_projection);
                 let batch = streaming_say_runtime_event_batch(
                     &agent_id,
                     &turn_id,
@@ -2000,6 +2000,67 @@ mod tests {
                 },
                 mez_agent::StreamingSayEvent::TextComplete { action_index: 0 },
                 mez_agent::StreamingSayEvent::TextDelta {
+                    action_index: 1,
+                    text: "gamma".to_string(),
+                },
+            ]
+        );
+    }
+
+    /// Verifies outbound message payloads schedule projection only when they
+    /// contribute visible text, while lifecycle events remain barriers.
+    #[test]
+    fn streaming_message_payload_deltas_change_projection() {
+        assert!(streaming_presentation_event_changes_projection(
+            &mez_agent::StreamingSayEvent::MessagePayloadDelta {
+                action_index: 0,
+                text: "partial payload".to_string(),
+            }
+        ));
+        assert!(!streaming_presentation_event_changes_projection(
+            &mez_agent::StreamingSayEvent::MessagePayloadDelta {
+                action_index: 0,
+                text: String::new(),
+            }
+        ));
+        assert!(!streaming_presentation_event_changes_projection(
+            &mez_agent::StreamingSayEvent::MessageStarted {
+                action_index: 0,
+                recipient: "agent-%2".to_string(),
+                content_type: "text/plain; charset=utf-8".to_string(),
+            }
+        ));
+        assert!(!streaming_presentation_event_changes_projection(
+            &mez_agent::StreamingSayEvent::MessagePayloadComplete { action_index: 0 }
+        ));
+
+        let mut events = Vec::new();
+        for event in [
+            mez_agent::StreamingSayEvent::MessagePayloadDelta {
+                action_index: 0,
+                text: "alpha ".to_string(),
+            },
+            mez_agent::StreamingSayEvent::MessagePayloadDelta {
+                action_index: 0,
+                text: "beta".to_string(),
+            },
+            mez_agent::StreamingSayEvent::MessagePayloadComplete { action_index: 0 },
+            mez_agent::StreamingSayEvent::MessagePayloadDelta {
+                action_index: 1,
+                text: "gamma".to_string(),
+            },
+        ] {
+            push_coalesced_streaming_say_event(&mut events, event);
+        }
+        assert_eq!(
+            events,
+            vec![
+                mez_agent::StreamingSayEvent::MessagePayloadDelta {
+                    action_index: 0,
+                    text: "alpha beta".to_string(),
+                },
+                mez_agent::StreamingSayEvent::MessagePayloadComplete { action_index: 0 },
+                mez_agent::StreamingSayEvent::MessagePayloadDelta {
                     action_index: 1,
                     text: "gamma".to_string(),
                 },
