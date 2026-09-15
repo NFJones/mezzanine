@@ -248,16 +248,39 @@ fn annotation_payloads_are_not_screened_as_schema_keywords() {
     );
 }
 
-/// Verifies a schema that declares a different dialect is rejected instead of
-/// being silently reinterpreted under the admitted 2020-12 semantics.
+/// Verifies native Draft-07 validation is selected from its declaration rather
+/// than being silently reinterpreted as 2020-12, while other dialects remain
+/// rejected.
 #[test]
-fn unsupported_dialect_is_rejected() {
+fn draft_07_is_validated_natively_and_other_dialects_are_rejected() {
     let mut validator = McpSchemaValidator::default();
+    let draft_07 = r#"{"$schema":"http://json-schema.org/draft-07/schema#","type":"object","properties":{"mode":{"enum":["safe","fast"]},"request":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"items":{"type":"array","items":{"type":"integer"},"minItems":1}},"required":["mode","request","items"],"additionalProperties":false}"#;
+    validator
+        .validate_arguments(
+            SERVER,
+            TOOL,
+            draft_07,
+            r#"{"mode":"safe","request":{"path":"README.md"},"items":[1]}"#,
+        )
+        .unwrap();
+    let diagnostic = validator
+        .validate_arguments(
+            SERVER,
+            TOOL,
+            draft_07,
+            r#"{"mode":"unsafe","request":{"path":"README.md","extra":true},"items":[]}"#,
+        )
+        .unwrap_err();
+    assert_eq!(
+        diagnostic.category(),
+        McpSchemaFailure::InstanceViolatesSchema
+    );
+
     let diagnostic = validator
         .admit_tool_schema(
             SERVER,
             TOOL,
-            r#"{"$schema":"http://json-schema.org/draft-07/schema#","type":"object"}"#,
+            r#"{"$schema":"https://json-schema.org/draft/2019-09/schema","type":"object"}"#,
         )
         .unwrap_err();
     assert_eq!(diagnostic.category(), McpSchemaFailure::UnsupportedDialect);

@@ -487,7 +487,7 @@ fn unusable_schemas_withdraw_only_the_affected_tool() {
     let mut dialect = tool();
     dialect.name = "dialect".to_string();
     dialect.input_schema_json =
-        r#"{"$schema":"http://json-schema.org/draft-07/schema#","type":"object"}"#.to_string();
+        r#"{"$schema":"https://json-schema.org/draft/2019-09/schema","type":"object"}"#.to_string();
     let mut remote = tool();
     remote.name = "remote".to_string();
     remote.input_schema_json =
@@ -532,4 +532,36 @@ fn unusable_schemas_withdraw_only_the_affected_tool() {
         })
         .unwrap_err();
     assert_eq!(error.kind(), McpErrorKind::Forbidden);
+}
+
+/// Verifies Draft-07 tools stay callable through live registry admission and
+/// retain Draft-07 assertion semantics at argument validation time.
+#[test]
+fn draft_07_schema_stays_callable() {
+    let mut registry = McpRegistry::default();
+    registry.add_server(config()).unwrap();
+    let mut draft_07 = tool();
+    draft_07.name = "draft_07".to_string();
+    draft_07.input_schema_json = r#"{"$schema":"http://json-schema.org/draft-07/schema#","type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}"#.to_string();
+    registry.mark_available("fs", vec![draft_07], NOW).unwrap();
+
+    registry
+        .plan_tool_call(&McpToolCallRequest {
+            server_id: "fs".to_string(),
+            tool_name: "draft_07".to_string(),
+            arguments_json: r#"{"path":"README.md"}"#.to_string(),
+            timeout_ms: None,
+            approval_bypass: true,
+        })
+        .unwrap();
+    let error = registry
+        .plan_tool_call(&McpToolCallRequest {
+            server_id: "fs".to_string(),
+            tool_name: "draft_07".to_string(),
+            arguments_json: r#"{"path":"README.md","extra":true}"#.to_string(),
+            timeout_ms: None,
+            approval_bypass: true,
+        })
+        .unwrap_err();
+    assert_eq!(error.kind(), McpErrorKind::InvalidArgs);
 }

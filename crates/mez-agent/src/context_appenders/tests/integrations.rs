@@ -181,6 +181,27 @@ fn mcp_retrieved_manifest_preserves_object_admitting_type_union() {
 }
 
 #[test]
+/// Verifies a retrieved Draft-07 tool contract survives durable manifest
+/// admission and remains available for later MCP call validation.
+fn mcp_retrieved_manifest_preserves_draft_07_schema() {
+    let context = context_with_retrieved_mcp_manifest(
+        "fs",
+        serde_json::json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+            "additionalProperties": false
+        }),
+    );
+    let tools = invoked_mcp_tools_for_context(&context, &mcp_summary_for_server_ids(&["fs"]));
+
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].tool_name, "read_file");
+    assert!(tools[0].input_schema_json.contains("draft-07/schema#"));
+}
+
+#[test]
 /// Verifies configured catalog refreshes append only on a real transition.
 ///
 /// An unchanged catalog must remain at its original chronological position.

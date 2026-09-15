@@ -116,8 +116,11 @@ use jsonschema::Draft;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-/// Dialect URI admitted for MCP tool-input schemas.
+/// Default dialect URI admitted for MCP tool-input schemas.
 pub const MCP_SCHEMA_SUPPORTED_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
+
+/// Draft-07 dialect URI also admitted for MCP tool-input schemas.
+pub const MCP_SCHEMA_DRAFT_07_DIALECT: &str = "http://json-schema.org/draft-07/schema#";
 
 /// Stable prefix of every MCP tool-schema generation fingerprint.
 pub const MCP_SCHEMA_GENERATION_PREFIX: &str = "mcp-schema-v1";
@@ -556,8 +559,8 @@ impl McpSchemaValidator {
             self.touch(&generation);
             return Ok(generation);
         }
-        let schema = admit_schema_document(schema_json, &self.limits)?;
-        let validator = compile_schema(&schema, &self.limits)?;
+        let (schema, draft) = admit_schema_document(schema_json, &self.limits)?;
+        let validator = compile_schema(&schema, draft, &self.limits)?;
         self.compilations = self.compilations.saturating_add(1);
         self.insert(
             generation.clone(),
@@ -661,7 +664,7 @@ impl McpSchemaValidator {
 fn admit_schema_document(
     schema_json: &str,
     limits: &McpSchemaLimits,
-) -> Result<Value, McpSchemaDiagnostic> {
+) -> Result<(Value, Draft), McpSchemaDiagnostic> {
     if schema_json.len() > limits.max_schema_bytes {
         return Err(McpSchemaDiagnostic::new(
             McpSchemaFailure::SchemaTooLarge,
@@ -691,8 +694,22 @@ fn admit_schema_document(
         McpSchemaFailure::SchemaTooDeep,
         McpSchemaFailure::SchemaTooComplex,
     )?;
-    screen_schema_keywords(&schema, limits)?;
-    Ok(schema)
+    let draft = admitted_schema_draft(&schema)?;
+    screen_schema_keywords(&schema, draft, limits)?;
+    Ok((schema, draft))
+}
+
+/// Selects one explicitly supported root dialect without reinterpreting it.
+fn admitted_schema_draft(schema: &Value) -> Result<Draft, McpSchemaDiagnostic> {
+    match schema.get("$schema").and_then(Value::as_str) {
+        None | Some(MCP_SCHEMA_SUPPORTED_DIALECT) => Ok(Draft::Draft202012),
+        Some(MCP_SCHEMA_DRAFT_07_DIALECT) => Ok(Draft::Draft7),
+        Some(_) => Err(McpSchemaDiagnostic::new(
+            McpSchemaFailure::UnsupportedDialect,
+            Some("$schema"),
+            None,
+        )),
+    }
 }
 
 /// Reports whether one `type` value admits JSON objects.
@@ -745,6 +762,7 @@ fn measure(
 /// Screens every schema keyword that could cause a fetch or a dialect switch.
 fn screen_schema_keywords(
     schema: &Value,
+    draft: Draft,
     limits: &McpSchemaLimits,
 ) -> Result<(), McpSchemaDiagnostic> {
     let mut stack = vec![schema];
@@ -756,7 +774,7 @@ fn screen_schema_keywords(
         for (keyword, child) in map {
             match keyword.as_str() {
                 "$schema" => {
-                    if child.as_str() != Some(MCP_SCHEMA_SUPPORTED_DIALECT) {
+                    if child.as_str() != Some(schema_dialect_uri(draft)) {
                         return Err(McpSchemaDiagnostic::new(
                             McpSchemaFailure::UnsupportedDialect,
                             Some("$schema"),
@@ -832,6 +850,8 @@ const MCP_SCHEMA_SCHEMA_MAP_KEYWORDS: &[&str] = &[
     "patternProperties",
     "dependentSchemas",
     "$defs",
+    "definitions",
+    "dependencies",
 ];
 
 /// Queues one keyword's subschema positions for screening.
@@ -867,10 +887,11 @@ fn push_schema_positions<'a>(keyword: &str, child: &'a Value, stack: &mut Vec<&'
 /// Compiles one screened schema with the admitted dialect and local-only options.
 fn compile_schema(
     schema: &Value,
+    draft: Draft,
     limits: &McpSchemaLimits,
 ) -> Result<jsonschema::Validator, McpSchemaDiagnostic> {
     jsonschema::options()
-        .with_draft(Draft::Draft202012)
+        .with_draft(draft)
         .offline()
         .should_validate_formats(false)
         .without_content_media_type_support("application/json")
@@ -882,6 +903,15 @@ fn compile_schema(
         )
         .build(schema)
         .map_err(|error| compilation_diagnostic(&error))
+}
+
+/// Returns the canonical URI corresponding to an admitted JSON Schema draft.
+const fn schema_dialect_uri(draft: Draft) -> &'static str {
+    match draft {
+        Draft::Draft7 => MCP_SCHEMA_DRAFT_07_DIALECT,
+        Draft::Draft202012 => MCP_SCHEMA_SUPPORTED_DIALECT,
+        _ => MCP_SCHEMA_SUPPORTED_DIALECT,
+    }
 }
 
 /// Converts one compilation failure into a bounded diagnostic.

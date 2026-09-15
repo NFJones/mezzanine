@@ -56,9 +56,12 @@ shell sandbox contains it.
 ## Tool schema validation, limits, and unavailable tools
 
 Mez validates tool arguments itself before transport dispatch. The supported
-dialect is JSON Schema 2020-12. A schema that declares another `$schema` is
-unsupported and leaves its tool unavailable rather than switching assertion
-semantics. `enum`, `const`, `additionalProperties`, `unevaluatedProperties`,
+dialects are JSON Schema 2020-12 and Draft-07
+(`http://json-schema.org/draft-07/schema#`); Mez selects a native validator for
+the declared dialect rather than reinterpreting it under another version. A
+schema that declares another `$schema`, or a conflicting declaration in a
+schema position, is unsupported and leaves its tool unavailable. `enum`,
+`const`, `additionalProperties`, `unevaluatedProperties`,
 `unevaluatedItems`, nested `required`, array and object bounds, string and
 numeric bounds, `pattern`, type unions, and `allOf`/`anyOf`/`oneOf`/`not` are
 enforced. `format` and content keywords stay annotations, so an approximate email
