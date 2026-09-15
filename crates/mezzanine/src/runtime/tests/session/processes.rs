@@ -2951,14 +2951,14 @@ fn runtime_agent_owned_pane_clears_daemon_environment_while_user_shell_inherits_
         .take_running_pane_process_for_adapter(&user_started.pane_id)
         .unwrap();
     let user_environment = pane_root_exec_environment(&user_process);
-    let mut daemon = crate::runtime::processes::native_ambient_environment();
+    let mut daemon = user_environment.clone();
+    let probe =
+        crate::runtime::processes::daemon_only_probe_key_for_tests(&daemon, Path::new("/bin/sh"))
+            .expect("the inherited user environment must expose a daemon-only variable");
     daemon.push(mez_mux::process::RawEnvironmentEntry {
         key: b"MEZ_AGENT_OWNED_DAEMON_SENTINEL".to_vec(),
         value: b"daemon-only".to_vec(),
     });
-    let probe =
-        crate::runtime::processes::daemon_only_probe_key_for_tests(&daemon, Path::new("/bin/sh"))
-            .expect("the injected daemon environment must expose a daemon-only variable");
     assert!(
         environment_forwards(&user_environment, &probe),
         "a user shell pane must keep inheriting the daemon environment"
