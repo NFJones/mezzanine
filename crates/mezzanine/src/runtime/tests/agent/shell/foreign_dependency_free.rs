@@ -927,7 +927,9 @@ fn runtime_remote_certification_requires_authenticated_managed_install() {
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
-    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
     let pane_id = service
         .session()
         .active_window()
@@ -1060,6 +1062,10 @@ bootstrap\tcomplete\t1714500000\n";
         transaction.observed_output_bytes = bootstrap_output.len();
         transaction.observed_output_preview = bootstrap_output.to_string();
     }
+    assert!(
+        !service.managed_child_receiver_is_installed_for_tests(&pane_id),
+        "the remote fixture must complete without an authenticated managed receiver"
+    );
     service
         .observe_agent_shell_transaction_end(
             &pane_id,
