@@ -4992,6 +4992,8 @@ operations remain limited to effective scopes, while validated allowlisted PATH
 directories may receive the narrow read access required for executable lookup.
 `TMPDIR` and all XDG state paths MUST remain code-owned private workload paths,
 and Git configuration MUST remain isolated from host global configuration.
+To preserve normal BSD `mktemp` behavior, Seatbelt MUST also grant the resolved
+macOS per-user temporary root read-write authority without changing `TMPDIR`.
 
 Project configuration overlays SHOULD be created at `.mezzanine/config.toml`
 with a minimal `[permissions]` table and `approval_policy = "ask"` when a
@@ -7728,7 +7730,9 @@ sandboxed payload environment remains owned by the compiled sandbox plan
 Backend-owned `HOME`, identity, locale, and Git values are defaults only when
 no configured selected snapshot value is present. Seatbelt-owned `TMPDIR` and
 XDG state paths are mandatory private workload paths: selected pane values for
-those names MUST NOT replace them or grant access to ambient temporary roots.
+those names MUST NOT replace them. Seatbelt MUST independently grant the
+resolved macOS per-user temporary root so BSD `mktemp` can use its default
+parent directory.
 Every sandboxed action MUST grant its resolved code-owned temporary directory
 read-write authority independently of configured scope arrays. The contract
 MUST NOT weaken the stricter credential-free context admitted pane-status

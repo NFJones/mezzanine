@@ -105,9 +105,11 @@ Seatbelt uses its private canonical host path directly as `HOME` while denying
 operations outside authorized paths. Neither backend copies the real host home,
 credentials, or global Git configuration. Cleanup and quota remain user or
 deployment policy. Every sandboxed action also receives a code-owned private
-temporary directory as read-write authority. A whitelisted `TMPDIR` or
-`XDG_CACHE_HOME` may request pane evidence for non-sandboxed workloads, but it
-cannot replace that private directory or broaden sandbox filesystem authority.
+temporary directory as read-write authority. On macOS, Seatbelt additionally
+grants the resolved per-user temporary root so BSD `mktemp` works with its
+default parent, while retaining the private directory as `TMPDIR`. A
+whitelisted `TMPDIR` or `XDG_CACHE_HOME` may request pane evidence for
+non-sandboxed workloads, but it cannot replace that private directory.
 Configured environment forwarding names and sanitized Git identity do not grant
 filesystem authority.
 

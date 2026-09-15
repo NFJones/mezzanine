@@ -359,7 +359,7 @@ fn sandbox_status_reports_seatbelt_operation_confinement() {
     assert_eq!(output["effective"]["capability_state"], "not-probed");
     assert_eq!(
         output["effective"]["runtime_profile_version"],
-        "seatbelt-v2"
+        "seatbelt-v3"
     );
     assert_eq!(
         output["effective"]["managed_home_path_semantics"],

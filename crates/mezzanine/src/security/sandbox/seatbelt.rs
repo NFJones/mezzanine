@@ -25,10 +25,16 @@ use crate::runtime::{
 };
 
 /// Version of the code-owned Seatbelt profile emitted by this compiler.
-pub(crate) const SEATBELT_RUNTIME_PROFILE_VERSION: &str = "seatbelt-v2";
+pub(crate) const SEATBELT_RUNTIME_PROFILE_VERSION: &str = "seatbelt-v3";
 
 const PROFILE_ARTIFACT_ID: &str = "seatbelt-profile";
 const MINIMAL_PATH: &str = "/usr/bin:/bin";
+
+// BSD `mktemp` resolves the per-user temporary root through the raw `/var`
+// alias. Seatbelt needs this literal metadata authority for that resolution;
+// write authority remains limited to the resolved per-user temporary root.
+#[cfg(target_os = "macos")]
+const MACOS_VAR_ALIAS_METADATA_RULE: &str = "(allow file-read-metadata (literal \"/var\"))\n";
 
 const FIXED_READ_SUBPATHS: &[&str] = &[
     "/System",
@@ -268,6 +274,15 @@ fn seatbelt_profile(request: &SeatbeltCompileRequest<'_>) -> Result<String, Sand
         "subpath",
         &private_directories,
     )?;
+    #[cfg(target_os = "macos")]
+    profile.push_str(MACOS_VAR_ALIAS_METADATA_RULE);
+    #[cfg(target_os = "macos")]
+    append_filter_rule(
+        &mut profile,
+        "file-read* file-write*",
+        "subpath",
+        &[&macos_user_temporary_directory()?],
+    )?;
     let executable_directories = authorized_path_directories(request);
     let executable_directory_refs = executable_directories
         .iter()
@@ -301,6 +316,43 @@ fn seatbelt_profile(request: &SeatbeltCompileRequest<'_>) -> Result<String, Sand
         profile.push_str(CONNECTED_NETWORK_RULES);
     }
     Ok(profile)
+}
+
+/// Returns the canonical macOS per-user temporary root used by BSD `mktemp`
+/// when an invocation does not provide a template or `-p` directory.
+///
+/// `std::env::temp_dir` honors the code-owned `TMPDIR` injected for a Seatbelt
+/// workload. BSD `mktemp` instead uses Darwin's per-user root for a bare
+/// invocation, so query that root directly through `confstr`.
+#[cfg(target_os = "macos")]
+fn macos_user_temporary_directory() -> Result<String, SandboxCompileError> {
+    let required =
+        unsafe { libc::confstr(libc::_CS_DARWIN_USER_TEMP_DIR, std::ptr::null_mut(), 0) };
+    if required == 0 {
+        return Err(invalid_input(
+            "macOS per-user temporary directory lookup failed",
+        ));
+    }
+    let mut buffer = vec![0_u8; required];
+    let written = unsafe {
+        libc::confstr(
+            libc::_CS_DARWIN_USER_TEMP_DIR,
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+        )
+    };
+    if written == 0 || written > buffer.len() {
+        return Err(invalid_input(
+            "macOS per-user temporary directory lookup returned an invalid length",
+        ));
+    }
+    let temporary_directory = std::ffi::CStr::from_bytes_until_nul(&buffer)
+        .map_err(|_| invalid_input("macOS per-user temporary directory is not NUL-terminated"))?
+        .to_str()
+        .map_err(|_| invalid_input("macOS per-user temporary directory must be valid UTF-8"))?
+        .trim_end_matches('/');
+    validate_printable_absolute_path(temporary_directory, "macOS per-user temporary directory")?;
+    Ok(canonicalize_macos_alias(temporary_directory))
 }
 
 /// Returns canonical pane PATH directories that may be read to locate binaries.
@@ -648,6 +700,11 @@ mod tests {
         assert!(
             profile.contains("file-read* file-write* (subpath \"/private/tmp/mez-action/tmp\")")
         );
+        #[cfg(target_os = "macos")]
+        assert!(profile.contains(&format!(
+            "file-read* file-write* (subpath \"{}\")",
+            macos_user_temporary_directory().unwrap()
+        )));
         assert!(!profile.contains("(allow network*)"));
         assert!(!profile.contains("(global-name-prefix \"com.apple.\")"));
         assert!(!profile.contains("(allow system-socket"));
@@ -885,7 +942,8 @@ mod tests {
         if !Path::new("/usr/bin/sandbox-exec").is_file() {
             return;
         }
-        let root = std::env::temp_dir().join(format!("mez-seatbelt-real-{}", std::process::id()));
+        let root =
+            Path::new("/private/tmp").join(format!("mez-seatbelt-real-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("allowed")).unwrap();
         fs::create_dir_all(root.join("denied")).unwrap();
@@ -967,6 +1025,35 @@ mod tests {
         assert!(!root.join("denied/denied").exists());
         assert!(!root.join("read-only/denied").exists());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Verifies the macOS compatibility scope permits BSD `mktemp -d` to use
+    /// its default per-user temporary parent without caller configuration.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn real_profile_allows_bsd_mktemp_default_directory() {
+        use std::process::Command;
+
+        if !Path::new("/usr/bin/sandbox-exec").is_file() {
+            return;
+        }
+        let config = config();
+        let mut policy = policy(SandboxNetworkMode::Isolated);
+        policy.working_directory = macos_user_temporary_directory().unwrap();
+        let evidence = evidence();
+        let plan = compile_seatbelt_launch_plan(request(&config, &policy, &evidence)).unwrap();
+        let output = Command::new("/usr/bin/sandbox-exec")
+            .arg("-p")
+            .arg(profile(&plan))
+            .arg("/bin/sh")
+            .arg("-c")
+            .arg("temporary=$(mktemp -d) && rmdir \"$temporary\"")
+            .current_dir(macos_user_temporary_directory().unwrap())
+            .env("TMPDIR", macos_user_temporary_directory().unwrap())
+            .output()
+            .unwrap();
+
+        assert!(output.status.success(), "{output:?}");
     }
 
     /// Verifies the connected profile can open an ordinary host TCP client
