@@ -25,7 +25,7 @@ use crate::runtime::{
 };
 
 /// Version of the code-owned Seatbelt profile emitted by this compiler.
-pub(crate) const SEATBELT_RUNTIME_PROFILE_VERSION: &str = "seatbelt-v1";
+pub(crate) const SEATBELT_RUNTIME_PROFILE_VERSION: &str = "seatbelt-v2";
 
 const PROFILE_ARTIFACT_ID: &str = "seatbelt-profile";
 const MINIMAL_PATH: &str = "/usr/bin:/bin";
@@ -40,6 +40,14 @@ const FIXED_READ_SUBPATHS: &[&str] = &[
     "/private/var/db/timezone",
 ];
 const FIXED_READ_LITERALS: &[&str] = &["/dev/null", "/dev/random", "/dev/urandom"];
+
+// macOS client networking depends on more than BSD socket operations. The
+// system resolver, reachability, proxy, and CFNetwork services use Mach and
+// system-socket operations that a deny-default profile otherwise rejects.
+// Keep this code-owned baseline explicit rather than importing private Apple
+// profiles at runtime. Host client networking needs the Apple service namespace
+// itself because resolver dependencies vary across supported macOS releases.
+const CONNECTED_NETWORK_RULES: &str = "(allow file-read-metadata)\n(allow network*)\n(allow file-read* file-test-existence (literal \"/Library/Preferences/com.apple.networkd.plist\") (literal \"/private/var/db/com.apple.networkextension.tracker-info\") (literal \"/private/var/db/nsurlstoraged/dafsaData.bin\") (literal \"/private/var/run/resolv.conf\"))\n(allow mach-lookup (global-name-prefix \"com.apple.\"))\n(allow network-outbound (literal \"/private/var/run/mDNSResponder\") (control-name \"com.apple.netsrc\") (control-name \"com.apple.network.statistics\"))\n(allow system-socket (require-all (socket-domain AF_SYSTEM) (socket-protocol 2)) (socket-domain AF_ROUTE))\n(allow ipc-posix-shm-read-data (ipc-posix-name \"/com.apple.AppSSO.version\"))\n(allow user-preference-read (preference-domain \"com.apple.CFNetwork\" \"com.apple.SystemConfiguration\"))\n";
 
 /// Inputs required to compile one effective policy into a Seatbelt launch.
 #[derive(Debug, Clone)]
@@ -290,7 +298,7 @@ fn seatbelt_profile(request: &SeatbeltCompileRequest<'_>) -> Result<String, Sand
         append_filter_rule(&mut profile, operation, filter, &[path.as_str()])?;
     }
     if request.policy.network == SandboxNetworkMode::Connected {
-        profile.push_str("(allow network*)\n");
+        profile.push_str(CONNECTED_NETWORK_RULES);
     }
     Ok(profile)
 }
@@ -627,6 +635,9 @@ mod tests {
         assert!(profile.contains("(literal \"/private/tmp/workspace/input.txt\")"));
         assert!(profile.contains("(subpath \"/private/tmp/workspace/target\")"));
         assert!(!profile.contains("(allow network*)"));
+        assert!(!profile.contains("(global-name-prefix \"com.apple.\")"));
+        assert!(!profile.contains("(allow system-socket"));
+        assert!(!profile.contains("(allow file-read-metadata)"));
     }
 
     #[test]
@@ -641,7 +652,11 @@ mod tests {
         let environment =
             serde_json::from_slice::<BTreeMap<String, String>>(&plan.environment_document).unwrap();
 
-        assert!(profile(&plan).contains("(allow network*)"));
+        let profile = profile(&plan);
+        assert!(profile.contains("(allow network*)"));
+        assert!(profile.contains("(allow file-read-metadata)"));
+        assert!(profile.contains("(global-name-prefix \"com.apple.\")"));
+        assert!(profile.contains("(allow system-socket"));
         assert_eq!(environment["HOME"], "/private/tmp/mez-action/home");
         assert_eq!(environment["TMPDIR"], "/private/tmp/mez-action/tmp");
         assert_eq!(environment["PATH"], "/opt/tools/bin:/usr/bin:/bin");
@@ -919,5 +934,47 @@ mod tests {
         assert!(!root.join("denied/denied").exists());
         assert!(!root.join("read-only/denied").exists());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Verifies the connected profile can open an ordinary host TCP client
+    /// connection while retaining the compiler's deny-default filesystem
+    /// boundary.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn real_connected_profile_reaches_a_local_tcp_listener() {
+        use std::net::TcpListener;
+        use std::thread;
+
+        if !Path::new("/usr/bin/sandbox-exec").is_file() {
+            return;
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let accepted = thread::spawn(move || {
+            listener.set_nonblocking(false).unwrap();
+            listener.accept().is_ok()
+        });
+        let plan = compile_seatbelt_launch_plan(request(
+            &config(),
+            &policy(SandboxNetworkMode::Connected),
+            &evidence(),
+        ))
+        .unwrap();
+        let profile = profile(&plan);
+        let output = std::process::Command::new("/usr/bin/sandbox-exec")
+            .arg("-p")
+            .arg(profile)
+            .arg("/usr/bin/nc")
+            .arg("-z")
+            .arg("localhost")
+            .arg(address.port().to_string())
+            .output()
+            .unwrap();
+
+        assert!(output.status.success(), "{output:?}");
+        assert!(
+            accepted.join().unwrap(),
+            "connected Seatbelt profile did not reach its local TCP listener"
+        );
     }
 }

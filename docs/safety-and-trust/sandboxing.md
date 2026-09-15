@@ -112,9 +112,12 @@ identity do not grant filesystem authority.
 `permissions.network_policy` selects whether a shell action may use networking.
 With Bubblewrap, `deny` uses an isolated network namespace. With Seatbelt,
 `deny` rejects TCP, UDP, and Unix-domain socket operations in the visible host
-namespace. `allow` permits networking and `prompt` permits it only after the
+namespace. `allow` grants a code-owned macOS host-client networking baseline,
+including resolver metadata, Apple system-service lookups, reachability,
+proxy, and CFNetwork operations; `prompt` grants that baseline only after the
 action's network requirement is authorized. Neither backend provides
-destination filtering. Product-owned web, fetch, and MCP actions are not child
+destination filtering, and Seatbelt continues to restrict filesystem and
+process operations. Product-owned web, fetch, and MCP actions are not child
 shell processes and have their own capability and approval gates.
 
 ## Fail safely

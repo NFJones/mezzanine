@@ -4769,9 +4769,11 @@ action's network requirement is authorized. Destination-level filtering is
 outside this binary connected/isolated contract. Seatbelt MUST enforce denied
 network authority by denying TCP, UDP, and Unix-domain socket operations in the
 visible host namespace. It MUST NOT describe that operation-level boundary as
-a private network namespace. Authorized Seatbelt network actions MAY use host
-networking according to the same `deny`, `prompt`, and `allow` authorization
-decisions. Reported network enforcement MUST come from a compiled launch plan
+a private network namespace. Authorized Seatbelt network actions MUST use a
+code-owned host-client networking baseline, including resolver metadata, Apple
+system-service lookups, reachability, proxy, and CFNetwork service operations,
+according to the same `deny`, `prompt`, and `allow` authorization decisions. Reported network
+enforcement MUST come from a compiled launch plan
 plus an exact capability proof; configuration alone MUST NOT produce an
 `isolated` or `connected` claim, and Seatbelt reporting MUST NOT describe a
 private namespace. Every Bubblewrap profile MUST
