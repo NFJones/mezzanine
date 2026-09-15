@@ -631,7 +631,8 @@ destructive_action_policy = "prompt"
 bypass_mode = false
 # Optional pane-derived variable names shared by native and sandboxed actions.
 # Values are always redacted and never inherit from Mez's daemon environment.
-#? env_whitelist = ["PATH", "ACME_HOME"]
+env_whitelist = ["PATH", "HOME", "SHELL", "TMPDIR", "XDG_CACHE_HOME"]
+# Add names such as `ACME_HOME` here only when the workload requires them.
 
 # Optional sanitized Git identity for sandboxed commits. Configure both fields;
 # Mezzanine never imports the host global Git configuration.

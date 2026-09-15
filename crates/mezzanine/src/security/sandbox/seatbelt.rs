@@ -404,6 +404,17 @@ fn payload_environment(
     for (name, value) in &request.environment_evidence.values {
         environment.insert(name.clone(), value.clone());
     }
+    // The workload directory is the only temporary-state authority granted by
+    // the profile. Pane values may extend the payload environment, but they
+    // must not redirect temporary files or XDG state to ambient host paths.
+    environment.insert(
+        "TMPDIR".to_string(),
+        canonicalize_macos_alias(request.temporary_directory),
+    );
+    environment.insert("XDG_CACHE_HOME".to_string(), format!("{xdg_root}/cache"));
+    environment.insert("XDG_CONFIG_HOME".to_string(), format!("{xdg_root}/config"));
+    environment.insert("XDG_DATA_HOME".to_string(), format!("{xdg_root}/data"));
+    environment.insert("XDG_STATE_HOME".to_string(), format!("{xdg_root}/state"));
     if let (Some(name), Some(email)) = (
         request.config.git_user_name.as_deref(),
         request.config.git_user_email.as_deref(),
@@ -634,6 +645,9 @@ mod tests {
         assert!(profile.starts_with("(version 1)\n(deny default)\n"));
         assert!(profile.contains("(literal \"/private/tmp/workspace/input.txt\")"));
         assert!(profile.contains("(subpath \"/private/tmp/workspace/target\")"));
+        assert!(
+            profile.contains("file-read* file-write* (subpath \"/private/tmp/mez-action/tmp\")")
+        );
         assert!(!profile.contains("(allow network*)"));
         assert!(!profile.contains("(global-name-prefix \"com.apple.\")"));
         assert!(!profile.contains("(allow system-socket"));
@@ -664,11 +678,17 @@ mod tests {
         assert!(!environment.contains_key("SSH_AUTH_SOCK"));
     }
 
-    /// Verifies configured evidence overrides Seatbelt defaults without
-    /// removing any declared environment name from the payload.
+    /// Verifies configured environment values are forwarded except for the
+    /// backend-owned temporary and XDG-state paths.
     #[test]
-    fn compiler_accepts_configured_environment_overrides() {
-        let names = ["PATH".to_string(), "HOME".to_string(), "SHELL".to_string()];
+    fn compiler_preserves_backend_owned_temporary_environment() {
+        let names = [
+            "PATH".to_string(),
+            "HOME".to_string(),
+            "SHELL".to_string(),
+            "TMPDIR".to_string(),
+            "XDG_CACHE_HOME".to_string(),
+        ];
         let environment_request =
             mez_agent::shell::PaneEnvironmentRequest::new(names.to_vec()).unwrap();
         let evidence = mez_agent::shell::PaneEnvironmentEvidence::from_parts(
@@ -680,6 +700,14 @@ mod tests {
                 ),
                 ("HOME".to_string(), "/server/home".to_string()),
                 ("SHELL".to_string(), "/bin/zsh".to_string()),
+                (
+                    "TMPDIR".to_string(),
+                    "/private/var/folders/ambient/T".to_string(),
+                ),
+                (
+                    "XDG_CACHE_HOME".to_string(),
+                    "/private/var/folders/ambient/cache".to_string(),
+                ),
             ]),
             BTreeMap::new(),
         )
@@ -697,6 +725,11 @@ mod tests {
         assert_eq!(environment["PATH"], "/opt/tools/bin:/usr/bin:/bin");
         assert_eq!(environment["HOME"], "/server/home");
         assert_eq!(environment["SHELL"], "/bin/zsh");
+        assert_eq!(environment["TMPDIR"], "/private/tmp/mez-action/tmp");
+        assert_eq!(
+            environment["XDG_CACHE_HOME"],
+            "/private/tmp/mez-action/tmp/xdg/cache"
+        );
     }
 
     /// Verifies Seatbelt exposes the canonical user home without granting it

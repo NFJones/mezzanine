@@ -3761,3 +3761,23 @@ fn migrates_schema_95_env_whitelist_to_shared_permissions_setting() {
         );
     }
 }
+
+/// Verifies schema-v96 documents advance without materializing environment
+/// forwarding so the current runtime defaults remain available to omitted
+/// configuration while explicit lists remain user-owned.
+#[test]
+fn migrates_schema_96_without_materializing_env_whitelist_defaults() {
+    for (format, text) in [
+        (ConfigFormat::Toml, "version = 96\n[permissions]\n"),
+        (ConfigFormat::Json, r#"{"version":96,"permissions":{}}"#),
+        (ConfigFormat::Yaml, "version: 96\npermissions: {}\n"),
+    ] {
+        let migrated = migrate_config_text(format, text).unwrap();
+        let root = parse_config_json_value(format, &migrated.text).unwrap();
+
+        assert_eq!(migrated.from_version, 96);
+        assert_eq!(migrated.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert!(migrated.changed);
+        assert!(root.pointer("/permissions/env_whitelist").is_none());
+    }
+}

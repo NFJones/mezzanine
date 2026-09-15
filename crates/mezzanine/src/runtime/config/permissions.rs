@@ -308,7 +308,13 @@ impl Default for ConfiguredSandboxEnvironment {
     /// Selects the standard pane environment variables when no explicit list exists.
     fn default() -> Self {
         Self {
-            requested_names: vec!["PATH".to_string(), "HOME".to_string(), "SHELL".to_string()],
+            requested_names: vec![
+                "PATH".to_string(),
+                "HOME".to_string(),
+                "SHELL".to_string(),
+                "TMPDIR".to_string(),
+                "XDG_CACHE_HOME".to_string(),
+            ],
         }
     }
 }

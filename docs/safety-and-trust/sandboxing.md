@@ -104,8 +104,12 @@ Bubblewrap mounts its managed home at a synthetic in-sandbox home path.
 Seatbelt uses its private canonical host path directly as `HOME` while denying
 operations outside authorized paths. Neither backend copies the real host home,
 credentials, or global Git configuration. Cleanup and quota remain user or
-deployment policy. Configured environment forwarding names and sanitized Git
-identity do not grant filesystem authority.
+deployment policy. Every sandboxed action also receives a code-owned private
+temporary directory as read-write authority. A whitelisted `TMPDIR` or
+`XDG_CACHE_HOME` may request pane evidence for non-sandboxed workloads, but it
+cannot replace that private directory or broaden sandbox filesystem authority.
+Configured environment forwarding names and sanitized Git identity do not grant
+filesystem authority.
 
 ## Control network access
 

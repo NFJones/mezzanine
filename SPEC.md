@@ -4634,8 +4634,10 @@ default to `["PATH"]`, while an explicit `[]` remains an opt-out. Migration
 from v49 MUST write `[]`. Schema v96 promotes this to the shared
 `permissions.env_whitelist` string array and removes the backend-scoped values,
 preferring an authored shared value over Bubblewrap and then Seatbelt legacy
-values. An omitted shared value defaults to `["PATH", "HOME", "SHELL"]`, and an
-explicit `[]` forwards none of those names. Names MUST match
+values. Schema v97 expands its default to `["PATH", "HOME", "SHELL", "TMPDIR",
+"XDG_CACHE_HOME"]`; the `96 -> 97` migration advances only the schema version
+so explicit lists remain user-owned. An explicit `[]` forwards none of those
+names. Names MUST match
 `[A-Za-z_][A-Za-z0-9_]*`, be unique, contain at most 128 entries, and total at
 most 16 KiB. Values MUST be selected from an immutable environment snapshot
 captured when the Mez server runtime is created, not from the active pane
@@ -7723,10 +7725,14 @@ the Seatbelt child supervisor or `bwrap` MUST receive only the launcher control
 bucket and MUST NOT receive pane credentials or workload entries, while the
 sandboxed payload environment remains owned by the compiled sandbox plan
 (`--clearenv` plus `--setenv`, or the Seatbelt environment document).
-Backend-owned `HOME`, XDG paths, identity, locale, and Git values are defaults
-only when no configured selected snapshot value is present. The contract MUST
-NOT weaken the stricter credential-free context admitted pane-status providers
-use.
+Backend-owned `HOME`, identity, locale, and Git values are defaults only when
+no configured selected snapshot value is present. Seatbelt-owned `TMPDIR` and
+XDG state paths are mandatory private workload paths: selected pane values for
+those names MUST NOT replace them or grant access to ambient temporary roots.
+Every sandboxed action MUST grant its resolved code-owned temporary directory
+read-write authority independently of configured scope arrays. The contract
+MUST NOT weaken the stricter credential-free context admitted pane-status
+providers use.
 Native local inference MUST NOT claim to represent a remote shell environment;
 it describes the local pane root process only. A required daemon variable that
 cannot be dropped safely MUST be documented rather than silently restored as

@@ -250,6 +250,10 @@ fn initial_config_uses_native_shell_and_platform_sandbox_defaults() {
             crate::security::sandbox::SandboxPlatformAvailability::current().default_sandbox_name()
         )
     );
+    assert_eq!(
+        crate::runtime::ConfiguredSandboxEnvironment::default().requested_names,
+        ["PATH", "HOME", "SHELL", "TMPDIR", "XDG_CACHE_HOME"]
+    );
 }
 
 /// Verifies newly generated macOS configuration enables Seatbelt with

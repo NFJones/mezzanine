@@ -1415,6 +1415,8 @@ fn default_pane_environment_forwards_whitelisted_path() {
             ("PATH".to_string(), "/opt/tools:/usr/bin".to_string()),
             ("HOME".to_string(), "/home/agent".to_string()),
             ("SHELL".to_string(), "/bin/sh".to_string()),
+            ("TMPDIR".to_string(), "/tmp/pane".to_string()),
+            ("XDG_CACHE_HOME".to_string(), "/home/agent/.cache".to_string()),
         ]),
         BTreeMap::new(),
     )

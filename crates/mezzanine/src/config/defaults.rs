@@ -1052,7 +1052,8 @@ approval_policy = "ask"
 sandbox = "bubblewrap"
 # Optional pane-derived variable names shared by native and sandboxed actions.
 # Values remain redacted and are never inherited from the Mez daemon environment.
-#? env_whitelist = ["PATH", "ACME_HOME"]
+env_whitelist = ["PATH", "HOME", "SHELL", "TMPDIR", "XDG_CACHE_HOME"]
+# Add names such as `ACME_HOME` here only when the workload requires them.
 # Scope paths may name files or directories. A Unix-domain socket may also be
 # placed in read_scopes for an explicitly trusted service endpoint; a read-only
 # mount does not make requests sent through that socket read-only.
