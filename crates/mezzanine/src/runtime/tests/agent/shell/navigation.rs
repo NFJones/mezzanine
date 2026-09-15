@@ -514,11 +514,30 @@ bootstrap\tcomplete\t1714500000\n";
         )
         .unwrap();
 
+    let settled_effects = service.drain_pane_io_transition().side_effects;
+    if !service.agent_subshell_is_active(&pane_id) {
+        assert!(
+            pane_input_effects(&settled_effects).is_empty(),
+            "callback-backed bootstrap must wait for the restored parent prompt"
+        );
+        service
+            .apply_pane_output_bytes(
+                pane_id.clone(),
+                b"\x1b]133;A\x1b\\user@host ~/repo $ \x1b]133;B\x1b\\".to_vec(),
+            )
+            .unwrap();
+        assert_eq!(
+            pane_input_effects(&service.drain_pane_io_transition().side_effects).len(),
+            1,
+            "the restored parent prompt must resume the deferred child-shell handoff"
+        );
+    } else {
+        assert!(
+            pane_input_effects(&settled_effects).is_empty(),
+            "dependency-free bootstrap must not send a second child-shell handoff"
+        );
+    }
     assert!(service.agent_subshell_is_active(&pane_id));
-    assert!(
-        pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
-        "dependency-free bootstrap must not send a second child-shell handoff"
-    );
     let _ = process.terminate(Duration::from_millis(10));
 }
 

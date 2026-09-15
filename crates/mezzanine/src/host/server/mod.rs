@@ -1874,16 +1874,16 @@ mod tests {
         let parsed_context = host
             .local_session_launch_context(params.as_object().unwrap(), Size::new(101, 37).unwrap())
             .unwrap();
-        let caller_overlay = caller_overlay.canonicalize().unwrap();
-        let host_overlay = host_overlay.canonicalize().unwrap();
+        let canonical_caller_overlay = caller_overlay.canonicalize().unwrap();
+        let canonical_host_overlay = host_overlay.canonicalize().unwrap();
         assert!(parsed_context.config_layers.iter().any(|layer| {
-            layer.path.as_deref() == Some(caller_overlay.as_path()) && layer.trusted
+            layer.path.as_deref() == Some(canonical_caller_overlay.as_path()) && layer.trusted
         }));
         assert!(
             parsed_context
                 .config_layers
                 .iter()
-                .all(|layer| { layer.path.as_deref() != Some(host_overlay.as_path()) })
+                .all(|layer| { layer.path.as_deref() != Some(canonical_host_overlay.as_path()) })
         );
         let (created, shutdown) = host
             .dispatch_request(&json!({

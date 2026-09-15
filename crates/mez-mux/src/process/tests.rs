@@ -935,20 +935,21 @@ fn cleared_environment_applies_harness_values_and_overrides_only() {
 
     #[cfg(target_os = "macos")]
     {
-        // `KERN_PROCARGS2` can omit another process's environment. Force that
-        // fallback path and compare its code-owned launch contract against the
-        // atomic child snapshot, including portable-pty's injected `SHELL`.
-        process.primary_pid = 0;
-        let fallback = process
+        // Point the best-effort kernel reader at this test process, whose
+        // ambient environment differs from the cleared child. The pane must
+        // still prefer its code-owned launch contract, including portable-pty's
+        // injected `SHELL`, over potentially stale or misattributed metadata.
+        process.primary_pid = std::process::id();
+        let observed = process
             .environment()
-            .expect("the macOS fallback must retain the pane launch environment");
-        for entry in fallback {
+            .expect("the macOS pane must retain its launch environment");
+        for entry in observed {
             let key = String::from_utf8(entry.key).expect("test launch keys are UTF-8");
             let value = String::from_utf8(entry.value).expect("test launch values are UTF-8");
             assert_eq!(
                 value_for(&key),
                 Some(value.as_str()),
-                "fallback {key} diverged"
+                "launch contract {key} diverged"
             );
         }
         assert!(forwards("SHELL"));

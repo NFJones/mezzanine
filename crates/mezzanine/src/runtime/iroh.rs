@@ -4694,7 +4694,10 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
-        assert!(error.message().contains("trust initialization"), "{error}");
+        assert!(
+            error.message().contains("remote endpoint trust is revoked"),
+            "{error}"
+        );
 
         let _ = handle.shutdown().await.unwrap();
         drop(handle);
