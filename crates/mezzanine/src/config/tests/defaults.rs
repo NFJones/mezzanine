@@ -311,6 +311,12 @@ fn initial_macos_config_uses_auto_allow_with_policy_only_sandboxing() {
         permissions.get("sandbox").and_then(toml::Value::as_str),
         Some("policy-only")
     );
+    assert_eq!(
+        permissions
+            .get("network_policy")
+            .and_then(toml::Value::as_str),
+        Some("prompt")
+    );
 }
 
 /// Verifies newly generated Linux configuration uses unrestricted approval
@@ -398,6 +404,33 @@ fn initial_other_platform_config_uses_ask_with_policy_only_sandboxing() {
         permissions.get("sandbox").and_then(toml::Value::as_str),
         Some("policy-only")
     );
+}
+
+/// Verifies policy-only generated configurations retain prompt networking.
+#[test]
+fn policy_only_generated_configurations_retain_prompt_network_policy() {
+    for platform in [
+        GeneratedConfigPlatform::MacOs {
+            seatbelt_available: false,
+        },
+        GeneratedConfigPlatform::Linux {
+            bubblewrap_available: false,
+        },
+        GeneratedConfigPlatform::Other,
+    ] {
+        let config = initial_config_toml_for_platform(platform).unwrap();
+        let parsed: toml::Value = toml::from_str(&config).unwrap();
+        let permissions = parsed
+            .get("permissions")
+            .and_then(toml::Value::as_table)
+            .unwrap();
+        assert_eq!(
+            permissions
+                .get("network_policy")
+                .and_then(toml::Value::as_str),
+            Some("prompt")
+        );
+    }
 }
 
 /// Verifies the first-run configuration does not retain references to model
@@ -527,6 +560,14 @@ fn default_config_matches_documented_example() {
             platform.default_approval_policy_name()
         ),
     );
+    if matches!(platform.default_sandbox_name(), "bubblewrap" | "seatbelt") {
+        let documented =
+            documented.replace("network_policy = \"prompt\"", "network_policy = \"allow\"");
+        let generated = toml::from_str::<toml::Value>(&initial_config_toml().unwrap()).unwrap();
+        let documented = toml::from_str::<toml::Value>(&documented).unwrap();
+        assert_eq!(generated, documented);
+        return;
+    }
     let generated = toml::from_str::<toml::Value>(&initial_config_toml().unwrap()).unwrap();
     let documented = toml::from_str::<toml::Value>(&documented).unwrap();
     assert_eq!(generated, documented);
