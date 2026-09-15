@@ -487,7 +487,7 @@ fn unusable_schemas_withdraw_only_the_affected_tool() {
     let mut dialect = tool();
     dialect.name = "dialect".to_string();
     dialect.input_schema_json =
-        r#"{"$schema":"https://json-schema.org/draft/2019-09/schema","type":"object"}"#.to_string();
+        r#"{"$schema":"https://json-schema.org/draft/04/schema","type":"object"}"#.to_string();
     let mut remote = tool();
     remote.name = "remote".to_string();
     remote.input_schema_json =
@@ -564,4 +564,126 @@ fn draft_07_schema_stays_callable() {
         })
         .unwrap_err();
     assert_eq!(error.kind(), McpErrorKind::InvalidArgs);
+}
+
+/// Verifies Draft-06 tools preserve legacy definition and dependency semantics
+/// through live registry admission and call planning.
+#[test]
+fn draft_06_schema_stays_callable() {
+    let mut registry = McpRegistry::default();
+    registry.add_server(config()).unwrap();
+    let mut draft_06 = tool();
+    draft_06.name = "draft_06".to_string();
+    draft_06.input_schema_json = r##"{"$schema":"http://json-schema.org/draft-06/schema#","type":"object","definitions":{"path":{"type":"string","minLength":1}},"properties":{"path":{"$ref":"#/definitions/path"},"mode":{"enum":["safe","fast"]}},"dependencies":{"mode":["path"]},"additionalProperties":false}"##.to_string();
+    registry.mark_available("fs", vec![draft_06], NOW).unwrap();
+
+    registry
+        .plan_tool_call(&McpToolCallRequest {
+            server_id: "fs".to_string(),
+            tool_name: "draft_06".to_string(),
+            arguments_json: r#"{"path":"README.md","mode":"safe"}"#.to_string(),
+            timeout_ms: None,
+            approval_bypass: true,
+        })
+        .unwrap();
+    for arguments_json in [
+        r#"{"mode":"safe"}"#,
+        r#"{"path":""}"#,
+        r#"{"path":"README.md","mode":"unsafe"}"#,
+    ] {
+        assert_eq!(
+            registry
+                .plan_tool_call(&McpToolCallRequest {
+                    server_id: "fs".to_string(),
+                    tool_name: "draft_06".to_string(),
+                    arguments_json: arguments_json.to_string(),
+                    timeout_ms: None,
+                    approval_bypass: true,
+                })
+                .unwrap_err()
+                .kind(),
+            McpErrorKind::InvalidArgs,
+            "{arguments_json} should fail its isolated Draft-06 assertion"
+        );
+    }
+}
+
+/// Verifies Draft-04 tools retain legacy `id`, definition, dependency, and
+/// boolean exclusive-bound semantics through live registry call planning.
+#[test]
+fn draft_04_schema_stays_callable() {
+    let mut registry = McpRegistry::default();
+    registry.add_server(config()).unwrap();
+    let mut draft_04 = tool();
+    draft_04.name = "draft_04".to_string();
+    draft_04.input_schema_json = r##"{"$schema":"http://json-schema.org/draft-04/schema#","id":"https://example.test/mcp-tool","type":"object","definitions":{"path":{"type":"string","minLength":1}},"properties":{"path":{"$ref":"#/definitions/path"},"mode":{"enum":["safe","fast"]},"priority":{"type":"number","minimum":0,"exclusiveMinimum":true}},"dependencies":{"mode":["path"]},"additionalProperties":false}"##.to_string();
+    registry.mark_available("fs", vec![draft_04], NOW).unwrap();
+
+    registry
+        .plan_tool_call(&McpToolCallRequest {
+            server_id: "fs".to_string(),
+            tool_name: "draft_04".to_string(),
+            arguments_json: r#"{"path":"README.md","mode":"safe","priority":1}"#.to_string(),
+            timeout_ms: None,
+            approval_bypass: true,
+        })
+        .unwrap();
+    for arguments_json in [
+        r#"{"mode":"safe"}"#,
+        r#"{"path":""}"#,
+        r#"{"path":"README.md","mode":"unsafe"}"#,
+        r#"{"path":"README.md","priority":0}"#,
+    ] {
+        assert_eq!(
+            registry
+                .plan_tool_call(&McpToolCallRequest {
+                    server_id: "fs".to_string(),
+                    tool_name: "draft_04".to_string(),
+                    arguments_json: arguments_json.to_string(),
+                    timeout_ms: None,
+                    approval_bypass: true,
+                })
+                .unwrap_err()
+                .kind(),
+            McpErrorKind::InvalidArgs,
+            "{arguments_json} should fail its isolated Draft-04 assertion"
+        );
+    }
+}
+
+/// Verifies Draft 2019-09 tools retain native `unevaluatedProperties` semantics
+/// through live registry admission and call planning.
+#[test]
+fn draft_2019_09_schema_stays_callable() {
+    let mut registry = McpRegistry::default();
+    registry.add_server(config()).unwrap();
+    let mut draft_2019_09 = tool();
+    draft_2019_09.name = "draft_2019_09".to_string();
+    draft_2019_09.input_schema_json = r#"{"$schema":"https://json-schema.org/draft/2019-09/schema","type":"object","properties":{"path":{"type":"string"}},"required":["path"],"unevaluatedProperties":false}"#.to_string();
+    registry
+        .mark_available("fs", vec![draft_2019_09], NOW)
+        .unwrap();
+
+    registry
+        .plan_tool_call(&McpToolCallRequest {
+            server_id: "fs".to_string(),
+            tool_name: "draft_2019_09".to_string(),
+            arguments_json: r#"{"path":"README.md"}"#.to_string(),
+            timeout_ms: None,
+            approval_bypass: true,
+        })
+        .unwrap();
+    assert_eq!(
+        registry
+            .plan_tool_call(&McpToolCallRequest {
+                server_id: "fs".to_string(),
+                tool_name: "draft_2019_09".to_string(),
+                arguments_json: r#"{"path":"README.md","extra":true}"#.to_string(),
+                timeout_ms: None,
+                approval_bypass: true,
+            })
+            .unwrap_err()
+            .kind(),
+        McpErrorKind::InvalidArgs
+    );
 }

@@ -8,12 +8,15 @@
 //!
 //! # Supported dialect
 //!
-//! The admitted dialect is JSON Schema 2020-12
-//! (`https://json-schema.org/draft/2020-12/schema`). A tool schema that declares
-//! any other `$schema` value is rejected as `unsupported_dialect`, because
-//! silently switching assertion semantics would make approval decisions and
-//! model repair guidance unreviewable. A schema that omits `$schema` is compiled
-//! with 2020-12 semantics.
+//! The admitted dialects are JSON Schema 2020-12
+//! (`https://json-schema.org/draft/2020-12/schema`), Draft 2019-09
+//! (`https://json-schema.org/draft/2019-09/schema`), Draft-07, Draft-06
+//! (`http://json-schema.org/draft-06/schema#`), and Draft-04
+//! (`http://json-schema.org/draft-04/schema#`). A tool schema that declares
+//! another `$schema` value is rejected as `unsupported_dialect`,
+//! because silently switching assertion semantics would make approval decisions
+//! and model repair guidance unreviewable. A schema that omits `$schema` is
+//! compiled with 2020-12 semantics.
 //!
 //! # Supported assertions
 //!
@@ -121,6 +124,15 @@ pub const MCP_SCHEMA_SUPPORTED_DIALECT: &str = "https://json-schema.org/draft/20
 
 /// Draft-07 dialect URI also admitted for MCP tool-input schemas.
 pub const MCP_SCHEMA_DRAFT_07_DIALECT: &str = "http://json-schema.org/draft-07/schema#";
+
+/// Draft-06 dialect URI also admitted for MCP tool-input schemas.
+pub const MCP_SCHEMA_DRAFT_06_DIALECT: &str = "http://json-schema.org/draft-06/schema#";
+
+/// Draft-04 dialect URI also admitted for MCP tool-input schemas.
+pub const MCP_SCHEMA_DRAFT_04_DIALECT: &str = "http://json-schema.org/draft-04/schema#";
+
+/// Draft 2019-09 dialect URI also admitted for MCP tool-input schemas.
+pub const MCP_SCHEMA_DRAFT_2019_09_DIALECT: &str = "https://json-schema.org/draft/2019-09/schema";
 
 /// Stable prefix of every MCP tool-schema generation fingerprint.
 pub const MCP_SCHEMA_GENERATION_PREFIX: &str = "mcp-schema-v1";
@@ -704,6 +716,9 @@ fn admitted_schema_draft(schema: &Value) -> Result<Draft, McpSchemaDiagnostic> {
     match schema.get("$schema").and_then(Value::as_str) {
         None | Some(MCP_SCHEMA_SUPPORTED_DIALECT) => Ok(Draft::Draft202012),
         Some(MCP_SCHEMA_DRAFT_07_DIALECT) => Ok(Draft::Draft7),
+        Some(MCP_SCHEMA_DRAFT_06_DIALECT) => Ok(Draft::Draft6),
+        Some(MCP_SCHEMA_DRAFT_04_DIALECT) => Ok(Draft::Draft4),
+        Some(MCP_SCHEMA_DRAFT_2019_09_DIALECT) => Ok(Draft::Draft201909),
         Some(_) => Err(McpSchemaDiagnostic::new(
             McpSchemaFailure::UnsupportedDialect,
             Some("$schema"),
@@ -908,7 +923,10 @@ fn compile_schema(
 /// Returns the canonical URI corresponding to an admitted JSON Schema draft.
 const fn schema_dialect_uri(draft: Draft) -> &'static str {
     match draft {
+        Draft::Draft4 => MCP_SCHEMA_DRAFT_04_DIALECT,
+        Draft::Draft6 => MCP_SCHEMA_DRAFT_06_DIALECT,
         Draft::Draft7 => MCP_SCHEMA_DRAFT_07_DIALECT,
+        Draft::Draft201909 => MCP_SCHEMA_DRAFT_2019_09_DIALECT,
         Draft::Draft202012 => MCP_SCHEMA_SUPPORTED_DIALECT,
         _ => MCP_SCHEMA_SUPPORTED_DIALECT,
     }

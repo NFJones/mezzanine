@@ -73,6 +73,33 @@ fn parses_tools_list_response_with_schema_and_cursor() {
     assert_eq!(response.next_cursor.as_deref(), Some("more"));
 }
 
+/// Verifies the exact Draft-07 declaration from an MCP `tools/list` response
+/// reaches registry admission unchanged and leaves the tool callable.
+#[test]
+fn discovered_draft_07_schema_stays_callable() {
+    let response = parse_mcp_tools_list_response(
+        r#"{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"read_file","description":"Read a file","inputSchema":{"$schema":"http://json-schema.org/draft-07/schema#","type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}}]}}"#,
+        2,
+    )
+    .unwrap();
+    let mut registry = McpRegistry::default();
+    registry.add_server(config()).unwrap();
+    registry
+        .mark_available_from_discovered_tools("fs", response.tools, NOW)
+        .unwrap();
+
+    assert_eq!(registry.available_tools().len(), 1);
+    registry
+        .plan_tool_call(&McpToolCallRequest {
+            server_id: "fs".to_string(),
+            tool_name: "read_file".to_string(),
+            arguments_json: r#"{"path":"README.md"}"#.to_string(),
+            timeout_ms: None,
+            approval_bypass: true,
+        })
+        .unwrap();
+}
+
 /// Verifies repeated continuation cursors terminate discovery deterministically.
 #[test]
 fn mcp_tool_list_pagination_rejects_repeated_cursor() {

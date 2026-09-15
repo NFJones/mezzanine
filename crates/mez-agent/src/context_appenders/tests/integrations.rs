@@ -202,6 +202,72 @@ fn mcp_retrieved_manifest_preserves_draft_07_schema() {
 }
 
 #[test]
+/// Verifies a retrieved Draft-06 tool contract with legacy schema positions
+/// survives durable manifest admission.
+fn mcp_retrieved_manifest_preserves_draft_06_schema() {
+    let context = context_with_retrieved_mcp_manifest(
+        "fs",
+        serde_json::json!({
+            "$schema": "http://json-schema.org/draft-06/schema#",
+            "type": "object",
+            "definitions": {"path": {"type": "string"}},
+            "properties": {"path": {"$ref": "#/definitions/path"}},
+            "required": ["path"],
+            "additionalProperties": false
+        }),
+    );
+    let tools = invoked_mcp_tools_for_context(&context, &mcp_summary_for_server_ids(&["fs"]));
+
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].tool_name, "read_file");
+    assert!(tools[0].input_schema_json.contains("draft-06/schema#"));
+}
+
+#[test]
+/// Verifies a retrieved Draft-04 tool contract with a legacy `id` and
+/// definitions survives durable manifest admission.
+fn mcp_retrieved_manifest_preserves_draft_04_schema() {
+    let context = context_with_retrieved_mcp_manifest(
+        "fs",
+        serde_json::json!({
+            "$schema": "http://json-schema.org/draft-04/schema#",
+            "id": "https://example.test/mcp-tool",
+            "type": "object",
+            "definitions": {"path": {"type": "string"}},
+            "properties": {"path": {"$ref": "#/definitions/path"}},
+            "required": ["path"],
+            "additionalProperties": false
+        }),
+    );
+    let tools = invoked_mcp_tools_for_context(&context, &mcp_summary_for_server_ids(&["fs"]));
+
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].tool_name, "read_file");
+    assert!(tools[0].input_schema_json.contains("draft-04/schema#"));
+}
+
+#[test]
+/// Verifies a retrieved Draft 2019-09 tool contract survives durable manifest
+/// admission and remains available for later MCP call validation.
+fn mcp_retrieved_manifest_preserves_draft_2019_09_schema() {
+    let context = context_with_retrieved_mcp_manifest(
+        "fs",
+        serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2019-09/schema",
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+            "unevaluatedProperties": false
+        }),
+    );
+    let tools = invoked_mcp_tools_for_context(&context, &mcp_summary_for_server_ids(&["fs"]));
+
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].tool_name, "read_file");
+    assert!(tools[0].input_schema_json.contains("draft/2019-09/schema"));
+}
+
+#[test]
 /// Verifies configured catalog refreshes append only on a real transition.
 ///
 /// An unchanged catalog must remain at its original chronological position.

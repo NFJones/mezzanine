@@ -276,11 +276,57 @@ fn draft_07_is_validated_natively_and_other_dialects_are_rejected() {
         McpSchemaFailure::InstanceViolatesSchema
     );
 
+    let draft_2019_09 = r#"{"$schema":"https://json-schema.org/draft/2019-09/schema","type":"object","properties":{"path":{"type":"string"}},"required":["path"],"unevaluatedProperties":false}"#;
+    validator
+        .validate_arguments(SERVER, TOOL, draft_2019_09, r#"{"path":"README.md"}"#)
+        .unwrap();
+    assert_eq!(
+        validator
+            .validate_arguments(
+                SERVER,
+                TOOL,
+                draft_2019_09,
+                r#"{"path":"README.md","extra":true}"#,
+            )
+            .unwrap_err()
+            .category(),
+        McpSchemaFailure::InstanceViolatesSchema
+    );
+
+    let draft_06 = r##"{"$schema":"http://json-schema.org/draft-06/schema#","type":"object","definitions":{"path":{"type":"string","minLength":1}},"properties":{"path":{"$ref":"#/definitions/path"},"mode":{"enum":["safe","fast"]}},"required":["path","mode"],"dependencies":{"mode":["path"]},"additionalProperties":false}"##;
+    validator
+        .validate_arguments(
+            SERVER,
+            TOOL,
+            draft_06,
+            r#"{"path":"README.md","mode":"safe"}"#,
+        )
+        .unwrap();
+    assert_eq!(
+        validator
+            .validate_arguments(SERVER, TOOL, draft_06, r#"{"mode":"safe"}"#)
+            .unwrap_err()
+            .category(),
+        McpSchemaFailure::InstanceViolatesSchema
+    );
+
+    let draft_04 = r##"{"$schema":"http://json-schema.org/draft-04/schema#","id":"https://example.test/mcp-tool","type":"object","properties":{"priority":{"type":"number","minimum":0,"exclusiveMinimum":true}},"additionalProperties":false}"##;
+    validator
+        .validate_arguments(SERVER, TOOL, draft_04, r#"{"priority":1}"#)
+        .unwrap();
+    assert_eq!(
+        validator
+            .validate_arguments(SERVER, TOOL, draft_04, r#"{"priority":0}"#)
+            .unwrap_err()
+            .category(),
+        McpSchemaFailure::InstanceViolatesSchema
+    );
+
     let diagnostic = validator
         .admit_tool_schema(
             SERVER,
             TOOL,
-            r#"{"$schema":"https://json-schema.org/draft/2019-09/schema","type":"object"}"#,
+            r#"{"$schema":"https://json-schema.org/draft/06/schema","type":"object"}"#,
         )
         .unwrap_err();
     assert_eq!(diagnostic.category(), McpSchemaFailure::UnsupportedDialect);

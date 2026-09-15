@@ -56,8 +56,11 @@ shell sandbox contains it.
 ## Tool schema validation, limits, and unavailable tools
 
 Mez validates tool arguments itself before transport dispatch. The supported
-dialects are JSON Schema 2020-12 and Draft-07
-(`http://json-schema.org/draft-07/schema#`); Mez selects a native validator for
+dialects are JSON Schema 2020-12, Draft 2019-09
+(`https://json-schema.org/draft/2019-09/schema`), Draft-07
+(`http://json-schema.org/draft-07/schema#`), Draft-06
+(`http://json-schema.org/draft-06/schema#`), and Draft-04
+(`http://json-schema.org/draft-04/schema#`); Mez selects a native validator for
 the declared dialect rather than reinterpreting it under another version. A
 schema that declares another `$schema`, or a conflicting declaration in a
 schema position, is unsupported and leaves its tool unavailable. `enum`,
