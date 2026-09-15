@@ -889,8 +889,13 @@ mod tests {
         .unwrap();
         let observed = fs::read_to_string(&observed).unwrap();
         let lines = observed.lines().collect::<Vec<_>>();
-        assert_eq!(lines[0], launch_directory.to_string_lossy());
-        assert_eq!(lines[1], root.to_string_lossy());
+        let launch_directory = launch_directory.canonicalize().unwrap();
+        let root = root.canonicalize().unwrap();
+        assert_eq!(
+            Path::new(lines[0]).canonicalize().unwrap(),
+            launch_directory
+        );
+        assert_eq!(Path::new(lines[1]).canonicalize().unwrap(), root);
         assert_eq!(lines[2..], ["101", "37", "unset"]);
 
         drop(runtime);
