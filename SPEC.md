@@ -10993,11 +10993,15 @@ cancellation MUST clear peer-wait state through normal turn cleanup.
 Interagent MMP traffic is presentation-only. One presentation-eligible,
 model-authored `send_message` MAY create one `${recipient}< {payload}` row in
 the sending pane after message-service acceptance, while fanout creates at most
-one `{sender}> {payload}` row per committing recipient. A sender row proves
-only acceptance or queueing, never recipient observation, processing,
-agreement, acknowledgment, or task completion. It MUST NOT enter provider or
-user-trust context, approval authority, delivery routing, turn triggering,
-receiver receipts, or delivery cursors. In normal pane-log mode, canonical
+one `{sender}> {payload}` row per committing recipient. Before acceptance, a
+presentation-eligible sender row MAY appear provisionally and MUST update
+incrementally as its payload streams, using the same debounced, generation-fenced
+projection behavior as streamed `say` output. A provisional sender row proves
+nothing and MUST be removed if validation, approval, or delivery fails. An
+accepted sender row proves only acceptance or queueing, never recipient
+observation, processing, agreement, acknowledgment, or task completion. It MUST
+NOT enter provider or user-trust context, approval authority, delivery routing,
+turn triggering, receiver receipts, or delivery cursors. In normal pane-log mode, canonical
 `text/plain; charset=utf-8` and supported `text/markdown` are
 presentation-eligible; plaintext MUST render literally and Markdown through the
 safe Markdown renderer. All other media types MUST remain durable and
@@ -11017,6 +11021,21 @@ receive the `parent>` label. The `parent>` marker MUST use the
 `agent_transcript_parent` semantic style; other inbound peer markers MUST use
 `agent_transcript_peer_sender`. The receiver persists this distinction so replay
 and resize reproduce the same label and marker styling.
+A child sending to its exact direct parent MUST likewise use the stable
+`parent<` marker, including provisional streaming and accepted sender rows.
+This alias compares the syntactically parsed single-agent recipient with the
+child's spawn-owned parent identity; it MUST NOT use discovery, fanout, pane
+titles, or message-service lookup. Sent records persist the classification at
+acceptance so replay never reclassifies historical rows. Selectors, siblings,
+grandparents, unrelated agents, and fenced descendants retain ordinary outbound
+recipient labels. The `parent<` marker uses `agent_transcript_parent`; other
+outbound markers use `agent_transcript_peer_recipient`.
+For ordinary child recipients, outbound sender rows MUST use the spawn-owned
+display name rather than the opaque agent id. Generated human and nonhuman names
+remain readable, while literal-name mode retains its assigned literal name. This
+is presentation-only: routing and authority retain the parsed recipient identity.
+The accepted sender record MUST persist the resolved label so replay and resize
+do not rename historical rows when lineage changes.
 A logged peer line remains an operator-visible observation: it stays untrusted
 and non-user-authored, and it MUST NOT become user-trust context, approval
 authority, or a turn trigger. A received line MUST be logged only for a message

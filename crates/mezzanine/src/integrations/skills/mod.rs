@@ -935,6 +935,34 @@ mod tests {
         assert!(
             fix_issues_document
                 .text
+                .contains("send it one review assignment via MMP `send_message`")
+        );
+        assert!(
+            fix_issues_document
+                .text
+                .contains("The reviewer must return its verdict to the requesting main agent via MMP `send_message`")
+        );
+        assert!(
+            fix_issues_document
+                .text
+                .contains("A successful send only means the assignment was queued")
+        );
+        assert!(
+            fix_issues_document.text.contains(
+                "correlated to the assignment when an assignment message id is available"
+            )
+        );
+        assert!(
+            fix_issues_document
+                .text
+                .contains("only while that required substantive reviewer MMP reply is outstanding")
+        );
+        assert!(fix_issues_document.text.contains(
+            "Runtime task-status notifications are not substitutes for reviewer messages"
+        ));
+        assert!(
+            fix_issues_document
+                .text
                 .contains("close the persistent review agent before producing the final report")
         );
         assert!(

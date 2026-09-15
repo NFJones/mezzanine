@@ -383,7 +383,7 @@ impl PaneProcess {
     pub fn environment(&self) -> Option<Vec<RawEnvironmentEntry>> {
         process_environment_for_pid(self.primary_pid)
             .filter(|environment| !environment.is_empty())
-            .or_else(|| {
+            .or({
                 #[cfg(target_os = "macos")]
                 {
                     (!self.launch_environment.is_empty()).then(|| self.launch_environment.clone())

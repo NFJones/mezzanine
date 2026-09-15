@@ -260,7 +260,11 @@ fn streaming_outbound_message_projection_with_theme(
     table_width: usize,
     ui_theme: &mez_mux::theme::UiTheme,
 ) -> StreamingSayProjection {
-    let label = peer_message_echo_label(&message.recipient);
+    let label = if message.direct_parent {
+        "parent".to_string()
+    } else {
+        peer_message_echo_label(&message.recipient_label)
+    };
     let marker = format!("{label}<");
     let prefix = format!("{marker} ");
     let payload = peer_message_echo_payload(&message.text);
@@ -278,7 +282,11 @@ fn streaming_outbound_message_projection_with_theme(
     attach_agent_name_marker_span(
         &mut rendered_lines,
         marker.as_str(),
-        agent_name_marker_rendition(ui_theme.colors.agent_transcript_peer_recipient),
+        agent_name_marker_rendition(if message.direct_parent {
+            ui_theme.colors.agent_transcript_parent
+        } else {
+            ui_theme.colors.agent_transcript_peer_recipient
+        }),
     );
     let copy_lines = if markdown {
         std::iter::once(message.text.trim_end_matches(['\r', '\n']).to_string())
@@ -361,21 +369,22 @@ fn peer_message_presentation_source(
 
 /// Encodes one accepted sender-side peer-message source for geometry-aware replay.
 ///
-/// Sender records deliberately carry no receipt identity or direct-parent state:
-/// they are operator-visible evidence of message-service acceptance only and must
-/// never participate in receiver-owned delivery recovery.
+/// Sender records deliberately carry no receipt identity. Their direct-parent
+/// fact is captured at acceptance so replay never reclassifies historical rows.
 fn sent_peer_message_presentation_source(
     action_identity: &str,
-    recipient: &str,
+    recipient_label: &str,
     payload: &str,
     content_type: &str,
+    direct_parent: bool,
 ) -> String {
     serde_json::json!({
         "direction": "sent",
         "action_identity": action_identity,
-        "peer": recipient,
+        "peer": recipient_label,
         "payload": payload,
         "content_type": content_type,
+        "direct_parent": direct_parent,
         "presentation_eligible": true,
     })
     .to_string()
@@ -400,7 +409,6 @@ fn decoded_peer_message_presentation_source(
         "received" => Some(encoded),
         "sent"
             if encoded.receive_identity.is_none()
-                && !encoded.direct_parent
                 && encoded
                     .action_identity
                     .as_deref()
@@ -1170,12 +1178,22 @@ impl RuntimeSessionService {
                             // payload, and a pre-persistence suppression leaves no
                             // presentation record for replay to resurrect.
                             if encoded.direction == "sent" {
+                                let source = RuntimeStreamingMessageSource {
+                                    recipient: encoded.peer.clone(),
+                                    recipient_label: encoded.peer.clone(),
+                                    direct_parent: encoded.direct_parent,
+                                    content_type: encoded
+                                        .content_type
+                                        .as_deref()
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                    text: encoded.payload.clone(),
+                                    complete: true,
+                                };
                                 self.append_accepted_outbound_message_presentation(
                                     pane_id,
                                     encoded.action_identity.as_deref().unwrap_or_default(),
-                                    encoded.peer.as_str(),
-                                    encoded.content_type.as_deref().unwrap_or_default(),
-                                    encoded.payload.as_str(),
+                                    &source,
                                 )?;
                             } else {
                                 self.append_agent_peer_message_to_terminal_buffer(
@@ -2818,6 +2836,20 @@ impl RuntimeSessionService {
                 ) {
                     return Ok(());
                 }
+                let direct_parent = crate::runtime::runtime_message_recipient(recipient)
+                    .ok()
+                    .is_some_and(|recipient| {
+                        self.runtime_outbound_recipient_is_direct_parent(
+                            &format!("agent-{pane_id}"),
+                            &recipient,
+                        )
+                    });
+                let recipient_label = crate::runtime::runtime_message_recipient(recipient)
+                    .ok()
+                    .map(|parsed_recipient| {
+                        self.runtime_outbound_recipient_display_label(&parsed_recipient, recipient)
+                    })
+                    .unwrap_or_else(|| recipient.clone());
                 self.ensure_agent_streaming_presentation(pane_id, turn_id)?;
                 let presentation = self
                     .presentation
@@ -2833,6 +2865,8 @@ impl RuntimeSessionService {
                     .entry(*action_index)
                     .or_insert_with(|| RuntimeStreamingMessageSource {
                         recipient: recipient.clone(),
+                        recipient_label,
+                        direct_parent,
                         content_type: content_type.clone(),
                         text: String::new(),
                         complete: false,
@@ -4040,27 +4074,20 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
         action_identity: &str,
-        recipient: &str,
-        content_type: &str,
-        payload: &str,
+        source: &RuntimeStreamingMessageSource,
     ) -> Result<()> {
-        let source = RuntimeStreamingMessageSource {
-            recipient: recipient.to_string(),
-            content_type: content_type.to_string(),
-            text: payload.to_string(),
-            complete: true,
-        };
         let projection = streaming_outbound_message_projection_with_theme(
-            &source,
+            source,
             self.agent_terminal_markdown_frame_width(pane_id)?,
             self.agent_terminal_markdown_terminal_width(pane_id)?,
             &self.presentation.settings.ui_theme,
         );
         let persisted_source = sent_peer_message_presentation_source(
             action_identity,
-            recipient,
-            payload,
-            content_type,
+            source.recipient_label.as_str(),
+            source.text.as_str(),
+            source.content_type.as_str(),
+            source.direct_parent,
         );
         self.append_agent_terminal_rendered_lines_to_buffer(
             pane_id,
@@ -4079,27 +4106,20 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
         action_identity: &str,
-        recipient: &str,
-        content_type: &str,
-        payload: &str,
+        source: &RuntimeStreamingMessageSource,
     ) -> Result<()> {
-        let source = RuntimeStreamingMessageSource {
-            recipient: recipient.to_string(),
-            content_type: content_type.to_string(),
-            text: payload.to_string(),
-            complete: true,
-        };
         let projection = streaming_outbound_message_projection_with_theme(
-            &source,
+            source,
             self.agent_terminal_markdown_frame_width(pane_id)?,
             self.agent_terminal_markdown_terminal_width(pane_id)?,
             &self.presentation.settings.ui_theme,
         );
         let persisted_source = sent_peer_message_presentation_source(
             action_identity,
-            recipient,
-            payload,
-            content_type,
+            source.recipient_label.as_str(),
+            source.text.as_str(),
+            source.content_type.as_str(),
+            source.direct_parent,
         );
         self.persist_agent_presentation_entry(
             pane_id,
@@ -4144,6 +4164,20 @@ impl RuntimeSessionService {
             ));
         };
         let content_type = mez_agent::normalize_maap_message_content_type(content_type);
+        let direct_parent = crate::runtime::runtime_message_recipient(recipient)
+            .ok()
+            .is_some_and(|recipient| {
+                self.runtime_outbound_recipient_is_direct_parent(
+                    &format!("agent-{pane_id}"),
+                    &recipient,
+                )
+            });
+        let fallback_recipient_label = crate::runtime::runtime_message_recipient(recipient)
+            .ok()
+            .map(|parsed_recipient| {
+                self.runtime_outbound_recipient_display_label(&parsed_recipient, recipient)
+            })
+            .unwrap_or_else(|| recipient.clone());
         if !runtime_peer_message_presentation_is_visible(
             self.agent_peer_message_log_mode(),
             Some(&content_type),
@@ -4158,23 +4192,23 @@ impl RuntimeSessionService {
         {
             return Ok(());
         }
-        let streamed = self
+        let streamed_source = self
             .presentation
             .agent_streaming_say_presentations
             .get(pane_id)
-            .is_some_and(|presentation| {
-                presentation.turn_id == turn_id
-                    && presentation
-                        .outbound_messages
-                        .get(&action_index)
-                        .is_some_and(|source| {
-                            source.complete
-                                && source.recipient == *recipient
-                                && source.content_type == content_type
-                                && source.text == *payload
-                        })
-            });
-        if streamed {
+            .and_then(|presentation| {
+                (presentation.turn_id == turn_id)
+                    .then(|| presentation.outbound_messages.get(&action_index))
+                    .flatten()
+            })
+            .filter(|source| {
+                source.complete
+                    && source.recipient == *recipient
+                    && source.content_type == content_type
+                    && source.text == *payload
+            })
+            .cloned();
+        if let Some(source) = streamed_source {
             // Completion verified the complete provider source. Keep the
             // cumulative owner until every outbound action from this response
             // settles, so a later rejected sibling can still restore the
@@ -4182,22 +4216,22 @@ impl RuntimeSessionService {
             self.persist_accepted_outbound_message_presentation(
                 pane_id,
                 action.id.as_str(),
-                recipient,
-                content_type.as_str(),
-                payload,
+                &source,
             )?;
             self.presentation
                 .agent_settled_outbound_message_actions
                 .insert(identity);
             return Ok(());
         }
-        self.append_accepted_outbound_message_presentation(
-            pane_id,
-            action.id.as_str(),
-            recipient,
-            content_type.as_str(),
-            payload,
-        )?;
+        let source = RuntimeStreamingMessageSource {
+            recipient: recipient.clone(),
+            recipient_label: fallback_recipient_label,
+            direct_parent,
+            content_type,
+            text: payload.clone(),
+            complete: true,
+        };
+        self.append_accepted_outbound_message_presentation(pane_id, action.id.as_str(), &source)?;
         self.presentation
             .agent_settled_outbound_message_actions
             .insert(identity);

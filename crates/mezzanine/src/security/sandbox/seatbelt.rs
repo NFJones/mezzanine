@@ -721,6 +721,11 @@ mod tests {
         let home = root.join("home");
         let tools = root.join("scope/tools");
         let escaped = home.join("escaped-bin");
+        let canonical_home = canonicalize_macos_alias(&home.to_string_lossy());
+        let canonical_home_bin =
+            canonicalize_macos_alias(&home.join(".local/bin").to_string_lossy());
+        let canonical_tools = canonicalize_macos_alias(&tools.to_string_lossy());
+        let canonical_escaped = canonicalize_macos_alias(&escaped.to_string_lossy());
         let config = config();
         let mut policy = policy(SandboxNetworkMode::Isolated);
         policy.grants.push(SandboxPathGrant {
@@ -747,22 +752,19 @@ mod tests {
             serde_json::from_slice::<BTreeMap<String, String>>(&plan.environment_document).unwrap();
         let profile = profile(&plan);
 
-        assert_eq!(environment["HOME"], home.to_string_lossy());
+        assert_eq!(environment["HOME"], canonical_home);
         assert_eq!(environment["TMPDIR"], "/private/tmp/mez-action/tmp");
         assert_eq!(
             environment["XDG_CONFIG_HOME"],
             "/private/tmp/mez-action/tmp/xdg/config"
         );
-        assert!(profile.contains(&format!(
-            "(subpath \"{}\")",
-            home.join(".local/bin").display()
-        )));
-        assert!(profile.contains(&format!("(subpath \"{}\")", tools.display())));
-        assert!(!profile.contains(&format!("(subpath \"{}\")", escaped.display())));
+        assert!(profile.contains(&format!("(subpath \"{canonical_home_bin}\")")));
+        assert!(profile.contains(&format!("(subpath \"{canonical_tools}\")")));
+        assert!(!profile.contains(&format!("(subpath \"{canonical_escaped}\")")));
         assert!(!profile.contains("(subpath \"/opt/denied/bin\")"));
         assert!(!profile.contains(&format!(
             "file-read* file-write* (subpath \"{}\")",
-            home.display()
+            canonical_home
         )));
         std::fs::remove_dir_all(root).unwrap();
     }

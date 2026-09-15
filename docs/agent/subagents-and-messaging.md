@@ -111,7 +111,10 @@ Normal pane logs show canonical `text/plain; charset=utf-8` and supported
 and model-visible without a pane row. After message-service acceptance, one
 model-authored `send_message` may add `${recipient}< {payload}` to the sender
 once, while each recipient logs `{sender}> {payload}` only when it commits its
-own delivery. Sender presentation proves acceptance or queueing only, not
+own delivery. Eligible sender payloads update incrementally during provider
+streaming through the same debounced projection path as `say` output, but remain
+provisional until acceptance and disappear if validation, approval, or delivery
+fails. Accepted sender presentation proves acceptance or queueing only, not
 recipient observation, processing, agreement, acknowledgment, or completion.
 Set `agents.peer_message_log_mode = "verbose"` to show bounded raw payloads for
 other accepted media on both eligible sender and receiving rows; runtime bridge
@@ -130,6 +133,23 @@ outbound `${recipient}<` markers use `agent_transcript_peer_recipient`; all
 three semantics persist through presentation replay and resize. Sender rows
 never become provider context, user-trust context, approval authority, delivery
 state, turn triggers, receiver receipts, or cursors.
+
+For ordinary child recipients, outbound sender rows use the recipient's
+spawn-owned display name rather than its opaque agent id. Generated human and
+nonhuman names remain readable, while literal-name mode retains its assigned
+literal name. This label is presentation-only: routing and authority retain the
+parsed recipient identity. The accepted sender record persists the resolved
+label, so replay and resize do not rename historical rows when lineage changes.
+
+When a child sends to its exact direct parent, its provisional and accepted
+sender rows use `parent<` instead of the requested recipient text. This is a
+presentation-only comparison between the parsed single-agent recipient and the
+spawn-captured parent identity; it does not use discovery, pane titles, fanout,
+or message-service lookup and grants no authority. The accepted sent record
+persists this fact so replay and resize retain the historical label. Selectors,
+siblings, grandparents, unrelated agents, and fenced descendants keep ordinary
+outbound recipient labels. The `parent<` marker uses
+`agent_transcript_parent` rather than `agent_transcript_peer_recipient`.
 
 Under `ask`, a send that no rule already allows blocks as a resumable approval
 bound to the recipient and payload, and under `auto-allow` it proceeds after a
