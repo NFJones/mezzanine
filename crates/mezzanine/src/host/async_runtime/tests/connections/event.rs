@@ -280,7 +280,7 @@ async fn async_event_listener_accepts_and_streams_visible_events() {
     use tokio::io::AsyncReadExt;
     use tokio::net::{UnixListener, UnixStream};
 
-    let path = std::env::temp_dir().join(format!(
+    let path = std::path::PathBuf::from("/tmp").join(format!(
         "mez-async-event-listener-{}-{}.sock",
         std::process::id(),
         "primary"
