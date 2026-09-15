@@ -1874,6 +1874,8 @@ mod tests {
         let parsed_context = host
             .local_session_launch_context(params.as_object().unwrap(), Size::new(101, 37).unwrap())
             .unwrap();
+        let caller_overlay = caller_overlay.canonicalize().unwrap();
+        let host_overlay = host_overlay.canonicalize().unwrap();
         assert!(parsed_context.config_layers.iter().any(|layer| {
             layer.path.as_deref() == Some(caller_overlay.as_path()) && layer.trusted
         }));
@@ -1909,6 +1911,7 @@ mod tests {
         assert_eq!(payload.authoritative_columns, 101);
         assert_eq!(payload.authoritative_rows, 37);
         assert_eq!(payload.shell.path, "/bin/sh");
+        let caller_directory = caller_directory.canonicalize().unwrap();
         assert!(
             payload
                 .windows
