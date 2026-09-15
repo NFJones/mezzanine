@@ -13,7 +13,11 @@ const MINIMUM_OUTPUT_BYTES: usize = 1024 * 1024;
 /// Input records mixed into the PTY output flood.
 const INPUT_RECORDS: usize = 64;
 /// Maximum workload iterations before the outer timeout reports a failure.
-const MAX_WORKLOAD_ITERATIONS: usize = 4096;
+///
+/// macOS can split the deterministic output flood into roughly one PTY event
+/// per line under load, so retain four polling opportunities per emitted line
+/// instead of coupling completion to Linux-sized output chunks.
+const MAX_WORKLOAD_ITERATIONS: usize = 65_536;
 /// Marker emitted after the deterministic PTY output flood.
 const OUTPUT_COMPLETE_MARKER: &[u8] = b"release-load-output-done";
 /// Marker emitted after the child receives the final input record.

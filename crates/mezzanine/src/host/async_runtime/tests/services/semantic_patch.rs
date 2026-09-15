@@ -65,7 +65,10 @@ async fn async_zsh_large_semantic_patch_completes_and_releases_input() {
         let report = run_async_pane_process_supervisor_service(
             pane_worker_handle,
             AsyncPaneProcessSupervisorServiceConfig {
-                max_polls: u64::MAX,
+                // A finite bound keeps the supervisor's configured idle wake
+                // active, so it periodically observes the test-only atomic
+                // stop predicate without requiring runtime shutdown.
+                max_polls: 1_000_000,
                 take_limit: 8,
                 idle_interval: Duration::from_millis(1),
                 pane_service: AsyncPaneProcessServiceConfig {
@@ -270,13 +273,13 @@ async fn async_zsh_large_semantic_patch_completes_and_releases_input() {
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
         workers_done.store(true, Ordering::SeqCst);
+        pane_worker_stopped_rx
+            .await
+            .expect("pane worker should stop after large semantic patch settlement");
         assert_eq!(
             client_handle.shutdown().await.unwrap(),
             RuntimeLifecycleState::Running
         );
-        pane_worker_stopped_rx
-            .await
-            .expect("pane worker should stop after large semantic patch settlement");
         settled
     };
 
