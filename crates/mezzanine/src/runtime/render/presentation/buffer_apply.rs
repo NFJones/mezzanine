@@ -45,7 +45,8 @@ use mez_agent::{
 use mez_mux::{
     copy::{COPY_WRAP_CONTINUATION, encode_copy_source_line_in_group},
     render::{
-        markdown_block_copy_lines, wrap_rich_text_line_to_width_with_continuation_indent_hard,
+        markdown_block_copy_lines, markdown_local_continuation_indent_width,
+        wrap_rich_text_line_to_width_with_continuation_indent_hard,
         wrap_rich_text_line_to_width_with_source_ranges_hard,
     },
 };
@@ -178,6 +179,15 @@ fn peer_message_echo_payload(payload: &str) -> String {
     crate::runtime::control::runtime_peer_message_logged_payload(payload)
 }
 
+/// Returns the display-only hanging indent that follows the peer speaker prefix.
+///
+/// Wrapped rows and later payload source lines must start under the payload's
+/// first body column, so the indent mirrors the rendered prefix width the same
+/// way user prompts and plain `say` output derive theirs.
+fn peer_message_continuation_indent(prefix: &str) -> String {
+    " ".repeat(UnicodeWidthStr::width(prefix))
+}
+
 /// Renders one Markdown peer payload while preserving its sender indicator.
 fn peer_message_markdown_rendered_lines(
     prefix: &str,
@@ -185,19 +195,29 @@ fn peer_message_markdown_rendered_lines(
     ui_theme: &mez_mux::theme::UiTheme,
     table_display_width: usize,
 ) -> Vec<RichTextLine> {
+    let continuation = peer_message_continuation_indent(prefix);
+    let prefix_width = UnicodeWidthStr::width(prefix);
     render_agent_markdown_body_lines_with_prefix(
         payload,
         ui_theme,
         table_display_width,
         prefix,
-        "     ",
+        continuation.as_str(),
     )
     .into_iter()
     .flat_map(|line| {
+        let rest = line
+            .display
+            .strip_prefix(prefix)
+            .or_else(|| line.display.strip_prefix(continuation.as_str()))
+            .unwrap_or(line.display.as_str());
+        let indent_width = prefix_width
+            .saturating_add(markdown_local_continuation_indent_width(rest))
+            .min(table_display_width.saturating_sub(1));
         wrap_rich_text_line_to_width_with_continuation_indent_hard(
             line,
             table_display_width,
-            "     ",
+            &" ".repeat(indent_width),
         )
     })
     .collect()
@@ -210,7 +230,7 @@ fn peer_message_echo_rendered_lines(
     display_width: usize,
     copy_group: &str,
 ) -> Vec<RichTextLine> {
-    let body_indent = " ".repeat(5);
+    let body_indent = peer_message_continuation_indent(prefix);
     let payload = payload.trim_end_matches(['\r', '\n']);
     let payload_lines = if payload.is_empty() {
         vec![""]
@@ -225,7 +245,11 @@ fn peer_message_echo_rendered_lines(
             let line = RichTextLine {
                 display: format!(
                     "{}{}",
-                    if source_index == 0 { prefix } else { "" },
+                    if source_index == 0 {
+                        prefix
+                    } else {
+                        body_indent.as_str()
+                    },
                     sanitized_agent_terminal_line(payload_line),
                 ),
                 style_spans: Vec::new(),
@@ -5613,7 +5637,7 @@ mod tests {
                 .iter()
                 .map(|line| line.display.as_str())
                 .collect::<Vec<_>>(),
-            ["agent-%3> alpha", "     beta gamma"]
+            ["agent-%3> alpha", "          beta gamma"]
         );
         assert_eq!(
             lines
