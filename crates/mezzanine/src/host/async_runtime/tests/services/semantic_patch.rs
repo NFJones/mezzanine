@@ -270,13 +270,13 @@ async fn async_zsh_large_semantic_patch_completes_and_releases_input() {
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
         workers_done.store(true, Ordering::SeqCst);
-        pane_worker_stopped_rx
-            .await
-            .expect("pane worker should stop after large semantic patch settlement");
         assert_eq!(
             client_handle.shutdown().await.unwrap(),
             RuntimeLifecycleState::Running
         );
+        pane_worker_stopped_rx
+            .await
+            .expect("pane worker should stop after large semantic patch settlement");
         settled
     };
 

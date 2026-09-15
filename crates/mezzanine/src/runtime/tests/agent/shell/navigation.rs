@@ -392,6 +392,10 @@ fn runtime_agent_shell_immediate_reentry_resumes_after_parent_bootstrap() {
     let mut process = service
         .take_running_pane_process_for_adapter(&pane_id)
         .unwrap();
+    // The placeholder process may still resolve as `cat` or the spawning
+    // shell under host load. Pin the OS identity to the same POSIX shell the
+    // synthetic identity and bootstrap records below declare.
+    service.set_pane_process_executable_for_tests(&pane_id, "/bin/sh");
 
     service
         .execute_terminal_command(&primary, "agent-shell")
