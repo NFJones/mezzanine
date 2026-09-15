@@ -376,23 +376,17 @@ impl PaneProcess {
     ///
     /// On Linux this reads `/proc/<pid>/environ`; the result reflects the
     /// environment captured when the process was executed and does not track
-    /// later variable changes. On macOS, `KERN_PROCARGS2` can omit a child
-    /// environment, so panes spawned by this process fall back to their exact
-    /// launch contract. Values may contain arbitrary non-UTF-8 bytes and must
-    /// be treated as protected runtime state.
+    /// later variable changes. On macOS, panes spawned by this process use
+    /// their exact launch contract because `KERN_PROCARGS2` can omit or briefly
+    /// misattribute a child environment; the kernel reader remains a fallback
+    /// for handles without launch metadata. Values may contain arbitrary
+    /// non-UTF-8 bytes and must be treated as protected runtime state.
     pub fn environment(&self) -> Option<Vec<RawEnvironmentEntry>> {
-        process_environment_for_pid(self.primary_pid)
-            .filter(|environment| !environment.is_empty())
-            .or({
-                #[cfg(target_os = "macos")]
-                {
-                    (!self.launch_environment.is_empty()).then(|| self.launch_environment.clone())
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    None
-                }
-            })
+        #[cfg(target_os = "macos")]
+        if !self.launch_environment.is_empty() {
+            return Some(self.launch_environment.clone());
+        }
+        process_environment_for_pid(self.primary_pid).filter(|environment| !environment.is_empty())
     }
 
     /// Runs the resize operation for this subsystem.
