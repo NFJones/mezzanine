@@ -1270,7 +1270,7 @@ profiles when changing provider, model, or provider options.
 | `permissions.command_rules` | array | `[]` | User/project command rule entries. |
 | `permissions.session_command_rules` | array | `[]` | Session-scoped command rule entries. |
 | `permissions.global_command_rules` | array | `[]` | Global command rule entries. |
-| `permissions.network_policy` | string | `"prompt"` | Shell-network policy: `deny` uses a private Bubblewrap network namespace or denies Seatbelt network operations; `allow` permits networking; `prompt` permits it only for an authorized network action. Neither backend filters destinations. |
+| `permissions.network_policy` | string | `"allow"` for generated Bubblewrap or Seatbelt configurations; otherwise `"prompt"` | Shell-network policy: `deny` uses a private Bubblewrap network namespace or denies Seatbelt network operations; `allow` permits networking; `prompt` permits it only for an authorized network action. Neither backend filters destinations. |
 | `permissions.destructive_action_policy` | string | `"prompt"` | Destructive action policy. |
 | `permissions.bypass_mode` | boolean | `false` | Explicit bypass state; cannot be enabled from config. |
 

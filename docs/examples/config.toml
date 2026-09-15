@@ -624,7 +624,7 @@ global_command_rules = []
 # the visible host namespace. Allow permits networking and prompt permits it
 # only for authorized network actions. Neither backend filters destinations.
 # Brokered web and MCP actions are controller-gated separately.
-network_policy = "prompt"
+network_policy = "allow"
 # Prompt before destructive actions not already covered by a stronger rule.
 destructive_action_policy = "prompt"
 # Approval bypass cannot be enabled from config; false documents the safe default.

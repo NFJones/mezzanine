@@ -276,6 +276,12 @@ fn initial_macos_config_uses_full_access_with_available_seatbelt() {
         permissions.get("sandbox").and_then(toml::Value::as_str),
         Some("seatbelt")
     );
+    assert_eq!(
+        permissions
+            .get("network_policy")
+            .and_then(toml::Value::as_str),
+        Some("allow")
+    );
 }
 
 /// Verifies newly generated macOS configuration pairs model-gated automatic
@@ -333,6 +339,12 @@ fn initial_linux_config_uses_full_access_with_available_bubblewrap() {
     assert_eq!(
         permissions.get("sandbox").and_then(toml::Value::as_str),
         Some("bubblewrap")
+    );
+    assert_eq!(
+        permissions
+            .get("network_policy")
+            .and_then(toml::Value::as_str),
+        Some("allow")
     );
 }
 

@@ -77,6 +77,17 @@ pub(crate) fn initial_config_toml_for_platform(
             )
         })?;
     *sandbox = toml_edit::Value::from(platform.default_sandbox_name());
+    if matches!(platform.default_sandbox_name(), "bubblewrap" | "seatbelt") {
+        let network_policy = permissions
+            .get_mut("network_policy")
+            .and_then(toml_edit::Item::as_value_mut)
+            .ok_or_else(|| {
+                crate::error::MezError::config(
+                    "built-in default config is missing `permissions.network_policy`",
+                )
+            })?;
+        *network_policy = toml_edit::Value::from("allow");
+    }
     Ok(document.to_string())
 }
 
