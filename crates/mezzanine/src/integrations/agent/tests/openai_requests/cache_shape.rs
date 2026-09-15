@@ -157,7 +157,7 @@ fn openai_responses_request_body_excludes_large_mcp_catalog_from_tools() {
     let mcp_tool = openai_function_tool(&value, "submit_maap_action_batch");
     let description = mcp_tool["description"].as_str().unwrap();
 
-    assert!(description.contains("When MCP actions are included, search configured MCP metadata"));
+    assert!(description.contains("use a resolved @server reference as durable MCP directory context and retrieve that server directly"));
     assert!(!description.contains("server00"), "{description}");
     assert!(
         !description.contains("Server 00 operations"),

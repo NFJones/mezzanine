@@ -96,7 +96,7 @@ pub fn maap_current_action_batch_description(
 /// Returns the request-independent OpenAI Responses MAAP tool description.
 pub fn maap_cache_stable_action_batch_description() -> String {
     maap_action_batch_description_with_mcp_manifest(
-        "When MCP actions are included, search configured MCP metadata, retrieve a selected server's safe metadata, then use mcp_call only when the current action surface and MCP context identify a callable server/tool pair; runtime validation rejects unavailable tools and invalid arguments.",
+        "When MCP actions are included, use a resolved @server reference as durable MCP directory context and retrieve that server directly; otherwise search configured MCP metadata, retrieve a selected server's safe metadata, then use mcp_call only when the current action surface and MCP context identify a callable server/tool pair; runtime validation rejects unavailable tools and invalid arguments.",
     )
 }
 

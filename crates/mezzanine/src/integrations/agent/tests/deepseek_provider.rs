@@ -152,7 +152,7 @@ fn deepseek_chat_completions_request_body_dispatches_static_actions_on_initial_s
         "{description}"
     );
     assert!(
-        description.contains("When MCP actions are included, search configured MCP metadata"),
+        description.contains("use a resolved @server reference as durable MCP directory context and retrieve that server directly"),
         "{description}"
     );
     assert!(

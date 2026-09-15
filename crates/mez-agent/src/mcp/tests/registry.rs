@@ -185,6 +185,14 @@ fn agent_shell_server_search_and_get_are_safe_and_deterministic() {
             .collect::<Vec<_>>(),
         ["fs", "fs-cache"]
     );
+    let explicit_search = registry.search_agent_shell_servers("@FS", 20);
+    assert_eq!(
+        explicit_search
+            .iter()
+            .map(|server| server.server_id.as_str())
+            .collect::<Vec<_>>(),
+        ["fs", "fs-cache"]
+    );
     let server = registry.agent_shell_server_summary("fs").unwrap();
     assert_eq!(server.purpose, "Filesystem project reads");
     assert_eq!(server.usage_instructions, "Use for project files.");

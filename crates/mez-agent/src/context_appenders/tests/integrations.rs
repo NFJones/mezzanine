@@ -45,7 +45,10 @@ fn mcp_catalog_snapshot_content(context: &AgentContext) -> &str {
 /// Builds durable retrieval authority for one available MCP server. The
 /// resulting manifest is deliberately distinct from configuration and prompt
 /// mentions, which can make a server referencable but never callable.
-fn context_with_retrieved_mcp_manifest(server_id: &str) -> AgentContext {
+fn context_with_retrieved_mcp_manifest(
+    server_id: &str,
+    input_schema: serde_json::Value,
+) -> AgentContext {
     let result = ActionResult {
         protocol: "maap/1".to_string(),
         turn_id: "turn-1".to_string(),
@@ -66,11 +69,7 @@ fn context_with_retrieved_mcp_manifest(server_id: &str) -> AgentContext {
                         "name": "read_file",
                         "state": "available",
                         "description": "Read one project file",
-                        "input_schema": {
-                            "type": "object",
-                            "properties": {"path": {"type": "string"}},
-                            "required": ["path"]
-                        }
+                        "input_schema": input_schema
                     }]
                 }
             })
@@ -142,7 +141,14 @@ fn mcp_context_exposes_configured_servers_without_explicit_mentions() {
 /// Verifies only a validated durable `mcp_server_get` result exposes a tool
 /// and preserves its complete object argument schema for MAAP validation.
 fn mcp_retrieved_manifest_grants_callable_tools() {
-    let context = context_with_retrieved_mcp_manifest("fs");
+    let context = context_with_retrieved_mcp_manifest(
+        "fs",
+        serde_json::json!({
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"]
+        }),
+    );
     let tools = invoked_mcp_tools_for_context(&context, &mcp_summary_for_server_ids(&["fs"]));
 
     assert_eq!(tools.len(), 1);
@@ -153,6 +159,25 @@ fn mcp_retrieved_manifest_grants_callable_tools() {
         block.source == ContextSourceKind::McpRetrievedManifest
             && block.label == "retrieved MCP manifest fs"
     }));
+}
+
+#[test]
+/// Verifies a retrieved tool schema whose root type union admits objects stays
+/// callable and preserves its complete contract for later MAAP validation.
+fn mcp_retrieved_manifest_preserves_object_admitting_type_union() {
+    let context = context_with_retrieved_mcp_manifest(
+        "fs",
+        serde_json::json!({
+            "type": ["object", "null"],
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"]
+        }),
+    );
+    let tools = invoked_mcp_tools_for_context(&context, &mcp_summary_for_server_ids(&["fs"]));
+
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].tool_name, "read_file");
+    assert!(tools[0].input_schema_json.contains(r#"["object","null"]"#));
 }
 
 #[test]
@@ -320,9 +345,9 @@ fn mcp_context_uses_resolved_openai_responses_api_for_aliased_providers() {
 }
 
 #[test]
-/// Verifies explicit mentions preserve exact configured identifier casing and
-/// expose the matching server tools to both prompt context and action schemas.
-fn mcp_context_resolves_exact_mixed_case_configured_server_id() {
+/// Verifies explicit mentions preserve exact configured identifier casing while
+/// leaving tools unavailable until a later successful retrieval.
+fn mcp_context_preserves_exact_mixed_case_reference_without_exposing_tools() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
         placement: crate::ContextPlacement::ConversationAppend,
@@ -331,11 +356,19 @@ fn mcp_context_resolves_exact_mixed_case_configured_server_id() {
     }])
     .unwrap();
     let summary = mcp_summary_for_server_ids(&["GitHub_2"]);
+    let mut blocks = context.blocks().to_vec();
+    blocks.extend(mcp_server_reference_blocks_for_prompt(
+        "use @GitHub_2 to inspect the issue",
+        &summary,
+    ));
+    let context = AgentContext::new(blocks).unwrap();
 
     let tools = invoked_mcp_tools_for_context(&context, &summary);
     let context = append_mcp_context(context, &summary).unwrap();
 
     assert!(tools.is_empty());
+    assert!(mcp_server_is_referencable(&context, "GitHub_2"));
+    assert!(!mcp_server_is_referencable(&context, "github_2"));
     assert!(
         context
             .blocks()
@@ -402,14 +435,20 @@ fn mcp_context_resolves_unambiguous_case_insensitive_server_id() {
         source: ContextSourceKind::UserInstruction,
         placement: crate::ContextPlacement::ConversationAppend,
         label: "user".to_string(),
-        content: "use @github_2 to inspect the issue".to_string(),
+        content: "use @GitHub_2 and @github_2 to inspect the issue".to_string(),
     }])
     .unwrap();
     let summary = mcp_summary_for_server_ids(&["GitHub_2"]);
+    let references = mcp_server_reference_blocks_for_prompt(
+        "use @GitHub_2 and @github_2 to inspect the issue",
+        &summary,
+    );
 
     let tools = invoked_mcp_tools_for_context(&context, &summary);
 
     assert!(tools.is_empty());
+    assert_eq!(references.len(), 1);
+    assert_eq!(references[0].label, "MCP server reference GitHub_2");
 }
 
 #[test]
@@ -424,17 +463,66 @@ fn mcp_context_reports_unresolved_and_ambiguous_server_mentions() {
     }])
     .unwrap();
     let summary = mcp_summary_for_server_ids(&["GitHub", "github"]);
+    let mut blocks = context.blocks().to_vec();
+    blocks.extend(mcp_server_reference_blocks_for_prompt(
+        "compare @missing with @GITHUB",
+        &summary,
+    ));
+    let context = AgentContext::new(blocks).unwrap();
 
     let tools = invoked_mcp_tools_for_context(&context, &summary);
     let context = append_mcp_context(context, &summary).unwrap();
 
     assert!(tools.is_empty());
+    let diagnostics = context
+        .blocks()
+        .iter()
+        .filter(|block| block.source == ContextSourceKind::McpServerReference)
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(diagnostics.len(), 2, "{diagnostics:#?}");
+    assert!(diagnostics.iter().any(|content| {
+        content.contains(r#""requested":"missing""#) && content.contains(r#""state":"unknown""#)
+    }));
+    assert!(diagnostics.iter().any(|content| {
+        content.contains(r#""requested":"GITHUB""#)
+            && content.contains(r#""state":"ambiguous""#)
+            && content.contains(r#""GitHub""#)
+            && content.contains(r#""github""#)
+    }));
+}
+
+#[test]
+/// Verifies an unavailable explicit MCP mention supplies a bounded diagnostic
+/// without granting retrieval authority or exposing a callable tool.
+fn mcp_context_reports_unavailable_server_mentions_without_granting_authority() {
+    let summary = McpPromptSummary {
+        available_servers: Vec::new(),
+        available_tools: Vec::new(),
+        unavailable_servers: vec![McpPromptUnavailableServer {
+            server_id: "gitlab".to_string(),
+            purpose: "GitLab operations".to_string(),
+            usage_instructions: "Use for issues.".to_string(),
+            reason: "authentication failed".to_string(),
+            retryable: true,
+        }],
+    };
+    let blocks = mcp_server_reference_blocks_for_prompt("use @gitlab", &summary);
+    let context = AgentContext::new(blocks).unwrap();
+
+    assert_eq!(context.blocks().len(), 1);
     assert!(
-        context
-            .blocks()
-            .iter()
-            .all(|block| block.label != MCP_INTEGRATIONS_CONTEXT_LABEL)
+        context.blocks()[0]
+            .content
+            .contains(r#""state":"unavailable""#)
     );
+    assert!(
+        context.blocks()[0]
+            .content
+            .contains(r#""reason":"authentication failed""#)
+    );
+    assert!(!mcp_server_is_referencable(&context, "gitlab"));
+    assert!(invoked_mcp_tools_for_context(&context, &summary).is_empty());
 }
 
 #[test]
@@ -502,13 +590,11 @@ fn mcp_context_does_not_emit_routing_match_for_verbatim_server_purpose() {
 }
 
 #[test]
-/// Verifies explicit MCP context includes all requested server tools.
+/// Verifies an explicit MCP reference alone exposes no requested server tools.
 ///
-/// Explicit MCP server invocations are the point where the model receives the
-/// concrete server manifest. A large server must not hide tools that fall after
-/// the compact ordinary-context detail limit, because the requested server is
-/// already known to be relevant for the turn.
-fn mcp_context_includes_all_tools_for_explicit_server_invocation() {
+/// The complete tool manifest is available only after `mcp_server_get`, so a
+/// direct reference cannot bypass retrieval by relying on prompt context size.
+fn mcp_context_requires_retrieval_before_exposing_explicit_server_tools() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
         placement: crate::ContextPlacement::ConversationAppend,
@@ -525,23 +611,28 @@ fn mcp_context_includes_all_tools_for_explicit_server_invocation() {
             input_schema_json: r#"{"type":"object"}"#.to_string(),
         })
         .collect::<Vec<_>>();
-    let context = append_mcp_context(
-        context,
-        &McpPromptSummary {
-            available_servers: vec![McpPromptServer {
-                server_id: "fs".to_string(),
-                display_name: "Filesystem".to_string(),
-                purpose: "Read project files through MCP".to_string(),
-                usage_instructions: "Use when MCP-backed file access is requested.".to_string(),
-                tool_count: tools.len(),
-                approval_required_tool_count: 0,
-            }],
-            available_tools: tools,
-            unavailable_servers: Vec::new(),
-        },
-    )
-    .unwrap();
+    let summary = McpPromptSummary {
+        available_servers: vec![McpPromptServer {
+            server_id: "fs".to_string(),
+            display_name: "Filesystem".to_string(),
+            purpose: "Read project files through MCP".to_string(),
+            usage_instructions: "Use when MCP-backed file access is requested.".to_string(),
+            tool_count: tools.len(),
+            approval_required_tool_count: 0,
+        }],
+        available_tools: tools,
+        unavailable_servers: Vec::new(),
+    };
+    let mut blocks = context.blocks().to_vec();
+    blocks.extend(mcp_server_reference_blocks_for_prompt(
+        "use @fs to choose the right tool",
+        &summary,
+    ));
+    let context = AgentContext::new(blocks).unwrap();
+    let context = append_mcp_context(context, &summary).unwrap();
 
+    assert!(mcp_server_is_referencable(&context, "fs"));
+    assert!(invoked_mcp_tools_for_context(&context, &summary).is_empty());
     assert!(
         context
             .blocks()
@@ -551,10 +642,11 @@ fn mcp_context_includes_all_tools_for_explicit_server_invocation() {
 }
 
 #[test]
-/// Verifies an explicitly selected server exposes each complete tool contract
-/// so cache-stable generic MCP actions can be constructed without a volatile
-/// provider schema.
-fn mcp_context_preserves_complete_selected_tool_schema_and_descriptions() {
+/// Verifies an explicit reference alone preserves no complete tool contract.
+///
+/// Cache-stable generic MCP actions receive schemas only from a durable
+/// retrieval manifest, never from a volatile prompt reference.
+fn mcp_context_requires_retrieval_before_preserving_selected_tool_contracts() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
         placement: crate::ContextPlacement::ConversationAppend,
@@ -564,29 +656,34 @@ fn mcp_context_preserves_complete_selected_tool_schema_and_descriptions() {
     .unwrap();
     let long_description = format!("Catalog item lookup {}", "detail ".repeat(300));
     let schema = r#"{"type":"object","description":"Lookup request","properties":{"item":{"type":"object","description":"Item selector","properties":{"id":{"type":"string","description":"Stable item id","minLength":3},"tags":{"type":"array","description":"Optional tags","items":{"type":"string","enum":["featured","archived"]},"minItems":1}},"required":["id"],"additionalProperties":false}},"required":["item"],"additionalProperties":false}"#;
-    let context = append_mcp_context(
-        context,
-        &McpPromptSummary {
-            available_servers: vec![McpPromptServer {
-                server_id: "catalog".to_string(),
-                display_name: "Catalog".to_string(),
-                purpose: "Look up catalog records".to_string(),
-                usage_instructions: "Use item selectors for catalog operations.".to_string(),
-                tool_count: 1,
-                approval_required_tool_count: 0,
-            }],
-            available_tools: vec![McpPromptTool {
-                server_id: "catalog".to_string(),
-                tool_name: "lookup_item".to_string(),
-                description: long_description.clone(),
-                approval_required: false,
-                input_schema_json: schema.to_string(),
-            }],
-            unavailable_servers: Vec::new(),
-        },
-    )
-    .unwrap();
+    let summary = McpPromptSummary {
+        available_servers: vec![McpPromptServer {
+            server_id: "catalog".to_string(),
+            display_name: "Catalog".to_string(),
+            purpose: "Look up catalog records".to_string(),
+            usage_instructions: "Use item selectors for catalog operations.".to_string(),
+            tool_count: 1,
+            approval_required_tool_count: 0,
+        }],
+        available_tools: vec![McpPromptTool {
+            server_id: "catalog".to_string(),
+            tool_name: "lookup_item".to_string(),
+            description: long_description.clone(),
+            approval_required: false,
+            input_schema_json: schema.to_string(),
+        }],
+        unavailable_servers: Vec::new(),
+    };
+    let mut blocks = context.blocks().to_vec();
+    blocks.extend(mcp_server_reference_blocks_for_prompt(
+        "use @catalog to inspect an item",
+        &summary,
+    ));
+    let context = AgentContext::new(blocks).unwrap();
+    let context = append_mcp_context(context, &summary).unwrap();
 
+    assert!(mcp_server_is_referencable(&context, "catalog"));
+    assert!(invoked_mcp_tools_for_context(&context, &summary).is_empty());
     assert!(
         context
             .blocks()

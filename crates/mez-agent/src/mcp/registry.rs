@@ -712,7 +712,8 @@ impl McpRegistry {
         query: &str,
         limit: usize,
     ) -> Vec<AgentShellMcpServerSummary> {
-        let query = query.trim().to_ascii_lowercase();
+        let query = query.trim().strip_prefix('@').unwrap_or(query.trim());
+        let query = query.to_ascii_lowercase();
         if query.is_empty() || limit == 0 {
             return Vec::new();
         }

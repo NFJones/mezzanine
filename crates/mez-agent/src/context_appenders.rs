@@ -9,7 +9,7 @@ use crate::instructions::DiscoveredInstructionFile;
 use crate::{
     ActionResult, ActionStatus, AgentContext, AgentContextResult, ContextBlock, ContextRetention,
     ContextSemanticKind, ContextSourceKind, McpPromptServer, McpPromptSummary, McpPromptTool,
-    McpPromptUnavailableServer, MemoryContextRecord, ProviderApiCompatibility,
+    McpPromptUnavailableServer, McpSchemaValidator, MemoryContextRecord, ProviderApiCompatibility,
     validate_context_required,
 };
 
@@ -203,47 +203,97 @@ pub fn mcp_server_reference_blocks_for_prompt(
     prompt: &str,
     summary: &McpPromptSummary,
 ) -> Vec<ContextBlock> {
-    let mut server_ids = Vec::new();
-    for requested in explicit_mcp_server_mentions(prompt) {
-        let exact = summary
-            .available_servers
-            .iter()
-            .find(|server| server.server_id == requested);
-        let case_matches = summary
-            .available_servers
-            .iter()
-            .filter(|server| server.server_id.eq_ignore_ascii_case(&requested))
-            .collect::<Vec<_>>();
-        let Some(server) = exact.or_else(|| (case_matches.len() == 1).then(|| case_matches[0]))
-        else {
-            continue;
-        };
-        if !server_ids
-            .iter()
-            .any(|server_id| server_id == &server.server_id)
-        {
-            server_ids.push(server.server_id.clone());
-        }
-    }
-    server_ids
+    let mut resolved_server_ids = std::collections::BTreeSet::new();
+    explicit_mcp_server_mentions(prompt)
         .into_iter()
-        .filter_map(|server_id| {
-            let server = summary
-                .available_servers
-                .iter()
-                .find(|server| server.server_id == server_id)?;
-            let content = serde_json::to_string(&serde_json::json!({
-                "version": "mez-mcp-server-reference/v1",
-                "server": mcp_directory_record_value(server),
-            }))
-            .ok()?;
-            Some(ContextBlock::reference_event(
-                ContextSourceKind::McpServerReference,
-                format!("{MCP_SERVER_REFERENCE_CONTEXT_LABEL_PREFIX}{server_id}"),
-                content,
-            ))
+        .filter_map(|requested| mcp_server_reference_block_for_mention(&requested, summary))
+        .filter(|block| {
+            let Some(server_id) = mcp_reference_server_id(&block.content) else {
+                return true;
+            };
+            resolved_server_ids.insert(server_id)
         })
         .collect()
+}
+
+/// Builds either durable retrieval authority or a bounded non-authorizing
+/// diagnostic for one explicit MCP server mention.
+fn mcp_server_reference_block_for_mention(
+    requested: &str,
+    summary: &McpPromptSummary,
+) -> Option<ContextBlock> {
+    let mut configured = summary
+        .available_servers
+        .iter()
+        .map(|server| server.server_id.as_str())
+        .chain(
+            summary
+                .unavailable_servers
+                .iter()
+                .map(|server| server.server_id.as_str()),
+        )
+        .collect::<Vec<_>>();
+    configured.sort_unstable();
+    configured.dedup();
+    let exact = configured
+        .iter()
+        .copied()
+        .find(|server_id| *server_id == requested);
+    let case_matches = configured
+        .iter()
+        .copied()
+        .filter(|server_id| server_id.eq_ignore_ascii_case(requested))
+        .collect::<Vec<_>>();
+    let canonical = exact.or_else(|| (case_matches.len() == 1).then(|| case_matches[0]));
+    if let Some(server_id) = canonical
+        && let Some(server) = summary
+            .available_servers
+            .iter()
+            .find(|server| server.server_id == server_id)
+    {
+        let content = serde_json::to_string(&serde_json::json!({
+            "version": "mez-mcp-server-reference/v1",
+            "server": mcp_directory_record_value(server),
+        }))
+        .ok()?;
+        return Some(ContextBlock::reference_event(
+            ContextSourceKind::McpServerReference,
+            format!("{MCP_SERVER_REFERENCE_CONTEXT_LABEL_PREFIX}{server_id}"),
+            content,
+        ));
+    }
+    let (state, reason, candidates) = if let Some(server_id) = canonical {
+        let unavailable = summary
+            .unavailable_servers
+            .iter()
+            .find(|server| server.server_id == server_id)?;
+        (
+            "unavailable",
+            unavailable.reason.as_str(),
+            vec![server_id.to_string()],
+        )
+    } else if case_matches.is_empty() {
+        ("unknown", "no configured MCP server matched", Vec::new())
+    } else {
+        (
+            "ambiguous",
+            "use an exact configured MCP server identifier",
+            case_matches.into_iter().map(str::to_string).collect(),
+        )
+    };
+    let content = serde_json::to_string(&serde_json::json!({
+        "version": "mez-mcp-server-reference-diagnostic/v1",
+        "requested": requested,
+        "state": state,
+        "reason": reason,
+        "candidates": candidates,
+    }))
+    .ok()?;
+    Some(ContextBlock::reference_event(
+        ContextSourceKind::McpServerReference,
+        format!("{MCP_SERVER_REFERENCE_CONTEXT_LABEL_PREFIX}{requested} diagnostic"),
+        content,
+    ))
 }
 
 /// Builds a canonical durable directory grant from one successful MCP search.
@@ -349,10 +399,7 @@ pub fn mcp_retrieved_manifest_for_action_result(result: &ActionResult) -> Option
             let name = tool.get("name")?.as_str()?.trim();
             let description = tool.get("description")?.as_str()?;
             let input_schema = tool.get("input_schema")?.as_object()?.clone();
-            if name.is_empty()
-                || input_schema
-                    .get("type")
-                    .is_some_and(|schema_type| schema_type != "object")
+            if name.is_empty() || !admit_retrieved_mcp_input_schema(server_id, name, &input_schema)
             {
                 return None;
             }
@@ -413,9 +460,7 @@ fn parse_mcp_retrieved_manifest(content: &str) -> Option<(String, Vec<McpPromptT
             let description = tool.get("description")?.as_str()?;
             let input_schema = tool.get("input_schema")?.as_object()?;
             if tool_name.is_empty()
-                || input_schema
-                    .get("type")
-                    .is_some_and(|schema_type| schema_type != "object")
+                || !admit_retrieved_mcp_input_schema(server_id, tool_name, input_schema)
             {
                 return None;
             }
@@ -431,6 +476,23 @@ fn parse_mcp_retrieved_manifest(content: &str) -> Option<(String, Vec<McpPromptT
     tools.sort_by(|left, right| left.tool_name.cmp(&right.tool_name));
     tools.dedup_by(|left, right| left.tool_name == right.tool_name);
     Some((server_id.to_string(), tools))
+}
+
+/// Re-admits one retrieved manifest schema through the canonical MCP schema owner.
+///
+/// Retrieval evidence is model-visible but can outlive a live registry refresh, so
+/// its tool schemas must satisfy the same object-argument contract as live tools.
+fn admit_retrieved_mcp_input_schema(
+    server_id: &str,
+    tool_name: &str,
+    input_schema: &serde_json::Map<String, serde_json::Value>,
+) -> bool {
+    let Ok(schema_json) = serde_json::to_string(input_schema) else {
+        return false;
+    };
+    McpSchemaValidator::default()
+        .admit_tool_schema(server_id, tool_name, &schema_json)
+        .is_ok()
 }
 
 /// Builds the canonical safe directory projection for one available server.

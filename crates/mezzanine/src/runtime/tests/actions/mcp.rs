@@ -210,8 +210,8 @@ fn runtime_control_mcp_list_uses_runtime_owned_registry() {
 
 #[test]
 /// Verifies fixed MCP discovery actions settle against the live registry with
-/// safe metadata only, without starting an MCP transport or requiring a
-/// callable request-local tool manifest.
+/// safe metadata only, without starting an MCP transport. An explicit prompt
+/// reference makes direct metadata retrieval eligible before any search.
 fn runtime_mcp_server_discovery_actions_return_safe_registry_metadata() {
     let mut service = test_runtime_service();
     service
@@ -250,7 +250,7 @@ fn runtime_mcp_server_discovery_actions_return_safe_registry_metadata() {
         )
         .unwrap();
     let started = service
-        .start_agent_prompt_turn("%1", "find the filesystem integration")
+        .start_agent_prompt_turn("%1", "find the @fs filesystem integration")
         .unwrap();
     service.remove_pending_agent_provider_task(&started.turn_id);
     let turn = service
@@ -260,7 +260,7 @@ fn runtime_mcp_server_discovery_actions_return_safe_registry_metadata() {
         .unwrap();
     let actions = vec![
         mez_agent::AgentAction {
-            id: "get-before-search-1".to_string(),
+            id: "get-from-reference-1".to_string(),
 
             payload: mez_agent::AgentActionPayload::McpServerGet {
                 server: "fs".to_string(),
@@ -314,12 +314,10 @@ fn runtime_mcp_server_discovery_actions_return_safe_registry_metadata() {
             .unwrap(),
         3
     );
-    assert_eq!(execution.action_results[0].status, ActionStatus::Rejected);
     assert!(
         execution
             .action_results
             .iter()
-            .skip(1)
             .all(|result| result.status == ActionStatus::Succeeded)
     );
     let rendered = format!("{:?}", execution.action_results);
