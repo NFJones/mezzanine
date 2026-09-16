@@ -528,6 +528,20 @@ max_input_tokens = 20000
     service.set_auth_store(AuthStore::new(
         crate::security::auth::AuthPaths::under_config_root(&auth_root),
     ));
+    let transcript_store = AgentTranscriptStore::new(temp_root("configured-input-cap-history"));
+    transcript_store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: "configured-input-cap-history".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: mez_agent::transcript::TranscriptRole::Assistant,
+            turn_id: "turn-history".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: format!("configured-cap-marker {}", "compactable ".repeat(20_000)),
+        })
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
@@ -535,22 +549,17 @@ max_input_tokens = 20000
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "configured-input-cap-history", 1)
+        .unwrap();
     let start = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"configured-input-cap-preflight","input":"continue after proactive compaction"}}"#,
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
-    insert_test_context_block(
-        service.agent_turn_contexts_mut().get_mut("turn-1").unwrap(),
-        ContextBlock {
-            source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: "proactively compactable result".to_string(),
-            content: format!("configured-cap-marker {}", "compactable ".repeat(20_000)),
-        },
-    );
     let task = service.pending_agent_provider_tasks().remove(0);
-    let agent_id = AgentId::opaque(task.agent_id).unwrap();
+    let agent_id = AgentId::opaque(task.agent_id.clone()).unwrap();
 
     assert!(
         service
@@ -688,6 +697,52 @@ max_input_tokens = 20000
         .expect("claim should retain the exact OpenAI request for the next worker");
     assert_eq!(retained_request.provider, "runtime-batch");
     assert_eq!(retained_request.model, "test");
+
+    let response = runtime_say_response(&task.turn_id, "first turn completed", true);
+    let action = response
+        .action_batch
+        .as_ref()
+        .and_then(|batch| batch.actions.first())
+        .cloned()
+        .expect("completion response should contain a final say action");
+    service
+        .apply_agent_provider_execution(
+            &dispatch.turn,
+            &dispatch.model_profile,
+            "runtime-batch",
+            mez_agent::AgentTurnExecution {
+                request: runtime_model_request_fixture_for_agent(&task.turn_id, &task.agent_id),
+                response,
+                latest_response_usage: Default::default(),
+                routing_token_usage_by_model: std::collections::BTreeMap::new(),
+                action_results: vec![mez_agent::ActionResult::succeeded(
+                    &dispatch.turn,
+                    &action,
+                    vec!["first turn completed".to_string()],
+                    None,
+                )],
+                final_turn: true,
+                terminal_state: AgentTurnState::Completed,
+            },
+        )
+        .unwrap();
+    assert!(service.agent_turn_contexts().get(&task.turn_id).is_none());
+
+    let second = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"configured-input-cap-next","method":"agent/shell/command","params":{"idempotency_key":"configured-input-cap-next","input":"small follow-up"}}"#,
+        &primary,
+    );
+    assert!(second.contains(r#""state":"running""#), "{second}");
+    let second_task = service.pending_agent_provider_tasks().remove(0);
+    let second_agent_id = AgentId::opaque(second_task.agent_id.clone()).unwrap();
+    assert!(
+        service
+            .claim_configured_agent_provider_task(&second_agent_id, &second_task.turn_id)
+            .unwrap()
+            .is_some(),
+        "the next turn should use the persisted compacted epoch"
+    );
+    assert!(service.pending_agent_compaction_tasks().is_empty());
 
     service.clear_agent_turn_provider_request_chain(&task.turn_id);
     let (new_epoch, _) = service

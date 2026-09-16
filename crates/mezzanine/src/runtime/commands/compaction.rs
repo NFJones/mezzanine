@@ -284,14 +284,13 @@ impl RuntimeSessionService {
         if !plan.changes_context() {
             return Ok(false);
         }
-        let conversation_id = self
+        let (conversation_id, transcript_entries) = self
             .agent_shell_store()
             .get(&turn.pane_id)
+            .map(|session| (session.session_id.clone(), session.transcript_entries))
             .ok_or_else(|| {
                 MezError::invalid_state("active-turn compaction pane session is unavailable")
-            })?
-            .session_id
-            .clone();
+            })?;
         let allowed_actions = self.capture_agent_session_allowed_actions_for_pane(&turn.pane_id)?;
         let mut current_blocks = plan.replacement_blocks().to_vec();
         let mut pending_blocks = Vec::new();
@@ -346,7 +345,16 @@ impl RuntimeSessionService {
                     "configured-input-limit".to_string()
                 }
             },
-            transcript_entries: 0,
+            // Proactive compaction must establish a durable epoch as well as
+            // replacing this turn's context. Provider-rejection recovery is
+            // intentionally turn-local because its source can include
+            // unpersisted same-turn observations.
+            transcript_entries: match trigger {
+                RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. } => 0,
+                RuntimeActiveTurnCompactionTrigger::ConfiguredInputLimit { .. } => {
+                    transcript_entries
+                }
+            },
             retained_transcript_entries: 0,
             summarized_entries: plan.replacement_blocks().len(),
             model_profile_name,
@@ -672,7 +680,7 @@ impl RuntimeSessionService {
                         MezError::invalid_state("active-turn compaction context is unavailable")
                     })?;
                 let (compacted, report) =
-                    apply_model_context_compaction_plan(context, plan.as_ref(), final_summary)
+                    apply_model_context_compaction_plan(context, plan.as_ref(), &final_summary)
                         .map_err(|error| MezError::invalid_state(error.message()))?;
                 if let (Some(rejected_bytes), Some(stream)) =
                     (rejected_request_bytes, rejected_request_stream)
@@ -742,6 +750,33 @@ impl RuntimeSessionService {
                         ),
                     )?;
                 }
+                if matches!(
+                    trigger,
+                    RuntimeActiveTurnCompactionTrigger::ConfiguredInputLimit { .. }
+                ) {
+                    self.persist_agent_compaction_epoch(pane_id, &task, &final_summary)?;
+                    if self.refresh_running_turn_context_after_conversation_compaction(&turn_id)? {
+                        self.clear_agent_turn_provider_request_chain(&turn_id);
+                        self.queue_agent_provider_recovery_task_after_compaction(&turn_id)?;
+                        self.append_agent_status_text_to_terminal_buffer(
+                            pane_id,
+                            &format!(
+                                "agent: configured input-cap compaction applied durable model summary pass={} compacted_blocks={}",
+                                match trigger {
+                                    RuntimeActiveTurnCompactionTrigger::ConfiguredInputLimit { pass, .. } => pass,
+                                    RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. } => unreachable!("configured compaction trigger was matched above"),
+                                },
+                                report.compacted_blocks
+                            ),
+                        )?;
+                        self.append_agent_trace_turn_event(
+                            pane_id,
+                            &turn_id,
+                            "provider_request preflight_resuming reason=configured_input_limit_compaction_completed",
+                        )?;
+                        return Ok(());
+                    }
+                }
                 self.agent_turn_contexts_mut()
                     .insert(turn_id.clone(), compacted);
                 self.clear_agent_turn_provider_request_chain(&turn_id);
@@ -776,56 +811,7 @@ impl RuntimeSessionService {
                 self.append_agent_trace_turn_event(pane_id, &turn_id, trace)?;
                 return Ok(());
             }
-            let now = current_unix_seconds().max(1);
-            let memory_id = mez_agent::memory::canonical_memory_uuid(&format!(
-                "compact-{}",
-                task.conversation_id
-            ));
-            let content = runtime_model_compact_memory_content(
-                pane_id,
-                &task.conversation_id,
-                task.transcript_entries,
-                task.summarized_entries,
-                &task.model_profile_name,
-                &task.model_profile,
-                &summary,
-            );
-            self.upsert_session_memory(MemoryRecord::new_with_defaults(
-                memory_id.clone(),
-                MemoryScope::Pane {
-                    session_id: self.session.id.to_string(),
-                    pane_id: pane_id.to_string(),
-                },
-                now,
-                now,
-                MemorySource::Agent,
-                224,
-                content,
-            ))?;
-            let mcp_catalog_snapshot = mez_agent::configured_mcp_catalog_snapshot_content(
-                &self.mcp_registry().prompt_summary(),
-                self.integration.always_exposed_mcp_servers(),
-            );
-            let mcp_epoch_entries = self.persist_mcp_compaction_epoch_transcript(
-                pane_id,
-                &task.conversation_id,
-                mcp_catalog_snapshot,
-            )?;
-            let remaining_transcript_entries = self
-                .agent_shell_store_mut()
-                .retain_recent_transcript_entries(
-                    pane_id,
-                    task.retained_transcript_entries
-                        .saturating_add(mcp_epoch_entries as u64),
-                )?
-                .transcript_entries;
-            self.append_agent_status_text_to_terminal_buffer(
-                pane_id,
-                &format!(
-                    "agent: compacted conversation summary memory_id={} summarized_entries={} remaining_transcript_entries={} source=model-compact trigger={}",
-                    memory_id, task.summarized_entries, remaining_transcript_entries, task.source
-                ),
-            )?;
+            self.persist_agent_compaction_epoch(pane_id, &task, &summary)?;
             if let Some(resume_turn_id) = task.resume_turn_id.as_deref() {
                 let refreshed = self
                     .refresh_running_turn_context_after_conversation_compaction(resume_turn_id)?;
@@ -856,6 +842,65 @@ impl RuntimeSessionService {
             }
         }
         Ok(true)
+    }
+
+    /// Persists one compacted conversation epoch and removes its summarized raw replay prefix.
+    fn persist_agent_compaction_epoch(
+        &mut self,
+        pane_id: &str,
+        task: &RuntimeAgentCompactionTask,
+        summary: &str,
+    ) -> Result<()> {
+        let now = current_unix_seconds().max(1);
+        let memory_id =
+            mez_agent::memory::canonical_memory_uuid(&format!("compact-{}", task.conversation_id));
+        let content = runtime_model_compact_memory_content(
+            pane_id,
+            &task.conversation_id,
+            task.transcript_entries,
+            task.summarized_entries,
+            &task.model_profile_name,
+            &task.model_profile,
+            summary,
+        );
+        self.upsert_session_memory(MemoryRecord::new_with_defaults(
+            memory_id.clone(),
+            MemoryScope::Pane {
+                session_id: self.session.id.to_string(),
+                pane_id: pane_id.to_string(),
+            },
+            now,
+            now,
+            MemorySource::Agent,
+            224,
+            content,
+        ))?;
+        let mcp_catalog_snapshot = mez_agent::configured_mcp_catalog_snapshot_content(
+            &self.mcp_registry().prompt_summary(),
+            self.integration.always_exposed_mcp_servers(),
+        );
+        let mcp_epoch_entries = self.persist_mcp_compaction_epoch_transcript(
+            pane_id,
+            &task.conversation_id,
+            mcp_catalog_snapshot,
+        )?;
+        let remaining_transcript_entries = self
+            .agent_shell_store_mut()
+            .retain_recent_transcript_entries(
+                pane_id,
+                task.retained_transcript_entries
+                    .saturating_add(mcp_epoch_entries as u64),
+            )?
+            .transcript_entries;
+        self.clear_agent_conversation_provider_request_chain(&task.conversation_id);
+        self.append_agent_status_text_to_terminal_buffer(
+            pane_id,
+            &format!(
+                "agent: compacted conversation summary memory_id={} summarized_entries={} remaining_transcript_entries={} source=model-compact trigger={}",
+                memory_id, task.summarized_entries, remaining_transcript_entries, task.source
+            ),
+        )?;
+        Ok(())
     }
 
     /// Applies a failed model-backed compaction worker result.
