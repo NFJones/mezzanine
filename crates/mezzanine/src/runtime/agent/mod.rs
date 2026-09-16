@@ -423,6 +423,12 @@ pub(crate) struct RuntimeAgentComponent {
     /// Provider preparation still validates the complete epoch identity before
     /// extending a retained request.
     agent_conversation_provider_request_chains: BTreeMap<String, mez_agent::ModelRequest>,
+    /// Latest malformed transcript-history identity that started each
+    /// conversation's replacement provider-cache epoch.
+    ///
+    /// Reconstructing unchanged malformed history must retain the replacement
+    /// epoch, while a newly excluded group must start another replacement.
+    repaired_transcript_history_identities: BTreeMap<String, String>,
     /// Configured profile identities retained separately from display labels.
     agent_turn_configured_model_profiles: BTreeMap<String, String>,
     /// Number of proactive configured-input-limit compaction passes per turn.
@@ -2546,6 +2552,21 @@ impl RuntimeSessionService {
             .remove(conversation_id);
     }
 
+    /// Starts a replacement cache epoch for repaired durable transcript history.
+    ///
+    /// Returns `true` only when the excluded-group identity is new for the
+    /// conversation, so unchanged recovery retains its replacement request chain.
+    pub(crate) fn begin_repaired_transcript_history_cache_epoch(
+        &mut self,
+        conversation_id: &str,
+        repair_identity: &str,
+    ) -> bool {
+        self.agent
+            .repaired_transcript_history_identities
+            .insert(conversation_id.to_string(), repair_identity.to_string())
+            .is_none_or(|previous| previous != repair_identity)
+    }
+
     /// Clears the exact provider request retained for one cache epoch.
     ///
     /// Compaction starts a new cache epoch, so its replacement context must not
@@ -2574,6 +2595,7 @@ impl RuntimeSessionService {
         self.agent
             .agent_conversation_provider_request_chains
             .clear();
+        self.agent.repaired_transcript_history_identities.clear();
         self.agent.agent_turn_configured_model_profiles.clear();
         self.agent.agent_turn_routing_applied.clear();
     }

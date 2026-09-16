@@ -13,6 +13,191 @@ fn project_instruction(content: &str) -> mez_agent::instructions::DiscoveredInst
     }
 }
 
+/// Verifies dropping a malformed execution group starts a new cache epoch.
+///
+/// The restored provider-visible history differs from the prior native request
+/// sequence, so its retained request baseline and prompt-cache lineage must not
+/// be reused by the next provider dispatch.
+#[test]
+fn runtime_repaired_transcript_history_clears_provider_cache_continuity() {
+    let mut service = test_runtime_service();
+    let transcript_root = temp_root("repaired-transcript-cache-epoch");
+    let transcript_store = AgentTranscriptStore::new(transcript_root);
+    service.set_agent_transcript_store(transcript_store.clone());
+    let session = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .clone();
+    let original_lineage = session.prompt_cache_lineage_id.clone();
+    let turn = mez_agent::AgentTurnRecord {
+        turn_id: "turn-cache-repair".to_string(),
+        conversation_id: session.session_id.clone(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 100,
+        deadline_at_unix_millis: 0,
+        policy_profile: "default".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        cooperation_mode: None,
+        state: mez_agent::AgentTurnState::Running,
+        initial_capability: None,
+    };
+    service.start_agent_turn(turn.clone()).unwrap();
+    service
+        .retain_agent_provider_request_chain(&turn, runtime_model_request_fixture(&turn.turn_id));
+    let group = mez_agent::ContextExecutionGroupId::new("cache-repair-orphan").unwrap();
+    let owner = mez_agent::ProviderContinuityOwner::new(
+        mez_agent::ProviderApiCompatibility::DeepSeekChatCompletions,
+        "deepseek",
+    )
+    .unwrap();
+    let native = mez_agent::ProviderTranscriptEvent::DeepSeekAssistantToolCall {
+        content: String::new(),
+        reasoning_content: None,
+        tool_calls: vec![serde_json::json!({
+            "id": "call-cache-repair",
+            "type": "function",
+            "function": {"name": "submit_maap_action_batch", "arguments": "{}"}
+        })],
+    }
+    .to_transcript_content();
+    let orphaned = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+        ContextSourceKind::TranscriptTool,
+        "provider continuity event 1",
+        native,
+        group,
+        1,
+        Some(owner),
+    )
+    .unwrap();
+    for (sequence, role, content) in [
+        (
+            1,
+            TranscriptRole::Assistant,
+            "safe display fallback".to_string(),
+        ),
+        (2, TranscriptRole::System, orphaned.to_transcript_content()),
+    ] {
+        transcript_store
+            .append(&TranscriptEntry {
+                conversation_id: session.session_id.clone(),
+                sequence,
+                created_at_unix_seconds: 100,
+                role,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                pane_id: turn.pane_id.clone(),
+                content,
+            })
+            .unwrap();
+    }
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 2)
+        .unwrap();
+
+    let context = service
+        .agent_context_for_pane_prompt("%1", "continue after repair", 0)
+        .unwrap();
+
+    assert!(
+        context
+            .blocks()
+            .iter()
+            .any(|block| block.content == "safe display fallback")
+    );
+    assert!(!service.agent_conversation_has_provider_request_chain_for_tests(&session.session_id));
+    assert_ne!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .prompt_cache_lineage_id,
+        original_lineage
+    );
+    let repaired_lineage = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .prompt_cache_lineage_id
+        .clone();
+    service
+        .retain_agent_provider_request_chain(&turn, runtime_model_request_fixture(&turn.turn_id));
+
+    service
+        .agent_context_for_pane_prompt("%1", "continue in the replacement epoch", 0)
+        .unwrap();
+
+    assert!(service.agent_conversation_has_provider_request_chain_for_tests(&session.session_id));
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .prompt_cache_lineage_id,
+        repaired_lineage
+    );
+
+    let second_group = mez_agent::ContextExecutionGroupId::new("cache-repair-orphan-2").unwrap();
+    let second_orphaned = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+        ContextSourceKind::TranscriptTool,
+        "provider continuity event 2",
+        mez_agent::ProviderTranscriptEvent::DeepSeekAssistantToolCall {
+            content: String::new(),
+            reasoning_content: None,
+            tool_calls: vec![serde_json::json!({
+                "id": "call-cache-repair-2",
+                "type": "function",
+                "function": {"name": "submit_maap_action_batch", "arguments": "{}"}
+            })],
+        }
+        .to_transcript_content(),
+        second_group,
+        1,
+        Some(
+            mez_agent::ProviderContinuityOwner::new(
+                mez_agent::ProviderApiCompatibility::DeepSeekChatCompletions,
+                "deepseek",
+            )
+            .unwrap(),
+        ),
+    )
+    .unwrap();
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: session.session_id.clone(),
+            sequence: 3,
+            created_at_unix_seconds: 100,
+            role: TranscriptRole::System,
+            turn_id: turn.turn_id.clone(),
+            agent_id: turn.agent_id.clone(),
+            pane_id: turn.pane_id.clone(),
+            content: second_orphaned.to_transcript_content(),
+        })
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 1)
+        .unwrap();
+
+    service
+        .agent_context_for_pane_prompt("%1", "continue after second repair", 0)
+        .unwrap();
+
+    assert!(!service.agent_conversation_has_provider_request_chain_for_tests(&session.session_id));
+    assert_ne!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .prompt_cache_lineage_id,
+        repaired_lineage
+    );
+}
+
 /// Verifies prompt-boundary environment snapshots are canonical, private, and
 /// appended only when their exact model projection changes.
 ///

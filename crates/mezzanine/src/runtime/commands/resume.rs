@@ -1380,7 +1380,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns a version-four UUID string for a newly forked conversation.
-    pub(super) fn runtime_new_agent_conversation_id() -> String {
+    pub(crate) fn runtime_new_agent_conversation_id() -> String {
         let mut bytes: [u8; 16] = rand::random();
         bytes[6] = (bytes[6] & 0x0f) | 0x40;
         bytes[8] = (bytes[8] & 0x3f) | 0x80;

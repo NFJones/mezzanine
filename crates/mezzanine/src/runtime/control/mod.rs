@@ -183,6 +183,23 @@ impl RuntimeSessionService {
         self.refresh_project_config_layers_for_pane(pane_id)?;
         self.settle_recoverable_pane_readiness_for_agent_prompt(pane_id)?;
         let history = self.runtime_agent_history_epoch_context(pane_id)?;
+        if let Some(repair_identity) = history.provider_history_repair_identity.as_deref() {
+            let conversation_id = self
+                .agent_shell_store()
+                .get(pane_id)
+                .map(|session| session.session_id.clone());
+            if let Some(conversation_id) = conversation_id
+                && self.begin_repaired_transcript_history_cache_epoch(
+                    &conversation_id,
+                    repair_identity,
+                )
+            {
+                self.clear_agent_conversation_provider_request_chain(&conversation_id);
+                self.agent_shell_store_mut()
+                    .ensure_session(pane_id.to_string())?
+                    .prompt_cache_lineage_id = Self::runtime_new_agent_conversation_id();
+            }
+        }
         let mut blocks = history.blocks;
         let imported_execution_events = history.execution_events;
         let imported_history_events = blocks.len();
@@ -621,12 +638,14 @@ impl RuntimeSessionService {
             return Ok(context::RuntimeAgentTranscriptContext {
                 blocks,
                 execution_events,
+                provider_history_repair_identity: None,
             });
         };
         let Some(store) = self.persistence.transcript_store() else {
             return Ok(context::RuntimeAgentTranscriptContext {
                 blocks,
                 execution_events,
+                provider_history_repair_identity: None,
             });
         };
         let transcript_conversation_id = session
@@ -642,6 +661,7 @@ impl RuntimeSessionService {
             return Ok(context::RuntimeAgentTranscriptContext {
                 blocks,
                 execution_events,
+                provider_history_repair_identity: None,
             });
         }
         let mut entries = match store.inspect(transcript_conversation_id) {
@@ -662,14 +682,17 @@ impl RuntimeSessionService {
             let first_active = entries.len().saturating_sub(active_entries);
             entries.drain(..first_active);
         }
+        let mut provider_history_repair_identity = None;
         if !entries.is_empty() {
             let transcript = runtime_agent_transcript_context(pane_id, &entries);
+            provider_history_repair_identity = transcript.provider_history_repair_identity;
             blocks.extend(transcript.blocks);
             execution_events = transcript.execution_events;
         }
         Ok(context::RuntimeAgentTranscriptContext {
             blocks,
             execution_events,
+            provider_history_repair_identity,
         })
     }
 
@@ -2252,6 +2275,106 @@ mod tests {
             transcript.blocks[0].content,
             "display fallback for partial execution"
         );
+        let mut context = AgentContext::import_durable_blocks(transcript.blocks).unwrap();
+        context
+            .restore_imported_execution_events(&transcript.execution_events)
+            .unwrap();
+        context.validate_durable().unwrap();
+    }
+
+    /// Verifies an orphaned native continuity group is discarded while its
+    /// display-oriented assistant and action result remain available as safe
+    /// provider-neutral history.
+    ///
+    /// The typed group cannot be replayed because native provider evidence
+    /// without a preceding typed assistant owner violates causal ordering.
+    /// Restoring its hidden native row would also let DeepSeek receive a tool
+    /// call without the canonical execution that owns it.
+    #[test]
+    fn runtime_transcript_replay_drops_orphaned_native_continuity_group() {
+        let group = mez_agent::ContextExecutionGroupId::new("execution-group-orphaned").unwrap();
+        let owner = mez_agent::ProviderContinuityOwner::new(
+            mez_agent::ProviderApiCompatibility::DeepSeekChatCompletions,
+            "deepseek",
+        )
+        .unwrap();
+        let native = ProviderTranscriptEvent::DeepSeekAssistantToolCall {
+            content: String::new(),
+            reasoning_content: Some("inspect the repository".to_string()),
+            tool_calls: vec![serde_json::json!({
+                "id": "call-orphaned",
+                "type": "function",
+                "function": {"name": "submit_maap_action_batch", "arguments": "{}"}
+            })],
+        }
+        .to_transcript_content();
+        let orphaned_native = TranscriptContextEvent::execution_block_with_metadata(
+            mez_agent::ContextSourceKind::TranscriptTool,
+            "provider continuity event 1",
+            native.clone(),
+            group.clone(),
+            1,
+            Some(owner),
+        )
+        .unwrap();
+        let orphaned_result = TranscriptContextEvent::execution_block_with_metadata(
+            mez_agent::ContextSourceKind::ActionResult,
+            "action result orphaned",
+            "[action_result orphaned shell_command succeeded]",
+            group,
+            2,
+            None,
+        )
+        .unwrap();
+        let contents = [
+            (
+                TranscriptRole::Assistant,
+                "display fallback for orphaned execution".to_string(),
+            ),
+            (TranscriptRole::System, native),
+            (
+                TranscriptRole::Tool,
+                "[action_result orphaned shell_command succeeded]".to_string(),
+            ),
+            (
+                TranscriptRole::System,
+                orphaned_native.to_transcript_content(),
+            ),
+            (
+                TranscriptRole::System,
+                orphaned_result.to_transcript_content(),
+            ),
+        ];
+        let entries = contents
+            .into_iter()
+            .enumerate()
+            .map(|(index, (role, content))| TranscriptEntry {
+                conversation_id: "conv1".to_string(),
+                sequence: u64::try_from(index).unwrap().saturating_add(1),
+                created_at_unix_seconds: 100,
+                role,
+                turn_id: "turn-orphaned".to_string(),
+                agent_id: "agent-1".to_string(),
+                pane_id: "%1".to_string(),
+                content,
+            })
+            .collect::<Vec<_>>();
+
+        let transcript = runtime_agent_transcript_context("%1", &entries);
+
+        assert!(transcript.execution_events.is_empty());
+        assert_eq!(transcript.blocks.len(), 2, "{:#?}", transcript.blocks);
+        assert_eq!(
+            transcript.blocks[0].content,
+            "display fallback for orphaned execution"
+        );
+        assert_eq!(
+            transcript.blocks[1].content,
+            "[action_result orphaned shell_command succeeded]\nhistorical_output: omitted"
+        );
+        assert!(transcript.blocks.iter().all(|block| {
+            ProviderTranscriptEvent::from_transcript_content(&block.content).is_none()
+        }));
         let mut context = AgentContext::import_durable_blocks(transcript.blocks).unwrap();
         context
             .restore_imported_execution_events(&transcript.execution_events)
