@@ -1446,12 +1446,14 @@ impl RuntimeSessionService {
                 format!(r#""{}""#, json_escape(name)),
             ));
         }
+        let message_sequence = self.control.message_service().next_message_sequence();
         let envelope = Envelope {
             protocol: "mmp/1",
             id: format!(
-                "{}:task_status:{}",
+                "{}:task_status:{}:{}",
                 turn.turn_id,
-                runtime_task_state_suffix(state)
+                runtime_task_state_suffix(state),
+                message_sequence,
             ),
             message_type: "task_status".to_string(),
             time: format!("runtime:{now_ms}"),
@@ -1770,9 +1772,10 @@ impl RuntimeSessionService {
                 format!(r#""{}""#, json_escape(name)),
             ));
         }
+        let message_sequence = self.control.message_service().next_message_sequence();
         let envelope = Envelope {
             protocol: "mmp/1",
-            id: format!("{}:task_result:final", turn.turn_id),
+            id: format!("{}:task_result:final:{message_sequence}", turn.turn_id),
             message_type: "task_result".to_string(),
             time: format!("runtime:{now_ms}"),
             sender: child_identity.clone(),

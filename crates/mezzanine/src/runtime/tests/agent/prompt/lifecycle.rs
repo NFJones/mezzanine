@@ -1,7 +1,9 @@
 //! Runtime tests for agent prompt lifecycle behavior.
 
 use super::*;
+use crate::runtime::current_unix_seconds;
 use mez_agent::SubagentSessionMode;
+use mez_agent::messaging::{Envelope, Recipient};
 
 /// Spawns one native child and returns its canonical id with the advertised display name.
 ///
@@ -450,6 +452,192 @@ fn runtime_subagent_spawn_bridge_notifications_log_no_parent_pane_echo() {
         !result_text.contains("completed without provider output"),
         "normal mode suppresses the JSON bridge result payload: {result_text}"
     );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a retained pre-restart lifecycle id cannot poison a new spawn whose
+/// compact turn id is reused after historical turn-ledger state was discarded.
+///
+/// The MMP sequence survives snapshot restore, so runtime-authored lifecycle
+/// ids must include that occurrence identity rather than relying only on the
+/// restart-local `turn-N` allocator and task state.
+#[test]
+fn runtime_subagent_spawn_avoids_restored_legacy_lifecycle_message_id() {
+    let mut service = test_runtime_service();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .start_agent_prompt_turn("%1", "retain turn-1 so the child receives turn-2")
+        .unwrap();
+    let now_ms = current_unix_seconds().saturating_mul(1000);
+    let parent = service
+        .ensure_runtime_message_identity("agent-%1", None, "agent", &[], now_ms)
+        .unwrap();
+    service
+        .control
+        .message_service_mut()
+        .subscribe(&parent.agent_id)
+        .unwrap();
+    service
+        .control
+        .message_service_mut()
+        .accept_at_with_scope(
+            &parent.agent_id,
+            Envelope {
+                protocol: "mmp/1",
+                id: "turn-2:task_status:started".to_string(),
+                message_type: "task_status".to_string(),
+                time: "runtime:1".to_string(),
+                sender: parent.clone(),
+                recipient: Recipient::Agent(parent.agent_id.clone()),
+                correlation_id: Some("turn-2".to_string()),
+                ttl_ms: None,
+                content_type: "application/json".to_string(),
+                payload: mez_agent::messaging::TaskStatusPayload {
+                    task_id: "turn-2".to_string(),
+                    state: mez_agent::messaging::TaskState::Running,
+                    progress_percent: Some(0),
+                    summary: "retained pre-restart status".to_string(),
+                }
+                .to_json(),
+                extension_fields: Vec::new(),
+            },
+            mez_agent::messaging::MessageScope::Session,
+            now_ms,
+        )
+        .unwrap();
+    let restored_message_state = service.message_service().snapshot_state();
+    *service.control.message_service_mut() =
+        mez_agent::messaging::MessageService::from_snapshot_state(&restored_message_state).unwrap();
+
+    let spawned = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: mez_agent::SubagentSessionMode::New,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
+                task_prompt: "verify restart-safe lifecycle identity".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: false,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap();
+    let spawned = serde_json::from_str::<serde_json::Value>(&spawned).unwrap();
+    assert_eq!(spawned["turn"]["id"], "turn-2");
+    let accepted = service.message_service().snapshot_state().accepted_messages;
+    assert!(
+        accepted
+            .iter()
+            .any(|message| message.envelope.id == "turn-2:task_status:started")
+    );
+    assert!(accepted.iter().any(|message| {
+        message
+            .envelope
+            .id
+            .starts_with("turn-2:task_status:started:")
+    }));
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies repeated transitions to the same task state produce distinct MMP
+/// occurrences even when their payload summaries differ.
+///
+/// A state name is descriptive data, not an idempotency key; approval and wait
+/// lifecycles may legitimately enter `blocked` more than once in one turn.
+#[test]
+fn runtime_subagent_repeated_task_state_updates_use_distinct_message_ids() {
+    let mut service = test_runtime_service();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let spawned = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: mez_agent::SubagentSessionMode::New,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
+                task_prompt: "exercise repeated blocked states".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: false,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap();
+    let spawned = serde_json::from_str::<serde_json::Value>(&spawned).unwrap();
+    let turn_id = spawned["turn"]["id"].as_str().unwrap();
+    let child_turn = service.agent_turn_ledger().turn(turn_id).cloned().unwrap();
+
+    service
+        .emit_subagent_task_status(
+            &child_turn,
+            mez_agent::messaging::TaskState::Blocked,
+            None,
+            "first blocked occurrence",
+        )
+        .unwrap();
+    service
+        .emit_subagent_task_status(
+            &child_turn,
+            mez_agent::messaging::TaskState::Blocked,
+            None,
+            "second blocked occurrence",
+        )
+        .unwrap();
+
+    let blocked_ids = service
+        .message_service()
+        .snapshot_state()
+        .accepted_messages
+        .into_iter()
+        .filter(|message| {
+            message
+                .envelope
+                .id
+                .starts_with(&format!("{turn_id}:task_status:blocked:"))
+        })
+        .map(|message| message.envelope.id)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(blocked_ids.len(), 2, "{blocked_ids:#?}");
     service.terminate_all_pane_processes().unwrap();
 }
 

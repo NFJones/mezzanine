@@ -1789,7 +1789,10 @@ executable = "{bubblewrap_executable}"
         .accepted_messages
         .iter()
         .find(|message| {
-            message.envelope.id == format!("{child_turn_id}:task_result:final")
+            message
+                .envelope
+                .id
+                .starts_with(&format!("{child_turn_id}:task_result:final:"))
                 && message.envelope.message_type == "task_result"
         })
         .expect("terminal subagent output should remain durable after child-pane cleanup");

@@ -576,6 +576,15 @@ impl MessageService {
         records
     }
 
+    /// Returns the sequence that will be assigned to the next accepted message.
+    ///
+    /// Runtime-authored envelopes use this durable, monotonically increasing
+    /// value as an occurrence identity. Because snapshots preserve the sequence,
+    /// generated message ids cannot collide with accepted pre-restart traffic.
+    pub fn next_message_sequence(&self) -> MessageSequence {
+        self.next_sequence
+    }
+
     /// Returns a serializable snapshot of durable local message protocol state.
     pub fn snapshot_state(&self) -> MessageServiceSnapshot {
         let mut registered_agents = self

@@ -1747,16 +1747,18 @@ impl RuntimeSessionService {
             "subagent_display_name".to_string(),
             format!(r#""{}""#, json_escape(initial_status.child_display_name)),
         ));
+        let message_sequence = self.control.message_service().next_message_sequence();
         let envelope = Envelope {
             protocol: "mmp/1",
             id: format!(
-                "{}:task_status:{}",
+                "{}:task_status:{}:{}",
                 initial_status.turn_id,
                 if state == TaskState::Queued {
                     "queued"
                 } else {
                     "started"
-                }
+                },
+                message_sequence,
             ),
             message_type: "task_status".to_string(),
             time: format!("runtime:{now_ms}"),

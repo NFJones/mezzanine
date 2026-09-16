@@ -52,6 +52,12 @@ objects instead. In particular, registration `hello` contains `protocol`,
 role defaults to `default`. The service assigns the effective identity in
 `welcome`.
 
+Runtime-authored subagent lifecycle envelopes use IDs shaped as
+`<turn-id>:task_status:<state>:<sequence>` and
+`<turn-id>:task_result:final:<sequence>`. The final component is the durable
+MMP acceptance sequence. It keeps lifecycle IDs unique across snapshot restore
+and distinguishes repeated occurrences of the same task state.
+
 These reduced service-operation shapes are an implementation conformance gap.
 `SPEC.md` requires every message envelope to carry the full envelope and only
 allows a pre-registration `hello` sender to omit `agent_id` or use a

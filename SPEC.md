@@ -9262,6 +9262,12 @@ mechanism to wake writable recipient connections.
 
 Recipients MUST treat message `id` values as idempotency keys.
 
+Runtime-authored subagent `task_status` and `task_result` messages MUST include
+the durable MMP acceptance sequence in their message identity. The sequence is
+an occurrence identity in addition to the child turn and lifecycle state, so
+restored sessions and repeated transitions to the same state cannot reuse an
+accepted message id for different envelope content.
+
 A sender MUST receive `ack` when a message is accepted for delivery.
 
 A sender MUST receive `error` when a message is rejected, undeliverable, or
