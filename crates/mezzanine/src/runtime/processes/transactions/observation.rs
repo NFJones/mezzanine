@@ -1338,6 +1338,19 @@ impl RuntimeSessionService {
             self.reject_agent_subshell_certification(pane_id, rejection);
             return RuntimeAgentSubshellCertificationOutcome::Rejected(rejection);
         };
+        // A boundary that expects a managed child can correlate only that child's
+        // admitted installation. Check this before considering any loader or
+        // foreground-group proof so no correlation path can promote an
+        // unauthenticated receiver.
+        let receiver_unauthenticated = self.boundary_expects_authenticated_managed_child(pane_id)
+            && !self.managed_child_receiver_is_installed(pane_id, marker);
+        if receiver_unauthenticated {
+            let rejection = RuntimeAgentSubshellCertificationRejection::ReceiverNotAuthenticated;
+            self.remove_agent_subshell_bootstrap_proof(pane_id, marker);
+            self.fail_bootstrapping_foreign_shell_boundary(pane_id);
+            self.reject_agent_subshell_certification(pane_id, rejection);
+            return RuntimeAgentSubshellCertificationOutcome::Rejected(rejection);
+        }
         let handoff_proof = self.dependency_free_handoff_proof(pane_id, marker);
         if let DependencyFreeHandoffProof::Withheld = handoff_proof {
             // The correlated loader record was admitted without the process-bound
@@ -1353,11 +1366,6 @@ impl RuntimeSessionService {
             self.reject_agent_subshell_certification(pane_id, rejection);
             return RuntimeAgentSubshellCertificationOutcome::Rejected(rejection);
         }
-        // A boundary that expects a managed child can correlate only that child's
-        // admitted installation. The install credential travels in-band through
-        // the same PTY, so it is admission evidence, never authority.
-        let receiver_unauthenticated = self.boundary_expects_authenticated_managed_child(pane_id)
-            && !self.managed_child_receiver_is_installed(pane_id, marker);
         if let DependencyFreeHandoffProof::Proven { process_group_id } = handoff_proof
             && evidence.process_group_id == Some(process_group_id)
         {
@@ -1369,19 +1377,6 @@ impl RuntimeSessionService {
                 process_group_id,
             );
             return RuntimeAgentSubshellCertificationOutcome::Certified;
-        }
-        if receiver_unauthenticated {
-            // A managed child was expected but never authenticated its receiver,
-            // so the recorded foreground group proves only that whichever program
-            // answered the replayed start frame is still foreground. Refuse that
-            // proof instead of falling through to the generic foreground-group
-            // comparison, which a replay satisfies with its own live group. No
-            // worker observation can add authentication, so refuse promptly.
-            let rejection = RuntimeAgentSubshellCertificationRejection::ReceiverNotAuthenticated;
-            self.remove_agent_subshell_bootstrap_proof(pane_id, marker);
-            self.fail_bootstrapping_foreign_shell_boundary(pane_id);
-            self.reject_agent_subshell_certification(pane_id, rejection);
-            return RuntimeAgentSubshellCertificationOutcome::Rejected(rejection);
         }
         if let Some(instance) = self.adapter_owned_pane_process_instance(pane_id) {
             let Some(expected_process_group_id) = evidence.process_group_id else {
