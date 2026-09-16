@@ -45,14 +45,17 @@ while you inspect, edit, and validate work.
 
 ## Why Mezzanine?
 
-- **Persistent sessions:** windows, panes, detach/reattach, and copy mode.
-- **Pane-local agents:** independent conversations beside the shell where work
-  already lives.
-- **Reviewable actions:** visible shell commands, patches, approvals, MCP calls,
-  and subagent work.
-- **Safety controls:** approval policy, project trust, and optional OS-level
-  confinement through Bubblewrap on Linux or Seatbelt on macOS are distinct,
-  visible controls.
+- **A real multiplexer, not an agent wrapper:** persistent windows and panes,
+  detach/reattach, copy mode, and recoverable terminal sessions keep your full
+  workspace together.
+- **An agent that lives where the work lives:** each pane gets its own
+  independent, terminal-local conversation alongside the shell, editor, logs,
+  or service it is helping you operate.
+- **Actions you can inspect and control:** commands, patches, approvals, MCP
+  calls, and subagent work are explicit rather than hidden behind a chat UI.
+- **Safety is a first-class workflow:** project trust, approval policies, and
+  optional OS-level confinement (Bubblewrap on Linux or Seatbelt on macOS) are
+  separate, visible controls.
 
 ## Prerequisites
 
