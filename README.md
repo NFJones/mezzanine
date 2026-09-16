@@ -53,6 +53,12 @@ while you inspect, edit, and validate work.
   or service it is helping you operate.
 - **Actions you can inspect and control:** commands, patches, approvals, MCP
   calls, and subagent work are explicit rather than hidden behind a chat UI.
+- **Agents that can coordinate, not just delegate:** discover peers, exchange
+  scoped messages, and keep persistent collaborators in dedicated panes with
+  clear ownership and authority boundaries.
+- **Remote access without giving up recovery:** optional Iroh connectivity uses
+  explicit device pairing while the local Unix socket remains the administration
+  and recovery path.
 - **Safety is a first-class workflow:** project trust, approval policies, and
   optional OS-level confinement (Bubblewrap on Linux or Seatbelt on macOS) are
   separate, visible controls.
