@@ -2028,6 +2028,49 @@ fn provider_model_metadata_vocabulary_validation() {
                         .contains("at most one OpenAI prompt-cache generation")
             })
     );
+
+    let explicit_cache_mode = validate_config_text(
+        ConfigFormat::Toml,
+        "[providers.openai]\nkind = \"openai\"\napi = \"openai-responses\"\n[providers.openai.models.gpt56]\nid = \"gpt-5.6\"\ncapabilities = [\"openai_prompt_cache_gpt56\", \"openai_prompt_cache_explicit\"]\n",
+        ConfigScope::Primary,
+    );
+    assert!(
+        explicit_cache_mode.valid,
+        "{:?}",
+        explicit_cache_mode.diagnostics
+    );
+
+    let incompatible_explicit_cache_mode = validate_config_text(
+        ConfigFormat::Toml,
+        "[providers.openai]\nkind = \"openai\"\napi = \"openai-responses\"\n[providers.openai.models.gpt55]\nid = \"gpt-5.5\"\ncapabilities = [\"openai_prompt_cache_gpt55\", \"openai_prompt_cache_explicit\"]\n",
+        ConfigScope::Primary,
+    );
+    assert!(!incompatible_explicit_cache_mode.valid);
+    assert!(
+        incompatible_explicit_cache_mode
+            .diagnostics
+            .iter()
+            .any(|diagnostic| {
+                diagnostic.path == "providers.openai.models.gpt55.capabilities"
+                    && diagnostic.message.contains("requires GPT-5.6-or-newer")
+            })
+    );
+
+    let unqualified_explicit_cache_mode = validate_config_text(
+        ConfigFormat::Toml,
+        "[providers.openai]\nkind = \"openai\"\napi = \"openai-responses\"\n[providers.openai.models.custom]\nid = \"custom-responses-model\"\ncapabilities = [\"openai_prompt_cache_explicit\"]\n",
+        ConfigScope::Primary,
+    );
+    assert!(!unqualified_explicit_cache_mode.valid);
+    assert!(
+        unqualified_explicit_cache_mode
+            .diagnostics
+            .iter()
+            .any(|diagnostic| {
+                diagnostic.path == "providers.openai.models.custom.capabilities"
+                    && diagnostic.message.contains("requires GPT-5.6-or-newer")
+            })
+    );
 }
 
 /// Reasoning selections are validated against resolvable model metadata at

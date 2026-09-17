@@ -5,7 +5,9 @@
 //! computes non-model-visible prompt-cache fingerprints used for diagnostics.
 
 use crate::context::{ContextEpochIdentity, ContextEpochTransition, ProviderRequestEpoch};
-use crate::openai_request::openai_responses_request_control_shape_with_stream;
+use crate::openai_request::{
+    apply_openai_prompt_cache_breakpoint, openai_responses_request_control_shape_with_stream,
+};
 use crate::openai_schema::openai_maap_action_batch_tools;
 use crate::provider::MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME;
 use crate::{
@@ -263,7 +265,9 @@ pub fn openai_prompt_cache_diagnostics_for_request_with_stream(
     stream: bool,
 ) -> ProviderRequestAssemblyResult<OpenAiPromptCacheDiagnostics> {
     validate_provider_request_required("OpenAI model", &request.model)?;
-    let rendered = openai_render_request_messages(request)?;
+    let mut rendered = openai_render_request_messages(request)?;
+    apply_openai_prompt_cache_breakpoint(request, &mut rendered.input)?;
+    apply_openai_prompt_cache_breakpoint(request, &mut rendered.stable_input)?;
     let response_format = openai_response_format(request).unwrap_or(serde_json::Value::Null);
     let tools = if request.interaction_kind.expects_structured_json() {
         serde_json::json!([])

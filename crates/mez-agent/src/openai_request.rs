@@ -5,7 +5,7 @@
 //! formatting, and MAAP schema selection while remaining independent of
 //! credentials and transport orchestration.
 
-use crate::model_capabilities::OpenAiPromptCacheGeneration;
+use crate::model_capabilities::{OpenAiPromptCacheGeneration, OpenAiPromptCacheMode};
 use crate::openai_cache::{
     openai_prompt_cache_key, openai_render_request_messages, openai_response_format,
 };
@@ -105,8 +105,21 @@ fn apply_openai_prompt_cache_policy(
                 )));
             }
             body["prompt_cache_options"] = serde_json::json!({ "ttl": "30m" });
+            if request.model_capabilities.openai_prompt_cache_mode
+                == OpenAiPromptCacheMode::Explicit
+            {
+                body["prompt_cache_options"]["mode"] = serde_json::json!("explicit");
+            }
         }
         None => {
+            if request.model_capabilities.openai_prompt_cache_mode
+                == OpenAiPromptCacheMode::Explicit
+            {
+                return Err(ProviderRequestAssemblyError::invalid_args(format!(
+                    "OpenAI model {:?} has no verified explicit prompt-cache support",
+                    request.model
+                )));
+            }
             if let Some(retention) = retention {
                 return Err(ProviderRequestAssemblyError::invalid_args(format!(
                     "OpenAI model {:?} has no verified prompt-cache retention support; refusing prompt_cache_retention={retention:?}",
@@ -115,6 +128,44 @@ fn apply_openai_prompt_cache_policy(
             }
         }
     }
+    Ok(())
+}
+
+/// Marks the latest developer semantic input-text block for explicit GPT-5.6+
+/// cache creation without changing chronological message ordering.
+pub(crate) fn apply_openai_prompt_cache_breakpoint(
+    request: &ModelRequest,
+    input: &mut [serde_json::Value],
+) -> ProviderRequestAssemblyResult<()> {
+    if request.model_capabilities.openai_prompt_cache_mode != OpenAiPromptCacheMode::Explicit {
+        return Ok(());
+    }
+    let supported_generation = request
+        .model_capabilities
+        .openai_prompt_cache_generation
+        .or_else(|| inferred_openai_prompt_cache_generation(&request.model))
+        == Some(OpenAiPromptCacheGeneration::Gpt56OrNewer);
+    if !supported_generation {
+        return Err(ProviderRequestAssemblyError::invalid_args(format!(
+            "OpenAI model {:?} has no verified explicit prompt-cache support",
+            request.model
+        )));
+    }
+    let block = input
+        .iter_mut()
+        .rev()
+        .filter(|message| {
+            message.get("role").and_then(serde_json::Value::as_str) == Some("developer")
+        })
+        .filter_map(|message| message.get_mut("content")?.as_array_mut())
+        .flat_map(|content| content.iter_mut().rev())
+        .find(|block| block.get("type").and_then(serde_json::Value::as_str) == Some("input_text"))
+        .ok_or_else(|| {
+            ProviderRequestAssemblyError::invalid_args(
+                "OpenAI explicit prompt-cache mode requires a developer input_text content block",
+            )
+        })?;
+    block["prompt_cache_breakpoint"] = serde_json::json!({ "mode": "explicit" });
     Ok(())
 }
 
@@ -142,7 +193,9 @@ pub fn openai_responses_request_body_with_stream(
     let rendered = openai_render_request_messages(request)?;
     let mut body = openai_responses_request_control_shape_with_stream(request, stream)?;
     body["instructions"] = serde_json::json!(rendered.instructions);
-    body["input"] = serde_json::json!(rendered.input);
+    let mut input = rendered.input;
+    apply_openai_prompt_cache_breakpoint(request, &mut input)?;
+    body["input"] = serde_json::json!(input);
     body["prompt_cache_key"] = serde_json::json!(openai_prompt_cache_key(request));
     serde_json::to_string(&body).map_err(|error| {
         ProviderRequestAssemblyError::invalid_state(format!(

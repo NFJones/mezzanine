@@ -119,7 +119,51 @@ fn openai_responses_request_body_applies_generation_aware_cache_controls() {
     let gpt_56: serde_json::Value =
         serde_json::from_str(&openai_responses_request_body(&gpt_56).unwrap()).unwrap();
     assert_eq!(gpt_56["prompt_cache_options"]["ttl"], "30m");
+    assert!(gpt_56["prompt_cache_options"].get("mode").is_none());
     assert!(gpt_56.get("prompt_cache_retention").is_none());
+
+    let mut explicit_gpt_56 = openai_prompt_cache_retention_test_request("gpt-5.6-2026-01-01");
+    explicit_gpt_56.messages.push(mez_agent::ModelMessage {
+        role: mez_agent::ModelMessageRole::Developer,
+        source: mez_agent::ContextSourceKind::ProjectGuidance,
+        placement: mez_agent::ContextPlacement::StablePrefix,
+        content: "stable cache boundary".to_string(),
+    });
+    explicit_gpt_56.model_capabilities.openai_prompt_cache_mode =
+        mez_agent::model_capabilities::OpenAiPromptCacheMode::Explicit;
+    let explicit_diagnostics =
+        openai_prompt_cache_diagnostics_for_request(&explicit_gpt_56).unwrap();
+    let explicit_gpt_56: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&explicit_gpt_56).unwrap()).unwrap();
+    assert_eq!(explicit_gpt_56["prompt_cache_options"]["ttl"], "30m");
+    assert_eq!(explicit_gpt_56["prompt_cache_options"]["mode"], "explicit");
+    let breakpoint = explicit_gpt_56["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["role"] == "developer")
+        .unwrap()["content"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap();
+    assert_eq!(breakpoint["prompt_cache_breakpoint"]["mode"], "explicit");
+    assert_eq!(
+        explicit_diagnostics.effective_input_bytes,
+        serde_json::to_string(&explicit_gpt_56["input"])
+            .unwrap()
+            .len()
+    );
+
+    let mut explicit_without_developer =
+        openai_prompt_cache_retention_test_request("gpt-5.6-2026-01-01");
+    explicit_without_developer
+        .model_capabilities
+        .openai_prompt_cache_mode = mez_agent::model_capabilities::OpenAiPromptCacheMode::Explicit;
+    assert!(
+        openai_responses_request_body(&explicit_without_developer).is_err(),
+        "explicit mode must not mark the volatile user input as a cache breakpoint"
+    );
 
     let gpt_6 = openai_prompt_cache_retention_test_request("gpt-6-astra");
     let gpt_6: serde_json::Value =

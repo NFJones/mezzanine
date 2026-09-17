@@ -86,7 +86,10 @@ pub mod messaging;
 pub mod model_capabilities;
 /// Provider-neutral model catalog construction and selection policy.
 pub mod model_catalog;
-pub use model_capabilities::{ModelCapabilities, ModelCapabilityMetadataPolicy};
+pub use model_capabilities::{
+    ModelCapabilities, ModelCapabilityMetadataPolicy, OpenAiPromptCacheGeneration,
+    OpenAiPromptCacheMode,
+};
 /// Provider-independent model profile records and selection policy.
 pub mod model_profile;
 /// Provider-independent successful model response contract.

@@ -4492,6 +4492,13 @@ only the model-supported `in_memory` or `24h` value; GPT-4.5 MAY select only
 other than the compatible `30m` spelling. Unknown or custom model identifiers
 MUST receive no model-specific cache controls and MUST reject an explicit
 retention setting until supported capability metadata is available.
+GPT-5.6-and-later model metadata MAY declare
+`openai_prompt_cache_explicit` with its cache-generation capability to select
+`prompt_cache_options.mode = "explicit"`. Explicit mode MUST mark exactly one
+semantic `input_text` content block with
+`prompt_cache_breakpoint: { mode: "explicit" }`; it MUST NOT mark top-level
+`instructions`, alter chronological ordering, or be enabled for earlier or
+unknown model generations.
 For OpenAI-compatible Chat Completions profiles,
 `provider_options.developer_role` MAY be set to `developer` or `system` to
 control how Mezzanine developer messages are serialized. It MUST default to

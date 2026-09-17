@@ -1031,6 +1031,41 @@ fn validate_provider_models_config(format: ConfigFormat, text: &str) -> Vec<Conf
                                 .to_string(),
                     });
                 }
+                let explicit_cache_mode = tags
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .any(|tag| tag.trim() == "openai_prompt_cache_explicit");
+                let incompatible_explicit_generation = tags
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .any(|tag| {
+                        matches!(
+                            tag.trim(),
+                            "openai_prompt_cache_gpt45"
+                                | "openai_prompt_cache_earlier"
+                                | "openai_prompt_cache_gpt55"
+                        )
+                    });
+                if explicit_cache_mode && incompatible_explicit_generation {
+                    diagnostics.push(ConfigDiagnostic {
+                        path: format!("{entry_path}.capabilities"),
+                        message:
+                            "OpenAI explicit prompt-cache mode requires GPT-5.6-or-newer generation metadata"
+                                .to_string(),
+                    });
+                }
+                let gpt56_generation = tags
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .any(|tag| tag.trim() == "openai_prompt_cache_gpt56");
+                if explicit_cache_mode && !gpt56_generation {
+                    diagnostics.push(ConfigDiagnostic {
+                        path: format!("{entry_path}.capabilities"),
+                        message:
+                            "OpenAI explicit prompt-cache mode requires GPT-5.6-or-newer generation metadata"
+                                .to_string(),
+                    });
+                }
             }
 
             if let Some(aliases) = model.get("aliases").and_then(serde_json::Value::as_array) {
@@ -1153,6 +1188,7 @@ fn is_supported_capability_tag(tag: &str) -> bool {
             | "openai_prompt_cache_earlier"
             | "openai_prompt_cache_gpt55"
             | "openai_prompt_cache_gpt56"
+            | "openai_prompt_cache_explicit"
             | "vision"
     )
 }

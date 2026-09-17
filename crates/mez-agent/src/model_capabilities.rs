@@ -25,6 +25,19 @@ pub enum OpenAiPromptCacheGeneration {
     Gpt56OrNewer,
 }
 
+/// GPT-5.6-and-later OpenAI Responses cache-mode policy.
+///
+/// Implicit mode preserves the provider default. Explicit mode requires the
+/// request serializer to place a supported semantic content-block breakpoint.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub enum OpenAiPromptCacheMode {
+    /// Use OpenAI's default implicit cache-boundary selection.
+    #[default]
+    Implicit,
+    /// Create cache entries only at explicitly marked content blocks.
+    Explicit,
+}
+
 /// Provenance policy used to resolve one effective model capability record.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub enum ModelCapabilityMetadataPolicy {
@@ -45,6 +58,8 @@ pub struct ModelCapabilities {
     /// Explicit OpenAI cache protocol metadata, when the selected model record
     /// establishes behavior that cannot safely be inferred from its id.
     pub openai_prompt_cache_generation: Option<OpenAiPromptCacheGeneration>,
+    /// Configured GPT-5.6-and-later cache-boundary mode.
+    pub openai_prompt_cache_mode: OpenAiPromptCacheMode,
     /// Whether the model supports the provider's native thinking control.
     pub native_thinking: bool,
     /// Ordered provider-facing reasoning efforts accepted by the model.
@@ -72,6 +87,7 @@ impl ModelCapabilities {
         Self {
             metadata_policy: ModelCapabilityMetadataPolicy::ProviderApi,
             openai_prompt_cache_generation: None,
+            openai_prompt_cache_mode: OpenAiPromptCacheMode::Implicit,
             native_thinking: provider.supports_thinking_toggle,
             supported_reasoning_efforts: Vec::new(),
             reasoning_efforts_explicit: false,
@@ -92,6 +108,7 @@ impl ModelCapabilities {
         Self {
             metadata_policy: ModelCapabilityMetadataPolicy::ConservativeUnknown,
             openai_prompt_cache_generation: None,
+            openai_prompt_cache_mode: OpenAiPromptCacheMode::Implicit,
             native_thinking: false,
             supported_reasoning_efforts: Vec::new(),
             reasoning_efforts_explicit: true,
@@ -135,6 +152,12 @@ impl ModelCapabilities {
                         }
                         _ => None,
                     });
+            effective.openai_prompt_cache_mode =
+                if has_capability(capabilities, "openai_prompt_cache_explicit") {
+                    OpenAiPromptCacheMode::Explicit
+                } else {
+                    OpenAiPromptCacheMode::Implicit
+                };
             effective.native_thinking = has_capability(capabilities, "native_thinking");
             effective.function_tools = capabilities.iter().any(|capability| {
                 matches!(

@@ -222,6 +222,7 @@ mod tests {
         request.model_capabilities = crate::ModelCapabilities {
             metadata_policy: crate::ModelCapabilityMetadataPolicy::ModelMetadata,
             openai_prompt_cache_generation: None,
+            openai_prompt_cache_mode: crate::OpenAiPromptCacheMode::Implicit,
             native_thinking: true,
             supported_reasoning_efforts: vec!["high".to_string(), "max".to_string()],
             reasoning_efforts_explicit: true,

@@ -43,6 +43,7 @@ fn canonical_capability_tag(tag: &str) -> bool {
             | "openai_prompt_cache_earlier"
             | "openai_prompt_cache_gpt55"
             | "openai_prompt_cache_gpt56"
+            | "openai_prompt_cache_explicit"
             | "vision"
     )
 }

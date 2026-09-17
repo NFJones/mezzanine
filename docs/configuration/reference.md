@@ -969,9 +969,12 @@ and before persistence. Capability tags use one provider-neutral vocabulary
 aliases, `forced_tool_choice`, `streaming`, `max_output_tokens` with
 `max_output_token_control` alias, OpenAI Responses cache-generation declarations
 `openai_prompt_cache_gpt45`, `openai_prompt_cache_earlier`, `openai_prompt_cache_gpt55`, and
-`openai_prompt_cache_gpt56`, plus the informational `vision` tag). The OpenAI
+`openai_prompt_cache_gpt56`, plus `openai_prompt_cache_explicit` and the
+informational `vision` tag). The OpenAI
 cache-generation tags are mutually exclusive and allow a configured canonical
 model record to establish cache-control behavior when its identifier is custom.
+`openai_prompt_cache_explicit` is valid only with GPT-5.6-or-newer generation
+metadata and makes Responses emit one semantic `input_text` cache breakpoint.
 Reasoning-level vocabularies are per provider: DeepSeek accepts `low`, `high`,
 and `max` (the `xhigh` alias maps to `max`); OpenAI Responses accepts `low`,
 `medium`, `high`, and `xhigh`; Anthropic Messages accepts `low`, `medium`,
