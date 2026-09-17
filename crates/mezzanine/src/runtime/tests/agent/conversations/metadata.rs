@@ -125,7 +125,7 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
 
     assert!(
         status.contains(
-            "| Pane agent tokens | gpt-saved via openai: input=450 cached_input=450 cumulative_cache_hit=50.00% output=80 reasoning=33 total=980 |"
+            "| Pane agent tokens | gpt-saved via openai: input=450 cached_input=450 cache_write_input=unknown cumulative_cache_hit=50.00% output=80 reasoning=33 total=980 |"
         ),
         "{status}"
     );

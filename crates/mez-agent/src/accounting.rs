@@ -47,7 +47,8 @@ fn non_empty_or_unknown(value: String) -> String {
 /// Provider-reported token usage for one or more model requests.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ModelTokenUsage {
-    /// Raw input tokens reported before prompt-cache adjustment.
+    /// Provider-visible total input tokens, including any cache-read or
+    /// cache-write counters reported separately by the provider.
     pub input_tokens: u64,
     /// Output tokens charged or counted by the provider.
     pub output_tokens: u64,
@@ -98,7 +99,6 @@ impl ModelTokenUsage {
     /// Returns provider-visible total tokens when input and output are known.
     pub fn total_tokens(self) -> u64 {
         self.prompt_cache_input_tokens()
-            .saturating_add(self.cache_write_input_tokens.unwrap_or(0))
             .saturating_add(self.output_tokens)
     }
 
@@ -112,19 +112,29 @@ impl ModelTokenUsage {
     }
 
     /// Returns input tokens billed outside provider prompt-cache hits.
+    ///
+    /// Cache-write counters are already included in `input_tokens`; this keeps
+    /// inclusive providers such as OpenAI from being counted twice while
+    /// additive providers normalize their input total during parsing.
     pub fn billed_input_tokens(self) -> u64 {
-        let input_tokens = if self.cached_input_tokens.unwrap_or(0) > self.input_tokens {
+        if self.cached_input_tokens.unwrap_or(0) > self.input_tokens {
             self.input_tokens
         } else {
             self.input_tokens
                 .saturating_sub(self.cached_input_tokens.unwrap_or(0))
-        };
-        input_tokens.saturating_add(self.cache_write_input_tokens.unwrap_or(0))
+        }
     }
 
     /// Returns the best-effort display value for provider prompt-cache hits.
     pub fn cached_input_tokens_display(self) -> String {
         self.cached_input_tokens
+            .map(|tokens| tokens.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+
+    /// Returns the best-effort display value for provider prompt-cache writes.
+    pub fn cache_write_input_tokens_display(self) -> String {
+        self.cache_write_input_tokens
             .map(|tokens| tokens.to_string())
             .unwrap_or_else(|| "unknown".to_string())
     }
@@ -273,8 +283,8 @@ mod tests {
             cache_write_input_tokens: Some(20),
         });
         assert_eq!(usage.cache_write_input_tokens, Some(20));
-        assert_eq!(usage.billed_input_tokens(), 60);
-        assert_eq!(usage.total_tokens(), 130);
+        assert_eq!(usage.billed_input_tokens(), 40);
+        assert_eq!(usage.total_tokens(), 110);
         usage.add_assign(ModelTokenUsage {
             input_tokens: 50,
             output_tokens: 5,
@@ -293,18 +303,18 @@ mod tests {
     }
 
     #[test]
-    /// Verifies providers may report cache hits outside ordinary input tokens
+    /// Verifies normalized input totals preserve additive cache counters
     /// without corrupting billed and total token calculations.
-    fn token_usage_accounts_for_separately_reported_cache_hits() {
+    fn token_usage_accounts_for_normalized_cache_counters() {
         let usage = ModelTokenUsage {
-            input_tokens: 2,
+            input_tokens: 16_610,
             output_tokens: 12,
             reasoning_tokens: 0,
             cached_input_tokens: Some(10_496),
             cache_write_input_tokens: Some(6_112),
         };
 
-        assert_eq!(usage.input_tokens, 2);
+        assert_eq!(usage.input_tokens, 16_610);
         assert_eq!(usage.billed_input_tokens(), 6_114);
         assert_eq!(usage.total_tokens(), 16_622);
         assert_eq!(usage.cached_input_hit_ratio_display(), "63.19%");

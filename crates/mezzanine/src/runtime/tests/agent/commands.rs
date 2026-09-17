@@ -54,14 +54,14 @@ fn runtime_show_metrics_reports_provider_tokens_by_model() {
                 output_tokens: 34,
                 reasoning_tokens: 9,
                 cached_input_tokens: Some(80),
-                cache_write_input_tokens: None,
+                cache_write_input_tokens: Some(16),
             },
             mez_agent::ModelTokenUsage {
                 input_tokens: 120,
                 output_tokens: 34,
                 reasoning_tokens: 9,
                 cached_input_tokens: Some(80),
-                cache_write_input_tokens: None,
+                cache_write_input_tokens: Some(16),
             },
             &mez_agent::ModelTokenUsageKey::new("openai", "gpt-fast"),
         );
@@ -177,13 +177,13 @@ fn runtime_show_metrics_reports_provider_tokens_by_model() {
     );
     assert!(
         response.contains(
-            "provider_model_tokens[gpt-fast via openai] = provider=openai model=gpt-fast input=40 cached_input=80 output=34 reasoning=9 cumulative_cache_hit=66.67% total=154"
+            "provider_model_tokens[gpt-fast via openai] = provider=openai model=gpt-fast input=40 cached_input=80 cache_write_input=16 output=34 reasoning=9 cumulative_cache_hit=66.67% total=154"
         ),
         "{response}"
     );
     assert!(
         response.contains(
-            "provider_model_tokens[deepseek-chat via deepseek] = provider=deepseek model=deepseek-chat input=100 cached_input=100 output=50 reasoning=20 cumulative_cache_hit=50.00% total=250"
+            "provider_model_tokens[deepseek-chat via deepseek] = provider=deepseek model=deepseek-chat input=100 cached_input=100 cache_write_input=unknown output=50 reasoning=20 cumulative_cache_hit=50.00% total=250"
         ),
         "{response}"
     );

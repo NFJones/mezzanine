@@ -22,6 +22,13 @@ samples, including cold starts and auxiliary routing or sizing requests.
 `Latest request cache hit` describes the most recent execution-model request.
 A missing provider counter is `unknown`; an observed zero is `0.00%`.
 
+Provider token summaries also report `cache_write_input` when the provider
+supplies a cache-write counter. OpenAI Responses reports
+`cache_write_tokens` as a subset of its reported input total: Mezzanine keeps
+that detail for observability without adding it again to `input` or `total`.
+An omitted write counter remains `unknown`, while an observed zero is shown as
+`0`.
+
 ## Understand normal cache changes
 
 Compaction creates a new immutable request shape, so the following request can

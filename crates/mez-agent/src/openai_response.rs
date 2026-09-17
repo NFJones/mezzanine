@@ -583,7 +583,7 @@ fn openai_token_usage_from_response_value(value: &serde_json::Value) -> ModelTok
             ],
         ),
         cached_input_tokens: openai_cached_input_tokens(usage),
-        cache_write_input_tokens: None,
+        cache_write_input_tokens: openai_cache_write_input_tokens(usage),
     }
 }
 
@@ -605,6 +605,20 @@ fn openai_cached_input_tokens(value: &serde_json::Value) -> Option<u64> {
         "/cached_input_tokens",
         "/cached_prompt_tokens",
         "/cached_tokens",
+    ]
+    .iter()
+    .find_map(|pointer| value.pointer(pointer).and_then(serde_json::Value::as_u64))
+}
+
+/// Returns inclusive OpenAI cache-write accounting from Responses usage.
+///
+/// OpenAI reports writes as a subset of `input_tokens`, so callers retain this
+/// detail for observability while the shared accounting total does not add it
+/// again.
+fn openai_cache_write_input_tokens(value: &serde_json::Value) -> Option<u64> {
+    [
+        "/input_tokens_details/cache_write_tokens",
+        "/prompt_tokens_details/cache_write_tokens",
     ]
     .iter()
     .find_map(|pointer| value.pointer(pointer).and_then(serde_json::Value::as_u64))
@@ -946,7 +960,8 @@ mod tests {
                 "input_tokens": 42,
                 "output_tokens": 11,
                 "input_tokens_details": {
-                    "cached_tokens": 0
+                    "cached_tokens": 0,
+                    "cache_write_tokens": 0
                 }
             },
             "output_text": "ok"
@@ -981,7 +996,8 @@ mod tests {
                 "input_tokens": 42,
                 "output_tokens": 11,
                 "input_tokens_details": {
-                    "cached_tokens": 12
+                    "cached_tokens": 12,
+                    "cache_write_tokens": 9
                 },
                 "prompt_tokens_details": {
                     "cached_tokens": 8
@@ -1034,6 +1050,7 @@ mod tests {
         assert_eq!(missing_usage.cached_input_tokens_display(), "unknown");
         assert_eq!(missing_usage.cached_input_hit_ratio_display(), "unknown");
         assert_eq!(zero_usage.cached_input_tokens, Some(0));
+        assert_eq!(zero_usage.cache_write_input_tokens, Some(0));
         assert_eq!(zero_usage.cached_input_tokens_display(), "0");
         assert_eq!(zero_usage.cached_input_hit_ratio_display(), "0.00%");
         assert_eq!(prompt_details_usage.cached_input_tokens, Some(24));
@@ -1043,7 +1060,9 @@ mod tests {
         );
         assert_eq!(controller_alias_usage.cached_input_tokens, Some(36));
         assert_eq!(multi_cached_usage.cached_input_tokens, Some(12));
+        assert_eq!(multi_cached_usage.cache_write_input_tokens, Some(9));
         assert_eq!(stream_usage.cached_input_tokens, Some(12));
+        assert_eq!(stream_usage.cache_write_input_tokens, None);
     }
 
     #[test]
