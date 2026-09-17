@@ -1128,6 +1128,8 @@ pub(super) fn runtime_openai_prompt_cache_diagnostics_trace_json(
 ) -> serde_json::Value {
     serde_json::json!({
         "prompt_cache_key": diagnostics.prompt_cache_key,
+        "prompt_cache_key_purpose": diagnostics.prompt_cache_key_purpose,
+        "prompt_cache_partition_sha256": diagnostics.prompt_cache_partition_sha256,
         "effective_input_bytes": diagnostics.effective_input_bytes,
         "effective_input_items": diagnostics.effective_input_items,
         "instructions_bytes": diagnostics.instructions_bytes,

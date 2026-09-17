@@ -975,6 +975,13 @@ cache-generation tags are mutually exclusive and allow a configured canonical
 model record to establish cache-control behavior when its identifier is custom.
 `openai_prompt_cache_explicit` is valid only with GPT-5.6-or-newer generation
 metadata and makes Responses emit one semantic `input_text` cache breakpoint.
+OpenAI Responses cache keys are derived from provider/session identity plus a
+typed, content-free workload purpose. Ordinary requests remain session-scoped;
+internal auto-sizing requests use a separate router purpose so missing session
+metadata cannot collapse unrelated traffic. Pre-GPT-5.6 router traffic uses a
+bounded deterministic shard for routing affinity, while GPT-5.6-or-newer keeps
+an agent boundary for cache accounting and anti-probing isolation. Diagnostics
+report the purpose and a partition digest, never the raw identity or prompt.
 Reasoning-level vocabularies are per provider: DeepSeek accepts `low`, `high`,
 and `max` (the `xhigh` alias maps to `max`); OpenAI Responses accepts `low`,
 `medium`, `high`, and `xhigh`; Anthropic Messages accepts `low`, `medium`,

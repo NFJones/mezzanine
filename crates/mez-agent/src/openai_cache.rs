@@ -9,13 +9,16 @@ use crate::openai_request::{
     apply_openai_prompt_cache_breakpoint, openai_responses_request_control_shape_with_stream,
 };
 use crate::openai_schema::openai_maap_action_batch_tools;
-use crate::provider::MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME;
+use crate::provider::{
+    MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME, OpenAiPromptCacheKeyPurpose,
+    openai_prompt_cache_key_with_partition,
+};
 use crate::{
     ContextSourceKind, ModelInteractionKind, ModelRequest, OpenAiPromptCacheDiagnostics,
-    OpenAiRenderedMessages, ProviderRequestAssemblyError, ProviderRequestAssemblyResult,
+    OpenAiPromptCacheGeneration, OpenAiPromptCacheKeyDiagnostics, OpenAiRenderedMessages,
+    ProviderRequestAssemblyError, ProviderRequestAssemblyResult,
     openai_auto_sizing_response_format, openai_macro_judge_response_format,
-    openai_prompt_cache_diagnostics, openai_prompt_cache_key as provider_prompt_cache_key,
-    openai_render_messages, openai_routed_handoff_response_format,
+    openai_prompt_cache_diagnostics, openai_render_messages, openai_routed_handoff_response_format,
     openai_sandbox_failure_assessment_response_format, openai_stable_projection_material,
     validate_provider_request_required,
 };
@@ -243,12 +246,70 @@ pub(super) fn openai_response_format(request: &ModelRequest) -> Option<serde_jso
     }
 }
 
+/// Resolves the content-free routing purpose and partition for one request.
+///
+/// Pre-GPT-5.6 internal work uses a bounded deterministic shard so genuinely
+/// shared fixed prefixes can retain routing affinity without one global hot
+/// key. GPT-5.6+ uses the stable agent boundary instead because its key is an
+/// accounting and anti-probing boundary rather than a routing optimization.
+fn openai_prompt_cache_key_partition(
+    request: &ModelRequest,
+) -> (OpenAiPromptCacheKeyPurpose, String) {
+    let generation = request
+        .model_capabilities
+        .openai_prompt_cache_generation
+        .or_else(|| crate::openai_request::inferred_openai_prompt_cache_generation(&request.model));
+    let is_gpt56_or_newer = generation == Some(OpenAiPromptCacheGeneration::Gpt56OrNewer);
+    match request.interaction_kind {
+        ModelInteractionKind::AutoSizing => {
+            if is_gpt56_or_newer {
+                (
+                    OpenAiPromptCacheKeyPurpose::InternalRouter,
+                    request.agent_id.clone(),
+                )
+            } else {
+                (
+                    OpenAiPromptCacheKeyPurpose::InternalRouter,
+                    format!(
+                        "routing-shard-{}",
+                        stable_partition_shard(&request.agent_id)
+                    ),
+                )
+            }
+        }
+        ModelInteractionKind::MacroJudge
+        | ModelInteractionKind::SandboxFailureAssessment
+        | ModelInteractionKind::RoutedHandoff
+        | ModelInteractionKind::RoutedHandoffRepair => (
+            OpenAiPromptCacheKeyPurpose::InternalWorkflow,
+            request.agent_id.clone(),
+        ),
+        _ if request.prompt_cache_session_id.is_some() => (
+            OpenAiPromptCacheKeyPurpose::Session,
+            "session-boundary".to_string(),
+        ),
+        _ => (
+            OpenAiPromptCacheKeyPurpose::UnknownCompatible,
+            request.agent_id.clone(),
+        ),
+    }
+}
+
+/// Returns one of four stable routing shards from a non-content agent identity.
+fn stable_partition_shard(agent_id: &str) -> u8 {
+    let digest = Sha256::digest(agent_id.as_bytes());
+    digest[0] % 4
+}
+
 /// Builds a stable, non-secret OpenAI prompt-cache routing key for a request.
 pub(super) fn openai_prompt_cache_key(request: &ModelRequest) -> String {
-    provider_prompt_cache_key(
+    let (purpose, partition) = openai_prompt_cache_key_partition(request);
+    openai_prompt_cache_key_with_partition(
         &request.provider,
         request.prompt_cache_lineage_id.as_deref(),
         request.prompt_cache_session_id.as_deref(),
+        purpose,
+        &partition,
     )
 }
 
@@ -288,13 +349,25 @@ pub fn openai_prompt_cache_diagnostics_for_request_with_stream(
     };
     let provider_request_shape =
         openai_responses_request_control_shape_with_stream(request, stream)?;
-    let prompt_cache_key = openai_prompt_cache_key(request);
+    let (prompt_cache_key_purpose, prompt_cache_partition) =
+        openai_prompt_cache_key_partition(request);
+    let prompt_cache_key = openai_prompt_cache_key_with_partition(
+        &request.provider,
+        request.prompt_cache_lineage_id.as_deref(),
+        request.prompt_cache_session_id.as_deref(),
+        prompt_cache_key_purpose,
+        &prompt_cache_partition,
+    );
     let mut complete_request = provider_request_shape.clone();
     complete_request["instructions"] = serde_json::json!(rendered.instructions);
     complete_request["input"] = serde_json::json!(rendered.input);
     complete_request["prompt_cache_key"] = serde_json::json!(prompt_cache_key);
     openai_prompt_cache_diagnostics(
-        prompt_cache_key,
+        OpenAiPromptCacheKeyDiagnostics {
+            key: prompt_cache_key,
+            purpose: prompt_cache_key_purpose.as_str().to_string(),
+            partition_sha256: sha256_hex(prompt_cache_partition.as_bytes()),
+        },
         &rendered,
         &response_format,
         &tools,
@@ -892,5 +965,74 @@ mod tests {
         );
         assert!(!rendered_json.contains("call_legacy"), "{rendered_json}");
         assert!(!rendered_json.contains("openai-legacy-secret-sentinel"));
+    }
+
+    /// Verifies auxiliary OpenAI requests use deterministic typed partitions
+    /// instead of sharing the legacy unknown-session routing key.
+    ///
+    /// Pre-GPT-5.6 router traffic is intentionally bounded to four stable
+    /// shards for prefix-routing affinity. GPT-5.6 keys are accounting and
+    /// anti-probing boundaries, so they retain the individual agent boundary.
+    #[test]
+    fn openai_cache_key_partitions_auxiliary_workload_by_generation() {
+        let mut pre_gpt56 = request_chain_fixture(vec![ModelMessage {
+            role: ModelMessageRole::User,
+            source: ContextSourceKind::UserInstruction,
+            placement: crate::ContextPlacement::ConversationAppend,
+            content: "size this task".to_string(),
+        }]);
+        pre_gpt56.model = "gpt-5.5".to_string();
+        pre_gpt56.prompt_cache_session_id = None;
+        pre_gpt56.prompt_cache_lineage_id = None;
+        pre_gpt56.interaction_kind = ModelInteractionKind::AutoSizing;
+
+        let mut same_agent = pre_gpt56.clone();
+        same_agent.turn_id = "turn-2".to_string();
+        let mut other_agent = pre_gpt56.clone();
+        other_agent.agent_id = "agent-2".to_string();
+
+        let first = openai_prompt_cache_diagnostics_for_request(&pre_gpt56).unwrap();
+        let repeated = openai_prompt_cache_diagnostics_for_request(&same_agent).unwrap();
+        let other = openai_prompt_cache_diagnostics_for_request(&other_agent).unwrap();
+
+        assert_eq!(first.prompt_cache_key_purpose, "internal_router");
+        assert_eq!(first.prompt_cache_key, repeated.prompt_cache_key);
+        assert_eq!(
+            first.prompt_cache_partition_sha256,
+            repeated.prompt_cache_partition_sha256
+        );
+        assert_ne!(first.prompt_cache_partition_sha256, "agent-1");
+        assert_ne!(other.prompt_cache_partition_sha256, "agent-2");
+
+        let mut gpt56 = pre_gpt56.clone();
+        gpt56.model = "gpt-5.6".to_string();
+        let gpt56_diagnostics = openai_prompt_cache_diagnostics_for_request(&gpt56).unwrap();
+
+        assert_eq!(
+            gpt56_diagnostics.prompt_cache_key_purpose,
+            "internal_router"
+        );
+        assert_ne!(first.prompt_cache_key, gpt56_diagnostics.prompt_cache_key);
+        assert_ne!(
+            first.prompt_cache_partition_sha256,
+            gpt56_diagnostics.prompt_cache_partition_sha256
+        );
+
+        let mut routed_handoff = pre_gpt56.clone();
+        routed_handoff.interaction_kind = ModelInteractionKind::RoutedHandoff;
+        routed_handoff.prompt_cache_session_id = Some("session-1".to_string());
+        let mut routed_handoff_repair = routed_handoff.clone();
+        routed_handoff_repair.interaction_kind = ModelInteractionKind::RoutedHandoffRepair;
+        routed_handoff_repair.prompt_cache_session_id = None;
+
+        let routed_handoff = openai_prompt_cache_diagnostics_for_request(&routed_handoff).unwrap();
+        let routed_handoff_repair =
+            openai_prompt_cache_diagnostics_for_request(&routed_handoff_repair).unwrap();
+
+        assert_eq!(routed_handoff.prompt_cache_key_purpose, "internal_workflow");
+        assert_eq!(
+            routed_handoff_repair.prompt_cache_key_purpose,
+            "internal_workflow"
+        );
     }
 }

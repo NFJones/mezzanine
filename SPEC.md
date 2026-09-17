@@ -5100,17 +5100,24 @@ API-key requests. These options MUST NOT be sent to ChatGPT browser/device
 credential backends.
 OpenAI Responses requests SHOULD include a stable, non-secret
 `prompt_cache_key` derived from Mezzanine's prompt profile, provider, lineage,
-agent session UUID, and cache-family identity, not the exact selected model.
-Forked sessions and forked subagents MUST retain inherited lineage but use
-distinct routing keys through their independent session UUIDs. Requests within
-the same session MUST retain the same key when the other namespace inputs are
-unchanged. Missing lineage or session metadata MUST use stable unknown-lineage
-or unknown-session components respectively, not per-request random values.
-The key SHOULD NOT vary only because the interaction kind, exposed action
-surface, MCP tool catalog, or current user prompt changed;
-the provider's exact prompt-prefix hashing provides the correctness boundary
-for those differences, and over-fragmenting the routing key reduces cache hit
-rates.
+agent session UUID, typed workload purpose, privacy-safe workload partition,
+and cache-family identity, not the exact selected model. Forked sessions and
+forked subagents MUST retain inherited lineage but use distinct routing keys
+through their independent session UUIDs. Requests within the same session MUST
+retain the same key when the other namespace inputs are unchanged. Missing
+lineage or session metadata MUST use stable unknown components rather than
+per-request random values. Ordinary session requests MUST use the session
+purpose. Auto-sizing traffic MUST use the internal-router purpose rather than
+the ordinary unknown-session fallback; before GPT-5.6 it MAY use one of four
+deterministic non-content routing shards, while GPT-5.6-and-later MUST retain
+the stable agent boundary because its key is an accounting and anti-probing
+boundary rather than a routing optimization. Internal structured workflows
+MUST use an internal-workflow purpose, and requests without a session identity
+MUST use an agent-scoped unknown-compatible fallback. The key SHOULD NOT vary
+only because the interaction kind, exposed action surface, MCP tool catalog, or
+current user prompt changed; the provider's exact prompt-prefix hashing
+provides the correctness boundary for those differences, and over-fragmenting
+the routing key reduces cache hit rates.
 The derived key MUST NOT include rendered prompt-prefix bytes, user prompt text,
 action output, transcript content, project-file content, secrets, credentials,
 or per-turn identifiers. Provider token accounting MUST preserve the difference

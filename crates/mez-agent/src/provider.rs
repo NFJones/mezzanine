@@ -235,6 +235,10 @@ impl std::error::Error for ProviderRequestAssemblyError {}
 pub struct OpenAiPromptCacheDiagnostics {
     /// Stable routing key sent to the OpenAI Responses API.
     pub prompt_cache_key: String,
+    /// Typed content-free policy purpose used to derive the routing key.
+    pub prompt_cache_key_purpose: String,
+    /// SHA-256 of the non-content workload partition used for the routing key.
+    pub prompt_cache_partition_sha256: String,
     /// Canonical serialized bytes in the effective OpenAI `input` array.
     pub effective_input_bytes: usize,
     /// Number of items in the effective OpenAI `input` array.
@@ -271,6 +275,17 @@ pub struct OpenAiPromptCacheDiagnostics {
     pub continuity_snapshot: OpenAiRequestContinuitySnapshot,
 }
 
+/// Content-free OpenAI cache-key metadata supplied to request diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenAiPromptCacheKeyDiagnostics {
+    /// Stable routing key sent to the OpenAI Responses API.
+    pub key: String,
+    /// Typed content-free policy purpose used to derive the routing key.
+    pub purpose: String,
+    /// SHA-256 of the non-content workload partition used for the routing key.
+    pub partition_sha256: String,
+}
+
 /// Builds non-model-visible OpenAI prompt-cache diagnostics from one rendered
 /// request and its provider-owned control values.
 ///
@@ -279,7 +294,7 @@ pub struct OpenAiPromptCacheDiagnostics {
 /// encoding and fingerprinting so cache diagnostics stay aligned with the
 /// provider renderer.
 pub fn openai_prompt_cache_diagnostics(
-    prompt_cache_key: String,
+    cache_key: OpenAiPromptCacheKeyDiagnostics,
     rendered: &OpenAiRenderedMessages,
     response_format: &serde_json::Value,
     tools: &serde_json::Value,
@@ -314,7 +329,9 @@ pub fn openai_prompt_cache_diagnostics(
 
     let stable_projection_sha256 = sha256_hex(stable_projection.as_bytes());
     Ok(OpenAiPromptCacheDiagnostics {
-        prompt_cache_key,
+        prompt_cache_key: cache_key.key,
+        prompt_cache_key_purpose: cache_key.purpose,
+        prompt_cache_partition_sha256: cache_key.partition_sha256,
         effective_input_bytes,
         effective_input_items,
         instructions_bytes: rendered.instructions.len(),
@@ -431,16 +448,67 @@ fn sha256_hex(bytes: &[u8]) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// Typed purpose for an OpenAI prompt-cache routing key.
+///
+/// The purpose is content-free policy metadata. It separates ordinary session
+/// traffic from internal workloads without placing user or prompt material in
+/// a provider-visible key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenAiPromptCacheKeyPurpose {
+    /// An ordinary session-scoped agent request.
+    Session,
+    /// The internal auto-sizing router workload.
+    InternalRouter,
+    /// An internal structured workflow such as a judge or assessment.
+    InternalWorkflow,
+    /// A request with no session identity that uses a stable fallback boundary.
+    UnknownCompatible,
+}
+
+impl OpenAiPromptCacheKeyPurpose {
+    /// Returns the stable diagnostic and key-material label for this purpose.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Session => "session",
+            Self::InternalRouter => "internal_router",
+            Self::InternalWorkflow => "internal_workflow",
+            Self::UnknownCompatible => "unknown_compatible",
+        }
+    }
+}
+
 /// Builds a stable, non-secret OpenAI prompt-cache routing key.
 ///
-/// The key includes provider compatibility identity, prompt lineage, and session
-/// identity while excluding the model and rendered prompt text. Forks retain
-/// their lineage but use independent routing keys. Missing metadata uses stable
-/// unknown components; the key does not replace provider exact-prefix matching.
+/// The compatibility wrapper retains the ordinary session policy for callers
+/// that have no typed workload information. New request construction should use
+/// [`openai_prompt_cache_key_with_partition`] so auxiliary traffic cannot
+/// collapse onto the unknown-session key.
 pub fn openai_prompt_cache_key(
     provider: &str,
     lineage_id: Option<&str>,
     session_id: Option<&str>,
+) -> String {
+    openai_prompt_cache_key_with_partition(
+        provider,
+        lineage_id,
+        session_id,
+        OpenAiPromptCacheKeyPurpose::Session,
+        "session-default",
+    )
+}
+
+/// Builds a stable, non-secret OpenAI prompt-cache key from a typed workload
+/// purpose and privacy-safe partition identifier.
+///
+/// Callers must derive `partition` only from durable, non-content identities or
+/// a bounded deterministic shard. The raw material is hashed before it leaves
+/// Mezzanine, so diagnostics can report only the purpose and key digest.
+pub fn openai_prompt_cache_key_with_partition(
+    provider: &str,
+    lineage_id: Option<&str>,
+    session_id: Option<&str>,
+    purpose: OpenAiPromptCacheKeyPurpose,
+    partition: &str,
 ) -> String {
     let mut material = String::new();
     material.push_str("mezzanine\n");
@@ -459,7 +527,13 @@ pub fn openai_prompt_cache_key(
     material.push_str("session_id=");
     material.push_str(session_id.unwrap_or("session-unknown"));
     material.push('\n');
-    material.push_str("cache_family=responses-routing-v5\n");
+    material.push_str("purpose=");
+    material.push_str(purpose.as_str());
+    material.push('\n');
+    material.push_str("partition=");
+    material.push_str(partition);
+    material.push('\n');
+    material.push_str("cache_family=responses-routing-v6\n");
     let digest = sha2::Sha256::digest(material.as_bytes());
     let digest_hex = digest
         .iter()

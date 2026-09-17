@@ -17,7 +17,9 @@ use crate::{
 };
 
 /// Resolves an OpenAI Responses cache generation from one canonical model id.
-fn inferred_openai_prompt_cache_generation(model: &str) -> Option<OpenAiPromptCacheGeneration> {
+pub(crate) fn inferred_openai_prompt_cache_generation(
+    model: &str,
+) -> Option<OpenAiPromptCacheGeneration> {
     let model = model.trim().to_ascii_lowercase();
     if let Some(suffix) = model.strip_prefix("gpt-") {
         let major = suffix
