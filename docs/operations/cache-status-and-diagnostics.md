@@ -72,15 +72,39 @@ current compaction epoch; live registry validation remains required. An
 unchanged directory must not increase the snapshot count or create an
 MCP-caused provider-prefix divergence.
 
-OpenAI prompt-cache routing keys include the agent session UUID in addition to
-prompt profile/version, provider, lineage, and cache-family identity. Forked
-sessions and forked subagents retain their parent's lineage but receive distinct
-routing keys. Requests within the same session retain their key when those
-inputs are unchanged; changing only the model does not change the key. Missing
-session or lineage metadata uses stable unknown components. Session isolation
-does not guarantee cache hits or provider eviction/billing isolation, and can
-reduce reuse of a parent's cached prefix. Existing keys change once on upgrade
-to the session-scoped `responses-routing-v5` family.
+OpenAI prompt-cache routing keys include prompt profile/version, provider,
+lineage, session identity, typed workload purpose, a privacy-safe workload
+partition, and cache-family identity. Forked sessions and forked subagents
+retain their parent's lineage but receive distinct routing keys. Internal router
+and structured-workflow traffic uses separate purposes, and diagnostics expose
+only the purpose and partition digest. Session isolation does not guarantee
+cache hits or provider eviction/billing isolation.
+
+## Run an opt-in OpenAI cache conformance observation
+
+The ordinary test suite never makes provider calls. To observe direct OpenAI
+Responses behavior for a synthetic paired prefix, explicitly authorize the
+probe and provide an API key only through the environment:
+
+```sh
+MEZ_OPENAI_CACHE_PROBE=1 OPENAI_API_KEY=... \
+MEZ_OPENAI_CACHE_PROBE_MODEL=gpt-5.6 \
+just probe-openai-prompt-cache
+```
+
+Set `MEZ_OPENAI_CACHE_PROBE_MODE=explicit` only for a GPT-5.6-or-newer model
+that accepts explicit cache breakpoints; the default is `implicit`. The probe
+sends two requests with the same synthetic stable prefix and distinct fixed
+suffixes. Its second request retains the first request as an exact input prefix.
+It prints only backend, model, cache generation/mode/TTL, request ordinal,
+append-only status, purpose and partition digest, request-shape digest, token
+counters, and whether a response id was present; it never prints the key,
+prompt, output, endpoint, or credential. A zero or missing `cached_tokens`
+value is an observation, not a defect: inspect continuity, elapsed time,
+routing load, and provider residency before drawing conclusions. This probe
+currently qualifies only the direct API-key Responses backend; the separate
+ChatGPT browser/device backend remains explicitly unsupported until its cache
+semantics can be tested without treating its credentials as REST API keys.
 
 Changes to the model, provider routing namespace, prompt-cache lineage, stream
 shape, compaction epoch, or an explicitly exceptional interaction start a new

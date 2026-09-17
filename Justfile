@@ -59,6 +59,17 @@ test-real-bubblewrap:
 test-real-linux-power-inhibition:
     sh scripts/test-real-linux-power-inhibition.sh
 
+# Send two explicitly authorized synthetic OpenAI Responses requests and print
+# only sanitized cache-usage observations. This is disabled unless the caller
+# supplies both the opt-in switch and an API key.
+probe-openai-prompt-cache:
+    sh scripts/probe-openai-prompt-cache.sh
+
+# Exercise the credential-gated OpenAI cache probe with a fake transport. This
+# never contacts a provider and protects its authorization and redaction rules.
+test-openai-prompt-cache-probe:
+    timeout 120s sh scripts/probe-openai-prompt-cache-test.sh
+
 # Run the complete macOS Seatbelt compiler, pane/native runtime, cleanup,
 # recovery, and product-binary acceptance surface serially.
 test-real-seatbelt:
