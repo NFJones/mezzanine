@@ -4484,10 +4484,14 @@ When both context fields are absent, Mezzanine SHOULD use built-in provider
 model metadata for known default model families before falling back to a
 conservative local token budget for display and explicit compaction targets.
 OpenAI input caching is provider-managed for eligible prompt prefixes.
-Mezzanine MAY send a stable OpenAI `prompt_cache_key`, but MUST NOT send a
-`prompt_cache_retention` request field. If an older OpenAI profile still carries
-`provider_options.prompt_cache_retention`, the OpenAI Responses adapter MUST
-ignore it.
+Mezzanine MAY send a stable OpenAI `prompt_cache_key`. For known pre-GPT-5.6
+OpenAI Responses models, `provider_options.prompt_cache_retention` MAY select
+only the model-supported `in_memory` or `24h` value; GPT-4.5 MAY select only
+`in_memory`, and GPT-5.5 and GPT-5.5 Pro MAY select only `24h`. GPT-5.6 and newer MUST use
+`prompt_cache_options: { ttl: "30m" }` and MUST reject legacy retention values
+other than the compatible `30m` spelling. Unknown or custom model identifiers
+MUST receive no model-specific cache controls and MUST reject an explicit
+retention setting until supported capability metadata is available.
 For OpenAI-compatible Chat Completions profiles,
 `provider_options.developer_role` MAY be set to `developer` or `system` to
 control how Mezzanine developer messages are serialized. It MUST default to
@@ -5358,9 +5362,10 @@ MUST use a reserved, versioned system transcript event contract. Only supported
 typed events may become model-visible context during replay; ordinary system
 records and malformed or unsupported reserved payloads MUST remain filtered.
 OpenAI request diagnostics MUST fingerprint the provider-visible request shape
-after unsupported local profile options are omitted. Local
-`provider_options.prompt_cache_retention` values MUST NOT affect the emitted
-OpenAI Responses body or the provider request-shape diagnostics.
+after unsupported local profile options are rejected. Supported generation-aware
+cache controls, including `prompt_cache_retention` and
+`prompt_cache_options.ttl`, MUST affect the emitted OpenAI Responses body and
+the provider request-shape diagnostics.
 
 The `providers.<name>.models` table MUST be a map keyed by a path-safe local
 entry identity. Each record MUST define its canonical provider-facing `id` and

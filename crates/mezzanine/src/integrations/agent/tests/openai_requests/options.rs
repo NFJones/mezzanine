@@ -38,7 +38,7 @@ fn openai_responses_request_body_includes_reasoning_effort() {
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
 
     assert_eq!(value["reasoning"]["effort"], "high");
-    assert!(value.get("prompt_cache_retention").is_none());
+    assert_eq!(value["prompt_cache_retention"], "24h");
 }
 
 #[test]
@@ -90,25 +90,64 @@ fn openai_responses_request_body_omits_configured_max_output_tokens() {
 }
 
 #[test]
-/// Verifies OpenAI Responses requests omit prompt-cache retention controls.
-///
-/// OpenAI input caching is automatic for eligible prefixes. The Responses API
-/// rejects a `prompt_cache_retention` request field, so stale profile options
-/// must not leak into the provider-visible JSON body.
-fn openai_responses_request_body_omits_prompt_cache_retention_option() {
-    for retention in ["24h", "in_memory", "forever"] {
-        let mut request = openai_prompt_cache_retention_test_request("gpt-5.5");
+/// Verifies Responses cache controls follow the documented canonical model
+/// generation rather than treating every OpenAI model as one API-wide cache
+/// contract. This keeps legacy retention controls away from GPT-5.6 while
+/// rejecting unsupported values before they reach the provider.
+fn openai_responses_request_body_applies_generation_aware_cache_controls() {
+    let mut earlier = openai_prompt_cache_retention_test_request("gpt-5.4");
+    earlier.prompt_cache_retention = Some("in_memory".to_string());
+    let earlier: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&earlier).unwrap()).unwrap();
+    assert_eq!(earlier["prompt_cache_retention"], "in_memory");
+    assert!(earlier.get("prompt_cache_options").is_none());
+
+    let mut gpt_45 = openai_prompt_cache_retention_test_request("gpt-4.5-2025-02-27");
+    gpt_45.prompt_cache_retention = Some("in_memory".to_string());
+    let gpt_45: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&gpt_45).unwrap()).unwrap();
+    assert_eq!(gpt_45["prompt_cache_retention"], "in_memory");
+
+    let mut gpt_55 = openai_prompt_cache_retention_test_request("gpt-5.5-pro-2026-01-01");
+    gpt_55.prompt_cache_retention = Some("24h".to_string());
+    let gpt_55: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&gpt_55).unwrap()).unwrap();
+    assert_eq!(gpt_55["prompt_cache_retention"], "24h");
+
+    let mut gpt_56 = openai_prompt_cache_retention_test_request("gpt-5.6-2026-01-01");
+    gpt_56.prompt_cache_retention = Some("30m".to_string());
+    let gpt_56: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&gpt_56).unwrap()).unwrap();
+    assert_eq!(gpt_56["prompt_cache_options"]["ttl"], "30m");
+    assert!(gpt_56.get("prompt_cache_retention").is_none());
+
+    let gpt_6 = openai_prompt_cache_retention_test_request("gpt-6-astra");
+    let gpt_6: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&gpt_6).unwrap()).unwrap();
+    assert_eq!(gpt_6["prompt_cache_options"]["ttl"], "30m");
+    assert!(gpt_6.get("prompt_cache_retention").is_none());
+
+    let mut metadata_override =
+        openai_prompt_cache_retention_test_request("custom-responses-model");
+    metadata_override
+        .model_capabilities
+        .openai_prompt_cache_generation =
+        Some(mez_agent::model_capabilities::OpenAiPromptCacheGeneration::Gpt56OrNewer);
+    let metadata_override: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&metadata_override).unwrap()).unwrap();
+    assert_eq!(metadata_override["prompt_cache_options"]["ttl"], "30m");
+
+    for (model, retention) in [
+        ("gpt-4.5", "24h"),
+        ("gpt-5.5", "in_memory"),
+        ("gpt-5.6", "24h"),
+        ("custom-responses-model", "24h"),
+    ] {
+        let mut request = openai_prompt_cache_retention_test_request(model);
         request.prompt_cache_retention = Some(retention.to_string());
-
-        let body = openai_responses_request_body(&request).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&body).unwrap();
-
-        assert!(value.get("prompt_cache_retention").is_none(), "{retention}");
         assert!(
-            value["prompt_cache_key"]
-                .as_str()
-                .is_some_and(|key| key.starts_with("mez-")),
-            "{retention}"
+            openai_responses_request_body(&request).is_err(),
+            "{model} unexpectedly accepted {retention}"
         );
     }
 }

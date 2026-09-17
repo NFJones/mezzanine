@@ -221,6 +221,7 @@ mod tests {
         request.model = "deepseek-v4-pro".to_string();
         request.model_capabilities = crate::ModelCapabilities {
             metadata_policy: crate::ModelCapabilityMetadataPolicy::ModelMetadata,
+            openai_prompt_cache_generation: None,
             native_thinking: true,
             supported_reasoning_efforts: vec!["high".to_string(), "max".to_string()],
             reasoning_efforts_explicit: true,

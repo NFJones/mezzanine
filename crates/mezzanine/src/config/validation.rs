@@ -1010,6 +1010,27 @@ fn validate_provider_models_config(format: ConfigFormat, text: &str) -> Vec<Conf
                         });
                     }
                 }
+                let cache_generations = tags
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .filter(|tag| {
+                        matches!(
+                            tag.trim(),
+                            "openai_prompt_cache_gpt45"
+                                | "openai_prompt_cache_earlier"
+                                | "openai_prompt_cache_gpt55"
+                                | "openai_prompt_cache_gpt56"
+                        )
+                    })
+                    .count();
+                if cache_generations > 1 {
+                    diagnostics.push(ConfigDiagnostic {
+                        path: format!("{entry_path}.capabilities"),
+                        message:
+                            "provider model may declare at most one OpenAI prompt-cache generation"
+                                .to_string(),
+                    });
+                }
             }
 
             if let Some(aliases) = model.get("aliases").and_then(serde_json::Value::as_array) {
@@ -1128,6 +1149,10 @@ fn is_supported_capability_tag(tag: &str) -> bool {
             | "streaming"
             | "max_output_tokens"
             | "max_output_token_control"
+            | "openai_prompt_cache_gpt45"
+            | "openai_prompt_cache_earlier"
+            | "openai_prompt_cache_gpt55"
+            | "openai_prompt_cache_gpt56"
             | "vision"
     )
 }

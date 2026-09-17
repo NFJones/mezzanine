@@ -5,6 +5,7 @@
 //! formatting, and MAAP schema selection while remaining independent of
 //! credentials and transport orchestration.
 
+use crate::model_capabilities::OpenAiPromptCacheGeneration;
 use crate::openai_cache::{
     openai_prompt_cache_key, openai_render_request_messages, openai_response_format,
 };
@@ -14,6 +15,108 @@ use crate::{
     ProviderRequestAssemblyError, ProviderRequestAssemblyResult, openai_request_options,
     validate_provider_request_required,
 };
+
+/// Resolves an OpenAI Responses cache generation from one canonical model id.
+fn inferred_openai_prompt_cache_generation(model: &str) -> Option<OpenAiPromptCacheGeneration> {
+    let model = model.trim().to_ascii_lowercase();
+    if let Some(suffix) = model.strip_prefix("gpt-") {
+        let major = suffix
+            .split(['.', '-'])
+            .next()
+            .and_then(|major| major.parse::<u32>().ok());
+        if major.is_some_and(|major| major >= 6) {
+            return Some(OpenAiPromptCacheGeneration::Gpt56OrNewer);
+        }
+    }
+    if let Some(suffix) = model.strip_prefix("gpt-5.") {
+        match suffix
+            .split('-')
+            .next()
+            .and_then(|minor| minor.parse::<u32>().ok())
+        {
+            Some(5) => Some(OpenAiPromptCacheGeneration::Gpt55),
+            Some(minor) if minor >= 6 => Some(OpenAiPromptCacheGeneration::Gpt56OrNewer),
+            Some(_) => Some(OpenAiPromptCacheGeneration::Earlier),
+            None => None,
+        }
+    } else if model == "gpt-4.5" || model.starts_with("gpt-4.5-") {
+        Some(OpenAiPromptCacheGeneration::Gpt45)
+    } else if ["gpt-4.1", "gpt-5"]
+        .iter()
+        .any(|family| model == *family || model.starts_with(&format!("{family}-")))
+    {
+        Some(OpenAiPromptCacheGeneration::Earlier)
+    } else {
+        None
+    }
+}
+
+/// Adds the generation-compatible OpenAI cache control for one request.
+fn apply_openai_prompt_cache_policy(
+    body: &mut serde_json::Value,
+    request: &ModelRequest,
+) -> ProviderRequestAssemblyResult<()> {
+    let retention = request.prompt_cache_retention.as_deref();
+    match request
+        .model_capabilities
+        .openai_prompt_cache_generation
+        .or_else(|| inferred_openai_prompt_cache_generation(&request.model))
+    {
+        Some(OpenAiPromptCacheGeneration::Earlier) => {
+            if let Some(retention) = retention {
+                if !matches!(retention, "in_memory" | "24h") {
+                    return Err(ProviderRequestAssemblyError::invalid_args(format!(
+                        "OpenAI model {:?} supports prompt_cache_retention values in_memory or 24h, got {retention:?}",
+                        request.model
+                    )));
+                }
+                body["prompt_cache_retention"] = serde_json::json!(retention);
+            }
+        }
+        Some(OpenAiPromptCacheGeneration::Gpt45) => {
+            if let Some(retention) = retention {
+                if retention != "in_memory" {
+                    return Err(ProviderRequestAssemblyError::invalid_args(format!(
+                        "OpenAI model {:?} supports only prompt_cache_retention=in_memory, got {retention:?}",
+                        request.model
+                    )));
+                }
+                body["prompt_cache_retention"] = serde_json::json!(retention);
+            }
+        }
+        Some(OpenAiPromptCacheGeneration::Gpt55) => {
+            if let Some(retention) = retention {
+                if retention != "24h" {
+                    return Err(ProviderRequestAssemblyError::invalid_args(format!(
+                        "OpenAI model {:?} supports only prompt_cache_retention=24h, got {retention:?}",
+                        request.model
+                    )));
+                }
+                body["prompt_cache_retention"] = serde_json::json!(retention);
+            }
+        }
+        Some(OpenAiPromptCacheGeneration::Gpt56OrNewer) => {
+            if let Some(retention) = retention
+                && retention != "30m"
+            {
+                return Err(ProviderRequestAssemblyError::invalid_args(format!(
+                    "OpenAI model {:?} uses prompt_cache_options.ttl=30m instead of prompt_cache_retention={retention:?}",
+                    request.model
+                )));
+            }
+            body["prompt_cache_options"] = serde_json::json!({ "ttl": "30m" });
+        }
+        None => {
+            if let Some(retention) = retention {
+                return Err(ProviderRequestAssemblyError::invalid_args(format!(
+                    "OpenAI model {:?} has no verified prompt-cache retention support; refusing prompt_cache_retention={retention:?}",
+                    request.model
+                )));
+            }
+        }
+    }
+    Ok(())
+}
 
 /// Builds a non-streaming OpenAI Responses request body.
 ///
@@ -76,6 +179,7 @@ pub(crate) fn openai_responses_request_control_shape_with_stream(
     if let Some(service_tier) = options.service_tier {
         body["service_tier"] = serde_json::json!(service_tier);
     }
+    apply_openai_prompt_cache_policy(&mut body, request)?;
     if request.interaction_kind.expects_structured_json() {
         body["tool_choice"] = serde_json::json!("none");
     } else if request.interaction_kind.expects_maap_batch() {

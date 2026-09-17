@@ -2010,6 +2010,24 @@ fn provider_model_metadata_vocabulary_validation() {
         ConfigScope::Primary,
     );
     assert!(permissive.valid, "{:?}", permissive.diagnostics);
+
+    let conflicting_cache_generations = validate_config_text(
+        ConfigFormat::Toml,
+        "[providers.openai]\nkind = \"openai\"\napi = \"openai-responses\"\n[providers.openai.models.custom]\nid = \"custom-responses-model\"\ncapabilities = [\"openai_prompt_cache_gpt55\", \"openai_prompt_cache_gpt56\"]\n",
+        ConfigScope::Primary,
+    );
+    assert!(!conflicting_cache_generations.valid);
+    assert!(
+        conflicting_cache_generations
+            .diagnostics
+            .iter()
+            .any(|diagnostic| {
+                diagnostic.path == "providers.openai.models.custom.capabilities"
+                    && diagnostic
+                        .message
+                        .contains("at most one OpenAI prompt-cache generation")
+            })
+    );
 }
 
 /// Reasoning selections are validated against resolvable model metadata at

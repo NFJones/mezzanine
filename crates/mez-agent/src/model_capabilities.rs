@@ -8,6 +8,23 @@
 
 use crate::{ProviderApiCompatibility, ProviderCapabilities};
 
+/// Model-specific OpenAI Responses prompt-cache protocol generation.
+///
+/// This capability is intentionally optional: a recognized canonical OpenAI
+/// model identifier supplies the built-in policy, while configured metadata
+/// can explicitly establish the contract for an otherwise custom identifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub enum OpenAiPromptCacheGeneration {
+    /// GPT-4.5 implicit caching without documented 24-hour retention.
+    Gpt45,
+    /// Pre-GPT-5.6 implicit caching with ordinary retention controls.
+    Earlier,
+    /// GPT-5.5 implicit caching with its 24-hour-only retention control.
+    Gpt55,
+    /// GPT-5.6-and-later cache options and 30-minute lifetime contract.
+    Gpt56OrNewer,
+}
+
 /// Provenance policy used to resolve one effective model capability record.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub enum ModelCapabilityMetadataPolicy {
@@ -25,6 +42,9 @@ pub enum ModelCapabilityMetadataPolicy {
 pub struct ModelCapabilities {
     /// Policy describing how model-specific support was established.
     pub metadata_policy: ModelCapabilityMetadataPolicy,
+    /// Explicit OpenAI cache protocol metadata, when the selected model record
+    /// establishes behavior that cannot safely be inferred from its id.
+    pub openai_prompt_cache_generation: Option<OpenAiPromptCacheGeneration>,
     /// Whether the model supports the provider's native thinking control.
     pub native_thinking: bool,
     /// Ordered provider-facing reasoning efforts accepted by the model.
@@ -51,6 +71,7 @@ impl ModelCapabilities {
         let provider = ProviderCapabilities::for_api(api);
         Self {
             metadata_policy: ModelCapabilityMetadataPolicy::ProviderApi,
+            openai_prompt_cache_generation: None,
             native_thinking: provider.supports_thinking_toggle,
             supported_reasoning_efforts: Vec::new(),
             reasoning_efforts_explicit: false,
@@ -70,6 +91,7 @@ impl ModelCapabilities {
     pub fn conservative_unknown_deepseek() -> Self {
         Self {
             metadata_policy: ModelCapabilityMetadataPolicy::ConservativeUnknown,
+            openai_prompt_cache_generation: None,
             native_thinking: false,
             supported_reasoning_efforts: Vec::new(),
             reasoning_efforts_explicit: true,
@@ -101,6 +123,18 @@ impl ModelCapabilities {
             effective.metadata_policy = ModelCapabilityMetadataPolicy::ModelMetadata;
         }
         if let Some(capabilities) = capabilities {
+            effective.openai_prompt_cache_generation =
+                capabilities
+                    .iter()
+                    .find_map(|capability| match capability.trim() {
+                        "openai_prompt_cache_gpt45" => Some(OpenAiPromptCacheGeneration::Gpt45),
+                        "openai_prompt_cache_earlier" => Some(OpenAiPromptCacheGeneration::Earlier),
+                        "openai_prompt_cache_gpt55" => Some(OpenAiPromptCacheGeneration::Gpt55),
+                        "openai_prompt_cache_gpt56" => {
+                            Some(OpenAiPromptCacheGeneration::Gpt56OrNewer)
+                        }
+                        _ => None,
+                    });
             effective.native_thinking = has_capability(capabilities, "native_thinking");
             effective.function_tools = capabilities.iter().any(|capability| {
                 matches!(

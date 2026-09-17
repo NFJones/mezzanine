@@ -52,7 +52,7 @@ fn openai_responses_request_body_has_canonical_cache_shape_fixture() {
     let diagnostics = openai_prompt_cache_diagnostics_for_request(&request).unwrap();
 
     assert_eq!(body["model"], "gpt-5.4");
-    assert!(body.get("prompt_cache_retention").is_none());
+    assert_eq!(body["prompt_cache_retention"], "24h");
     assert!(body.get("max_output_tokens").is_none());
     assert_eq!(body["reasoning"]["effort"], "medium");
     assert_eq!(body["service_tier"], "priority");

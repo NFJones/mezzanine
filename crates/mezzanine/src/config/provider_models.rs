@@ -39,6 +39,10 @@ fn canonical_capability_tag(tag: &str) -> bool {
             | "streaming"
             | "max_output_tokens"
             | "max_output_token_control"
+            | "openai_prompt_cache_gpt45"
+            | "openai_prompt_cache_earlier"
+            | "openai_prompt_cache_gpt55"
+            | "openai_prompt_cache_gpt56"
             | "vision"
     )
 }

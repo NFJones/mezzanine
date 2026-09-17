@@ -914,12 +914,11 @@ fn openai_prompt_cache_diagnostics_fingerprint_provider_prefix_parts() {
 }
 
 #[test]
-/// Verifies OpenAI prompt-cache diagnostics ignore retention profile options.
-///
-/// Diagnostics fingerprint the provider-visible request shape used for cache
-/// analysis. Because OpenAI does not accept `prompt_cache_retention`, changing a
-/// stale local option must not perturb the canonical request-shape digest.
-fn openai_prompt_cache_diagnostics_ignore_prompt_cache_retention_option() {
+/// Verifies OpenAI prompt-cache diagnostics include supported retention
+/// controls because those controls change the provider-visible request shape.
+/// This prevents cache continuity analysis from treating distinct lifetimes as
+/// an unchanged provider request.
+fn openai_prompt_cache_diagnostics_include_prompt_cache_retention_option() {
     let implicit = openai_prompt_cache_retention_test_request("gpt-5.4");
     let mut explicit = openai_prompt_cache_retention_test_request("gpt-5.4");
     explicit.prompt_cache_retention = Some("24h".to_string());
@@ -929,15 +928,15 @@ fn openai_prompt_cache_diagnostics_ignore_prompt_cache_retention_option() {
     let explicit_body: serde_json::Value =
         serde_json::from_str(&openai_responses_request_body(&explicit).unwrap()).unwrap();
     assert!(implicit_body.get("prompt_cache_retention").is_none());
-    assert_eq!(implicit_body, explicit_body);
+    assert_eq!(explicit_body["prompt_cache_retention"], "24h");
 
     let implicit_diagnostics = openai_prompt_cache_diagnostics_for_request(&implicit).unwrap();
     let explicit_diagnostics = openai_prompt_cache_diagnostics_for_request(&explicit).unwrap();
-    assert_eq!(
+    assert_ne!(
         implicit_diagnostics.provider_request_shape_bytes,
         explicit_diagnostics.provider_request_shape_bytes
     );
-    assert_eq!(
+    assert_ne!(
         implicit_diagnostics.provider_request_shape_sha256,
         explicit_diagnostics.provider_request_shape_sha256
     );
