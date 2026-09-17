@@ -1613,6 +1613,13 @@ fn runtime_provider_wire_observations_pair_status_and_reject_stale_owners() {
         "{status}"
     );
     assert!(
+        status.contains(&format!(
+            "| Latest cache key | {} |",
+            diagnostics.prompt_cache_key
+        )),
+        "{status}"
+    );
+    assert!(
         status.contains("| Provider wire prefix | request=wire-status-1 initial input_bytes=")
             && status.contains("input_items="),
         "{status}"

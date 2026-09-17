@@ -18,6 +18,24 @@ fn validate_non_empty(field: &str, value: &str) -> Result<()> {
     }
 }
 
+/// Reports whether the provider explicitly identified its response body as JSON.
+fn openai_response_is_json(headers: &BTreeMap<String, String>) -> bool {
+    headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+        .is_some_and(|(_, value)| {
+            let value = value.to_ascii_lowercase();
+            value.contains("application/json") || value.contains("+json")
+        })
+}
+
+/// Removes the direct-OpenAI cache option unsupported by the ChatGPT backend.
+fn remove_openai_prompt_cache_options(body: &mut serde_json::Value) {
+    if let Some(body) = body.as_object_mut() {
+        body.remove("prompt_cache_options");
+    }
+}
+
 // Model provider traits and OpenAI Responses adapter.
 
 mod anthropic;
@@ -1397,7 +1415,11 @@ impl<T: ProviderHttpTransport> ModelProvider for OpenAiResponsesProvider<T> {
             ));
         }
         let (model, raw_text, usage, provider_transcript_events) =
-            parse_openai_responses_provider_body(&response.body, &request.model, self.stream)?;
+            parse_openai_responses_provider_body(
+                &response.body,
+                &request.model,
+                self.stream && !openai_response_is_json(&response.headers),
+            )?;
         let quota_usage = provider_quota_usage_from_headers(&response.headers);
         let action_batch = if !request.interaction_kind.expects_maap_batch() {
             None
@@ -1597,11 +1619,12 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
             if let Some(error) = stream_error {
                 return Err(error.into());
             }
-            let (model, raw_text, usage, provider_transcript_events) = if self.stream {
-                stream_decoder.finish(&request.model)?
-            } else {
-                parse_openai_responses_provider_body(&response.body, &request.model, false)?
-            };
+            let (model, raw_text, usage, provider_transcript_events) =
+                if self.stream && !openai_response_is_json(&response.headers) {
+                    stream_decoder.finish(&request.model)?
+                } else {
+                    parse_openai_responses_provider_body(&response.body, &request.model, false)?
+                };
             let quota_usage = provider_quota_usage_from_headers(&response.headers);
             let action_batch = if !request.interaction_kind.expects_maap_batch() {
                 None
@@ -1681,7 +1704,22 @@ pub fn build_openai_responses_http_request_with_headers(
             "OpenAI provider timeout must be greater than zero",
         ));
     }
-    let body = openai_responses_request_body_with_stream(request, stream)?;
+    let mut body: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body_with_stream(request, stream)?)
+            .map_err(|error| {
+                MezError::invalid_state(format!(
+                    "OpenAI Responses request body was not JSON: {error}"
+                ))
+            })?;
+    if extra_headers
+        .keys()
+        .any(|name| name.eq_ignore_ascii_case(CHATGPT_ACCOUNT_ID_HEADER))
+    {
+        remove_openai_prompt_cache_options(&mut body);
+    }
+    let body = serde_json::to_string(&body).map_err(|error| {
+        MezError::invalid_state(format!("OpenAI Responses request encoding failed: {error}"))
+    })?;
     let mut headers = BTreeMap::new();
     headers.insert(
         "Accept".to_string(),

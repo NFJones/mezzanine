@@ -223,8 +223,8 @@ fn provider_http_expects_event_stream(
     request_headers: &BTreeMap<String, String>,
     response_headers: &BTreeMap<String, String>,
 ) -> bool {
-    provider_header_value(request_headers, "accept")
-        .or_else(|| provider_header_value(response_headers, "content-type"))
+    provider_header_value(response_headers, "content-type")
+        .or_else(|| provider_header_value(request_headers, "accept"))
         .is_some_and(|value| value.to_ascii_lowercase().contains("text/event-stream"))
 }
 
@@ -610,7 +610,7 @@ mod provider_transport_tests {
     use super::{
         AsyncProviderHttpTransport, ProviderHttpRequest, ProviderHttpTimeouts,
         ProviderSseTerminalDetector, ReqwestProviderHttpTransport,
-        apply_provider_transport_default_headers,
+        apply_provider_transport_default_headers, provider_http_expects_event_stream,
     };
     use std::collections::BTreeMap;
     use std::time::Duration;
@@ -631,6 +631,22 @@ mod provider_transport_tests {
             headers.get(reqwest::header::ACCEPT_ENCODING).unwrap(),
             "identity"
         );
+    }
+
+    #[test]
+    /// Verifies an explicit JSON response overrides the request's SSE preference.
+    fn provider_transport_prefers_response_content_type_over_sse_accept_header() {
+        assert!(!provider_http_expects_event_stream(
+            &BTreeMap::from([("Accept".to_string(), "text/event-stream".to_string())]),
+            &BTreeMap::from([(
+                "Content-Type".to_string(),
+                "application/json; charset=utf-8".to_string(),
+            )]),
+        ));
+        assert!(provider_http_expects_event_stream(
+            &BTreeMap::from([("Accept".to_string(), "application/json".to_string())]),
+            &BTreeMap::from([("Content-Type".to_string(), "text/event-stream".to_string())]),
+        ));
     }
 
     /// Verifies provider HTTP calls preserve an explicitly supplied

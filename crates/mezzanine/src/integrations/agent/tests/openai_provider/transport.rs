@@ -62,6 +62,65 @@ async fn openai_provider_async_posts_responses_request_and_parses_output_text() 
     );
 }
 
+#[tokio::test]
+/// Verifies a streaming OpenAI request accepts an explicit JSON response when
+/// a compatible backend declines SSE, without changing the requested stream
+/// intent.
+async fn openai_streaming_provider_parses_explicit_json_response() {
+    let request = assemble_model_request(
+        &ModelProfile {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "user".to_string(),
+            content: "hello".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    let transport = AsyncFakeProviderHttpTransport {
+        requests: std::sync::Mutex::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: std::collections::BTreeMap::from([(
+                "content-type".to_string(),
+                "application/json; charset=utf-8".to_string(),
+            )]),
+            body: r#"{"model":"gpt-test","output_text":"hello JSON"}"#.to_string(),
+        },
+    };
+    let provider = OpenAiResponsesProvider::with_endpoint_headers_and_stream(
+        "test-key",
+        "https://example.test/responses",
+        10,
+        std::collections::BTreeMap::new(),
+        true,
+        transport,
+    )
+    .unwrap();
+
+    let response = provider.send_request_async(&request).await.unwrap();
+
+    assert_eq!(response.raw_text, "hello JSON");
+    let sent = provider.transport.requests.lock().unwrap();
+    assert_eq!(
+        sent[0].headers.get("Accept").map(String::as_str),
+        Some("text/event-stream")
+    );
+    let body: serde_json::Value = serde_json::from_str(&sent[0].body).unwrap();
+    assert_eq!(body["stream"], true);
+}
+
 #[test]
 /// Verifies openai provider posts responses request, parses output text, and
 /// exposes provider token and quota usage metadata.

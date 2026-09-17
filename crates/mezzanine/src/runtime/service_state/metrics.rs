@@ -29,6 +29,7 @@ pub(crate) struct RuntimeProviderWireRequestStatus {
     pub(crate) model: String,
     pub(crate) interaction_kind: String,
     pub(crate) schema_digest: String,
+    pub(crate) prompt_cache_key: Option<String>,
     pub(crate) purpose: String,
     pub(crate) usage: Option<ModelTokenUsage>,
     pub(crate) effective_input_bytes: Option<usize>,
@@ -444,6 +445,10 @@ impl RuntimeMetricsSnapshot {
             model: observation.model.clone(),
             interaction_kind: observation.interaction_kind.clone(),
             schema_digest: observation.schema_digest.clone(),
+            prompt_cache_key: observation
+                .openai_diagnostics
+                .as_ref()
+                .map(|diagnostics| diagnostics.prompt_cache_key.clone()),
             purpose: observation.purpose.as_str().to_string(),
             usage: observation.usage,
             effective_input_bytes: observation

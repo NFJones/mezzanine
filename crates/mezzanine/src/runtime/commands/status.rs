@@ -357,6 +357,12 @@ impl RuntimeSessionService {
                 ),
             ],
             vec![
+                "Latest cache key".to_string(),
+                provider_wire_status
+                    .and_then(|status| status.prompt_cache_key.clone())
+                    .unwrap_or_else(|| "unknown".to_string()),
+            ],
+            vec![
                 "Context continuity".to_string(),
                 context_continuity.map_or_else(
                     || "unknown".to_string(),

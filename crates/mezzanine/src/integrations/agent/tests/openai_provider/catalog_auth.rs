@@ -152,7 +152,7 @@ fn openai_provider_from_auth_store_routes_chatgpt_credentials_to_codex_backend()
     let request = assemble_model_request(
         &ModelProfile {
             provider: "openai".to_string(),
-            model: "gpt-test".to_string(),
+            model: "gpt-5.6-sol".to_string(),
             model_capabilities: Default::default(),
             reasoning_profile: None,
             latency_preference: None,
@@ -216,6 +216,8 @@ fn openai_provider_from_auth_store_routes_chatgpt_credentials_to_codex_backend()
     );
     let request_body: serde_json::Value = serde_json::from_str(&sent[0].body).unwrap();
     assert_eq!(request_body["stream"], true);
+    assert!(request_body.get("prompt_cache_options").is_none());
+    assert!(request_body.get("prompt_cache_key").is_some());
     let metadata = std::fs::read_to_string(auth_store.paths().auth_file()).unwrap();
     assert!(metadata.contains("credential_kind = \"chatgpt\""));
     assert!(!metadata.contains("chatgpt-access-token"));
