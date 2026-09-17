@@ -59,6 +59,7 @@ pub struct ModelCapabilities {
     /// establishes behavior that cannot safely be inferred from its id.
     pub openai_prompt_cache_generation: Option<OpenAiPromptCacheGeneration>,
     /// Configured GPT-5.6-and-later cache-boundary mode.
+    #[serde(default)]
     pub openai_prompt_cache_mode: OpenAiPromptCacheMode,
     /// Whether the model supports the provider's native thinking control.
     pub native_thinking: bool,
@@ -267,5 +268,30 @@ mod tests {
         assert!(capabilities.forced_tool_choice);
         assert!(!capabilities.streaming);
         assert!(capabilities.max_output_tokens);
+    }
+
+    /// Verifies catalogs persisted before cache-mode support load with the
+    /// behavior-preserving implicit mode instead of blocking daemon startup.
+    #[test]
+    fn model_capabilities_default_missing_openai_cache_mode_to_implicit() {
+        let capabilities: ModelCapabilities = serde_json::from_str(
+            r#"{
+                "metadata_policy":"ProviderApi",
+                "openai_prompt_cache_generation":null,
+                "native_thinking":false,
+                "supported_reasoning_efforts":[],
+                "reasoning_efforts_explicit":false,
+                "function_tools":false,
+                "forced_tool_choice":false,
+                "streaming":false,
+                "max_output_tokens":false
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            capabilities.openai_prompt_cache_mode,
+            OpenAiPromptCacheMode::Implicit
+        );
     }
 }
