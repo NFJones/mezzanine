@@ -2137,6 +2137,123 @@ fn runtime_sized_child_identity_captures_catalog_materialized_options() {
     );
 }
 
+/// Verifies an option-only identity drift is reported, not installed silently.
+///
+/// The derived name depends on which names are free rather than on the identity
+/// alone, so a name comparison cannot catch a restored profile whose options
+/// changed. A restore-side catalog that contributes an extra option is exactly
+/// that case: the captured name still derives, but the profile no longer matches
+/// what the child ran.
+#[test]
+fn runtime_restore_reports_option_only_identity_drift() {
+    let transcript_store = crate::storage::transcript::AgentTranscriptStore::new(temp_root(
+        "runtime-option-only-identity-drift",
+    ));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "explicit-subagent-sizing-drift".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: EXPLICIT_SUBAGENT_SIZING_CONFIG.to_string(),
+        }])
+        .unwrap();
+    service.cache_provider_model_catalog_for_tests(
+        "deepseek",
+        vec![mez_agent::ProviderModelInfo {
+            id: "deepseek-v4-max".to_string(),
+            display_name: None,
+            reasoning_levels: Some(vec!["low".to_string(), "high".to_string()]),
+            context_window_tokens: None,
+            max_input_tokens: None,
+            max_output_tokens: None,
+            capabilities: Some(vec!["tool_use".to_string()]),
+        }],
+        vec!["low".to_string(), "high".to_string()],
+    );
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let (child_agent_id, child_pane_id, _turn_id) =
+        spawn_explicitly_sized_child(&mut service, &primary, "large", "high");
+    let (captured_name, captured_selection) =
+        persisted_model_identity(&service, &transcript_store, &child_pane_id);
+    let selection = captured_selection.expect("a generated identity carries its selection");
+
+    // The restart happens after a catalog refresh that reports a metadata key the
+    // child's capture does not carry at all, so re-materialization folds in an
+    // option the child never ran with. (A changed *value* of a captured option
+    // cannot drift: the captured options extend last during materialization.)
+    service.cache_provider_model_catalog_for_tests(
+        "deepseek",
+        vec![mez_agent::ProviderModelInfo {
+            id: "deepseek-v4-max".to_string(),
+            display_name: None,
+            reasoning_levels: Some(vec!["low".to_string(), "high".to_string()]),
+            context_window_tokens: Some(128_000),
+            max_input_tokens: None,
+            max_output_tokens: None,
+            capabilities: Some(vec!["tool_use".to_string()]),
+        }],
+        vec!["low".to_string(), "high".to_string()],
+    );
+    {
+        let overrides = service.integration.model_profile_overrides_mut();
+        overrides.agent_profiles.clear();
+        overrides.subagent_profiles.clear();
+        overrides.runtime_generated_profiles.clear();
+    }
+    service
+        .integration
+        .provider_registry_mut()
+        .profile_definitions
+        .remove(&captured_name);
+    service
+        .integration
+        .provider_registry_mut()
+        .profiles
+        .remove(&captured_name);
+
+    service.restore_agent_model_profile_identity(&child_pane_id, &captured_name, Some(&selection));
+    assert_eq!(
+        service
+            .integration
+            .model_profile_overrides()
+            .agent_profiles
+            .get(&child_agent_id)
+            .map(String::as_str),
+        Some(captured_name.as_str()),
+        "the captured name is authoritative when it is free"
+    );
+    let degradations = service
+        .event_log()
+        .expect("the runtime test service owns an event log")
+        .replay_for(&crate::protocol::event::EventAudience::AllPrimaries)
+        .into_iter()
+        .filter(|event| {
+            event.kind == crate::runtime::EventKind::AgentStatus
+                && event.payload.contains("\"model_profile\":\"degraded\"")
+        })
+        .map(|event| event.payload.clone())
+        .collect::<Vec<_>>();
+    assert!(
+        degradations
+            .iter()
+            .any(|payload| payload.contains("provider_options")),
+        "an option-only drift must name the differing field: {degradations:?}"
+    );
+}
+
 /// Verifies restored identities re-install the durable child profile, and that an
 /// unresolvable one degrades to the documented fallback instead of silently
 /// changing models.
