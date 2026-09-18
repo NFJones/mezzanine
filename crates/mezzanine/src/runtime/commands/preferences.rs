@@ -14,6 +14,122 @@ use super::{
 use mez_agent::AutoSizingRoutingPolicy;
 use mez_mux::record_browser::{RecordBrowser, RecordBrowserRecord};
 
+/// Returns whether one `/list-personalities` invocation opens the table.
+///
+/// The table form takes no arguments, so the argument-rejection branch stays on
+/// the inline lane and keeps its exact invalid-args error; only the bare form
+/// defers, where its inputs are the actor-owned profile map and pane selection.
+pub(crate) fn runtime_agent_list_personalities_args_are_empty(input: &str) -> bool {
+    matches!(
+        parse_slash_command(input),
+        Ok(Some(invocation)) if invocation.args.trim().is_empty()
+    )
+}
+
+/// Builds the safe selectable personality table from owned profile inputs.
+///
+/// The inline handler and the deferred executor share this builder, so the table
+/// shape, metadata, and selected-row marker are identical whichever lane opened
+/// the browser: the caller supplies the pane's effective selection and the
+/// configured profiles, because the actor owns that config state.
+pub(crate) fn runtime_agent_personality_browser(
+    profiles: &[(
+        String,
+        crate::runtime::service_state::RuntimeAgentPersonalityProfile,
+    )],
+    selected: Option<&str>,
+    pane_selection: Option<&str>,
+) -> Result<RecordBrowser> {
+    let selection_source = selected.map(|_| {
+        if pane_selection.is_some() {
+            "pane"
+        } else {
+            "default"
+        }
+    });
+    let records = profiles
+        .iter()
+        .map(|(id, profile)| {
+            let is_selected = selected == Some(id.as_str());
+            RecordBrowserRecord {
+                id: id.clone(),
+                open_command: Some(format!("/personality {id}")),
+                title: profile.name.clone().unwrap_or_else(|| id.clone()),
+                metadata: vec![
+                    (
+                        "name".to_string(),
+                        profile.name.clone().unwrap_or_else(|| "—".to_string()),
+                    ),
+                    (
+                        "selected".to_string(),
+                        if is_selected { "yes" } else { "no" }.to_string(),
+                    ),
+                    (
+                        "selection_source".to_string(),
+                        if is_selected {
+                            selection_source.unwrap_or("none")
+                        } else {
+                            "—"
+                        }
+                        .to_string(),
+                    ),
+                    (
+                        "response_style".to_string(),
+                        profile
+                            .response_style
+                            .clone()
+                            .unwrap_or_else(|| "default".to_string()),
+                    ),
+                    (
+                        "model_profile".to_string(),
+                        profile
+                            .model_profile
+                            .clone()
+                            .unwrap_or_else(|| "inherit".to_string()),
+                    ),
+                    (
+                        "planning".to_string(),
+                        personality_optional_bool(profile.planning_enabled),
+                    ),
+                    (
+                        "routing".to_string(),
+                        personality_optional_bool(profile.routing_enabled),
+                    ),
+                ],
+                markdown: String::new(),
+            }
+        })
+        .collect();
+    let mut browser = RecordBrowser::new("Personalities", records, Vec::new())?;
+    browser.set_table_id_column("Personality");
+    browser.set_table_columns_with_labels(vec![
+        ("Name".to_string(), "name".to_string()),
+        ("Selected".to_string(), "selected".to_string()),
+        (
+            "Selection source".to_string(),
+            "selection_source".to_string(),
+        ),
+        ("Response style".to_string(), "response_style".to_string()),
+        ("Model profile".to_string(), "model_profile".to_string()),
+        ("Planning".to_string(), "planning".to_string()),
+        ("Routing".to_string(), "routing".to_string()),
+    ]);
+    browser.set_help(
+        Some(
+            "**Keys:** `↑`/`↓` focus personality · `Enter` select · `/` search · `Esc` close"
+                .to_string(),
+        ),
+        None,
+    );
+    browser.set_empty_message(Some(
+        "No personalities are configured. Add profiles under `[personalities]`.".to_string(),
+    ));
+    if let Some(selected) = selected {
+        browser.set_active_record_id(selected);
+    }
+    Ok(browser)
+}
+
 impl RuntimeSessionService {
     /// Executes `/plan` as a pane-local plan-only and read-only mode transition.
     pub(crate) fn execute_agent_shell_plan_command(
@@ -116,96 +232,13 @@ impl RuntimeSessionService {
                     .contains_key(*profile_id)
             });
         let selected = self.agent_selected_personality_profile_id(pane_id);
-        let selection_source = selected.map(|_| {
-            if pane_selection.is_some() {
-                "pane"
-            } else {
-                "default"
-            }
-        });
-        let records = self
+        let profiles = self
             .integration
             .agent_personality_profiles()
             .iter()
-            .map(|(id, profile)| {
-                let is_selected = selected == Some(id.as_str());
-                RecordBrowserRecord {
-                    id: id.clone(),
-                    open_command: Some(format!("/personality {id}")),
-                    title: profile.name.clone().unwrap_or_else(|| id.clone()),
-                    metadata: vec![
-                        (
-                            "name".to_string(),
-                            profile.name.clone().unwrap_or_else(|| "—".to_string()),
-                        ),
-                        (
-                            "selected".to_string(),
-                            if is_selected { "yes" } else { "no" }.to_string(),
-                        ),
-                        (
-                            "selection_source".to_string(),
-                            if is_selected {
-                                selection_source.unwrap_or("none")
-                            } else {
-                                "—"
-                            }
-                            .to_string(),
-                        ),
-                        (
-                            "response_style".to_string(),
-                            profile
-                                .response_style
-                                .clone()
-                                .unwrap_or_else(|| "default".to_string()),
-                        ),
-                        (
-                            "model_profile".to_string(),
-                            profile
-                                .model_profile
-                                .clone()
-                                .unwrap_or_else(|| "inherit".to_string()),
-                        ),
-                        (
-                            "planning".to_string(),
-                            personality_optional_bool(profile.planning_enabled),
-                        ),
-                        (
-                            "routing".to_string(),
-                            personality_optional_bool(profile.routing_enabled),
-                        ),
-                    ],
-                    markdown: String::new(),
-                }
-            })
-            .collect();
-        let mut browser = RecordBrowser::new("Personalities", records, Vec::new())?;
-        browser.set_table_id_column("Personality");
-        browser.set_table_columns_with_labels(vec![
-            ("Name".to_string(), "name".to_string()),
-            ("Selected".to_string(), "selected".to_string()),
-            (
-                "Selection source".to_string(),
-                "selection_source".to_string(),
-            ),
-            ("Response style".to_string(), "response_style".to_string()),
-            ("Model profile".to_string(), "model_profile".to_string()),
-            ("Planning".to_string(), "planning".to_string()),
-            ("Routing".to_string(), "routing".to_string()),
-        ]);
-        browser.set_help(
-            Some(
-                "**Keys:** `↑`/`↓` focus personality · `Enter` select · `/` search · `Esc` close"
-                    .to_string(),
-            ),
-            None,
-        );
-        browser.set_empty_message(Some(
-            "No personalities are configured. Add profiles under `[personalities]`.".to_string(),
-        ));
-        if let Some(selected) = selected {
-            browser.set_active_record_id(selected);
-        }
-        Ok(browser)
+            .map(|(id, profile)| (id.clone(), profile.clone()))
+            .collect::<Vec<_>>();
+        runtime_agent_personality_browser(&profiles, selected, pane_selection)
     }
 
     /// Executes `/routing` against pane-scoped auto-sizing state.

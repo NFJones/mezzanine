@@ -319,6 +319,23 @@ pub(crate) enum RuntimeAgentCommandPrepared {
         /// Pending approval requests captured from the live queue.
         approvals: Vec<mez_agent::permissions::BlockedApprovalRequest>,
     },
+    /// Reads one pane's configured personality table.
+    ///
+    /// The profile map and the pane's effective selection are actor-owned config
+    /// state, so the claim captures both and the worker renders the table through
+    /// the shared builder; the overlay refresh stays on the actor because it only
+    /// re-reads that same in-memory state.
+    PersonalitiesBrowser {
+        /// Configured profiles in registry order.
+        profiles: Vec<(
+            String,
+            crate::runtime::service_state::RuntimeAgentPersonalityProfile,
+        )>,
+        /// Effective selection for the pane, when one resolves.
+        selected: Option<String>,
+        /// Pane-scoped selection before default fallback, when one applies.
+        pane_selection: Option<String>,
+    },
 }
 
 /// Result a worker prepares for the actor to apply.

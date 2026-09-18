@@ -2017,18 +2017,23 @@ fn runtime_agent_shell_list_personalities_selects_the_focused_profile() {
         }])
         .unwrap();
 
-    let response = service
+    let ack = service
         .execute_agent_shell_command(&primary, "/list-personalities")
         .unwrap();
+    assert!(
+        ack.contains(r#""body":null"#),
+        "the deferred lane acknowledges /list-personalities: {ack}"
+    );
+    let response = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred personality table applies its page");
     assert!(response.contains(r#""kind":"display""#), "{response}");
     assert!(
         response.contains(r#""command":"list-personalities""#),
         "{response}"
     );
     assert!(!response.contains("secret instructions"), "{response}");
-    service
-        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
-        .unwrap();
 
     let overlay = service.primary_display_overlay().unwrap();
     let browser = &overlay.record_browser.as_ref().unwrap().browser;
@@ -2127,13 +2132,32 @@ fn runtime_agent_shell_list_personalities_validates_arguments_and_empty_state() 
         "{invalid}"
     );
 
-    let response = service
+    let ack = service
         .execute_agent_shell_command(&primary, "/list-personalities")
         .unwrap();
+    assert!(
+        ack.contains(r#""body":null"#),
+        "the deferred lane acknowledges /list-personalities: {ack}"
+    );
     service
-        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
-        .unwrap();
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred personality table applies its page");
     let overlay = service.primary_display_overlay().unwrap();
+    assert!(
+        matches!(
+            overlay
+                .record_browser
+                .as_ref()
+                .and_then(|state| state.source.as_ref()),
+            Some(
+                crate::runtime::service_state::RuntimeRecordBrowserOverlaySource::Personalities {
+                    pane_id: source_pane,
+                }
+            ) if source_pane == &pane_id
+        ),
+        "the deferred table keeps the pane-keyed overlay source"
+    );
     let browser = &overlay.record_browser.as_ref().unwrap().browser;
     assert!(browser.records().is_empty());
     assert!(

@@ -42,6 +42,7 @@ pub(crate) const RUNTIME_AGENT_OFF_ACTOR_COMMANDS: &[&str] = &[
     "resume",
     "list-modified-files",
     "show-approvals",
+    "list-personalities",
 ];
 
 /// Prepared-input family one moved slash command consumes off the actor.
@@ -67,6 +68,8 @@ pub(crate) enum RuntimeAgentCommandFamily {
     ModifiedFiles,
     /// Pending-approval browser reads.
     ApprovalsBrowser,
+    /// Personality-table browser reads.
+    PersonalitiesBrowser,
 }
 
 /// Returns the prepared-input family for one moved command.
@@ -87,6 +90,7 @@ pub(crate) fn off_actor_command_family(command: &str) -> Option<RuntimeAgentComm
         "resume" => Some(RuntimeAgentCommandFamily::SavedSessionsBrowser),
         "list-modified-files" => Some(RuntimeAgentCommandFamily::ModifiedFiles),
         "show-approvals" => Some(RuntimeAgentCommandFamily::ApprovalsBrowser),
+        "list-personalities" => Some(RuntimeAgentCommandFamily::PersonalitiesBrowser),
         _ => None,
     }
 }
@@ -157,6 +161,9 @@ impl RuntimeSessionService {
             "resume" => {
                 super::resume::runtime_agent_resume_args_are_picker(input)
                     && self.persistence.transcript_store().is_some()
+            }
+            "list-personalities" => {
+                super::preferences::runtime_agent_list_personalities_args_are_empty(input)
             }
             _ => true,
         }
@@ -345,6 +352,33 @@ impl RuntimeSessionService {
                         .into_iter()
                         .cloned()
                         .collect(),
+                }
+            }
+            RuntimeAgentCommandFamily::PersonalitiesBrowser => {
+                let pane_selection = self
+                    .integration
+                    .agent_personality_selections()
+                    .get(pane_id)
+                    .map(String::as_str)
+                    .filter(|profile_id| {
+                        self.integration
+                            .agent_personality_profiles()
+                            .contains_key(*profile_id)
+                    })
+                    .map(str::to_string);
+                let selected = self
+                    .agent_selected_personality_profile_id(pane_id)
+                    .map(str::to_string);
+                let profiles = self
+                    .integration
+                    .agent_personality_profiles()
+                    .iter()
+                    .map(|(id, profile)| (id.clone(), profile.clone()))
+                    .collect();
+                RuntimeAgentCommandPrepared::PersonalitiesBrowser {
+                    profiles,
+                    selected,
+                    pane_selection,
                 }
             }
         };
@@ -602,6 +636,43 @@ impl RuntimeSessionService {
                             browser: Box::new(browser),
                             source: Some(
                                 crate::runtime::service_state::RuntimeRecordBrowserOverlaySource::Approvals,
+                            ),
+                        }
+                    }
+                    Err(error) => RuntimeAgentCommandAsyncOutcome::Failed {
+                        message: error.message().to_string(),
+                        kind: error.kind(),
+                    },
+                };
+            }
+            RuntimeAgentCommandPrepared::PersonalitiesBrowser {
+                profiles,
+                selected,
+                pane_selection,
+            } => {
+                return match super::preferences::runtime_agent_personality_browser(
+                    profiles,
+                    selected.as_deref(),
+                    pane_selection.as_deref(),
+                ) {
+                    Ok(browser) => {
+                        let page = browser.render_page();
+                        let outcome = AgentShellCommandOutcome::Display {
+                            command: "list-personalities".to_string(),
+                            body: page.raw_markdown,
+                        };
+                        RuntimeAgentCommandAsyncOutcome::RecordBrowser {
+                            body: runtime_agent_shell_command_response_json(
+                                &work.pane_id,
+                                &work.input,
+                                Some(&outcome),
+                            ),
+                            command: "list-personalities".to_string(),
+                            browser: Box::new(browser),
+                            source: Some(
+                                crate::runtime::service_state::RuntimeRecordBrowserOverlaySource::Personalities {
+                                    pane_id: work.pane_id.clone(),
+                                },
                             ),
                         }
                     }
