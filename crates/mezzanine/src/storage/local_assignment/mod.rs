@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use crate::error::{MezError, Result};
 
 mod repository;
+mod sqlite;
 mod types;
 
 pub(crate) use repository::LocalSessionAssignmentRepository;

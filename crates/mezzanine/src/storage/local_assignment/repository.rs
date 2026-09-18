@@ -1,9 +1,7 @@
 use std::collections::HashSet;
-use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::fs;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use rustix::fs::{FlockOperation, Mode, OFlags, flock, open};
 use serde::{Deserialize, Serialize};
@@ -14,17 +12,18 @@ use super::{
 };
 use crate::runtime::current_effective_uid;
 
+/// In-memory document version retained for the legacy JSON import.
 const DATABASE_VERSION: u32 = 1;
-const DATABASE_FILE_NAME: &str = "assignments.json";
+
+/// Exclusive lock retained for the one-time legacy import and for mutual
+/// exclusion with a build that still writes the legacy JSON document.
 const LOCK_FILE_NAME: &str = "assignments.lock";
-const MAX_DATABASE_BYTES: u64 = 2 * 1024 * 1024;
-static NEXT_TEMPORARY_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct LocalAssignmentDatabase {
-    version: u32,
-    boot_generation: u64,
-    assignments: Vec<LocalSessionAssignment>,
+pub(super) struct LocalAssignmentDatabase {
+    pub(super) version: u32,
+    pub(super) boot_generation: u64,
+    pub(super) assignments: Vec<LocalSessionAssignment>,
 }
 
 impl Default for LocalAssignmentDatabase {
@@ -341,53 +340,15 @@ impl LocalSessionAssignmentRepository {
     }
 
     fn load_database(&self) -> Result<LocalAssignmentDatabase> {
-        let path = self.directory.join(DATABASE_FILE_NAME);
-        let file = match open_private_file_read(&path) {
-            Ok(file) => file,
-            Err(error) if error.io_kind() == Some(std::io::ErrorKind::NotFound) => {
-                return Ok(LocalAssignmentDatabase::default());
-            }
-            Err(error) => return Err(error),
-        };
-        if file.metadata()?.len() > MAX_DATABASE_BYTES {
-            return Err(MezError::invalid_state(
-                "local session assignment database exceeds the protected size limit",
-            ));
-        }
-        let mut bytes = Vec::new();
-        file.take(MAX_DATABASE_BYTES.saturating_add(1))
-            .read_to_end(&mut bytes)?;
-        if bytes.len() as u64 > MAX_DATABASE_BYTES {
-            return Err(MezError::invalid_state(
-                "local session assignment database exceeds the protected size limit",
-            ));
-        }
-        let database = serde_json::from_slice(&bytes).map_err(|error| {
-            MezError::invalid_state(format!(
-                "local session assignment database is malformed: {error}"
-            ))
-        })?;
-        validate_database(&database)?;
-        Ok(database)
+        super::sqlite::load_database(&self.directory)
     }
 
     fn write_database(&self, database: &LocalAssignmentDatabase) -> Result<()> {
-        let mut bytes = serde_json::to_vec_pretty(database).map_err(|error| {
-            MezError::invalid_state(format!(
-                "failed to encode local session assignment database: {error}"
-            ))
-        })?;
-        bytes.push(b'\n');
-        if bytes.len() as u64 > MAX_DATABASE_BYTES {
-            return Err(MezError::invalid_state(
-                "local session assignment database exceeds the protected size limit",
-            ));
-        }
-        write_private_atomic(&self.directory.join(DATABASE_FILE_NAME), &bytes)
+        super::sqlite::write_database(&self.directory, database)
     }
 }
 
-fn validate_database(database: &LocalAssignmentDatabase) -> Result<()> {
+pub(super) fn validate_database(database: &LocalAssignmentDatabase) -> Result<()> {
     if database.version != DATABASE_VERSION {
         return Err(MezError::invalid_state(format!(
             "unsupported local session assignment database version {}",
@@ -453,18 +414,6 @@ fn open_private_lock(path: &Path) -> Result<fs::File> {
     Ok(file)
 }
 
-fn open_private_file_read(path: &Path) -> Result<fs::File> {
-    let descriptor = open(
-        path,
-        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .map_err(std::io::Error::from)?;
-    let file = fs::File::from(descriptor);
-    validate_private_file(path, &file.metadata()?)?;
-    Ok(file)
-}
-
 fn validate_private_file(path: &Path, metadata: &fs::Metadata) -> Result<()> {
     if metadata.file_type().is_symlink()
         || !metadata.is_file()
@@ -477,38 +426,4 @@ fn validate_private_file(path: &Path, metadata: &fs::Metadata) -> Result<()> {
         )));
     }
     Ok(())
-}
-
-fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| MezError::invalid_args("local assignment path has no parent"))?;
-    ensure_private_directory(parent)?;
-    if let Ok(metadata) = fs::symlink_metadata(path) {
-        validate_private_file(path, &metadata)?;
-    }
-    let temporary = parent.join(format!(
-        ".{DATABASE_FILE_NAME}.{}.{}.tmp",
-        std::process::id(),
-        NEXT_TEMPORARY_ID.fetch_add(1, Ordering::Relaxed)
-    ));
-    let result = (|| -> Result<()> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temporary)?;
-        file.write_all(bytes)?;
-        file.flush()?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&temporary, path)?;
-        validate_private_file(path, &fs::symlink_metadata(path)?)?;
-        fs::File::open(parent)?.sync_all()?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(temporary);
-    }
-    result
 }

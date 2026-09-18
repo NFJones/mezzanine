@@ -18,7 +18,7 @@ use super::{MezError, RemoteSessionLease, Result};
 use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 use std::path::{Path, PathBuf};
 
-/// Database file owned by the lease and assignment repositories.
+/// Database file owned by the remote-session lease repository.
 pub(super) const LEASE_DATABASE_FILE_NAME: &str = "session-reservations.sqlite";
 
 /// Schema version owned by the lease tables.
