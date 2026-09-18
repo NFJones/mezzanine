@@ -660,10 +660,11 @@ impl RemoteSessionLeaseRepository {
         ensure_private_directory(&self.directory)?;
         let lock = open_private_lock(&self.directory.join(LOCK_FILE_NAME))?;
         flock(&lock, FlockOperation::LockExclusive).map_err(std::io::Error::from)?;
-        let mut database = self.load_database()?;
-        let result = operation(&mut database)?;
-        validate_database(&database)?;
-        self.write_database(&database)?;
+        let before = self.load_database()?;
+        let mut after = before.clone();
+        let result = operation(&mut after)?;
+        validate_database(&after)?;
+        self.write_database(&before, &after)?;
         Ok(result)
     }
 
@@ -681,8 +682,8 @@ impl RemoteSessionLeaseRepository {
         super::sqlite::load_database(&self.directory)
     }
 
-    fn write_database(&self, database: &LeaseDatabase) -> Result<()> {
-        super::sqlite::write_database(&self.directory, database)
+    fn write_database(&self, before: &LeaseDatabase, after: &LeaseDatabase) -> Result<()> {
+        super::sqlite::write_database(&self.directory, before, after)
     }
 }
 

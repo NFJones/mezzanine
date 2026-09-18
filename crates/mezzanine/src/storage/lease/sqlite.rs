@@ -5,8 +5,8 @@
 //! `session-reservations.sqlite` database: key columns carry the fields the
 //! repository actually queries (`session_id`, `state`, `expires_at_unix_seconds`,
 //! `boot_generation`) and a payload column carries the validated record, so a
-//! future phase can move individual updates into SQL without another format
-//! change. The legacy `leases.json` is imported exactly once and is never
+//! mutation writes only the rows it changed. The legacy `leases.json` is
+//! imported exactly once and is never
 //! modified, so a rollback to a previous build still finds its data.
 
 use super::super::shared_sqlite::{
@@ -17,6 +17,7 @@ use super::super::shared_sqlite::{
 use super::repository::LeaseDatabase;
 use super::{MezError, RemoteSessionLease, RemoteSessionLeaseState, Result};
 use rusqlite::{Connection, Transaction, TransactionBehavior, params};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Database file owned by the remote-session lease repository.
@@ -172,7 +173,11 @@ pub(super) fn load_database(directory: &Path) -> Result<LeaseDatabase> {
 /// The caller holds the repository's exclusive lock, which is what makes the
 /// one-time legacy import safe against an older binary still writing the JSON
 /// document.
-pub(super) fn write_database(directory: &Path, database: &LeaseDatabase) -> Result<()> {
+pub(super) fn write_database(
+    directory: &Path,
+    before: &LeaseDatabase,
+    after: &LeaseDatabase,
+) -> Result<()> {
     let path = database_path(directory);
     reject_symlink(&path)?;
     let (mut connection, state) = open_shared_database(&path, LEASE_SCHEMA_VERSION)?;
@@ -183,7 +188,7 @@ pub(super) fn write_database(directory: &Path, database: &LeaseDatabase) -> Resu
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(database_error)?;
-    replace_rows(&transaction, database)?;
+    synchronize_rows(&transaction, before, after)?;
     transaction.commit().map_err(database_error)
 }
 
@@ -206,7 +211,8 @@ fn import_legacy_database(directory: &Path, connection: &mut Connection) -> Resu
     }
     let legacy = legacy_database(directory)?;
     import_legacy_file_once(connection, LEASE_IMPORT_MARKER, |transaction| {
-        replace_rows(transaction, &legacy)?;
+        clear_rows(transaction)?;
+        synchronize_rows(transaction, &LeaseDatabase::default(), &legacy)?;
         Ok(legacy.leases.len() as i64)
     })?;
     Ok(())
@@ -277,18 +283,83 @@ fn read_database(connection: &Connection) -> Result<LeaseDatabase> {
     Ok(database)
 }
 
-/// Replaces every stored row with the in-memory database state.
-fn replace_rows(transaction: &Transaction<'_>, database: &LeaseDatabase) -> Result<()> {
-    transaction
-        .execute("DELETE FROM leases", [])
-        .map_err(database_error)?;
-    for lease in &database.leases {
-        let payload = serde_json::to_string(lease).map_err(|error| {
-            MezError::invalid_state(format!(
-                "failed to encode remote session lease row: {error}"
-            ))
-        })?;
-        let state = encode_state(lease.state);
+/// One stored lease row's required write to turn one in-memory state into
+/// another.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum LeaseRowWrite<'a> {
+    /// The row is new and must be inserted.
+    Insert(&'a RemoteSessionLease),
+    /// The row exists and its validated record changed.
+    Update(&'a RemoteSessionLease),
+    /// The row is gone and must be removed.
+    Delete(&'a str),
+}
+
+/// Returns the row-level writes that turn `before` into `after`.
+///
+/// Unchanged rows produce no write, so a mutation that touches one lease
+/// writes one row instead of rewriting the whole store. The plan follows the
+/// caller's in-memory order, which the repository keeps sorted by lease id, so
+/// it is deterministic.
+pub(super) fn pending_writes<'a>(
+    before: &'a LeaseDatabase,
+    after: &'a LeaseDatabase,
+) -> Vec<LeaseRowWrite<'a>> {
+    let before_by_id: HashMap<&str, &RemoteSessionLease> = before
+        .leases
+        .iter()
+        .map(|lease| (lease.lease_id.as_str(), lease))
+        .collect();
+    let after_ids: HashSet<&str> = after
+        .leases
+        .iter()
+        .map(|lease| lease.lease_id.as_str())
+        .collect();
+    let mut writes = Vec::new();
+    for lease in &after.leases {
+        match before_by_id.get(lease.lease_id.as_str()) {
+            Some(existing) if *existing == lease => {}
+            Some(_) => writes.push(LeaseRowWrite::Update(lease)),
+            None => writes.push(LeaseRowWrite::Insert(lease)),
+        }
+    }
+    for lease in &before.leases {
+        if !after_ids.contains(lease.lease_id.as_str()) {
+            writes.push(LeaseRowWrite::Delete(lease.lease_id.as_str()));
+        }
+    }
+    writes
+}
+
+/// Persists one lease row, inserting a new lease or updating a changed one.
+fn write_row(
+    transaction: &Transaction<'_>,
+    lease: &RemoteSessionLease,
+    update_existing: bool,
+) -> Result<()> {
+    let payload = serde_json::to_string(lease).map_err(|error| {
+        MezError::invalid_state(format!(
+            "failed to encode remote session lease row: {error}"
+        ))
+    })?;
+    let state = encode_state(lease.state);
+    let expires_at = lease.expires_at_unix_seconds.map(|value| value as i64);
+    let boot_generation = lease.boot_generation as i64;
+    let changed = if update_existing {
+        transaction
+            .execute(
+                "UPDATE leases SET session_id = ?2, state = ?3, expires_at_unix_seconds = ?4, boot_generation = ?5, payload = ?6 WHERE lease_id = ?1",
+                params![
+                    lease.lease_id,
+                    lease.session_id,
+                    state,
+                    expires_at,
+                    boot_generation,
+                    payload,
+                ],
+            )
+            .map_err(database_error)?
+    } else {
         transaction
             .execute(
                 "INSERT INTO leases (lease_id, session_id, state, expires_at_unix_seconds, boot_generation, payload) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -296,29 +367,102 @@ fn replace_rows(transaction: &Transaction<'_>, database: &LeaseDatabase) -> Resu
                     lease.lease_id,
                     lease.session_id,
                     state,
-                    lease.expires_at_unix_seconds.map(|value| value as i64),
-                    lease.boot_generation as i64,
+                    expires_at,
+                    boot_generation,
                     payload,
                 ],
             )
-            .map_err(database_error)?;
+            .map_err(database_error)?
+    };
+    if changed == 0 {
+        return Err(MezError::invalid_state(
+            "remote session lease row is missing from the store",
+        ));
     }
-    transaction
-        .execute("DELETE FROM snapshot_cleanup_candidates", [])
-        .map_err(database_error)?;
-    for snapshot_id in &database.snapshot_cleanup_candidates {
-        transaction
-            .execute(
-                "INSERT INTO snapshot_cleanup_candidates (snapshot_id) VALUES (?1)",
-                params![snapshot_id],
-            )
-            .map_err(database_error)?;
+    Ok(())
+}
+
+/// Persists added and removed snapshot cleanup candidates.
+fn synchronize_candidates(
+    transaction: &Transaction<'_>,
+    before: &LeaseDatabase,
+    after: &LeaseDatabase,
+) -> Result<()> {
+    let before_candidates: HashSet<&str> = before
+        .snapshot_cleanup_candidates
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let after_candidates: HashSet<&str> = after
+        .snapshot_cleanup_candidates
+        .iter()
+        .map(String::as_str)
+        .collect();
+    for snapshot_id in &after.snapshot_cleanup_candidates {
+        if !before_candidates.contains(snapshot_id.as_str()) {
+            transaction
+                .execute(
+                    "INSERT INTO snapshot_cleanup_candidates (snapshot_id) VALUES (?1)",
+                    params![snapshot_id],
+                )
+                .map_err(database_error)?;
+        }
     }
+    for snapshot_id in &before.snapshot_cleanup_candidates {
+        if !after_candidates.contains(snapshot_id.as_str()) {
+            transaction
+                .execute(
+                    "DELETE FROM snapshot_cleanup_candidates WHERE snapshot_id = ?1",
+                    params![snapshot_id],
+                )
+                .map_err(database_error)?;
+        }
+    }
+    Ok(())
+}
+
+/// Persists the difference between two in-memory states in one transaction.
+///
+/// The caller validated `after`, so only added, changed, and removed rows are
+/// written; the boot generation row is a single row and is always upserted.
+fn synchronize_rows(
+    transaction: &Transaction<'_>,
+    before: &LeaseDatabase,
+    after: &LeaseDatabase,
+) -> Result<()> {
+    for write in pending_writes(before, after) {
+        match write {
+            LeaseRowWrite::Insert(lease) => write_row(transaction, lease, false)?,
+            LeaseRowWrite::Update(lease) => write_row(transaction, lease, true)?,
+            LeaseRowWrite::Delete(lease_id) => {
+                let changed = transaction
+                    .execute("DELETE FROM leases WHERE lease_id = ?1", params![lease_id])
+                    .map_err(database_error)?;
+                if changed == 0 {
+                    return Err(MezError::invalid_state(
+                        "remote session lease row is missing from the store",
+                    ));
+                }
+            }
+        }
+    }
+    synchronize_candidates(transaction, before, after)?;
     transaction
         .execute(
             "INSERT INTO lease_state (id, boot_generation) VALUES (1, ?1) ON CONFLICT(id) DO UPDATE SET boot_generation = excluded.boot_generation",
-            params![database.boot_generation as i64],
+            params![after.boot_generation as i64],
         )
+        .map_err(database_error)?;
+    Ok(())
+}
+
+/// Removes every stored row so a legacy import replaces the whole store.
+fn clear_rows(transaction: &Transaction<'_>) -> Result<()> {
+    transaction
+        .execute("DELETE FROM leases", [])
+        .map_err(database_error)?;
+    transaction
+        .execute("DELETE FROM snapshot_cleanup_candidates", [])
         .map_err(database_error)?;
     Ok(())
 }

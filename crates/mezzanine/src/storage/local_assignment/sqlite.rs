@@ -4,8 +4,8 @@
 //! grow past two megabytes. It now keeps the same records in a private
 //! `assignments.sqlite` database: key columns carry the fields the repository
 //! addresses and filters by (`session_id`, `state`, `boot_generation`) and a
-//! payload column carries the validated record, so a future phase can move
-//! individual updates into SQL without another format change. The database is
+//! payload column carries the validated record, and a mutation writes only the
+//! rows it changed. The database is
 //! deliberately separate from the remote-session lease database and lives in a
 //! directory of its own: `storage::shared_sqlite` owns one database per
 //! concern, so each store keeps its own exclusive lock and one schema version
@@ -24,6 +24,7 @@ use super::super::shared_sqlite::{
 };
 use super::repository::{LocalAssignmentDatabase, validate_database};
 use super::{LocalSessionAssignment, LocalSessionAssignmentState, MezError, Result};
+use std::collections::{HashMap, HashSet};
 
 /// Database file owned by the local session assignment repository.
 pub(super) const ASSIGNMENT_DATABASE_FILE_NAME: &str = "assignments.sqlite";
@@ -167,7 +168,11 @@ pub(super) fn load_database(directory: &Path) -> Result<LocalAssignmentDatabase>
 /// The caller holds the repository's exclusive lock, which is what makes the
 /// one-time legacy import safe against an older binary still writing the JSON
 /// document.
-pub(super) fn write_database(directory: &Path, database: &LocalAssignmentDatabase) -> Result<()> {
+pub(super) fn write_database(
+    directory: &Path,
+    before: &LocalAssignmentDatabase,
+    after: &LocalAssignmentDatabase,
+) -> Result<()> {
     let path = database_path(directory);
     reject_symlink(&path)?;
     let (mut connection, state) = open_shared_database(&path, ASSIGNMENT_SCHEMA_VERSION)?;
@@ -178,7 +183,7 @@ pub(super) fn write_database(directory: &Path, database: &LocalAssignmentDatabas
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(database_error)?;
-    replace_rows(&transaction, database)?;
+    synchronize_rows(&transaction, before, after)?;
     transaction.commit().map_err(database_error)
 }
 
@@ -201,7 +206,8 @@ fn import_legacy_database(directory: &Path, connection: &mut Connection) -> Resu
     }
     let legacy = legacy_database(directory)?;
     import_legacy_file_once(connection, ASSIGNMENT_IMPORT_MARKER, |transaction| {
-        replace_rows(transaction, &legacy)?;
+        clear_rows(transaction)?;
+        synchronize_rows(transaction, &LocalAssignmentDatabase::default(), &legacy)?;
         Ok(legacy.assignments.len() as i64)
     })?;
     Ok(())
@@ -271,35 +277,141 @@ fn read_database(connection: &Connection) -> Result<LocalAssignmentDatabase> {
     Ok(database)
 }
 
-/// Replaces every stored row with the in-memory database state.
-fn replace_rows(transaction: &Transaction<'_>, database: &LocalAssignmentDatabase) -> Result<()> {
-    transaction
-        .execute("DELETE FROM assignments", [])
-        .map_err(database_error)?;
-    for assignment in &database.assignments {
-        let payload = serde_json::to_string(assignment).map_err(|error| {
-            MezError::invalid_state(format!(
-                "failed to encode local session assignment row: {error}"
-            ))
-        })?;
-        let state = encode_state(assignment.state);
+/// One stored assignment row's required write to turn one in-memory state
+/// into another.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum AssignmentRowWrite<'a> {
+    /// The row is new and must be inserted.
+    Insert(&'a LocalSessionAssignment),
+    /// The row exists and its validated record changed.
+    Update(&'a LocalSessionAssignment),
+    /// The row is gone and must be removed.
+    Delete(&'a str),
+}
+
+/// Returns the row-level writes that turn `before` into `after`.
+///
+/// Unchanged rows produce no write, so a mutation that touches one assignment
+/// writes one row instead of rewriting the whole store. The plan follows the
+/// caller's in-memory order, which the repository keeps sorted by session id,
+/// so it is deterministic.
+pub(super) fn pending_writes<'a>(
+    before: &'a LocalAssignmentDatabase,
+    after: &'a LocalAssignmentDatabase,
+) -> Vec<AssignmentRowWrite<'a>> {
+    let before_by_id: HashMap<&str, &LocalSessionAssignment> = before
+        .assignments
+        .iter()
+        .map(|assignment| (assignment.session_id.as_str(), assignment))
+        .collect();
+    let after_ids: HashSet<&str> = after
+        .assignments
+        .iter()
+        .map(|assignment| assignment.session_id.as_str())
+        .collect();
+    let mut writes = Vec::new();
+    for assignment in &after.assignments {
+        match before_by_id.get(assignment.session_id.as_str()) {
+            Some(existing) if *existing == assignment => {}
+            Some(_) => writes.push(AssignmentRowWrite::Update(assignment)),
+            None => writes.push(AssignmentRowWrite::Insert(assignment)),
+        }
+    }
+    for assignment in &before.assignments {
+        if !after_ids.contains(assignment.session_id.as_str()) {
+            writes.push(AssignmentRowWrite::Delete(assignment.session_id.as_str()));
+        }
+    }
+    writes
+}
+
+/// Persists one assignment row, inserting a new one or updating a changed one.
+fn write_row(
+    transaction: &Transaction<'_>,
+    assignment: &LocalSessionAssignment,
+    update_existing: bool,
+) -> Result<()> {
+    let payload = serde_json::to_string(assignment).map_err(|error| {
+        MezError::invalid_state(format!(
+            "failed to encode local session assignment row: {error}"
+        ))
+    })?;
+    let state = encode_state(assignment.state);
+    let boot_generation = assignment.boot_generation as i64;
+    let changed = if update_existing {
+        transaction
+            .execute(
+                "UPDATE assignments SET state = ?2, boot_generation = ?3, payload = ?4 WHERE session_id = ?1",
+                params![
+                    assignment.session_id,
+                    state,
+                    boot_generation,
+                    payload,
+                ],
+            )
+            .map_err(database_error)?
+    } else {
         transaction
             .execute(
                 "INSERT INTO assignments (session_id, state, boot_generation, payload) VALUES (?1, ?2, ?3, ?4)",
                 params![
                     assignment.session_id,
                     state,
-                    assignment.boot_generation as i64,
+                    boot_generation,
                     payload,
                 ],
             )
-            .map_err(database_error)?;
+            .map_err(database_error)?
+    };
+    if changed == 0 {
+        return Err(MezError::invalid_state(
+            "local session assignment row is missing from the store",
+        ));
+    }
+    Ok(())
+}
+
+/// Persists the difference between two in-memory states in one transaction.
+///
+/// The caller validated `after`, so only added, changed, and removed rows are
+/// written; the boot generation row is a single row and is always upserted.
+fn synchronize_rows(
+    transaction: &Transaction<'_>,
+    before: &LocalAssignmentDatabase,
+    after: &LocalAssignmentDatabase,
+) -> Result<()> {
+    for write in pending_writes(before, after) {
+        match write {
+            AssignmentRowWrite::Insert(assignment) => write_row(transaction, assignment, false)?,
+            AssignmentRowWrite::Update(assignment) => write_row(transaction, assignment, true)?,
+            AssignmentRowWrite::Delete(session_id) => {
+                let changed = transaction
+                    .execute(
+                        "DELETE FROM assignments WHERE session_id = ?1",
+                        params![session_id],
+                    )
+                    .map_err(database_error)?;
+                if changed == 0 {
+                    return Err(MezError::invalid_state(
+                        "local session assignment row is missing from the store",
+                    ));
+                }
+            }
+        }
     }
     transaction
         .execute(
             "INSERT INTO assignment_state (id, boot_generation) VALUES (1, ?1) ON CONFLICT(id) DO UPDATE SET boot_generation = excluded.boot_generation",
-            params![database.boot_generation as i64],
+            params![after.boot_generation as i64],
         )
+        .map_err(database_error)?;
+    Ok(())
+}
+
+/// Removes every stored row so a legacy import replaces the whole store.
+fn clear_rows(transaction: &Transaction<'_>) -> Result<()> {
+    transaction
+        .execute("DELETE FROM assignments", [])
         .map_err(database_error)?;
     Ok(())
 }

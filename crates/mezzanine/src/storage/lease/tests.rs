@@ -593,8 +593,13 @@ fn lease_database_row_replacement_is_transactional() {
         snapshot_cleanup_candidates: Vec::new(),
     };
     assert!(
-        super::sqlite::write_database(&root, &duplicate).is_err(),
-        "duplicate lease ids must fail the replacement transaction"
+        super::sqlite::write_database(
+            &root,
+            &super::repository::LeaseDatabase::default(),
+            &duplicate,
+        )
+        .is_err(),
+        "duplicate lease ids must fail the write transaction"
     );
     assert_eq!(repository.list().unwrap(), stored);
     assert_eq!(repository.boot_generation().unwrap(), boot_generation);
@@ -681,16 +686,19 @@ fn lease_export_renders_rows_without_creating_the_store() {
         .iter()
         .find(|lease| lease.lease_id == "lease-export")
         .expect("the reservation is stored");
-    super::sqlite::write_database(
-        &root,
-        &super::repository::LeaseDatabase {
-            version: 1,
-            boot_generation: stored_export.boot_generation,
-            leases: stored.clone(),
-            snapshot_cleanup_candidates: vec!["snap-export".to_string()],
-        },
-    )
-    .unwrap();
+    let before = super::repository::LeaseDatabase {
+        version: 1,
+        boot_generation: stored_export.boot_generation,
+        leases: stored.clone(),
+        snapshot_cleanup_candidates: Vec::new(),
+    };
+    let after = super::repository::LeaseDatabase {
+        version: 1,
+        boot_generation: stored_export.boot_generation,
+        leases: stored.clone(),
+        snapshot_cleanup_candidates: vec!["snap-export".to_string()],
+    };
+    super::sqlite::write_database(&root, &before, &after).unwrap();
 
     let export = repository.export_tsv_read_only().unwrap().unwrap();
     assert!(
@@ -749,4 +757,62 @@ fn lease_export_rejects_dangling_symlinks() {
         );
         let _ = fs::remove_dir_all(root);
     }
+}
+
+/// A write persists only the rows a mutation changed: an unchanged row
+/// produces no statement, a changed row updates, a new row inserts, and a
+/// removed row deletes.
+#[test]
+fn lease_pending_writes_cover_only_changed_rows() {
+    let root = test_root("pending-writes");
+    let repository = RemoteSessionLeaseRepository::new(root.clone());
+    for (lease_id, session_id, idempotency_key, creation_fingerprint) in [
+        ("lease-a", "$a", "create-a", "fingerprint-a"),
+        ("lease-b", "$b", "create-b", "fingerprint-b"),
+        ("lease-c", "$c", "create-c", "fingerprint-c"),
+    ] {
+        repository
+            .reserve_pending(reservation(
+                lease_id,
+                session_id,
+                "device-1",
+                idempotency_key,
+                creation_fingerprint,
+            ))
+            .unwrap();
+    }
+    let before = super::repository::LeaseDatabase {
+        version: 1,
+        boot_generation: repository.boot_generation().unwrap(),
+        leases: repository.list().unwrap(),
+        snapshot_cleanup_candidates: Vec::new(),
+    };
+    let mut after = before.clone();
+    after.leases[0].name = Some("renamed".to_string());
+    after.leases.remove(1);
+    let mut added = before.leases[2].clone();
+    added.lease_id = "lease-d".to_string();
+    added.session_id = "$d".to_string();
+    added.idempotency_key = "create-d".to_string();
+    added.creation_fingerprint = "fingerprint-d".to_string();
+    after.leases.push(added);
+
+    let rendered = super::sqlite::pending_writes(&before, &after)
+        .iter()
+        .map(|write| match write {
+            super::sqlite::LeaseRowWrite::Insert(lease) => format!("insert {}", lease.lease_id),
+            super::sqlite::LeaseRowWrite::Update(lease) => format!("update {}", lease.lease_id),
+            super::sqlite::LeaseRowWrite::Delete(lease_id) => format!("delete {lease_id}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rendered,
+        vec![
+            "update lease-a".to_string(),
+            "insert lease-d".to_string(),
+            "delete lease-b".to_string(),
+        ],
+        "only changed, added, and removed rows are written"
+    );
+    let _ = fs::remove_dir_all(root);
 }

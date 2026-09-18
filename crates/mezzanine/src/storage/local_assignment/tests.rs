@@ -313,8 +313,13 @@ fn assignment_database_row_replacement_is_transactional() {
         assignments: vec![stored[0].clone(), stored[0].clone()],
     };
     assert!(
-        super::sqlite::write_database(&root, &duplicate).is_err(),
-        "duplicate session ids must fail the replacement transaction"
+        super::sqlite::write_database(
+            &root,
+            &super::repository::LocalAssignmentDatabase::default(),
+            &duplicate,
+        )
+        .is_err(),
+        "duplicate session ids must fail the write transaction"
     );
     assert_eq!(repository.list().unwrap(), stored);
     assert_eq!(
@@ -348,7 +353,12 @@ fn assignment_database_grows_past_the_removed_document_cap() {
         boot_generation: 1,
         assignments,
     };
-    super::sqlite::write_database(&root, &database).unwrap();
+    super::sqlite::write_database(
+        &root,
+        &super::repository::LocalAssignmentDatabase::default(),
+        &database,
+    )
+    .unwrap();
 
     let mut stored_bytes = fs::metadata(root.join("assignments.sqlite")).unwrap().len();
     if let Ok(wal) = fs::metadata(root.join("assignments.sqlite-wal")) {
@@ -508,4 +518,58 @@ fn assignment_export_rejects_dangling_symlinks() {
         );
         let _ = fs::remove_dir_all(root);
     }
+}
+
+/// A write persists only the rows a mutation changed: an unchanged row
+/// produces no statement, a changed row updates, a new row inserts, and a
+/// removed row deletes.
+#[test]
+fn assignment_pending_writes_cover_only_changed_rows() {
+    let root = test_root("pending-writes");
+    let repository = LocalSessionAssignmentRepository::new(root.clone());
+    for (session_id, name) in [("$a", "a"), ("$b", "b"), ("$c", "c")] {
+        repository
+            .reserve_pending(LocalAssignmentReservationRequest {
+                session_id: session_id.to_string(),
+                name: name.to_string(),
+                default_for_host: false,
+                now_unix_seconds: 10,
+            })
+            .unwrap();
+    }
+    let stored = repository.list().unwrap();
+    let before = super::repository::LocalAssignmentDatabase {
+        version: 1,
+        boot_generation: stored[0].boot_generation,
+        assignments: stored,
+    };
+    let mut after = before.clone();
+    after.assignments[0].failure = Some("changed".to_string());
+    after.assignments.remove(1);
+    let mut added = before.assignments[2].clone();
+    added.session_id = "$d".to_string();
+    after.assignments.push(added);
+
+    let rendered = super::sqlite::pending_writes(&before, &after)
+        .iter()
+        .map(|write| match write {
+            super::sqlite::AssignmentRowWrite::Insert(assignment) => {
+                format!("insert {}", assignment.session_id)
+            }
+            super::sqlite::AssignmentRowWrite::Update(assignment) => {
+                format!("update {}", assignment.session_id)
+            }
+            super::sqlite::AssignmentRowWrite::Delete(session_id) => format!("delete {session_id}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rendered,
+        vec![
+            "update $a".to_string(),
+            "insert $d".to_string(),
+            "delete $b".to_string(),
+        ],
+        "only changed, added, and removed rows are written"
+    );
+    let _ = fs::remove_dir_all(root);
 }
