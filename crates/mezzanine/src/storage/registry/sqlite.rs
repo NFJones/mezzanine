@@ -14,7 +14,7 @@ use super::{
 };
 use crate::storage::shared_sqlite::{
     SharedSchemaState, import_legacy_file_once, migration_completed, open_shared_database,
-    open_shared_database_read_only, set_schema_version,
+    open_shared_database_read_only, schema_version, set_schema_version,
 };
 use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 
@@ -63,6 +63,13 @@ pub(super) fn list(registry: &SessionRegistry) -> Result<Vec<SessionRecord>> {
     let mut records = if database_path(registry).exists() {
         match open_shared_database_read_only(&database_path(registry))? {
             Some(connection) => {
+                let version = schema_version(&connection)?;
+                if version != REGISTRY_SCHEMA_VERSION {
+                    return Err(MezError::invalid_state(format!(
+                        "registry database schema version {version} does not match this build's version {REGISTRY_SCHEMA_VERSION}; restart with the build that wrote it, or delete {} and let the next write import the legacy flat file",
+                        database_path(registry).display()
+                    )));
+                }
                 // The database is authoritative only once the one-time import
                 // completed; a database created before a failed import must not
                 // hide the legacy rows.
