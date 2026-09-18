@@ -17,6 +17,12 @@ use crate::{
 /// Result type returned while assembling one provider request.
 pub type ProviderRequestAssemblyResult<T> = Result<T, ProviderRequestAssemblyError>;
 
+/// Internal render tag marking input items rendered from stable-prefix messages.
+///
+/// It is stripped before the rendered messages are returned, so it exists only
+/// inside one `openai_render_messages` call and never reaches a caller or wire.
+const STABLE_PREFIX_TAG: &str = "__mez_stable_prefix";
+
 /// Provider-specific rendering of model messages for OpenAI Responses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenAiRenderedMessages {
@@ -26,6 +32,13 @@ pub struct OpenAiRenderedMessages {
     pub input: Vec<serde_json::Value>,
     /// Input messages included in the stable reusable prefix.
     pub stable_input: Vec<serde_json::Value>,
+    /// Positions in `input` rendered from stable-prefix messages.
+    ///
+    /// Explicit prompt-cache mode may only mark the stable reusable prefix, and
+    /// the rendered input alone no longer carries placement: this index list is
+    /// what lets the marker stay at the end of the stable developer group as
+    /// chronology appends newer developer-role blocks.
+    pub stable_input_positions: Vec<usize>,
 }
 
 /// Renders provider-independent messages into OpenAI Responses input shape.
@@ -48,12 +61,32 @@ pub fn openai_render_messages(
             instructions.push(message.content.clone());
             continue;
         }
+        let first_item = input.len();
         openai_push_input_message(message, &mut input);
+        if message.placement == crate::ContextPlacement::StablePrefix {
+            for item in input.iter_mut().skip(first_item) {
+                if let Some(object) = item.as_object_mut() {
+                    object.insert(STABLE_PREFIX_TAG.to_string(), serde_json::Value::Bool(true));
+                }
+            }
+        }
     }
     // A legacy transcript can retain a tool result whose assistant function
     // call was lost; the Responses protocol pairs one output with one call, so
     // an unpaired result is omitted rather than replayed without its call.
     openai_retain_paired_function_call_outputs(&mut input);
+    // Pairing can drop items, so the stable positions are resolved after it and
+    // the internal tag never reaches a caller or the wire.
+    let mut stable_input_positions = Vec::new();
+    for (position, item) in input.iter_mut().enumerate() {
+        let stable = item
+            .as_object_mut()
+            .and_then(|object| object.remove(STABLE_PREFIX_TAG))
+            .is_some();
+        if stable {
+            stable_input_positions.push(position);
+        }
+    }
     if input.is_empty() {
         return Err(ProviderRequestAssemblyError::invalid_args(
             "OpenAI Responses request requires at least one user or tool input message",
@@ -63,6 +96,7 @@ pub fn openai_render_messages(
         instructions: instructions.join("\n\n"),
         stable_input: input.clone(),
         input,
+        stable_input_positions,
     })
 }
 

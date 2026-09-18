@@ -393,8 +393,11 @@ pub fn openai_prompt_cache_diagnostics_for_request_with_stream(
 ) -> ProviderRequestAssemblyResult<OpenAiPromptCacheDiagnostics> {
     validate_provider_request_required("OpenAI model", &request.model)?;
     let mut rendered = openai_render_request_messages(request)?;
-    apply_openai_prompt_cache_breakpoint(request, &mut rendered.input)?;
-    apply_openai_prompt_cache_breakpoint(request, &mut rendered.stable_input)?;
+    apply_openai_prompt_cache_breakpoint(
+        request,
+        &rendered.stable_input_positions,
+        &mut rendered.input,
+    )?;
     let response_format = openai_response_format(request).unwrap_or(serde_json::Value::Null);
     let tools = if request.interaction_kind.expects_structured_json() {
         serde_json::json!([])

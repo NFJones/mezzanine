@@ -133,10 +133,23 @@ fn apply_openai_prompt_cache_policy(
     Ok(())
 }
 
-/// Marks the latest developer semantic input-text block for explicit GPT-5.6+
-/// cache creation without changing chronological message ordering.
+/// Marks the explicit GPT-5.6+ cache boundary at the end of the stable prefix.
+///
+/// Explicit mode allows exactly one breakpoint, and the boundary must not move as
+/// chronology appends newer developer-role blocks: the target is therefore the
+/// last `input_text` block of the last stable-prefix developer message, never the
+/// newest developer-role message anywhere in `input`. Marking the volatile tail
+/// writes a suffix the provider cannot reuse, and rebuilding the marker on the
+/// next request moves the boundary away from the previously paid write.
+///
+/// Local diagnostics measure the wire bytes including this marker
+/// (`openai_prompt_cache_diagnostics_for_request_with_stream`), while the
+/// send-path append-only gate compares marker-free canonical renders: the two
+/// agree on which boundary is cached precisely because this position is stable
+/// across appends, so the gate never observes the marker moving.
 pub(crate) fn apply_openai_prompt_cache_breakpoint(
     request: &ModelRequest,
+    stable_input_positions: &[usize],
     input: &mut [serde_json::Value],
 ) -> ProviderRequestAssemblyResult<()> {
     if request.model_capabilities.openai_prompt_cache_mode != OpenAiPromptCacheMode::Explicit {
@@ -154,21 +167,50 @@ pub(crate) fn apply_openai_prompt_cache_breakpoint(
         )));
     }
     let block = input
-        .iter_mut()
-        .rev()
-        .filter(|message| {
-            message.get("role").and_then(serde_json::Value::as_str) == Some("developer")
-        })
-        .filter_map(|message| message.get_mut("content")?.as_array_mut())
-        .flat_map(|content| content.iter_mut().rev())
-        .find(|block| block.get("type").and_then(serde_json::Value::as_str) == Some("input_text"))
+        .stable_input_positions_marker_target(stable_input_positions)
         .ok_or_else(|| {
             ProviderRequestAssemblyError::invalid_args(
-                "OpenAI explicit prompt-cache mode requires a developer input_text content block",
+                "OpenAI explicit prompt-cache mode requires a stable-prefix developer input_text content block",
             )
         })?;
     block["prompt_cache_breakpoint"] = serde_json::json!({ "mode": "explicit" });
     Ok(())
+}
+
+/// Selects the last `input_text` block of the last stable developer message.
+trait StableInputMarkerTarget {
+    /// Returns the block the explicit breakpoint may attach to.
+    fn stable_input_positions_marker_target(
+        &mut self,
+        stable_input_positions: &[usize],
+    ) -> Option<&mut serde_json::Value>;
+}
+
+impl StableInputMarkerTarget for [serde_json::Value] {
+    fn stable_input_positions_marker_target(
+        &mut self,
+        stable_input_positions: &[usize],
+    ) -> Option<&mut serde_json::Value> {
+        // Find the coordinates with immutable reads first: a mutable scan that
+        // returns a reference cannot be written as a loop, because the returned
+        // reference would outlive each iteration's borrow of the slice.
+        let (message_position, block_index) =
+            stable_input_positions.iter().rev().find_map(|position| {
+                let message = self.get(*position)?;
+                if message.get("role").and_then(serde_json::Value::as_str) != Some("developer") {
+                    return None;
+                }
+                let content = message.get("content")?.as_array()?;
+                let block_index = content.iter().rposition(|block| {
+                    block.get("type").and_then(serde_json::Value::as_str) == Some("input_text")
+                })?;
+                Some((*position, block_index))
+            })?;
+        self.get_mut(message_position)?
+            .get_mut("content")?
+            .as_array_mut()?
+            .get_mut(block_index)
+    }
 }
 
 /// Builds a non-streaming OpenAI Responses request body.
@@ -196,7 +238,7 @@ pub fn openai_responses_request_body_with_stream(
     let mut body = openai_responses_request_control_shape_with_stream(request, stream)?;
     body["instructions"] = serde_json::json!(rendered.instructions);
     let mut input = rendered.input;
-    apply_openai_prompt_cache_breakpoint(request, &mut input)?;
+    apply_openai_prompt_cache_breakpoint(request, &rendered.stable_input_positions, &mut input)?;
     body["input"] = serde_json::json!(input);
     body["prompt_cache_key"] = serde_json::json!(openai_prompt_cache_key(request));
     serde_json::to_string(&body).map_err(|error| {

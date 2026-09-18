@@ -195,3 +195,77 @@ fn openai_responses_request_body_applies_generation_aware_cache_controls() {
         );
     }
 }
+
+/// Returns the rendered input positions carrying an explicit cache breakpoint.
+fn explicit_prompt_cache_breakpoint_positions(
+    request: &mez_agent::ModelRequest,
+) -> Vec<(usize, usize)> {
+    let body: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(request).unwrap()).unwrap();
+    let input = body["input"].as_array().unwrap();
+    let mut positions = Vec::new();
+    for (message_index, message) in input.iter().enumerate() {
+        let Some(content) = message.get("content").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        for (block_index, block) in content.iter().enumerate() {
+            if block.get("prompt_cache_breakpoint").is_some() {
+                positions.push((message_index, block_index));
+            }
+        }
+    }
+    positions
+}
+
+/// Verifies the explicit prompt-cache breakpoint stays on the stable prefix.
+///
+/// Explicit mode permits exactly one breakpoint on an `input_text` block, and
+/// durable chronology appends Context-role blocks that also render as developer
+/// messages. The marker must therefore stay at the end of the stable developer
+/// prefix as those blocks arrive: the newest developer-role block sits in the
+/// volatile suffix, so marking it writes bytes the provider cannot reuse, and
+/// rebuilding the marker there drops the previously paid boundary from every
+/// later request.
+#[test]
+fn openai_explicit_prompt_cache_breakpoint_stays_on_the_stable_prefix() {
+    let mut request = openai_prompt_cache_retention_test_request("gpt-5.6-2026-01-01");
+    request.messages.push(mez_agent::ModelMessage {
+        role: mez_agent::ModelMessageRole::Developer,
+        source: mez_agent::ContextSourceKind::ProjectGuidance,
+        placement: mez_agent::ContextPlacement::StablePrefix,
+        content: "stable cache boundary".to_string(),
+    });
+    request.model_capabilities.openai_prompt_cache_mode =
+        mez_agent::model_capabilities::OpenAiPromptCacheMode::Explicit;
+    let stable_positions = explicit_prompt_cache_breakpoint_positions(&request);
+    assert_eq!(
+        stable_positions.len(),
+        1,
+        "explicit mode must emit exactly one breakpoint: {stable_positions:?}"
+    );
+
+    // Durable chronology appends a block that renders as a developer message too.
+    request.messages.push(mez_agent::ModelMessage {
+        role: mez_agent::ModelMessageRole::Context,
+        source: mez_agent::ContextSourceKind::Policy,
+        placement: mez_agent::ContextPlacement::ConversationAppend,
+        content: "request state transition one".to_string(),
+    });
+    let after_one_append = explicit_prompt_cache_breakpoint_positions(&request);
+    assert_eq!(
+        after_one_append, stable_positions,
+        "appending chronology must not move or duplicate the breakpoint"
+    );
+
+    request.messages.push(mez_agent::ModelMessage {
+        role: mez_agent::ModelMessageRole::Context,
+        source: mez_agent::ContextSourceKind::Policy,
+        placement: mez_agent::ContextPlacement::ConversationAppend,
+        content: "request state transition two".to_string(),
+    });
+    let after_two_appends = explicit_prompt_cache_breakpoint_positions(&request);
+    assert_eq!(
+        after_two_appends, stable_positions,
+        "later appends must not move the breakpoint either"
+    );
+}
