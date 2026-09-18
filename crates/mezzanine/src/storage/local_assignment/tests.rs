@@ -413,6 +413,10 @@ fn assignment_export_renders_rows_without_creating_the_store() {
         !root.join("assignments.sqlite").exists() && !root.join("assignments.json").exists(),
         "an inspection must not create the store"
     );
+    assert!(
+        !root.join("assignments.lock").exists(),
+        "an inspection must not create the lock file"
+    );
 
     let pending = repository
         .reserve_pending(LocalAssignmentReservationRequest {
@@ -445,12 +449,31 @@ fn assignment_export_renders_rows_without_creating_the_store() {
         )
         .unwrap();
 
+    repository
+        .reserve_pending(LocalAssignmentReservationRequest {
+            session_id: "$alpha".to_string(),
+            name: "alpha".to_string(),
+            default_for_host: false,
+            now_unix_seconds: 13,
+        })
+        .unwrap();
+
     let export = repository.export_tsv_read_only().unwrap().unwrap();
     assert!(
         export.starts_with(
             "session_id\tstate\tdefault_for_host\tboot_generation\tassignment_generation\tcreated_at_unix_seconds\tupdated_at_unix_seconds\tcheckpoint_snapshot_id\tfailure\n"
         ),
         "the export starts with the assignment header: {export}"
+    );
+    let exported_ids = export
+        .lines()
+        .skip(1)
+        .map(|line| line.split('\t').next().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        exported_ids,
+        vec!["$alpha".to_string(), "$export".to_string()],
+        "assignment rows sort by session id"
     );
     let row = export
         .lines()
@@ -464,4 +487,25 @@ fn assignment_export_renders_rows_without_creating_the_store() {
     assert_eq!(fields[7], "local-export");
     assert_eq!(fields[8], "");
     let _ = fs::remove_dir_all(root);
+}
+
+/// The inspection exporter fails closed on a dangling symbolic link instead of
+/// reporting an absent store.
+#[test]
+fn assignment_export_rejects_dangling_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    for file_name in ["assignments.sqlite", "assignments.json"] {
+        let root = test_root(&format!("export-symlink-{file_name}"));
+        fs::create_dir_all(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        symlink(root.join("missing-target"), root.join(file_name)).unwrap();
+        let repository = LocalSessionAssignmentRepository::new(root.clone());
+
+        assert!(
+            repository.export_tsv_read_only().is_err(),
+            "a dangling {file_name} must not be reported as an absent store"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
 }

@@ -652,6 +652,10 @@ fn lease_export_renders_rows_without_creating_the_store() {
         !root.join("session-reservations.sqlite").exists() && !root.join("leases.json").exists(),
         "an inspection must not create the store"
     );
+    assert!(
+        !root.join("leases.lock").exists(),
+        "an inspection must not create the lock file"
+    );
 
     repository
         .reserve_pending(reservation(
@@ -662,13 +666,26 @@ fn lease_export_renders_rows_without_creating_the_store() {
             "fingerprint-export",
         ))
         .unwrap();
+    repository
+        .reserve_pending(reservation(
+            "lease-alpha",
+            "$0",
+            "device-1",
+            "create-alpha",
+            "fingerprint-alpha",
+        ))
+        .unwrap();
     let stored = repository.list().unwrap();
-    assert_eq!(stored.len(), 1);
+    assert_eq!(stored.len(), 2);
+    let stored_export = stored
+        .iter()
+        .find(|lease| lease.lease_id == "lease-export")
+        .expect("the reservation is stored");
     super::sqlite::write_database(
         &root,
         &super::repository::LeaseDatabase {
             version: 1,
-            boot_generation: stored[0].boot_generation,
+            boot_generation: stored_export.boot_generation,
             leases: stored.clone(),
             snapshot_cleanup_candidates: vec!["snap-export".to_string()],
         },
@@ -682,7 +699,18 @@ fn lease_export_renders_rows_without_creating_the_store() {
         ),
         "the export starts with the lease header: {export}"
     );
-    let row = export
+    let lease_block = export.split("\n\n").next().unwrap();
+    let exported_ids = lease_block
+        .lines()
+        .skip(1)
+        .map(|line| line.split('\t').next().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        exported_ids,
+        vec!["lease-alpha".to_string(), "lease-export".to_string()],
+        "lease rows sort by lease id"
+    );
+    let row = lease_block
         .lines()
         .find(|line| line.starts_with("lease-export\t"))
         .expect("the export renders the lease row");
@@ -690,16 +718,35 @@ fn lease_export_renders_rows_without_creating_the_store() {
     assert_eq!(fields[1], "$1");
     assert_eq!(
         fields[2],
-        serde_json::to_value(stored[0].state)
+        serde_json::to_value(stored_export.state)
             .unwrap()
             .as_str()
             .unwrap()
     );
-    assert_eq!(fields[3], stored[0].boot_generation.to_string());
+    assert_eq!(fields[3], stored_export.boot_generation.to_string());
     assert_eq!(fields[5], "", "an unbounded lease has no expiry");
     assert!(
         export.contains("\nsnapshot_cleanup_candidate_id\nsnap-export\n"),
         "the export renders the pending cleanup candidates: {export}"
     );
     let _ = fs::remove_dir_all(root);
+}
+
+/// The inspection exporter fails closed on a dangling symbolic link instead of
+/// reporting an absent store.
+#[test]
+fn lease_export_rejects_dangling_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    for file_name in ["session-reservations.sqlite", "leases.json"] {
+        let root = test_root(&format!("export-symlink-{file_name}"));
+        symlink(root.join("missing-target"), root.join(file_name)).unwrap();
+        let repository = RemoteSessionLeaseRepository::new(root.clone());
+
+        assert!(
+            repository.export_tsv_read_only().is_err(),
+            "a dangling {file_name} must not be reported as an absent store"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
 }
