@@ -221,14 +221,14 @@ pub fn plan_model_context_compaction_at_consumed_sequence(
         .filter(|(index, _)| !replacement_ranges.iter().any(|range| range.contains(index)))
         .map(|(_, block)| block.clone())
         .collect::<Vec<_>>();
-    let summary_budget_words = context_budget_words.saturating_sub(
-        model_context_total_words(&stable_prefix)
-            .saturating_add(model_context_total_words(&retained_chronology)),
-    );
+    let stable_prefix_words = model_context_total_words(&stable_prefix);
+    let retained_chronology_words = model_context_total_words(&retained_chronology);
+    let summary_budget_words = context_budget_words
+        .saturating_sub(stable_prefix_words.saturating_add(retained_chronology_words));
     if summary_budget_words == 0 {
-        return Err(AgentContextError::new(
-            "unrecoverable model context overflow: no budget remains for a model-authored compaction summary",
-        ));
+        return Err(AgentContextError::new(format!(
+            "unrecoverable model context overflow: no budget remains for a model-authored compaction summary (context_budget_words={context_budget_words} stable_prefix_words={stable_prefix_words} retained_chronology_words={retained_chronology_words})"
+        )));
     }
     Ok(ModelContextCompactionPlan {
         consumed_sequence_high_water,
@@ -412,6 +412,12 @@ fn model_context_retained_tail_budget_words(
 }
 
 /// Clamps retained-tail percentages to the supported range.
+///
+/// The retained raw suffix is mandatory: a compaction that drops the model's own
+/// newest tail loses the continuity the following turn resumes from. A caller that
+/// passes `0` therefore asks for the minimum reservation rather than for none, and
+/// the configured input-cap path relies on exactly that when a configured hard cap
+/// cannot afford a larger optional tail.
 fn normalize_model_context_retained_tail_percent(retained_tail_percent: usize) -> usize {
     retained_tail_percent.clamp(1, 100)
 }
@@ -453,6 +459,21 @@ fn model_context_retained_group_indexes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies the retained-tail clamp keeps the mandatory minimum suffix.
+    ///
+    /// A caller that passes `0` - as the configured input-cap path does when a hard
+    /// cap cannot afford a larger optional tail - gets the one-percent minimum, not
+    /// no tail, because the raw suffix carries the continuity the next turn resumes
+    /// from. Values above the supported range clamp back to one hundred.
+    #[test]
+    fn model_context_retained_tail_percent_clamps_to_the_supported_range() {
+        assert_eq!(normalize_model_context_retained_tail_percent(0), 1);
+        assert_eq!(normalize_model_context_retained_tail_percent(1), 1);
+        assert_eq!(normalize_model_context_retained_tail_percent(50), 50);
+        assert_eq!(normalize_model_context_retained_tail_percent(100), 100);
+        assert_eq!(normalize_model_context_retained_tail_percent(150), 100);
+    }
 
     /// Verifies model-summary planning does not mutate durable chronology and
     /// applies one validated model-authored summary at the frozen event anchor.
