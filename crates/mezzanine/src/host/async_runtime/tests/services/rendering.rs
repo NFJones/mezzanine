@@ -522,7 +522,7 @@ async fn async_terminal_show_metrics_command_renders_actor_metrics() {
         }));
         handle.submit_runtime_events(batch).await.unwrap();
         let output = handle
-            .execute_terminal_command(primary, "show-metrics".to_string())
+            .execute_terminal_command(primary.clone(), "show-metrics".to_string())
             .await
             .unwrap();
         assert!(output.contains(r#""command":"show-metrics""#), "{output}");
@@ -535,6 +535,16 @@ async fn async_terminal_show_metrics_command_renders_actor_metrics() {
             "{output}"
         );
         assert!(output.contains("[runtime counts]"), "{output}");
+        let first_count = commands_processed_from_show_metrics(&output);
+        let second = handle
+            .execute_terminal_command(primary, "show-metrics".to_string())
+            .await
+            .unwrap();
+        let second_count = commands_processed_from_show_metrics(&second);
+        assert!(
+            second_count > first_count,
+            "each show-metrics request observes the request that produced it: {first_count} -> {second_count}"
+        );
         assert!(output.contains("provider_requests_started ="), "{output}");
         assert!(output.contains("[runtime histograms]"), "{output}");
         assert!(
@@ -562,4 +572,17 @@ async fn async_terminal_show_metrics_command_renders_actor_metrics() {
     };
     let ((), mut exit) = tokio::join!(client, actor.run());
     exit.service.terminate_all_pane_processes().unwrap();
+}
+/// Parses the `commands_processed` counter rendered by the `show-metrics`
+/// terminal command.
+fn commands_processed_from_show_metrics(output: &str) -> u64 {
+    let response: serde_json::Value =
+        serde_json::from_str(output).expect("show-metrics response is JSON");
+    let body = response["outcomes"][0]["body"]
+        .as_str()
+        .expect("show-metrics response carries a display body");
+    body.lines()
+        .find_map(|line| line.trim().strip_prefix("commands_processed = "))
+        .and_then(|count| count.trim().parse::<u64>().ok())
+        .expect("the display body carries the commands_processed counter")
 }
