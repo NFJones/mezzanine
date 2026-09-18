@@ -1465,21 +1465,32 @@ where
                         let Some(hint) = watchdog.pending_hint(std::time::Instant::now()) else {
                             continue;
                         };
-                        let Some(frame) = hint_frame.as_ref() else {
-                            continue;
+                        // Feedback must not depend on a prior render: without a
+                        // cached frame the hint is still painted as a bare line,
+                        // and the frame invalidation after the response repaints
+                        // the real layout.
+                        let (lines, line_style_spans, modes) = match hint_frame.as_ref() {
+                            Some(frame) => {
+                                let row = frame.lines.len().saturating_sub(1);
+                                let (lines, line_style_spans) = compose_operator_hint(
+                                    &frame.lines,
+                                    &frame.line_style_spans,
+                                    row,
+                                    &hint,
+                                );
+                                (lines, line_style_spans, frame.modes)
+                            }
+                            None => (
+                                vec![hint.clone()],
+                                vec![Vec::new()],
+                                super::AttachedTerminalOutputModes::default(),
+                            ),
                         };
-                        let row = frame.lines.len().saturating_sub(1);
-                        let (lines, line_style_spans) = compose_operator_hint(
-                            &frame.lines,
-                            &frame.line_style_spans,
-                            row,
-                            &hint,
-                        );
                         if !write_styled_output_or_disconnected_async(
                             terminal_io,
                             &lines,
                             &line_style_spans,
-                        frame.modes,
+                            modes,
                         )
                         .await?
                         {
