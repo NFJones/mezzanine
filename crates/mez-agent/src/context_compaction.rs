@@ -188,7 +188,7 @@ fn plan_model_context_compaction_with_projection(
     let mut stable_prefix_visible = Vec::new();
     let mut chronology_visible = Vec::new();
     for (index, block) in blocks.iter().enumerate() {
-        let visible = model_context_block_is_provider_visible(context, index, provider_projection);
+        let visible = provider_renders_context_block(context, index, provider_projection);
         match block.placement {
             crate::ContextPlacement::StablePrefix => stable_prefix_visible.push(visible),
             crate::ContextPlacement::ConversationAppend => chronology_visible.push(visible),
@@ -507,7 +507,7 @@ fn model_context_visible_total_words(blocks: &[ContextBlock], visible: &[bool]) 
 /// caller passes the block's index in [`AgentContext::blocks`]. Without a
 /// projection the planner budgets for every block, which is what a caller that
 /// cannot resolve the active provider must do.
-fn model_context_block_is_provider_visible(
+pub fn provider_renders_context_block(
     context: &AgentContext,
     index: usize,
     provider_projection: Option<ProviderBudgetProjection<'_>>,

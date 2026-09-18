@@ -285,6 +285,7 @@ pub use context_compaction::{
     DEFAULT_MODEL_CONTEXT_RETAINED_TAIL_PERCENT, ModelContextCompactionPlan,
     ProviderBudgetProjection, apply_model_context_compaction_plan, model_context_text_word_count,
     plan_model_context_compaction_at_consumed_sequence, plan_model_context_compaction_for_provider,
+    provider_renders_context_block,
 };
 pub use context_continuity::{
     ContextBlockDiagnostics, ContextContinuityBreakReason, ContextContinuityDiagnostics,

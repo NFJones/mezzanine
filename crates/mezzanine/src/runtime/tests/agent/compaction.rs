@@ -2412,8 +2412,8 @@ default_model = "test"
 [model_profiles.configured-input-cap-test]
 provider = "runtime-batch"
 model = "test"
-context_window_tokens = 40000
-max_input_tokens = 4000
+context_window_tokens = 200000
+max_input_tokens = 60000
 "#
             .to_string(),
         }])
@@ -2513,5 +2513,31 @@ max_input_tokens = 4000
             .pending_agent_compaction_task_for_tests("%1")
             .is_some(),
         "the unrendered provider block must not exhaust the summary budget"
+    );
+}
+
+/// Verifies the configured-cap word budget is measured rather than assumed.
+///
+/// The planner budgets words while the cap measures estimated provider tokens, so
+/// the budget converts the measured token allowance at the context's own
+/// words-per-token ratio: code-heavy text with few words per token gets a smaller
+/// word budget than prose with the same allowance, which is what makes the planned
+/// reduction match the measured one.
+#[test]
+fn runtime_configured_input_cap_budget_uses_the_measured_word_ratio() {
+    assert_eq!(
+        RuntimeSessionService::configured_input_cap_budget_words(1_000, 250, 1_000),
+        250,
+        "code-heavy text plans one word per four available tokens"
+    );
+    assert_eq!(
+        RuntimeSessionService::configured_input_cap_budget_words(1_000, 750, 1_000),
+        750,
+        "prose plans three words per four available tokens"
+    );
+    assert_eq!(
+        RuntimeSessionService::configured_input_cap_budget_words(1_000, 0, 0),
+        0,
+        "an empty rendered projection leaves no word budget"
     );
 }

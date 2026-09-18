@@ -299,8 +299,9 @@ impl RuntimeSessionService {
         }
         .max(1);
         let retained_tail_percent = self.agent_compaction_raw_retention_percent();
+        let provider_projection = self.agent_provider_budget_projection(&model_profile);
         let plan = self.plan_agent_context_compaction(
-            &model_profile,
+            provider_projection,
             &context,
             recovery_budget_words,
             retained_tail_percent,
@@ -428,13 +429,13 @@ impl RuntimeSessionService {
     /// budget that decides whether a summary can be requested at all.
     fn plan_agent_context_compaction(
         &self,
-        model_profile: &ModelProfile,
+        provider_projection: Option<mez_agent::ProviderBudgetProjection<'_>>,
         context: &mez_agent::AgentContext,
         context_budget_words: usize,
         retained_tail_percent: usize,
         consumed_sequence_high_water: u64,
     ) -> Result<mez_agent::ModelContextCompactionPlan> {
-        let plan = match self.agent_provider_budget_projection(model_profile) {
+        let plan = match provider_projection {
             Some(provider_projection) => mez_agent::plan_model_context_compaction_for_provider(
                 context,
                 context_budget_words,
@@ -450,6 +451,24 @@ impl RuntimeSessionService {
             ),
         };
         plan.map_err(|error| MezError::invalid_state(error.message()))
+    }
+
+    /// Converts one measured provider token budget into the planner's word unit.
+    ///
+    /// The cap and the guard measure estimated provider input tokens while the
+    /// planner budgets whitespace-delimited words, so carrying a token budget over
+    /// as if one token were one word over-budgets prose and under-budgets code by
+    /// the ratio between the two. Measuring that ratio over the same rendered
+    /// payloads the estimate covers keeps the plan in the cap's unit: the words it
+    /// plans to retain cost about the tokens it was given.
+    pub(crate) fn configured_input_cap_budget_words(
+        available_tokens: usize,
+        rendered_context_words: usize,
+        rendered_context_tokens: usize,
+    ) -> usize {
+        available_tokens
+            .saturating_mul(rendered_context_words)
+            .saturating_div(rendered_context_tokens.max(1))
     }
 
     /// Defers an oversized configured-cap request into bounded active-turn compaction.
@@ -507,25 +526,48 @@ impl RuntimeSessionService {
             )?;
         }
 
-        let rendered_context_tokens = context
-            .to_agent_context()
-            .blocks()
-            .iter()
-            .map(|block| {
+        // Only rendered blocks count toward the request estimate and the planner
+        // budget: a block the active provider never receives is not context the
+        // rebuilt request has to fit, and charging it would understate the fixed
+        // provider overhead the cap is measured against.
+        let provider_projection = self.agent_provider_budget_projection(model_profile);
+        let rendered_context = context.to_agent_context();
+        let mut rendered_context_tokens = 0usize;
+        let mut rendered_context_words = 0usize;
+        for (index, block) in rendered_context.blocks().iter().enumerate() {
+            if !mez_agent::provider_renders_context_block(
+                &rendered_context,
+                index,
+                provider_projection,
+            ) {
+                continue;
+            }
+            rendered_context_tokens = rendered_context_tokens.saturating_add(
                 mez_agent::provider_text_input_token_estimate(&format!(
                     "{}{}",
                     mez_agent::model_context_block_header(block),
                     block.content
+                )),
+            );
+            rendered_context_words = rendered_context_words.saturating_add(
+                mez_agent::model_context_text_word_count(&mez_agent::model_context_block_header(
+                    block,
                 ))
-            })
-            .fold(0usize, usize::saturating_add);
+                .saturating_add(mez_agent::model_context_text_word_count(&block.content)),
+            );
+        }
         let fixed_input_tokens = estimate
             .input_tokens
             .saturating_sub(rendered_context_tokens);
-        let context_budget_words = max_input_tokens
+        let available_tokens = max_input_tokens
             .saturating_sub(fixed_input_tokens)
             .saturating_mul(3)
             .saturating_div(4);
+        let context_budget_words = Self::configured_input_cap_budget_words(
+            available_tokens,
+            rendered_context_words,
+            rendered_context_tokens,
+        );
         let context_budget_words =
             Self::configured_input_cap_pass_budget(context_budget_words, non_reducing_pass);
         if context_budget_words == 0 {
@@ -540,7 +582,7 @@ impl RuntimeSessionService {
         // post-boundary context remains protected by the compaction planner.
         let retained_tail_percent = 0;
         let plan = self.plan_agent_context_compaction(
-            model_profile,
+            provider_projection,
             durable,
             context_budget_words,
             retained_tail_percent,
