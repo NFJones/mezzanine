@@ -620,3 +620,51 @@ fn overlay_refresh_installs_a_post_mutation_page_with_its_settlement_status() {
         "the settlement status rides the installed page: {rendered}"
     );
 }
+
+/// Verifies a failed archive settlement shows its status on the picker's page.
+///
+/// The failure event claims the refresh with its status and the conversation it
+/// names, so the operator reads the settlement result on the page the picker
+/// installs instead of only in the pane transcript.
+#[test]
+fn overlay_refresh_shows_a_failed_archive_settlement_status() {
+    let mut service = test_runtime_service();
+    let _primary =
+        open_saved_session_picker(&mut service, "overlay-refresh-settlement-failure", 45);
+    let first_ids = saved_session_page_ids(&service);
+    let conversation_id = first_ids
+        .first()
+        .cloned()
+        .expect("the picker lists a conversation");
+    service
+        .apply_persistence_transition(crate::runtime::PersistenceEvent::SessionArchiveFailed {
+            conversation_id: conversation_id.clone(),
+            operation: SessionArchiveOperation::Archive {
+                archived_at_unix_seconds: 20,
+            },
+            error: "test failure".to_string(),
+        })
+        .unwrap();
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the failed settlement claims the refresh"
+    );
+    assert_eq!(
+        service.active_saved_session_browser_record_id(),
+        Some(conversation_id),
+        "the settled page keeps the conversation it names"
+    );
+    let rendered = service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .expect("the picker stays open")
+        .browser
+        .render_page()
+        .markdown;
+    assert!(
+        rendered.contains("Error: test failure"),
+        "the failure status rides the installed page: {rendered}"
+    );
+}

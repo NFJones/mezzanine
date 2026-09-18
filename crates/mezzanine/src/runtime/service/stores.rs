@@ -383,6 +383,11 @@ impl RuntimeSessionService {
     }
 
     /// Refreshes an open active-session browser after retention removes rows.
+    ///
+    /// The rebuild runs in the overlay refresh lane, so rows retention removed
+    /// stay on screen until the rebuilt page installs; selecting one of them in
+    /// that window fails its store lookup, and the page self-heals when the
+    /// refresh lands.
     fn refresh_saved_session_overlay_after_retention(&mut self) -> Result<()> {
         let Some(source) = self.active_saved_session_browser_source() else {
             return Ok(());
