@@ -2028,6 +2028,115 @@ fn runtime_inherited_generated_identity_keeps_its_selection() {
     );
 }
 
+/// Verifies the durable identity captures the effective materialized profile.
+///
+/// Materialization merges provider-catalog model metadata into the effective
+/// profile, and the model-catalog cache is populated only by the refresh command
+/// paths, so a fresh daemon restores without it. Capturing the raw generated
+/// definition therefore let a restore re-materialize a different option set - and
+/// a different derived name - while still reporting success, silently changing
+/// the model identity the child was created with.
+#[test]
+fn runtime_sized_child_identity_captures_catalog_materialized_options() {
+    let transcript_store = crate::storage::transcript::AgentTranscriptStore::new(temp_root(
+        "runtime-catalog-materialized-identity",
+    ));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "explicit-subagent-sizing-catalog".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: EXPLICIT_SUBAGENT_SIZING_CONFIG.to_string(),
+        }])
+        .unwrap();
+    // Seed a live catalog whose model metadata materialization folds into the
+    // effective profile but which the configured definition does not carry.
+    service.cache_provider_model_catalog_for_tests(
+        "deepseek",
+        vec![mez_agent::ProviderModelInfo {
+            id: "deepseek-v4-max".to_string(),
+            display_name: None,
+            reasoning_levels: Some(vec!["low".to_string(), "high".to_string()]),
+            context_window_tokens: None,
+            max_input_tokens: None,
+            max_output_tokens: None,
+            capabilities: Some(vec!["tool_use".to_string()]),
+        }],
+        vec!["low".to_string(), "high".to_string()],
+    );
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let (child_agent_id, child_pane_id, _turn_id) =
+        spawn_explicitly_sized_child(&mut service, &primary, "large", "high");
+    let (effective_name, effective) = service
+        .active_model_profile_for_pane(&child_pane_id, &child_agent_id, None)
+        .unwrap();
+    assert!(
+        effective
+            .provider_options
+            .contains_key("model_reasoning_levels")
+            || effective
+                .provider_options
+                .contains_key("model_capabilities"),
+        "the seeded catalog must reach the effective profile: {effective:?}"
+    );
+
+    let (captured_name, captured_selection) =
+        persisted_model_identity(&service, &transcript_store, &child_pane_id);
+    assert_eq!(captured_name, effective_name);
+    let selection = captured_selection.expect("a generated identity carries its selection");
+    assert_eq!(
+        selection.provider_options, effective.provider_options,
+        "the capture must describe the effective profile, not the raw definition"
+    );
+
+    // A restart drops the catalog cache and every in-memory identity fact.
+    service
+        .remove_cached_provider_model_catalog("deepseek")
+        .unwrap();
+    {
+        let overrides = service.integration.model_profile_overrides_mut();
+        overrides.agent_profiles.clear();
+        overrides.subagent_profiles.clear();
+        overrides.runtime_generated_profiles.clear();
+    }
+    service
+        .integration
+        .provider_registry_mut()
+        .profile_definitions
+        .remove(&captured_name);
+    service
+        .integration
+        .provider_registry_mut()
+        .profiles
+        .remove(&captured_name);
+
+    service.restore_agent_model_profile_identity(&child_pane_id, &captured_name, Some(&selection));
+    let (restored_name, restored) = service
+        .active_model_profile_for_pane(&child_pane_id, &child_agent_id, None)
+        .unwrap();
+    assert_eq!(
+        restored_name, captured_name,
+        "a restore must reproduce the captured identity name"
+    );
+    assert_eq!(
+        restored.provider_options, effective.provider_options,
+        "a restore must reproduce the effective profile options"
+    );
+}
+
 /// Verifies restored identities re-install the durable child profile, and that an
 /// unresolvable one degrades to the documented fallback instead of silently
 /// changing models.
@@ -2126,8 +2235,8 @@ fn runtime_agent_model_identity_restore_reinstalls_or_degrades() {
         .collect::<Vec<_>>();
     assert_eq!(
         degraded_payloads.len(),
-        2,
-        "both unresolvable restores must report the degradation once"
+        3,
+        "each degraded restore must report once, including the identity drift"
     );
     assert!(
         degraded_payloads.iter().any(|payload| payload
@@ -2140,6 +2249,13 @@ fn runtime_agent_model_identity_restore_reinstalls_or_degrades() {
             .iter()
             .any(|payload| payload.contains("re-materialization failed")),
         "a failed re-materialization must report its reason: {degraded_payloads:?}"
+    );
+    assert!(
+        degraded_payloads
+            .iter()
+            .any(|payload| payload.contains("re-materialized identity differs")),
+        "a re-materialization that cannot reproduce the captured name must report the drift: \
+         {degraded_payloads:?}"
     );
 }
 

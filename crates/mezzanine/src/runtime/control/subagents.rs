@@ -871,15 +871,14 @@ impl RuntimeSessionService {
                 .contains(&profile_name);
             let selection = if runtime_generated {
                 self.provider_registry()
-                    .profile_definitions
-                    .get(&profile_name)
+                    .profile(&profile_name)
                     .map(
-                        |definition| crate::storage::transcript::AgentModelProfileSelection {
-                            provider: definition.provider.clone(),
-                            model: definition.model.clone(),
-                            reasoning_profile: definition.reasoning_profile.clone(),
-                            latency_preference: definition.latency_preference.clone(),
-                            provider_options: definition.provider_options.clone(),
+                        |profile| crate::storage::transcript::AgentModelProfileSelection {
+                            provider: profile.provider.clone(),
+                            model: profile.model.clone(),
+                            reasoning_profile: profile.reasoning_profile.clone(),
+                            latency_preference: profile.latency_preference.clone(),
+                            provider_options: profile.provider_options.clone(),
                         },
                     )
             } else {

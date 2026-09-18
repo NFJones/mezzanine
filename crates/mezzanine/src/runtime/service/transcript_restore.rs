@@ -848,6 +848,18 @@ impl RuntimeSessionService {
         };
         match self.restore_runtime_generated_model_profile(&selection.provider, definition) {
             Ok(restored) => {
+                if restored != profile_name {
+                    // The captured definition could not reproduce the identity it
+                    // was derived from - for example when the spawn materialized a
+                    // provider-catalog option the definition does not carry. The
+                    // closest reproducible identity is installed, but the change
+                    // must be reported instead of silently replacing the model.
+                    self.report_agent_model_identity_degradation(
+                        pane_id,
+                        profile_name,
+                        "re-materialized identity differs from the captured profile name",
+                    );
+                }
                 self.integration
                     .model_profile_overrides_mut()
                     .agent_profiles

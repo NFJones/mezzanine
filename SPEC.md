@@ -7519,7 +7519,10 @@ model, and reasoning selection so the child keeps the model and reasoning level
 it was created with. When the captured identity cannot be resolved or
 re-materialized, the runtime MUST keep the existing fallback resolution and
 report the degradation as an agent status event instead of silently changing the
-model. An agent-scope profile change made outside spawn (for example through a
+model. The captured selection MUST describe the effective profile the child ran,
+including any option materialized from provider-catalog metadata, and a
+re-materialization that cannot reproduce the captured identity MUST report the
+difference rather than installing a different model silently. An agent-scope profile change made outside spawn (for example through a
 later model command aimed at a child agent) is not yet captured and does not
 survive a restart; only the spawn-time identity is durable. Successful spawn
 state and action-result metadata MUST
