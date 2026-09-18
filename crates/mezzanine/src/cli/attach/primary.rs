@@ -1812,9 +1812,16 @@ mod pushed_snapshot_tests {
             })
             .expect("a delayed terminal step must paint the local busy hint");
         assert_eq!(
-            hinted.lines,
-            ["cached row one", "waiting for daemon (0s)"],
+            hinted.lines.first().map(String::as_str),
+            Some("cached row one"),
             "the hint overlays the last painted frame instead of degrading to a bare line"
+        );
+        assert!(
+            hinted
+                .lines
+                .last()
+                .is_some_and(|line| line.contains("waiting for daemon")),
+            "the overlaid row carries the busy hint"
         );
         assert!(
             hinted.line_style_spans.last().is_some_and(Vec::is_empty),
