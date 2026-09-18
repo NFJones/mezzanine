@@ -112,6 +112,137 @@ async fn async_actor_pumps_deferred_record_browser_refresh_for_applied_events() 
     let ((), _exit) = tokio::join!(client, actor.run());
 }
 
+/// Verifies an outstanding record-browser refresh cannot park the actor.
+///
+/// The picker's refresh is claimed as the provider worker would claim it and left
+/// unsettled, so the premise the lane exists for is asserted directly: an
+/// unrelated terminal step still dismisses the overlay and reaches the pane, and
+/// the settled page is dropped for the picker that closed.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_serves_steps_while_a_record_browser_refresh_is_outstanding() {
+    let mut service = test_service();
+    let transcript_store =
+        crate::storage::transcript::AgentTranscriptStore::new(std::env::temp_dir().join(format!(
+            "mez-actor-refresh-outstanding-{}",
+            std::process::id()
+        )));
+    transcript_store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: "actor-refresh".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 10,
+            role: mez_agent::transcript::TranscriptRole::User,
+            turn_id: "turn-actor-refresh".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "refresh candidate".to_string(),
+        })
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
+    let primary = service
+        .attach_primary(
+            "primary",
+            true,
+            mez_mux::layout::Size::new(80, 24).unwrap(),
+            10,
+        )
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let _ = service
+        .execute_agent_shell_command(&primary, "/resume")
+        .unwrap();
+    service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /resume picker applies its page");
+    service
+        .queue_record_browser_refresh_for_tests(crate::runtime::SAVED_SESSION_OVERLAY_REFRESH_KEY);
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::Pane(PaneEvent::Output {
+            pane_id: "%1".to_string(),
+            bytes: b"refresh-pump\n".to_vec(),
+        }));
+        handle.submit_runtime_events(batch).await.unwrap();
+        let effects = handle.drain_runtime_side_effects(8).await.unwrap();
+        let (refresh_key, generation) = effects
+            .iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::DispatchRecordBrowserRefresh {
+                    refresh_key,
+                    generation,
+                } => Some((refresh_key.clone(), *generation)),
+                _ => None,
+            })
+            .expect("the applied batch must pump the queued refresh");
+        let work = handle
+            .claim_record_browser_refresh(refresh_key, generation)
+            .await
+            .unwrap()
+            .expect("the open picker claims its refresh");
+        // The worker stalls here: nothing settles the claimed work yet.
+
+        // The picker's detail key is served, which is the premise the lane exists
+        // for: the outstanding store read must not hold the serialized actor.
+        let opened = handle
+            .apply_attached_terminal_step_plan(
+                primary.clone(),
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(b"i".to_vec())],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            opened.view_refresh_required,
+            "the actor must keep serving steps while a refresh claim is outstanding"
+        );
+        let outcome = crate::runtime::RuntimeSessionService::execute_record_browser_refresh(&work);
+        assert!(
+            !handle
+                .complete_record_browser_refresh(work, outcome)
+                .await
+                .unwrap(),
+            "a settled page is dropped while the record's detail is open"
+        );
+        let closed = handle
+            .apply_attached_terminal_step_plan(
+                primary.clone(),
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x1b".to_vec())],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            closed.view_refresh_required,
+            "the actor keeps serving steps after the settled page is dropped"
+        );
+
+        let _ = handle.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(transcript_store.root());
+    };
+
+    let ((), _exit) = tokio::join!(client, actor.run());
+}
+
 /// Verifies that a foreground resize signal can wake the render path without
 /// directly mutating geometry in the actor event. The attached terminal service
 /// owns the actual terminal-size read, so the signal event should only enqueue
