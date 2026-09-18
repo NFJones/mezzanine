@@ -114,17 +114,20 @@ pub(super) fn export_tsv_read_only(root: &Path) -> Result<Option<String>> {
     Ok(Some(output))
 }
 
-/// Reports whether any legacy history file exists below one store root.
+/// Reports whether any legible legacy history file exists below one store root.
+///
+/// Only regular files count, matching what the fallback read can actually open:
+/// a dangling symbolic link is nothing to export rather than an empty section.
 fn legacy_history_exists(root: &Path) -> bool {
-    if path_exists(&root.join(LEGACY_AGENT_HISTORY_FILE_NAME))
-        || path_exists(&root.join(LEGACY_COMMAND_HISTORY_FILE_NAME))
+    if root.join(LEGACY_AGENT_HISTORY_FILE_NAME).is_file()
+        || root.join(LEGACY_COMMAND_HISTORY_FILE_NAME).is_file()
     {
         return true;
     }
     std::fs::read_dir(root).is_ok_and(|entries| {
         entries
             .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-            .any(|path| path.is_dir() && path_exists(&path.join(LEGACY_AGENT_HISTORY_FILE_NAME)))
+            .any(|path| path.is_dir() && path.join(LEGACY_AGENT_HISTORY_FILE_NAME).is_file())
     })
 }
 
@@ -640,6 +643,25 @@ mod tests {
         let entries = read(&root, HistoryScope::Agent).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].text, "shared prompt");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A dangling legacy symlink is nothing to export rather than an empty
+    /// section, while the database path keeps failing closed on a symlink.
+    #[test]
+    fn history_export_ignores_unreadable_legacy_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = test_root("export-symlink");
+        symlink(
+            root.join("missing-target"),
+            root.join(LEGACY_AGENT_HISTORY_FILE_NAME),
+        )
+        .unwrap();
+        assert!(
+            export_tsv_read_only(&root).unwrap().is_none(),
+            "a dangling legacy symlink is nothing to export"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 }
