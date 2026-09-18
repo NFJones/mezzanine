@@ -2906,10 +2906,15 @@ impl RuntimeSessionService {
             .get(pane_id)
             .map(|boundary| {
                 format!(
-                    "phase={} primary={} interaction_generation={}",
+                    "phase={} primary={} interaction_generation={} child_shell_expected={} loader_marker={} loader_ready={} loader_awaits_launch_proof={} staged={}",
                     boundary.phase.as_str(),
                     boundary.primary_process_id,
-                    boundary.interaction_generation
+                    boundary.interaction_generation,
+                    boundary.child_shell.is_some(),
+                    boundary.loader_marker.is_some(),
+                    boundary.loader_ready,
+                    boundary.loader_ready_awaits_launch_proof,
+                    boundary.child_staging_source.is_some()
                 )
             })
             .unwrap_or_else(|| "phase=none".to_string());
