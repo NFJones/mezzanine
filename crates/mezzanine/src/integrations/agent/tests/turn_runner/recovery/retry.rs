@@ -170,6 +170,25 @@ fn turn_runner_repairs_malformed_provider_maap_output_without_raw_excerpt() {
         2,
         "a malformed output without an excerpt must still reach a repair request"
     );
+    let repair_text = requests[1]
+        .messages
+        .iter()
+        .map(|message| message.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        repair_text.contains(mez_agent::MAAP_REPAIR_EVIDENCE_PREFIX),
+        "the repair request must carry the evidence block: {repair_text}"
+    );
+    assert!(
+        repair_text
+            .contains("validation_error=provider MAAP output is malformed: missing required field"),
+        "the evidence block must name the malformed output: {repair_text}"
+    );
+    assert!(
+        repair_text.contains("previous_response_excerpt:\n"),
+        "a withheld excerpt must render as an empty state field instead of dropping the block: {repair_text}"
+    );
 }
 #[test]
 /// Verifies exhausted malformed-output repairs still report the provider cause.
