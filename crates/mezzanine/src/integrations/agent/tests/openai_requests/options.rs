@@ -269,3 +269,64 @@ fn openai_explicit_prompt_cache_breakpoint_stays_on_the_stable_prefix() {
         "later appends must not move the breakpoint either"
     );
 }
+
+/// Verifies a stable non-developer block can carry the explicit breakpoint.
+///
+/// SPEC.md requires exactly one semantic `input_text` marker and does not restrict
+/// its role, while a minimal session can have no stable developer block at all:
+/// its only developer-rendered messages are appended Context blocks. Requiring a
+/// developer block would refuse those turns, so the stable boundary may be any
+/// stable-prefix block and the volatile developer blocks must still be ignored.
+#[test]
+fn openai_explicit_prompt_cache_breakpoint_marks_a_stable_non_developer_block() {
+    let mut request = openai_prompt_cache_retention_test_request("gpt-5.6-2026-01-01");
+    request.messages.push(mez_agent::ModelMessage {
+        role: mez_agent::ModelMessageRole::User,
+        source: mez_agent::ContextSourceKind::UserInstruction,
+        placement: mez_agent::ContextPlacement::StablePrefix,
+        content: "stable operator instruction".to_string(),
+    });
+    request.model_capabilities.openai_prompt_cache_mode =
+        mez_agent::model_capabilities::OpenAiPromptCacheMode::Explicit;
+    let stable_positions = explicit_prompt_cache_breakpoint_positions(&request);
+    assert_eq!(
+        stable_positions.len(),
+        1,
+        "explicit mode must emit exactly one breakpoint: {stable_positions:?}"
+    );
+
+    request.messages.push(mez_agent::ModelMessage {
+        role: mez_agent::ModelMessageRole::Context,
+        source: mez_agent::ContextSourceKind::Policy,
+        placement: mez_agent::ContextPlacement::ConversationAppend,
+        content: "volatile runtime hint".to_string(),
+    });
+    assert_eq!(
+        explicit_prompt_cache_breakpoint_positions(&request),
+        stable_positions,
+        "volatile developer-rendered blocks must not become the breakpoint"
+    );
+}
+
+/// Verifies explicit mode still fails closed without a stable input block.
+///
+/// The breakpoint is mandatory in explicit mode and may only attach to an
+/// `input_text` block, so a request whose every candidate block is volatile
+/// chronology has no legal boundary: assembly must refuse rather than send an
+/// unmarked explicit-mode request or mark the volatile tail.
+#[test]
+fn openai_explicit_prompt_cache_breakpoint_requires_a_stable_input_block() {
+    let mut request = openai_prompt_cache_retention_test_request("gpt-5.6-2026-01-01");
+    request.model_capabilities.openai_prompt_cache_mode =
+        mez_agent::model_capabilities::OpenAiPromptCacheMode::Explicit;
+    request.messages.push(mez_agent::ModelMessage {
+        role: mez_agent::ModelMessageRole::Context,
+        source: mez_agent::ContextSourceKind::Policy,
+        placement: mez_agent::ContextPlacement::ConversationAppend,
+        content: "volatile runtime hint".to_string(),
+    });
+    assert!(
+        openai_responses_request_body(&request).is_err(),
+        "explicit mode without a stable-prefix input_text block must fail closed"
+    );
+}

@@ -137,10 +137,14 @@ fn apply_openai_prompt_cache_policy(
 ///
 /// Explicit mode allows exactly one breakpoint, and the boundary must not move as
 /// chronology appends newer developer-role blocks: the target is therefore the
-/// last `input_text` block of the last stable-prefix developer message, never the
-/// newest developer-role message anywhere in `input`. Marking the volatile tail
-/// writes a suffix the provider cannot reuse, and rebuilding the marker on the
-/// next request moves the boundary away from the previously paid write.
+/// last `input_text` block of the last stable-prefix message, whatever its role,
+/// never the newest developer-role message anywhere in `input`. SPEC.md requires
+/// exactly one semantic `input_text` marker and does not restrict its role, so a
+/// stable non-developer block is a valid boundary; requiring a developer block
+/// would refuse turns whose only developer-rendered blocks are volatile. Marking
+/// the volatile tail writes a suffix the provider cannot reuse, and rebuilding the
+/// marker on the next request moves the boundary away from the previously paid
+/// write.
 ///
 /// Local diagnostics measure the wire bytes including this marker
 /// (`openai_prompt_cache_diagnostics_for_request_with_stream`), while the
@@ -170,14 +174,14 @@ pub(crate) fn apply_openai_prompt_cache_breakpoint(
         .stable_input_positions_marker_target(stable_input_positions)
         .ok_or_else(|| {
             ProviderRequestAssemblyError::invalid_args(
-                "OpenAI explicit prompt-cache mode requires a stable-prefix developer input_text content block",
+                "OpenAI explicit prompt-cache mode requires a stable-prefix input_text content block",
             )
         })?;
     block["prompt_cache_breakpoint"] = serde_json::json!({ "mode": "explicit" });
     Ok(())
 }
 
-/// Selects the last `input_text` block of the last stable developer message.
+/// Selects the last `input_text` block of the last stable-prefix message.
 trait StableInputMarkerTarget {
     /// Returns the block the explicit breakpoint may attach to.
     fn stable_input_positions_marker_target(
@@ -197,9 +201,6 @@ impl StableInputMarkerTarget for [serde_json::Value] {
         let (message_position, block_index) =
             stable_input_positions.iter().rev().find_map(|position| {
                 let message = self.get(*position)?;
-                if message.get("role").and_then(serde_json::Value::as_str) != Some("developer") {
-                    return None;
-                }
                 let content = message.get("content")?.as_array()?;
                 let block_index = content.iter().rposition(|block| {
                     block.get("type").and_then(serde_json::Value::as_str) == Some("input_text")
