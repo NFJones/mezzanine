@@ -550,79 +550,26 @@ impl RuntimeSessionService {
             )));
         }
         if input == b"a" && record_browser.browser.scope_toggle_enabled() {
-            let source = record_browser.source.clone();
-            if let Some(source) = source {
-                let active_record_id = record_browser
-                    .browser
-                    .active_record_id()
-                    .map(str::to_string);
-                let source = self.record_browser_source_toggled_scope(&source);
-                let (source, browser) = self.refresh_saved_session_browser_preserving(
-                    &source,
-                    active_record_id.as_deref(),
-                )?;
-                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
-                    return Ok(Some(false));
-                };
-                let Some(record_browser) = overlay.record_browser.as_mut() else {
-                    return Ok(None);
-                };
-                record_browser.source = Some(source);
-                record_browser.browser = browser;
-                return Ok(Some(render_record_browser_overlay(
-                    overlay,
-                    &mut self.presentation.overlay_action_registry,
-                    &self.presentation.settings.ui_theme,
-                    terminal_width,
-                    prose_width,
-                )));
-            }
-        }
-        if input == b"u"
-            && matches!(
-                record_browser.source,
-                Some(RuntimeRecordBrowserOverlaySource::SavedSessions { .. })
-            )
-        {
-            let source = record_browser.source.clone();
-            if let Some(source) = source {
-                let active_record_id = record_browser
-                    .browser
-                    .active_record_id()
-                    .map(str::to_string);
-                let source = self.record_browser_source_toggled_subagents(&source);
-                let (source, browser) = self.refresh_saved_session_browser_preserving(
-                    &source,
-                    active_record_id.as_deref(),
-                )?;
-                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
-                    return Ok(Some(false));
-                };
-                let Some(record_browser) = overlay.record_browser.as_mut() else {
-                    return Ok(None);
-                };
-                record_browser.source = Some(source);
-                record_browser.browser = browser;
-                return Ok(Some(render_record_browser_overlay(
-                    overlay,
-                    &mut self.presentation.overlay_action_registry,
-                    &self.presentation.settings.ui_theme,
-                    terminal_width,
-                    prose_width,
-                )));
-            }
-        }
-        if input == b"r"
-            && matches!(
-                record_browser.source,
-                Some(RuntimeRecordBrowserOverlaySource::SavedSessions { .. })
-            )
-        {
             let Some(source) = record_browser.source.clone() else {
                 return Ok(Some(false));
             };
-            let source = self.record_browser_source_toggled_session_lifecycle(&source);
-            let (source, browser) = self.refresh_saved_session_browser_preserving(&source, None)?;
+            let active_record_id = record_browser
+                .browser
+                .active_record_id()
+                .map(str::to_string);
+            let source = self.record_browser_source_toggled_scope(&source);
+            // The scope key is shared with the other browse families, whose
+            // rebuilds still run inline; only the saved-session picker reads a
+            // store tall enough to need the deferred lane.
+            if matches!(
+                source,
+                RuntimeRecordBrowserOverlaySource::SavedSessions { .. }
+            ) {
+                self.begin_record_browser_preserving_claim(source, active_record_id)?;
+                return Ok(Some(false));
+            }
+            let (source, browser) = self
+                .refresh_saved_session_browser_preserving(&source, active_record_id.as_deref())?;
             let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                 return Ok(Some(false));
             };
@@ -638,6 +585,36 @@ impl RuntimeSessionService {
                 terminal_width,
                 prose_width,
             )));
+        }
+        if input == b"u"
+            && matches!(
+                record_browser.source,
+                Some(RuntimeRecordBrowserOverlaySource::SavedSessions { .. })
+            )
+        {
+            let Some(source) = record_browser.source.clone() else {
+                return Ok(Some(false));
+            };
+            let active_record_id = record_browser
+                .browser
+                .active_record_id()
+                .map(str::to_string);
+            let source = self.record_browser_source_toggled_subagents(&source);
+            self.begin_record_browser_preserving_claim(source, active_record_id)?;
+            return Ok(Some(false));
+        }
+        if input == b"r"
+            && matches!(
+                record_browser.source,
+                Some(RuntimeRecordBrowserOverlaySource::SavedSessions { .. })
+            )
+        {
+            let Some(source) = record_browser.source.clone() else {
+                return Ok(Some(false));
+            };
+            let source = self.record_browser_source_toggled_session_lifecycle(&source);
+            self.begin_record_browser_preserving_claim(source, None)?;
+            return Ok(Some(false));
         }
         if input == b"A"
             && matches!(
@@ -1736,26 +1713,8 @@ impl RuntimeSessionService {
                     mez_mux::record_browser::RecordBrowserFilterField::Text,
                     query.as_deref().unwrap_or_default(),
                 )?;
-                let (source, browser) = self.refresh_saved_session_browser_preserving(
-                    &source,
-                    active_record_id.as_deref(),
-                )?;
-                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
-                    return Ok(false);
-                };
-                let Some(record_browser) = overlay.record_browser.as_mut() else {
-                    return Ok(false);
-                };
-                record_browser.source = Some(source);
-                record_browser.browser = browser;
-                return Ok(render_record_browser_overlay_matching(
-                    overlay,
-                    &mut self.presentation.overlay_action_registry,
-                    &self.presentation.settings.ui_theme,
-                    terminal_width,
-                    prose_width,
-                    query.as_deref(),
-                ));
+                self.begin_record_browser_preserving_claim(source, active_record_id)?;
+                return Ok(false);
             }
             let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                 return Ok(false);

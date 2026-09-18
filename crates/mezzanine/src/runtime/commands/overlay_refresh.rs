@@ -8,9 +8,16 @@
 //! and no newer claim has been made, which keeps overlay state, selection, and
 //! rendering unchanged apart from arrival timing. Each claim carries an intent:
 //! a current-page rebuild restores the focused row, while an adjacent-page fetch
-//! resolves the cursor record the operator stepped off into a keyset anchor. A
-//! key owns at most one pending claim, so a claim that lands while a page-edge
-//! fetch is still queued replaces that step instead of applying it twice.
+//! resolves the cursor record the operator stepped off into a keyset anchor, and
+//! a filter change (scope, subagent visibility, lifecycle, search text) rebuilds
+//! the page the operator will see. A key owns at most one pending claim, so a
+//! claim that lands while a page-edge fetch is still queued replaces that step
+//! instead of applying it twice.
+//!
+//! A filter change switches the retained source when its page installs, not when
+//! the key arrives. A key pressed before that settlement therefore acts on the
+//! page the operator can still see, and the completion drops the rebuild if the
+//! overlay moved on in the meantime.
 
 use super::RuntimeSessionService;
 use crate::error::{MezError, MezErrorKind, Result};
@@ -38,7 +45,7 @@ impl RuntimeSessionService {
         self.active_saved_session_browser_source()?;
         Some(self.begin_record_browser_refresh_claim_for_intent(
             refresh_key,
-            RuntimeRecordBrowserRefreshIntent::CurrentPage {
+            RuntimeRecordBrowserRefreshIntent::RefreshInPlace {
                 active_record_id: self.active_saved_session_browser_record_id(),
             },
         ))
@@ -75,7 +82,7 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_state("resume requires transcript storage"))?;
         Ok(Some(self.begin_record_browser_refresh_claim_for_intent(
             SAVED_SESSION_OVERLAY_REFRESH_KEY,
-            RuntimeRecordBrowserRefreshIntent::AdjacentPage {
+            RuntimeRecordBrowserRefreshIntent::FetchAdjacent {
                 delta,
                 first_id,
                 last_id,
@@ -100,6 +107,34 @@ impl RuntimeSessionService {
         generation
     }
 
+    /// Claims one preserving page rebuild for an in-memory filter change.
+    ///
+    /// The caller supplies the source the rebuild targets (a toggled scope,
+    /// subagent visibility, lifecycle, or search text) and the row the operator
+    /// had focused. The claim keeps the source the overlay shows now as its
+    /// staleness token, so a rebuild is dropped instead of installing over a page
+    /// the operator moved on to. Returns `Ok(None)` when no saved-session browser
+    /// is open, which leaves the caller's in-memory update to stand alone.
+    pub(crate) fn begin_record_browser_preserving_claim(
+        &mut self,
+        target: RuntimeRecordBrowserOverlaySource,
+        active_record_id: Option<String>,
+    ) -> Result<Option<u64>> {
+        if self.active_saved_session_browser_source().is_none() {
+            return Ok(None);
+        }
+        self.persistence
+            .transcript_store()
+            .ok_or_else(|| MezError::invalid_state("resume requires transcript storage"))?;
+        Ok(Some(self.begin_record_browser_refresh_claim_for_intent(
+            SAVED_SESSION_OVERLAY_REFRESH_KEY,
+            RuntimeRecordBrowserRefreshIntent::ApplyFilter {
+                target: Box::new(target),
+                active_record_id,
+            },
+        )))
+    }
+
     /// Builds the owned work one queued refresh dispatch needs.
     ///
     /// Returns `None` when the claim is stale or the overlay no longer shows a
@@ -118,7 +153,7 @@ impl RuntimeSessionService {
         {
             return Ok(None);
         }
-        let Some(source) = self.active_saved_session_browser_source() else {
+        let Some(active_source) = self.active_saved_session_browser_source() else {
             return Ok(None);
         };
         let Some(intent) = self
@@ -127,10 +162,18 @@ impl RuntimeSessionService {
         else {
             return Ok(None);
         };
+        let source = match &intent {
+            RuntimeRecordBrowserRefreshIntent::ApplyFilter { target, .. } => {
+                target.as_ref().clone()
+            }
+            RuntimeRecordBrowserRefreshIntent::RefreshInPlace { .. }
+            | RuntimeRecordBrowserRefreshIntent::FetchAdjacent { .. } => active_source.clone(),
+        };
         Ok(Some(RuntimeRecordBrowserRefreshWork {
             refresh_key: refresh_key.to_string(),
             generation,
             source,
+            active_source,
             intent,
             transcript_store: self.persistence.transcript_store().cloned(),
             prompt_width: self.saved_session_prompt_width(),
@@ -151,9 +194,15 @@ impl RuntimeSessionService {
                 kind: MezErrorKind::InvalidState,
             };
         };
+        if let RuntimeRecordBrowserRefreshIntent::ApplyFilter {
+            active_record_id, ..
+        } = &work.intent
+        {
+            return Self::execute_preserving_page_refresh(store, work, active_record_id.as_deref());
+        }
         let mut source = work.source.clone();
         let mut active_index = None;
-        if let RuntimeRecordBrowserRefreshIntent::AdjacentPage {
+        if let RuntimeRecordBrowserRefreshIntent::FetchAdjacent {
             delta,
             first_id,
             last_id,
@@ -206,12 +255,12 @@ impl RuntimeSessionService {
             }
         };
         match &work.intent {
-            RuntimeRecordBrowserRefreshIntent::CurrentPage { active_record_id } => {
+            RuntimeRecordBrowserRefreshIntent::RefreshInPlace { active_record_id } => {
                 if let Some(active_record_id) = active_record_id.as_deref() {
                     browser.set_active_record_id(active_record_id);
                 }
             }
-            RuntimeRecordBrowserRefreshIntent::AdjacentPage { delta, .. } => {
+            RuntimeRecordBrowserRefreshIntent::FetchAdjacent { delta, .. } => {
                 if browser.records().is_empty() {
                     // The cursor record is the last row the catalog served, so an
                     // empty neighbour means the catalog ended between the two
@@ -242,6 +291,7 @@ impl RuntimeSessionService {
                     0
                 });
             }
+            RuntimeRecordBrowserRefreshIntent::ApplyFilter { .. } => {}
         }
         RuntimeRecordBrowserRefreshOutcome::Rebuilt {
             browser: Box::new(browser),
@@ -297,6 +347,90 @@ impl RuntimeSessionService {
         Ok(browser)
     }
 
+    /// Rebuilds one saved-session page around the row the operator had focused.
+    ///
+    /// Mirrors the inline preserving refresh: the first page is tried, then the
+    /// page anchored at the focused record. The first build already holds the page
+    /// the inline fallback re-read, so it is reused instead of reading it again,
+    /// and a record the new filters no longer match simply leaves that page.
+    fn execute_preserving_page_refresh(
+        store: &crate::storage::transcript::AgentTranscriptStore,
+        work: &RuntimeRecordBrowserRefreshWork,
+        active_record_id: Option<&str>,
+    ) -> RuntimeRecordBrowserRefreshOutcome {
+        let mut first_page = work.source.clone();
+        if let RuntimeRecordBrowserOverlaySource::SavedSessions { anchor, .. } = &mut first_page {
+            *anchor = None;
+        }
+        let browser = match Self::rebuild_saved_session_page(store, &first_page, work) {
+            Ok(browser) => browser,
+            Err(error) => {
+                return RuntimeRecordBrowserRefreshOutcome::Failed {
+                    message: error.message().to_string(),
+                    kind: error.kind(),
+                };
+            }
+        };
+        let Some(active_record_id) = active_record_id else {
+            return RuntimeRecordBrowserRefreshOutcome::Rebuilt {
+                browser: Box::new(browser),
+                source: first_page,
+                active_index: None,
+            };
+        };
+        let mut first_page_browser = browser;
+        if first_page_browser.set_active_record_id(active_record_id) {
+            return RuntimeRecordBrowserRefreshOutcome::Rebuilt {
+                browser: Box::new(first_page_browser),
+                source: first_page,
+                active_index: None,
+            };
+        }
+        let cursor = match store.saved_session(active_record_id) {
+            Ok(Some(session)) => {
+                crate::storage::transcript::SavedSessionCursor::from_session(&session)
+            }
+            Ok(None) => {
+                return RuntimeRecordBrowserRefreshOutcome::Rebuilt {
+                    browser: Box::new(first_page_browser),
+                    source: first_page,
+                    active_index: None,
+                };
+            }
+            Err(error) => {
+                return RuntimeRecordBrowserRefreshOutcome::Failed {
+                    message: error.message().to_string(),
+                    kind: error.kind(),
+                };
+            }
+        };
+        let mut anchored = first_page.clone();
+        if let RuntimeRecordBrowserOverlaySource::SavedSessions { anchor, .. } = &mut anchored {
+            *anchor = Some(SavedSessionPageAnchor::At(cursor));
+        }
+        match Self::rebuild_saved_session_page(store, &anchored, work) {
+            Ok(mut anchored_browser) => {
+                if anchored_browser.set_active_record_id(active_record_id) {
+                    RuntimeRecordBrowserRefreshOutcome::Rebuilt {
+                        browser: Box::new(anchored_browser),
+                        source: anchored,
+                        active_index: None,
+                    }
+                } else {
+                    RuntimeRecordBrowserRefreshOutcome::Rebuilt {
+                        browser: Box::new(first_page_browser),
+                        source: first_page,
+                        active_index: None,
+                    }
+                }
+            }
+            Err(error) => RuntimeRecordBrowserRefreshOutcome::Failed {
+                message: error.message().to_string(),
+                kind: error.kind(),
+            },
+        }
+    }
+
     /// Queues one refresh dispatch without an open overlay for tests.
     ///
     /// A test that asserts the actor emits what a real claim queues uses this
@@ -305,7 +439,7 @@ impl RuntimeSessionService {
     pub(crate) fn queue_record_browser_refresh_for_tests(&mut self, refresh_key: &str) {
         self.begin_record_browser_refresh_claim_for_intent(
             refresh_key,
-            RuntimeRecordBrowserRefreshIntent::CurrentPage {
+            RuntimeRecordBrowserRefreshIntent::RefreshInPlace {
                 active_record_id: None,
             },
         );
@@ -353,7 +487,8 @@ impl RuntimeSessionService {
                 {
                     return Ok(false);
                 }
-                if self.active_saved_session_browser_source().as_ref() != Some(&work.source) {
+                if self.active_saved_session_browser_source().as_ref() != Some(&work.active_source)
+                {
                     return Ok(false);
                 }
                 Ok(self.set_active_saved_session_browser_error(&format!(
@@ -372,7 +507,8 @@ impl RuntimeSessionService {
                 {
                     return Ok(false);
                 }
-                if self.active_saved_session_browser_source().as_ref() != Some(&work.source) {
+                if self.active_saved_session_browser_source().as_ref() != Some(&work.active_source)
+                {
                     return Ok(false);
                 }
                 let mut browser = *browser;

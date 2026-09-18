@@ -294,6 +294,12 @@ fn runtime_resume_browser_archives_browses_details_and_deletes_sessions() {
     service
         .apply_primary_display_overlay_input(&primary, b"r")
         .unwrap();
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the lifecycle toggle claims a lane rebuild"
+    );
     let archived_empty = service
         .primary_display_overlay()
         .and_then(|overlay| overlay.record_browser.as_ref())
@@ -313,6 +319,12 @@ fn runtime_resume_browser_archives_browses_details_and_deletes_sessions() {
     service
         .apply_primary_display_overlay_input(&primary, b"r")
         .unwrap();
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the second lifecycle toggle claims the active page again"
+    );
     service
         .apply_primary_display_overlay_input(&primary, b"A")
         .unwrap();
@@ -369,6 +381,12 @@ fn runtime_resume_browser_archives_browses_details_and_deletes_sessions() {
     service
         .apply_primary_display_overlay_input(&primary, b"r")
         .unwrap();
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the lifecycle toggle claims the archived page"
+    );
     let archived_page = service
         .primary_display_overlay()
         .and_then(|overlay| overlay.record_browser.as_ref())
@@ -457,6 +475,12 @@ fn runtime_resume_browser_restores_then_resumes_archived_session() {
     service
         .apply_primary_display_overlay_input(&primary, b"r")
         .unwrap();
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the lifecycle toggle claims the archived page"
+    );
     service
         .apply_primary_display_overlay_input(&primary, b"\r")
         .unwrap();
@@ -1407,6 +1431,12 @@ fn runtime_resume_browser_filters_current_directory_and_toggles_all_sessions() {
     service
         .apply_primary_display_overlay_input(&primary, b"a")
         .unwrap();
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the scope toggle claims the unbounded page"
+    );
     let all_record_ids = service
         .primary_display_overlay()
         .and_then(|overlay| overlay.record_browser.as_ref())
@@ -1421,6 +1451,12 @@ fn runtime_resume_browser_filters_current_directory_and_toggles_all_sessions() {
     service
         .apply_primary_display_overlay_input(&primary, b"a")
         .unwrap();
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the scope toggle claims the directory page again"
+    );
     let scoped_record_ids = service
         .primary_display_overlay()
         .and_then(|overlay| overlay.record_browser.as_ref())
@@ -1547,6 +1583,12 @@ fn runtime_resume_browser_pages_and_searches_catalog_results() {
     service
         .apply_primary_display_overlay_input(&primary, b"\r")
         .unwrap();
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the submitted search claims the filtered page"
+    );
     let searched = service
         .primary_display_overlay()
         .and_then(|overlay| overlay.record_browser.as_ref())
@@ -1625,6 +1667,12 @@ fn runtime_resume_hides_subagents_but_allows_toggle_and_direct_resume() {
     service
         .apply_primary_display_overlay_input(&primary, b"u")
         .unwrap();
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the subagent toggle claims the inclusive page"
+    );
     let browser = service
         .primary_display_overlay()
         .and_then(|overlay| overlay.record_browser.as_ref())
@@ -1643,6 +1691,12 @@ fn runtime_resume_hides_subagents_but_allows_toggle_and_direct_resume() {
     service
         .apply_primary_display_overlay_input(&primary, b"u")
         .unwrap();
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the subagent toggle claims the root-only page again"
+    );
     let browser = service
         .primary_display_overlay()
         .and_then(|overlay| overlay.record_browser.as_ref())

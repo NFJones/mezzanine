@@ -412,6 +412,11 @@ pub(crate) struct RuntimeRecordBrowserRefreshWork {
     pub generation: u64,
     /// Overlay source the page is rebuilt from.
     pub source: super::RuntimeRecordBrowserOverlaySource,
+    /// Overlay source the claim observed, compared when the outcome settles.
+    ///
+    /// A filter change rebuilds from a source the overlay does not show yet, so
+    /// the token that decides staleness stays separate from the rebuild target.
+    pub active_source: super::RuntimeRecordBrowserOverlaySource,
     /// What the worker rebuilds for this claim.
     pub intent: RuntimeRecordBrowserRefreshIntent,
     /// Transcript store the saved-session page reads.
@@ -427,7 +432,7 @@ pub(crate) struct RuntimeRecordBrowserRefreshWork {
 pub(crate) enum RuntimeRecordBrowserRefreshIntent {
     /// Rebuild the current page in place, restoring the focused row when one was
     /// focused.
-    CurrentPage {
+    RefreshInPlace {
         /// Focused record the rebuilt page restores, when one was focused.
         active_record_id: Option<String>,
     },
@@ -435,13 +440,21 @@ pub(crate) enum RuntimeRecordBrowserRefreshIntent {
     ///
     /// The page identity is captured in memory when the claim is made; the cursor
     /// lookup and the page rebuild both happen in the worker.
-    AdjacentPage {
+    FetchAdjacent {
         /// Signed cursor movement: positive pages forward, negative backward.
         delta: isize,
         /// First record id on the page the cursor moved off.
         first_id: String,
         /// Last record id on the page the cursor moved off.
         last_id: String,
+    },
+    /// Rebuild the page around the focused row after an in-memory filter change:
+    /// a toggled scope, subagent visibility, lifecycle, or search text.
+    ApplyFilter {
+        /// Source the rebuild targets, derived from the page the operator saw.
+        target: Box<super::RuntimeRecordBrowserOverlaySource>,
+        /// Focused record the rebuilt page restores, when one was focused.
+        active_record_id: Option<String>,
     },
 }
 

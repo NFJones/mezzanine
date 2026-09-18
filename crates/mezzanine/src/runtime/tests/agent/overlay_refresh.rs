@@ -377,6 +377,17 @@ fn overlay_refresh_adjacent_page_keeps_the_retained_scope_toggle() {
     service
         .apply_primary_display_overlay_input(&primary, b"a")
         .unwrap();
+    assert_eq!(
+        saved_session_page_ids(&service),
+        scoped_ids,
+        "a claimed filter change leaves the current page installed"
+    );
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the scope toggle claims the unbounded page"
+    );
     assert!(saved_session_scope_toggle_enabled(&service));
     let unscoped_ids = saved_session_page_ids(&service);
     assert_eq!(unscoped_ids.len(), 20);
@@ -406,5 +417,11 @@ fn overlay_refresh_adjacent_page_keeps_the_retained_scope_toggle() {
     service
         .apply_primary_display_overlay_input(&primary, b"a")
         .unwrap();
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the scope toggle claims the directory page again"
+    );
     assert_eq!(saved_session_page_ids(&service), scoped_ids);
 }
