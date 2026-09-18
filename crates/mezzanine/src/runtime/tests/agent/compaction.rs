@@ -2409,6 +2409,9 @@ sandbox = "policy-only"
 kind = "openai"
 models = ["test"]
 default_model = "test"
+# The cap must clear the fixed provider request overhead this fixture observes -
+# about 22.9k tokens of system prompt and tool schemas - or the pass lands in the
+# "cap smaller than fixed overhead" terminal before the projection is exercised.
 [model_profiles.configured-input-cap-test]
 provider = "runtime-batch"
 model = "test"
