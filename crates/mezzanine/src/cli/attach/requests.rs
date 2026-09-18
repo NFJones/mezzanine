@@ -324,6 +324,7 @@ pub(super) async fn render_attach_client_frame_async<I: AsyncAttachedTerminalIo>
         return Ok(PrimaryViewRenderOutcome {
             connected: true,
             animation_refresh_interval_ms,
+            hint_frame: None,
         });
     }
     let modes = control_socket_cursor_blink_elapsed(frame.modes, cursor_blink_epoch);
@@ -341,6 +342,11 @@ pub(super) async fn render_attach_client_frame_async<I: AsyncAttachedTerminalIo>
         } else {
             0
         },
+        hint_frame: Some(super::AttachHintFrame {
+            lines: frame.lines.clone(),
+            line_style_spans: frame.line_style_spans.clone(),
+            modes,
+        }),
     })
 }
 
@@ -365,6 +371,7 @@ pub(super) async fn render_iroh_attach_client_frame_async<I: AsyncAttachedTermin
         } else {
             0
         },
+        hint_frame: None,
     })
 }
 
@@ -405,6 +412,7 @@ pub(super) async fn render_iroh_attach_client_frame_bounded_async<I: AsyncAttach
         PrimaryViewRenderOutcome {
             connected: true,
             animation_refresh_interval_ms,
+            hint_frame: None,
         },
         report,
     ))

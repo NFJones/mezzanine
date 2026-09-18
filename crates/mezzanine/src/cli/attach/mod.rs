@@ -215,12 +215,14 @@ impl AttachIrohHealthTracker {
 }
 
 /// Outcome from rendering one explicit primary terminal view.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PrimaryViewRenderOutcome {
     /// Whether the control connection and attached terminal are still usable.
     connected: bool,
     /// Milliseconds until the next animation-only view refresh.
     animation_refresh_interval_ms: u64,
+    /// Last composed frame, retained so a stalled daemon can be answered with
+    /// local feedback instead of a frozen terminal.
+    hint_frame: Option<AttachHintFrame>,
 }
 
 impl PrimaryViewRenderOutcome {
@@ -229,8 +231,20 @@ impl PrimaryViewRenderOutcome {
         Self {
             connected: false,
             animation_refresh_interval_ms: 0,
+            hint_frame: None,
         }
     }
+}
+
+/// Composed frame rows retained for local busy-hint repaints.
+#[derive(Debug, Clone)]
+struct AttachHintFrame {
+    /// Frame rows from the last successful render.
+    lines: Vec<String>,
+    /// Style spans aligned with `lines`.
+    line_style_spans: Vec<Vec<TerminalStyleSpan>>,
+    /// Output modes captured with the frame.
+    modes: AttachedTerminalOutputModes,
 }
 /// Outcome from notifying the runtime about a primary terminal resize.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -304,10 +318,6 @@ mod primary;
 mod requests;
 mod responses;
 mod selection;
-#[allow(
-    dead_code,
-    reason = "54abacd5 phase 1: the primary client loop consumes this watchdog next"
-)]
 mod watchdog;
 
 #[cfg(test)]

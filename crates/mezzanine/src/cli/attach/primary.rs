@@ -14,15 +14,17 @@ use super::requests::{
     request_and_render_primary_view_async, request_primary_resize_async,
     request_primary_view_frame_async, terminal_step_control_request,
     terminal_step_if_changed_control_request, write_async_control_body_or_disconnected,
+    write_styled_output_or_disconnected_async,
 };
 use super::responses::{
     control_response_forbidden, terminal_step_response_client_frame,
     terminal_step_response_refresh_requirement,
 };
+use super::watchdog::{AttachResponseWatchdog, compose_operator_hint};
 use super::{
     AsRawFd, AsyncAttachedTerminalIo, AsyncAttachedTerminalPresentationGuard,
-    AttachAnimationRefresh, AttachTerminalSizeRefresh, ClientId, MezError, Result, Size,
-    UnixStream, decode_control_frame, io,
+    AttachAnimationRefresh, AttachHintFrame, AttachTerminalSizeRefresh, ClientId, MezError, Result,
+    Size, UnixStream, decode_control_frame, io,
 };
 
 /// Runs the run control socket attached primary client operation for this subsystem.
@@ -1375,6 +1377,7 @@ where
     let mut event_stream = event_stream.map(AttachedRuntimeEventStream::new);
     let mut animation_refresh = AttachAnimationRefresh::default();
     let mut size_refresh = AttachTerminalSizeRefresh::default();
+    let mut hint_frame: Option<AttachHintFrame> = None;
     loop {
         if refresh_attached_client_size_async(terminal_io, &mut client_size).await? {
             terminal_io.invalidate_output_frame().await?;
@@ -1430,6 +1433,7 @@ where
                 break Ok(());
             }
             animation_refresh.update_from_rendered_view(outcome.animation_refresh_interval_ms);
+            hint_frame = outcome.hint_frame;
             render_requested = false;
             iteration = iteration.saturating_add(1);
             continue;
@@ -1444,9 +1448,51 @@ where
         if !write_async_control_body_or_disconnected(stream, &request).await? {
             break Ok(());
         }
-        let Some(response) =
-            read_async_control_response_frames_or_disconnected(stream, 1024 * 1024, 1).await?
-        else {
+        // A stalled actor must not read as a frozen terminal, so the wait is
+        // bounded by the response watchdog: a due hint repaints the last
+        // composed frame locally, and the response clears it. The connection is
+        // never dropped on the first slow response.
+        let mut watchdog = AttachResponseWatchdog::new(std::time::Instant::now());
+        let response = {
+            let mut response_future = std::pin::pin!(
+                read_async_control_response_frames_or_disconnected(stream, 1024 * 1024, 1)
+            );
+            loop {
+                tokio::select! {
+                    biased;
+                    response = &mut response_future => break response?,
+                    _ = tokio::time::sleep(watchdog.poll_interval()) => {
+                        let Some(hint) = watchdog.pending_hint(std::time::Instant::now()) else {
+                            continue;
+                        };
+                        let Some(frame) = hint_frame.as_ref() else {
+                            continue;
+                        };
+                        let row = frame.lines.len().saturating_sub(1);
+                        let (lines, line_style_spans) = compose_operator_hint(
+                            &frame.lines,
+                            &frame.line_style_spans,
+                            row,
+                            &hint,
+                        );
+                        if !write_styled_output_or_disconnected_async(
+                            terminal_io,
+                            &lines,
+                            &line_style_spans,
+                        frame.modes,
+                        )
+                        .await?
+                        {
+                            break None;
+                        }
+                    }
+                }
+            }
+        };
+        if watchdog.clear() {
+            terminal_io.invalidate_output_frame().await?;
+        }
+        let Some(response) = response else {
             break Ok(());
         };
         let (body, _) = decode_control_frame(&response, 1024 * 1024)?;
