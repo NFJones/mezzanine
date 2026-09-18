@@ -175,6 +175,15 @@ impl RuntimeSessionService {
             }
             let pane_id = metadata.pane_id.clone();
             let conversation_id = metadata.conversation_id.clone();
+            if let Some((profile_name, selection)) =
+                store.conversation_model_identity(&conversation_id)?
+            {
+                self.restore_agent_model_profile_identity(
+                    &pane_id,
+                    &profile_name,
+                    selection.as_ref(),
+                );
+            }
             let conversation_allowed_actions =
                 store.conversation_allowed_actions(&conversation_id)?;
             let conversation_kind = store.conversation_kind(&conversation_id)?;
@@ -785,6 +794,80 @@ impl RuntimeSessionService {
             return Err(error);
         }
         Ok(records.len())
+    }
+
+    /// Restores the durable agent-scoped model identity for one pane.
+    ///
+    /// A name that still resolves keeps configuration authoritative. A name that
+    /// no longer resolves is re-materialized from its captured selection so the
+    /// conversation keeps the model and reasoning level it was created with; when
+    /// that is impossible the existing fallback resolution stays in place and the
+    /// degradation is reported as an agent status event instead of silently
+    /// changing the target.
+    pub(crate) fn restore_agent_model_profile_identity(
+        &mut self,
+        pane_id: &str,
+        profile_name: &str,
+        selection: Option<&crate::storage::transcript::AgentModelProfileSelection>,
+    ) {
+        if self.provider_registry().profile(profile_name).is_some() {
+            self.integration
+                .model_profile_overrides_mut()
+                .agent_profiles
+                .insert(format!("agent-{pane_id}"), profile_name.to_string());
+            return;
+        }
+        let Some(selection) = selection else {
+            self.report_agent_model_identity_degradation(
+                pane_id,
+                profile_name,
+                "profile no longer resolves and no selection was captured",
+            );
+            return;
+        };
+        let definition = mez_agent::ModelProfileDefinition {
+            provider: selection.provider.clone(),
+            model: selection.model.clone(),
+            reasoning_profile: selection.reasoning_profile.clone(),
+            latency_preference: selection.latency_preference.clone(),
+            provider_options: selection.provider_options.clone(),
+            ..mez_agent::ModelProfileDefinition::default()
+        };
+        match self.restore_runtime_generated_model_profile(&selection.provider, definition) {
+            Ok(restored) => {
+                self.integration
+                    .model_profile_overrides_mut()
+                    .agent_profiles
+                    .insert(format!("agent-{pane_id}"), restored);
+            }
+            Err(error) => self.report_agent_model_identity_degradation(
+                pane_id,
+                profile_name,
+                &format!("re-materialization failed: {error}"),
+            ),
+        }
+    }
+
+    /// Reports one unrecoverable agent model identity degradation.
+    ///
+    /// The event mirrors the environment-evidence degradation shape so existing
+    /// status consumers surface it without a new channel; the fallback resolution
+    /// stays in place because model identity is not authority.
+    fn report_agent_model_identity_degradation(
+        &mut self,
+        pane_id: &str,
+        profile_name: &str,
+        reason: &str,
+    ) {
+        let _ = self.append_lifecycle_event(
+            crate::runtime::EventKind::AgentStatus,
+            format!(
+                r#"{{"pane_id":"{}","model_profile":"degraded","profile":"{}","reason":"{}"}}"#,
+                crate::runtime::json_escape(pane_id),
+                crate::runtime::json_escape(profile_name),
+                crate::runtime::json_escape(reason)
+            ),
+        );
     }
 
     /// Loads and validates persisted pane-local settings before `/resume` mutates live state.

@@ -1712,6 +1712,140 @@ fn spawn_explicitly_sized_child(
     )
 }
 
+/// Verifies a spawn-sized child's model identity is captured durably.
+///
+/// The child's agent-scoped profile used to live only in runtime memory, so a
+/// restart silently changed the child's model and reasoning level. The identity
+/// now lands on the child conversation's sidecar together with the selection
+/// needed to re-materialize a runtime-generated definition, and an unrelated
+/// pane must not inherit it.
+#[test]
+fn runtime_spawn_explicit_sizing_captures_durable_child_model_identity() {
+    let transcript_store = crate::storage::transcript::AgentTranscriptStore::new(temp_root(
+        "runtime-spawn-sized-child-identity",
+    ));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "explicit-subagent-sizing-identity".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: EXPLICIT_SUBAGENT_SIZING_CONFIG.to_string(),
+        }])
+        .unwrap();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let (child_agent_id, child_pane_id, _turn_id) =
+        spawn_explicitly_sized_child(&mut service, &primary, "large", "high");
+    let (effective_name, effective) = service
+        .active_model_profile_for_pane(&child_pane_id, &child_agent_id, None)
+        .unwrap();
+    service.checkpoint_agent_session_metadata().unwrap();
+
+    let child_conversation_id = service
+        .agent_shell_store()
+        .get(&child_pane_id)
+        .expect("the child pane owns an agent shell session")
+        .session_id
+        .clone();
+    let primary_conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .expect("the primary pane owns an agent shell session")
+        .session_id
+        .clone();
+    let (captured_name, captured_selection) = transcript_store
+        .conversation_model_identity(&child_conversation_id)
+        .unwrap()
+        .expect("the child model identity must be persisted at spawn");
+    assert_eq!(captured_name, effective_name);
+    let captured_selection =
+        captured_selection.expect("a runtime-generated profile carries its selection");
+    assert_eq!(captured_selection.model, effective.model);
+    assert_eq!(
+        captured_selection.reasoning_profile.as_deref(),
+        effective.reasoning_profile.as_deref()
+    );
+    assert_eq!(
+        transcript_store
+            .conversation_model_identity(&primary_conversation_id)
+            .unwrap(),
+        None,
+        "an unrelated pane must not inherit the child model identity"
+    );
+}
+
+/// Verifies restored identities re-install the durable child profile, and that an
+/// unresolvable one degrades to the documented fallback instead of silently
+/// changing models.
+#[test]
+fn runtime_agent_model_identity_restore_reinstalls_or_degrades() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "explicit-subagent-sizing-restore".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: EXPLICIT_SUBAGENT_SIZING_CONFIG.to_string(),
+        }])
+        .unwrap();
+
+    service.restore_agent_model_profile_identity("%7", "deepseek-small", None);
+    assert_eq!(
+        service
+            .integration
+            .model_profile_overrides()
+            .agent_profiles
+            .get("agent-%7")
+            .map(String::as_str),
+        Some("deepseek-small"),
+        "a name that still resolves must be re-installed"
+    );
+
+    let selection = crate::storage::transcript::AgentModelProfileSelection {
+        provider: "missing-provider".to_string(),
+        model: "missing-model".to_string(),
+        reasoning_profile: Some("high".to_string()),
+        latency_preference: None,
+        provider_options: std::collections::BTreeMap::new(),
+    };
+    service.restore_agent_model_profile_identity(
+        "%8",
+        "generated-missing-profile",
+        Some(&selection),
+    );
+    assert!(
+        !service
+            .integration
+            .model_profile_overrides()
+            .agent_profiles
+            .contains_key("agent-%8"),
+        "an unresolvable selection must not install an override"
+    );
+    service.restore_agent_model_profile_identity("%9", "generated-missing-profile", None);
+    assert!(
+        !service
+            .integration
+            .model_profile_overrides()
+            .agent_profiles
+            .contains_key("agent-%9"),
+        "a missing name without a selection must not install an override"
+    );
+}
+
 /// Verifies a durable child profile pins the requested reasoning level even
 /// when it differs from the configured target profile's own reasoning level.
 ///

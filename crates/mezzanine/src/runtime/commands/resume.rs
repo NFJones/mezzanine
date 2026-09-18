@@ -375,6 +375,7 @@ impl RuntimeSessionService {
         let prepared_objective = store.effective_persisted_objective(&conversation_id)?;
         let prepared_resume_state =
             self.prepare_agent_resume_state_for_conversation(&conversation_id)?;
+        let restored_model_identity = store.conversation_model_identity(&conversation_id)?;
         let previous_checkpoint_records =
             store.load_agent_session_metadata(self.session.id.as_str())?;
         let previous_session = self
@@ -548,6 +549,13 @@ impl RuntimeSessionService {
                     overrides.agent_profiles.remove(descendant_agent_id);
                     overrides.subagent_profiles.remove(descendant_agent_id);
                 }
+            }
+            if let Some((profile_name, selection)) = restored_model_identity.as_ref() {
+                self.restore_agent_model_profile_identity(
+                    pane_id,
+                    profile_name,
+                    selection.as_ref(),
+                );
             }
             #[cfg(test)]
             if self.take_agent_resume_after_authority_restore_failure_for_tests() {

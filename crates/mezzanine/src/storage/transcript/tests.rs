@@ -2739,6 +2739,53 @@ fn transcript_store_latest_root_session_skips_unresumable_legacy_child() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies the durable agent model identity round-trips through the sidecar and
+/// that a sidecar written before the field existed still reads as no identity.
+///
+/// The identity is what a restart restores, so it must survive a write/read pair
+/// with its selection intact, and legacy sidecars must stay readable instead of
+/// failing the whole record decode.
+#[test]
+fn transcript_store_round_trips_agent_model_profile_identity() {
+    let root = temp_root("agent-model-profile-identity");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("child", 1, TranscriptRole::User))
+        .unwrap();
+    assert_eq!(store.conversation_model_identity("child").unwrap(), None);
+
+    let selection = crate::storage::transcript::AgentModelProfileSelection {
+        provider: "deepseek".to_string(),
+        model: "deepseek-flash".to_string(),
+        reasoning_profile: Some("max".to_string()),
+        latency_preference: None,
+        provider_options: std::collections::BTreeMap::new(),
+    };
+    store
+        .save_conversation_model_identity("child", "deepseek-flash:max", Some(&selection))
+        .unwrap();
+    let (name, restored) = store
+        .conversation_model_identity("child")
+        .unwrap()
+        .expect("identity should round-trip");
+    assert_eq!(name, "deepseek-flash:max");
+    assert_eq!(restored, Some(selection));
+
+    fs::create_dir_all(root.join("legacy")).unwrap();
+    fs::write(
+        root.join("legacy").join("metadata.json"),
+        b"{\"version\":2,\"conversation_kind\":\"root\"}\n",
+    )
+    .unwrap();
+    assert_eq!(store.conversation_model_identity("legacy").unwrap(), None);
+    assert_eq!(
+        store.conversation_kind("legacy").unwrap(),
+        mez_agent::AgentConversationKind::Root
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies ordinary metadata mutations update the catalog only after their
 /// filesystem payload or compatibility sidecar has been persisted.
 ///

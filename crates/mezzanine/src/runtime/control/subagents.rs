@@ -858,6 +858,34 @@ impl RuntimeSessionService {
                 .or_else(|| self.inherited_model_profile_for_child_agent(&spawn.parent_agent_id)),
         };
         if let Some(profile_name) = child_model_profile {
+            let selection = self
+                .provider_registry()
+                .profile_definitions
+                .get(&profile_name)
+                .map(
+                    |definition| crate::storage::transcript::AgentModelProfileSelection {
+                        provider: definition.provider.clone(),
+                        model: definition.model.clone(),
+                        reasoning_profile: definition.reasoning_profile.clone(),
+                        latency_preference: definition.latency_preference.clone(),
+                        provider_options: definition.provider_options.clone(),
+                    },
+                );
+            if let Some(store) = self.persistence.cloned_transcript_store()
+                && let Err(error) = store.save_conversation_model_identity(
+                    &child_conversation_id,
+                    &profile_name,
+                    selection.as_ref(),
+                )
+            {
+                self.cleanup_failed_subagent_spawn(
+                    controller,
+                    &started.pane_id,
+                    &child_agent_id,
+                    None,
+                );
+                return Err(error);
+            }
             self.integration
                 .model_profile_overrides_mut()
                 .agent_profiles

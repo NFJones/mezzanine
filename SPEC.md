@@ -7493,8 +7493,16 @@ the identity is cleared. A spawn that omits the pair MUST keep role-profile and
 inherited-parent inheritance unchanged. Per-turn routing remains the pane’s
 separate configured policy, so a later turn of an explicitly sized child stays
 eligible for router dispatch when routing is enabled. Runtime-generated child
-profiles and agent-scoped overrides are memory-only and are not restored across
-a runtime restart. Successful spawn state and action-result metadata MUST
+profiles and agent-scoped overrides MUST be captured on the child conversation's
+durable metadata when the identity is installed, and a resume or restart MUST
+restore that identity before the conversation's next turn. A captured name that
+still resolves MUST restore by name so configuration keeps precedence, and a
+runtime-generated profile MUST be re-materialized from its captured provider,
+model, and reasoning selection so the child keeps the model and reasoning level
+it was created with. When the captured identity cannot be resolved or
+re-materialized, the runtime MUST keep the existing fallback resolution and
+report the degradation as an agent status event instead of silently changing the
+model. Successful spawn state and action-result metadata MUST
 report the effective requested size, reasoning effort, and resolved
 model-profile identity.
 

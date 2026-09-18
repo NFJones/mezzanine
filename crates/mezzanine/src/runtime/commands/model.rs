@@ -906,7 +906,22 @@ impl RuntimeSessionService {
         // definition's values for later turns.
         definition.reasoning_profile = profile.reasoning_profile.clone();
         definition.latency_preference = profile.latency_preference.clone();
-        let catalog = self.cached_provider_model_catalog(&profile.provider);
+        self.restore_runtime_generated_model_profile(&profile.provider, definition)
+    }
+
+    /// Re-materializes one runtime-generated profile definition and returns its
+    /// deterministic name.
+    ///
+    /// Spawn sizing and resume share this: a selection captured with an explicit
+    /// size and reasoning pair is registered under the same derived name on every
+    /// restore, so a resumed conversation resolves the identity it was created
+    /// with instead of falling back to another target.
+    pub(crate) fn restore_runtime_generated_model_profile(
+        &mut self,
+        provider: &str,
+        definition: ModelProfileDefinition,
+    ) -> Result<String> {
+        let catalog = self.cached_provider_model_catalog(provider);
         let catalog = catalog.as_ref().map(|catalog| &catalog.catalog);
         let materialized = self
             .provider_registry()

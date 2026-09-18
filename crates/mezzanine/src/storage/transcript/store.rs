@@ -84,11 +84,62 @@ struct ConversationMetadata {
     allowed_actions: Option<AllowedActionSet>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     subagent_lineage: Option<mez_agent::SubagentSessionLineage>,
+    /// Agent-scoped model profile name restored when this conversation resumes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_model_profile: Option<String>,
+    /// Selection needed to re-materialize a runtime-generated agent profile.
+    ///
+    /// Present when the name above refers to a definition the runtime generated
+    /// from an explicit spawn size or reasoning pair; a restored runtime rebuilds
+    /// the same definition and deterministic name from these fields before the
+    /// conversation's next turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_model_profile_selection: Option<AgentModelProfileSelection>,
+}
+
+/// Provider, model, and reasoning selection for one agent-scoped profile.
+///
+/// The fields are the ones the runtime-generated profile name is derived from,
+/// so re-materializing this selection reproduces the exact profile identity the
+/// child was created with instead of silently falling back to another target.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct AgentModelProfileSelection {
+    /// Provider that served the generated definition.
+    pub(crate) provider: String,
+    /// Model that served the generated definition.
+    pub(crate) model: String,
+    /// Reasoning profile requested for the generated definition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) reasoning_profile: Option<String>,
+    /// Latency preference requested for the generated definition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) latency_preference: Option<String>,
+    /// Provider options carried by the generated definition.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) provider_options: BTreeMap<String, String>,
 }
 
 /// Rejects incomplete child sidecars while preserving true legacy root
 /// conversations, which predate every child-contract field.
 fn validate_conversation_metadata_contract(metadata: &ConversationMetadata) -> Result<()> {
+    if let Some(profile) = metadata.agent_model_profile.as_deref() {
+        if profile.trim().is_empty() {
+            return Err(MezError::invalid_args(
+                "conversation metadata agent model profile must not be empty",
+            ));
+        }
+        if let Some(selection) = metadata.agent_model_profile_selection.as_ref()
+            && (selection.provider.trim().is_empty() || selection.model.trim().is_empty())
+        {
+            return Err(MezError::invalid_args(
+                "conversation metadata agent model selection requires a provider and model",
+            ));
+        }
+    } else if metadata.agent_model_profile_selection.is_some() {
+        return Err(MezError::invalid_args(
+            "conversation metadata agent model selection requires a profile name",
+        ));
+    }
     match metadata.conversation_kind.as_str() {
         "root" => {
             if metadata.subagent_lineage.is_some()
@@ -706,6 +757,50 @@ impl AgentTranscriptStore {
             }
         }
         Ok(bytes)
+    }
+
+    /// Returns the durable agent-scoped model identity for one conversation.
+    ///
+    /// The identity is model identity only: it carries no authority, so it is
+    /// stored apart from the child contract and never widens what a restored
+    /// conversation may do.
+    pub fn conversation_model_identity(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<(String, Option<AgentModelProfileSelection>)>> {
+        let metadata = self.read_conversation_metadata(conversation_id)?;
+        let Some(profile_name) = metadata.agent_model_profile else {
+            return Ok(None);
+        };
+        Ok(Some((profile_name, metadata.agent_model_profile_selection)))
+    }
+
+    /// Persists the agent-scoped model identity restored when this conversation
+    /// resumes.
+    ///
+    /// The runtime writes this when it installs the agent-scope override, so a
+    /// later restart restores the model and reasoning level the conversation was
+    /// created with instead of falling back to another target. The selection is
+    /// written only for profiles the runtime generated; a configured profile is
+    /// restored by name so configuration keeps winning.
+    pub fn save_conversation_model_identity(
+        &self,
+        conversation_id: &str,
+        profile_name: &str,
+        selection: Option<&AgentModelProfileSelection>,
+    ) -> Result<()> {
+        validate_conversation_id(conversation_id)?;
+        if profile_name.trim().is_empty() {
+            return Err(MezError::invalid_args(
+                "agent model profile name must not be empty",
+            ));
+        }
+        let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
+        let mut metadata = self.read_conversation_metadata_locked(conversation_id)?;
+        metadata.agent_model_profile = Some(profile_name.to_string());
+        metadata.agent_model_profile_selection = selection.cloned();
+        validate_conversation_metadata_contract(&metadata)?;
+        self.write_conversation_metadata_locked(conversation_id, &metadata)
     }
 
     /// Atomically captures the immutable durable contract for one child conversation.
@@ -2834,6 +2929,8 @@ impl AgentTranscriptStore {
                 subagent_scope: None,
                 allowed_actions: None,
                 subagent_lineage: None,
+                agent_model_profile: None,
+                agent_model_profile_selection: None,
             });
         }
         let data = std_fs::read(&path)?;
