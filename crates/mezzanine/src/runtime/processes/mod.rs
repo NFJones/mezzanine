@@ -4359,6 +4359,14 @@ impl RuntimeSessionService {
         if window_ids.is_empty() {
             return;
         }
+        let deferred_pane_ids = self
+            .session
+            .windows()
+            .iter()
+            .filter(|window| window_ids.contains(window.id.as_str()))
+            .flat_map(|window| window.panes())
+            .map(|pane| pane.id.to_string())
+            .collect::<std::collections::HashSet<_>>();
         let deferred_clients = self
             .render_effects_for_clients_projecting_windows(
                 &window_ids.iter().cloned().collect::<Vec<_>>(),
@@ -4370,26 +4378,7 @@ impl RuntimeSessionService {
                 _ => None,
             })
             .collect::<std::collections::HashSet<_>>();
-        let deferred_pane_ids = self
-            .session
-            .windows()
-            .iter()
-            .filter(|window| window_ids.contains(window.id.as_str()))
-            .flat_map(|window| window.panes())
-            .map(|pane| pane.id.to_string())
-            .collect::<std::collections::HashSet<_>>();
-        let superseded = side_effects.iter().any(|effect| {
-            matches!(
-                effect,
-                RuntimeSideEffect::RenderClient {
-                    client_id,
-                    reason: RenderInvalidationReason::Resize
-                        | RenderInvalidationReason::Layout
-                        | RenderInvalidationReason::FullRedraw,
-                } if deferred_clients.contains(client_id)
-            )
-        });
-        if superseded {
+        if self.divider_render_effects_are_superseded(side_effects) {
             self.presentation.clear_mouse_resize_drag_state();
             side_effects.extend(
                 self.presentation
@@ -4410,6 +4399,40 @@ impl RuntimeSessionService {
             }
             _ => true,
         });
+    }
+
+    /// Reports whether one enqueue batch supersedes the pending divider render.
+    ///
+    /// The probe is side-effect free: the actor queue needs this answer before
+    /// it commits to the enqueue whose capacity verdict decides whether the
+    /// destructive reconciliation may consume pending gesture state.
+    fn divider_render_effects_are_superseded(&self, side_effects: &[RuntimeSideEffect]) -> bool {
+        let window_ids = self.presentation.deferred_pane_content_window_ids();
+        if window_ids.is_empty() {
+            return false;
+        }
+        let deferred_clients = self
+            .render_effects_for_clients_projecting_windows(
+                &window_ids.iter().cloned().collect::<Vec<_>>(),
+                RenderInvalidationReason::PaneOutput,
+            )
+            .into_iter()
+            .filter_map(|effect| match effect {
+                RuntimeSideEffect::RenderClient { client_id, .. } => Some(client_id),
+                _ => None,
+            })
+            .collect::<std::collections::HashSet<_>>();
+        side_effects.iter().any(|effect| {
+            matches!(
+                effect,
+                RuntimeSideEffect::RenderClient {
+                    client_id,
+                    reason: RenderInvalidationReason::Resize
+                        | RenderInvalidationReason::Layout
+                        | RenderInvalidationReason::FullRedraw,
+                } if deferred_clients.contains(client_id)
+            )
+        })
     }
 
     /// Reports whether one pane belongs to geometry hidden by a divider gesture.
