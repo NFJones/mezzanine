@@ -18,8 +18,9 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 
 use super::super::shared_sqlite::{
-    SharedSchemaState, import_legacy_file_once, migration_completed, open_shared_database,
-    open_shared_database_read_only, read_private_legacy_file, schema_version, set_schema_version,
+    SharedSchemaState, export_tsv, import_legacy_file_once, migration_completed,
+    open_shared_database, open_shared_database_read_only, read_private_legacy_file, schema_version,
+    set_schema_version,
 };
 use super::repository::{LocalAssignmentDatabase, validate_database};
 use super::{LocalSessionAssignment, LocalSessionAssignmentState, MezError, Result};
@@ -57,6 +58,66 @@ fn encode_state(state: LocalSessionAssignmentState) -> String {
         .ok()
         .and_then(|value| value.as_str().map(ToOwned::to_owned))
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Reports whether one path exists, including a symbolic link that does not
+/// resolve, so an inspection command reports the broken path instead of
+/// treating the store as absent.
+fn path_exists(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok()
+}
+
+/// Renders the assignment store in its inspection TSV shape without creating
+/// it.
+///
+/// Returns `None` when neither representation exists, so an inspection command
+/// never creates the store, and the rows come from the same read-only path the
+/// listing command uses, so an export cannot block a daemon writer. Rows sort
+/// by session id.
+pub(super) fn export_tsv_read_only(directory: &Path) -> Result<Option<String>> {
+    let path = database_path(directory);
+    let legacy = legacy_path(directory);
+    reject_symlink(&path)?;
+    if !path_exists(&path) && !path_exists(&legacy) {
+        return Ok(None);
+    }
+    let database = load_database(directory)?;
+    let mut assignments = database.assignments;
+    assignments.sort_by(|left, right| left.session_id.cmp(&right.session_id));
+    let rows = assignments
+        .iter()
+        .map(|assignment| {
+            vec![
+                assignment.session_id.clone(),
+                encode_state(assignment.state),
+                assignment.default_for_host.to_string(),
+                assignment.boot_generation.to_string(),
+                assignment.assignment_generation.to_string(),
+                assignment.created_at_unix_seconds.to_string(),
+                assignment.updated_at_unix_seconds.to_string(),
+                assignment
+                    .checkpoint
+                    .as_ref()
+                    .map(|checkpoint| checkpoint.snapshot_id.clone())
+                    .unwrap_or_default(),
+                assignment.failure.clone().unwrap_or_default(),
+            ]
+        })
+        .collect::<Vec<_>>();
+    Ok(Some(export_tsv(
+        &[
+            "session_id",
+            "state",
+            "default_for_host",
+            "boot_generation",
+            "assignment_generation",
+            "created_at_unix_seconds",
+            "updated_at_unix_seconds",
+            "checkpoint_snapshot_id",
+            "failure",
+        ],
+        &rows,
+    )))
 }
 
 /// Refuses a database path that is a symbolic link.

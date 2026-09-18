@@ -28,7 +28,7 @@ enum StorageCliCommand {
 ///
 /// Each store conversion appends its store here; the error message and the
 /// exporter match below both derive from this list so they cannot diverge.
-pub(super) const STORAGE_EXPORTERS: &[&str] = &["memory", "sessions"];
+pub(super) const STORAGE_EXPORTERS: &[&str] = &["memory", "sessions", "leases", "assignments"];
 
 /// Typed process CLI arguments for `mez storage export`.
 #[derive(Debug, Clone, Args)]
@@ -84,6 +84,31 @@ fn storage_export_body(store: &str, env: &CliEnv) -> Result<String> {
             body.ok_or_else(|| {
                 MezError::invalid_state(
                     "no session registry found; start a session with `mez new` first",
+                )
+            })
+        }
+        "leases" => {
+            let paths = env.config_paths()?;
+            let repository = crate::storage::lease::RemoteSessionLeaseRepository::new(
+                crate::storage::lease::default_remote_session_lease_directory(paths.root()),
+            );
+            repository.export_tsv_read_only()?.ok_or_else(|| {
+                MezError::invalid_state(
+                    "no remote session lease store found; a remote session creates it on its first reservation",
+                )
+            })
+        }
+        "assignments" => {
+            let paths = env.config_paths()?;
+            let repository =
+                crate::storage::local_assignment::LocalSessionAssignmentRepository::new(
+                    crate::storage::local_assignment::default_local_assignment_directory(
+                        paths.root(),
+                    ),
+                );
+            repository.export_tsv_read_only()?.ok_or_else(|| {
+                MezError::invalid_state(
+                    "no local session assignment store found; create one with `mez new` first",
                 )
             })
         }

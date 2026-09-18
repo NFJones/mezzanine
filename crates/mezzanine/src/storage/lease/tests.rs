@@ -637,3 +637,69 @@ fn lease_database_state_column_is_checked_on_read() {
     );
     let _ = fs::remove_dir_all(root);
 }
+
+/// The inspection exporter renders stored lease rows and pending cleanup
+/// candidates without creating the store or taking the repository lock.
+#[test]
+fn lease_export_renders_rows_without_creating_the_store() {
+    let root = test_root("export");
+    let repository = RemoteSessionLeaseRepository::new(root.clone());
+    assert!(
+        repository.export_tsv_read_only().unwrap().is_none(),
+        "an absent store reports nothing to export"
+    );
+    assert!(
+        !root.join("session-reservations.sqlite").exists() && !root.join("leases.json").exists(),
+        "an inspection must not create the store"
+    );
+
+    repository
+        .reserve_pending(reservation(
+            "lease-export",
+            "$1",
+            "device-1",
+            "create-export",
+            "fingerprint-export",
+        ))
+        .unwrap();
+    let stored = repository.list().unwrap();
+    assert_eq!(stored.len(), 1);
+    super::sqlite::write_database(
+        &root,
+        &super::repository::LeaseDatabase {
+            version: 1,
+            boot_generation: stored[0].boot_generation,
+            leases: stored.clone(),
+            snapshot_cleanup_candidates: vec!["snap-export".to_string()],
+        },
+    )
+    .unwrap();
+
+    let export = repository.export_tsv_read_only().unwrap().unwrap();
+    assert!(
+        export.starts_with(
+            "lease_id\tsession_id\tstate\tboot_generation\tlease_generation\texpires_at_unix_seconds\tupdated_at_unix_seconds\tfailure\n"
+        ),
+        "the export starts with the lease header: {export}"
+    );
+    let row = export
+        .lines()
+        .find(|line| line.starts_with("lease-export\t"))
+        .expect("the export renders the lease row");
+    let fields = row.split('\t').collect::<Vec<_>>();
+    assert_eq!(fields[1], "$1");
+    assert_eq!(
+        fields[2],
+        serde_json::to_value(stored[0].state)
+            .unwrap()
+            .as_str()
+            .unwrap()
+    );
+    assert_eq!(fields[3], stored[0].boot_generation.to_string());
+    assert_eq!(fields[5], "", "an unbounded lease has no expiry");
+    assert!(
+        export.contains("\nsnapshot_cleanup_candidate_id\nsnap-export\n"),
+        "the export renders the pending cleanup candidates: {export}"
+    );
+    let _ = fs::remove_dir_all(root);
+}

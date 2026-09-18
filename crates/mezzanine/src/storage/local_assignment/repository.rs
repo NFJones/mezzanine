@@ -54,6 +54,13 @@ impl LocalSessionAssignmentRepository {
         })
     }
 
+    /// Renders this store in its inspection TSV shape without creating it or
+    /// taking the repository lock, so an export cannot mutate or block the
+    /// daemon's store.
+    pub(crate) fn export_tsv_read_only(&self) -> Result<Option<String>> {
+        super::sqlite::export_tsv_read_only(&self.directory)
+    }
+
     pub(crate) fn get(&self, session_id: &str) -> Result<Option<LocalSessionAssignment>> {
         validate_identifier(session_id, "session id")?;
         self.with_locked_database(|database| {

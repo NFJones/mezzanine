@@ -10,8 +10,9 @@
 //! modified, so a rollback to a previous build still finds its data.
 
 use super::super::shared_sqlite::{
-    SharedSchemaState, import_legacy_file_once, migration_completed, open_shared_database,
-    open_shared_database_read_only, read_private_legacy_file, schema_version, set_schema_version,
+    SharedSchemaState, export_tsv, import_legacy_file_once, migration_completed,
+    open_shared_database, open_shared_database_read_only, read_private_legacy_file, schema_version,
+    set_schema_version,
 };
 use super::repository::LeaseDatabase;
 use super::{MezError, RemoteSessionLease, RemoteSessionLeaseState, Result};
@@ -55,6 +56,74 @@ fn encode_state(state: RemoteSessionLeaseState) -> String {
         .ok()
         .and_then(|value| value.as_str().map(ToOwned::to_owned))
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Reports whether one path exists, including a symbolic link that does not
+/// resolve, so an inspection command reports the broken path instead of
+/// treating the store as absent.
+fn path_exists(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok()
+}
+
+/// Renders the lease store in its inspection TSV shape without creating it.
+///
+/// Returns `None` when neither representation exists, so an inspection command
+/// never creates the store, and the rows come from the same read-only path the
+/// listing command uses, so an export cannot block a daemon writer. Lease rows
+/// sort by lease id; pending snapshot cleanup candidates follow them after a
+/// blank line under a `snapshot_cleanup_candidate_id` header.
+pub(super) fn export_tsv_read_only(directory: &Path) -> Result<Option<String>> {
+    let path = database_path(directory);
+    let legacy = legacy_path(directory);
+    reject_symlink(&path)?;
+    if !path_exists(&path) && !path_exists(&legacy) {
+        return Ok(None);
+    }
+    let database = load_database(directory)?;
+    let mut leases = database.leases;
+    leases.sort_by(|left, right| left.lease_id.cmp(&right.lease_id));
+    let rows = leases
+        .iter()
+        .map(|lease| {
+            vec![
+                lease.lease_id.clone(),
+                lease.session_id.clone(),
+                encode_state(lease.state),
+                lease.boot_generation.to_string(),
+                lease.lease_generation.to_string(),
+                lease
+                    .expires_at_unix_seconds
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+                lease.updated_at_unix_seconds.to_string(),
+                lease.failure.clone().unwrap_or_default(),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let mut output = export_tsv(
+        &[
+            "lease_id",
+            "session_id",
+            "state",
+            "boot_generation",
+            "lease_generation",
+            "expires_at_unix_seconds",
+            "updated_at_unix_seconds",
+            "failure",
+        ],
+        &rows,
+    );
+    let mut candidates = database.snapshot_cleanup_candidates;
+    if !candidates.is_empty() {
+        candidates.sort();
+        let rows = candidates
+            .into_iter()
+            .map(|snapshot_id| vec![snapshot_id])
+            .collect::<Vec<_>>();
+        output.push('\n');
+        output.push_str(&export_tsv(&["snapshot_cleanup_candidate_id"], &rows));
+    }
+    Ok(Some(output))
 }
 
 /// Refuses a database path that is a symbolic link.

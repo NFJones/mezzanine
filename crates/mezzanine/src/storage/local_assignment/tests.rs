@@ -398,3 +398,70 @@ fn assignment_database_state_column_is_checked_on_read() {
     );
     let _ = fs::remove_dir_all(root);
 }
+
+/// The inspection exporter renders stored assignment rows, including their
+/// checkpoint, without creating the store or taking the repository lock.
+#[test]
+fn assignment_export_renders_rows_without_creating_the_store() {
+    let root = test_root("export");
+    let repository = LocalSessionAssignmentRepository::new(root.clone());
+    assert!(
+        repository.export_tsv_read_only().unwrap().is_none(),
+        "an absent store reports nothing to export"
+    );
+    assert!(
+        !root.join("assignments.sqlite").exists() && !root.join("assignments.json").exists(),
+        "an inspection must not create the store"
+    );
+
+    let pending = repository
+        .reserve_pending(LocalAssignmentReservationRequest {
+            session_id: "$export".to_string(),
+            name: "export".to_string(),
+            default_for_host: false,
+            now_unix_seconds: 10,
+        })
+        .unwrap();
+    let active = repository
+        .activate(
+            &pending.session_id,
+            pending.boot_generation,
+            pending.assignment_generation,
+            11,
+        )
+        .unwrap();
+    let checkpointed = repository
+        .update_checkpoint(
+            &active.session_id,
+            active.boot_generation,
+            active.assignment_generation,
+            LocalAssignmentCheckpoint {
+                snapshot_id: "local-export".to_string(),
+                snapshot_version: 1,
+                session_id: active.session_id.clone(),
+                recorded_at_unix_seconds: 12,
+            },
+            12,
+        )
+        .unwrap();
+
+    let export = repository.export_tsv_read_only().unwrap().unwrap();
+    assert!(
+        export.starts_with(
+            "session_id\tstate\tdefault_for_host\tboot_generation\tassignment_generation\tcreated_at_unix_seconds\tupdated_at_unix_seconds\tcheckpoint_snapshot_id\tfailure\n"
+        ),
+        "the export starts with the assignment header: {export}"
+    );
+    let row = export
+        .lines()
+        .find(|line| line.starts_with("$export\t"))
+        .expect("the export renders the assignment row");
+    let fields = row.split('\t').collect::<Vec<_>>();
+    assert_eq!(fields[1], "active");
+    assert_eq!(fields[2], "false");
+    assert_eq!(fields[3], checkpointed.boot_generation.to_string());
+    assert_eq!(fields[4], checkpointed.assignment_generation.to_string());
+    assert_eq!(fields[7], "local-export");
+    assert_eq!(fields[8], "");
+    let _ = fs::remove_dir_all(root);
+}

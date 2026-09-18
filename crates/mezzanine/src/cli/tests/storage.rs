@@ -191,3 +191,82 @@ fn storage_export_accepts_every_advertised_store() {
         );
     }
 }
+
+/// Verifies `mez storage export leases` and `mez storage export assignments`
+/// print the rows of the two reservation stores below the configured root.
+#[test]
+fn storage_export_reservation_stores_print_rows() {
+    let (env, _home) = test_env("storage-export-reservations");
+    let paths = env.config_paths().unwrap();
+    let leases = crate::storage::lease::RemoteSessionLeaseRepository::new(
+        crate::storage::lease::default_remote_session_lease_directory(paths.root()),
+    );
+    leases
+        .reserve_pending(crate::storage::lease::LeaseReservationRequest {
+            lease_id: "lease-cli".to_string(),
+            session_id: "$cli".to_string(),
+            owner_principal_id: "device-cli".to_string(),
+            owner_live_session_limit: usize::MAX,
+            name: None,
+            default_for_owner: false,
+            expires_at_unix_seconds: None,
+            idempotency_key: "create-cli".to_string(),
+            creation_fingerprint: "fingerprint-cli".to_string(),
+            now_unix_seconds: 10,
+        })
+        .unwrap();
+    let assignments = crate::storage::local_assignment::LocalSessionAssignmentRepository::new(
+        crate::storage::local_assignment::default_local_assignment_directory(paths.root()),
+    );
+    assignments
+        .reserve_pending(
+            crate::storage::local_assignment::LocalAssignmentReservationRequest {
+                session_id: "$cli".to_string(),
+                name: "cli".to_string(),
+                default_for_host: false,
+                now_unix_seconds: 10,
+            },
+        )
+        .unwrap();
+
+    let mut stderr = Vec::new();
+    let mut stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "storage".to_string(),
+            "export".to_string(),
+            "leases".to_string(),
+        ],
+        env.clone(),
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    let export = String::from_utf8(stdout).unwrap();
+    assert!(
+        export.contains("lease-cli\t$cli\t"),
+        "the lease export renders its row: {export}"
+    );
+
+    let mut stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "storage".to_string(),
+            "export".to_string(),
+            "assignments".to_string(),
+        ],
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    let export = String::from_utf8(stdout).unwrap();
+    assert!(
+        export.contains("$cli\tpending\tfalse\t"),
+        "the assignment export renders its row: {export}"
+    );
+}
