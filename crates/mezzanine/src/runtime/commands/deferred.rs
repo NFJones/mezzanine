@@ -37,6 +37,7 @@ pub(crate) const RUNTIME_AGENT_OFF_ACTOR_COMMANDS: &[&str] = &[
     "issue",
     "show-issues",
     "show-memories",
+    "context-doc",
 ];
 
 /// Prepared-input family one moved slash command consumes off the actor.
@@ -52,6 +53,8 @@ pub(crate) enum RuntimeAgentCommandFamily {
     IssueBrowser,
     /// Persistent-memory browser reads.
     MemoryBrowser,
+    /// Context-document reads.
+    ContextDocument,
 }
 
 /// Returns the prepared-input family for one moved command.
@@ -67,6 +70,7 @@ pub(crate) fn off_actor_command_family(command: &str) -> Option<RuntimeAgentComm
         "issue" => Some(RuntimeAgentCommandFamily::IssueStore),
         "show-issues" => Some(RuntimeAgentCommandFamily::IssueBrowser),
         "show-memories" => Some(RuntimeAgentCommandFamily::MemoryBrowser),
+        "context-doc" => Some(RuntimeAgentCommandFamily::ContextDocument),
         _ => None,
     }
 }
@@ -126,6 +130,12 @@ impl RuntimeSessionService {
                 self.runtime_persistent_memory_enabled()
                     && self.integration.config_root().is_some()
                     && super::show_records::show_memories_args_are_browser_form(input)
+            }
+            "context-doc" => {
+                self.integration.config_root().is_some()
+                    && super::context_documents::runtime_agent_context_document_args_are_read_only(
+                        input,
+                    )
             }
             _ => true,
         }
@@ -260,6 +270,20 @@ impl RuntimeSessionService {
                 RuntimeAgentCommandPrepared::MemoryBrowser {
                     config_root,
                     pane_scope: self.runtime_remember_scope_for_pane(pane_id),
+                }
+            }
+            RuntimeAgentCommandFamily::ContextDocument => {
+                let Some(config_root) = self
+                    .integration
+                    .config_root()
+                    .map(std::path::Path::to_path_buf)
+                else {
+                    return Ok(None);
+                };
+                let project = self.context_document_project_for_pane(pane_id, &config_root);
+                RuntimeAgentCommandPrepared::ContextDocument {
+                    config_root,
+                    project,
                 }
             }
         };
@@ -402,6 +426,24 @@ impl RuntimeSessionService {
                         kind: error.kind(),
                     },
                 };
+            }
+            RuntimeAgentCommandPrepared::ContextDocument {
+                config_root,
+                project,
+            } => {
+                match super::context_documents::runtime_agent_context_document_read_body(
+                    config_root,
+                    project,
+                    &work.input,
+                ) {
+                    Ok(body) => body,
+                    Err(error) => {
+                        return RuntimeAgentCommandAsyncOutcome::Failed {
+                            message: error.message().to_string(),
+                            kind: error.kind(),
+                        };
+                    }
+                }
             }
         };
         let outcome = AgentShellCommandOutcome::Display {

@@ -2074,11 +2074,27 @@ fn runtime_context_document_commands_manage_explicit_inclusion_lifecycle() {
     let listed = service
         .execute_agent_shell_command(&primary, "/context-doc list")
         .unwrap();
+    assert!(
+        listed.contains(r#""body":null"#),
+        "the deferred lane acknowledges /context-doc list: {listed}"
+    );
+    let listed = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /context-doc list applies");
     assert!(listed.contains(&document.id), "{listed}");
     assert!(!listed.contains("project context"), "{listed}");
     let shown = service
         .execute_agent_shell_command(&primary, &format!("/context-doc show {}", document.id))
         .unwrap();
+    assert!(
+        shown.contains(r#""body":null"#),
+        "the deferred lane acknowledges /context-doc show: {shown}"
+    );
+    let shown = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /context-doc show applies");
     assert!(shown.contains("project context"), "{shown}");
 
     let disabled = service

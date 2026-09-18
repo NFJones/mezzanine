@@ -257,6 +257,18 @@ pub(crate) enum RuntimeAgentCommandPrepared {
         /// Pane's effective remember scope when the invocation does not name one.
         pane_scope: mez_agent::memory::MemoryScope,
     },
+    /// Reads context documents from the captured store.
+    ///
+    /// `/context-doc list` and `/context-doc show` read the context-document
+    /// store, which is the synchronous read the inline path used to perform inside
+    /// the actor request; the mutating sub-commands stay inline because they write
+    /// rows or start an external editor on the actor.
+    ContextDocument {
+        /// Configured Mezzanine config root whose context store is read.
+        config_root: std::path::PathBuf,
+        /// Project key the read is scoped to.
+        project: String,
+    },
 }
 
 /// Result a worker prepares for the actor to apply.

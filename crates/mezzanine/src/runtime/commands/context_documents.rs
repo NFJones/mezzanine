@@ -50,32 +50,14 @@ impl RuntimeSessionService {
                     visibility,
                 })
             }
-            Some("list") | None => {
-                let records = store
-                    .list()?
-                    .into_iter()
-                    .filter(|document| document.visible_to_project(&project))
-                    .collect::<Vec<_>>();
-                Ok(AgentShellCommandOutcome::Display {
-                    command: "context-doc".to_string(),
-                    body: context_document_list_display(&records),
-                })
-            }
-            Some("show") => {
-                let id = required_single_id(&arguments, "show")?;
-                let document = authorized_document(&store, id, &project)?;
-                Ok(AgentShellCommandOutcome::Display {
-                    command: "context-doc".to_string(),
-                    body: format!(
-                        "context document found=true\nid={}\nscope={}\nenabled={}\ntitle={}\ncontent={}",
-                        document.id,
-                        scope_display(&document.scope),
-                        document.enabled,
-                        json_escape(&document.title),
-                        json_escape(&document.content),
-                    ),
-                })
-            }
+            Some("list") | None => Ok(AgentShellCommandOutcome::Display {
+                command: "context-doc".to_string(),
+                body: runtime_agent_context_document_read_body(&config_root, &project, input)?,
+            }),
+            Some("show") => Ok(AgentShellCommandOutcome::Display {
+                command: "context-doc".to_string(),
+                body: runtime_agent_context_document_read_body(&config_root, &project, input)?,
+            }),
             Some("edit") => {
                 let id = required_single_id(&arguments, "edit")?;
                 authorized_document(&store, id, &project)?;
@@ -135,6 +117,67 @@ impl RuntimeSessionService {
         crate::security::project::discover_project_root(&working_directory)
             .to_string_lossy()
             .into_owned()
+    }
+}
+
+/// Reports whether one `/context-doc` invocation is a read-only sub-command.
+///
+/// `create`, `edit`, `enable`, `disable`, and `delete` mutate the store or start
+/// an external editor on the actor, so only the read forms may move off it.
+pub(crate) fn runtime_agent_context_document_args_are_read_only(input: &str) -> bool {
+    let Ok(Some(invocation)) = parse_slash_command(input) else {
+        return false;
+    };
+    let Some(arguments) = shlex::split(&invocation.args) else {
+        return false;
+    };
+    matches!(
+        arguments.first().map(String::as_str),
+        None | Some("list" | "show")
+    )
+}
+
+/// Reads one read-only `/context-doc` sub-command from owned inputs.
+///
+/// The deferred executor passes the config root and project key the actor
+/// captured; both lanes share `context_document_list_display` and the detail
+/// format, so a deferred read renders the same rows the inline lane rendered for
+/// the same store state.
+pub(crate) fn runtime_agent_context_document_read_body(
+    config_root: &std::path::Path,
+    project: &str,
+    input: &str,
+) -> Result<String> {
+    let invocation = parse_slash_command(input)?
+        .ok_or_else(|| MezError::invalid_args("context-doc command must be a slash command"))?;
+    let store = ContextDocumentStore::under_config_root(config_root);
+    let arguments = shlex::split(&invocation.args).ok_or_else(|| {
+        MezError::invalid_args("context-doc arguments contain an unterminated quote")
+    })?;
+    match arguments.first().map(String::as_str) {
+        Some("list") | None => {
+            let records = store
+                .list()?
+                .into_iter()
+                .filter(|document| document.visible_to_project(project))
+                .collect::<Vec<_>>();
+            Ok(context_document_list_display(&records))
+        }
+        Some("show") => {
+            let id = required_single_id(&arguments, "show")?;
+            let document = authorized_document(&store, id, project)?;
+            Ok(format!(
+                "context document found=true\nid={}\nscope={}\nenabled={}\ntitle={}\ncontent={}",
+                document.id,
+                scope_display(&document.scope),
+                document.enabled,
+                json_escape(&document.title),
+                json_escape(&document.content),
+            ))
+        }
+        _ => Err(MezError::invalid_args(
+            "deferred context-doc execution requires a read-only sub-command",
+        )),
     }
 }
 
