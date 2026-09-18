@@ -4,7 +4,7 @@ use super::{ActionStatus, HookExecutionPlan, PaneId, RuntimeHookPipelineBlock, S
 use crate::host::terminal::{PaneAgentStatusField, PaneStatusSegmentIdentity};
 use mez_agent::LocalActionPlan;
 use mez_mux::overlay::AnchoredSelector;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Describes whether a parent turn waits for spawned subagents before it can
 /// continue provider execution.
@@ -685,6 +685,14 @@ pub(crate) struct RuntimeModelProfileOverrideStore {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(crate) subagent_profiles: BTreeMap<String, String>,
+    /// Profile names this process derived from a runtime selection.
+    ///
+    /// The marker distinguishes a name the runtime generated from an explicit
+    /// spawn size or reasoning pair, which can be re-materialized from its
+    /// captured selection, from a configured profile name, which must keep
+    /// resolving from configuration - including when either name was inherited
+    /// from an ancestor agent.
+    pub(crate) runtime_generated_profiles: BTreeSet<String>,
 }
 
 /// User-defined pane personality profile.

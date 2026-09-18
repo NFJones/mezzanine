@@ -841,7 +841,7 @@ impl RuntimeSessionService {
                 &selection.selected_profile_name,
                 selection.selected_profile.clone(),
             ) {
-                Ok(profile_name) => Some((profile_name, true)),
+                Ok(profile_name) => Some(profile_name),
                 Err(error) => {
                     self.cleanup_failed_subagent_spawn(
                         controller,
@@ -855,14 +855,20 @@ impl RuntimeSessionService {
             None => profile
                 .model_profile
                 .clone()
-                .or_else(|| self.inherited_model_profile_for_child_agent(&spawn.parent_agent_id))
-                .map(|profile_name| (profile_name, false)),
+                .or_else(|| self.inherited_model_profile_for_child_agent(&spawn.parent_agent_id)),
         };
-        if let Some((profile_name, runtime_generated)) = child_model_profile {
-            // Only a runtime-generated name carries a selection. A configured
-            // profile must keep resolving from configuration, so removing it
-            // later degrades to the documented fallback instead of being
-            // re-materialized from a stale captured definition.
+        if let Some(profile_name) = child_model_profile {
+            // Only a name this process registered from a runtime selection carries
+            // a selection. A configured profile must keep resolving from
+            // configuration, so removing it later degrades to the documented
+            // fallback instead of being re-materialized from a stale capture. The
+            // marker covers an inherited generated name too, which the previous
+            // branch-based rule captured without its selection.
+            let runtime_generated = self
+                .integration
+                .model_profile_overrides()
+                .runtime_generated_profiles
+                .contains(&profile_name);
             let selection = if runtime_generated {
                 self.provider_registry()
                     .profile_definitions

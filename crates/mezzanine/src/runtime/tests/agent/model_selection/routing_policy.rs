@@ -1786,6 +1786,248 @@ fn runtime_spawn_explicit_sizing_captures_durable_child_model_identity() {
     );
 }
 
+/// Spawns one child with no explicit size/reasoning pair so its identity comes
+/// from the role or the inherited parent resolution.
+fn spawn_child_without_explicit_sizing(
+    service: &mut RuntimeSessionService,
+    primary: &mez_core::ids::ClientId,
+) -> (String, String, String) {
+    let spawned = service
+        .spawn_runtime_subagent(
+            primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: mez_agent::SubagentSessionMode::New,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
+                task_prompt: "inherit the parent model identity".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: false,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap();
+    let spawned = serde_json::from_str::<serde_json::Value>(&spawned).unwrap();
+    (
+        spawned["agent"]["id"].as_str().unwrap().to_string(),
+        spawned["agent"]["pane_id"].as_str().unwrap().to_string(),
+        spawned["turn"]["id"].as_str().unwrap().to_string(),
+    )
+}
+
+/// Returns the persisted model identity of one pane's conversation.
+fn persisted_model_identity(
+    service: &RuntimeSessionService,
+    store: &crate::storage::transcript::AgentTranscriptStore,
+    pane_id: &str,
+) -> (
+    String,
+    Option<crate::storage::transcript::AgentModelProfileSelection>,
+) {
+    let conversation_id = service
+        .agent_shell_store()
+        .get(pane_id)
+        .expect("the pane owns an agent shell session")
+        .session_id
+        .clone();
+    store
+        .conversation_model_identity(&conversation_id)
+        .unwrap()
+        .expect("the pane conversation must carry a durable model identity")
+}
+
+/// Verifies a configured inherited profile is captured by name only.
+///
+/// The capture split must keep configuration authoritative: a child that
+/// inherited a configured profile persists its name without a selection, so a
+/// later removal of that profile from configuration degrades through the
+/// documented fallback instead of being re-materialized from a stale definition.
+#[test]
+fn runtime_configured_child_model_identity_captures_name_only() {
+    let transcript_store = crate::storage::transcript::AgentTranscriptStore::new(temp_root(
+        "runtime-configured-child-identity",
+    ));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "explicit-subagent-sizing-configured".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: EXPLICIT_SUBAGENT_SIZING_CONFIG.to_string(),
+        }])
+        .unwrap();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .integration
+        .model_profile_overrides_mut()
+        .agent_profiles
+        .insert("agent-%1".to_string(), "deepseek-small".to_string());
+
+    let (child_agent_id, child_pane_id, _turn_id) =
+        spawn_child_without_explicit_sizing(&mut service, &primary);
+    assert_eq!(
+        service
+            .integration
+            .model_profile_overrides()
+            .agent_profiles
+            .get(&child_agent_id)
+            .map(String::as_str),
+        Some("deepseek-small"),
+        "the child must inherit the configured parent profile"
+    );
+    let (captured_name, captured_selection) =
+        persisted_model_identity(&service, &transcript_store, &child_pane_id);
+    assert_eq!(captured_name, "deepseek-small");
+    assert_eq!(
+        captured_selection, None,
+        "a configured name must not carry a selection"
+    );
+}
+
+/// Verifies an inherited runtime-generated identity keeps its selection.
+///
+/// A generated name inherited from an ancestor is still a runtime selection, so
+/// the marker - not the spawn branch - must decide whether its definition is
+/// captured; otherwise the child degrades on restart even though the runtime can
+/// reproduce the identical profile.
+#[test]
+fn runtime_inherited_generated_identity_keeps_its_selection() {
+    let transcript_store = crate::storage::transcript::AgentTranscriptStore::new(temp_root(
+        "runtime-inherited-generated-identity",
+    ));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "explicit-subagent-sizing-inherited".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: EXPLICIT_SUBAGENT_SIZING_CONFIG.to_string(),
+        }])
+        .unwrap();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let (sized_agent_id, _sized_pane_id, _turn_id) =
+        spawn_explicitly_sized_child(&mut service, &primary, "large", "high");
+    let generated_name = service
+        .integration
+        .model_profile_overrides()
+        .agent_profiles
+        .get(&sized_agent_id)
+        .cloned()
+        .expect("the sized child owns a generated profile name");
+    assert!(
+        service
+            .integration
+            .model_profile_overrides()
+            .runtime_generated_profiles
+            .contains(&generated_name),
+        "registering a runtime-generated name must mark it"
+    );
+    service
+        .integration
+        .model_profile_overrides_mut()
+        .agent_profiles
+        .insert("agent-%1".to_string(), generated_name.clone());
+
+    let (inherited_agent_id, inherited_pane_id, _turn_id) =
+        spawn_child_without_explicit_sizing(&mut service, &primary);
+    assert_eq!(
+        service
+            .integration
+            .model_profile_overrides()
+            .agent_profiles
+            .get(&inherited_agent_id)
+            .map(String::as_str),
+        Some(generated_name.as_str()),
+        "the child must inherit the parent's generated name"
+    );
+    let (captured_name, captured_selection) =
+        persisted_model_identity(&service, &transcript_store, &inherited_pane_id);
+    assert_eq!(captured_name, generated_name);
+    let captured_selection =
+        captured_selection.expect("an inherited runtime-generated name must keep its selection");
+    assert!(
+        !captured_selection.model.is_empty(),
+        "the captured selection must carry the effective model"
+    );
+
+    // Both halves are now exercised together: dropping every in-memory identity
+    // fact must not change the identity a restart restores.
+    let selection = captured_selection;
+    {
+        let overrides = service.integration.model_profile_overrides_mut();
+        overrides.agent_profiles.clear();
+        overrides.subagent_profiles.clear();
+        overrides.runtime_generated_profiles.clear();
+    }
+    service
+        .integration
+        .provider_registry_mut()
+        .profile_definitions
+        .remove(&captured_name);
+    service
+        .integration
+        .provider_registry_mut()
+        .profiles
+        .remove(&captured_name);
+
+    service.restore_agent_model_profile_identity(
+        &inherited_pane_id,
+        &captured_name,
+        Some(&selection),
+    );
+    let (effective_name, effective) = service
+        .active_model_profile_for_pane(&inherited_pane_id, &inherited_agent_id, None)
+        .unwrap();
+    assert_eq!(effective_name, captured_name);
+    assert_eq!(effective.model, selection.model);
+    assert_eq!(
+        effective.reasoning_profile.as_deref(),
+        selection.reasoning_profile.as_deref()
+    );
+    assert!(
+        service
+            .integration
+            .model_profile_overrides()
+            .runtime_generated_profiles
+            .contains(&captured_name),
+        "the restored name must be marked as runtime-generated again"
+    );
+}
+
 /// Verifies restored identities re-install the durable child profile, and that an
 /// unresolvable one degrades to the documented fallback instead of silently
 /// changing models.
@@ -1871,7 +2113,7 @@ fn runtime_agent_model_identity_restore_reinstalls_or_degrades() {
     assert_eq!(restored_profile.model, "deepseek-v4-flash");
     assert_eq!(restored_profile.reasoning_profile.as_deref(), Some("low"));
 
-    let degraded_events = service
+    let degraded_payloads = service
         .event_log()
         .expect("the runtime test service owns an event log")
         .replay_for(&crate::protocol::event::EventAudience::AllPrimaries)
@@ -1880,10 +2122,24 @@ fn runtime_agent_model_identity_restore_reinstalls_or_degrades() {
             event.kind == crate::runtime::EventKind::AgentStatus
                 && event.payload.contains("\"model_profile\":\"degraded\"")
         })
-        .count();
+        .map(|event| event.payload.clone())
+        .collect::<Vec<_>>();
     assert_eq!(
-        degraded_events, 2,
+        degraded_payloads.len(),
+        2,
         "both unresolvable restores must report the degradation once"
+    );
+    assert!(
+        degraded_payloads.iter().any(|payload| payload
+            .contains("\"profile\":\"generated-missing-profile\"")
+            && payload.contains("profile no longer resolves")),
+        "a missing name must report its profile and reason: {degraded_payloads:?}"
+    );
+    assert!(
+        degraded_payloads
+            .iter()
+            .any(|payload| payload.contains("re-materialization failed")),
+        "a failed re-materialization must report its reason: {degraded_payloads:?}"
     );
 }
 

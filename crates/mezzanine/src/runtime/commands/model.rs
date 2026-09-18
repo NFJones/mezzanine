@@ -938,6 +938,10 @@ impl RuntimeSessionService {
                 .provider_registry_mut()
                 .insert_profile_definition(profile_name.clone(), definition, catalog)?;
         }
+        self.integration
+            .model_profile_overrides_mut()
+            .runtime_generated_profiles
+            .insert(profile_name.clone());
         Ok(profile_name)
     }
 

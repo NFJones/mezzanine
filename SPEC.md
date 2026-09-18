@@ -7494,10 +7494,11 @@ inherited-parent inheritance unchanged. Per-turn routing remains the pane’s
 separate configured policy, so a later turn of an explicitly sized child stays
 eligible for router dispatch when routing is enabled. Runtime-generated child
 profiles and agent-scoped overrides MUST be captured on the child conversation's
-durable metadata when the child is spawned - a runtime-generated name together
-with the selection needed to re-materialize it, a configured name without a
-selection so configuration keeps precedence - and a resume or restart MUST
-restore that identity before the conversation's next turn. A captured name that
+durable metadata when the child is spawned: a name the runtime generated for
+that child or that the child inherited from an ancestor MUST be captured
+together with the selection needed to re-materialize it, and any other name MUST
+be captured without a selection so configuration keeps precedence. A resume or
+restart MUST restore that identity before the conversation's next turn. A captured name that
 still resolves MUST restore by name so configuration keeps precedence, and a
 runtime-generated profile MUST be re-materialized from its captured provider,
 model, and reasoning selection so the child keeps the model and reasoning level

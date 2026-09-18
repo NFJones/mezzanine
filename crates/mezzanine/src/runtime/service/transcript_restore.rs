@@ -819,6 +819,15 @@ impl RuntimeSessionService {
                 .model_profile_overrides_mut()
                 .agent_profiles
                 .insert(format!("agent-{pane_id}"), profile_name.to_string());
+            if selection.is_some() {
+                // A captured selection identifies a runtime-generated name, so the
+                // marker must be restored with it: a later spawn inheriting this
+                // identity has to capture the selection again.
+                self.integration
+                    .model_profile_overrides_mut()
+                    .runtime_generated_profiles
+                    .insert(profile_name.to_string());
+            }
             return;
         }
         let Some(selection) = selection else {
