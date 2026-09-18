@@ -344,7 +344,9 @@ fn snapshot_repository_selects_latest_snapshot_by_session() {
     repo.write(&new).unwrap();
     repo.write(&other).unwrap();
 
-    let latest_index = fs::read_to_string(root.join("latest.index")).unwrap();
+    let latest_index = super::latest_index::read(&root)
+        .unwrap()
+        .expect("the write path stores an index");
 
     assert_eq!(
         repo.latest(Some("$target")).unwrap().unwrap().id,
@@ -352,8 +354,14 @@ fn snapshot_repository_selects_latest_snapshot_by_session() {
     );
     assert_eq!(repo.latest(None).unwrap().unwrap().id, "snap-other");
     assert!(repo.latest(Some("$missing")).unwrap().is_none());
-    assert!(latest_index.contains("all\tsnap-other\n"));
-    assert!(latest_index.contains("session\t$target\tsnap-new\n"));
+    assert_eq!(latest_index.latest_all.as_deref(), Some("snap-other"));
+    assert_eq!(
+        latest_index
+            .latest_by_session
+            .get("$target")
+            .map(String::as_str),
+        Some("snap-new")
+    );
 
     repo.delete("snap-other").unwrap();
     assert_eq!(repo.latest(None).unwrap().unwrap().id, "snap-new");
@@ -384,9 +392,14 @@ fn snapshot_repository_updates_latest_index_without_scanning_unrelated_manifests
 
     repo.write(&new).unwrap();
 
-    let latest_index = fs::read_to_string(root.join("latest.index")).unwrap();
-    assert!(latest_index.contains("all\tsnap-new\n"));
-    assert!(latest_index.contains("session\t$1\tsnap-new\n"));
+    let latest_index = super::latest_index::read(&root)
+        .unwrap()
+        .expect("the write path stores an index");
+    assert_eq!(latest_index.latest_all.as_deref(), Some("snap-new"));
+    assert_eq!(
+        latest_index.latest_by_session.get("$1").map(String::as_str),
+        Some("snap-new")
+    );
     let _ = fs::remove_dir_all(root);
 }
 

@@ -537,61 +537,6 @@ pub(super) async fn write_private_new_atomic_async(path: &Path, bytes: &[u8]) ->
     result
 }
 
-/// Atomically replaces a derived private file and requires its renamed
-/// directory entry to reach stable storage before returning.
-pub(super) fn write_private_replace_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| MezError::invalid_args("snapshot publication path has no parent"))?;
-    ensure_private_directory_durable(parent)?;
-    let temporary = publication_temporary_path(path)?;
-    let result = (|| -> Result<()> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
-        set_private_file_permissions(&temporary)?;
-        file.write_all(bytes)?;
-        file.flush()?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&temporary, path)?;
-        sync_directory(parent)
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
-}
-
-/// Tokio counterpart to [`write_private_replace_atomic`].
-pub(super) async fn write_private_replace_atomic_async(path: &Path, bytes: &[u8]) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| MezError::invalid_args("snapshot publication path has no parent"))?;
-    ensure_private_directory_durable_async(parent).await?;
-    let temporary = publication_temporary_path(path)?;
-    let result = async {
-        let mut file = tokio::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .await?;
-        set_private_file_permissions_async(&temporary).await?;
-        file.write_all(bytes).await?;
-        file.flush().await?;
-        file.sync_all().await?;
-        drop(file);
-        tokio::fs::rename(&temporary, path).await?;
-        sync_directory_async(parent).await
-    }
-    .await;
-    if result.is_err() {
-        let _ = tokio::fs::remove_file(&temporary).await;
-    }
-    result
-}
-
 pub(super) fn reconcile_publication_temporaries(root: &Path) -> Result<usize> {
     let entries = match fs::read_dir(root) {
         Ok(entries) => entries,

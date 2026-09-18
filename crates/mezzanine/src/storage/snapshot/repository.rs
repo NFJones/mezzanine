@@ -15,8 +15,7 @@ use mez_mux::session::Session;
 use super::encoding::{
     current_rfc3339_utc, has_manifest_control_character, reconcile_publication_temporaries,
     sync_directory, sync_directory_async, validate_snapshot_id, write_private_new_atomic,
-    write_private_new_atomic_async, write_private_replace_atomic,
-    write_private_replace_atomic_async,
+    write_private_new_atomic_async,
 };
 use super::types::{
     SessionSnapshotPayload, SnapshotCreationContext, SnapshotKind, SnapshotManifest,
@@ -26,10 +25,24 @@ use super::types::{
 use super::types::{SnapshotConfigLayerMetadata, SnapshotFrameState, SnapshotPaneCapture};
 
 /// Persisted global and per-session latest-snapshot identities.
-#[derive(Debug, Default, PartialEq, Eq)]
-struct LatestSnapshotIndex {
-    latest_all: Option<String>,
-    latest_by_session: BTreeMap<String, String>,
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct LatestSnapshotIndex {
+    /// Snapshot selected across every session, when one exists.
+    pub(super) latest_all: Option<String>,
+    /// Snapshot selected for each session id.
+    pub(super) latest_by_session: BTreeMap<String, String>,
+}
+
+/// Runs one blocking snapshot-index store call off the async runtime.
+///
+/// The index lives in SQLite with the shared busy timeout, so an async caller
+/// hands the call to the blocking pool instead of parking a runtime worker.
+async fn spawn_blocking_snapshot_index<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|error| MezError::invalid_state(format!("snapshot index task failed: {error}")))?
 }
 
 impl SnapshotRepository {
@@ -656,11 +669,6 @@ impl SnapshotRepository {
         Ok(())
     }
 
-    /// Returns the filesystem path for the latest snapshot index.
-    fn latest_index_path(&self) -> PathBuf {
-        self.root.join("latest.index")
-    }
-
     /// Reads one snapshot id from the latest index file.
     fn read_latest_index(&self, session_id: Option<&str>) -> Result<Option<String>> {
         let Some(index) = self.read_latest_index_state()? else {
@@ -672,120 +680,59 @@ impl SnapshotRepository {
         })
     }
 
-    /// Reads and validates the complete latest-index state.
+    /// Reads the complete latest-index state, rebuilding an empty index once.
+    ///
+    /// An empty table means a fresh install, a deleted database, or a store that
+    /// predates this build: the winners are recomputed from the manifests and
+    /// stored, which is the same ordering the previous file index produced.
     fn read_latest_index_state(&self) -> Result<Option<LatestSnapshotIndex>> {
-        let data = match fs::read_to_string(self.latest_index_path()) {
-            Ok(data) => data,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.into()),
-        };
-        Self::decode_latest_index(&data).map(Some)
+        if let Some(index) = super::latest_index::read(&self.root)? {
+            return Ok(Some(index));
+        }
+        let snapshots = self.list()?;
+        if snapshots.is_empty() {
+            return Ok(None);
+        }
+        self.write_latest_index_file(&snapshots)?;
+        super::latest_index::read(&self.root)
     }
 
-    /// Reads and validates the complete latest-index state asynchronously.
+    /// Reads the complete latest-index state asynchronously, rebuilding once.
     async fn read_latest_index_state_async(&self) -> Result<Option<LatestSnapshotIndex>> {
-        let data = match tokio::fs::read_to_string(self.latest_index_path()).await {
-            Ok(data) => data,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.into()),
-        };
-        Self::decode_latest_index(&data).map(Some)
+        let root = self.root.clone();
+        if let Some(index) =
+            spawn_blocking_snapshot_index(move || super::latest_index::read(&root)).await?
+        {
+            return Ok(Some(index));
+        }
+        let snapshots = self.list_async().await?;
+        if snapshots.is_empty() {
+            return Ok(None);
+        }
+        self.write_latest_index_file_async(&snapshots).await?;
+        let root = self.root.clone();
+        spawn_blocking_snapshot_index(move || super::latest_index::read(&root)).await
     }
 
-    /// Decodes one strict latest-index file.
-    fn decode_latest_index(data: &str) -> Result<LatestSnapshotIndex> {
-        let mut index = LatestSnapshotIndex::default();
-        for line in data.lines() {
-            if let Some(snapshot_id) = line.strip_prefix("all\t") {
-                validate_snapshot_id(snapshot_id)?;
-                if index.latest_all.replace(snapshot_id.to_string()).is_some() {
-                    return Err(MezError::invalid_state(
-                        "snapshot latest index contains duplicate global entries",
-                    ));
-                }
-                continue;
-            }
-            let Some(rest) = line.strip_prefix("session\t") else {
-                return Err(MezError::invalid_state(
-                    "snapshot latest index contains an invalid entry",
-                ));
-            };
-            let Some((session_id, snapshot_id)) = rest.split_once('\t') else {
-                return Err(MezError::invalid_state(
-                    "snapshot latest index contains a malformed session entry",
-                ));
-            };
-            if session_id.is_empty() {
-                return Err(MezError::invalid_state(
-                    "snapshot latest index contains an empty session id",
-                ));
-            }
-            validate_snapshot_id(snapshot_id)?;
-            if index
-                .latest_by_session
-                .insert(session_id.to_string(), snapshot_id.to_string())
-                .is_some()
-            {
-                return Err(MezError::invalid_state(
-                    "snapshot latest index contains duplicate session entries",
-                ));
-            }
-        }
-        if index.latest_all.is_none() {
-            return Err(MezError::invalid_state(
-                "snapshot latest index has no global entry",
-            ));
-        }
-        Ok(index)
-    }
-
-    /// Encodes one deterministic global and per-session latest index.
-    fn encode_latest_index(index: &LatestSnapshotIndex) -> Result<String> {
-        let latest_all = index
-            .latest_all
-            .as_deref()
-            .ok_or_else(|| MezError::invalid_state("snapshot latest index has no global entry"))?;
-        validate_snapshot_id(latest_all)?;
-        let mut output = format!("all\t{latest_all}\n");
-        for (session_id, snapshot_id) in &index.latest_by_session {
-            if session_id.is_empty() || has_manifest_control_character(session_id) {
-                return Err(MezError::invalid_state(
-                    "snapshot latest index contains an invalid session id",
-                ));
-            }
-            validate_snapshot_id(snapshot_id)?;
-            output.push_str("session\t");
-            output.push_str(session_id);
-            output.push('\t');
-            output.push_str(snapshot_id);
-            output.push('\n');
-        }
-        Ok(output)
-    }
-
-    /// Atomically replaces the latest index with private durable contents.
+    /// Atomically replaces the stored latest index.
     fn write_latest_index_state(&self, index: &LatestSnapshotIndex) -> Result<()> {
-        let path = self.latest_index_path();
-        let output = Self::encode_latest_index(index)?;
-        write_private_replace_atomic(&path, output.as_bytes())
+        super::latest_index::write(&self.root, index)
     }
 
     /// Async counterpart to [`Self::write_latest_index_state`].
     async fn write_latest_index_state_async(&self, index: &LatestSnapshotIndex) -> Result<()> {
-        let path = self.latest_index_path();
-        let output = Self::encode_latest_index(index)?;
-        write_private_replace_atomic_async(&path, output.as_bytes()).await
+        let root = self.root.clone();
+        let index = index.clone();
+        spawn_blocking_snapshot_index(move || super::latest_index::write(&root, &index)).await
     }
 
     /// Writes the latest index file for global and per-session lookups.
     fn write_latest_index_file(&self, snapshots: &[SnapshotState]) -> Result<()> {
-        let path = self.latest_index_path();
         if snapshots.is_empty() {
-            if path.exists() {
-                fs::remove_file(path)?;
-                sync_directory(&self.root)?;
-            }
-            return Ok(());
+            // No snapshots means no winners: storing an empty index is the state
+            // the absent file used to represent, and a later read rebuilds from the
+            // (empty) manifest list without looping.
+            return self.write_latest_index_state(&LatestSnapshotIndex::default());
         }
 
         let mut latest_all: Option<&SnapshotState> = None;
@@ -816,12 +763,9 @@ impl SnapshotRepository {
     /// Async latest-index writer used by recovery and deletion paths.
     async fn write_latest_index_file_async(&self, snapshots: &[SnapshotState]) -> Result<()> {
         if snapshots.is_empty() {
-            match tokio::fs::remove_file(self.latest_index_path()).await {
-                Ok(()) => sync_directory_async(&self.root).await?,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error.into()),
-            }
-            return Ok(());
+            return self
+                .write_latest_index_state_async(&LatestSnapshotIndex::default())
+                .await;
         }
         let mut latest_all: Option<&SnapshotState> = None;
         let mut latest_by_session: BTreeMap<&str, &SnapshotState> = BTreeMap::new();
