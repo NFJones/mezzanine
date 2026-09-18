@@ -816,3 +816,47 @@ fn overlay_refresh_delete_fallback_reports_no_kept_index() {
         "the fallback opens on the first row, not the deleted row's index"
     );
 }
+
+/// Verifies a store-backed claim without its captured store fails cleanly.
+///
+/// The issue resolver reads live config, so a claim made before a config root
+/// existed carries none; the worker must report the diagnostic the inline refresh
+/// raised instead of panicking or reading the wrong store.
+#[test]
+fn overlay_refresh_reports_a_missing_issue_database_path() {
+    let service = test_runtime_service();
+    let source = RuntimeRecordBrowserOverlaySource::Issues {
+        project_glob: None,
+        default_project_glob: None,
+        kind: None,
+        state: None,
+        active_only: false,
+        text: None,
+        limit: 20,
+    };
+    let work = crate::runtime::RuntimeRecordBrowserRefreshWork {
+        refresh_key: "%1".to_string(),
+        generation: 0,
+        active_source: source.clone(),
+        source: source.clone(),
+        intent: crate::runtime::RuntimeRecordBrowserRefreshIntent::ApplyFilter {
+            target: Box::new(source),
+            active_record_id: None,
+            active_index: None,
+            error: None,
+        },
+        transcript_store: None,
+        config_root: None,
+        issue_database_path: None,
+        prompt_width: 40,
+        title_policy: service.agent_session_title_policy(),
+    };
+    let outcome = RuntimeSessionService::execute_record_browser_refresh(&work);
+    let RuntimeRecordBrowserRefreshOutcome::Failed { message, .. } = outcome else {
+        panic!("a missing issue database path must fail the rebuild");
+    };
+    assert!(
+        message.contains("config root"),
+        "the failure keeps the inline diagnostic: {message}"
+    );
+}

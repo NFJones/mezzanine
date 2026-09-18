@@ -185,7 +185,16 @@ impl RuntimeSessionService {
             RuntimeRecordBrowserOverlaySource::Context {
                 conversation_id,
                 pane_id,
-            } => Some(self.delete_context_browser_record(conversation_id, pane_id, record_id)?),
+            } => {
+                self.delete_context_browser_entry(conversation_id, pane_id, record_id)?;
+                if self
+                    .begin_record_browser_delete_claim(active_index)?
+                    .is_some()
+                {
+                    return Ok(None);
+                }
+                Some(self.context_record_browser(conversation_id, pane_id)?)
+            }
             RuntimeRecordBrowserOverlaySource::Issues {
                 project_glob,
                 kind,
@@ -283,13 +292,16 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Deletes one pane-owned transcript record and refreshes its context browser.
-    fn delete_context_browser_record(
+    /// Deletes one pane-owned transcript record through its store.
+    ///
+    /// The page refresh that follows runs in the overlay refresh lane, so this
+    /// keeps only the deletion and the retained-entry bookkeeping.
+    fn delete_context_browser_entry(
         &mut self,
         conversation_id: &str,
         pane_id: &str,
         record_id: &str,
-    ) -> Result<RecordBrowser> {
+    ) -> Result<()> {
         let sequence = record_id.parse::<u64>().map_err(|_| {
             MezError::invalid_args("context browser record id must be a transcript sequence")
         })?;
@@ -325,7 +337,7 @@ impl RuntimeSessionService {
             self.agent_shell_store_mut()
                 .retain_recent_transcript_entries(pane_id, transcript_entries.saturating_sub(1))?;
         }
-        self.context_record_browser(conversation_id, pane_id)
+        Ok(())
     }
 
     /// Executes `/show-issues` by querying issue records and rendering browser Markdown.

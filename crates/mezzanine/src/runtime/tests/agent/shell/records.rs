@@ -1785,6 +1785,12 @@ fn runtime_agent_shell_show_context_deletes_the_selected_active_session_entry() 
 
     apply_record_browser_input(&mut service, &primary, b"d");
 
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the context delete claims the page it left"
+    );
     let overlay = service.primary_display_overlay().unwrap();
     let record_browser = overlay.record_browser.as_ref().unwrap();
     let successor_selection_index = overlay
@@ -1815,6 +1821,12 @@ fn runtime_agent_shell_show_context_deletes_the_selected_active_session_entry() 
     apply_record_browser_input(&mut service, &primary, b"d");
 
     let entries = transcript_store.inspect(&conversation_id).unwrap();
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the second context delete claims its page"
+    );
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].content, "first context entry");
     assert_eq!(

@@ -170,6 +170,12 @@ impl RuntimeSessionService {
     /// Selection, detail/list mode, browser and overlay scroll, and parent
     /// stack state remain intact. If filtering removes the edited record, the
     /// nearest bounded row becomes active instead.
+    ///
+    /// This refresh still reads inline, unlike every other store-backed one: it
+    /// follows an out-of-process editor session rather than a keystroke burst, and
+    /// its restored view state (detail mode plus both scroll offsets) is actor
+    /// state the lane's outcome has nothing to carry. The read itself goes through
+    /// the same per-family readers the lane workers use, so the two cannot drift.
     pub(crate) fn refresh_record_browser_after_external_edit(
         &mut self,
         pane_id: &str,
