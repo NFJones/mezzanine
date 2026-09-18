@@ -325,8 +325,12 @@ fn openai_explicit_prompt_cache_breakpoint_requires_a_stable_input_block() {
         placement: mez_agent::ContextPlacement::ConversationAppend,
         content: "volatile runtime hint".to_string(),
     });
+    let error = openai_responses_request_body(&request)
+        .expect_err("explicit mode without a stable-prefix input_text block must fail closed");
     assert!(
-        openai_responses_request_body(&request).is_err(),
-        "explicit mode without a stable-prefix input_text block must fail closed"
+        error
+            .to_string()
+            .contains("requires a stable-prefix input_text content block"),
+        "the guard must name the stable-prefix requirement: {error}"
     );
 }
