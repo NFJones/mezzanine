@@ -21,6 +21,10 @@
 //! completion installs that page only while the overlay is still the one the
 //! claim observed: a newer claim, a source the operator changed, or a record
 //! opened into detail all leave the deferred page uninstalled.
+//!
+//! A settled claim clears its pending filter target, so a filter whose rebuild
+//! failed or was dropped is not replayed later: the operator presses the key
+//! again once the list is back.
 
 use super::RuntimeSessionService;
 use crate::error::{MezError, MezErrorKind, Result};
