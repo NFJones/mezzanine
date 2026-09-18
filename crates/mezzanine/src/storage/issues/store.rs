@@ -455,11 +455,20 @@ impl IssueStore {
             ensure_private_parent(&self.path)?;
         }
         let connection = Connection::open(&self.path)?;
+        connection.busy_timeout(ISSUE_STORE_BUSY_TIMEOUT)?;
         initialize_schema(&connection)?;
         set_private_issue_file_permissions(&self.path)?;
         Ok(connection)
     }
 }
+
+/// Busy timeout for one issue-store connection.
+///
+/// Deferred `/issue` reads open their own connection on a worker while inline
+/// mutations still write on the actor, so the first creation, a legacy rebuild, or
+/// a non-WAL conversion can contend. Without a timeout rusqlite fails the loser
+/// immediately with `SQLITE_BUSY`; this budget matches the other small stores.
+const ISSUE_STORE_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
 
 fn initialize_schema(connection: &Connection) -> Result<()> {
     connection.execute_batch(

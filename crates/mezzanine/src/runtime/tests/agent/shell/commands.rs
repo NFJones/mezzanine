@@ -1689,4 +1689,78 @@ fn runtime_agent_shell_issue_reads_defer_and_mutations_stay_inline() {
         .unwrap()
         .expect("the deferred /issue read applies its rows");
     assert!(body.contains("Deferred read lane"), "{body}");
+
+    let id = added
+        .split("id=")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .map(ToOwned::to_owned)
+        .expect("the add response carries the new issue id");
+    let show = service
+        .execute_agent_shell_command(&primary, &format!("/issue show {id}"))
+        .unwrap();
+    assert!(
+        show.contains(r#""body":null"#),
+        "the deferred lane acknowledges /issue show before its store read: {show}"
+    );
+    let detail = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /issue show applies its record");
+    assert!(detail.contains("Deferred read lane"), "{detail}");
+}
+
+/// Verifies a deferred read that cannot complete off the actor keeps the inline
+/// path, so the user gets an error or a synchronous body instead of an
+/// acknowledgement nothing would settle.
+#[test]
+fn runtime_agent_shell_issue_reads_fall_back_to_the_inline_lane() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    // No configured config root means no database location to capture.
+    service.integration.set_config_root(None);
+    let unconfigured = service.execute_agent_shell_command(&primary, "/issue query");
+    assert!(
+        unconfigured
+            .as_deref()
+            .is_ok_and(|body| body.contains("requires a configured config root")
+                && !body.contains(r#""body":null"#)),
+        "without a config root the read keeps its inline error body: {unconfigured:?}"
+    );
+    assert!(
+        service.take_pending_deferred_agent_commands().is_empty(),
+        "a refused read must not queue deferred work"
+    );
+
+    // A disabled issue store keeps its inline invalid-args error as well.
+    service.set_config_root(temp_root("runtime-issue-fallback"));
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[issues]\nenabled = false\n".to_string(),
+        }])
+        .unwrap();
+    let disabled = service.execute_agent_shell_command(&primary, "/issue query");
+    assert!(
+        disabled
+            .as_deref()
+            .is_ok_and(|body| body.contains("issues.enabled to be true")
+                && !body.contains(r#""body":null"#)),
+        "a disabled issue store keeps its inline error body: {disabled:?}"
+    );
+    assert!(
+        service.take_pending_deferred_agent_commands().is_empty(),
+        "a disabled issue store must not queue deferred work"
+    );
 }
