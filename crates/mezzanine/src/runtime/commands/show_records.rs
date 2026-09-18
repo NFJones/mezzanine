@@ -124,23 +124,7 @@ impl RuntimeSessionService {
             .persistence
             .cloned_transcript_store()
             .ok_or_else(|| MezError::invalid_state("show-context requires transcript storage"))?;
-        let entries = match store.inspect(conversation_id) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Vec::new(),
-            Err(error) => return Err(error),
-        };
-        let mut browser = RecordBrowser::new(
-            "Context",
-            entries
-                .into_iter()
-                .filter(|entry| entry.pane_id == pane_id)
-                .map(context_browser_record)
-                .collect(),
-            Vec::new(),
-        )?;
-        browser.enable_deletion();
-        configure_context_record_browser(&mut browser);
-        Ok(browser)
+        Self::read_context_browser_for_refresh(&store, conversation_id, pane_id)
     }
 
     /// Deletes one selected record through its retained backend source and
@@ -476,15 +460,7 @@ impl RuntimeSessionService {
                 conversation_id,
                 pane_id,
             } => self.context_record_browser(conversation_id, pane_id),
-            RuntimeRecordBrowserOverlaySource::Issues {
-                project_glob,
-                kind,
-                state,
-                active_only,
-                text,
-                limit,
-                ..
-            } => {
+            RuntimeRecordBrowserOverlaySource::Issues { .. } => {
                 let Some(config_root) = self
                     .integration
                     .config_root()
@@ -494,43 +470,12 @@ impl RuntimeSessionService {
                         "show-issues requires a configured config root",
                     ));
                 };
-                let store = crate::storage::issues::IssueStore::from_database_path(
+                Self::read_issue_browser_for_refresh(
                     issues::runtime_issue_database_path(self, &config_root),
-                );
-                let query = mez_agent::issues::IssueBrowserQuery::new(
-                    project_glob.clone(),
-                    *kind,
-                    *state,
-                    text.clone(),
-                    Some(*limit),
-                )?;
-                let mut browser = RecordBrowser::new(
-                    "Issues",
-                    store
-                        .query_issue_browser(&query)?
-                        .into_iter()
-                        .filter(|record| {
-                            !matches!(record.state, mez_agent::issues::IssueState::Resolved)
-                                || !*active_only
-                        })
-                        .map(issue_browser_record)
-                        .collect(),
-                    issue_kind_filter_choices(),
-                )?;
-                browser.enable_deletion();
-                configure_issue_record_browser(&mut browser);
-                browser.set_kind_filter_value(kind.map(|kind| kind.as_str().to_string()))?;
-                set_record_browser_scope_indicator(&mut browser, source);
-                Ok(browser)
+                    source,
+                )
             }
-            RuntimeRecordBrowserOverlaySource::Memories {
-                scope,
-                kind,
-                state,
-                text,
-                limit,
-                ..
-            } => {
+            RuntimeRecordBrowserOverlaySource::Memories { .. } => {
                 let Some(config_root) = self
                     .integration
                     .config_root()
@@ -540,31 +485,127 @@ impl RuntimeSessionService {
                         "show-memories requires a configured Mezzanine config root",
                     ));
                 };
-                let store =
-                    crate::storage::memory::PersistentMemoryStore::under_config_root(&config_root);
-                let mut browser = RecordBrowser::new(
-                    "Memories",
-                    store
-                        .search(&MemorySearchRequest {
-                            query: text.clone(),
-                            scope: scope.clone(),
-                            kind: *kind,
-                            state: *state,
-                            source: None,
-                            limit: *limit,
-                        })?
-                        .into_iter()
-                        .map(|result| memory_browser_record(result.record))
-                        .collect(),
-                    memory_kind_filter_choices(),
-                )?;
-                browser.enable_deletion();
-                configure_memory_record_browser(&mut browser);
-                browser.set_kind_filter_value(kind.map(|kind| kind_name(kind).to_string()))?;
-                set_record_browser_scope_indicator(&mut browser, source);
-                Ok(browser)
+                Self::read_memory_browser_for_refresh(config_root, source)
             }
         }
+    }
+
+    /// Reads one pane's context browser off actor ownership.
+    pub(crate) fn read_context_browser_for_refresh(
+        store: &crate::storage::transcript::AgentTranscriptStore,
+        conversation_id: &str,
+        pane_id: &str,
+    ) -> Result<RecordBrowser> {
+        let entries = match store.inspect(conversation_id) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error),
+        };
+        let mut browser = RecordBrowser::new(
+            "Context",
+            entries
+                .into_iter()
+                .filter(|entry| entry.pane_id == pane_id)
+                .map(context_browser_record)
+                .collect(),
+            Vec::new(),
+        )?;
+        browser.enable_deletion();
+        configure_context_record_browser(&mut browser);
+        Ok(browser)
+    }
+
+    /// Reads the issue browser for one overlay source off actor ownership.
+    ///
+    /// The actor arm resolves the database location from live config and then
+    /// calls this, so the inline refresh and a deferred worker rebuild cannot drift
+    /// apart in how they filter or format issue rows.
+    pub(crate) fn read_issue_browser_for_refresh(
+        database_path: crate::storage::issues::IssueDatabasePath,
+        source: &RuntimeRecordBrowserOverlaySource,
+    ) -> Result<RecordBrowser> {
+        let RuntimeRecordBrowserOverlaySource::Issues {
+            project_glob,
+            kind,
+            state,
+            active_only,
+            text,
+            limit,
+            ..
+        } = source
+        else {
+            return Err(MezError::invalid_state(
+                "issue overlay refresh requires an issue source",
+            ));
+        };
+        let store = crate::storage::issues::IssueStore::from_database_path(database_path);
+        let query = mez_agent::issues::IssueBrowserQuery::new(
+            project_glob.clone(),
+            *kind,
+            *state,
+            text.clone(),
+            Some(*limit),
+        )?;
+        let mut browser = RecordBrowser::new(
+            "Issues",
+            store
+                .query_issue_browser(&query)?
+                .into_iter()
+                .filter(|record| {
+                    !matches!(record.state, mez_agent::issues::IssueState::Resolved)
+                        || !*active_only
+                })
+                .map(issue_browser_record)
+                .collect(),
+            issue_kind_filter_choices(),
+        )?;
+        browser.enable_deletion();
+        configure_issue_record_browser(&mut browser);
+        browser.set_kind_filter_value(kind.map(|kind| kind.as_str().to_string()))?;
+        set_record_browser_scope_indicator(&mut browser, source);
+        Ok(browser)
+    }
+
+    /// Reads the memory browser for one overlay source off actor ownership.
+    pub(crate) fn read_memory_browser_for_refresh(
+        config_root: std::path::PathBuf,
+        source: &RuntimeRecordBrowserOverlaySource,
+    ) -> Result<RecordBrowser> {
+        let RuntimeRecordBrowserOverlaySource::Memories {
+            scope,
+            kind,
+            state,
+            text,
+            limit,
+            ..
+        } = source
+        else {
+            return Err(MezError::invalid_state(
+                "memory overlay refresh requires a memory source",
+            ));
+        };
+        let store = crate::storage::memory::PersistentMemoryStore::under_config_root(&config_root);
+        let mut browser = RecordBrowser::new(
+            "Memories",
+            store
+                .search(&MemorySearchRequest {
+                    query: text.clone(),
+                    scope: scope.clone(),
+                    kind: *kind,
+                    state: *state,
+                    source: None,
+                    limit: *limit,
+                })?
+                .into_iter()
+                .map(|result| memory_browser_record(result.record))
+                .collect(),
+            memory_kind_filter_choices(),
+        )?;
+        browser.enable_deletion();
+        configure_memory_record_browser(&mut browser);
+        browser.set_kind_filter_value(kind.map(|kind| kind_name(kind).to_string()))?;
+        set_record_browser_scope_indicator(&mut browser, source);
+        Ok(browser)
     }
 
     /// Refreshes a bounded saved-session page around one selected UUID.
