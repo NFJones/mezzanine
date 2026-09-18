@@ -8,7 +8,9 @@
 //! and no newer claim has been made, which keeps overlay state, selection, and
 //! rendering unchanged apart from arrival timing. Each claim carries an intent:
 //! a current-page rebuild restores the focused row, while an adjacent-page fetch
-//! resolves the cursor record the operator stepped off into a keyset anchor.
+//! resolves the cursor record the operator stepped off into a keyset anchor. A
+//! key owns at most one pending claim, so a claim that lands while a page-edge
+//! fetch is still queued replaces that step instead of applying it twice.
 
 use super::RuntimeSessionService;
 use crate::error::{MezError, MezErrorKind, Result};
@@ -260,6 +262,7 @@ impl RuntimeSessionService {
     ) -> Result<mez_mux::record_browser::RecordBrowser> {
         let RuntimeRecordBrowserOverlaySource::SavedSessions {
             directory,
+            default_directory,
             lifecycle,
             include_subagents,
             search,
@@ -272,7 +275,7 @@ impl RuntimeSessionService {
                 "record browser refresh requires a saved-session source",
             ));
         };
-        super::resume::runtime_agent_saved_sessions_browser(
+        let mut browser = super::resume::runtime_agent_saved_sessions_browser(
             store,
             directory.as_deref(),
             *lifecycle,
@@ -282,7 +285,16 @@ impl RuntimeSessionService {
             *limit,
             work.prompt_width,
             work.title_policy,
-        )
+        )?;
+        // The builder cannot see the retained default directory, so the shared
+        // capability keeps a picker's scope toggle after `a` left its directory
+        // scope; a deferred rebuild must not drop it.
+        super::resume::apply_saved_session_scope_capability(
+            &mut browser,
+            directory.as_deref(),
+            default_directory.as_deref(),
+        );
+        Ok(browser)
     }
 
     /// Queues one refresh dispatch without an open overlay for tests.

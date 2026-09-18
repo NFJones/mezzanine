@@ -433,13 +433,10 @@ impl RuntimeSessionService {
                 limit,
                 ..
             } => {
-                // The shared saved-session builder already applies the same
-                // scope indicator and directory-conditional scope toggle as the
-                // `/resume` open path. One extra capability is required here: a
-                // picker opened with a directory scope keeps its toggle after
-                // `a` switches to the unbounded scope, because the retained
-                // default directory can still be toggled back to. A picker with
-                // no directory scope at all gets no toggle.
+                // The shared saved-session builder already applies the same scope
+                // indicator and directory-conditional scope toggle as the `/resume`
+                // open path, and the shared capability keeps a picker's toggle after
+                // `a` switches to the unbounded scope.
                 let mut browser = self.saved_sessions_record_browser_for_query(
                     directory.as_deref(),
                     *lifecycle,
@@ -448,9 +445,11 @@ impl RuntimeSessionService {
                     anchor.clone(),
                     *limit,
                 )?;
-                if directory.is_some() || default_directory.is_some() {
-                    browser.enable_scope_toggle();
-                }
+                super::resume::apply_saved_session_scope_capability(
+                    &mut browser,
+                    directory.as_deref(),
+                    default_directory.as_deref(),
+                );
                 Ok(browser)
             }
             RuntimeRecordBrowserOverlaySource::Personalities { pane_id } => {

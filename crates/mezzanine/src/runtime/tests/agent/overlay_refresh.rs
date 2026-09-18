@@ -170,6 +170,14 @@ fn saved_session_page_ids(service: &RuntimeSessionService) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Reports whether the active saved-session picker offers its scope toggle.
+fn saved_session_scope_toggle_enabled(service: &RuntimeSessionService) -> bool {
+    service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .is_some_and(|record_browser| record_browser.browser.scope_toggle_enabled())
+}
+
 /// Steps the picker cursor onto the last row of the installed page.
 fn move_saved_session_cursor_to_last_row(
     service: &mut RuntimeSessionService,
@@ -294,4 +302,109 @@ fn overlay_refresh_adjacent_page_past_the_catalog_end_falls_back_to_the_edge() {
         first_ids.first().cloned(),
         "the fallback page focuses its first row"
     );
+}
+
+/// Verifies a deferred page rebuild keeps the picker's retained scope toggle.
+///
+/// A picker opened on a directory scope keeps its `a` toggle after switching to
+/// the unbounded scope, because the retained default directory can still be
+/// toggled back to. The inline refresh always applied that capability, so a
+/// deferred rebuild that drops it leaves the operator without the key.
+#[test]
+fn overlay_refresh_adjacent_page_keeps_the_retained_scope_toggle() {
+    const SCOPED_ROOT: &str = "/scope-root";
+    const OTHER_ROOT: &str = "/other-root";
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("overlay-refresh-scope-toggle"));
+    for index in 0..10 {
+        transcript_store
+            .append(&mez_agent::transcript::TranscriptEntry {
+                conversation_id: format!("scoped-{index:02}"),
+                sequence: 1,
+                created_at_unix_seconds: 1000 - index,
+                role: mez_agent::transcript::TranscriptRole::User,
+                turn_id: format!("turn-scoped-{index}"),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: format!("cwd={SCOPED_ROOT}\nscoped page prompt {index}"),
+            })
+            .unwrap();
+    }
+    for index in 0..25 {
+        transcript_store
+            .append(&mez_agent::transcript::TranscriptEntry {
+                conversation_id: format!("unscoped-{index:02}"),
+                sequence: 1,
+                created_at_unix_seconds: 200 - index,
+                role: mez_agent::transcript::TranscriptRole::User,
+                turn_id: format!("turn-unscoped-{index}"),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: format!("cwd={OTHER_ROOT}\nunscoped page prompt {index}"),
+            })
+            .unwrap();
+    }
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 12).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_pane_current_working_directory("%1", std::path::PathBuf::from(SCOPED_ROOT));
+    let response = service
+        .execute_agent_shell_command(&primary, "/resume")
+        .unwrap();
+    assert!(
+        response.contains(r#""body":null"#),
+        "the deferred lane acknowledges /resume: {response}"
+    );
+    service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /resume picker applies its page");
+    assert!(
+        saved_session_scope_toggle_enabled(&service),
+        "a picker opened on a directory scope offers its scope toggle"
+    );
+    let scoped_ids = saved_session_page_ids(&service);
+    assert_eq!(scoped_ids.len(), 10);
+    assert!(scoped_ids.iter().all(|id| id.starts_with("scoped-")));
+
+    // `a` drops the directory scope and keeps only the retained default, so the
+    // picker still offers the toggle while it lists every directory.
+    service
+        .apply_primary_display_overlay_input(&primary, b"a")
+        .unwrap();
+    assert!(saved_session_scope_toggle_enabled(&service));
+    let unscoped_ids = saved_session_page_ids(&service);
+    assert_eq!(unscoped_ids.len(), 20);
+    assert!(
+        unscoped_ids.iter().any(|id| id.starts_with("unscoped-")),
+        "the toggled picker lists every directory: {unscoped_ids:?}"
+    );
+
+    // The fetch past the page edge runs in the lane, so its rebuild has to keep
+    // the capability the inline refresh kept.
+    move_saved_session_cursor_to_last_row(&mut service, &primary);
+    service
+        .apply_primary_display_overlay_input(&primary, b"\x1b[B")
+        .unwrap();
+    assert!(settle_saved_session_page_claim(&mut service));
+    let fetched_ids = saved_session_page_ids(&service);
+    assert!(
+        fetched_ids.iter().all(|id| id.starts_with("unscoped-")),
+        "the fetched page continues the toggled catalog: {fetched_ids:?}"
+    );
+    assert!(
+        saved_session_scope_toggle_enabled(&service),
+        "the deferred page rebuild keeps the retained scope toggle"
+    );
+
+    // The retained default directory still toggles back into scope.
+    service
+        .apply_primary_display_overlay_input(&primary, b"a")
+        .unwrap();
+    assert_eq!(saved_session_page_ids(&service), scoped_ids);
 }

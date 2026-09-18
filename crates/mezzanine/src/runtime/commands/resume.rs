@@ -1378,6 +1378,23 @@ pub(crate) fn runtime_agent_saved_sessions_overlay_source(
     }
 }
 
+/// Applies the saved-session scope capability one rebuilt browser must retain.
+///
+/// A picker opened with a directory scope keeps its toggle after `a` switches to
+/// the unbounded scope, because the retained default directory can still be
+/// toggled back to; a picker with no directory scope at all gets no toggle. The
+/// inline refresh and the deferred refresh lane both rebuild from the same
+/// source, so both apply this after building.
+pub(crate) fn apply_saved_session_scope_capability(
+    browser: &mut RecordBrowser,
+    directory: Option<&str>,
+    default_directory: Option<&str>,
+) {
+    if directory.is_some() || default_directory.is_some() {
+        browser.enable_scope_toggle();
+    }
+}
+
 /// Builds one bounded saved-session browser page from owned catalog filters.
 ///
 /// The inline `/resume` picker and the deferred executor share this sequence, so
