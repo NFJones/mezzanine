@@ -400,6 +400,7 @@ fn assignment_reads_never_block_on_an_uncommitted_writer() {
     connection
         .execute_batch("BEGIN IMMEDIATE; DELETE FROM assignments;")
         .unwrap();
+    let started = std::time::Instant::now();
     let read = repository.list().unwrap();
     assert_eq!(
         read.len(),
@@ -410,10 +411,61 @@ fn assignment_reads_never_block_on_an_uncommitted_writer() {
         repository.export_tsv_read_only().unwrap().is_some(),
         "an export must read through the same uncommitted writer"
     );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "a reader must not wait on an uncommitted writer"
+    );
     connection.execute_batch("ROLLBACK").unwrap();
     drop(connection);
 
     assert_eq!(repository.list().unwrap().len(), 1);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// The inspection export takes no repository lock: while another writer holds
+/// the store's exclusive lock, the export still completes and reports the
+/// committed rows instead of parking behind the writer.
+#[test]
+fn assignment_export_ignores_the_exclusive_write_lock() {
+    let root = test_root("export-unlocked");
+    let repository = LocalSessionAssignmentRepository::new(root.clone());
+    repository
+        .reserve_pending(LocalAssignmentReservationRequest {
+            session_id: "$export".to_string(),
+            name: "export".to_string(),
+            default_for_host: false,
+            now_unix_seconds: 10,
+        })
+        .unwrap();
+
+    let lock = rustix::fs::open(
+        root.join("assignments.lock"),
+        rustix::fs::OFlags::RDWR | rustix::fs::OFlags::CREATE | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+    )
+    .unwrap();
+    rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive).unwrap();
+
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let export_repository = LocalSessionAssignmentRepository::new(root.clone());
+    let worker = std::thread::spawn(move || {
+        sender
+            .send(export_repository.export_tsv_read_only())
+            .expect("the export worker reports its result");
+    });
+    let export = receiver
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("the export must not wait on the repository lock")
+        .unwrap()
+        .unwrap();
+    assert!(
+        export.contains("$export\tpending\tfalse\t"),
+        "the export renders the committed row while the lock is held: {export}"
+    );
+    worker.join().unwrap();
+
+    rustix::fs::flock(&lock, rustix::fs::FlockOperation::Unlock).unwrap();
+    drop(lock);
     let _ = fs::remove_dir_all(root);
 }
 
