@@ -1370,8 +1370,8 @@ fn runtime_status_reports_turn_elapsed_provider_claim_and_retry() {
         "a fresh turn is not awaiting a retry: {status}"
     );
 
-    // Completing the turn clears all three rows again, so a settled pane cannot
-    // look like it is still waiting on a provider claim.
+    // The claim lease is the state the claim row exists to expose, so claim the
+    // turn deterministically instead of relying on the queued fallback.
     let turn_id = service
         .agent_turn_ledger()
         .turns()
@@ -1379,6 +1379,19 @@ fn runtime_status_reports_turn_elapsed_provider_claim_and_retry() {
         .expect("the dispatched prompt must create a turn")
         .turn_id
         .clone();
+    service
+        .record_claimed_agent_provider_context_for_tests(&turn_id, 0)
+        .unwrap();
+    let claimed_status = service.runtime_agent_status_display("%1").unwrap();
+    assert!(
+        claimed_status
+            .lines()
+            .any(|line| line.contains("Provider claim") && line.contains("claimed")),
+        "a claimed provider lease is reported as claimed: {claimed_status}"
+    );
+
+    // Completing the turn clears all three rows again, so a settled pane cannot
+    // look like it is still waiting on a provider claim.
     service.remove_pending_agent_provider_task(&turn_id);
     service
         .agent_turn_ledger_mut()
