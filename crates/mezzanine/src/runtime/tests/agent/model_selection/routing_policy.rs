@@ -2359,6 +2359,172 @@ fn runtime_config_apply_clears_generated_marker_for_configured_names() {
     );
 }
 
+/// Sets the base sizing profile's option used by the sibling-order fixture.
+///
+/// The sized-child definition is derived from the base profile definition at spawn
+/// time, so mutating it between two spawns gives two children that share model,
+/// reasoning, and latency but differ in one effective provider option.
+fn set_sized_base_option(service: &mut RuntimeSessionService, value: &str) {
+    service
+        .integration
+        .provider_registry_mut()
+        .profile_definitions
+        .get_mut("deepseek-large")
+        .expect("the fixture configures the large sizing profile")
+        .provider_options
+        .insert("sibling_variant".to_string(), value.to_string());
+}
+
+/// Verifies restore order cannot let siblings adopt each other's profile.
+///
+/// Two children share model, reasoning, and latency but differ in one effective
+/// provider option, so one preferred generated name resolves to two different
+/// identities and the second child is registered under a distinct name. A restart
+/// may restore either sibling first, and the captured name is authoritative: each
+/// pane must come back with its own options, and a name that had to change must be
+/// reported instead of silently substituting the other sibling.
+#[test]
+fn runtime_restore_order_preserves_sibling_model_identities() {
+    let transcript_store = crate::storage::transcript::AgentTranscriptStore::new(temp_root(
+        "runtime-sibling-identity-order",
+    ));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "explicit-subagent-sizing-siblings".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: EXPLICIT_SUBAGENT_SIZING_CONFIG.to_string(),
+        }])
+        .unwrap();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    set_sized_base_option(&mut service, "first");
+    let (first_agent_id, first_pane_id, _turn_id) =
+        spawn_explicitly_sized_child(&mut service, &primary, "large", "high");
+    let (first_name, first_selection) =
+        persisted_model_identity(&service, &transcript_store, &first_pane_id);
+    let first_selection = first_selection.expect("a generated identity carries its selection");
+    assert_eq!(
+        first_selection
+            .provider_options
+            .get("sibling_variant")
+            .map(String::as_str),
+        Some("first")
+    );
+
+    set_sized_base_option(&mut service, "second");
+    let (second_agent_id, second_pane_id, _turn_id) =
+        spawn_explicitly_sized_child(&mut service, &primary, "large", "high");
+    let (second_name, second_selection) =
+        persisted_model_identity(&service, &transcript_store, &second_pane_id);
+    let second_selection = second_selection.expect("a generated identity carries its selection");
+    assert_eq!(
+        second_selection
+            .provider_options
+            .get("sibling_variant")
+            .map(String::as_str),
+        Some("second")
+    );
+    assert_ne!(
+        first_selection.provider_options, second_selection.provider_options,
+        "the siblings must differ in their effective options"
+    );
+    assert_ne!(
+        first_name, second_name,
+        "differing options must not share one registration"
+    );
+
+    // A restart drops every in-memory identity fact.
+    {
+        let overrides = service.integration.model_profile_overrides_mut();
+        overrides.agent_profiles.clear();
+        overrides.subagent_profiles.clear();
+        overrides.runtime_generated_profiles.clear();
+    }
+    for name in [&first_name, &second_name] {
+        service
+            .integration
+            .provider_registry_mut()
+            .profile_definitions
+            .remove(name);
+        service
+            .integration
+            .provider_registry_mut()
+            .profiles
+            .remove(name);
+    }
+
+    // Restore in reverse spawn order: the second sibling first, so the order itself
+    // cannot decide which identity the first sibling adopts.
+    service.restore_agent_model_profile_identity(
+        &second_pane_id,
+        &second_name,
+        Some(&second_selection),
+    );
+    service.restore_agent_model_profile_identity(
+        &first_pane_id,
+        &first_name,
+        Some(&first_selection),
+    );
+    let (first_restored_name, first_restored) = service
+        .active_model_profile_for_pane(&first_pane_id, &first_agent_id, None)
+        .unwrap();
+    let (second_restored_name, second_restored) = service
+        .active_model_profile_for_pane(&second_pane_id, &second_agent_id, None)
+        .unwrap();
+    assert_eq!(
+        first_restored.provider_options, first_selection.provider_options,
+        "the first sibling must keep its own options"
+    );
+    assert_eq!(
+        second_restored.provider_options, second_selection.provider_options,
+        "the second sibling must keep its own options"
+    );
+
+    let degradations = service
+        .event_log()
+        .expect("the runtime test service owns an event log")
+        .replay_for(&crate::protocol::event::EventAudience::AllPrimaries)
+        .into_iter()
+        .filter(|event| {
+            event.kind == crate::runtime::EventKind::AgentStatus
+                && event.payload.contains("\"model_profile\":\"degraded\"")
+        })
+        .map(|event| event.payload.clone())
+        .collect::<Vec<_>>();
+    for (pane_id, restored_name, captured_name) in [
+        (
+            first_pane_id.as_str(),
+            first_restored_name.as_str(),
+            first_name.as_str(),
+        ),
+        (
+            second_pane_id.as_str(),
+            second_restored_name.as_str(),
+            second_name.as_str(),
+        ),
+    ] {
+        assert!(
+            restored_name == captured_name
+                || degradations.iter().any(|payload| payload.contains(pane_id)),
+            "a restore that had to change the name must report it: pane={pane_id} \
+             captured={captured_name} restored={restored_name} degradations={degradations:?}"
+        );
+    }
+}
+
 /// Verifies restored identities re-install the durable child profile, and that an
 /// unresolvable one degrades to the documented fallback instead of silently
 /// changing models.
