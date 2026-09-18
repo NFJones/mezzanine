@@ -172,7 +172,7 @@ fn runtime_agent_prompt_refreshes_project_overlay_and_project_skills_from_pane_c
     service.set_config_root(config_root.clone());
     service.set_project_trust_store(
         ProjectTrustStore::default(),
-        Some(config_root.join("project-trust.tsv")),
+        Some(config_root.join("project-trust.sqlite")),
     );
     service
         .replace_config_layers(vec![ConfigLayer {

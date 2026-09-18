@@ -3,7 +3,7 @@
 //! The store persists a small line-oriented format; this module owns parsing,
 //! escaping, canonicalization, timestamps, and private file permissions.
 
-use super::{MezError, Path, PathBuf, ProjectTrustRecord, Result, TrustDecision, fs};
+use super::{MezError, Path, PathBuf, ProjectTrustRecord, Result, TrustDecision};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 impl TrustDecision {
@@ -225,24 +225,4 @@ pub(super) fn parse_record_line(line: &str) -> Result<Vec<String>> {
     }
     fields.push(current);
     Ok(fields)
-}
-
-/// Runs the set private file permissions operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn set_private_file_permissions(path: &Path) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-    }
-
-    Ok(())
 }

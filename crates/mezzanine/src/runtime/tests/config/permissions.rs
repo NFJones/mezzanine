@@ -1275,7 +1275,7 @@ fn runtime_agent_trust_command_logs_and_persists_project_trust_request() {
         .unwrap();
     let root = temp_root("runtime-agent-trust-command");
     let config_root = root.join("config-root");
-    let trust_path = config_root.join("project-trust.tsv");
+    let trust_path = config_root.join("project-trust.sqlite");
     service.set_config_root(config_root.clone());
     fs::create_dir_all(root.join(".git")).unwrap();
     let overlay_dir = root.join(".mezzanine");

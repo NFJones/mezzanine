@@ -5,8 +5,6 @@
 //! discovery rules separate from general user configuration.
 
 use std::collections::BTreeMap;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::error::{MezError, Result};
@@ -26,6 +24,11 @@ mod encoding;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod resolution;
+/// Exposes the sqlite module boundary.
+///
+/// The nested module owns the durable trust database, its one-time import of
+/// the legacy TSV document, and the revision digest readers compare.
+mod sqlite;
 /// Exposes the store module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -54,10 +57,7 @@ pub use types::{
     ProjectTrustStore, TrustDecision,
 };
 
-use encoding::{
-    canonicalize_existing_or_original, canonicalize_for_comparison, parse_record_line,
-    set_private_file_permissions, unix_now_seconds,
-};
+use encoding::{canonicalize_existing_or_original, canonicalize_for_comparison, unix_now_seconds};
 
 /// Exposes the tests module boundary.
 ///

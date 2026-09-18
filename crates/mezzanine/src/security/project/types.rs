@@ -147,7 +147,11 @@ pub struct ProjectTrustStore {
 pub enum ProjectTrustRevision {
     /// The configured project-trust database does not exist.
     Missing,
-    /// SHA-256 digest of the exact bytes read from the database.
+    /// SHA-256 digest over the canonical persisted contents of the store.
+    ///
+    /// The digest covers the legacy TSV rendering of the records, so it stays
+    /// stable across the storage conversion for unchanged records and a reader
+    /// reloads only when the logical contents change.
     Sha256(String),
 }
 

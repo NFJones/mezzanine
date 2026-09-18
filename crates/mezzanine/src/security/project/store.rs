@@ -4,14 +4,10 @@
 //! parsing and canonical path handling to the encoding module.
 
 use super::{
-    MezError, OpenOptions, Path, PathBuf, ProjectTrustRecord, ProjectTrustRevision,
-    ProjectTrustSnapshot, ProjectTrustStore, Result, TrustDecision, Write,
-    canonicalize_existing_or_original, fs, parse_record_line, set_private_file_permissions,
-    unix_now_seconds,
+    MezError, Path, PathBuf, ProjectTrustRecord, ProjectTrustSnapshot, ProjectTrustStore, Result,
+    TrustDecision, canonicalize_existing_or_original, unix_now_seconds,
 };
 use crate::config::CURRENT_CONFIG_SCHEMA_VERSION;
-use rustix::fs::{FlockOperation, flock};
-use sha2::{Digest, Sha256};
 
 /// Current project trust record policy version.
 const PROJECT_TRUST_POLICY_VERSION: u32 = 1;
@@ -183,41 +179,13 @@ impl ProjectTrustStore {
         Ok(Self::load_snapshot_from_file(path)?.store)
     }
 
-    /// Loads trust records together with the digest of their persisted bytes.
+    /// Loads trust records together with the revision of their persisted
+    /// contents.
     ///
     /// Callers that retain trust state use the revision to detect external
     /// decisions without relying on timestamp resolution or file length.
     pub fn load_snapshot_from_file(path: &Path) -> Result<ProjectTrustSnapshot> {
-        let bytes = match fs::read(path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(ProjectTrustSnapshot {
-                    store: Self::default(),
-                    revision: ProjectTrustRevision::Missing,
-                });
-            }
-            Err(error) => return Err(error.into()),
-        };
-        let revision = ProjectTrustRevision::Sha256(
-            Sha256::digest(&bytes)
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect(),
-        );
-        let text = String::from_utf8(bytes)
-            .map_err(|_| MezError::config("project trust database is not valid UTF-8"))?;
-        let mut store = Self::default();
-
-        for line in text.lines() {
-            if line.trim().is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let fields = parse_record_line(line)?;
-            let record = ProjectTrustRecord::from_fields(&fields)?;
-            store.records.insert(record.project_root.clone(), record);
-        }
-
-        Ok(ProjectTrustSnapshot { store, revision })
+        super::sqlite::load_snapshot(path)
     }
 
     /// Runs the save to file operation for this subsystem.
@@ -230,8 +198,7 @@ impl ProjectTrustStore {
         reason = "complete-store persistence remains available for import and focused tests"
     )]
     pub fn save_to_file(&self, path: &Path) -> Result<()> {
-        let _lock = project_trust_database_lock(path)?;
-        self.save_to_file_locked(path)
+        super::sqlite::save(path, self)
     }
 
     /// Serializes one read-modify-write trust update under the database lock.
@@ -244,75 +211,19 @@ impl ProjectTrustStore {
     where
         F: FnOnce(&mut Self) -> Result<()>,
     {
-        let _lock = project_trust_database_lock(path)?;
-        let mut store = Self::load_from_file(path)?;
-        update(&mut store)?;
-        store.save_to_file_locked(path)?;
-        Self::load_snapshot_from_file(path)
+        super::sqlite::update(path, update)
     }
 
-    /// Persists the complete store while the caller holds the database lock.
-    fn save_to_file_locked(&self, path: &Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let file_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("project-trust.tsv");
-        let temporary = path.with_file_name(format!(".{file_name}.{}.tmp", std::process::id()));
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temporary)?;
-        let write_result = (|| -> Result<()> {
-            file.write_all(b"# Mezzanine project trust database v1\n")?;
-            for record in self.records.values() {
-                file.write_all(record.to_line().as_bytes())?;
-                file.write_all(b"\n")?;
-            }
-            file.flush()?;
-            file.sync_all()?;
-            set_private_file_permissions(&temporary)?;
-            fs::rename(&temporary, path)?;
-            set_private_file_permissions(path)?;
-            if let Some(parent) = path.parent()
-                && let Ok(directory) = OpenOptions::new().read(true).open(parent)
-            {
-                let _ = directory.sync_all();
-            }
-            Ok(())
-        })();
-        if write_result.is_err() {
-            let _ = fs::remove_file(&temporary);
-        }
-        write_result
+    /// Renders the stored trust records in the legacy TSV shape without
+    /// creating or migrating the database.
+    pub fn export_database_tsv_read_only(path: &Path) -> Result<Option<String>> {
+        super::sqlite::export_tsv_read_only(path)
     }
-}
 
-/// Holds an exclusive advisory lock for one project-trust database update.
-#[derive(Debug)]
-struct ProjectTrustDatabaseLock {
-    _file: fs::File,
-}
-
-/// Acquires the sibling lock shared by every project-trust writer.
-fn project_trust_database_lock(path: &Path) -> Result<ProjectTrustDatabaseLock> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+    /// Inserts one record directly for tests that need a state the public
+    /// decisions do not produce, such as a pending nested decision.
+    #[cfg(test)]
+    pub(crate) fn insert_record_for_tests(&mut self, record: ProjectTrustRecord) {
+        self.records.insert(record.project_root.clone(), record);
     }
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("project-trust.tsv");
-    let lock_path = path.with_file_name(format!(".{file_name}.lock"));
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&lock_path)?;
-    set_private_file_permissions(&lock_path)?;
-    flock(&file, FlockOperation::LockExclusive).map_err(std::io::Error::from)?;
-    Ok(ProjectTrustDatabaseLock { _file: file })
 }

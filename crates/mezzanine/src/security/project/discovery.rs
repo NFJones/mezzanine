@@ -5,7 +5,7 @@
 
 use super::{BTreeMap, MezError, OVERLAY_FILENAMES, Path, PathBuf, Result};
 #[cfg(test)]
-use super::{ProjectTrustPrompt, ProjectTrustStore, TrustDecision, fs};
+use super::{ProjectTrustPrompt, ProjectTrustStore, TrustDecision};
 
 /// Identifies how the caller selected the path used for project discovery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -159,7 +159,7 @@ pub fn discover_project_root(start: &Path) -> PathBuf {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub fn default_trust_database_path(config_root: &Path) -> PathBuf {
-    config_root.join("project-trust.tsv")
+    config_root.join(super::sqlite::PROJECT_TRUST_DATABASE_FILE_NAME)
 }
 
 /// Runs the discover overlay candidates operation for this subsystem.
@@ -225,7 +225,7 @@ pub fn summarize_overlay_capabilities(overlay_files: &[PathBuf]) -> Result<Vec<S
         if !path.is_file() {
             continue;
         }
-        let text = fs::read_to_string(path)?;
+        let text = std::fs::read_to_string(path)?;
         let lower = text.to_ascii_lowercase();
         push_capability_if(
             &mut capabilities,

@@ -28,8 +28,14 @@ enum StorageCliCommand {
 ///
 /// Each store conversion appends its store here; the error message and the
 /// exporter match below both derive from this list so they cannot diverge.
-pub(super) const STORAGE_EXPORTERS: &[&str] =
-    &["memory", "sessions", "leases", "assignments", "history"];
+pub(super) const STORAGE_EXPORTERS: &[&str] = &[
+    "memory",
+    "sessions",
+    "leases",
+    "assignments",
+    "history",
+    "project-trust",
+];
 
 /// Typed process CLI arguments for `mez storage export`.
 #[derive(Debug, Clone, Args)]
@@ -120,6 +126,17 @@ fn storage_export_body(store: &str, env: &CliEnv) -> Result<String> {
             store.export_prompt_history_tsv_read_only()?.ok_or_else(|| {
                 MezError::invalid_state(
                     "no prompt history store found; submit an agent prompt or run a command first",
+                )
+            })
+        }
+        "project-trust" => {
+            let paths = env.config_paths()?;
+            crate::security::project::ProjectTrustStore::export_database_tsv_read_only(
+                &crate::security::project::default_trust_database_path(paths.root()),
+            )?
+            .ok_or_else(|| {
+                MezError::invalid_state(
+                    "no project trust database found; decide project trust first",
                 )
             })
         }

@@ -982,7 +982,7 @@ fn runtime_bubblewrap_preflight_refreshes_external_project_trust() {
     let working_directory = project_root.join("src");
     fs::create_dir_all(project_root.join(".git")).unwrap();
     fs::create_dir_all(&working_directory).unwrap();
-    let trust_path = root.join("project-trust.tsv");
+    let trust_path = root.join("project-trust.sqlite");
     let mut service = test_runtime_service();
     let _primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -1055,7 +1055,7 @@ fn runtime_unchanged_project_trust_revision_preserves_config_generation() {
     let root = temp_root("runtime-unchanged-project-trust-refresh");
     let project_root = root.join("project");
     fs::create_dir_all(project_root.join(".git")).unwrap();
-    let trust_path = root.join("project-trust.tsv");
+    let trust_path = root.join("project-trust.sqlite");
     let snapshot = ProjectTrustStore::update_file(&trust_path, |store| {
         store.decide_at(project_root, TrustDecision::Trusted, None, 100)
     })
@@ -1083,7 +1083,7 @@ fn runtime_malformed_external_project_trust_fails_closed() {
     let working_directory = project_root.join("src");
     fs::create_dir_all(project_root.join(".git")).unwrap();
     fs::create_dir_all(&working_directory).unwrap();
-    let trust_path = root.join("project-trust.tsv");
+    let trust_path = root.join("project-trust.sqlite");
     let snapshot = ProjectTrustStore::update_file(&trust_path, |store| {
         store.decide_at(
             project_root.clone(),
@@ -1140,7 +1140,7 @@ fn runtime_external_project_trust_revocation_contracts_authority() {
     let working_directory = project_root.join("src");
     fs::create_dir_all(project_root.join(".git")).unwrap();
     fs::create_dir_all(&working_directory).unwrap();
-    let trust_path = root.join("project-trust.tsv");
+    let trust_path = root.join("project-trust.sqlite");
     let snapshot = ProjectTrustStore::update_file(&trust_path, |store| {
         store.decide_at(
             project_root.clone(),
@@ -1445,7 +1445,7 @@ fn external_nested_trust_revocation_invalidates_authority_before_admission() {
     fs::create_dir_all(project_root.join(".git")).unwrap();
     fs::create_dir_all(nested_root.join(".git")).unwrap();
     fs::create_dir_all(&working_directory).unwrap();
-    let trust_path = root.join("project-trust.tsv");
+    let trust_path = root.join("project-trust.sqlite");
     let snapshot = ProjectTrustStore::update_file(&trust_path, |store| {
         store.decide_at(project_root.clone(), TrustDecision::Trusted, None, 1)?;
         store.decide_at(nested_root.clone(), TrustDecision::Trusted, None, 2)
@@ -1518,18 +1518,13 @@ fn pending_nested_trust_decision_blocks_then_resumes_after_decision() {
     fs::create_dir_all(project_root.join(".git")).unwrap();
     fs::create_dir_all(nested_root.join(".git")).unwrap();
     fs::create_dir_all(&working_directory).unwrap();
-    let trust_path = root.join("project-trust.tsv");
+    let trust_path = root.join("project-trust.sqlite");
     ProjectTrustStore::update_file(&trust_path, |store| {
-        store.decide_at(project_root.clone(), TrustDecision::Trusted, None, 1)
+        store.decide_at(project_root.clone(), TrustDecision::Trusted, None, 1)?;
+        store.insert_record_for_tests(pending_nested_trust_record(&nested_root));
+        Ok(())
     })
     .unwrap();
-    let pending_line = format!(
-        "{}\tpending\t\t0\t\t1\t{}\t\n",
-        nested_root.display(),
-        crate::config::CURRENT_CONFIG_SCHEMA_VERSION
-    );
-    let persisted = fs::read_to_string(&trust_path).unwrap();
-    fs::write(&trust_path, format!("{persisted}{pending_line}")).unwrap();
     let snapshot = ProjectTrustStore::load_snapshot_from_file(&trust_path).unwrap();
     let mut service = test_runtime_service();
     let _primary = service
@@ -6101,18 +6096,27 @@ fn install_nested_pending_decision(
     nested_root: &Path,
 ) {
     ProjectTrustStore::update_file(trust_path, |store| {
-        store.decide_at(project_root.to_path_buf(), TrustDecision::Trusted, None, 1)
+        store.decide_at(project_root.to_path_buf(), TrustDecision::Trusted, None, 1)?;
+        store.insert_record_for_tests(pending_nested_trust_record(nested_root));
+        Ok(())
     })
     .unwrap();
-    let pending_line = format!(
-        "{}\tpending\t\t0\t\t1\t{}\t\n",
-        nested_root.display(),
-        crate::config::CURRENT_CONFIG_SCHEMA_VERSION
-    );
-    let persisted = fs::read_to_string(trust_path).unwrap();
-    fs::write(trust_path, format!("{persisted}{pending_line}")).unwrap();
     let snapshot = ProjectTrustStore::load_snapshot_from_file(trust_path).unwrap();
     service.set_project_trust_store(snapshot.store, Some(trust_path.to_path_buf()));
+}
+
+/// Builds the pending nested decision the trust store cannot decide itself.
+fn pending_nested_trust_record(nested_root: &Path) -> crate::security::project::ProjectTrustRecord {
+    crate::security::project::ProjectTrustRecord {
+        project_root: nested_root.to_path_buf(),
+        state: TrustDecision::Pending,
+        git_marker_path: None,
+        trusted_at_unix_seconds: 0,
+        decided_by_client_id: None,
+        trust_policy_version: 1,
+        configuration_schema_version: crate::config::CURRENT_CONFIG_SCHEMA_VERSION as u32,
+        vcs_remote: None,
+    }
 }
 
 /// Runs the retained action through real dispatch and asserts a trust denial.
@@ -6157,12 +6161,20 @@ fn install_stale_schema_trusted_record(
     trust_path: &Path,
     project_root: &Path,
 ) {
-    let line = format!(
-        "{}\ttrusted\t\t1\t\t1\t{}\t\n",
-        project_root.display(),
-        crate::config::CURRENT_CONFIG_SCHEMA_VERSION - 1
-    );
-    fs::write(trust_path, line).unwrap();
+    ProjectTrustStore::update_file(trust_path, |store| {
+        store.insert_record_for_tests(crate::security::project::ProjectTrustRecord {
+            project_root: project_root.to_path_buf(),
+            state: TrustDecision::Trusted,
+            git_marker_path: None,
+            trusted_at_unix_seconds: 1,
+            decided_by_client_id: None,
+            trust_policy_version: 1,
+            configuration_schema_version: (crate::config::CURRENT_CONFIG_SCHEMA_VERSION - 1) as u32,
+            vcs_remote: None,
+        });
+        Ok(())
+    })
+    .unwrap();
     let snapshot = ProjectTrustStore::load_snapshot_from_file(trust_path).unwrap();
     service.set_project_trust_store(snapshot.store, Some(trust_path.to_path_buf()));
 }
@@ -6287,7 +6299,7 @@ fn pending_nested_decision_denies_shell_dispatch_without_payload() {
     let project_root = root.join("project");
     let nested_root = project_root.join("vendor/nested");
     let working_directory = nested_root.join("src");
-    let trust_path = root.join("project-trust.tsv");
+    let trust_path = root.join("project-trust.sqlite");
     fs::create_dir_all(project_root.join(".git")).unwrap();
     fs::create_dir_all(nested_root.join(".git")).unwrap();
     fs::create_dir_all(&working_directory).unwrap();
@@ -6329,7 +6341,7 @@ fn pending_nested_decision_denies_apply_patch_dispatch_without_payload() {
     let project_root = root.join("project");
     let nested_root = project_root.join("vendor/nested");
     let working_directory = nested_root.join("src");
-    let trust_path = root.join("project-trust.tsv");
+    let trust_path = root.join("project-trust.sqlite");
     fs::create_dir_all(project_root.join(".git")).unwrap();
     fs::create_dir_all(nested_root.join(".git")).unwrap();
     fs::create_dir_all(&working_directory).unwrap();
@@ -6367,7 +6379,7 @@ fn stale_schema_trusted_record_grants_no_implicit_authority_at_dispatch() {
     let root = temp_root("runtime-stale-schema-trusted-record");
     let project_root = root.join("project");
     let working_directory = project_root.join("src");
-    let trust_path = root.join("project-trust.tsv");
+    let trust_path = root.join("project-trust.sqlite");
     fs::create_dir_all(project_root.join(".git")).unwrap();
     fs::create_dir_all(&working_directory).unwrap();
     let (mut service, turn_id, _) = admission_action_execution_service(

@@ -99,7 +99,7 @@ fn sandbox_status_is_structured_and_strictly_read_only() {
     assert_eq!(output["confirmation"]["required"], false);
     assert!(stderr.is_empty());
     assert_eq!(fs::read(&config_path).unwrap(), before_config);
-    assert!(!config_root.join("project-trust.tsv").exists());
+    assert!(!config_root.join("project-trust.sqlite").exists());
     assert!(!config_root.join("sandbox").exists());
     assert!(!home.join("runtime/mez-0").exists());
 
@@ -234,7 +234,7 @@ fn sandbox_status_reports_withheld_project_trust_for_marker_less_nested_root() {
     .unwrap();
     let project_root = project.canonicalize().unwrap();
     let nested_root = nested.canonicalize().unwrap();
-    ProjectTrustStore::update_file(&config_root.join("project-trust.tsv"), |store| {
+    ProjectTrustStore::update_file(&config_root.join("project-trust.sqlite"), |store| {
         store.decide_at(
             project_root.clone(),
             TrustDecision::Trusted,
@@ -396,7 +396,7 @@ fn sandbox_status_reports_seatbelt_operation_confinement() {
     }));
     assert!(stderr.is_empty());
     assert_eq!(fs::read(&config_path).unwrap(), before_config);
-    assert!(!config_root.join("project-trust.tsv").exists());
+    assert!(!config_root.join("project-trust.sqlite").exists());
     assert!(!config_root.join("sandbox").exists());
 
     let _ = fs::remove_dir_all(home);
@@ -774,7 +774,7 @@ fn sandbox_setup_enable_requires_confirmation_and_persists_preset() {
                 .into_owned()
         )
     );
-    assert!(!home.join(".config/mezzanine/project-trust.tsv").exists());
+    assert!(!home.join(".config/mezzanine/project-trust.sqlite").exists());
     assert!(stderr.is_empty());
 
     let _ = fs::remove_dir_all(home);
@@ -816,7 +816,7 @@ fn sandbox_setup_trusted_project_persists_trust_without_explicit_scopes() {
     assert!(!config.contains("\nread_scopes = ["), "{config}");
     assert!(!config.contains("\nwrite_scopes = ["), "{config}");
     let trust =
-        ProjectTrustStore::load_from_file(&home.join(".config/mezzanine/project-trust.tsv"))
+        ProjectTrustStore::load_from_file(&home.join(".config/mezzanine/project-trust.sqlite"))
             .unwrap();
     assert_eq!(
         trust.get(&project).map(|record| record.state),
@@ -886,6 +886,10 @@ fn sandbox_setup_read_only_and_disable_retain_expected_policy() {
 
 /// A trust-store write failure after config persistence restores the original
 /// config document instead of leaving a partially applied trusted preset.
+///
+/// The blocked trust path is a directory where the trust database belongs, so
+/// the store reports an invalid state instead of the file-write I/O failure a
+/// TSV document produced; the rollback contract is unchanged.
 #[test]
 fn sandbox_setup_rolls_back_config_when_trust_persistence_fails() {
     let (env, home) = test_env("sandbox-setup-trust-rollback");
@@ -897,7 +901,7 @@ fn sandbox_setup_rolls_back_config_when_trust_persistence_fails() {
     let original =
         "version = 25\n[permissions]\nsandbox = \"policy-only\"\napproval_policy = \"ask\"\n";
     fs::write(&config_path, original).unwrap();
-    fs::create_dir(config_root.join("project-trust.tsv")).unwrap();
+    fs::create_dir(config_root.join("project-trust.sqlite")).unwrap();
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
@@ -921,7 +925,7 @@ fn sandbox_setup_rolls_back_config_when_trust_persistence_fails() {
     ))
     .unwrap_err();
 
-    assert_eq!(error.kind(), crate::error::MezErrorKind::Io);
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
     assert_eq!(fs::read_to_string(&config_path).unwrap(), original);
     assert!(stdout.is_empty());
     assert!(stderr.is_empty());
@@ -1087,7 +1091,7 @@ fn sandbox_profile_import_requires_confirmation_and_uses_local_root() {
     assert!(config.contains(&local_root), "{config}");
     assert!(config.contains("write_scopes = []"), "{config}");
     assert!(!config.contains("toolchains"), "{config}");
-    assert!(!home.join(".config/mezzanine/project-trust.tsv").exists());
+    assert!(!home.join(".config/mezzanine/project-trust.sqlite").exists());
     assert!(stderr.is_empty());
 
     let _ = fs::remove_dir_all(home);

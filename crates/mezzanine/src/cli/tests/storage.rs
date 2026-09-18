@@ -306,3 +306,46 @@ fn storage_export_history_prints_both_scopes() {
     assert!(export.contains("exported prompt"), "{export}");
     assert!(export.contains("help"), "{export}");
 }
+
+/// Verifies `mez storage export project-trust` prints the trust database rows
+/// in the legacy TSV shape below the configured root.
+#[test]
+fn storage_export_project_trust_prints_legacy_rows() {
+    let (env, _home) = test_env("storage-export-trust");
+    let paths = env.config_paths().unwrap();
+    let path = crate::security::project::default_trust_database_path(paths.root());
+    let project = paths.root().join("export-project");
+    std::fs::create_dir_all(&project).unwrap();
+    crate::security::project::ProjectTrustStore::update_file(&path, |store| {
+        store.decide_at(
+            project.clone(),
+            crate::security::project::TrustDecision::Trusted,
+            None,
+            100,
+        )
+    })
+    .unwrap();
+
+    let mut stderr = Vec::new();
+    let mut stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "storage".to_string(),
+            "export".to_string(),
+            "project-trust".to_string(),
+        ],
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    let export = String::from_utf8(stdout).unwrap();
+    assert!(
+        export.starts_with("# Mezzanine project trust database v1"),
+        "{export}"
+    );
+    assert!(export.contains("export-project"), "{export}");
+    assert!(export.contains("trusted"), "{export}");
+}

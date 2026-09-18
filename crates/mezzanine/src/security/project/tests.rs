@@ -484,6 +484,216 @@ fn trust_database_serialized_updates_preserve_existing_records() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies the legacy TSV document is imported once, keeps its records and
+/// revision, and still filters outdated version records exactly as before.
+#[test]
+fn trust_database_imports_legacy_tsv_once() {
+    use sha2::{Digest, Sha256};
+
+    let root = temp_root("trust-sqlite-import");
+    let project = root.join("repo");
+    fs::create_dir(&project).unwrap();
+    fs::create_dir(project.join(".git")).unwrap();
+    let config_root = root.join("config");
+    let path = default_trust_database_path(&config_root);
+    let legacy_path = path.with_file_name(super::sqlite::LEGACY_TRUST_FILE_NAME);
+
+    let mut legacy = ProjectTrustStore::default();
+    legacy
+        .decide_at(project.clone(), TrustDecision::Trusted, None, 100)
+        .unwrap();
+    let mut outdated = legacy.get(&project).unwrap().clone();
+    outdated.project_root = root.join("outdated-repo");
+    outdated.configuration_schema_version = 0;
+    legacy
+        .records
+        .insert(outdated.project_root.clone(), outdated);
+
+    let mut bytes = String::from(super::sqlite::LEGACY_TRUST_HEADER);
+    bytes.push('\n');
+    for record in legacy.records.values() {
+        bytes.push_str(&record.to_line());
+        bytes.push('\n');
+    }
+    fs::create_dir_all(&config_root).unwrap();
+    fs::write(&legacy_path, &bytes).unwrap();
+
+    let snapshot = ProjectTrustStore::load_snapshot_from_file(&path).unwrap();
+    assert_eq!(
+        snapshot.revision,
+        super::ProjectTrustRevision::Sha256(
+            Sha256::digest(bytes.as_bytes())
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect()
+        ),
+        "a legacy document keeps the revision of its exact bytes"
+    );
+    assert_eq!(snapshot.store.records.len(), 2);
+    assert!(!path.exists(), "a read must not create the database");
+    assert!(snapshot.store.get_for_project(&project, None).is_some());
+    assert!(
+        snapshot
+            .store
+            .get_for_project(&root.join("outdated-repo"), None)
+            .is_none(),
+        "an outdated configuration schema version stays filtered"
+    );
+
+    let updated = ProjectTrustStore::update_file(&path, |store| {
+        store.decide_at(root.join("third"), TrustDecision::Rejected, None, 101)
+    })
+    .unwrap();
+    assert!(path.exists());
+    assert_eq!(fs::read(&legacy_path).unwrap(), bytes.as_bytes());
+    assert_eq!(updated.store.records.len(), 3);
+    let loaded = ProjectTrustStore::load_from_file(&path).unwrap();
+    assert_eq!(loaded.records.len(), 3);
+    assert_eq!(
+        loaded.get(&root.join("third")).unwrap().state,
+        TrustDecision::Rejected
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a trust write keeps its own database private and never creates or
+/// migrates another store's files.
+#[test]
+fn trust_database_write_stays_within_its_own_store() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = temp_root("trust-sqlite-boundary");
+    let project = root.join("repo");
+    fs::create_dir(&project).unwrap();
+    let config_root = root.join("config");
+    let path = default_trust_database_path(&config_root);
+    ProjectTrustStore::update_file(&path, |store| {
+        store.decide_at(project.clone(), TrustDecision::Trusted, None, 100)
+    })
+    .unwrap();
+
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o077,
+        0,
+        "the database is private"
+    );
+    assert_eq!(
+        fs::metadata(&config_root).unwrap().permissions().mode() & 0o077,
+        0,
+        "the store directory is private"
+    );
+    for other in [
+        "project-trust.tsv",
+        ".project-trust.sqlite.lock",
+        "sessions.sqlite",
+        "history.sqlite",
+        "session-reservations.sqlite",
+        "assignments.sqlite",
+    ] {
+        assert!(
+            !config_root.join(other).exists(),
+            "a trust write must not create {other}"
+        );
+    }
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a symlinked database path fails closed for reads and writes alike.
+#[test]
+fn trust_database_rejects_symlinked_paths() {
+    use std::os::unix::fs::symlink;
+
+    let root = temp_root("trust-sqlite-symlink");
+    let config_root = root.join("config");
+    fs::create_dir_all(&config_root).unwrap();
+    let path = default_trust_database_path(&config_root);
+    symlink(root.join("missing-target"), &path).unwrap();
+
+    assert!(ProjectTrustStore::load_from_file(&path).is_err());
+    assert!(
+        ProjectTrustStore::update_file(&path, |_| Ok(())).is_err(),
+        "a symlinked database path must fail closed"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies independent writers preserve each other's records through the
+/// database transactions.
+#[test]
+fn trust_database_concurrent_updates_preserve_each_others_records() {
+    let root = temp_root("trust-sqlite-concurrent");
+    let config_root = root.join("config");
+    let path = default_trust_database_path(&config_root);
+    let mut handles = Vec::new();
+    for index in 0..8u64 {
+        let path = path.clone();
+        let project = root.join(format!("project-{index}"));
+        fs::create_dir_all(&project).unwrap();
+        handles.push(std::thread::spawn(move || {
+            ProjectTrustStore::update_file(&path, |store| {
+                store.decide_at(project, TrustDecision::Trusted, None, 100 + index)
+            })
+            .map(|_| ())
+        }));
+    }
+    for handle in handles {
+        handle.join().unwrap().unwrap();
+    }
+    assert_eq!(
+        ProjectTrustStore::load_from_file(&path)
+            .unwrap()
+            .records
+            .len(),
+        8
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies the export renders the legacy TSV shape without creating or
+/// migrating the store.
+#[test]
+fn trust_database_export_renders_legacy_shape_without_creating_the_store() {
+    let root = temp_root("trust-sqlite-export");
+    let project = root.join("repo");
+    fs::create_dir(&project).unwrap();
+    let config_root = root.join("config");
+    let path = default_trust_database_path(&config_root);
+
+    assert!(
+        ProjectTrustStore::export_database_tsv_read_only(&path)
+            .unwrap()
+            .is_none(),
+        "an absent store reports nothing to export"
+    );
+    assert!(!path.exists() && !config_root.exists());
+
+    ProjectTrustStore::update_file(&path, |store| {
+        store.decide_at(project.clone(), TrustDecision::Rejected, None, 100)
+    })
+    .unwrap();
+    let export = ProjectTrustStore::export_database_tsv_read_only(&path)
+        .unwrap()
+        .unwrap();
+    assert!(export.starts_with(super::sqlite::LEGACY_TRUST_HEADER));
+    let stored_line = ProjectTrustStore::load_from_file(&path)
+        .unwrap()
+        .records()
+        .next()
+        .unwrap()
+        .to_line();
+    assert!(export.contains(&stored_line));
+    assert!(
+        !config_root
+            .join(super::sqlite::LEGACY_TRUST_FILE_NAME)
+            .exists(),
+        "an export must not recreate the legacy document"
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies the deepest stored trust decision governs every nested repository
 /// state instead of a broad trusted ancestor shadowing a deeper withholding
 /// decision.
