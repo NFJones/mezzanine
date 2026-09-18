@@ -2,6 +2,47 @@
 
 use super::*;
 
+#[test]
+/// Verifies the product's classification reports an out-of-scope shell read.
+///
+/// The product planner passes `DEFAULT_COMMAND_SHELL_CLASSIFICATION` into the
+/// classification-aware enforcer entry point, exactly as this test calls it, and
+/// turns a reported violation into a repairable `invalid_args` planning failure.
+/// Pinning the combination separates "the planner never reports a scope
+/// violation" from "the runner never consults the planner's report".
+fn subagent_scope_violation_reports_relative_escape_under_default_classification() {
+    let scope = mez_agent::SubagentScopeDeclaration {
+        cooperation_mode: mez_agent::CooperationMode::OwnedWrite,
+        approval_provenance: mez_agent::SubagentApprovalProvenance::Requested,
+        current_directory: "/repo".to_string(),
+        read_scopes: vec!["/repo/src".to_string()],
+        write_scopes: vec!["/repo/docs".to_string()],
+        permission_preset: None,
+    };
+    let action = AgentAction {
+        id: "a1".to_string(),
+        payload: AgentActionPayload::ShellCommand {
+            summary: "Inspect the neighbouring file".to_string(),
+            command: "cat ../secret.txt".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    let violation = mez_agent::subagent_action_scope_violation(
+        &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
+        &scope,
+        &action,
+        "cat ../secret.txt",
+        mez_agent::permissions::DEFAULT_COMMAND_SHELL_CLASSIFICATION,
+    )
+    .expect("the default classification must classify a plain shell read");
+    assert!(
+        violation.is_some(),
+        "a relative escape must be reported as a scope violation: {violation:?}"
+    );
+}
+
 #[tokio::test]
 /// Verifies malformed failure-summary MAAP responses get one repair attempt.
 ///
