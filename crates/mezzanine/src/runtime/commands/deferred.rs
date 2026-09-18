@@ -31,7 +31,7 @@ use crate::runtime::{
 /// [`super::disposition::RuntimeAgentSlashCommandDisposition::Deferred`], which
 /// the guard test below pins.
 pub(crate) const RUNTIME_AGENT_OFF_ACTOR_COMMANDS: &[&str] =
-    &["list-skills", "list-macros", "auth-status"];
+    &["list-skills", "list-macros", "auth-status", "issue"];
 
 /// Prepared-input family one moved slash command consumes off the actor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +40,8 @@ pub(crate) enum RuntimeAgentCommandFamily {
     Catalog,
     /// Provider credential status reads.
     AuthStatus,
+    /// Local project issue reads.
+    IssueStore,
 }
 
 /// Returns the prepared-input family for one moved command.
@@ -52,6 +54,7 @@ pub(crate) fn off_actor_command_family(command: &str) -> Option<RuntimeAgentComm
     match command {
         "list-skills" | "list-macros" => Some(RuntimeAgentCommandFamily::Catalog),
         "auth-status" => Some(RuntimeAgentCommandFamily::AuthStatus),
+        "issue" => Some(RuntimeAgentCommandFamily::IssueStore),
         _ => None,
     }
 }
@@ -69,6 +72,28 @@ impl RuntimeSessionService {
     /// Returns the current deferred slash-command claim generation for a pane.
     pub(crate) fn agent_command_claim_generation(&self, pane_id: &str) -> u64 {
         self.agent.agent_command_claim_generation(pane_id)
+    }
+
+    /// Reports whether one prompt command may run through the deferred lane.
+    ///
+    /// The dispatcher owns this decision because part of it depends on live
+    /// service state: an `/issue` read needs the store enabled and a resolvable
+    /// database, and its mutating forms stay inline because they also invalidate
+    /// prompt selector candidates on the actor. A command this refuses keeps the
+    /// inline path, so the user still receives a synchronous body instead of an
+    /// acknowledgement that nothing ever settles.
+    pub(crate) fn should_defer_agent_shell_command(&self, command: &str, input: &str) -> bool {
+        if !RUNTIME_AGENT_OFF_ACTOR_COMMANDS.contains(&command) {
+            return false;
+        }
+        match command {
+            "issue" => {
+                super::issues::runtime_issues_enabled(self)
+                    && self.integration.config_root().is_some()
+                    && super::issues::runtime_agent_issue_args_are_read_only(input)
+            }
+            _ => true,
+        }
     }
 
     /// Queues one deferred slash command for off-actor execution.
@@ -128,6 +153,9 @@ impl RuntimeSessionService {
         if !visible {
             return Ok(None);
         }
+        if !self.should_defer_agent_shell_command(command, input) {
+            return Ok(None);
+        }
         let Some(family) = off_actor_command_family(command) else {
             return Ok(None);
         };
@@ -150,6 +178,24 @@ impl RuntimeSessionService {
                     .collect(),
                 auth_store: self.auth_store().cloned(),
             },
+            RuntimeAgentCommandFamily::IssueStore => {
+                let Some(config_root) = self
+                    .integration
+                    .config_root()
+                    .map(std::path::Path::to_path_buf)
+                else {
+                    return Ok(None);
+                };
+                let working_directory = self
+                    .pane_current_working_directory(pane_id)
+                    .unwrap_or_else(|| config_root.clone());
+                RuntimeAgentCommandPrepared::IssueStore {
+                    database_path: super::issues::runtime_issue_database_path(self, &config_root),
+                    project: crate::storage::issues::project_key_for_working_directory(
+                        working_directory,
+                    ),
+                }
+            }
         };
         Ok(Some(RuntimeAgentCommandAsyncWork {
             pane_id: pane_id.to_string(),
@@ -202,6 +248,24 @@ impl RuntimeSessionService {
             } => {
                 match super::status::runtime_agent_auth_status_body(providers, auth_store.as_ref())
                 {
+                    Ok(body) => body,
+                    Err(error) => {
+                        return RuntimeAgentCommandAsyncOutcome::Failed {
+                            message: error.message().to_string(),
+                            kind: error.kind(),
+                        };
+                    }
+                }
+            }
+            RuntimeAgentCommandPrepared::IssueStore {
+                database_path,
+                project,
+            } => {
+                match super::issues::runtime_agent_issue_read_body(
+                    database_path.clone(),
+                    project,
+                    &work.input,
+                ) {
                     Ok(body) => body,
                     Err(error) => {
                         return RuntimeAgentCommandAsyncOutcome::Failed {

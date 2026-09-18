@@ -468,12 +468,14 @@ impl RuntimeSessionService {
             }
         };
         if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) = outcome.as_ref()
-            && super::deferred::RUNTIME_AGENT_OFF_ACTOR_COMMANDS.contains(&command.as_str())
             // Only a primary-input ingress may defer: its display is delivered
             // later through the prompt/step channel this lane settles into. A
             // control call answers with the body it asked for, so it keeps the
             // inline read rather than acknowledging work it cannot deliver.
             && origin.is_authenticated_primary_input()
+            // The deferred decision is service-state aware: a command whose read
+            // cannot complete off the actor keeps its synchronous body.
+            && self.should_defer_agent_shell_command(command, input)
         {
             return self.dispatch_deferred_agent_shell_command(
                 primary_client_id,

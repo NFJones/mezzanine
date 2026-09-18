@@ -1649,3 +1649,44 @@ fn runtime_agent_shell_planning_failure_hides_command_by_default() {
     assert!(!pane_text.contains("$ ls"), "{pane_text}");
     service.terminate_all_pane_processes().unwrap();
 }
+
+/// Verifies `/issue` reads run off the actor while its mutating forms stay inline.
+///
+/// `query` and `show` only need the issue database, so they acknowledge and
+/// settle through the deferred lane; `add`, `edit`, `update` and `delete` also
+/// invalidate prompt selector candidates on the actor, so they keep the
+/// synchronous path and their response body.
+#[test]
+fn runtime_agent_shell_issue_reads_defer_and_mutations_stay_inline() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_config_root(temp_root("runtime-issue-deferred-lane"));
+
+    let added = service
+        .execute_agent_shell_command(&primary, "/issue add --title \"Deferred read lane\"")
+        .unwrap();
+    assert!(added.contains("issue added id="), "{added}");
+    assert!(
+        service.take_pending_deferred_agent_commands().is_empty(),
+        "a mutating /issue must keep the inline path"
+    );
+
+    let query = service
+        .execute_agent_shell_command(&primary, "/issue query")
+        .unwrap();
+    assert!(
+        query.contains(r#""body":null"#),
+        "the deferred lane acknowledges /issue query before its store read: {query}"
+    );
+    let body = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /issue read applies its rows");
+    assert!(body.contains("Deferred read lane"), "{body}");
+}

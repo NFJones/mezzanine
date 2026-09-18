@@ -221,6 +221,18 @@ pub(crate) enum RuntimeAgentCommandPrepared {
         /// Credential store handle, or `None` when no store is configured.
         auth_store: Option<crate::security::auth::AuthStore>,
     },
+    /// Reads issue records from the captured local issue store.
+    ///
+    /// `/issue show` and `/issue query` open the project issue database, which is
+    /// the synchronous SQLite work the inline path used to perform inside the
+    /// actor request; the mutating sub-commands stay inline because they also
+    /// invalidate prompt selector candidates on the actor.
+    IssueStore {
+        /// Resolved issue database location captured from live config.
+        database_path: crate::storage::issues::IssueDatabasePath,
+        /// Project key the read is scoped to.
+        project: String,
+    },
 }
 
 /// Result a worker prepares for the actor to apply.

@@ -525,6 +525,60 @@ pub(crate) fn runtime_issue_database_path(
     crate::storage::issues::issue_database_location(config_root, configured.as_deref())
 }
 
+/// Reports whether one `/issue` invocation is a read-only sub-command.
+///
+/// `add`, `edit`, `update`, and `delete` mutate the store and invalidate prompt
+/// selector candidates on the actor, so only the read forms may move off it.
+pub(crate) fn runtime_agent_issue_args_are_read_only(input: &str) -> bool {
+    let Ok(Some(invocation)) = parse_slash_command(input) else {
+        return false;
+    };
+    matches!(
+        parse_issue_args(invocation.args.trim()),
+        Ok(RuntimeIssueArgs::Show { .. } | RuntimeIssueArgs::Query { .. })
+    )
+}
+
+/// Runs one read-only `/issue` sub-command from owned inputs.
+///
+/// The deferred executor passes the database location and project key the actor
+/// captured; both lanes share the record formatters, so a deferred read renders
+/// the same rows the inline lane rendered for the same store state.
+pub(crate) fn runtime_agent_issue_read_body(
+    database_path: crate::storage::issues::IssueDatabasePath,
+    project: &str,
+    input: &str,
+) -> Result<String> {
+    let invocation = parse_slash_command(input)?
+        .ok_or_else(|| MezError::invalid_args("issue command must be a slash command"))?;
+    let store = crate::storage::issues::IssueStore::from_database_path(database_path);
+    match parse_issue_args(invocation.args.trim())? {
+        RuntimeIssueArgs::Show { id } => {
+            let record = store.get_issue(project.to_string(), id)?;
+            Ok(runtime_issue_record_detail_display(record.as_ref()))
+        }
+        RuntimeIssueArgs::Query {
+            kind,
+            state,
+            text,
+            limit,
+        } => {
+            let query = mez_agent::issues::IssueQuery::new_with_state(
+                project.to_string(),
+                kind,
+                state.or(Some(mez_agent::issues::IssueState::Open)),
+                text,
+                limit,
+            )?;
+            let records = store.query_issues(&query)?;
+            Ok(runtime_issue_records_display(&records))
+        }
+        _ => Err(MezError::invalid_args(
+            "deferred issue execution requires a read-only sub-command",
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{RuntimeIssueArgs, parse_issue_args};
