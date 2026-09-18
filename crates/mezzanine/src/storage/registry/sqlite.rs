@@ -69,7 +69,7 @@ pub(super) fn list(registry: &SessionRegistry) -> Result<Vec<SessionRecord>> {
                     legacy_records(registry)?
                 }
             }
-            None => Vec::new(),
+            None => legacy_records(registry)?,
         }
     } else {
         legacy_records(registry)?
@@ -115,7 +115,7 @@ fn create_schema(connection: &mut Connection) -> Result<()> {
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(database_error)?;
     transaction
-        .execute_batch("CREATE TABLE sessions (record_version INTEGER NOT NULL, control_version INTEGER NOT NULL, session_id TEXT PRIMARY KEY, name TEXT NOT NULL, state TEXT NOT NULL, socket_path TEXT NOT NULL, created_at_unix_seconds INTEGER NOT NULL, last_attach_at_unix_seconds INTEGER, window_count INTEGER NOT NULL, attached_client_count INTEGER NOT NULL, attached_primary_count INTEGER NOT NULL, max_attached_primaries INTEGER NOT NULL, accepts_primary INTEGER NOT NULL, layout_owner_client_id TEXT, authoritative_columns INTEGER NOT NULL, authoritative_rows INTEGER NOT NULL); CREATE INDEX sessions_by_state ON sessions(state); CREATE INDEX sessions_by_last_attach ON sessions(last_attach_at_unix_seconds DESC);")
+        .execute_batch("CREATE TABLE sessions (record_version INTEGER NOT NULL, control_version INTEGER NOT NULL, session_id TEXT PRIMARY KEY, name TEXT NOT NULL, state TEXT NOT NULL, socket_path TEXT NOT NULL, created_at_unix_seconds INTEGER NOT NULL, last_attach_at_unix_seconds INTEGER, window_count INTEGER NOT NULL, attached_client_count INTEGER NOT NULL, attached_primary_count INTEGER NOT NULL, max_attached_primaries INTEGER NOT NULL, accepts_primary INTEGER NOT NULL, layout_owner_client_id TEXT, authoritative_columns INTEGER NOT NULL, authoritative_rows INTEGER NOT NULL, CHECK (created_at_unix_seconds >= 0 AND window_count >= 0 AND attached_client_count >= 0 AND attached_primary_count >= 0 AND max_attached_primaries >= 0 AND authoritative_columns >= 0 AND authoritative_rows >= 0)); CREATE INDEX sessions_by_state ON sessions(state); CREATE INDEX sessions_by_last_attach ON sessions(last_attach_at_unix_seconds DESC);")
         .map_err(database_error)?;
     set_schema_version(&transaction, REGISTRY_SCHEMA_VERSION)?;
     transaction.commit().map_err(database_error)

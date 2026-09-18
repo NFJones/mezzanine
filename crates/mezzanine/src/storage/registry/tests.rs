@@ -185,6 +185,64 @@ fn registry_imports_the_legacy_flat_file_once() {
         registry.list().unwrap(),
         vec![record("$1"), record("$2"), record("$3"), record("$4")]
     );
+    assert_eq!(
+        fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+        0o700,
+        "the registry directory stays private"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a rejected legacy record leaves the flat file authoritative.
+///
+/// The import runs in one transaction, so a record that decodes but fails
+/// validation must fail the mutation, leave the flat file byte-identical, and
+/// keep it as the readable source instead of publishing a partial registry.
+#[test]
+fn registry_failed_import_keeps_the_legacy_flat_file_authoritative() {
+    let root = test_root("sqlite-import-failure");
+    let _ = fs::remove_dir_all(&root);
+    let registry = SessionRegistry::new(root.clone(), effective_uid_for_tests());
+    let mut fields = record("$1")
+        .encode()
+        .unwrap()
+        .split('\t')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    fields[5] = "relative.sock".to_string();
+    let malformed = format!("{}\n", fields.join("\t"));
+    drop(registry.acquire_exclusive_lock().unwrap());
+    fs::write(registry.registry_file(), &malformed).unwrap();
+
+    assert!(
+        registry.upsert(record("$2")).is_err(),
+        "a record that fails validation must fail the import"
+    );
+    assert!(super::sqlite::database_path(&registry).exists());
+    assert_eq!(
+        fs::read_to_string(registry.registry_file()).unwrap(),
+        malformed,
+        "the legacy flat file is never modified"
+    );
+    assert!(
+        registry.list().is_err(),
+        "the flat file stays authoritative and still surfaces its malformed content"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a reader never waits for the exclusive registry write lock.
+#[test]
+fn registry_reader_ignores_the_exclusive_write_lock() {
+    let root = test_root("sqlite-reader-lock");
+    let _ = fs::remove_dir_all(&root);
+    let registry = SessionRegistry::new(root.clone(), effective_uid_for_tests());
+    registry.upsert(record("$1")).unwrap();
+
+    let lock = registry.acquire_exclusive_lock().unwrap();
+    assert_eq!(registry.list().unwrap(), vec![record("$1")]);
+    assert_eq!(registry.get("$1").unwrap(), Some(record("$1")));
+    drop(lock);
     let _ = fs::remove_dir_all(root);
 }
 
