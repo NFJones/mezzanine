@@ -168,7 +168,12 @@ fn provider_native_request_projection(
         .iter()
         .map(canonical_json_bytes)
         .collect::<ProviderRequestAssemblyResult<Vec<_>>>()?;
-    let envelope = canonical_json_bytes(&body)?;
+    // The projection keeps the same-epoch envelope-drift check to material that
+    // actually affects provider caching; operational controls are excluded from
+    // cache identity and must not report drift on their own.
+    let envelope = canonical_json_bytes(
+        &crate::openai_cache::openai_cache_identity_control_projection(&body),
+    )?;
     Ok(ProviderNativeRequestProjection {
         envelope,
         envelope_value: body,
@@ -223,9 +228,11 @@ fn provider_native_epoch_identity(
         response_format_sha256: sha256_hex(&canonical_json_bytes(&response_format)?),
         tool_schema_sha256: sha256_hex(&canonical_json_bytes(&tools)?),
         tool_choice_sha256: sha256_hex(&canonical_json_bytes(&tool_choice)?),
-        request_controls_sha256: sha256_hex(&canonical_json_bytes(&Value::Object(
-            controls.clone(),
-        ))?),
+        request_controls_sha256: sha256_hex(&canonical_json_bytes(
+            &crate::openai_cache::openai_cache_identity_control_projection(&Value::Object(
+                controls.clone(),
+            )),
+        )?),
         api_shape: api_shape.to_string(),
         cache_lineage: request.prompt_cache_lineage_id.clone(),
         compaction_generation_sha256: sha256_hex(

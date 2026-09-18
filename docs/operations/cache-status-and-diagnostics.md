@@ -109,8 +109,11 @@ semantics can be tested without treating its credentials as REST API keys.
 Changes to the model, provider routing namespace, prompt-cache lineage, stream
 shape, compaction epoch, or an explicitly exceptional interaction start a new
 cache epoch. Other changes to cache-affecting instructions, tools, tool choice,
-response format, reasoning controls, or request controls fail closed before an
-ordinary continuation is sent.
+response format, or request controls fail closed before an ordinary continuation
+is sent. Operational controls - reasoning effort, service tier, and verbosity -
+are excluded from cache identity: the emitted body keeps carrying them, but a
+change to only those never starts an epoch or reports a continuity divergence by
+itself.
 
 ## Escalate a diagnostic safely
 

@@ -142,6 +142,60 @@ fn provider_request_epoch(
     }
 }
 
+/// Operational controls excluded from prompt-cache identity material.
+///
+/// `reasoning`, `service_tier`, `text.verbosity`, and their provider-native
+/// dialect spellings change provider behaviour at request time but not one byte
+/// of the model-visible prefix or the provider-side cache key, so a change to
+/// only these controls must neither rotate Mezzanine's local epoch nor report a
+/// continuity divergence. They stay wire-level parameters - the emitted body
+/// keeps them - and provider-side truth stays observable through usage counters.
+/// New operational controls belong in this list instead of silently becoming
+/// identity material.
+const CACHE_IDENTITY_EXCLUDED_CONTROL_PATHS: &[&[&str]] = &[
+    &["reasoning"],
+    &["service_tier"],
+    &["text", "verbosity"],
+    &["output_config", "effort"],
+    &["output_config", "verbosity"],
+    &["reasoning_effort"],
+    &["verbosity"],
+];
+
+/// Returns one request-control shape reduced to the fields that define
+/// prompt-cache identity.
+pub(crate) fn openai_cache_identity_control_projection(
+    controls: &serde_json::Value,
+) -> serde_json::Value {
+    let mut projection = controls.clone();
+    for path in CACHE_IDENTITY_EXCLUDED_CONTROL_PATHS {
+        remove_cache_identity_control_path(&mut projection, path);
+    }
+    projection
+}
+
+/// Removes one excluded control path, pruning objects that become empty so an
+/// excluded child cannot leave an empty parent behind in the identity material.
+fn remove_cache_identity_control_path(value: &mut serde_json::Value, path: &[&str]) {
+    let Some((head, rest)) = path.split_first() else {
+        return;
+    };
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    if rest.is_empty() {
+        object.remove(*head);
+        return;
+    }
+    let Some(child) = object.get_mut(*head) else {
+        return;
+    };
+    remove_cache_identity_control_path(child, rest);
+    if child.as_object().is_some_and(|child| child.is_empty()) {
+        object.remove(*head);
+    }
+}
+
 /// Builds the exact non-model-visible identity for one OpenAI Responses epoch.
 ///
 /// Every field is derived from canonical provider-bound state. A difference
@@ -177,7 +231,9 @@ fn openai_context_epoch_identity(
         response_format_sha256: canonical_json_sha256(&response_format)?,
         tool_schema_sha256: canonical_json_sha256(&tools)?,
         tool_choice_sha256: canonical_json_sha256(&tool_choice)?,
-        request_controls_sha256: canonical_json_sha256(&request_controls)?,
+        request_controls_sha256: canonical_json_sha256(&openai_cache_identity_control_projection(
+            &request_controls,
+        ))?,
         api_shape: format!("openai-responses;stream={stream}"),
         cache_lineage: request.prompt_cache_lineage_id.clone(),
         compaction_generation_sha256: sha256_hex(
@@ -608,6 +664,184 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// Verifies the cache-identity projection drops exactly the operational
+    /// controls and nothing else.
+    ///
+    /// A new operational control must be added to the projection list instead of
+    /// silently becoming identity material, so the exclusion set is asserted
+    /// directly for both the OpenAI shape and the provider-native spellings, and
+    /// an emptied parent object is expected to disappear rather than leave a
+    /// residual empty node in the hashed material.
+    #[test]
+    fn openai_cache_identity_control_projection_excludes_operational_controls() {
+        let controls = serde_json::json!({
+            "model": "gpt-test",
+            "stream": true,
+            "reasoning": { "effort": "high" },
+            "service_tier": "priority",
+            "text": { "format": { "type": "json_object" }, "verbosity": "low" },
+            "output_config": { "effort": "high" },
+            "reasoning_effort": "high",
+            "verbosity": "low",
+        });
+        let projection = openai_cache_identity_control_projection(&controls);
+        assert_eq!(
+            projection,
+            serde_json::json!({
+                "model": "gpt-test",
+                "stream": true,
+                "text": { "format": { "type": "json_object" } },
+            })
+        );
+
+        // An excluded leaf must not leave an empty parent behind.
+        let only_verbosity = serde_json::json!({ "text": { "verbosity": "low" } });
+        assert_eq!(
+            openai_cache_identity_control_projection(&only_verbosity),
+            serde_json::json!({})
+        );
+    }
+
+    /// Verifies an operational control change keeps the cache epoch, the
+    /// rendered prefix, and the derived cache key.
+    ///
+    /// Auto-sizing can select a different reasoning effort or latency preference
+    /// between turns. Those are wire parameters: the emitted body still carries
+    /// them, but they must not rotate Mezzanine's local epoch nor appear as a
+    /// request-control continuity divergence.
+    #[test]
+    fn openai_operational_controls_keep_the_cache_epoch_and_envelope() {
+        let messages = vec![
+            ModelMessage {
+                role: ModelMessageRole::System,
+                source: ContextSourceKind::System,
+                placement: crate::ContextPlacement::StablePrefix,
+                content: "stable instructions".to_string(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::User,
+                source: ContextSourceKind::UserInstruction,
+                placement: crate::ContextPlacement::ConversationAppend,
+                content: "inspect the cache".to_string(),
+            },
+        ];
+        let mut medium = request_chain_fixture(messages.clone());
+        prepare_openai_request_prefix_extension(&mut medium, None).unwrap();
+
+        let mut high = request_chain_fixture(messages);
+        high.reasoning_effort = Some("high".to_string());
+        high.latency_preference = Some("fast".to_string());
+        prepare_openai_request_prefix_extension(&mut high, Some(&medium)).unwrap();
+
+        let medium_body: serde_json::Value =
+            serde_json::from_str(&crate::openai_responses_request_body(&medium).unwrap()).unwrap();
+        let high_body: serde_json::Value =
+            serde_json::from_str(&crate::openai_responses_request_body(&high).unwrap()).unwrap();
+        assert_eq!(high_body["reasoning"]["effort"], "high");
+        assert_eq!(high_body["service_tier"], "priority");
+        assert_eq!(medium_body["instructions"], high_body["instructions"]);
+        assert_eq!(medium_body["input"], high_body["input"]);
+        assert_eq!(
+            medium_body["prompt_cache_key"], high_body["prompt_cache_key"],
+            "operational controls must not change the derived cache key"
+        );
+        assert_eq!(high.messages.provider_continuity_warning(), None);
+        assert_eq!(
+            medium
+                .messages
+                .provider_request_epoch()
+                .unwrap()
+                .context_epoch,
+            high.messages
+                .provider_request_epoch()
+                .unwrap()
+                .context_epoch,
+            "operational controls must not rotate the local cache epoch"
+        );
+
+        let medium_diagnostics = openai_prompt_cache_diagnostics_for_request(&medium).unwrap();
+        let high_diagnostics = openai_prompt_cache_diagnostics_for_request(&high).unwrap();
+        let continuity = crate::compare_openai_request_continuity(
+            &medium_diagnostics.continuity_snapshot,
+            &high_diagnostics.continuity_snapshot,
+        );
+        assert!(continuity.cache_envelope_unchanged, "{continuity:#?}");
+        assert!(continuity.request_prefix_append_only, "{continuity:#?}");
+        assert_eq!(continuity.category, "identical", "{continuity:#?}");
+    }
+
+    /// Verifies a native provider effort change does not warn about a changed
+    /// canonical envelope or rotate the epoch.
+    ///
+    /// Anthropic spells the control `output_config.effort` and DeepSeek spells it
+    /// `reasoning_effort`; both are operational, so the same-epoch drift check
+    /// must ignore them while still catching genuinely cache-affecting changes.
+    #[test]
+    fn native_operational_effort_change_keeps_the_cache_epoch() {
+        use crate::provider_continuity::{
+            ProviderNativeRequestContinuity, prepare_provider_native_request_prefix_extension,
+        };
+        for (low_body, high_body) in [
+            (
+                r#"{"model":"m","messages":[],"output_config":{"effort":"low"}}"#,
+                r#"{"model":"m","messages":[],"output_config":{"effort":"high"}}"#,
+            ),
+            (
+                r#"{"model":"m","messages":[],"reasoning_effort":"low"}"#,
+                r#"{"model":"m","messages":[],"reasoning_effort":"high"}"#,
+            ),
+        ] {
+            let mut previous = request_chain_fixture(Vec::new());
+            prepare_provider_native_request_prefix_extension(
+                &mut previous,
+                None,
+                ProviderNativeRequestContinuity {
+                    cache_namespace: "test",
+                    provider_label: "test",
+                    current_api_shape: "test",
+                    previous_api_shape: "test",
+                    input_field: "messages",
+                    current_body: low_body,
+                    previous_body: None,
+                },
+            )
+            .unwrap();
+            let mut current = previous.clone();
+            prepare_provider_native_request_prefix_extension(
+                &mut current,
+                Some(&previous),
+                ProviderNativeRequestContinuity {
+                    cache_namespace: "test",
+                    provider_label: "test",
+                    current_api_shape: "test",
+                    previous_api_shape: "test",
+                    input_field: "messages",
+                    current_body: high_body,
+                    previous_body: Some(low_body),
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                current.messages.provider_continuity_warning(),
+                None,
+                "an effort-only change must not warn: {low_body} -> {high_body}"
+            );
+            assert_eq!(
+                previous
+                    .messages
+                    .provider_request_epoch()
+                    .unwrap()
+                    .context_epoch,
+                current
+                    .messages
+                    .provider_request_epoch()
+                    .unwrap()
+                    .context_epoch,
+                "an effort-only change must not rotate the epoch"
+            );
+        }
     }
 
     /// Verifies invalid controls on a prior Responses baseline are advisory,

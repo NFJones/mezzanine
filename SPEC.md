@@ -5432,6 +5432,9 @@ after unsupported local profile options are rejected. Supported generation-aware
 cache controls, including `prompt_cache_retention` and
 `prompt_cache_options.ttl`, MUST affect the emitted OpenAI Responses body and
 the provider request-shape diagnostics.
+Operational controls excluded from cache identity MUST NOT alter the
+request-control fingerprint reported by those diagnostics, and MUST NOT be
+rendered into the provider-visible prefix.
 
 The `providers.<name>.models` table MUST be a map keyed by a path-safe local
 entry identity. Each record MUST define its canonical provider-facing `id` and
