@@ -6,6 +6,39 @@ use crate::host::terminal::{
 };
 use mez_mux::layout::SplitDirection;
 
+/// Verifies the deferred agent-command family belongs to the worker-claimed
+/// side-effect families, so the drain hands it to a worker instead of retaining
+/// it for the actor.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_drains_deferred_agent_command_effects() {
+    let service = test_service();
+    let deferred_command = || RuntimeSideEffect::DispatchAgentCommand {
+        pane_id: "%1".to_string(),
+        command: "resume".to_string(),
+        input: "/resume".to_string(),
+    };
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .config(AsyncRuntimeActorConfig::default())
+        .build()
+        .unwrap();
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![deferred_command()])
+            .await
+            .unwrap();
+        assert_eq!(
+            handle.drain_runtime_side_effects(1).await.unwrap(),
+            vec![deferred_command()],
+            "the deferred command family is claimed by the worker drain"
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+    let ((), _exit) = tokio::join!(client, actor.run());
+}
+
 /// Verifies that a foreground resize signal can wake the render path without
 /// directly mutating geometry in the actor event. The attached terminal service
 /// owns the actual terminal-size read, so the signal event should only enqueue

@@ -93,6 +93,7 @@ impl AsyncRuntimeSessionActor {
                         | RuntimeSideEffect::DispatchAgentCompaction { .. }
                         | RuntimeSideEffect::DispatchAgentRemember { .. }
                         | RuntimeSideEffect::DispatchAgentSessionTitle { .. }
+                        | RuntimeSideEffect::DispatchAgentCommand { .. }
                         | RuntimeSideEffect::DispatchAgentPresentationResize { .. }
                 )
             {

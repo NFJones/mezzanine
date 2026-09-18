@@ -953,6 +953,25 @@ pub enum RuntimeSideEffect {
         /// Conversation whose display title should be generated.
         conversation_id: String,
     },
+    /// Run one runtime slash command that touches stores, files, or the network
+    /// outside the serialized actor.
+    ///
+    /// The prompt state, overlay registration, and presentation stay on the
+    /// actor: this effect only carries the command the disposition classifier
+    /// deferred, and the worker answers with an owned outcome the actor applies
+    /// exactly as the inline path would.
+    #[allow(
+        dead_code,
+        reason = "f526838b phase 2 step (b): the dispatcher emits this family once the deferred executor lands"
+    )]
+    DispatchAgentCommand {
+        /// Pane whose agent shell prompt submitted the command.
+        pane_id: String,
+        /// Canonical command name the disposition classifier deferred.
+        command: String,
+        /// Full prompt input including the command name and arguments.
+        input: String,
+    },
     /// Rebuild one resized source-backed agent presentation outside the actor.
     DispatchAgentPresentationResize {
         /// Pane whose newest coalesced target geometry should be projected.
