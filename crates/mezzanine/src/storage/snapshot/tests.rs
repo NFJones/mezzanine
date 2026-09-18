@@ -20,6 +20,7 @@ use mez_terminal::{
     TerminalStyleSpan,
 };
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use super::encoding::{PublicationFailurePhase, write_private_new_atomic_failing};
@@ -344,7 +345,7 @@ fn snapshot_repository_selects_latest_snapshot_by_session() {
     repo.write(&new).unwrap();
     repo.write(&other).unwrap();
 
-    let latest_index = super::latest_index::read(&root)
+    let latest_index = super::sqlite::read(&root)
         .unwrap()
         .expect("the write path stores an index");
 
@@ -392,7 +393,7 @@ fn snapshot_repository_updates_latest_index_without_scanning_unrelated_manifests
 
     repo.write(&new).unwrap();
 
-    let latest_index = super::latest_index::read(&root)
+    let latest_index = super::sqlite::read(&root)
         .unwrap()
         .expect("the write path stores an index");
     assert_eq!(latest_index.latest_all.as_deref(), Some("snap-new"));
@@ -403,10 +404,14 @@ fn snapshot_repository_updates_latest_index_without_scanning_unrelated_manifests
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies malformed latest-index contents trigger a full manifest recovery
-/// rebuild and leave no temporary replacement file behind.
+/// Verifies a legacy `latest.index` file from a build that predates the SQLite
+/// store is ignored rather than parsed.
+///
+/// The database owns the winners now, so a stale file cannot restore an old
+/// winner, fail a write, or leave a temporary replacement behind; leaving the
+/// file untouched keeps a rollback to the previous build working.
 #[test]
-fn snapshot_repository_recovers_malformed_latest_index_on_write() {
+fn snapshot_repository_ignores_the_legacy_latest_index_file() {
     let root = std::env::temp_dir().join(format!(
         "mez-snapshot-repo-index-recovery-{}",
         std::process::id()
@@ -427,6 +432,11 @@ fn snapshot_repository_recovers_malformed_latest_index_on_write() {
     repo.write(&new).unwrap();
 
     assert_eq!(repo.latest(None).unwrap().unwrap().id, "snap-new");
+    assert_eq!(
+        fs::read_to_string(root.join("latest.index")).unwrap(),
+        "malformed\n",
+        "the legacy file is left untouched"
+    );
     assert!(fs::read_dir(&root).unwrap().all(|entry| {
         !entry
             .unwrap()
@@ -2039,4 +2049,179 @@ fn session_restores_layout_from_snapshot_payload_and_seeds_ids() {
         .unwrap();
     assert_eq!(window_id.as_str(), "@9");
     assert_eq!(pane_id.as_str(), "%13");
+}
+
+/// Verifies a listing is served from the metadata index without opening a
+/// manifest, so listing cost no longer grows with manifest size.
+#[test]
+fn snapshot_repository_lists_from_the_metadata_index_without_reading_manifests() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-snapshot-repo-list-index-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let repo = SnapshotRepository::new(root.clone());
+    let mut first = manifest();
+    first.state.storage_ref = "snap-1.payload".to_string();
+    let mut second = manifest();
+    second.state.id = "snap-2".to_string();
+    second.state.session_id = "$2".to_string();
+    second.state.created_at = "2026-04-30T00:00:01Z".to_string();
+    second.state.storage_ref = "snap-2.payload".to_string();
+    repo.write(&first).unwrap();
+    repo.write(&second).unwrap();
+
+    for entry in fs::read_dir(&root).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|extension| extension.to_str()) == Some("manifest") {
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        }
+    }
+
+    let listed = repo.list().unwrap();
+
+    assert_eq!(
+        listed
+            .iter()
+            .map(|state| state.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["snap-1", "snap-2"],
+        "the index answers the listing in manifest order"
+    );
+    assert_eq!(listed[1].session_id, "$2");
+    assert_eq!(listed[1].name.as_deref(), Some("manual"));
+    assert!(
+        repo.inspect("snap-1").is_err(),
+        "the unreadable manifests prove the listing did not parse them"
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a manifest published without its index row - the state a crashed
+/// writer leaves behind - is repaired by the next listing instead of hidden.
+#[test]
+fn snapshot_repository_rebuilds_the_metadata_index_when_a_row_is_missing() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-snapshot-repo-index-repair-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let repo = SnapshotRepository::new(root.clone());
+    let mut orphan = manifest();
+    orphan.state.storage_ref = "snap-1.payload".to_string();
+
+    orphan.write_to_dir(&root).unwrap();
+
+    let listed = repo.list().unwrap();
+
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, "snap-1");
+    assert_eq!(
+        super::sqlite::read_metadata(&root).unwrap().unwrap().len(),
+        1,
+        "the repair stores the row it recovered"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies an index row whose manifest has already disappeared is dropped by
+/// the next listing, so the derived index cannot serve a snapshot that no
+/// longer exists.
+#[test]
+fn snapshot_repository_drops_an_index_row_whose_manifest_is_gone() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-snapshot-repo-index-stale-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let repo = SnapshotRepository::new(root.clone());
+    let mut saved = manifest();
+    saved.state.storage_ref = "snap-1.payload".to_string();
+    repo.write(&saved).unwrap();
+
+    fs::remove_file(root.join("snap-1.manifest")).unwrap();
+
+    assert!(repo.list().unwrap().is_empty());
+    assert!(
+        super::sqlite::read_metadata(&root).unwrap().is_none(),
+        "the repair removes the stale row"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies deleting a snapshot removes its metadata row and recomputes the
+/// latest winners from the index rather than from a manifest scan.
+#[test]
+fn snapshot_repository_delete_removes_the_metadata_row() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-snapshot-repo-delete-index-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let repo = SnapshotRepository::new(root.clone());
+    let mut saved = manifest();
+    saved.state.storage_ref = "snap-1.payload".to_string();
+    repo.write(&saved).unwrap();
+    assert!(super::sqlite::read_metadata(&root).unwrap().is_some());
+
+    assert!(repo.delete("snap-1").unwrap());
+
+    assert!(
+        super::sqlite::read_metadata(&root).unwrap().is_none(),
+        "the deleted snapshot leaves no indexed row"
+    );
+    assert!(repo.latest(None).unwrap().is_none());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a database written by the previous version of this store is rebuilt
+/// from the manifests: the version-1 winners are discarded, the listing is
+/// regenerated, and the current schema recomputes the latest winner.
+#[test]
+fn snapshot_repository_rebuilds_an_older_database_from_manifests() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-snapshot-repo-schema-upgrade-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let path = super::sqlite::database_path(&root);
+    let (mut connection, _) =
+        crate::storage::shared_sqlite::open_shared_database(&path, 1).unwrap();
+    let transaction = connection.transaction().unwrap();
+    transaction
+        .execute_batch(
+            "CREATE TABLE latest_snapshot (scope TEXT PRIMARY KEY, snapshot_id TEXT NOT NULL);",
+        )
+        .unwrap();
+    transaction
+        .execute(
+            "INSERT INTO latest_snapshot (scope, snapshot_id) VALUES ('', 'snap-stale')",
+            [],
+        )
+        .unwrap();
+    crate::storage::shared_sqlite::set_schema_version(&transaction, 1).unwrap();
+    transaction.commit().unwrap();
+    drop(connection);
+    let mut saved = manifest();
+    saved.state.storage_ref = "snap-1.payload".to_string();
+    saved.write_to_dir(&root).unwrap();
+    let repo = SnapshotRepository::new(root.clone());
+
+    let listed = repo.list().unwrap();
+
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, "snap-1");
+    assert!(
+        super::sqlite::read(&root).unwrap().is_none(),
+        "the version-1 winner is discarded rather than trusted"
+    );
+    assert_eq!(
+        repo.latest(None).unwrap().unwrap().id,
+        "snap-1",
+        "the current schema recomputes the winner from the rebuilt index"
+    );
+    let _ = fs::remove_dir_all(root);
 }

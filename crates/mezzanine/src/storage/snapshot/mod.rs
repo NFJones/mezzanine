@@ -9,11 +9,6 @@
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod encoding;
-/// Exposes the SQLite latest-index store module boundary.
-///
-/// The nested module keeps its implementation details isolated while this
-/// declaration makes the boundary available to the crate.
-mod latest_index;
 /// Exposes the manifest module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -34,6 +29,11 @@ mod repository;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod restore;
+/// Exposes the SQLite metadata store module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+mod sqlite;
 pub(crate) use restore::session_restore_input;
 /// Exposes the types module boundary.
 ///

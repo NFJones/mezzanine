@@ -82,6 +82,7 @@ impl SnapshotRepository {
     /// on duplicated control-flow logic.
     pub fn write(&self, manifest: &SnapshotManifest) -> Result<PathBuf> {
         let path = manifest.write_to_dir(&self.root)?;
+        super::sqlite::insert_metadata_row(&self.root, &manifest.state)?;
         self.write_latest_indexes(&manifest.state)?;
         Ok(path)
     }
@@ -89,6 +90,10 @@ impl SnapshotRepository {
     /// Writes a snapshot manifest through Tokio filesystem APIs.
     pub async fn write_async(&self, manifest: &SnapshotManifest) -> Result<PathBuf> {
         let path = manifest.write_to_dir_async(&self.root).await?;
+        let root = self.root.clone();
+        let state = manifest.state.clone();
+        spawn_blocking_snapshot_index(move || super::sqlite::insert_metadata_row(&root, &state))
+            .await?;
         self.write_latest_indexes_async(&manifest.state).await?;
         Ok(path)
     }
@@ -157,12 +162,103 @@ impl SnapshotRepository {
         SessionSnapshotPayload::decode(&data)
     }
 
-    /// Runs the list operation for this subsystem.
+    /// Lists every published snapshot from the metadata index.
     ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
+    /// The index answers the call without opening a manifest. It is a derived
+    /// cache, so the listing rebuilds it from the manifests whenever the number
+    /// of indexed rows and the number of manifest files disagree: a first run
+    /// after this migration, a deleted database, or an interrupted write or
+    /// delete heals on the next listing instead of hiding or inventing a
+    /// snapshot.
     pub fn list(&self) -> Result<Vec<SnapshotState>> {
+        if !self.root.exists() {
+            return Ok(Vec::new());
+        }
+        if let Some(states) = super::sqlite::read_metadata(&self.root)?
+            && Self::metadata_covers_manifests(&self.root, states.len())?
+        {
+            return Ok(states);
+        }
+        self.rebuild_metadata()
+    }
+
+    /// Lists snapshots through the metadata index with Tokio filesystem APIs.
+    pub async fn list_async(&self) -> Result<Vec<SnapshotState>> {
+        if !self.root.exists() {
+            return Ok(Vec::new());
+        }
+        let root = self.root.clone();
+        let indexed =
+            spawn_blocking_snapshot_index(move || super::sqlite::read_metadata(&root)).await?;
+        if let Some(states) = indexed
+            && Self::metadata_covers_manifests_async(&self.root, states.len()).await?
+        {
+            return Ok(states);
+        }
+        self.rebuild_metadata_async().await
+    }
+
+    /// Reports whether the metadata index covers every manifest on disk.
+    ///
+    /// The check reads directory entries only: it never opens a manifest, so a
+    /// listing stays a metadata query while still noticing a manifest that a
+    /// crashed writer published without its row, or a row whose manifest is
+    /// already gone. Both cases rebuild the index from the manifests.
+    fn metadata_covers_manifests(root: &Path, indexed_rows: usize) -> Result<bool> {
+        let mut manifests = 0;
+        for entry in fs::read_dir(root)? {
+            let entry = entry?;
+            if entry
+                .path()
+                .extension()
+                .and_then(|extension| extension.to_str())
+                == Some("manifest")
+            {
+                manifests += 1;
+            }
+        }
+        Ok(manifests == indexed_rows)
+    }
+
+    /// Async counterpart to [`Self::metadata_covers_manifests`].
+    async fn metadata_covers_manifests_async(root: &Path, indexed_rows: usize) -> Result<bool> {
+        let mut entries = tokio::fs::read_dir(root).await?;
+        let mut manifests = 0;
+        while let Some(entry) = entries.next_entry().await? {
+            if entry
+                .path()
+                .extension()
+                .and_then(|extension| extension.to_str())
+                == Some("manifest")
+            {
+                manifests += 1;
+            }
+        }
+        Ok(manifests == indexed_rows)
+    }
+
+    /// Rebuilds the metadata index from every manifest and returns the listing.
+    ///
+    /// This is the migration and recovery path: it parses each manifest with the
+    /// existing decoder, and replaces the indexed rows in one transaction so a
+    /// reader sees either the previous index or the complete new one.
+    fn rebuild_metadata(&self) -> Result<Vec<SnapshotState>> {
+        let states = self.list_manifests()?;
+        super::sqlite::write_metadata(&self.root, &states)?;
+        Ok(states)
+    }
+
+    /// Async counterpart to [`Self::rebuild_metadata`].
+    async fn rebuild_metadata_async(&self) -> Result<Vec<SnapshotState>> {
+        let states = self.list_manifests_async().await?;
+        let root = self.root.clone();
+        let rows = states.clone();
+        spawn_blocking_snapshot_index(move || super::sqlite::write_metadata(&root, &rows)).await?;
+        Ok(states)
+    }
+
+    /// Scans every manifest; the rebuild path for the derived index.
+    fn list_manifests(&self) -> Result<Vec<SnapshotState>> {
         let mut snapshots = Vec::new();
         if !self.root.exists() {
             return Ok(snapshots);
@@ -180,8 +276,8 @@ impl SnapshotRepository {
         Ok(snapshots)
     }
 
-    /// Lists snapshot manifests through Tokio filesystem APIs.
-    pub async fn list_async(&self) -> Result<Vec<SnapshotState>> {
+    /// Scans every manifest through Tokio filesystem APIs.
+    async fn list_manifests_async(&self) -> Result<Vec<SnapshotState>> {
         let mut snapshots = Vec::new();
         let mut entries = match tokio::fs::read_dir(&self.root).await {
             Ok(entries) => entries,
@@ -241,6 +337,7 @@ impl SnapshotRepository {
         let manifest = SnapshotManifest::read_from_file(&path)?;
         fs::remove_file(&path)?;
         self.remove_payload_if_local(&manifest)?;
+        super::sqlite::remove_metadata_row(&self.root, snapshot_id)?;
         self.rebuild_latest_indexes()?;
         Ok(true)
     }
@@ -264,6 +361,12 @@ impl SnapshotRepository {
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
                     Err(error) => return Err(error.into()),
                 };
+                let root = self.root.clone();
+                let orphan = snapshot_id.to_string();
+                spawn_blocking_snapshot_index(move || {
+                    super::sqlite::remove_metadata_row(&root, &orphan)
+                })
+                .await?;
                 self.rebuild_latest_indexes_async().await?;
                 return Ok(removed);
             }
@@ -271,6 +374,10 @@ impl SnapshotRepository {
         };
         self.remove_payload_if_local_async(&manifest).await?;
         tokio::fs::remove_file(&path).await?;
+        let root = self.root.clone();
+        let deleted = snapshot_id.to_string();
+        spawn_blocking_snapshot_index(move || super::sqlite::remove_metadata_row(&root, &deleted))
+            .await?;
         self.rebuild_latest_indexes_async().await?;
         Ok(true)
     }
@@ -526,8 +633,8 @@ impl SnapshotRepository {
 
     /// Returns the snapshot selected by the persisted latest index, when present.
     ///
-    /// The helper keeps latest lookups on the small index file instead of
-    /// requiring callers to enumerate and parse every manifest on hot paths.
+    /// The helper keeps latest lookups on the small indexed winners instead of
+    /// requiring callers to enumerate every manifest on hot paths.
     pub(crate) fn latest_from_index(
         &self,
         session_id: Option<&str>,
@@ -558,8 +665,8 @@ impl SnapshotRepository {
 
     /// Rebuilds the latest snapshot indexes from current manifests.
     ///
-    /// Repository writes and deletes call this so lookup paths can inspect one
-    /// bounded index file before falling back to a full manifest scan.
+    /// Repository writes and deletes call this so lookup paths read the stored
+    /// winners instead of enumerating every manifest.
     fn rebuild_latest_indexes(&self) -> Result<()> {
         let snapshots = self.list()?;
         self.write_latest_index_file(&snapshots)
@@ -669,7 +776,7 @@ impl SnapshotRepository {
         Ok(())
     }
 
-    /// Reads one snapshot id from the latest index file.
+    /// Reads one snapshot id from the stored latest index.
     fn read_latest_index(&self, session_id: Option<&str>) -> Result<Option<String>> {
         let Some(index) = self.read_latest_index_state()? else {
             return Ok(None);
@@ -686,7 +793,7 @@ impl SnapshotRepository {
     /// predates this build: the winners are recomputed from the manifests and
     /// stored, which is the same ordering the previous file index produced.
     fn read_latest_index_state(&self) -> Result<Option<LatestSnapshotIndex>> {
-        if let Some(index) = super::latest_index::read(&self.root)? {
+        if let Some(index) = super::sqlite::read(&self.root)? {
             return Ok(Some(index));
         }
         let snapshots = self.list()?;
@@ -694,14 +801,14 @@ impl SnapshotRepository {
             return Ok(None);
         }
         self.write_latest_index_file(&snapshots)?;
-        super::latest_index::read(&self.root)
+        super::sqlite::read(&self.root)
     }
 
     /// Reads the complete latest-index state asynchronously, rebuilding once.
     async fn read_latest_index_state_async(&self) -> Result<Option<LatestSnapshotIndex>> {
         let root = self.root.clone();
         if let Some(index) =
-            spawn_blocking_snapshot_index(move || super::latest_index::read(&root)).await?
+            spawn_blocking_snapshot_index(move || super::sqlite::read(&root)).await?
         {
             return Ok(Some(index));
         }
@@ -711,22 +818,22 @@ impl SnapshotRepository {
         }
         self.write_latest_index_file_async(&snapshots).await?;
         let root = self.root.clone();
-        spawn_blocking_snapshot_index(move || super::latest_index::read(&root)).await
+        spawn_blocking_snapshot_index(move || super::sqlite::read(&root)).await
     }
 
     /// Atomically replaces the stored latest index.
     fn write_latest_index_state(&self, index: &LatestSnapshotIndex) -> Result<()> {
-        super::latest_index::write(&self.root, index)
+        super::sqlite::write(&self.root, index)
     }
 
     /// Async counterpart to [`Self::write_latest_index_state`].
     async fn write_latest_index_state_async(&self, index: &LatestSnapshotIndex) -> Result<()> {
         let root = self.root.clone();
         let index = index.clone();
-        spawn_blocking_snapshot_index(move || super::latest_index::write(&root, &index)).await
+        spawn_blocking_snapshot_index(move || super::sqlite::write(&root, &index)).await
     }
 
-    /// Writes the latest index file for global and per-session lookups.
+    /// Stores the latest index for global and per-session lookups.
     fn write_latest_index_file(&self, snapshots: &[SnapshotState]) -> Result<()> {
         if snapshots.is_empty() {
             // No snapshots means no winners: storing an empty index is the state
