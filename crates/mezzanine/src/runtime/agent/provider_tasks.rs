@@ -389,6 +389,14 @@ impl RuntimeSessionService {
         self.agent.provider_retry_scheduler.turn_ids()
     }
 
+    /// Returns the latest planned or dispatched retry attempt for one turn.
+    ///
+    /// Status reporting needs the attempt against a specific turn rather than
+    /// the service-wide set of turns that are waiting on a retry.
+    pub(crate) fn agent_provider_retry_attempt_for_turn(&self, turn_id: &str) -> u64 {
+        self.agent.provider_retry_scheduler.attempt(turn_id)
+    }
+
     /// Builds the desired provider-poll timer transition for an external timer adapter.
     pub(crate) fn provider_poll_timer_transition(
         &self,

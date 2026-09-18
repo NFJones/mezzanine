@@ -227,10 +227,9 @@ impl RuntimeSessionService {
         // whether provider work is still queued for it, and whether any turn is
         // waiting on a retry.
         let running_turn_record = session.running_turn_id.as_deref().and_then(|turn_id| {
-            self.agent_turn_ledger()
-                .turns()
-                .iter()
-                .find(|turn| turn.turn_id == turn_id)
+            self.agent_turn_ledger().turns().iter().find(|turn| {
+                turn.turn_id == turn_id && turn.state == mez_agent::AgentTurnState::Running
+            })
         });
         let running_turn_elapsed = running_turn_record
             .map(|turn| {
@@ -242,21 +241,26 @@ impl RuntimeSessionService {
                     .to_string()
             })
             .unwrap_or_else(|| "none".to_string());
+        // A claimed lease is the window this field exists to expose, so the
+        // claimed state is reported instead of being collapsed into `idle`.
         let provider_claim = running_turn_record
             .map(|turn| {
-                if self.agent_provider_task_is_pending(&turn.turn_id) {
+                if self.agent_provider_task_is_claimed(&turn.turn_id) {
+                    "claimed".to_string()
+                } else if self.agent_provider_task_is_pending(&turn.turn_id) {
                     "queued".to_string()
                 } else {
                     "idle".to_string()
                 }
             })
             .unwrap_or_else(|| "none".to_string());
-        let retrying_turns = self.agent_provider_retry_turn_ids().count();
-        let provider_retry = if retrying_turns == 0 {
-            "none".to_string()
-        } else {
-            format!("{retrying_turns} turn(s) awaiting retry")
-        };
+        let provider_retry = running_turn_record.map_or_else(
+            || "none".to_string(),
+            |turn| match self.agent_provider_retry_attempt_for_turn(&turn.turn_id) {
+                0 => "none".to_string(),
+                attempt => format!("attempt {attempt}"),
+            },
+        );
         let rows = vec![
             vec!["Pane".to_string(), session.pane_id.clone()],
             vec!["Session".to_string(), session.session_id.clone()],

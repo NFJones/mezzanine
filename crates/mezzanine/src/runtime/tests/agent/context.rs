@@ -1362,12 +1362,47 @@ fn runtime_status_reports_turn_elapsed_provider_claim_and_retry() {
         "a running turn reports elapsed seconds: {status}"
     );
     assert!(
-        line("Provider claim").contains("queued"),
-        "a freshly started turn still owns queued provider work: {status}"
+        line("Provider claim").contains("queued") || line("Provider claim").contains("claimed"),
+        "a freshly started turn owns queued or claimed provider work: {status}"
     );
     assert!(
         line("Provider retry").contains("none"),
         "a fresh turn is not awaiting a retry: {status}"
+    );
+
+    // Completing the turn clears all three rows again, so a settled pane cannot
+    // look like it is still waiting on a provider claim.
+    let turn_id = service
+        .agent_turn_ledger()
+        .turns()
+        .last()
+        .expect("the dispatched prompt must create a turn")
+        .turn_id
+        .clone();
+    service.remove_pending_agent_provider_task(&turn_id);
+    service
+        .agent_turn_ledger_mut()
+        .finish_turn(&turn_id, AgentTurnState::Completed)
+        .unwrap();
+    let settled = service.runtime_agent_status_display("%1").unwrap();
+    let settled_line = |label: &str| {
+        settled
+            .lines()
+            .find(|line| line.contains(label))
+            .unwrap_or_else(|| panic!("{label} row missing from: {settled}"))
+            .to_string()
+    };
+    assert!(
+        settled_line("Turn elapsed").contains("none"),
+        "a completed turn clears the elapsed row: {settled}"
+    );
+    assert!(
+        settled_line("Provider claim").contains("none"),
+        "a completed turn clears the claim row: {settled}"
+    );
+    assert!(
+        settled_line("Provider retry").contains("none"),
+        "a completed turn clears the retry row: {settled}"
     );
 }
 
