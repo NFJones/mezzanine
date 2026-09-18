@@ -25,7 +25,12 @@ pub(crate) enum RuntimeAgentSlashCommandDisposition {
 /// Commands that keep running inline on the actor.
 ///
 /// Every entry mutates state the actor owns (the agent shell session, the active
-/// model, or policy) and does no store or filesystem read that could block.
+/// model, or policy). Their reads are bounded state lookups rather than catalog
+/// walks, with one named exception: `show-context` opens its pager from a
+/// pane-filtered transcript read, which the store caps keep bounded but which is
+/// still a store read on the actor. The other picker opens (`/resume`,
+/// `/show-issues`, `/show-memories`) run in the deferred command lane, and every
+/// refresh after this open runs in the overlay refresh lane.
 pub(crate) const RUNTIME_AGENT_INLINE_SLASH_COMMANDS: &[&str] = &[
     "help",
     "permissions",
