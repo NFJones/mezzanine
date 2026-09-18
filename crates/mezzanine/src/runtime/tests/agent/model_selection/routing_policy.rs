@@ -2054,18 +2054,18 @@ fn runtime_sized_child_identity_captures_catalog_materialized_options() {
         }])
         .unwrap();
     // Seed a live catalog whose model metadata materialization folds into the
-    // effective profile but which the configured definition does not carry.
-    service.cache_provider_model_catalog_for_tests(
+    // effective profile but which the configured definition does not carry. The
+    // seeded option exists only in the catalog, so the capture must take it from
+    // materialization rather than from the definition.
+    service.cache_provider_model_catalog_with_options_for_tests(
         "deepseek",
-        vec![mez_agent::ProviderModelInfo {
-            id: "deepseek-v4-max".to_string(),
-            display_name: None,
-            reasoning_levels: Some(vec!["low".to_string(), "high".to_string()]),
-            context_window_tokens: None,
-            max_input_tokens: None,
-            max_output_tokens: None,
-            capabilities: Some(vec!["tool_use".to_string()]),
-        }],
+        vec![(
+            "deepseek-v4-max".to_string(),
+            std::collections::BTreeMap::from([(
+                "captured_variant".to_string(),
+                "effective".to_string(),
+            )]),
+        )],
         vec!["low".to_string(), "high".to_string()],
     );
     service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
@@ -2251,6 +2251,79 @@ fn runtime_restore_reports_option_only_identity_drift() {
             .iter()
             .any(|payload| payload.contains("provider_options")),
         "an option-only drift must name the differing field: {degradations:?}"
+    );
+}
+
+/// Verifies a name configuration later defines loses its generated marker.
+///
+/// The marker asserts that this process generated the name. Once configuration
+/// owns that name the marker must go, or a capture inherited from the configured
+/// profile would later re-materialize silently instead of taking the
+/// configuration-authoritative path that reports the loss.
+#[test]
+fn runtime_config_apply_clears_generated_marker_for_configured_names() {
+    let transcript_store = crate::storage::transcript::AgentTranscriptStore::new(temp_root(
+        "runtime-configured-name-marker",
+    ));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store);
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "explicit-subagent-sizing-marker".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: EXPLICIT_SUBAGENT_SIZING_CONFIG.to_string(),
+        }])
+        .unwrap();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let (child_agent_id, _child_pane_id, _turn_id) =
+        spawn_explicitly_sized_child(&mut service, &primary, "large", "high");
+    let generated_name = service
+        .integration
+        .model_profile_overrides()
+        .agent_profiles
+        .get(&child_agent_id)
+        .cloned()
+        .expect("the sized child owns a generated profile name");
+    assert!(
+        service
+            .integration
+            .model_profile_overrides()
+            .runtime_generated_profiles
+            .contains(&generated_name),
+        "the generated name must be marked"
+    );
+
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "explicit-subagent-sizing-marker".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: format!(
+                "{EXPLICIT_SUBAGENT_SIZING_CONFIG}[model_profiles.\"{generated_name}\"]\nprovider = \"deepseek\"\nmodel = \"deepseek-v4-max\"\nreasoning_profile = \"high\"\n"
+            ),
+        }])
+        .unwrap();
+    assert!(
+        !service
+            .integration
+            .model_profile_overrides()
+            .runtime_generated_profiles
+            .contains(&generated_name),
+        "a configuration-owned name must not keep a runtime-generated marker"
     );
 }
 

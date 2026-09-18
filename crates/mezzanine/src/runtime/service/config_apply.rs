@@ -750,6 +750,21 @@ impl RuntimeSessionService {
             }
             self.integration
                 .replace_provider_registry(provider_registry);
+            // A name configuration now defines must not keep a runtime-generated
+            // marker: the marker asserts this process generated that name, and a
+            // marker on a configuration-owned name would suppress the degrade report
+            // if the name later leaves configuration.
+            let configured_names = self
+                .integration
+                .provider_registry()
+                .profiles
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>();
+            self.integration
+                .model_profile_overrides_mut()
+                .runtime_generated_profiles
+                .retain(|name| !configured_names.contains(name));
             *self.integration.preset_registry_mut() = preset_registry;
             self.clear_provider_model_catalog_cache();
         }

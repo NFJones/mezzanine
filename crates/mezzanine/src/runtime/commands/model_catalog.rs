@@ -301,6 +301,57 @@ impl RuntimeSessionService {
         self.apply_provider_info_refresh(outcome)
     }
 
+    /// Seeds the live model catalog cache with explicit per-model options.
+    ///
+    /// The ordinary seeding helper builds entries from HTTP-shaped model info, which
+    /// carries no `provider_options`, and materialization merges those options. Tests
+    /// that need two identities sharing model, reasoning, thinking, and latency but
+    /// differing in effective options therefore need this entry point.
+    #[cfg(test)]
+    pub(crate) fn cache_provider_model_catalog_with_options_for_tests(
+        &mut self,
+        provider_id: &str,
+        models: Vec<(String, std::collections::BTreeMap<String, String>)>,
+        reasoning_levels: Vec<String>,
+    ) {
+        let candidates = models
+            .into_iter()
+            .map(|(id, provider_options)| {
+                let mut candidate = ModelCatalogCandidate::available(
+                    mez_agent::ModelCatalogSource::Discovered,
+                    ProviderModelInfo {
+                        id,
+                        display_name: None,
+                        reasoning_levels: None,
+                        context_window_tokens: None,
+                        max_input_tokens: None,
+                        max_output_tokens: None,
+                        capabilities: None,
+                    },
+                );
+                candidate.provider_options = provider_options;
+                candidate
+            })
+            .collect::<Vec<_>>();
+        let catalog = ModelCatalog::from_input(ModelCatalogInput {
+            candidates,
+            default_model: None,
+            recommended_model: None,
+            reasoning_levels,
+        });
+        self.cache_provider_model_catalog(
+            provider_id,
+            RuntimeModelCatalog {
+                provider: provider_id.to_string(),
+                source: "provider".to_string(),
+                provider_error: None,
+                catalog,
+                quota_usage: Vec::new(),
+            },
+        )
+        .expect("the seeded catalog must install into the cache");
+    }
+
     /// Seeds the live model catalog cache for focused runtime tests.
     #[cfg(test)]
     pub(crate) fn cache_provider_model_catalog_for_tests(
