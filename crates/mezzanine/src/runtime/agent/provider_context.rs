@@ -17,6 +17,18 @@ use super::{
 use crate::runtime::RuntimeAutoSizingDecision;
 use sha2::{Digest, Sha256};
 
+/// Bounded configured input-cap compaction passes allowed for one turn.
+const CONFIGURED_INPUT_COMPACTION_PASS_LIMIT: u32 = 4;
+
+/// One bounded configured-cap compaction pass a preflight decided to queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RuntimeConfiguredInputCapPassPlan {
+    /// One-based pass number the queued compaction runs as.
+    pub(crate) pass: u32,
+    /// Whether this pass retries because the previous pass did not reduce the estimate.
+    pub(crate) non_reducing: bool,
+}
+
 /// Renders the bounded safe state that follows an output-token cutoff.
 ///
 /// Native argument fragments are deliberately absent. A cutoff containing an
@@ -343,6 +355,33 @@ impl RuntimeSessionService {
         Ok(true)
     }
 
+    /// Decides the next configured-cap compaction pass for one preflight.
+    ///
+    /// The cap measures estimated wire bytes while the compaction planner budgets
+    /// words, so a pass can legitimately fail to shrink the emitted estimate: code
+    /// heavy context or a summary near its word budget can replace fewer bytes than
+    /// it adds. Such a pass retries with a tightened budget while the bounded
+    /// allowance remains, and the cap is reported unsatisfiable only once that
+    /// allowance is exhausted - never as an internal consistency error.
+    pub(crate) fn plan_configured_input_cap_pass(
+        completed_passes: u32,
+        previous_input_tokens: Option<usize>,
+        current_input_tokens: usize,
+        max_input_tokens: usize,
+    ) -> Result<RuntimeConfiguredInputCapPassPlan> {
+        if completed_passes >= CONFIGURED_INPUT_COMPACTION_PASS_LIMIT {
+            return Err(MezError::invalid_state(format!(
+                "configured input cap cannot be satisfied for this turn after {completed_passes} bounded compaction passes: previous_input_tokens={} current_input_tokens={current_input_tokens} max_input_tokens={max_input_tokens}",
+                previous_input_tokens.unwrap_or(current_input_tokens)
+            )));
+        }
+        Ok(RuntimeConfiguredInputCapPassPlan {
+            pass: completed_passes.saturating_add(1),
+            non_reducing: previous_input_tokens
+                .is_some_and(|previous| current_input_tokens >= previous),
+        })
+    }
+
     /// Defers an oversized configured-cap request into bounded active-turn compaction.
     ///
     /// The supplied estimate is for the fully assembled provider wire request.
@@ -365,30 +404,35 @@ impl RuntimeSessionService {
                 .remove(&turn.turn_id);
             return Ok(false);
         }
-        if let Some(previous) = self
+        let previous_input_tokens = self
             .agent
             .agent_turn_configured_input_previous_tokens
             .get(&turn.turn_id)
-            .copied()
-            && estimate.input_tokens >= previous
-        {
-            return Err(MezError::invalid_state(format!(
-                "configured input-cap compaction did not reduce the complete request estimate: previous_input_tokens={previous} current_input_tokens={} max_input_tokens={max_input_tokens}",
-                estimate.input_tokens
-            )));
-        }
-        let pass = self
+            .copied();
+        let completed_passes = self
             .agent
             .agent_turn_configured_input_compaction_passes
             .get(&turn.turn_id)
             .copied()
-            .unwrap_or(0)
-            .saturating_add(1);
-        if pass > 4 {
-            return Err(MezError::invalid_state(format!(
-                "configured input-cap compaction exceeded four bounded passes: estimated_input_tokens={} max_input_tokens={max_input_tokens}",
-                estimate.input_tokens
-            )));
+            .unwrap_or(0);
+        let pass_plan = Self::plan_configured_input_cap_pass(
+            completed_passes,
+            previous_input_tokens,
+            estimate.input_tokens,
+            max_input_tokens,
+        )?;
+        let non_reducing_pass = pass_plan.non_reducing;
+        let pass = pass_plan.pass;
+        if non_reducing_pass {
+            self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                &turn.turn_id,
+                &format!(
+                    "configured_input_limit non_reducing_pass completed_passes={completed_passes} previous_input_tokens={} current_input_tokens={} max_input_tokens={max_input_tokens} retry=tightened_budget",
+                    previous_input_tokens.unwrap_or(estimate.input_tokens),
+                    estimate.input_tokens
+                ),
+            )?;
         }
 
         let rendered_context_tokens = context
@@ -410,6 +454,14 @@ impl RuntimeSessionService {
             .saturating_sub(fixed_input_tokens)
             .saturating_mul(3)
             .saturating_div(4);
+        // Repeating the same budget reproduces the same plan, so a non-reducing
+        // pass halves it for the retry; never below one word, so the retry still
+        // has a budget to plan against.
+        let context_budget_words = if non_reducing_pass {
+            context_budget_words.saturating_div(2).max(1)
+        } else {
+            context_budget_words
+        };
         if context_budget_words == 0 {
             return Err(MezError::invalid_state(format!(
                 "configured input cap is smaller than fixed provider request overhead: estimated_input_tokens={} fixed_input_tokens={fixed_input_tokens} max_input_tokens={max_input_tokens}",

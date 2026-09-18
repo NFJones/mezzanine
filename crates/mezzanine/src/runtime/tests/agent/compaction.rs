@@ -2321,3 +2321,45 @@ context_window_tokens = 128000
         compacted.content
     );
 }
+
+/// Verifies a non-reducing configured-cap pass retries instead of failing.
+///
+/// The cap measures estimated wire bytes while the compaction planner budgets
+/// words, so a code-heavy context can leave a pass that replaces fewer bytes than
+/// its summary adds. That pass must tighten its budget and retry while the bounded
+/// allowance remains, and only the exhausted allowance may end the turn - never an
+/// internal "did not reduce" inconsistency error.
+#[test]
+fn runtime_configured_input_cap_retries_a_non_reducing_pass() {
+    use crate::runtime::RuntimeSessionService;
+
+    let first = RuntimeSessionService::plan_configured_input_cap_pass(0, None, 30_000, 20_000)
+        .expect("the first pass of a turn always proceeds");
+    assert_eq!(first.pass, 1);
+    assert!(!first.non_reducing);
+
+    let reduced =
+        RuntimeSessionService::plan_configured_input_cap_pass(1, Some(30_000), 25_000, 20_000)
+            .expect("a reducing pass proceeds");
+    assert_eq!(reduced.pass, 2);
+    assert!(!reduced.non_reducing);
+
+    let non_reducing =
+        RuntimeSessionService::plan_configured_input_cap_pass(1, Some(30_000), 31_000, 20_000)
+            .expect("a non-reducing pass retries with a tightened budget");
+    assert_eq!(non_reducing.pass, 2);
+    assert!(non_reducing.non_reducing);
+
+    let exhausted =
+        RuntimeSessionService::plan_configured_input_cap_pass(4, Some(30_000), 31_000, 20_000)
+            .expect_err("the exhausted allowance must end the turn");
+    let message = exhausted.message().to_string();
+    assert!(
+        message.contains("configured input cap cannot be satisfied"),
+        "the terminal outcome must be typed as an unsatisfiable cap: {message}"
+    );
+    assert!(
+        !message.contains("did not reduce"),
+        "an internal consistency message must never surface for this condition: {message}"
+    );
+}
