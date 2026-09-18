@@ -2251,6 +2251,10 @@ fn runtime_agent_shell_show_approvals_defers_and_refuses_unknown_ids() {
         refused.contains("pending approval was not found"),
         "{refused}"
     );
+    assert!(
+        refused.contains("(not_found)"),
+        "the deferred refusal carries the inline error kind: {refused}"
+    );
 }
 
 /// Opens the `/show-approvals` browser through the deferred lane.
