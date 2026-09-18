@@ -118,6 +118,17 @@ impl AuditLog {
         self.defer_writes = defer;
     }
 
+    /// Reports whether audit JSONL writes are deferred to the effect adapter.
+    ///
+    /// The non-deferred path performs a per-record `sync_all`, a full-file
+    /// retention scan, and a full-file hash rescan, so callers that own the
+    /// daemon boundary assert this before their first append instead of paying
+    /// that cost per record.
+    #[cfg(test)]
+    pub(crate) fn writes_are_deferred(&self) -> bool {
+        self.defer_writes
+    }
+
     /// Drains audit JSONL records queued for asynchronous persistence.
     pub fn drain_deferred_writes(&mut self) -> Vec<AuditDeferredWrite> {
         std::mem::take(&mut self.deferred_writes)

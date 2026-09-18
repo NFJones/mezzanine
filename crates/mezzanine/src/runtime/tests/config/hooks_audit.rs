@@ -322,6 +322,66 @@ fn runtime_applies_audit_log_from_config_layers() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies the daemon boundary enables deferred audit writes before its first
+/// append, so no record pays the non-deferred path's per-record `sync_all`,
+/// full-file retention scan, and full-file hash rescan.
+#[test]
+fn runtime_daemon_enables_deferred_audit_writes_before_first_append() {
+    let mut service = test_runtime_service();
+    let root = temp_root("runtime-audit-deferral-before-first-append");
+    let audit_path = root.join("audit.jsonl");
+    service.set_config_root(root.clone());
+    service.use_audit_effect_adapter();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[audit]\nenabled = true\npath = \"audit.jsonl\"\nrequired = true\n".to_string(),
+        }])
+        .unwrap();
+
+    // The boundary flag is set before any append happens, so the first record
+    // already avoids the non-deferred path's per-record cost.
+    let audit_log = service
+        .persistence
+        .audit_log_mut()
+        .expect("adapter path installs an audit log");
+    assert!(
+        audit_log.writes_are_deferred(),
+        "the daemon boundary must defer audit writes before the first append"
+    );
+    assert!(!audit_path.exists());
+
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let output = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"audit-deferral-first-append","method":"agent/shell/command","params":{"idempotency_key":"audit-deferral-first-append","input":"/approval full-access"}}"#,
+        &primary,
+    );
+    assert!(output.contains("changed=true"), "{output}");
+    assert!(
+        !audit_path.exists(),
+        "the first record is deferred to the effect adapter instead of written synchronously"
+    );
+    let transition = service.drain_audit_persistence_transition();
+    assert!(
+        transition
+            .side_effects
+            .iter()
+            .any(|effect| matches!(effect, RuntimeSideEffect::PersistAuditLog { .. })),
+        "the deferred record surfaces as a PersistAuditLog side effect"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies that an adapter-owned runtime keeps audit persistence deferred
 /// when a live configuration reload installs a replacement audit writer. The
 /// ownership decision belongs to the actor boundary rather than the global
