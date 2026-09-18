@@ -13,17 +13,16 @@
 //! once and is never modified, so a rollback to a previous build still finds
 //! its data.
 
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 
 use super::super::shared_sqlite::{
     SharedSchemaState, import_legacy_file_once, migration_completed, open_shared_database,
-    open_shared_database_read_only, schema_version, set_schema_version,
+    open_shared_database_read_only, read_private_legacy_file, schema_version, set_schema_version,
 };
 use super::repository::{LocalAssignmentDatabase, validate_database};
-use super::{LocalSessionAssignment, MezError, Result};
+use super::{LocalSessionAssignment, LocalSessionAssignmentState, MezError, Result};
 
 /// Database file owned by the local session assignment repository.
 pub(super) const ASSIGNMENT_DATABASE_FILE_NAME: &str = "assignments.sqlite";
@@ -50,6 +49,14 @@ fn legacy_path(directory: &Path) -> PathBuf {
 /// Maps one rusqlite failure to an actionable assignment error.
 fn database_error(error: rusqlite::Error) -> MezError {
     MezError::invalid_state(format!("local session assignment database error: {error}"))
+}
+
+/// Encodes one assignment state token into its stored snake_case form.
+fn encode_state(state: LocalSessionAssignmentState) -> String {
+    serde_json::to_value(state)
+        .ok()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 /// Refuses a database path that is a symbolic link.
@@ -142,25 +149,16 @@ fn import_legacy_database(directory: &Path, connection: &mut Connection) -> Resu
 /// Decodes and validates the legacy JSON document when it exists.
 ///
 /// The legacy document keeps the private-file checks the JSON repository
-/// applied to it: a regular file owned by the current user without group or
-/// other access. Its declared size is no longer capped, because that cap is
-/// the failure mode this conversion removes.
+/// applied to it - a regular file owned by the current user without group or
+/// other access - and is read through the same no-follow descriptor that was
+/// validated, so replacing the path between the check and the read cannot
+/// substitute another file. Its declared size is no longer capped, because
+/// that cap is the failure mode this conversion removes.
 fn legacy_database(directory: &Path) -> Result<LocalAssignmentDatabase> {
     let path = legacy_path(directory);
-    let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+    let Some(bytes) = read_private_legacy_file(&path)? else {
         return Ok(LocalAssignmentDatabase::default());
     };
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
-        || metadata.uid() != crate::runtime::current_effective_uid()
-        || metadata.permissions().mode() & 0o077 != 0
-    {
-        return Err(MezError::forbidden(format!(
-            "local session assignment legacy document {} must be a private regular file owned by the current user",
-            path.display()
-        )));
-    }
-    let bytes = std::fs::read(&path)?;
     let database: LocalAssignmentDatabase = serde_json::from_slice(&bytes).map_err(|error| {
         MezError::invalid_state(format!(
             "local session assignment database is malformed: {error}"
@@ -184,19 +182,28 @@ fn read_database(connection: &Connection) -> Result<LocalAssignmentDatabase> {
         database.boot_generation = boot_generation as u64;
     }
     let mut statement = connection
-        .prepare("SELECT payload FROM assignments")
+        .prepare("SELECT state, payload FROM assignments")
         .map_err(database_error)?;
     let rows = statement
-        .query_map([], |row| row.get::<_, String>(0))
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
         .map_err(database_error)?;
     for row in rows {
-        let payload = row.map_err(database_error)?;
+        let (state, payload) = row.map_err(database_error)?;
         let assignment: LocalSessionAssignment =
             serde_json::from_str(&payload).map_err(|error| {
                 MezError::invalid_state(format!(
                     "local session assignment row is malformed: {error}"
                 ))
             })?;
+        let payload_state = encode_state(assignment.state);
+        if state != payload_state {
+            return Err(MezError::invalid_state(format!(
+                "local session assignment row {} state {state} does not match its payload state {payload_state}",
+                assignment.session_id
+            )));
+        }
         database.assignments.push(assignment);
     }
     validate_database(&database)?;
@@ -214,10 +221,7 @@ fn replace_rows(transaction: &Transaction<'_>, database: &LocalAssignmentDatabas
                 "failed to encode local session assignment row: {error}"
             ))
         })?;
-        let state = serde_json::to_value(assignment.state)
-            .ok()
-            .and_then(|value| value.as_str().map(ToOwned::to_owned))
-            .unwrap_or_else(|| "unknown".to_string());
+        let state = encode_state(assignment.state);
         transaction
             .execute(
                 "INSERT INTO assignments (session_id, state, boot_generation, payload) VALUES (?1, ?2, ?3, ?4)",

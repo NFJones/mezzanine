@@ -11,10 +11,10 @@
 
 use super::super::shared_sqlite::{
     SharedSchemaState, import_legacy_file_once, migration_completed, open_shared_database,
-    open_shared_database_read_only, schema_version, set_schema_version,
+    open_shared_database_read_only, read_private_legacy_file, schema_version, set_schema_version,
 };
 use super::repository::LeaseDatabase;
-use super::{MezError, RemoteSessionLease, Result};
+use super::{MezError, RemoteSessionLease, RemoteSessionLeaseState, Result};
 use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 use std::path::{Path, PathBuf};
 
@@ -47,6 +47,14 @@ fn legacy_path(directory: &Path) -> PathBuf {
 /// Maps one rusqlite failure to an actionable lease error.
 fn database_error(error: rusqlite::Error) -> MezError {
     MezError::invalid_state(format!("remote session lease database error: {error}"))
+}
+
+/// Encodes one lease state token into its stored snake_case form.
+fn encode_state(state: RemoteSessionLeaseState) -> String {
+    serde_json::to_value(state)
+        .ok()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 /// Refuses a database path that is a symbolic link.
@@ -138,11 +146,9 @@ fn import_legacy_database(directory: &Path, connection: &mut Connection) -> Resu
 /// Decodes and validates the legacy JSON document when it exists.
 fn legacy_database(directory: &Path) -> Result<LeaseDatabase> {
     let path = legacy_path(directory);
-    reject_symlink(&path)?;
-    if !path.exists() {
+    let Some(bytes) = read_private_legacy_file(&path)? else {
         return Ok(LeaseDatabase::default());
-    }
-    let bytes = std::fs::read(&path)?;
+    };
     let database: LeaseDatabase = serde_json::from_slice(&bytes).map_err(|error| {
         MezError::invalid_state(format!(
             "remote session lease database is malformed: {error}"
@@ -166,16 +172,25 @@ fn read_database(connection: &Connection) -> Result<LeaseDatabase> {
         database.boot_generation = boot_generation as u64;
     }
     let mut statement = connection
-        .prepare("SELECT payload FROM leases")
+        .prepare("SELECT state, payload FROM leases")
         .map_err(database_error)?;
     let rows = statement
-        .query_map([], |row| row.get::<_, String>(0))
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
         .map_err(database_error)?;
     for row in rows {
-        let payload = row.map_err(database_error)?;
+        let (state, payload) = row.map_err(database_error)?;
         let lease: RemoteSessionLease = serde_json::from_str(&payload).map_err(|error| {
             MezError::invalid_state(format!("remote session lease row is malformed: {error}"))
         })?;
+        let payload_state = encode_state(lease.state);
+        if state != payload_state {
+            return Err(MezError::invalid_state(format!(
+                "remote session lease row {} state {state} does not match its payload state {payload_state}",
+                lease.lease_id
+            )));
+        }
         database.leases.push(lease);
     }
     let mut statement = connection
@@ -204,10 +219,7 @@ fn replace_rows(transaction: &Transaction<'_>, database: &LeaseDatabase) -> Resu
                 "failed to encode remote session lease row: {error}"
             ))
         })?;
-        let state = serde_json::to_value(lease.state)
-            .ok()
-            .and_then(|value| value.as_str().map(ToOwned::to_owned))
-            .unwrap_or_else(|| "unknown".to_string());
+        let state = encode_state(lease.state);
         transaction
             .execute(
                 "INSERT INTO leases (lease_id, session_id, state, expires_at_unix_seconds, boot_generation, payload) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",

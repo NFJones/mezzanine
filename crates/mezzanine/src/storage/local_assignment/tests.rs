@@ -366,3 +366,35 @@ fn assignment_database_grows_past_the_removed_document_cap() {
     );
     let _ = fs::remove_dir_all(root);
 }
+
+/// The key columns are a checked mirror of the payload: a row whose state
+/// column disagrees with the encoded record fails closed instead of being read
+/// as trusted data.
+#[test]
+fn assignment_database_state_column_is_checked_on_read() {
+    let root = test_root("state-column");
+    let repository = LocalSessionAssignmentRepository::new(root.clone());
+    repository
+        .reserve_pending(LocalAssignmentReservationRequest {
+            session_id: "$state".to_string(),
+            name: "state".to_string(),
+            default_for_host: false,
+            now_unix_seconds: 10,
+        })
+        .unwrap();
+
+    let connection = rusqlite::Connection::open(root.join("assignments.sqlite")).unwrap();
+    connection
+        .execute(
+            "UPDATE assignments SET state = 'bogus' WHERE session_id = '$state'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+
+    assert_eq!(
+        repository.list().unwrap_err().kind(),
+        crate::error::MezErrorKind::InvalidState
+    );
+    let _ = fs::remove_dir_all(root);
+}

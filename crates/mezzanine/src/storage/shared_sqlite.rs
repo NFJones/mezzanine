@@ -26,10 +26,13 @@
 
 use std::cmp::Ordering;
 use std::fs;
+use std::io::Read;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rustix::fs::{Mode, OFlags, open};
 
 use crate::error::{MezError, Result};
 
@@ -212,6 +215,62 @@ pub(crate) fn import_legacy_file_once(
         .map_err(database_error)?;
     transaction.commit().map_err(database_error)?;
     Ok(Some(imported_rows))
+}
+
+/// Reads one legacy flat file through the validated, no-follow descriptor.
+///
+/// Returns `Ok(None)` when the file does not exist so a missing legacy
+/// document stays an empty store instead of an error. The bytes are read from
+/// the same descriptor the checks ran on: the path must not be a symbolic link
+/// when it is opened, and the opened file must be a regular file owned by the
+/// current user without group or other access. A `symlink_metadata` pre-check
+/// followed by a separate read would leave a window in which the validated path
+/// is replaced.
+pub(crate) fn read_private_legacy_file(path: &Path) -> Result<Option<Vec<u8>>> {
+    let descriptor = match open(
+        path,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(descriptor) => descriptor,
+        Err(rustix::io::Errno::NOENT) => return Ok(None),
+        Err(rustix::io::Errno::LOOP) => {
+            return Err(MezError::forbidden(format!(
+                "legacy document {} must not be a symbolic link",
+                path.display()
+            )));
+        }
+        Err(error) => {
+            return Err(MezError::invalid_state(format!(
+                "read legacy document {} failed: {error}",
+                path.display()
+            )));
+        }
+    };
+    let mut file = std::fs::File::from(descriptor);
+    let metadata = file.metadata().map_err(|error| {
+        MezError::invalid_state(format!(
+            "read legacy document {} failed: {error}",
+            path.display()
+        ))
+    })?;
+    if !metadata.is_file()
+        || metadata.uid() != crate::runtime::current_effective_uid()
+        || metadata.permissions().mode() & 0o077 != 0
+    {
+        return Err(MezError::forbidden(format!(
+            "legacy document {} must be a private regular file owned by the current user",
+            path.display()
+        )));
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(|error| {
+        MezError::invalid_state(format!(
+            "read legacy document {} failed: {error}",
+            path.display()
+        ))
+    })?;
+    Ok(Some(bytes))
 }
 
 /// Runs `PRAGMA integrity_check` and reports the first problem found.
@@ -619,6 +678,52 @@ mod tests {
                 .execute("INSERT INTO items (id) VALUES (1)", [])
                 .is_err(),
             "a read-only connection rejects writes"
+        );
+    }
+
+    /// Verifies the legacy reader is descriptor-validated: a symlink, an
+    /// over-permissive file, and a directory all fail closed, a missing file
+    /// reports nothing to import, and a private file yields its bytes.
+    #[test]
+    fn shared_database_reads_legacy_files_through_validated_descriptors() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let dir = unique_temp_dir("legacy-read");
+        assert!(
+            read_private_legacy_file(&dir.join("missing.json"))
+                .unwrap()
+                .is_none(),
+            "a missing legacy document reports nothing to import"
+        );
+
+        let private = dir.join("private.json");
+        fs::write(&private, b"{\"a\":1}\n").unwrap();
+        fs::set_permissions(&private, fs::Permissions::from_mode(PRIVATE_FILE_MODE)).unwrap();
+        assert_eq!(
+            read_private_legacy_file(&private).unwrap().unwrap(),
+            b"{\"a\":1}\n"
+        );
+
+        let shared = dir.join("shared.json");
+        fs::write(&shared, b"{}").unwrap();
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(
+            read_private_legacy_file(&shared).is_err(),
+            "a legacy document with group or other access must fail closed"
+        );
+
+        let linked = dir.join("linked.json");
+        symlink(&private, &linked).unwrap();
+        assert!(
+            read_private_legacy_file(&linked).is_err(),
+            "a symlinked legacy document must fail closed"
+        );
+
+        let directory = dir.join("directory.json");
+        fs::create_dir(&directory).unwrap();
+        assert!(
+            read_private_legacy_file(&directory).is_err(),
+            "a directory in place of a legacy document must fail closed"
         );
     }
 }

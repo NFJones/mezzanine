@@ -604,3 +604,36 @@ fn lease_database_row_replacement_is_transactional() {
     );
     let _ = fs::remove_dir_all(root);
 }
+
+/// The key columns are a checked mirror of the payload: a row whose state
+/// column disagrees with the encoded record fails closed instead of being read
+/// as trusted data.
+#[test]
+fn lease_database_state_column_is_checked_on_read() {
+    let root = test_root("state-column");
+    let repository = RemoteSessionLeaseRepository::new(root.clone());
+    repository
+        .reserve_pending(reservation(
+            "lease-state",
+            "$1",
+            "device-1",
+            "create-state",
+            "fingerprint-state",
+        ))
+        .unwrap();
+
+    let connection = rusqlite::Connection::open(root.join("session-reservations.sqlite")).unwrap();
+    connection
+        .execute(
+            "UPDATE leases SET state = 'bogus' WHERE lease_id = 'lease-state'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+
+    assert_eq!(
+        repository.list().unwrap_err().kind(),
+        MezErrorKind::InvalidState
+    );
+    let _ = fs::remove_dir_all(root);
+}
