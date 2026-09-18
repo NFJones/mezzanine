@@ -9,6 +9,8 @@
 
 use std::time::{Duration, Instant};
 
+use mez_terminal::TerminalStyleSpan;
+
 /// Delay before the first busy hint is painted.
 pub(super) const ATTACH_RESPONSE_HINT_THRESHOLD: Duration = Duration::from_millis(500);
 
@@ -73,6 +75,31 @@ impl AttachResponseWatchdog {
     }
 }
 
+/// Overlays one busy-hint row onto a cached client frame.
+///
+/// The caller keeps the last composed frame so a stalled daemon can be answered
+/// with local feedback: this replaces exactly one row with the already-fitted
+/// hint text and drops that row's style spans so server styling cannot bleed
+/// into locally authored text. Other rows, their spans, and the frame length are
+/// left untouched, and a row outside the frame is a no-op.
+pub(super) fn compose_operator_hint(
+    lines: &[String],
+    line_style_spans: &[Vec<TerminalStyleSpan>],
+    row: usize,
+    hint: &str,
+) -> (Vec<String>, Vec<Vec<TerminalStyleSpan>>) {
+    let mut hinted_lines = lines.to_vec();
+    let mut hinted_spans = line_style_spans.to_vec();
+    let Some(line) = hinted_lines.get_mut(row) else {
+        return (hinted_lines, hinted_spans);
+    };
+    *line = hint.to_string();
+    if let Some(row_spans) = hinted_spans.get_mut(row) {
+        row_spans.clear();
+    }
+    (hinted_lines, hinted_spans)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,5 +147,37 @@ mod tests {
         );
         assert!(painted.clear(), "clearing reports the painted hint");
         assert!(!painted.clear(), "the hint is cleared only once");
+    }
+
+    /// Verifies the hint overlay replaces exactly one row, drops that row's
+    /// spans, leaves the rest of the frame intact, and ignores an out-of-range
+    /// row.
+    #[test]
+    fn attach_response_watchdog_composes_hint_overlay() {
+        let lines = vec!["server row one".to_string(), "server row two".to_string()];
+        let spans = vec![
+            vec![],
+            vec![TerminalStyleSpan {
+                start: 0,
+                length: 1,
+                rendition: mez_terminal::GraphicRendition::default(),
+            }],
+        ];
+
+        let (hinted_lines, hinted_spans) =
+            compose_operator_hint(&lines, &spans, 1, "waiting for daemon (1s)");
+        assert_eq!(hinted_lines[0], "server row one");
+        assert_eq!(hinted_lines[1], "waiting for daemon (1s)");
+        assert_eq!(hinted_lines.len(), lines.len());
+        assert!(
+            hinted_spans[1].is_empty(),
+            "local text carries no server spans"
+        );
+        assert_eq!(hinted_spans[0], spans[0]);
+
+        let (untouched_lines, untouched_spans) =
+            compose_operator_hint(&lines, &spans, 7, "waiting for daemon (2s)");
+        assert_eq!(untouched_lines, lines);
+        assert_eq!(untouched_spans, spans);
     }
 }
