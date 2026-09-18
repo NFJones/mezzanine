@@ -819,8 +819,9 @@ impl RuntimeSessionService {
                 );
             }
             // The pool is busy: keep the prior candidates and leave the prompt
-            // unloaded for this generation, so a later invalidation or poll
-            // resubmits instead of queueing another catalog walk.
+            // unloaded for this generation, so the next selector invalidation
+            // or conversation start resubmits instead of queueing another walk.
+            // The poll path never resubmits on its own.
             super::selector_pool::RuntimeAgentSelectorRefreshOutcome::Saturated => {}
             super::selector_pool::RuntimeAgentSelectorRefreshOutcome::Stopped => {
                 if let Some(state) = self.presentation.agent_prompt_inputs.get_mut(pane_id)

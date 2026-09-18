@@ -160,6 +160,13 @@ impl RuntimeAgentSelectorRefreshPool {
     }
 
     /// Stops every worker and waits for it to exit.
+    ///
+    /// A worker waiting on the queue exits as soon as the sender drops, but a
+    /// worker already inside a walk observes the stop flag only when that walk
+    /// returns. Shutdown therefore waits for at most one in-flight walk per
+    /// worker, bounded by the store budgets the walk itself uses (the issues
+    /// read alone shares the five second flock and busy budget), and callers
+    /// that need a hard bound must add their own checkpoint inside the walk.
     pub(crate) fn shutdown(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
         self.sender = None;
@@ -387,7 +394,34 @@ mod tests {
         pool.shutdown();
     }
 
-    /// Verifies teardown stops and joins every worker and refuses new work.
+    /// Verifies shutdown waits for a walk already in flight.
+    ///
+    /// A worker inside its walk observes the stop flag only when the walk
+    /// returns, so teardown latency is bounded by one walk per worker rather
+    /// than by the pool deciding to abandon work. This pins that behaviour so
+    /// a future checkpoint change has to update the test deliberately.
+    #[test]
+    fn selector_refresh_pool_shutdown_waits_for_an_in_flight_walk() {
+        let mut pool = RuntimeAgentSelectorRefreshPool::with_workers(1);
+        let (sender, _receiver) = result_channel();
+        let (snapshot, release) = gated_snapshot();
+        assert_eq!(
+            pool.submit(refresh_key("%1"), 1, snapshot, sender),
+            RuntimeAgentSelectorRefreshOutcome::Queued
+        );
+        wait_for_live_worker(&pool);
+        let shutdown = std::thread::spawn(move || {
+            pool.shutdown();
+        });
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(
+            !shutdown.is_finished(),
+            "shutdown must wait for the walk already in flight"
+        );
+        drop(release);
+        shutdown.join().unwrap();
+    }
+
     #[test]
     fn selector_refresh_pool_shutdown_joins_every_worker() {
         let mut pool = RuntimeAgentSelectorRefreshPool::with_workers(2);
