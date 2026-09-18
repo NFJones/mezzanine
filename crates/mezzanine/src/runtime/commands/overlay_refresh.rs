@@ -25,6 +25,13 @@
 //! A settled claim clears its pending filter target, so a filter whose rebuild
 //! failed or was dropped is not replayed later: the operator presses the key
 //! again once the list is back.
+//!
+//! A rebuild never closes a record detail, so a toggle or filter key pressed from
+//! inside one is discarded rather than applied - the same re-press rule as a
+//! dropped filter - and a delete is the one intent that owns its page even in
+//! detail, because the row that detail showed is gone. A filter key also keeps
+//! the row index the operator was on when the new filters no longer match the
+//! focused record, which is where the raw-index refresh left them.
 
 use super::RuntimeSessionService;
 use crate::error::{MezError, MezErrorKind, Result};
@@ -765,6 +772,17 @@ impl RuntimeSessionService {
                 {
                     return Ok(false);
                 }
+                // Pane-scoped keys are not bumped on registration, so a claim must
+                // still name the overlay it came from; the shared picker key relies
+                // on its dismissal and registration bumps instead.
+                if !matches!(
+                    work.source,
+                    RuntimeRecordBrowserOverlaySource::SavedSessions { .. }
+                ) && self.active_record_browser_refresh_key().as_deref()
+                    != Some(work.refresh_key.as_str())
+                {
+                    return Ok(false);
+                }
                 if !self.active_record_browser_matches(&work.active_source) {
                     return Ok(false);
                 }
@@ -784,6 +802,14 @@ impl RuntimeSessionService {
                     .presentation
                     .record_browser_refresh_generation(&work.refresh_key)
                     != work.generation
+                {
+                    return Ok(false);
+                }
+                if !matches!(
+                    work.source,
+                    RuntimeRecordBrowserOverlaySource::SavedSessions { .. }
+                ) && self.active_record_browser_refresh_key().as_deref()
+                    != Some(work.refresh_key.as_str())
                 {
                     return Ok(false);
                 }

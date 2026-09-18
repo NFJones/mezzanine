@@ -2032,9 +2032,26 @@ fn runtime_agent_shell_record_browser_filter_claims_its_page() {
         .agent_shell_store_mut()
         .enter_or_resume(&pane_id)
         .unwrap();
+    // One issue under the pane's project, so the settled empty page proves the
+    // submitted filter reached the rows rather than an empty store.
+    let project = crate::storage::issues::project_key_for_working_directory(
+        service
+            .pane_current_working_directory(&pane_id)
+            .unwrap_or_else(|| config_root.clone()),
+    );
+    crate::storage::issues::IssueStore::under_config_root(&config_root)
+        .add_issue(
+            project.clone(),
+            mez_agent::issues::IssueKind::Task,
+            "Filtered issue".to_string(),
+            Some("Filtered body".to_string()),
+            None,
+            1,
+        )
+        .unwrap();
     let source = crate::runtime::service_state::RuntimeRecordBrowserOverlaySource::Issues {
-        project_glob: Some("alpha".to_string()),
-        default_project_glob: Some("alpha".to_string()),
+        project_glob: Some(project.clone()),
+        default_project_glob: Some(project.clone()),
         kind: None,
         state: None,
         active_only: false,
@@ -2059,6 +2076,14 @@ fn runtime_agent_shell_record_browser_filter_claims_its_page() {
     service
         .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
         .unwrap();
+    assert_eq!(
+        service
+            .primary_display_overlay()
+            .and_then(|overlay| overlay.record_browser.as_ref())
+            .map(|record_browser| record_browser.browser.records().len()),
+        Some(1),
+        "the fixture opens on the project's issue"
+    );
 
     // Submit a project filter that matches nothing, so the settled page is empty
     // and the retained source proves the filter reached the worker.
