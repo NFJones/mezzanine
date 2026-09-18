@@ -372,7 +372,9 @@ impl RuntimeSessionService {
         if completed_passes >= CONFIGURED_INPUT_COMPACTION_PASS_LIMIT {
             return Err(MezError::invalid_state(format!(
                 "configured input cap cannot be satisfied for this turn after {completed_passes} bounded compaction passes: previous_input_tokens={} current_input_tokens={current_input_tokens} max_input_tokens={max_input_tokens}",
-                previous_input_tokens.unwrap_or(current_input_tokens)
+                // The pass counter only advances together with a recorded estimate,
+                // so reaching the bounded terminal always has one to report.
+                previous_input_tokens.expect("bounded passes record their previous estimate")
             )));
         }
         Ok(RuntimeConfiguredInputCapPassPlan {
@@ -445,7 +447,9 @@ impl RuntimeSessionService {
                 &turn.turn_id,
                 &format!(
                     "configured_input_limit non_reducing_pass completed_passes={completed_passes} previous_input_tokens={} current_input_tokens={} max_input_tokens={max_input_tokens} retry=tightened_budget",
-                    previous_input_tokens.unwrap_or(estimate.input_tokens),
+                    // A non-reducing pass is only ever a pass that followed a
+                    // recorded estimate, so the fallback is unreachable here.
+                    previous_input_tokens.expect("non-reducing passes record their previous estimate"),
                     estimate.input_tokens
                 ),
             )?;
