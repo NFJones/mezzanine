@@ -1144,6 +1144,31 @@ impl RuntimeSessionService {
         self.set_agent_prompt_display_output(pane_id, display_output)
     }
 
+    /// Applies one deferred slash-command response body to the agent prompt.
+    ///
+    /// The deferred executor returns the same response body the inline path
+    /// produced, so parsing it through the inline display path keeps
+    /// presentation byte-identical while the store read itself stayed off the
+    /// serialized actor. Stale outcomes never reach this call: the completion
+    /// compares the claim generation first.
+    pub(crate) fn apply_deferred_agent_shell_response_body(
+        &mut self,
+        pane_id: &str,
+        body: &str,
+    ) -> Result<()> {
+        let display_output = runtime_agent_shell_display_output(
+            body,
+            &self.presentation.settings.ui_theme,
+            usize::from(self.session.authoritative_size.columns),
+            self.presentation.settings.terminal_agent_wrap_column_cap,
+        )?;
+        self.set_agent_prompt_display_output(pane_id, display_output)?;
+        if runtime_agent_shell_visibility(body).as_deref() == Some("hidden") {
+            self.remove_agent_prompt_input(pane_id);
+        }
+        Ok(())
+    }
+
     /// Appends agent shell display output using the declared content renderer.
     pub(super) fn set_agent_prompt_display_output(
         &mut self,

@@ -48,9 +48,10 @@ pub(super) use parse::{
 pub(super) use presentation::rendered_client_view_json;
 pub(super) use status::{
     RuntimeSubagentModelProfiles, agent_shell_visibility_json_name,
-    runtime_agent_shell_command_response_json, runtime_agent_shell_prompt_turn_response_json,
-    runtime_agent_shell_stop_response_json, runtime_agent_turn_state_json,
-    runtime_agent_turn_state_name, runtime_execution_ready_for_provider_continuation,
-    runtime_hook_execution_status_name, runtime_pane_readiness_state_name,
-    runtime_subagent_state_json, runtime_terminal_step_result_json,
+    runtime_agent_shell_command_response_json, runtime_agent_shell_deferred_command_response_json,
+    runtime_agent_shell_prompt_turn_response_json, runtime_agent_shell_stop_response_json,
+    runtime_agent_turn_state_json, runtime_agent_turn_state_name,
+    runtime_execution_ready_for_provider_continuation, runtime_hook_execution_status_name,
+    runtime_pane_readiness_state_name, runtime_subagent_state_json,
+    runtime_terminal_step_result_json,
 };

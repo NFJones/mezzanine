@@ -846,6 +846,30 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Reports whether the active turn accepted the result.
         reply: oneshot::Sender<Result<bool>>,
     },
+    /// Claims one queued deferred slash command for off-actor execution.
+    ClaimAgentCommandWork {
+        /// Primary client that submitted the command.
+        primary_client_id: mez_core::ids::ClientId,
+        /// Pane whose agent shell prompt submitted the command.
+        pane_id: String,
+        /// Canonical command name the disposition classifier deferred.
+        command: String,
+        /// Full prompt input including the command name and arguments.
+        input: String,
+        /// Actor-owned claim generation stamped when the command was dispatched.
+        claim_generation: u64,
+        /// Claimed owned work, or `None` when the claim is stale or unusable.
+        reply: oneshot::Sender<Result<Option<crate::runtime::RuntimeAgentCommandAsyncWork>>>,
+    },
+    /// Applies one settled deferred slash command outcome inside the actor.
+    CompleteAgentCommandWork {
+        /// Work item the outcome belongs to.
+        work: Box<crate::runtime::RuntimeAgentCommandAsyncWork>,
+        /// Worker outcome to apply.
+        outcome: Box<crate::runtime::RuntimeAgentCommandAsyncOutcome>,
+        /// Reports whether the actor applied the outcome instead of dropping it.
+        reply: oneshot::Sender<Result<bool>>,
+    },
     /// Claims a queued model-backed conversation compaction task.
     ClaimAgentCompactionTask {
         /// Pane whose queued compaction should be claimed.
@@ -1243,6 +1267,8 @@ impl AsyncRuntimeRequest {
             | Self::ClaimApprovedExternalAction { .. }
             | Self::ClaimNativeShellAction { .. }
             | Self::CompleteApprovedExternalAction { .. }
+            | Self::ClaimAgentCommandWork { .. }
+            | Self::CompleteAgentCommandWork { .. }
             | Self::ClaimAgentCompactionTask { .. }
             | Self::ClaimAgentRememberTask { .. }
             | Self::ClaimAgentSessionTitleTask { .. }

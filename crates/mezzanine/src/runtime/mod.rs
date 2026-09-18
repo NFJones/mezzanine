@@ -446,8 +446,10 @@ use service_state::{
     RuntimeAgentPromptInput, RuntimeCommandBinding, RuntimeSubagentLineage,
 };
 pub(crate) use service_state::{
-    RuntimeAgentProviderPreparationOutcome, RuntimeAgentProviderPreparationWork,
-    RuntimeMcpDiscoveryOutcome, RuntimeMcpDiscoverySuccess, RuntimePersistentSubagent,
+    RuntimeAgentCommandAsyncOutcome, RuntimeAgentCommandAsyncWork, RuntimeAgentCommandDispatch,
+    RuntimeAgentCommandPrepared, RuntimeAgentProviderPreparationOutcome,
+    RuntimeAgentProviderPreparationWork, RuntimeMcpDiscoveryOutcome, RuntimeMcpDiscoverySuccess,
+    RuntimePersistentSubagent,
 };
 pub(crate) use sockets::hosted_session_socket_path;
 pub use sockets::{
@@ -602,10 +604,11 @@ use json::{
     RuntimeSubagentModelProfiles, agent_shell_visibility_json_name, agent_state_control_method,
     current_unix_seconds, mouse_action_name, mux_action_command_prompt_prefill, mux_action_name,
     optional_path_json, optional_string_json, pane_navigation_direction, rendered_client_view_json,
-    runtime_agent_shell_command_response_json, runtime_agent_shell_prompt_turn_response_json,
-    runtime_agent_shell_stop_response_json, runtime_agent_turn_duration_display,
-    runtime_agent_turn_state_json, runtime_agent_turn_state_name, runtime_command_outcomes_json,
-    runtime_cooperation_mode, runtime_cooperation_mode_name, runtime_copy_position_for_view,
+    runtime_agent_shell_command_response_json, runtime_agent_shell_deferred_command_response_json,
+    runtime_agent_shell_prompt_turn_response_json, runtime_agent_shell_stop_response_json,
+    runtime_agent_turn_duration_display, runtime_agent_turn_state_json,
+    runtime_agent_turn_state_name, runtime_command_outcomes_json, runtime_cooperation_mode,
+    runtime_cooperation_mode_name, runtime_copy_position_for_view,
     runtime_execution_ready_for_provider_continuation, runtime_hook_execution_status_name,
     runtime_initialize_requested_observer, runtime_initialize_requested_primary,
     runtime_initialize_terminal_size, runtime_json_bool_field, runtime_json_creation_command,

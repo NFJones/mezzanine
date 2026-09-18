@@ -960,11 +960,9 @@ pub enum RuntimeSideEffect {
     /// actor: this effect only carries the command the disposition classifier
     /// deferred, and the worker answers with an owned outcome the actor applies
     /// exactly as the inline path would.
-    #[allow(
-        dead_code,
-        reason = "f526838b phase 2 step (b): the dispatcher emits this family once the deferred executor lands"
-    )]
     DispatchAgentCommand {
+        /// Primary client that submitted the command.
+        primary_client_id: mez_core::ids::ClientId,
         /// Pane whose agent shell prompt submitted the command.
         pane_id: String,
         /// Canonical command name the disposition classifier deferred.

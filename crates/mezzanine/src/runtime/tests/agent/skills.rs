@@ -219,6 +219,14 @@ fn runtime_agent_prompt_refreshes_project_overlay_and_project_skills_from_pane_c
     let skills = service
         .execute_agent_shell_command(&primary, "/list-skills")
         .unwrap();
+    assert!(
+        skills.contains(r#""body":null"#),
+        "the deferred lane acknowledges /list-skills before its catalog read: {skills}"
+    );
+    let skills = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /list-skills lane applies its catalog display");
     assert!(skills.contains("Project review workflow"), "{skills}");
     assert!(
         skills.contains("| `$review` | project | Project review workflow |"),
@@ -731,6 +739,14 @@ fn runtime_agent_shell_list_skills_displays_effective_catalog() {
     let response = service
         .execute_agent_shell_command(&primary, "/list-skills")
         .unwrap();
+    assert!(
+        response.contains(r#""body":null"#),
+        "the deferred lane acknowledges /list-skills before its catalog read: {response}"
+    );
+    let response = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /list-skills lane applies its catalog display");
 
     assert!(response.contains("## Skills"), "{response}");
     assert!(response.contains("Start a prompt with `$`"), "{response}");
@@ -778,6 +794,14 @@ fn runtime_agent_shell_list_skills_reports_builtin_catalog_without_external_skil
     let response = service
         .execute_agent_shell_command(&primary, "/list-skills")
         .unwrap();
+    assert!(
+        response.contains(r#""body":null"#),
+        "the deferred lane acknowledges /list-skills before its catalog read: {response}"
+    );
+    let response = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /list-skills lane applies its catalog display");
 
     assert!(
         response.contains("| `$create-skill` | user | Create or modify concise Mezzanine skills"),

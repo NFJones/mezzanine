@@ -855,6 +855,40 @@ impl AsyncRuntimeSessionHandle {
             .await?
     }
 
+    /// Claims one queued deferred slash command for off-actor execution.
+    pub async fn claim_agent_command_work(
+        &self,
+        primary_client_id: mez_core::ids::ClientId,
+        pane_id: String,
+        command: String,
+        input: String,
+        claim_generation: u64,
+    ) -> Result<Option<crate::runtime::RuntimeAgentCommandAsyncWork>> {
+        self.request(|reply| AsyncRuntimeRequest::ClaimAgentCommandWork {
+            primary_client_id,
+            pane_id,
+            command,
+            input,
+            claim_generation,
+            reply,
+        })
+        .await?
+    }
+
+    /// Applies one settled deferred slash command outcome inside the actor.
+    pub async fn complete_agent_command_work(
+        &self,
+        work: crate::runtime::RuntimeAgentCommandAsyncWork,
+        outcome: crate::runtime::RuntimeAgentCommandAsyncOutcome,
+    ) -> Result<bool> {
+        self.request(|reply| AsyncRuntimeRequest::CompleteAgentCommandWork {
+            work: Box::new(work),
+            outcome: Box::new(outcome),
+            reply,
+        })
+        .await?
+    }
+
     /// Claims one queued model-backed durable memory task for async execution.
     pub async fn claim_agent_remember_task(
         &self,

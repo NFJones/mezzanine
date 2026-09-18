@@ -64,6 +64,7 @@ mod approval;
 mod artifacts;
 mod compaction;
 mod context_documents;
+mod deferred;
 mod disposition;
 mod issues;
 mod lists;

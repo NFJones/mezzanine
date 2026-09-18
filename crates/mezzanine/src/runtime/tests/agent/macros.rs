@@ -30,6 +30,14 @@ fn runtime_agent_shell_list_macros_displays_effective_catalog() {
     let response = service
         .execute_agent_shell_command(&primary, "/list-macros")
         .unwrap();
+    assert!(
+        response.contains(r#""body":null"#),
+        "the deferred lane acknowledges /list-macros before its catalog read: {response}"
+    );
+    let response = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /list-macros lane applies its catalog display");
 
     assert!(response.contains("## Macros"), "{response}");
     assert!(response.contains("Start a prompt with `#`"), "{response}");

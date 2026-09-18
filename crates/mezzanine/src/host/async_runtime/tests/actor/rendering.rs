@@ -44,6 +44,7 @@ async fn async_actor_publishes_metrics_snapshot_only_for_control_requests() {
 async fn async_actor_drains_deferred_agent_command_effects() {
     let service = test_service();
     let deferred_command = || RuntimeSideEffect::DispatchAgentCommand {
+        primary_client_id: mez_core::ids::ClientId::parse('c', "c1".to_string()).unwrap(),
         pane_id: "%1".to_string(),
         command: "resume".to_string(),
         input: "/resume".to_string(),

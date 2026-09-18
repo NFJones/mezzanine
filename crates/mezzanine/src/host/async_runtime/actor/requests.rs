@@ -988,6 +988,27 @@ impl AsyncRuntimeSessionActor {
                         });
                         std::mem::drop(join_handle);
                     }
+                    // Deferred slash commands queued by this prompt submission
+                    // become worker-claimed effects in the same drain, so the
+                    // actor request that applied the input never performs the
+                    // command's store or filesystem read itself.
+                    let deferred_commands = self.service.take_pending_deferred_agent_commands();
+                    if !deferred_commands.is_empty() {
+                        self.queue_runtime_side_effects(
+                            deferred_commands
+                                .into_iter()
+                                .map(|dispatch| {
+                                    crate::runtime::RuntimeSideEffect::DispatchAgentCommand {
+                                        primary_client_id: dispatch.primary_client_id,
+                                        pane_id: dispatch.pane_id,
+                                        command: dispatch.command,
+                                        input: dispatch.input,
+                                        claim_generation: dispatch.claim_generation,
+                                    }
+                                })
+                                .collect(),
+                        )?;
+                    }
                     Ok(application)
                 });
                 let _ = reply.send(result);
@@ -1357,6 +1378,49 @@ impl AsyncRuntimeSessionActor {
                         Ok(applied)
                     });
                 let should_notify = result.is_ok();
+                let _ = reply.send(result);
+                if should_notify {
+                    self.notify_event_delivery();
+                }
+                self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
+                false
+            }
+            AsyncRuntimeRequest::ClaimAgentCommandWork {
+                primary_client_id,
+                pane_id,
+                command,
+                input,
+                claim_generation,
+                reply,
+            } => {
+                let result = self.service.claim_agent_command_work(
+                    &primary_client_id,
+                    &pane_id,
+                    &command,
+                    &input,
+                    claim_generation,
+                );
+                let should_notify = result.is_ok();
+                let _ = reply.send(result);
+                if should_notify {
+                    self.notify_event_delivery();
+                }
+                false
+            }
+            AsyncRuntimeRequest::CompleteAgentCommandWork {
+                work,
+                outcome,
+                reply,
+            } => {
+                let previous_lifecycle_state = self.service.lifecycle_state();
+                let result = self
+                    .service
+                    .complete_agent_command_work(&work, *outcome)
+                    .and_then(|applied| {
+                        self.queue_deferred_pane_io_side_effects_from_service()?;
+                        Ok(applied)
+                    });
+                let should_notify = result.as_ref().is_ok_and(|applied| *applied);
                 let _ = reply.send(result);
                 if should_notify {
                     self.notify_event_delivery();

@@ -175,10 +175,6 @@ pub(crate) enum RuntimeSnapshotControlAsyncWorkKind {
 /// The actor owns prompt, overlay, and presentation state; the worker prepares
 /// an owned outcome value from this work item and never reaches into live
 /// service state, mirroring the snapshot control and provider persistence work.
-#[allow(
-    dead_code,
-    reason = "f526838b phase 2 step (b): the worker claim materialises this next"
-)]
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeAgentCommandAsyncWork {
     /// Pane whose agent shell prompt submitted the command.
@@ -191,6 +187,29 @@ pub(crate) struct RuntimeAgentCommandAsyncWork {
     pub input: String,
     /// Actor-owned claim generation compared when the outcome settles.
     pub claim_generation: u64,
+    /// Owned inputs the deferred execution reads instead of live actor state.
+    pub prepared: RuntimeAgentCommandPrepared,
+}
+
+/// Owned inputs one deferred slash command may read off the serialized actor.
+///
+/// The actor captures these while it still owns the pane, so the worker never
+/// reaches into live service state. Every family that moves off the actor names
+/// exactly what it reads here, which keeps the off-actor surface reviewable and
+/// makes an accidental dependency on actor state a compile error.
+#[derive(Debug, Clone)]
+pub(crate) enum RuntimeAgentCommandPrepared {
+    /// Renders one skill or macro catalog from the captured roots.
+    ///
+    /// `/list-skills` and `/list-macros` walk the configured user catalog plus
+    /// the pane's trusted project catalog, which is the filesystem work the
+    /// inline path used to perform inside the actor request.
+    Catalog {
+        /// Configured Mezzanine config root whose catalogs are discovered.
+        config_root: Option<std::path::PathBuf>,
+        /// Trusted project root whose project-scoped catalogs may apply.
+        project_root: Option<std::path::PathBuf>,
+    },
 }
 
 /// Result a worker prepares for the actor to apply.
@@ -198,10 +217,6 @@ pub(crate) struct RuntimeAgentCommandAsyncWork {
 /// Presentation stays byte-identical to the inline path: the actor turns the
 /// response body into the same command response it returns today, and reports a
 /// failure through the same invalid-command response path.
-#[allow(
-    dead_code,
-    reason = "f526838b phase 2 step (b): the completion request consumes this next"
-)]
 #[derive(Debug)]
 pub(crate) enum RuntimeAgentCommandAsyncOutcome {
     /// Command response body the actor returns to the caller.
@@ -214,6 +229,26 @@ pub(crate) enum RuntimeAgentCommandAsyncOutcome {
         /// Diagnostic reported through the invalid-command response path.
         message: String,
     },
+}
+
+/// One deferred slash command the actor queued for off-actor execution.
+///
+/// The prompt-submission path cannot emit side effects directly, so it records
+/// the dispatch here and the actor's step handler drains it into a
+/// [`crate::runtime::RuntimeSideEffect::DispatchAgentCommand`] in the same place
+/// it drains interactive provider refreshes.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeAgentCommandDispatch {
+    /// Primary client that submitted the command.
+    pub primary_client_id: mez_core::ids::ClientId,
+    /// Pane whose agent shell prompt submitted the command.
+    pub pane_id: String,
+    /// Canonical command name the disposition classifier deferred.
+    pub command: String,
+    /// Full prompt input including the command name and arguments.
+    pub input: String,
+    /// Actor-owned claim generation used to drop stale outcomes.
+    pub claim_generation: u64,
 }
 
 /// Repository result returned to the actor after async snapshot control work.

@@ -393,6 +393,13 @@ impl RuntimeSessionService {
         )
     }
 
+    /// Drains deferred slash commands queued by prompt submission.
+    pub(crate) fn take_pending_deferred_agent_commands(
+        &mut self,
+    ) -> Vec<crate::runtime::RuntimeAgentCommandDispatch> {
+        std::mem::take(&mut self.presentation.pending_deferred_agent_commands)
+    }
+
     /// Drains exact clients whose latest divider action must rearm debounce.
     pub(crate) fn take_divider_resize_debounce_requests(&mut self) -> Vec<mez_core::ids::ClientId> {
         self.presentation.take_divider_resize_debounce_requests()

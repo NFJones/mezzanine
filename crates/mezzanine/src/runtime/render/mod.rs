@@ -494,6 +494,8 @@ pub(crate) struct RuntimePresentationComponent {
         std::collections::BTreeMap<String, external_prompt::RuntimeAgentPromptEditSnapshot>,
     /// Provider refreshes submitted from agent prompts awaiting actor dispatch.
     pending_agent_prompt_provider_info_refreshes: Vec<RuntimeAgentPromptProviderInfoRefresh>,
+    /// Deferred slash commands submitted from agent prompts awaiting dispatch.
+    pending_deferred_agent_commands: Vec<crate::runtime::RuntimeAgentCommandDispatch>,
     /// Background selector discoveries keyed by exact client and pane owner.
     agent_prompt_selector_refreshes: std::collections::HashMap<
         (mez_core::ids::ClientId, String),
@@ -1441,6 +1443,14 @@ impl RuntimePresentationComponent {
             .iter()
             .map(|refresh| refresh.primary_client_id.clone())
             .collect()
+    }
+
+    /// Queues one deferred slash command for actor-side effect emission.
+    pub(crate) fn push_pending_deferred_agent_command(
+        &mut self,
+        dispatch: crate::runtime::RuntimeAgentCommandDispatch,
+    ) {
+        self.pending_deferred_agent_commands.push(dispatch);
     }
 
     /// Removes pane-scoped interaction state from every retained client.

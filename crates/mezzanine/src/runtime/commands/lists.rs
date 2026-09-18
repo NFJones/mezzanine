@@ -4,6 +4,10 @@
 //! runtime command facade. It owns the effective skill and macro catalog
 //! displays plus the pane-local modified-file summary used by `/list-skills`,
 //! `/list-macros`, and `/list-modified-files`.
+//!
+//! The skill and macro catalog formatters are free functions because the
+//! deferred executor renders the same catalog off the actor, and both lanes
+//! must produce byte-identical bodies for the same catalog.
 
 use super::{
     AgentShellCommandOutcome, AgentShellVisibility, MezError, Result, RuntimeSessionService,
@@ -23,53 +27,8 @@ impl RuntimeSessionService {
         self.refresh_project_config_layers_for_pane(pane_id)?;
         Ok(AgentShellCommandOutcome::Display {
             command: "list-skills".to_string(),
-            body: self.runtime_agent_skill_catalog_display(pane_id),
+            body: runtime_agent_skill_catalog_body(&self.effective_skill_catalog_for_pane(pane_id)),
         })
-    }
-
-    /// Builds the user-facing skill catalog display for `/list-skills`.
-    ///
-    /// # Parameters
-    /// - `pane_id`: Pane whose config root and trusted project root determine
-    ///   the effective skill set.
-    fn runtime_agent_skill_catalog_display(&self, pane_id: &str) -> String {
-        let catalog = self.effective_skill_catalog_for_pane(pane_id);
-        let mut lines = vec![
-            "## Skills".to_string(),
-            String::new(),
-            "Start a prompt with `$` and press Tab to select a skill by name.".to_string(),
-            "Submit `$<skill-name> [additional context]` to invoke a skill explicitly.".to_string(),
-            String::new(),
-        ];
-        if catalog.skills.is_empty() {
-            lines.push("No skills are currently available.".to_string());
-        } else {
-            lines.push(format!("{} skills available:", catalog.skills.len()));
-            lines.push(String::new());
-            let rows = catalog
-                .skills
-                .iter()
-                .map(|skill| {
-                    vec![
-                        format!("`${}`", skill.name),
-                        skill.source.as_str().to_string(),
-                        skill.description.clone(),
-                    ]
-                })
-                .collect::<Vec<_>>();
-            lines.extend(runtime_markdown_table(
-                &["Skill", "Scope", "Description"],
-                &rows,
-            ));
-        }
-        if !catalog.diagnostics.is_empty() {
-            lines.push(String::new());
-            lines.push("Skipped skill diagnostics:".to_string());
-            lines.extend(catalog.diagnostics.iter().map(|diagnostic| {
-                format!("- `{}` - {}", diagnostic.path.display(), diagnostic.message)
-            }));
-        }
-        lines.join("\n")
     }
 
     /// Executes `/sync-builtin-skills` and reports managed built-in skill updates.
@@ -135,54 +94,8 @@ impl RuntimeSessionService {
         self.refresh_project_config_layers_for_pane(pane_id)?;
         Ok(AgentShellCommandOutcome::Display {
             command: "list-macros".to_string(),
-            body: self.runtime_agent_macro_catalog_display(pane_id),
+            body: runtime_agent_macro_catalog_body(&self.effective_macro_catalog_for_pane(pane_id)),
         })
-    }
-
-    /// Builds the user-facing macro catalog display for `/list-macros`.
-    ///
-    /// # Parameters
-    /// - `pane_id`: Pane whose config root and trusted project root determine
-    ///   the effective macro set.
-    fn runtime_agent_macro_catalog_display(&self, pane_id: &str) -> String {
-        let catalog = self.effective_macro_catalog_for_pane(pane_id);
-        let mut lines = vec![
-            "## Macros".to_string(),
-            String::new(),
-            "Start a prompt with `#` and press Tab to select a macro by name.".to_string(),
-            "Submit `#<macro-name> [additional context]` to invoke a macro explicitly.".to_string(),
-            String::new(),
-        ];
-        if catalog.macros.is_empty() {
-            lines.push("No macros are currently available.".to_string());
-        } else {
-            lines.push(format!("{} macros available:", catalog.macros.len()));
-            lines.push(String::new());
-            let rows = catalog
-                .macros
-                .iter()
-                .map(|macro_summary| {
-                    vec![
-                        format!("`#{}`", macro_summary.name),
-                        macro_summary.source.as_str().to_string(),
-                        macro_summary.step_count.to_string(),
-                        macro_summary.description.clone(),
-                    ]
-                })
-                .collect::<Vec<_>>();
-            lines.extend(runtime_markdown_table(
-                &["Macro", "Scope", "Steps", "Description"],
-                &rows,
-            ));
-        }
-        if !catalog.diagnostics.is_empty() {
-            lines.push(String::new());
-            lines.push("Skipped macro diagnostics:".to_string());
-            lines.extend(catalog.diagnostics.iter().map(|diagnostic| {
-                format!("- `{}` - {}", diagnostic.path.display(), diagnostic.message)
-            }));
-        }
-        lines.join("\n")
     }
 
     /// Executes `/list-modified-files` and returns a compact markdown list.
@@ -241,4 +154,91 @@ impl RuntimeSessionService {
     fn markdown_modified_file_count_span(class_name: &str, sign: char, count: usize) -> String {
         format!(r#"<span class="{class_name}">{sign}{count}</span>"#)
     }
+}
+
+/// Renders the user-facing skill catalog display for `/list-skills`.
+///
+/// The inline and deferred lanes share this formatter so a catalog rendered off
+/// the actor is byte-identical to the one the inline path returned.
+pub(crate) fn runtime_agent_skill_catalog_body(catalog: &mez_agent::SkillCatalog) -> String {
+    let mut lines = vec![
+        "## Skills".to_string(),
+        String::new(),
+        "Start a prompt with `$` and press Tab to select a skill by name.".to_string(),
+        "Submit `$<skill-name> [additional context]` to invoke a skill explicitly.".to_string(),
+        String::new(),
+    ];
+    if catalog.skills.is_empty() {
+        lines.push("No skills are currently available.".to_string());
+    } else {
+        lines.push(format!("{} skills available:", catalog.skills.len()));
+        lines.push(String::new());
+        let rows = catalog
+            .skills
+            .iter()
+            .map(|skill| {
+                vec![
+                    format!("`${}`", skill.name),
+                    skill.source.as_str().to_string(),
+                    skill.description.clone(),
+                ]
+            })
+            .collect::<Vec<_>>();
+        lines.extend(runtime_markdown_table(
+            &["Skill", "Scope", "Description"],
+            &rows,
+        ));
+    }
+    if !catalog.diagnostics.is_empty() {
+        lines.push(String::new());
+        lines.push("Skipped skill diagnostics:".to_string());
+        lines.extend(catalog.diagnostics.iter().map(|diagnostic| {
+            format!("- `{}` - {}", diagnostic.path.display(), diagnostic.message)
+        }));
+    }
+    lines.join("\n")
+}
+
+/// Renders the user-facing macro catalog display for `/list-macros`.
+///
+/// The inline and deferred lanes share this formatter for the same reason as
+/// [`runtime_agent_skill_catalog_body`].
+pub(crate) fn runtime_agent_macro_catalog_body(catalog: &mez_agent::MacroCatalog) -> String {
+    let mut lines = vec![
+        "## Macros".to_string(),
+        String::new(),
+        "Start a prompt with `#` and press Tab to select a macro by name.".to_string(),
+        "Submit `#<macro-name> [additional context]` to invoke a macro explicitly.".to_string(),
+        String::new(),
+    ];
+    if catalog.macros.is_empty() {
+        lines.push("No macros are currently available.".to_string());
+    } else {
+        lines.push(format!("{} macros available:", catalog.macros.len()));
+        lines.push(String::new());
+        let rows = catalog
+            .macros
+            .iter()
+            .map(|macro_summary| {
+                vec![
+                    format!("`#{}`", macro_summary.name),
+                    macro_summary.source.as_str().to_string(),
+                    macro_summary.step_count.to_string(),
+                    macro_summary.description.clone(),
+                ]
+            })
+            .collect::<Vec<_>>();
+        lines.extend(runtime_markdown_table(
+            &["Macro", "Scope", "Steps", "Description"],
+            &rows,
+        ));
+    }
+    if !catalog.diagnostics.is_empty() {
+        lines.push(String::new());
+        lines.push("Skipped macro diagnostics:".to_string());
+        lines.extend(catalog.diagnostics.iter().map(|diagnostic| {
+            format!("- `{}` - {}", diagnostic.path.display(), diagnostic.message)
+        }));
+    }
+    lines.join("\n")
 }

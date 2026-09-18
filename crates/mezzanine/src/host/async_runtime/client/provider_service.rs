@@ -465,6 +465,42 @@ async fn dispatch_agent_provider_side_effects(
                 };
                 workers.spawn(execute_native_shell_action(handle.clone(), dispatch));
             }
+            RuntimeSideEffect::DispatchAgentCommand {
+                primary_client_id,
+                pane_id,
+                command,
+                input,
+                claim_generation,
+            } => {
+                let work = match handle
+                    .claim_agent_command_work(
+                        primary_client_id,
+                        pane_id,
+                        command,
+                        input,
+                        claim_generation,
+                    )
+                    .await
+                {
+                    Ok(Some(work)) => work,
+                    Ok(None) | Err(_) => continue,
+                };
+                let handle = handle.clone();
+                workers.spawn(async move {
+                    let execution_work = work.clone();
+                    let Ok(outcome) = tokio::task::spawn_blocking(move || {
+                        crate::runtime::RuntimeSessionService::execute_deferred_agent_command(
+                            &execution_work,
+                        )
+                    })
+                    .await
+                    else {
+                        return Ok(None);
+                    };
+                    let _ = handle.complete_agent_command_work(work, outcome).await;
+                    Ok(None)
+                });
+            }
             RuntimeSideEffect::DispatchAgentCompaction { pane_id } => {
                 let dispatch = match handle.claim_agent_compaction_task(pane_id.clone()).await {
                     Ok(Some(dispatch)) => dispatch,

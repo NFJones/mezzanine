@@ -67,6 +67,24 @@ pub(crate) fn runtime_terminal_step_result_json(
     )
 }
 
+/// Builds the in-flight response for one deferred agent-shell slash command.
+///
+/// The command has been handed to a worker, so the response carries no body: the
+/// completion applies the real display through the inline display path once the
+/// work settles, and the prompt stays usable in the meantime.
+pub(crate) fn runtime_agent_shell_deferred_command_response_json(
+    pane_id: &str,
+    input: &str,
+    command: &str,
+) -> String {
+    format!(
+        r#"{{"pane_id":"{}","input":"{}","kind":"requires_runtime","command":"{}","body":null,"turn":null}}"#,
+        json_escape(pane_id),
+        json_escape(input),
+        json_escape(command)
+    )
+}
+
 /// Runs the runtime agent shell command response json operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

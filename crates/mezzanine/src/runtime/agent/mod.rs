@@ -293,6 +293,13 @@ pub(crate) struct RuntimeAgentComponent {
     agent_session_patch_records: BTreeMap<String, Vec<RuntimeAgentPatchRecord>>,
     /// Latest model-authored copy output retained by pane.
     agent_copy_outputs: BTreeMap<String, RuntimeAgentCopyOutput>,
+    /// Actor-owned deferred slash-command claim generations by pane.
+    ///
+    /// The dispatcher stamps a generation when it hands store-reading command
+    /// work to a worker, the claim materialises work only while that generation
+    /// is still current, and the completion drops an outcome whose generation a
+    /// resubmitted command has already replaced.
+    agent_command_claim_generations: BTreeMap<String, u64>,
     /// File modification summaries retained by pane and display path.
     agent_modified_files: BTreeMap<String, BTreeMap<String, RuntimeAgentModifiedFileSummary>>,
     /// Panes with explicit planning-mode presentation enabled.
@@ -734,6 +741,27 @@ impl RuntimeAgentCompactionFailureState {
 }
 
 impl RuntimeAgentComponent {
+    /// Returns the current deferred slash-command claim generation for a pane.
+    pub(crate) fn agent_command_claim_generation(&self, pane_id: &str) -> u64 {
+        self.agent_command_claim_generations
+            .get(pane_id)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// Starts one deferred slash-command claim and returns its generation.
+    ///
+    /// Generations only move forward, so a stale worker outcome can never be
+    /// confused with a live claim for the same pane and command.
+    pub(crate) fn begin_agent_command_claim(&mut self, pane_id: &str) -> u64 {
+        let generation = self
+            .agent_command_claim_generation(pane_id)
+            .saturating_add(1);
+        self.agent_command_claim_generations
+            .insert(pane_id.to_string(), generation);
+        generation
+    }
+
     /// Builds agent ownership with configured provider-selection defaults.
     pub(crate) fn with_settings(
         agent_routing: bool,

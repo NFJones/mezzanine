@@ -113,7 +113,7 @@ fn agent_shell_command_plan(input: &str) -> AgentShellCommandPlan {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn agent_shell_invalid_command_response_json(
+pub(super) fn agent_shell_invalid_command_response_json(
     pane_id: &str,
     input: &str,
     error: &MezError,
@@ -467,6 +467,16 @@ impl RuntimeSessionService {
                 ));
             }
         };
+        if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) = outcome.as_ref()
+            && super::deferred::RUNTIME_AGENT_OFF_ACTOR_COMMANDS.contains(&command.as_str())
+        {
+            return self.dispatch_deferred_agent_shell_command(
+                primary_client_id,
+                &pane_id,
+                command,
+                input,
+            );
+        }
         let exit_requires_runtime = outcome.as_ref().is_some_and(|outcome| {
             matches!(
                 outcome,

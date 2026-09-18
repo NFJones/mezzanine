@@ -46,6 +46,10 @@ pub use interaction::{
     RuntimeAgentPromptTurnStart, RuntimeAgentTurnStop, RuntimeConfigApplyReport,
 };
 pub(crate) use lifecycle::RuntimeAgentPatchRecord;
+pub(crate) use lifecycle::{
+    RuntimeAgentCommandAsyncOutcome, RuntimeAgentCommandAsyncWork, RuntimeAgentCommandDispatch,
+    RuntimeAgentCommandPrepared,
+};
 pub use lifecycle::{RuntimeLifecycleState, RuntimeRegistryUpdatePlan};
 pub(crate) use lifecycle::{
     RuntimePreparedConfigReload, RuntimeSnapshotControlAsyncOutcome,
