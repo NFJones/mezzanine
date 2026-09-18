@@ -233,6 +233,18 @@ pub(crate) enum RuntimeAgentCommandPrepared {
         /// Project key the read is scoped to.
         project: String,
     },
+    /// Builds the local issue browser from the captured store read.
+    ///
+    /// `/show-issues` queries the issue database and renders a record browser; the
+    /// worker does both, and the actor installs the browser overlay when the
+    /// outcome settles. The `--save` form keeps the inline path because it also
+    /// writes a page file.
+    IssueBrowser {
+        /// Resolved issue database location captured from live config.
+        database_path: crate::storage::issues::IssueDatabasePath,
+        /// Project key the browser is scoped to by default.
+        project: String,
+    },
 }
 
 /// Result a worker prepares for the actor to apply.
@@ -257,6 +269,21 @@ pub(crate) enum RuntimeAgentCommandAsyncOutcome {
         /// (code)` suffix byte-identical to the inline lane; without it every
         /// deferred failure would render a normalized `invalid_state`.
         kind: crate::error::MezErrorKind,
+    },
+    /// Deferred execution produced a record browser the actor installs.
+    ///
+    /// The inline lane registered the overlay and returned the page body in one
+    /// actor request; the deferred lane hands the browser back so the completion
+    /// can install it with the same call before applying the body.
+    RecordBrowser {
+        /// Response body the actor applies exactly like the inline lane's.
+        body: String,
+        /// Command that owns the overlay registration key.
+        command: String,
+        /// Browser the worker rendered from the captured store read.
+        browser: Box<mez_mux::record_browser::RecordBrowser>,
+        /// Overlay source retained for refreshes and scope indicators.
+        source: Option<super::RuntimeRecordBrowserOverlaySource>,
     },
 }
 

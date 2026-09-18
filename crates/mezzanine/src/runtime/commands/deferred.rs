@@ -30,8 +30,13 @@ use crate::runtime::{
 /// Every entry must also be classified
 /// [`super::disposition::RuntimeAgentSlashCommandDisposition::Deferred`], which
 /// the guard test below pins.
-pub(crate) const RUNTIME_AGENT_OFF_ACTOR_COMMANDS: &[&str] =
-    &["list-skills", "list-macros", "auth-status", "issue"];
+pub(crate) const RUNTIME_AGENT_OFF_ACTOR_COMMANDS: &[&str] = &[
+    "list-skills",
+    "list-macros",
+    "auth-status",
+    "issue",
+    "show-issues",
+];
 
 /// Prepared-input family one moved slash command consumes off the actor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +47,8 @@ pub(crate) enum RuntimeAgentCommandFamily {
     AuthStatus,
     /// Local project issue reads.
     IssueStore,
+    /// Local issue browser reads.
+    IssueBrowser,
 }
 
 /// Returns the prepared-input family for one moved command.
@@ -55,6 +62,7 @@ pub(crate) fn off_actor_command_family(command: &str) -> Option<RuntimeAgentComm
         "list-skills" | "list-macros" => Some(RuntimeAgentCommandFamily::Catalog),
         "auth-status" => Some(RuntimeAgentCommandFamily::AuthStatus),
         "issue" => Some(RuntimeAgentCommandFamily::IssueStore),
+        "show-issues" => Some(RuntimeAgentCommandFamily::IssueBrowser),
         _ => None,
     }
 }
@@ -104,6 +112,11 @@ impl RuntimeSessionService {
                 super::issues::runtime_issues_enabled(self)
                     && self.integration.config_root().is_some()
                     && super::issues::runtime_agent_issue_args_are_read_only(input)
+            }
+            "show-issues" => {
+                super::issues::runtime_issues_enabled(self)
+                    && self.integration.config_root().is_some()
+                    && super::show_records::show_issues_args_are_browser_form(input)
             }
             _ => true,
         }
@@ -209,6 +222,24 @@ impl RuntimeSessionService {
                     ),
                 }
             }
+            RuntimeAgentCommandFamily::IssueBrowser => {
+                let Some(config_root) = self
+                    .integration
+                    .config_root()
+                    .map(std::path::Path::to_path_buf)
+                else {
+                    return Ok(None);
+                };
+                let working_directory = self
+                    .pane_current_working_directory(pane_id)
+                    .unwrap_or_else(|| config_root.clone());
+                RuntimeAgentCommandPrepared::IssueBrowser {
+                    database_path: super::issues::runtime_issue_database_path(self, &config_root),
+                    project: crate::storage::issues::project_key_for_working_directory(
+                        working_directory,
+                    ),
+                }
+            }
         };
         Ok(Some(RuntimeAgentCommandAsyncWork {
             pane_id: pane_id.to_string(),
@@ -288,6 +319,37 @@ impl RuntimeSessionService {
                     }
                 }
             }
+            RuntimeAgentCommandPrepared::IssueBrowser {
+                database_path,
+                project,
+            } => {
+                return match super::show_records::read_issue_browser(
+                    database_path.clone(),
+                    project.clone(),
+                    &work.input,
+                ) {
+                    Ok(read) => {
+                        let outcome = AgentShellCommandOutcome::Display {
+                            command: "show-issues".to_string(),
+                            body: read.markdown,
+                        };
+                        RuntimeAgentCommandAsyncOutcome::RecordBrowser {
+                            body: runtime_agent_shell_command_response_json(
+                                &work.pane_id,
+                                &work.input,
+                                Some(&outcome),
+                            ),
+                            command: "show-issues".to_string(),
+                            browser: Box::new(read.browser),
+                            source: read.source,
+                        }
+                    }
+                    Err(error) => RuntimeAgentCommandAsyncOutcome::Failed {
+                        message: error.message().to_string(),
+                        kind: error.kind(),
+                    },
+                };
+            }
         };
         let outcome = AgentShellCommandOutcome::Display {
             command: work.command.clone(),
@@ -330,6 +392,23 @@ impl RuntimeSessionService {
             RuntimeAgentCommandAsyncOutcome::Response { body } => body,
             RuntimeAgentCommandAsyncOutcome::Failed { message, kind } => {
                 RuntimeSessionService::deferred_agent_command_failure_body(work, &message, kind)
+            }
+            RuntimeAgentCommandAsyncOutcome::RecordBrowser {
+                body,
+                command,
+                browser,
+                source,
+            } => {
+                // The inline lane installed the browser overlay before it returned
+                // the page body, so the deferred lane installs it with the same
+                // call and then applies the body through the same display path.
+                self.register_pending_record_browser_overlay(
+                    &work.pane_id,
+                    &command,
+                    *browser,
+                    source,
+                );
+                body
             }
         };
         self.apply_deferred_agent_shell_response_body(&work.pane_id, &body)?;
@@ -377,6 +456,7 @@ impl RuntimeSessionService {
             let outcome = RuntimeSessionService::execute_deferred_agent_command(&work);
             let body = match &outcome {
                 RuntimeAgentCommandAsyncOutcome::Response { body } => body.clone(),
+                RuntimeAgentCommandAsyncOutcome::RecordBrowser { body, .. } => body.clone(),
                 RuntimeAgentCommandAsyncOutcome::Failed { message, kind } => {
                     RuntimeSessionService::deferred_agent_command_failure_body(
                         &work, message, *kind,

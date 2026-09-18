@@ -928,9 +928,14 @@ fn focused_issue_fix_browser_fixture(
     let response = service
         .execute_agent_shell_command(&primary, "/show-issues")
         .unwrap();
+    assert!(
+        response.contains(r#""body":null"#),
+        "the deferred lane acknowledges /show-issues: {response}"
+    );
     service
-        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
-        .unwrap();
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /show-issues browser applies");
     (service, primary, pane_id, root, vec![recent.id, older.id])
 }
 
@@ -1204,9 +1209,14 @@ enabled = true
     let response = service
         .execute_agent_shell_command(&primary, "/show-issues")
         .unwrap();
+    assert!(
+        response.contains(r#""body":null"#),
+        "the deferred lane acknowledges /show-issues: {response}"
+    );
     service
-        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
-        .unwrap();
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /show-issues browser applies");
 
     let overlay_view = service
         .render_client_view(
@@ -3083,9 +3093,14 @@ fn runtime_agent_shell_show_issues_blocks_open_dependents_then_deletes() {
     let response = service
         .execute_agent_shell_command(&primary, &format!("/show-issues {}", prerequisite.id))
         .unwrap();
+    assert!(
+        response.contains(r#""body":null"#),
+        "the deferred lane acknowledges /show-issues detail: {response}"
+    );
     service
-        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
-        .unwrap();
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /show-issues detail applies");
     apply_record_browser_input(&mut service, &primary, b"d");
 
     assert!(

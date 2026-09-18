@@ -1764,3 +1764,73 @@ fn runtime_agent_shell_issue_reads_fall_back_to_the_inline_lane() {
         "a disabled issue store must not queue deferred work"
     );
 }
+
+/// Verifies `/show-issues` builds its browser off the actor and installs the
+/// overlay when the outcome settles, while the `--save` form stays inline.
+#[test]
+fn runtime_agent_shell_show_issues_defers_its_browser_and_installs_the_overlay() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let config_root = temp_root("runtime-show-issues-deferred");
+    service.set_config_root(config_root.clone());
+
+    service
+        .execute_agent_shell_command(&primary, "/issue add --title \"Browser lane\"")
+        .unwrap();
+    assert!(
+        service.pending_record_browser_overlays_is_empty(),
+        "the inline mutation must not install a browser overlay"
+    );
+
+    let show = service
+        .execute_agent_shell_command(&primary, "/show-issues")
+        .unwrap();
+    assert!(
+        show.contains(r#""body":null"#),
+        "the deferred lane acknowledges /show-issues before its store read: {show}"
+    );
+    assert!(
+        service.pending_record_browser_overlays_is_empty(),
+        "the overlay must arrive with the settled outcome"
+    );
+
+    let body = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /show-issues browser applies");
+    assert!(body.contains("Browser lane"), "{body}");
+    let overlay = service
+        .primary_display_overlay()
+        .expect("the deferred browser completion should open the record-browser overlay");
+    let record_browser = overlay
+        .record_browser
+        .as_ref()
+        .expect("the overlay should retain record-browser state");
+    assert_eq!(record_browser.pane_id, "%1");
+    assert_eq!(record_browser.command, "show-issues");
+    assert_eq!(record_browser.browser.render_page().title, "Issues");
+    assert!(
+        service.pending_record_browser_overlays_is_empty(),
+        "the applied display consumes the pending overlay"
+    );
+
+    // The --save form writes a page file, so it keeps the inline path.
+    let save_path = config_root.join("issues-page.md");
+    let saved = service
+        .execute_agent_shell_command(
+            &primary,
+            &format!("/show-issues --save {}", save_path.display()),
+        )
+        .unwrap();
+    assert!(saved.contains("show-issues saved path="), "{saved}");
+    assert!(
+        save_path.exists(),
+        "the inline --save form writes its page file"
+    );
+}

@@ -362,8 +362,6 @@ impl RuntimeSessionService {
         pane_id: &str,
         input: &str,
     ) -> Result<AgentShellCommandOutcome> {
-        let slash = parse_slash_command(input)?
-            .ok_or_else(|| MezError::invalid_args("show-issues command must be a slash command"))?;
         if !issues::runtime_issues_enabled(self) {
             return Err(MezError::invalid_args(
                 "show-issues requires issues.enabled to be true",
@@ -378,85 +376,28 @@ impl RuntimeSessionService {
                 "show-issues requires a configured config root",
             ));
         };
-        let args = parse_show_issues_args(&slash.args)?;
         let working_directory = self
             .pane_current_working_directory(pane_id)
             .unwrap_or_else(|| config_root.clone());
         let current_project =
             crate::storage::issues::project_key_for_working_directory(working_directory);
-        let project_glob = args
-            .project_glob
-            .clone()
-            .or_else(|| (!args.all_projects).then_some(current_project.clone()));
-        let store = crate::storage::issues::IssueStore::from_database_path(
+        let read = read_issue_browser(
             issues::runtime_issue_database_path(self, &config_root),
-        );
-        let issue_state = args.state;
-        let source = Some(RuntimeRecordBrowserOverlaySource::Issues {
-            project_glob: project_glob.clone(),
-            default_project_glob: project_glob.clone(),
-            kind: args.kind,
-            state: issue_state,
-            active_only: args.state.is_none() && args.detail_id.is_none(),
-            text: args.text.clone(),
-            limit: args.limit,
-        });
-        let records = if let Some(id) = args.detail_id.as_ref() {
-            store
-                .get_issue(current_project, id.clone())?
-                .into_iter()
-                .collect::<Vec<_>>()
-        } else {
-            let query = mez_agent::issues::IssueBrowserQuery::new(
-                project_glob.clone(),
-                args.kind,
-                issue_state,
-                args.text.clone(),
-                Some(args.limit),
-            )?;
-            store
-                .query_issue_browser(&query)?
-                .into_iter()
-                .filter(|record| {
-                    !matches!(record.state, mez_agent::issues::IssueState::Resolved)
-                        || !source.as_ref().is_some_and(|source| {
-                            matches!(
-                                source,
-                                RuntimeRecordBrowserOverlaySource::Issues {
-                                    active_only: true,
-                                    ..
-                                }
-                            )
-                        })
-                })
-                .collect()
-        };
-        let mut browser = RecordBrowser::new(
-            if args.detail_id.is_some() {
-                "Issue detail"
-            } else {
-                "Issues"
-            },
-            records.into_iter().map(issue_browser_record).collect(),
-            issue_kind_filter_choices(),
+            current_project,
+            input,
         )?;
-        browser.enable_deletion();
-        configure_issue_record_browser(&mut browser);
-        browser.set_kind_filter_value(args.kind.map(|kind| kind.as_str().to_string()))?;
-        if let Some(source) = source.as_ref() {
-            set_record_browser_scope_indicator(&mut browser, source);
+        if let Some(path) = read.save_path {
+            return self.save_record_browser_page(pane_id, "show-issues", path, read.markdown);
         }
-        if args.detail_id.is_some() {
-            browser.show_first_record_detail();
-        }
-        let page = browser.render_page();
-        if let Some(path) = args.save_path {
-            return self.save_record_browser_page(pane_id, "show-issues", path, page.raw_markdown);
-        }
-        self.register_pending_record_browser_overlay(pane_id, "show-issues", browser, source);
+        self.register_pending_record_browser_overlay(
+            pane_id,
+            "show-issues",
+            read.browser,
+            read.source,
+        );
         Ok(AgentShellCommandOutcome::Display {
             command: "show-issues".to_string(),
-            body: page.raw_markdown,
+            body: read.markdown,
         })
     }
 
@@ -1056,6 +997,119 @@ fn configure_context_record_browser(browser: &mut RecordBrowser) {
     browser.set_empty_message(Some(
         "No transcript entries found for the active pane.".to_string(),
     ));
+}
+
+/// One `/show-issues` read rendered for whichever lane asked for it.
+pub(crate) struct RuntimeIssueBrowserRead {
+    /// Browser the actor installs as the pane overlay.
+    pub browser: RecordBrowser,
+    /// Overlay source retained for refreshes and scope indicators.
+    pub source: Option<RuntimeRecordBrowserOverlaySource>,
+    /// Page markdown the response body carries.
+    pub markdown: String,
+    /// `--save` destination argument, when the invocation asked for a page file.
+    pub save_path: Option<String>,
+}
+
+/// Builds the `/show-issues` browser from one issue-store read.
+///
+/// The inline handler and the deferred executor share this sequence, so the page,
+/// the overlay, and the scope indicator are identical whichever lane produced
+/// them. Saving is the caller's job: the inline lane writes the page file, and the
+/// deferred gate keeps the `--save` form on that lane.
+pub(crate) fn read_issue_browser(
+    database_path: crate::storage::issues::IssueDatabasePath,
+    current_project: String,
+    input: &str,
+) -> Result<RuntimeIssueBrowserRead> {
+    let slash = parse_slash_command(input)?
+        .ok_or_else(|| MezError::invalid_args("show-issues command must be a slash command"))?;
+    let args = parse_show_issues_args(&slash.args)?;
+    let project_glob = args
+        .project_glob
+        .clone()
+        .or_else(|| (!args.all_projects).then_some(current_project.clone()));
+    let store = crate::storage::issues::IssueStore::from_database_path(database_path);
+    let issue_state = args.state;
+    let source = Some(RuntimeRecordBrowserOverlaySource::Issues {
+        project_glob: project_glob.clone(),
+        default_project_glob: project_glob.clone(),
+        kind: args.kind,
+        state: issue_state,
+        active_only: args.state.is_none() && args.detail_id.is_none(),
+        text: args.text.clone(),
+        limit: args.limit,
+    });
+    let records = if let Some(id) = args.detail_id.as_ref() {
+        store
+            .get_issue(current_project, id.clone())?
+            .into_iter()
+            .collect::<Vec<_>>()
+    } else {
+        let query = mez_agent::issues::IssueBrowserQuery::new(
+            project_glob.clone(),
+            args.kind,
+            issue_state,
+            args.text.clone(),
+            Some(args.limit),
+        )?;
+        store
+            .query_issue_browser(&query)?
+            .into_iter()
+            .filter(|record| {
+                !matches!(record.state, mez_agent::issues::IssueState::Resolved)
+                    || !source.as_ref().is_some_and(|source| {
+                        matches!(
+                            source,
+                            RuntimeRecordBrowserOverlaySource::Issues {
+                                active_only: true,
+                                ..
+                            }
+                        )
+                    })
+            })
+            .collect()
+    };
+    let mut browser = RecordBrowser::new(
+        if args.detail_id.is_some() {
+            "Issue detail"
+        } else {
+            "Issues"
+        },
+        records.into_iter().map(issue_browser_record).collect(),
+        issue_kind_filter_choices(),
+    )?;
+    browser.enable_deletion();
+    configure_issue_record_browser(&mut browser);
+    browser.set_kind_filter_value(args.kind.map(|kind| kind.as_str().to_string()))?;
+    if let Some(source) = source.as_ref() {
+        set_record_browser_scope_indicator(&mut browser, source);
+    }
+    if args.detail_id.is_some() {
+        browser.show_first_record_detail();
+    }
+    let page = browser.render_page();
+    Ok(RuntimeIssueBrowserRead {
+        browser,
+        source,
+        markdown: page.raw_markdown,
+        save_path: args.save_path,
+    })
+}
+
+/// Reports whether one `/show-issues` invocation renders a browser overlay.
+///
+/// The `--save` form writes a page file, so it keeps running inline until the
+/// deferred outcome can carry a mutation body the way the browser form carries
+/// the overlay.
+pub(crate) fn show_issues_args_are_browser_form(input: &str) -> bool {
+    let Ok(Some(invocation)) = parse_slash_command(input) else {
+        return false;
+    };
+    matches!(
+        parse_show_issues_args(invocation.args.trim()),
+        Ok(args) if args.save_path.is_none()
+    )
 }
 
 /// Applies the table presentation shared by issue browser construction paths.
