@@ -1,7 +1,10 @@
 //! Async-runtime tests owned by rendering behavior.
 
 use super::super::*;
-use crate::host::terminal::MouseAction;
+use crate::host::terminal::{
+    AttachedTerminalClientStepPlan, MouseAction, TerminalClientLoopAction, TerminalClientLoopConfig,
+};
+use mez_mux::layout::SplitDirection;
 
 /// Verifies that a foreground resize signal can wake the render path without
 /// directly mutating geometry in the actor event. The attached terminal service
@@ -972,6 +975,154 @@ async fn async_actor_coalesces_render_side_effects_by_client() {
     assert_eq!(exit.metrics.runtime_side_effects_queued, 3);
     assert_eq!(exit.metrics.runtime_side_effects_drained, 3);
     assert_eq!(exit.metrics.render_invalidations_coalesced, 1);
+}
+
+/// Verifies a rejected side-effect enqueue leaves the pending divider gesture
+/// state recoverable for the caller's retry.
+///
+/// The enqueue reconciles pending divider render effects, whose superseded
+/// branch clears the mouse resize-drag state and takes the pending
+/// agent-presentation resize dispatches. That reconciliation must run only once
+/// the enqueue is admitted, otherwise a queue-full rejection destroys work
+/// whose only remaining copy was the failed enqueue.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_rejected_enqueue_preserves_divider_gesture_state() {
+    let mut service = test_service();
+    service.start_initial_pane_process(None).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let size = Size::new(80, 24).unwrap();
+    let source = service.attach_primary("source", true, size, 120).unwrap();
+    service
+        .session_mut_for_tests()
+        .split_active_pane(&source, SplitDirection::Vertical)
+        .unwrap();
+    let border = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap()
+        .mouse_border_cells
+        .into_iter()
+        .next()
+        .expect("vertical split should expose a divider");
+    let drag = |column| AttachedTerminalClientStepPlan {
+        actions: vec![TerminalClientLoopAction::HandleMouse(
+            MouseAction::ResizePane {
+                column,
+                row: border.row,
+            },
+        )],
+        output_lines: Vec::new(),
+        output_line_style_spans: Vec::new(),
+        input_hangup: false,
+        output_hangup: false,
+        error_roles: Vec::new(),
+    };
+    for column in [border.column, border.column.saturating_add(3)] {
+        service
+            .apply_attached_terminal_step_transition(&source, &drag(column))
+            .unwrap();
+    }
+    let queued_provider_effect = || RuntimeSideEffect::DispatchAgentProvider {
+        agent_id: AgentId::opaque("agent-%1").unwrap(),
+        turn_id: "turn-1".to_string(),
+    };
+    // The batch supersedes the pending divider render (visible geometry) and
+    // carries a non-droppable effect, so a full queue rejects it instead of
+    // evicting the repaint and admitting the rest.
+    let superseding_batch = || {
+        vec![
+            RuntimeSideEffect::RenderClient {
+                client_id: source.clone(),
+                reason: RenderInvalidationReason::FullRedraw,
+            },
+            queued_provider_effect(),
+        ]
+    };
+    assert!(
+        service.pending_divider_render_effects_are_superseded(&superseding_batch()),
+        "the drag fixture must leave deferred divider geometry"
+    );
+
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .config(AsyncRuntimeActorConfig {
+            side_effect_buffer: 2,
+            ..AsyncRuntimeActorConfig::default()
+        })
+        .build()
+        .unwrap();
+    // The actor only makes progress while its future is polled, so the whole
+    // request sequence runs concurrently with it.
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![queued_provider_effect(), queued_provider_effect()])
+            .await
+            .unwrap();
+        let error = handle
+            .queue_runtime_side_effects(superseding_batch())
+            .await
+            .expect_err("a full queue must reject the superseding batch");
+        assert!(
+            error.message().contains("capacity="),
+            "the rejection is the bounded-capacity failure: {}",
+            error.message()
+        );
+        let rejected = handle.drain_runtime_side_effects(8).await.unwrap();
+        assert_eq!(
+            rejected
+                .iter()
+                .filter(|effect| **effect == queued_provider_effect())
+                .count(),
+            2,
+            "the pre-existing queued work survives the rejection: {rejected:?}"
+        );
+        assert!(
+            rejected
+                .iter()
+                .filter(|effect| matches!(effect, RuntimeSideEffect::RenderClient { .. }))
+                .count()
+                <= 1,
+            "only the documented compensation redraw is admitted outside the budget: {rejected:?}"
+        );
+        assert!(
+            !rejected.iter().any(|effect| matches!(
+                effect,
+                RuntimeSideEffect::DispatchAgentPresentationResize { .. }
+            )),
+            "the rejected batch must not merge the pending divider dispatches: {rejected:?}"
+        );
+        // The retry still finds the gesture state, so this enqueue merges the
+        // pending divider resize dispatches instead of filtering them away.
+        handle
+            .queue_runtime_side_effects(superseding_batch())
+            .await
+            .expect("the drained queue admits the retry");
+        let retried = handle.drain_runtime_side_effects(8).await.unwrap();
+        assert!(
+            retried.contains(&RuntimeSideEffect::RenderClient {
+                client_id: source.clone(),
+                reason: RenderInvalidationReason::FullRedraw,
+            }),
+            "the admitted retry enqueues the batch the rejection left untouched: {retried:?}"
+        );
+        assert!(
+            retried.contains(&queued_provider_effect()),
+            "the admitted retry carries the whole batch: {retried:?}"
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    assert!(
+        !exit
+            .service
+            .pending_divider_render_effects_are_superseded(&superseding_batch()),
+        "the admitted retry consumes the divider gesture state"
+    );
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that render invalidations are coalesced before the actor applies

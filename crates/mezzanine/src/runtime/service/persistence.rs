@@ -19,6 +19,16 @@ impl RuntimeSessionService {
         &self.session
     }
 
+    /// Returns the session for focused tests that build pane layouts.
+    ///
+    /// Test modules outside the runtime module cannot reach the private
+    /// session field, and dividing panes needs mutable session access to create
+    /// the divider geometry those regressions assert on.
+    #[cfg(test)]
+    pub(crate) fn session_mut_for_tests(&mut self) -> &mut Session {
+        &mut self.session
+    }
+
     /// Attaches the session registry used to publish live session metadata.
     ///
     /// Foreground daemons call this after constructing the service so attach,
