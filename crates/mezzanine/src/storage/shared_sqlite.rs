@@ -17,7 +17,9 @@
 //! creates, migrates, or writes any store other than the one it is handed: it
 //! touches the database file, that file's `-wal`/`-shm` sidecars, and the
 //! database's parent directory, which it creates and restricts to 0700. The
-//! parent directory is therefore required to be dedicated to that one store.
+//! parent directory must therefore be a store root owned by the same user (one
+//! store's own directory, or a private root that only this user's stores and
+//! their sidecars occupy), never a shared or world-writable directory.
 //!
 //! Read-only opens: the only open entry point here is read-write and may
 //! create the file and apply the WAL pragma. A conversion that must let a

@@ -2209,7 +2209,10 @@ impl AgentTranscriptStore {
         &self,
         command: &ReadlineHistoryEntry,
     ) -> Result<bool> {
-        if command.text.trim().is_empty() || !command.is_valid() {
+        if command.text.trim().is_empty()
+            || command.text.len() > mez_mux::readline::MAX_READLINE_HISTORY_ENTRY_BYTES
+            || !command.is_valid()
+        {
             return Ok(false);
         }
         self.ensure_store_dir()?;
@@ -2264,9 +2267,6 @@ impl AgentTranscriptStore {
         &self,
         command: ReadlineHistoryEntry,
     ) -> Result<bool> {
-        if command.text.trim().is_empty() || !command.is_valid() {
-            return Ok(false);
-        }
         let store = self.clone();
         tokio::task::spawn_blocking(move || {
             store.append_structured_command_prompt_history(&command)

@@ -131,6 +131,11 @@ pub(super) fn read(root: &Path, scope: HistoryScope) -> Result<Vec<ReadlineHisto
         return legacy_entries(root, scope);
     };
     let version = schema_version(&connection)?;
+    if version == 0 {
+        // A writer may have created the file but not yet published the schema,
+        // so the legacy files are still the source of truth for a reader.
+        return legacy_entries(root, scope);
+    }
     if version != HISTORY_SCHEMA_VERSION {
         return Err(MezError::invalid_state(format!(
             "prompt history database schema version {version} does not match this build's version {HISTORY_SCHEMA_VERSION}; restart with the build that wrote it, or delete {} and let the next write import the legacy files",
@@ -406,15 +411,27 @@ fn retain_within_bounds(transaction: &Transaction<'_>, scope: HistoryScope) -> R
         removed += 1;
         retained = retained.saturating_sub(1);
     }
-    if removed > 0
-        && let Some((cutoff, _)) = entries.get(removed)
-    {
-        transaction
-            .execute(
-                "DELETE FROM history WHERE scope = ?1 AND position < ?2",
-                params![scope.as_str(), cutoff],
-            )
-            .map_err(database_error)?;
+    if removed > 0 {
+        match entries.get(removed) {
+            Some((cutoff, _)) => {
+                transaction
+                    .execute(
+                        "DELETE FROM history WHERE scope = ?1 AND position < ?2",
+                        params![scope.as_str(), cutoff],
+                    )
+                    .map_err(database_error)?;
+            }
+            None => {
+                // The scope is smaller than one retained row's budget, so the
+                // only state inside the bounds is an empty scope.
+                transaction
+                    .execute(
+                        "DELETE FROM history WHERE scope = ?1",
+                        params![scope.as_str()],
+                    )
+                    .map_err(database_error)?;
+            }
+        }
     }
     Ok(())
 }
@@ -507,6 +524,68 @@ mod tests {
 
         assert!(append(&root, HistoryScope::Agent, &entry).is_err());
         assert!(read(&root, HistoryScope::Agent).is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A scope whose single retained row already exceeds the byte budget is
+    /// emptied instead of keeping a row the read path would always trim.
+    #[test]
+    fn history_retention_empties_a_scope_that_cannot_fit_one_row() {
+        let root = test_root("oversized-row");
+        let oversized = "x".repeat(mez_mux::readline::MAX_READLINE_HISTORY_BYTES + 1);
+        assert!(
+            append(
+                &root,
+                HistoryScope::Agent,
+                &ReadlineHistoryEntry::literal("seed")
+            )
+            .unwrap()
+        );
+
+        let connection = rusqlite::Connection::open(database_path(&root)).unwrap();
+        connection
+            .execute(
+                "UPDATE history SET text = ?1, collapsed_paste_ranges = '0:1' WHERE scope = 'agent'",
+                params![oversized],
+            )
+            .unwrap();
+        drop(connection);
+
+        // The tail text matches, so the append only replaces the representation
+        // and then trims a scope that cannot hold even one such row.
+        assert!(
+            append(
+                &root,
+                HistoryScope::Agent,
+                &ReadlineHistoryEntry::literal(&oversized)
+            )
+            .unwrap()
+        );
+        assert!(read(&root, HistoryScope::Agent).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A database file whose schema version is not published yet keeps readers
+    /// on the legacy files instead of failing them.
+    #[test]
+    fn history_read_falls_back_while_the_schema_version_is_unpublished() {
+        let root = test_root("unpublished-schema");
+        let entry = ReadlineHistoryEntry::literal("shared prompt");
+        let row = super::super::encoding::encode_structured_prompt_history_entry(&entry).unwrap();
+        std::fs::write(
+            root.join(LEGACY_AGENT_HISTORY_FILE_NAME),
+            format!("{row}\n"),
+        )
+        .unwrap();
+        let connection = rusqlite::Connection::open(database_path(&root)).unwrap();
+        connection
+            .execute_batch("CREATE TABLE history (scope TEXT);")
+            .unwrap();
+        drop(connection);
+
+        let entries = read(&root, HistoryScope::Agent).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].text, "shared prompt");
         let _ = std::fs::remove_dir_all(root);
     }
 }
