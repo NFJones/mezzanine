@@ -2369,6 +2369,15 @@ impl RuntimeSessionService {
         // A registration owns the key: without a source the previous entry must
         // go, or a later refresh of this overlay would query the old backend and
         // replace the browser the caller just registered.
+        if matches!(
+            &source,
+            Some(RuntimeRecordBrowserOverlaySource::SavedSessions { .. })
+        ) {
+            // A picker opening now must not inherit a claim queued for the picker
+            // it replaces.
+            self.presentation
+                .begin_record_browser_refresh(crate::runtime::SAVED_SESSION_OVERLAY_REFRESH_KEY);
+        }
         match source {
             Some(source) => {
                 self.presentation

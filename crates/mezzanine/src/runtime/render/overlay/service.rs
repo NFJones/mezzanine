@@ -565,6 +565,7 @@ impl RuntimeSessionService {
                 source,
                 RuntimeRecordBrowserOverlaySource::SavedSessions { .. }
             ) {
+                self.set_active_saved_session_browser_source(source.clone());
                 self.begin_record_browser_preserving_claim(source, active_record_id)?;
                 return Ok(Some(false));
             }
@@ -600,6 +601,7 @@ impl RuntimeSessionService {
                 .active_record_id()
                 .map(str::to_string);
             let source = self.record_browser_source_toggled_subagents(&source);
+            self.set_active_saved_session_browser_source(source.clone());
             self.begin_record_browser_preserving_claim(source, active_record_id)?;
             return Ok(Some(false));
         }
@@ -613,6 +615,7 @@ impl RuntimeSessionService {
                 return Ok(Some(false));
             };
             let source = self.record_browser_source_toggled_session_lifecycle(&source);
+            self.set_active_saved_session_browser_source(source.clone());
             self.begin_record_browser_preserving_claim(source, None)?;
             return Ok(Some(false));
         }
@@ -1713,6 +1716,7 @@ impl RuntimeSessionService {
                     mez_mux::record_browser::RecordBrowserFilterField::Text,
                     query.as_deref().unwrap_or_default(),
                 )?;
+                self.set_active_saved_session_browser_source(source.clone());
                 self.begin_record_browser_preserving_claim(source, active_record_id)?;
                 return Ok(false);
             }
@@ -1843,6 +1847,42 @@ impl RuntimeSessionService {
         ))
     }
 
+    /// Sets the source the active saved-session browser retains.
+    ///
+    /// A filter key switches the source as it arrives, so the next key composes
+    /// with the filter the operator just set; the rebuilt page for that source
+    /// arrives from the refresh lane.
+    pub(crate) fn set_active_saved_session_browser_source(
+        &mut self,
+        source: RuntimeRecordBrowserOverlaySource,
+    ) {
+        let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+            return;
+        };
+        let Some(record_browser) = overlay.record_browser.as_mut() else {
+            return;
+        };
+        if matches!(
+            record_browser.source,
+            Some(RuntimeRecordBrowserOverlaySource::SavedSessions { .. })
+        ) {
+            record_browser.source = Some(source);
+        }
+    }
+
+    /// Reports whether the active saved-session browser shows one record's detail.
+    ///
+    /// A deferred rebuild must not replace the page the operator opened into
+    /// detail after the claim was made, so the completion drops it while this is
+    /// true.
+    pub(crate) fn active_saved_session_browser_is_detail(&self) -> bool {
+        self.presentation
+            .primary_display_overlay
+            .as_ref()
+            .and_then(|overlay| overlay.record_browser.as_ref())
+            .is_some_and(|record_browser| record_browser.browser.is_detail_view())
+    }
+
     /// Records one refresh failure on the active saved-session browser.
     ///
     /// The inline refresh surfaced a failed rebuild by rebuilding the page with
@@ -1891,7 +1931,14 @@ impl RuntimeSessionService {
 
     /// Dismisses the primary display overlay after deferred resume succeeds.
     pub(crate) fn dismiss_primary_display_overlay(&mut self) -> bool {
-        self.presentation.primary_display_overlay.take().is_some()
+        let dismissed = self.presentation.primary_display_overlay.take().is_some();
+        if dismissed {
+            // Claims queued for the picker belong to a page that just closed; a
+            // reopen must not inherit their rebuild.
+            self.presentation
+                .begin_record_browser_refresh(crate::runtime::SAVED_SESSION_OVERLAY_REFRESH_KEY);
+        }
+        dismissed
     }
 
     /// Shows or clears the primary-client command display overlay.

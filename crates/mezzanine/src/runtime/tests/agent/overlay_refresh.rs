@@ -178,6 +178,14 @@ fn saved_session_scope_toggle_enabled(service: &RuntimeSessionService) -> bool {
         .is_some_and(|record_browser| record_browser.browser.scope_toggle_enabled())
 }
 
+/// Reports whether the active saved-session picker shows one record's detail.
+fn saved_session_detail_open(service: &RuntimeSessionService) -> bool {
+    service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .is_some_and(|record_browser| record_browser.browser.is_detail_view())
+}
+
 /// Steps the picker cursor onto the last row of the installed page.
 fn move_saved_session_cursor_to_last_row(
     service: &mut RuntimeSessionService,
@@ -424,4 +432,104 @@ fn overlay_refresh_adjacent_page_keeps_the_retained_scope_toggle() {
         "the scope toggle claims the directory page again"
     );
     assert_eq!(saved_session_page_ids(&service), scoped_ids);
+}
+
+/// Verifies a settling rebuild leaves a record the operator opened into detail.
+///
+/// The detail view keeps the picker's source, so the staleness guard alone would
+/// let an in-flight rebuild replace the browser and close the detail; the
+/// completion drops that rebuild instead.
+#[test]
+fn overlay_refresh_settles_without_closing_an_open_detail_view() {
+    let mut service = test_runtime_service();
+    let primary = open_saved_session_picker(&mut service, "overlay-refresh-detail", 45);
+    service
+        .apply_primary_display_overlay_input(&primary, b"u")
+        .unwrap();
+    service
+        .apply_primary_display_overlay_input(&primary, b"i")
+        .unwrap();
+    assert!(
+        saved_session_detail_open(&service),
+        "the focused row opens its detail view"
+    );
+    assert!(
+        !service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "a settling rebuild must not close the open detail"
+    );
+    assert!(saved_session_detail_open(&service));
+}
+
+/// Verifies two filter keys pressed before settlement compose into one page.
+///
+/// A filter key switches the retained source as it arrives, so the second target
+/// is derived from the first filter instead of the page the picker still shows.
+#[test]
+fn overlay_refresh_composes_filter_keys_pressed_before_settlement() {
+    let mut service = test_runtime_service();
+    let primary = open_saved_session_picker(&mut service, "overlay-refresh-compose-filters", 45);
+    service
+        .apply_primary_display_overlay_input(&primary, b"u")
+        .unwrap();
+    service
+        .apply_primary_display_overlay_input(&primary, b"r")
+        .unwrap();
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the newest claim installs the composed page"
+    );
+    let source = service
+        .active_saved_session_browser_source()
+        .expect("the picker stays open");
+    let RuntimeRecordBrowserOverlaySource::SavedSessions {
+        include_subagents,
+        lifecycle,
+        ..
+    } = source
+    else {
+        panic!("the picker keeps a saved-session source");
+    };
+    assert!(
+        include_subagents,
+        "the subagent toggle survives the second key"
+    );
+    assert!(matches!(lifecycle, SavedSessionLifecycleFilter::Archived));
+}
+
+/// Verifies a dismissed picker's pending filter does not install on reopen.
+///
+/// Dismissal and registration both invalidate the picker's outstanding claims, so
+/// a picker opened afterwards shows its own page instead of inheriting the closed
+/// one's rebuild.
+#[test]
+fn overlay_refresh_drops_a_pending_filter_after_dismiss_and_reopen() {
+    let mut service = test_runtime_service();
+    let primary = open_saved_session_picker(&mut service, "overlay-refresh-reopen", 45);
+    let first_ids = saved_session_page_ids(&service);
+    service
+        .apply_primary_display_overlay_input(&primary, b"u")
+        .unwrap();
+    assert!(service.dismiss_primary_display_overlay());
+    let response = service
+        .execute_agent_shell_command(&primary, "/resume")
+        .unwrap();
+    assert!(
+        response.contains(r#""body":null"#),
+        "the deferred lane acknowledges the reopened /resume: {response}"
+    );
+    service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the reopened picker applies its page");
+    assert!(
+        !service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "a dismissed claim must not install into the reopened picker"
+    );
+    assert_eq!(saved_session_page_ids(&service), first_ids);
 }

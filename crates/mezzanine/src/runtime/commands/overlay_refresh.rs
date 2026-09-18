@@ -14,10 +14,11 @@
 //! claim that lands while a page-edge fetch is still queued replaces that step
 //! instead of applying it twice.
 //!
-//! A filter change switches the retained source when its page installs, not when
-//! the key arrives. A key pressed before that settlement therefore acts on the
-//! page the operator can still see, and the completion drops the rebuild if the
-//! overlay moved on in the meantime.
+//! A filter key switches the retained source as it arrives, so a second key
+//! composes with the filter the operator just set and only the rebuilt page is
+//! deferred. The completion installs that page only while the overlay is still
+//! the one the claim observed: a newer claim, a source the operator changed, or a
+//! record opened into detail all leave the deferred page uninstalled.
 
 use super::RuntimeSessionService;
 use crate::error::{MezError, MezErrorKind, Result};
@@ -491,6 +492,9 @@ impl RuntimeSessionService {
                 {
                     return Ok(false);
                 }
+                if self.active_saved_session_browser_is_detail() {
+                    return Ok(false);
+                }
                 Ok(self.set_active_saved_session_browser_error(&format!(
                     "overlay refresh failed: {message} ({kind:?})"
                 )))
@@ -509,6 +513,9 @@ impl RuntimeSessionService {
                 }
                 if self.active_saved_session_browser_source().as_ref() != Some(&work.active_source)
                 {
+                    return Ok(false);
+                }
+                if self.active_saved_session_browser_is_detail() {
                     return Ok(false);
                 }
                 let mut browser = *browser;
