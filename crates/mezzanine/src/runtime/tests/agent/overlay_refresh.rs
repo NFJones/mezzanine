@@ -744,3 +744,73 @@ fn overlay_refresh_after_delete_falls_back_when_the_page_empties() {
         "the emptied anchored page falls back to the source head"
     );
 }
+
+/// Verifies an emptied delete page reports no kept index.
+///
+/// The inline fallback installed a fresh browser, which opens on the first row,
+/// so the worker must not carry the deleted row's index onto the fallback page.
+/// The fallback needs an anchor whose successors are gone, which the picker's own
+/// keys cannot produce (deleting a row always leaves its page's other rows), so
+/// the claim's work is assembled directly.
+#[test]
+fn overlay_refresh_delete_fallback_reports_no_kept_index() {
+    let mut service = test_runtime_service();
+    let _primary =
+        open_saved_session_picker(&mut service, "overlay-refresh-delete-fallback-index", 25);
+    // The fixture names its rows `refresh-page-{index:02}`, so the catalog's last
+    // row is the last one it appended.
+    let last_id = "refresh-page-24".to_string();
+    let store = service
+        .persistence
+        .cloned_transcript_store()
+        .expect("the picker holds its catalog store");
+    let session = store
+        .saved_session(&last_id)
+        .unwrap()
+        .expect("the catalog row exists");
+    let mut source = service
+        .active_saved_session_browser_source()
+        .expect("the picker keeps a saved-session source");
+    let RuntimeRecordBrowserOverlaySource::SavedSessions { anchor, .. } = &mut source else {
+        panic!("the picker keeps a saved-session source");
+    };
+    *anchor = Some(crate::storage::transcript::SavedSessionPageAnchor::After(
+        crate::storage::transcript::SavedSessionCursor::from_session(&session),
+    ));
+    let work = crate::runtime::RuntimeRecordBrowserRefreshWork {
+        refresh_key: crate::runtime::SAVED_SESSION_OVERLAY_REFRESH_KEY.to_string(),
+        generation: 0,
+        active_source: source.clone(),
+        source,
+        intent: crate::runtime::RuntimeRecordBrowserRefreshIntent::RefreshAfterDelete {
+            active_index: 5,
+        },
+        transcript_store: Some(store),
+        prompt_width: service.saved_session_prompt_width(),
+        title_policy: service.agent_session_title_policy(),
+    };
+    let outcome = RuntimeSessionService::execute_record_browser_refresh(&work);
+    let RuntimeRecordBrowserRefreshOutcome::Rebuilt {
+        browser,
+        source,
+        active_index,
+    } = outcome
+    else {
+        panic!("the emptied anchored page falls back instead of failing");
+    };
+    assert!(
+        !browser.records().is_empty(),
+        "the fallback shows the head of the same source"
+    );
+    assert!(
+        matches!(
+            source,
+            RuntimeRecordBrowserOverlaySource::SavedSessions { anchor: None, .. }
+        ),
+        "the fallback drops the emptied anchor"
+    );
+    assert_eq!(
+        active_index, None,
+        "the fallback opens on the first row, not the deleted row's index"
+    );
+}

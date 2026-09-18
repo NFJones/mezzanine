@@ -482,6 +482,7 @@ impl RuntimeSessionService {
         active_index: usize,
     ) -> RuntimeRecordBrowserRefreshOutcome {
         let mut source = work.source.clone();
+        let mut kept_index = Some(active_index);
         let mut browser = match Self::rebuild_saved_session_page(store, &source, work) {
             Ok(browser) => browser,
             Err(error) => {
@@ -504,11 +505,14 @@ impl RuntimeSessionService {
                     };
                 }
             };
+            // The inline fallback installed a fresh browser, which starts at the
+            // first row; only the normal rebuild keeps the index the delete left.
+            kept_index = None;
         }
         RuntimeRecordBrowserRefreshOutcome::Rebuilt {
             browser: Box::new(browser),
             source,
-            active_index: Some(active_index),
+            active_index: kept_index,
         }
     }
 
