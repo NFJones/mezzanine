@@ -503,6 +503,15 @@ pub(crate) struct RuntimePresentationComponent {
     /// Per-key refresh intents describing what the claimed rebuild does.
     record_browser_refresh_intents:
         std::collections::BTreeMap<String, crate::runtime::RuntimeRecordBrowserRefreshIntent>,
+    /// Per-key filter targets whose rebuilt page has not installed yet.
+    ///
+    /// A filter key derives its target from the displayed source, so a second
+    /// key arriving before the first page settles composes with the target the
+    /// first one is still fetching. The entry clears when that claim settles.
+    record_browser_pending_targets: std::collections::BTreeMap<
+        String,
+        crate::runtime::service_state::RuntimeRecordBrowserOverlaySource,
+    >,
     /// Background selector discoveries keyed by exact client and pane owner.
     agent_prompt_selector_refreshes: std::collections::HashMap<
         (mez_core::ids::ClientId, String),
@@ -1515,6 +1524,31 @@ impl RuntimePresentationComponent {
         self.record_browser_refresh_intents.remove(refresh_key)
     }
 
+    /// Records the source a claimed filter rebuild will install.
+    pub(crate) fn set_record_browser_pending_target(
+        &mut self,
+        refresh_key: &str,
+        source: crate::runtime::service_state::RuntimeRecordBrowserOverlaySource,
+    ) {
+        self.record_browser_pending_targets
+            .insert(refresh_key.to_string(), source);
+    }
+
+    /// Returns the source a pending filter rebuild will install.
+    pub(crate) fn record_browser_pending_target(
+        &self,
+        refresh_key: &str,
+    ) -> Option<crate::runtime::service_state::RuntimeRecordBrowserOverlaySource> {
+        self.record_browser_pending_targets
+            .get(refresh_key)
+            .cloned()
+    }
+
+    /// Forgets the pending filter target of one refresh key.
+    pub(crate) fn clear_record_browser_pending_target(&mut self, refresh_key: &str) {
+        self.record_browser_pending_targets.remove(refresh_key);
+    }
+
     /// Removes pane-scoped interaction state from every retained client.
     pub(crate) fn remove_pane_state_for_all_clients(&mut self, pane_id: &str) {
         self.capture_projected_client_state();
@@ -2377,6 +2411,9 @@ impl RuntimeSessionService {
             // it replaces.
             self.presentation
                 .begin_record_browser_refresh(crate::runtime::SAVED_SESSION_OVERLAY_REFRESH_KEY);
+            self.presentation.clear_record_browser_pending_target(
+                crate::runtime::SAVED_SESSION_OVERLAY_REFRESH_KEY,
+            );
         }
         match source {
             Some(source) => {

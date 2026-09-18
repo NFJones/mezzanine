@@ -14,11 +14,13 @@
 //! claim that lands while a page-edge fetch is still queued replaces that step
 //! instead of applying it twice.
 //!
-//! A filter key switches the retained source as it arrives, so a second key
-//! composes with the filter the operator just set and only the rebuilt page is
-//! deferred. The completion installs that page only while the overlay is still
-//! the one the claim observed: a newer claim, a source the operator changed, or a
-//! record opened into detail all leave the deferred page uninstalled.
+//! A filter key derives its target from the page on screen, so every
+//! source-derived action (archive/restore, detail) agrees with the rows the
+//! operator sees. The target stays pending while its page is fetched, and a
+//! second filter key composes with it instead of dropping the earlier filter. The
+//! completion installs that page only while the overlay is still the one the
+//! claim observed: a newer claim, a source the operator changed, or a record
+//! opened into detail all leave the deferred page uninstalled.
 
 use super::RuntimeSessionService;
 use crate::error::{MezError, MezErrorKind, Result};
@@ -127,6 +129,8 @@ impl RuntimeSessionService {
         self.persistence
             .transcript_store()
             .ok_or_else(|| MezError::invalid_state("resume requires transcript storage"))?;
+        self.presentation
+            .set_record_browser_pending_target(SAVED_SESSION_OVERLAY_REFRESH_KEY, target.clone());
         Ok(Some(self.begin_record_browser_refresh_claim_for_intent(
             SAVED_SESSION_OVERLAY_REFRESH_KEY,
             RuntimeRecordBrowserRefreshIntent::ApplyFilter {
@@ -479,6 +483,17 @@ impl RuntimeSessionService {
         work: &RuntimeRecordBrowserRefreshWork,
         outcome: RuntimeRecordBrowserRefreshOutcome,
     ) -> Result<bool> {
+        if self
+            .presentation
+            .record_browser_refresh_generation(&work.refresh_key)
+            == work.generation
+        {
+            // This claim settles here, so the filter target it carried stops
+            // composing into later keys whether or not its page installed. A
+            // superseded claim leaves its successor's target in place.
+            self.presentation
+                .clear_record_browser_pending_target(&work.refresh_key);
+        }
         match outcome {
             RuntimeRecordBrowserRefreshOutcome::Failed { message, kind } => {
                 if self

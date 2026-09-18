@@ -4,6 +4,7 @@ use crate::runtime::RuntimeRecordBrowserRefreshOutcome;
 use crate::runtime::RuntimeSessionService;
 use crate::runtime::service_state::RuntimeRecordBrowserOverlaySource;
 use crate::runtime::tests::{temp_root, test_runtime_service};
+use crate::runtime::{RuntimeSideEffect, SessionArchiveOperation};
 use crate::storage::transcript::{AgentTranscriptStore, SavedSessionLifecycleFilter};
 use mez_mux::layout::Size;
 
@@ -532,4 +533,41 @@ fn overlay_refresh_drops_a_pending_filter_after_dismiss_and_reopen() {
         "a dismissed claim must not install into the reopened picker"
     );
     assert_eq!(saved_session_page_ids(&service), first_ids);
+}
+
+/// Verifies source-derived keys keep acting on the page the picker displays.
+///
+/// The retained source describes the displayed page, so a lifecycle toggle whose
+/// page is still being fetched must not make the archive key queue a restore or
+/// the detail key look the active row up as archived.
+#[test]
+fn overlay_refresh_keeps_source_derived_keys_on_the_displayed_page() {
+    let mut service = test_runtime_service();
+    let primary = open_saved_session_picker(&mut service, "overlay-refresh-displayed-page", 45);
+    service
+        .apply_primary_display_overlay_input(&primary, b"r")
+        .unwrap();
+    service
+        .apply_primary_display_overlay_input(&primary, b"A")
+        .unwrap();
+    let effects = service
+        .drain_transcript_persistence_transition()
+        .side_effects;
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            RuntimeSideEffect::PersistSessionArchive {
+                operation: SessionArchiveOperation::Archive { .. },
+                ..
+            }
+        )),
+        "the archive key still archives the displayed active page: {effects:?}"
+    );
+    service
+        .apply_primary_display_overlay_input(&primary, b"i")
+        .unwrap();
+    assert!(
+        saved_session_detail_open(&service),
+        "the detail key still opens the displayed active row"
+    );
 }

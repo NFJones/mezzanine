@@ -550,7 +550,7 @@ impl RuntimeSessionService {
             )));
         }
         if input == b"a" && record_browser.browser.scope_toggle_enabled() {
-            let Some(source) = record_browser.source.clone() else {
+            let Some(source) = self.active_record_browser_effective_source() else {
                 return Ok(Some(false));
             };
             let active_record_id = record_browser
@@ -565,7 +565,6 @@ impl RuntimeSessionService {
                 source,
                 RuntimeRecordBrowserOverlaySource::SavedSessions { .. }
             ) {
-                self.set_active_saved_session_browser_source(source.clone());
                 self.begin_record_browser_preserving_claim(source, active_record_id)?;
                 return Ok(Some(false));
             }
@@ -593,7 +592,7 @@ impl RuntimeSessionService {
                 Some(RuntimeRecordBrowserOverlaySource::SavedSessions { .. })
             )
         {
-            let Some(source) = record_browser.source.clone() else {
+            let Some(source) = self.active_record_browser_effective_source() else {
                 return Ok(Some(false));
             };
             let active_record_id = record_browser
@@ -601,7 +600,6 @@ impl RuntimeSessionService {
                 .active_record_id()
                 .map(str::to_string);
             let source = self.record_browser_source_toggled_subagents(&source);
-            self.set_active_saved_session_browser_source(source.clone());
             self.begin_record_browser_preserving_claim(source, active_record_id)?;
             return Ok(Some(false));
         }
@@ -611,11 +609,10 @@ impl RuntimeSessionService {
                 Some(RuntimeRecordBrowserOverlaySource::SavedSessions { .. })
             )
         {
-            let Some(source) = record_browser.source.clone() else {
+            let Some(source) = self.active_record_browser_effective_source() else {
                 return Ok(Some(false));
             };
             let source = self.record_browser_source_toggled_session_lifecycle(&source);
-            self.set_active_saved_session_browser_source(source.clone());
             self.begin_record_browser_preserving_claim(source, None)?;
             return Ok(Some(false));
         }
@@ -1711,12 +1708,14 @@ impl RuntimeSessionService {
                         })
                     });
             if let Some((Some(source), active_record_id, query)) = saved_session_search {
+                let source = self
+                    .active_record_browser_effective_source()
+                    .unwrap_or(source);
                 let source = self.record_browser_source_with_filter(
                     &source,
                     mez_mux::record_browser::RecordBrowserFilterField::Text,
                     query.as_deref().unwrap_or_default(),
                 )?;
-                self.set_active_saved_session_browser_source(source.clone());
                 self.begin_record_browser_preserving_claim(source, active_record_id)?;
                 return Ok(false);
             }
@@ -1847,27 +1846,35 @@ impl RuntimeSessionService {
         ))
     }
 
-    /// Sets the source the active saved-session browser retains.
+    /// Returns the source the active record browser shows or will show.
     ///
-    /// A filter key switches the source as it arrives, so the next key composes
-    /// with the filter the operator just set; the rebuilt page for that source
-    /// arrives from the refresh lane.
-    pub(crate) fn set_active_saved_session_browser_source(
-        &mut self,
-        source: RuntimeRecordBrowserOverlaySource,
-    ) {
-        let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
-            return;
-        };
-        let Some(record_browser) = overlay.record_browser.as_mut() else {
-            return;
-        };
-        if matches!(
-            record_browser.source,
-            Some(RuntimeRecordBrowserOverlaySource::SavedSessions { .. })
+    /// The retained source keeps describing the displayed page, so every
+    /// source-derived action agrees with the rows on screen. A saved-session
+    /// filter whose page is still being fetched keeps its target pending, and the
+    /// next filter key composes with that target instead of dropping the earlier
+    /// filter; the other families keep their source inline and refresh inline.
+    pub(crate) fn active_record_browser_effective_source(
+        &self,
+    ) -> Option<RuntimeRecordBrowserOverlaySource> {
+        let source = self
+            .presentation
+            .primary_display_overlay
+            .as_ref()?
+            .record_browser
+            .as_ref()?
+            .source
+            .clone()?;
+        if !matches!(
+            source,
+            RuntimeRecordBrowserOverlaySource::SavedSessions { .. }
         ) {
-            record_browser.source = Some(source);
+            return Some(source);
         }
+        Some(
+            self.presentation
+                .record_browser_pending_target(crate::runtime::SAVED_SESSION_OVERLAY_REFRESH_KEY)
+                .unwrap_or(source),
+        )
     }
 
     /// Reports whether the active saved-session browser shows one record's detail.
@@ -1937,6 +1944,9 @@ impl RuntimeSessionService {
             // reopen must not inherit their rebuild.
             self.presentation
                 .begin_record_browser_refresh(crate::runtime::SAVED_SESSION_OVERLAY_REFRESH_KEY);
+            self.presentation.clear_record_browser_pending_target(
+                crate::runtime::SAVED_SESSION_OVERLAY_REFRESH_KEY,
+            );
         }
         dismissed
     }
