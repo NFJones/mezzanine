@@ -278,6 +278,23 @@ pub(crate) enum RuntimeAgentCommandPrepared {
         /// Configured Mezzanine config root whose skill copies are synced.
         config_root: std::path::PathBuf,
     },
+    /// Reads one bounded saved-session catalog page for the `/resume` picker.
+    ///
+    /// Bare `/resume` reads the saved-session catalog, whose shared `flock` read
+    /// is the blocking work that parks the serialized actor; the
+    /// conversation-selecting argument forms stay inline.
+    SavedSessionsBrowser {
+        /// Transcript store handle whose saved-session catalog is queried.
+        store: crate::storage::transcript::AgentTranscriptStore,
+        /// Pane working directory captured as the picker's directory filter.
+        directory: Option<String>,
+        /// Maximum catalog rows retained by the picker page.
+        limit: usize,
+        /// Prompt column budget captured from the pane viewport.
+        prompt_width: usize,
+        /// Session-title policy captured from live config.
+        title_policy: crate::session_title::SessionTitlePolicy,
+    },
 }
 
 /// Result a worker prepares for the actor to apply.

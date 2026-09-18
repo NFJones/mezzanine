@@ -39,6 +39,7 @@ pub(crate) const RUNTIME_AGENT_OFF_ACTOR_COMMANDS: &[&str] = &[
     "show-memories",
     "context-doc",
     "sync-builtin-skills",
+    "resume",
 ];
 
 /// Prepared-input family one moved slash command consumes off the actor.
@@ -58,6 +59,8 @@ pub(crate) enum RuntimeAgentCommandFamily {
     ContextDocument,
     /// Managed built-in skill syncs.
     BuiltinSkillSync,
+    /// Saved-session catalog reads for the `/resume` picker.
+    SavedSessionsBrowser,
 }
 
 /// Returns the prepared-input family for one moved command.
@@ -75,6 +78,7 @@ pub(crate) fn off_actor_command_family(command: &str) -> Option<RuntimeAgentComm
         "show-memories" => Some(RuntimeAgentCommandFamily::MemoryBrowser),
         "context-doc" => Some(RuntimeAgentCommandFamily::ContextDocument),
         "sync-builtin-skills" => Some(RuntimeAgentCommandFamily::BuiltinSkillSync),
+        "resume" => Some(RuntimeAgentCommandFamily::SavedSessionsBrowser),
         _ => None,
     }
 }
@@ -142,6 +146,10 @@ impl RuntimeSessionService {
                     )
             }
             "sync-builtin-skills" => self.integration.config_root().is_some(),
+            "resume" => {
+                super::resume::runtime_agent_resume_args_are_picker(input)
+                    && self.persistence.transcript_store().is_some()
+            }
             _ => true,
         }
     }
@@ -300,6 +308,21 @@ impl RuntimeSessionService {
                     return Ok(None);
                 };
                 RuntimeAgentCommandPrepared::BuiltinSkillSync { config_root }
+            }
+            RuntimeAgentCommandFamily::SavedSessionsBrowser => {
+                let Some(store) = self.persistence.cloned_transcript_store() else {
+                    return Ok(None);
+                };
+                let directory = self
+                    .pane_current_working_directory(pane_id)
+                    .map(|path| path.to_string_lossy().into_owned());
+                RuntimeAgentCommandPrepared::SavedSessionsBrowser {
+                    store,
+                    directory,
+                    limit: self.saved_session_page_limit(),
+                    prompt_width: self.saved_session_prompt_width(),
+                    title_policy: self.agent_session_title_policy(),
+                }
             }
         };
         Ok(Some(RuntimeAgentCommandAsyncWork {
@@ -473,6 +496,52 @@ impl RuntimeSessionService {
                                 &work.pane_id,
                                 &work.input,
                                 Some(&outcome),
+                            ),
+                        }
+                    }
+                    Err(error) => RuntimeAgentCommandAsyncOutcome::Failed {
+                        message: error.message().to_string(),
+                        kind: error.kind(),
+                    },
+                };
+            }
+            RuntimeAgentCommandPrepared::SavedSessionsBrowser {
+                store,
+                directory,
+                limit,
+                prompt_width,
+                title_policy,
+            } => {
+                return match super::resume::runtime_agent_saved_sessions_browser(
+                    store,
+                    directory.as_deref(),
+                    crate::storage::transcript::SavedSessionLifecycleFilter::Active,
+                    false,
+                    None,
+                    None,
+                    *limit,
+                    *prompt_width,
+                    *title_policy,
+                ) {
+                    Ok(browser) => {
+                        let page = browser.render_page();
+                        let outcome = AgentShellCommandOutcome::Display {
+                            command: "resume".to_string(),
+                            body: page.raw_markdown,
+                        };
+                        RuntimeAgentCommandAsyncOutcome::RecordBrowser {
+                            body: runtime_agent_shell_command_response_json(
+                                &work.pane_id,
+                                &work.input,
+                                Some(&outcome),
+                            ),
+                            command: "resume".to_string(),
+                            browser: Box::new(browser),
+                            source: Some(
+                                super::resume::runtime_agent_saved_sessions_overlay_source(
+                                    directory.clone(),
+                                    *limit,
+                                ),
                             ),
                         }
                     }

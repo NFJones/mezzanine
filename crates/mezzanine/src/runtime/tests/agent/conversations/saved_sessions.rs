@@ -19,6 +19,85 @@ fn record_metadata_value(
         .unwrap_or_default()
 }
 
+/// Verifies bare `/resume` reads the saved-session catalog through the deferred
+/// lane while the argument forms that touch conversation state stay inline.
+///
+/// The picker is the headline case for this family: the saved-session catalog
+/// read takes a shared `flock` with a multi-second stall budget, so it must not
+/// run inside the serialized actor request that applies prompt input.
+#[test]
+fn runtime_resume_picker_defers_the_catalog_read_and_keeps_argument_forms_inline() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-picker-lane"));
+    let session_id = "018f6b3a-1b2c-7000-9000-cafebabefeed";
+    transcript_store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: session_id.to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 10,
+            role: mez_agent::transcript::TranscriptRole::User,
+            turn_id: "turn-saved".to_string(),
+            agent_id: "agent-%9".to_string(),
+            pane_id: "%9".to_string(),
+            content: "saved prompt".to_string(),
+        })
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let response = service
+        .execute_agent_shell_command(&primary, "/resume")
+        .unwrap();
+    assert!(
+        response.contains(r#""body":null"#),
+        "the deferred lane acknowledges bare /resume: {response}"
+    );
+    let page = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /resume picker applies its page");
+    assert!(page.contains("Agent Sessions"), "{page}");
+    assert!(page.contains(session_id), "{page}");
+    let overlay = service
+        .primary_display_overlay()
+        .expect("the completed picker installs its overlay");
+    assert!(overlay.record_browser.is_some());
+    let state = overlay.record_browser.as_ref().unwrap();
+    assert_eq!(state.command, "resume");
+    assert!(state.browser.render_page().markdown.contains(session_id));
+    assert!(
+        matches!(
+            state.source.as_ref(),
+            Some(
+                crate::runtime::service_state::RuntimeRecordBrowserOverlaySource::SavedSessions {
+                    lifecycle: crate::storage::transcript::SavedSessionLifecycleFilter::Active,
+                    include_subagents: false,
+                    limit,
+                    ..
+                }
+            ) if *limit > 0
+        ),
+        "the deferred picker keeps the inline overlay filters: {:?}",
+        state.source
+    );
+
+    // The argument forms still select, name, or archive one conversation, so they
+    // keep running inline instead of acknowledging the command.
+    let direct = service
+        .execute_agent_shell_command(&primary, &format!("/resume {session_id}"))
+        .unwrap();
+    assert!(
+        !direct.contains(r#""body":null"#),
+        "the direct resume form stays inline: {direct}"
+    );
+}
+
 /// Verifies retention work is duplicate-suppressed while pending, deferred
 /// requests rerun after total failure, and partial reports settle without an
 /// overlay render when no conversation was deleted.
@@ -203,9 +282,14 @@ fn runtime_resume_browser_archives_browses_details_and_deletes_sessions() {
     let response = service
         .execute_agent_shell_command(&primary, "/resume")
         .unwrap();
+    assert!(
+        response.contains(r#""body":null"#),
+        "the deferred lane acknowledges /resume: {response}"
+    );
     service
-        .set_agent_prompt_response_display_output_for_tests("%1", &response)
-        .unwrap();
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /resume picker applies its page");
 
     service
         .apply_primary_display_overlay_input(&primary, b"r")
@@ -362,9 +446,14 @@ fn runtime_resume_browser_restores_then_resumes_archived_session() {
     let response = service
         .execute_agent_shell_command(&primary, "/resume")
         .unwrap();
+    assert!(
+        response.contains(r#""body":null"#),
+        "the deferred lane acknowledges /resume: {response}"
+    );
     service
-        .set_agent_prompt_response_display_output_for_tests("%1", &response)
-        .unwrap();
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /resume picker applies its page");
     service
         .apply_primary_display_overlay_input(&primary, b"r")
         .unwrap();
@@ -1036,9 +1125,14 @@ fn runtime_title_refresh_keeps_unfiltered_resume_scope() {
     let response = service
         .execute_agent_shell_command(&primary, "/resume")
         .unwrap();
+    assert!(
+        response.contains(r#""body":null"#),
+        "the deferred lane acknowledges /resume: {response}"
+    );
     service
-        .set_agent_prompt_response_display_output_for_tests("%1", &response)
-        .unwrap();
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /resume picker applies its page");
     let (toggle, rendered) = open_resume_scope_state(&service);
     assert!(!toggle, "an unfiltered picker has no scope toggle");
     assert!(
@@ -1285,9 +1379,14 @@ fn runtime_resume_browser_filters_current_directory_and_toggles_all_sessions() {
     let response = service
         .execute_agent_shell_command(&primary, "/resume")
         .unwrap();
+    assert!(
+        response.contains(r#""body":null"#),
+        "the deferred lane acknowledges /resume: {response}"
+    );
     service
-        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
-        .unwrap();
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /resume picker applies its page");
     let record_ids = service
         .primary_display_overlay()
         .and_then(|overlay| overlay.record_browser.as_ref())
@@ -1368,9 +1467,14 @@ fn runtime_resume_browser_pages_and_searches_catalog_results() {
     let response = service
         .execute_agent_shell_command(&primary, "/resume")
         .unwrap();
+    assert!(
+        response.contains(r#""body":null"#),
+        "the deferred lane acknowledges /resume: {response}"
+    );
     service
-        .set_agent_prompt_response_display_output_for_tests("%1", &response)
-        .unwrap();
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /resume picker applies its page");
     let first_ids = service
         .primary_display_overlay()
         .and_then(|overlay| overlay.record_browser.as_ref())
@@ -1485,9 +1589,14 @@ fn runtime_resume_hides_subagents_but_allows_toggle_and_direct_resume() {
     let response = service
         .execute_agent_shell_command(&primary, "/resume")
         .unwrap();
+    assert!(
+        response.contains(r#""body":null"#),
+        "the deferred lane acknowledges /resume: {response}"
+    );
     service
-        .set_agent_prompt_response_display_output_for_tests("%1", &response)
-        .unwrap();
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /resume picker applies its page");
     let browser = service
         .primary_display_overlay()
         .and_then(|overlay| overlay.record_browser.as_ref())
@@ -2007,14 +2116,14 @@ fn runtime_resume_browser_clear_name_hotkey_preserves_session_and_selection() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    let pane_id = service.active_pane_id().unwrap().to_string();
-    let response = service
+    service
         .execute_agent_shell_command(&primary, "/resume")
         .unwrap();
+    let response = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /resume picker applies its page");
     assert!(response.contains("`c` clear name"), "{response}");
-    service
-        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
-        .unwrap();
 
     service
         .apply_primary_display_overlay_input(&primary, b"c")
@@ -2114,13 +2223,17 @@ fn runtime_resume_browser_enter_resumes_and_i_opens_details() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    let pane_id = service.active_pane_id().unwrap().to_string();
     let response = service
         .execute_agent_shell_command(&primary, "/resume")
         .unwrap();
+    assert!(
+        response.contains(r#""body":null"#),
+        "the deferred lane acknowledges /resume: {response}"
+    );
     service
-        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
-        .unwrap();
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /resume picker applies its page");
 
     service
         .apply_primary_display_overlay_input(&primary, b"i")
@@ -3730,6 +3843,10 @@ fn runtime_resume_picker_view_keeps_selected_link_styling_off_previous_cell() {
         .unwrap();
     assert_eq!(submitted.forwarded_bytes, 0);
     assert!(submitted.view_refresh_required);
+    service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /resume picker applies its page");
     assert!(service.primary_display_overlay().is_some());
 
     let moved = service
@@ -3906,6 +4023,10 @@ fn runtime_resume_picker_attached_frame_keeps_selected_link_styling_off_previous
         .unwrap();
     assert_eq!(submitted.forwarded_bytes, 0);
     assert!(submitted.view_refresh_required);
+    service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /resume picker applies its page");
     let previous_view = service
         .render_client_view(
             ClientViewRole::Primary,

@@ -734,15 +734,10 @@ impl RuntimeSessionService {
             pane_id,
             "resume",
             browser,
-            Some(RuntimeRecordBrowserOverlaySource::SavedSessions {
-                directory: directory.clone(),
-                default_directory: directory,
-                lifecycle: SavedSessionLifecycleFilter::Active,
-                include_subagents: false,
-                search: None,
-                anchor: None,
-                limit: self.saved_session_page_limit(),
-            }),
+            Some(runtime_agent_saved_sessions_overlay_source(
+                directory.clone(),
+                self.saved_session_page_limit(),
+            )),
         );
         Ok(AgentShellCommandOutcome::Display {
             command: "resume".to_string(),
@@ -794,87 +789,24 @@ impl RuntimeSessionService {
             .persistence
             .transcript_store()
             .ok_or_else(|| MezError::invalid_state("resume requires transcript storage"))?;
-        let sessions = store
-            .query_saved_sessions(&SavedSessionQuery {
-                lifecycle,
-                directory: directory.map(ToOwned::to_owned),
-                include_subagents,
-                require_latest_user_prompt: true,
-                search: search.map(ToOwned::to_owned),
-                anchor,
-                limit,
-            })?
-            .sessions;
-        let prompt_width = usize::from(self.session.authoritative_size.columns)
+        runtime_agent_saved_sessions_browser(
+            store,
+            directory,
+            lifecycle,
+            include_subagents,
+            search,
+            anchor,
+            limit,
+            self.saved_session_prompt_width(),
+            self.agent_session_title_policy(),
+        )
+    }
+
+    /// Returns the prompt column budget each saved-session row may use.
+    pub(crate) fn saved_session_prompt_width(&self) -> usize {
+        usize::from(self.session.authoritative_size.columns)
             .saturating_sub(40)
-            .clamp(20, 80);
-        let records = sessions
-            .into_iter()
-            .map(|session| {
-                Self::saved_session_browser_record(
-                    session,
-                    prompt_width,
-                    self.agent_session_title_policy(),
-                )
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let archived = lifecycle == SavedSessionLifecycleFilter::Archived;
-        let mut browser = RecordBrowser::new(
-            if archived {
-                "Archived Agent Sessions"
-            } else {
-                "Agent Sessions"
-            },
-            records,
-            Vec::new(),
-        )?;
-        browser.enable_deletion();
-        browser.set_table_id_column("Conversation");
-        browser.set_table_columns_with_labels(vec![
-            ("Name".to_string(), "name".to_string()),
-            ("Latest prompt".to_string(), "latest_prompt".to_string()),
-            ("Last active".to_string(), "last_active".to_string()),
-            ("Directory".to_string(), "directory".to_string()),
-            ("Entries".to_string(), "entries".to_string()),
-        ]);
-        if archived {
-            browser.set_table_columns_with_labels(vec![
-                ("Name".to_string(), "name".to_string()),
-                ("Latest prompt".to_string(), "latest_prompt".to_string()),
-                ("Last active".to_string(), "last_active".to_string()),
-                ("Archived at".to_string(), "archived_at".to_string()),
-                ("Directory".to_string(), "directory".to_string()),
-                ("Entries".to_string(), "entries".to_string()),
-            ]);
-        }
-        let lifecycle_action = if archived {
-            "`A` restore"
-        } else {
-            "`A` archive"
-        };
-        browser.set_help(
-            Some(format!(
-                "**Keys:** `↑`/`↓` focus conversation UUID · `Enter` resume · `i` details · `a` all/current directory · `u` show/hide subagents · `r` active/archived · {lifecycle_action} · `c` clear name · `d` delete · `/` search"
-            )),
-            Some(format!(
-                "**Keys:** `Esc` back · `a` all/current directory · `u` show/hide subagents · `r` active/archived · {lifecycle_action} · `d` delete · `/` search"
-            )),
-        );
-        if directory.is_some() {
-            browser.enable_scope_toggle();
-            browser.set_scope_indicator(directory.map(ToOwned::to_owned));
-        } else {
-            browser.set_scope_indicator(Some("all directories".to_string()));
-        }
-        browser.set_empty_message(Some(
-            if archived {
-                "No archived agent sessions are available."
-            } else {
-                "No saved agent sessions are available."
-            }
-            .to_string(),
-        ));
-        Ok(browser)
+            .clamp(20, 80)
     }
 
     /// Returns the viewport-derived bounded page size used by `/resume`.
@@ -1404,4 +1336,131 @@ impl RuntimeSessionService {
             bytes[15]
         )
     }
+}
+
+/// Returns whether one `/resume` invocation opens the saved-session picker.
+///
+/// The bare form reads the saved-session catalog, which is the blocking read this
+/// family moves off the actor. Every argument form selects, names, archives, or
+/// restores one conversation and therefore stays inline with the actor-owned
+/// conversation state.
+pub(crate) fn runtime_agent_resume_args_are_picker(input: &str) -> bool {
+    matches!(
+        parse_slash_command(input),
+        Ok(Some(invocation)) if invocation.args.trim().is_empty()
+    )
+}
+
+/// Returns the overlay source retained for one bare `/resume` picker.
+///
+/// The inline picker and the deferred executor share this source, so the filters
+/// a refreshed overlay rebuilds from are identical whichever lane opened it.
+pub(crate) fn runtime_agent_saved_sessions_overlay_source(
+    directory: Option<String>,
+    limit: usize,
+) -> RuntimeRecordBrowserOverlaySource {
+    RuntimeRecordBrowserOverlaySource::SavedSessions {
+        default_directory: directory.clone(),
+        directory,
+        lifecycle: SavedSessionLifecycleFilter::Active,
+        include_subagents: false,
+        search: None,
+        anchor: None,
+        limit,
+    }
+}
+
+/// Builds one bounded saved-session browser page from owned catalog filters.
+///
+/// The inline `/resume` picker and the deferred executor share this sequence, so
+/// the page a worker renders off the actor is byte-identical to the page the
+/// inline path returned. The caller owns the store handle and the pane-derived
+/// presentation inputs, because the saved-session catalog read is the blocking
+/// work this family moves off the serialized actor.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn runtime_agent_saved_sessions_browser(
+    store: &crate::storage::transcript::AgentTranscriptStore,
+    directory: Option<&str>,
+    lifecycle: SavedSessionLifecycleFilter,
+    include_subagents: bool,
+    search: Option<&str>,
+    anchor: Option<SavedSessionPageAnchor>,
+    limit: usize,
+    prompt_width: usize,
+    policy: SessionTitlePolicy,
+) -> Result<RecordBrowser> {
+    let sessions = store
+        .query_saved_sessions(&SavedSessionQuery {
+            lifecycle,
+            directory: directory.map(ToOwned::to_owned),
+            include_subagents,
+            require_latest_user_prompt: true,
+            search: search.map(ToOwned::to_owned),
+            anchor,
+            limit,
+        })?
+        .sessions;
+    let records = sessions
+        .into_iter()
+        .map(|session| {
+            RuntimeSessionService::saved_session_browser_record(session, prompt_width, policy)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let archived = lifecycle == SavedSessionLifecycleFilter::Archived;
+    let mut browser = RecordBrowser::new(
+        if archived {
+            "Archived Agent Sessions"
+        } else {
+            "Agent Sessions"
+        },
+        records,
+        Vec::new(),
+    )?;
+    browser.enable_deletion();
+    browser.set_table_id_column("Conversation");
+    browser.set_table_columns_with_labels(vec![
+        ("Name".to_string(), "name".to_string()),
+        ("Latest prompt".to_string(), "latest_prompt".to_string()),
+        ("Last active".to_string(), "last_active".to_string()),
+        ("Directory".to_string(), "directory".to_string()),
+        ("Entries".to_string(), "entries".to_string()),
+    ]);
+    if archived {
+        browser.set_table_columns_with_labels(vec![
+            ("Name".to_string(), "name".to_string()),
+            ("Latest prompt".to_string(), "latest_prompt".to_string()),
+            ("Last active".to_string(), "last_active".to_string()),
+            ("Archived at".to_string(), "archived_at".to_string()),
+            ("Directory".to_string(), "directory".to_string()),
+            ("Entries".to_string(), "entries".to_string()),
+        ]);
+    }
+    let lifecycle_action = if archived {
+        "`A` restore"
+    } else {
+        "`A` archive"
+    };
+    browser.set_help(
+        Some(format!(
+            "**Keys:** `↑`/`↓` focus conversation UUID · `Enter` resume · `i` details · `a` all/current directory · `u` show/hide subagents · `r` active/archived · {lifecycle_action} · `c` clear name · `d` delete · `/` search"
+        )),
+        Some(format!(
+            "**Keys:** `Esc` back · `a` all/current directory · `u` show/hide subagents · `r` active/archived · {lifecycle_action} · `d` delete · `/` search"
+        )),
+    );
+    if directory.is_some() {
+        browser.enable_scope_toggle();
+        browser.set_scope_indicator(directory.map(ToOwned::to_owned));
+    } else {
+        browser.set_scope_indicator(Some("all directories".to_string()));
+    }
+    browser.set_empty_message(Some(
+        if archived {
+            "No archived agent sessions are available."
+        } else {
+            "No saved agent sessions are available."
+        }
+        .to_string(),
+    ));
+    Ok(browser)
 }
