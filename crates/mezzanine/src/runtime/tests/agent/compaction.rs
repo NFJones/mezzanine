@@ -2379,3 +2379,139 @@ fn runtime_configured_input_cap_retries_a_non_reducing_pass() {
         "a tightened budget never drops below one word"
     );
 }
+
+/// Verifies a durable block owned by another provider does not consume the
+/// configured-cap summary budget when the recovery plans.
+///
+/// The configured-cap path plans through the active provider's rendered
+/// projection, and request assembly never renders a block whose provider owner
+/// does not match that provider. Without the projection, a foreign-owned native
+/// block retained above the consumed boundary could bring the summary budget to
+/// zero and fail the deferral with `no budget remains` instead of queueing the
+/// compaction that makes the turn fit.
+#[test]
+fn runtime_configured_input_cap_plan_ignores_unrendered_provider_blocks() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "configured-input-cap-projection".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[agents]
+default_provider = "runtime-batch"
+default_model_profile = "configured-input-cap-test"
+shell_mode = "pane"
+[permissions]
+sandbox = "policy-only"
+[providers.runtime-batch]
+kind = "openai"
+models = ["test"]
+default_model = "test"
+[model_profiles.configured-input-cap-test]
+provider = "runtime-batch"
+model = "test"
+context_window_tokens = 40000
+max_input_tokens = 4000
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let auth_root = temp_root("configured-input-cap-projection-auth");
+    service.set_auth_store(AuthStore::new(
+        crate::security::auth::AuthPaths::under_config_root(&auth_root),
+    ));
+    let transcript_store =
+        AgentTranscriptStore::new(temp_root("configured-input-cap-projection-history"));
+    transcript_store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: "configured-input-cap-projection-history".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: mez_agent::transcript::TranscriptRole::Assistant,
+            turn_id: "turn-history".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: format!(
+                "configured-cap-projection-marker {}",
+                "compactable ".repeat(20_000)
+            ),
+        })
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "configured-input-cap-projection-history", 1)
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"configured-input-cap-projection","input":"continue after proactive compaction"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let task = service.pending_agent_provider_tasks().remove(0);
+    let agent_id = AgentId::opaque(task.agent_id.clone()).unwrap();
+
+    let foreign_content = mez_agent::ProviderTranscriptEvent::validated_openai_response_output(
+        (0..3000)
+            .map(|index| {
+                serde_json::json!({
+                    "type": "reasoning",
+                    "id": format!("foreign-{index}"),
+                    "text": "foreign provider continuity replay segment",
+                })
+            })
+            .collect(),
+    )
+    .unwrap()
+    .to_transcript_content();
+    let foreign_owner = mez_agent::ProviderContinuityOwner::new(
+        mez_agent::ProviderApiCompatibility::OpenAiResponses,
+        "configured-openai",
+    )
+    .unwrap();
+    let foreign_group =
+        mez_agent::ContextExecutionGroupId::new("foreign-native-execution").unwrap();
+    let turn_context = service
+        .agent_turn_contexts_mut()
+        .get_mut(&task.turn_id)
+        .expect("the pending turn owns a durable context");
+    turn_context
+        .append_assistant_event(
+            "foreign native turn",
+            "foreign call emitted ahead of its transcript",
+            foreign_group.clone(),
+        )
+        .unwrap();
+    turn_context
+        .append_evidence_event(
+            mez_agent::ContextSourceKind::TranscriptTool,
+            "foreign native response",
+            foreign_content,
+            foreign_group,
+            Some(foreign_owner),
+            false,
+        )
+        .unwrap();
+
+    assert!(
+        service
+            .claim_configured_agent_provider_task(&agent_id, &task.turn_id)
+            .unwrap()
+            .is_none(),
+        "the configured cap must still defer into compaction"
+    );
+    assert!(
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_some(),
+        "the unrendered provider block must not exhaust the summary budget"
+    );
+}
