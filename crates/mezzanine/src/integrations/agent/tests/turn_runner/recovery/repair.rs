@@ -43,6 +43,116 @@ fn subagent_scope_violation_reports_relative_escape_under_default_classification
     );
 }
 
+#[test]
+/// Verifies a scope-violating batch currently settles as an approval.
+///
+/// The enforcer probe above proves the product classification reports `cat
+/// ../secret.txt` as an out-of-scope read, yet a full runner turn that carries
+/// that scope settles the batch through the approval path with a single provider
+/// request: the planning failure never reaches the turn loop, so no repair is
+/// offered. This characterization pins the observed behavior for the
+/// planner-repair work, and it fails the moment the failure starts surfacing.
+fn turn_runner_settles_scope_violating_batch_as_approval_without_repair() {
+    let mut turn = turn();
+    turn.agent_id = "agent-%2".to_string();
+    turn.pane_id = "%2".to_string();
+    let violating = ModelResponse {
+        provider: "batch".to_string(),
+        model: "test".to_string(),
+        raw_text: "read action".to_string(),
+        usage: Default::default(),
+        latest_request_usage: None,
+        quota_usage: Default::default(),
+        action_batch: Some(MaapBatch {
+            rationale: "test action batch rationale".to_string(),
+            actions: vec![AgentAction {
+                id: "a1".to_string(),
+                payload: AgentActionPayload::ShellCommand {
+                    summary: "Inspect the neighbouring file".to_string(),
+                    command: "cat ../secret.txt".to_string(),
+                    interactive: false,
+                    stateful: false,
+                    timeout_ms: None,
+                },
+            }],
+        }),
+        provider_transcript_events: Vec::new(),
+    };
+    let repaired = ModelResponse {
+        provider: "batch".to_string(),
+        model: "test".to_string(),
+        raw_text: "repaired response".to_string(),
+        usage: Default::default(),
+        latest_request_usage: None,
+        quota_usage: Default::default(),
+        action_batch: Some(MaapBatch {
+            rationale: "test action batch rationale".to_string(),
+            actions: vec![say_action("say-1", "Staying inside the declared scope.")],
+        }),
+        provider_transcript_events: Vec::new(),
+    };
+    let provider = SequencedProvider::new(vec![Ok(violating), Ok(repaired)]);
+    let policy = PermissionPolicy::default();
+    let approvals = SessionApprovalStore::default();
+    let subagent_scope = mez_agent::SubagentScopeDeclaration {
+        cooperation_mode: mez_agent::CooperationMode::OwnedWrite,
+        approval_provenance: mez_agent::SubagentApprovalProvenance::Requested,
+        current_directory: "/repo".to_string(),
+        read_scopes: vec!["/repo/src".to_string()],
+        write_scopes: vec!["/repo/docs".to_string()],
+        permission_preset: None,
+    };
+    let mut ledger = AgentTurnLedger::new(false);
+    let runner = AgentTurnRunner {
+        provider: &provider,
+        model_profile: ModelProfile {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            model_capabilities: Default::default(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        permissions: &crate::security::permissions::ProductPermissionPlanning::new(
+            &policy, &approvals, None,
+        ),
+        subagent_scope: Some(&subagent_scope),
+        subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
+        available_mcp_servers: Vec::new(),
+        available_mcp_tools: &[],
+        memory_actions_enabled: false,
+        issue_actions_enabled: true,
+    };
+
+    let execution = runner
+        .run_turn(
+            &mut ledger,
+            turn,
+            AgentContext::new(vec![ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: "user".to_string(),
+                content: "inspect the neighbouring file".to_string(),
+            }])
+            .unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        execution.terminal_state,
+        AgentTurnState::Blocked,
+        "a scope-violating shell action currently waits for approval: {:?}",
+        execution.action_results
+    );
+    assert_eq!(
+        provider.requests().len(),
+        1,
+        "the batch is not repaired today, so only the first response is consumed"
+    );
+}
+
 #[tokio::test]
 /// Verifies malformed failure-summary MAAP responses get one repair attempt.
 ///
