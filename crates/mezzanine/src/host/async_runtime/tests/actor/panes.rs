@@ -1319,3 +1319,107 @@ async fn async_actor_fences_late_routed_child_events_during_parent_recovery() {
     );
     assert!(exit.service.terminate_all_pane_processes().is_ok());
 }
+
+/// Verifies an outstanding deferred slash-command work item cannot park the
+/// actor: the command is submitted, claimed as the provider worker would claim
+/// it, and left unsettled while an unrelated terminal step still completes.
+///
+/// This is the premise the deferred lane exists for - the command's store read
+/// must not hold the serialized actor - so the assertion is the follow-up step's
+/// forwarded byte rather than only the drained effect.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_serves_steps_while_deferred_command_work_is_outstanding() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let config_root =
+        std::env::temp_dir().join(format!("mez-deferred-claim-{}", std::process::id()));
+    std::fs::create_dir_all(&config_root).unwrap();
+    service.set_config_root(config_root.clone());
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let submit = AttachedTerminalClientStepPlan {
+            actions: vec![TerminalClientLoopAction::ForwardToPane(
+                b"/issue query\r".to_vec(),
+            )],
+            output_lines: Vec::new(),
+            output_line_style_spans: Vec::new(),
+            input_hangup: false,
+            output_hangup: false,
+            error_roles: Vec::new(),
+        };
+        handle
+            .apply_attached_terminal_step_plan(primary.clone(), submit)
+            .await
+            .unwrap();
+        let effects = handle.drain_runtime_side_effects(8).await.unwrap();
+        let (pane_id, command, input, claim_generation) = effects
+            .iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::DispatchAgentCommand {
+                    pane_id,
+                    command,
+                    input,
+                    claim_generation,
+                    ..
+                } => Some((
+                    pane_id.clone(),
+                    command.clone(),
+                    input.clone(),
+                    *claim_generation,
+                )),
+                _ => None,
+            })
+            .expect("the submitted command must be handed to the worker lane");
+        assert_eq!(command, "issue");
+
+        // The worker claims the work and then stalls: nothing settles it here.
+        let work = handle
+            .claim_agent_command_work(primary.clone(), pane_id, command, input, claim_generation)
+            .await
+            .unwrap()
+            .expect("the current generation claims its work");
+
+        let follow_up = AttachedTerminalClientStepPlan {
+            actions: vec![TerminalClientLoopAction::ForwardToPane(b"x".to_vec())],
+            output_lines: Vec::new(),
+            output_line_style_spans: Vec::new(),
+            input_hangup: false,
+            output_hangup: false,
+            error_roles: Vec::new(),
+        };
+        let application = handle
+            .apply_attached_terminal_step_plan(primary.clone(), follow_up)
+            .await
+            .unwrap();
+        assert_eq!(
+            application.agent_prompt_inputs_applied, 1,
+            "the actor must keep serving agent prompt input while deferred command work is outstanding"
+        );
+
+        // Settling the outstanding work still applies its display.
+        let outcome = crate::runtime::RuntimeSessionService::execute_deferred_agent_command(&work);
+        assert!(
+            handle
+                .complete_agent_command_work(work, outcome)
+                .await
+                .unwrap(),
+            "the settled outcome applies for the current generation"
+        );
+
+        let _ = handle.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(&config_root);
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+
+    assert!(exit.commands_processed >= 2);
+}
