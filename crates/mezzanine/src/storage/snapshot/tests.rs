@@ -2225,3 +2225,41 @@ fn snapshot_repository_rebuilds_an_older_database_from_manifests() {
     );
     let _ = fs::remove_dir_all(root);
 }
+
+/// Verifies an ordinary write compares against the indexed metadata row instead
+/// of re-parsing the previous winner's manifest.
+#[test]
+fn snapshot_repository_updates_the_latest_index_from_metadata_rows() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-snapshot-repo-index-rows-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let repo = SnapshotRepository::new(root.clone());
+    let mut old = manifest();
+    old.state.id = "snap-old".to_string();
+    old.state.created_at = "2026-04-30T00:00:00Z".to_string();
+    old.state.storage_ref = "snap-old.payload".to_string();
+    repo.write(&old).unwrap();
+    fs::set_permissions(
+        root.join("snap-old.manifest"),
+        fs::Permissions::from_mode(0o000),
+    )
+    .unwrap();
+    let mut new = manifest();
+    new.state.id = "snap-new".to_string();
+    new.state.created_at = "2026-04-30T00:00:01Z".to_string();
+    new.state.storage_ref = "snap-new.payload".to_string();
+
+    repo.write(&new).unwrap();
+
+    let latest_index = super::sqlite::read(&root)
+        .unwrap()
+        .expect("the write path stores an index");
+    assert_eq!(latest_index.latest_all.as_deref(), Some("snap-new"));
+    assert_eq!(
+        latest_index.latest_by_session.get("$1").map(String::as_str),
+        Some("snap-new")
+    );
+    let _ = fs::remove_dir_all(root);
+}

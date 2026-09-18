@@ -198,6 +198,16 @@ impl SnapshotRepository {
         self.rebuild_metadata_async().await
     }
 
+    /// Renders the stored latest winners for `mez storage export snapshots`.
+    ///
+    /// The body keeps the retired `latest.index` shape so the winners stay
+    /// inspectable and diffable after the file disappeared. The read is
+    /// read-only, so an inspection command never creates, migrates, or writes
+    /// the store, and it reports `None` when no database exists yet.
+    pub fn export_tsv_read_only(&self) -> Result<Option<String>> {
+        super::sqlite::export_tsv_read_only(&self.root)
+    }
+
     /// Reports whether the metadata index covers every manifest on disk.
     ///
     /// The check reads directory entries only: it never opens a manifest, so a
@@ -706,6 +716,42 @@ impl SnapshotRepository {
         self.write_latest_index_state_async(&index).await
     }
 
+    /// Reads one indexed winner's recorded state without parsing its manifest.
+    ///
+    /// The latest-index update only compares ordering fields, so the metadata
+    /// row answers it. The manifest existence check keeps the previous repair
+    /// behavior: a winner whose manifest has already disappeared reports an
+    /// error, and the caller rebuilds the index from the manifests instead of
+    /// keeping a phantom winner.
+    fn indexed_winner_state(&self, snapshot_id: &str) -> Result<SnapshotState> {
+        if !self.manifest_path(snapshot_id)?.exists() {
+            return Err(MezError::invalid_state(format!(
+                "snapshot {snapshot_id} manifest is missing"
+            )));
+        }
+        super::sqlite::read_metadata_row(&self.root, snapshot_id)?.ok_or_else(|| {
+            MezError::invalid_state(format!("snapshot {snapshot_id} has no metadata row"))
+        })
+    }
+
+    /// Async counterpart to [`Self::indexed_winner_state`].
+    async fn indexed_winner_state_async(&self, snapshot_id: &str) -> Result<SnapshotState> {
+        if !self.manifest_path(snapshot_id)?.exists() {
+            return Err(MezError::invalid_state(format!(
+                "snapshot {snapshot_id} manifest is missing"
+            )));
+        }
+        let root = self.root.clone();
+        let indexed_id = snapshot_id.to_string();
+        let state = spawn_blocking_snapshot_index(move || {
+            super::sqlite::read_metadata_row(&root, &indexed_id)
+        })
+        .await?;
+        state.ok_or_else(|| {
+            MezError::invalid_state(format!("snapshot {snapshot_id} has no metadata row"))
+        })
+    }
+
     /// Compares a new snapshot with only the currently indexed winners.
     fn update_latest_index(
         &self,
@@ -716,13 +762,13 @@ impl SnapshotRepository {
             .latest_all
             .clone()
             .ok_or_else(|| MezError::invalid_state("snapshot latest index has no global entry"))?;
-        let latest_all = self.inspect(&latest_all_id)?.state;
+        let latest_all = self.indexed_winner_state(&latest_all_id)?;
         if Self::compare_latest_snapshots(&latest_all, state) == Ordering::Less {
             index.latest_all = Some(state.id.clone());
         }
 
         if let Some(latest_session_id) = index.latest_by_session.get(&state.session_id).cloned() {
-            let latest_session = self.inspect(&latest_session_id)?.state;
+            let latest_session = self.indexed_winner_state(&latest_session_id)?;
             if latest_session.session_id != state.session_id {
                 return Err(MezError::invalid_state(
                     "snapshot latest index session entry points to another session",
@@ -751,13 +797,13 @@ impl SnapshotRepository {
             .latest_all
             .clone()
             .ok_or_else(|| MezError::invalid_state("snapshot latest index has no global entry"))?;
-        let latest_all = self.inspect_async(&latest_all_id).await?.state;
+        let latest_all = self.indexed_winner_state_async(&latest_all_id).await?;
         if Self::compare_latest_snapshots(&latest_all, state) == Ordering::Less {
             index.latest_all = Some(state.id.clone());
         }
 
         if let Some(latest_session_id) = index.latest_by_session.get(&state.session_id).cloned() {
-            let latest_session = self.inspect_async(&latest_session_id).await?.state;
+            let latest_session = self.indexed_winner_state_async(&latest_session_id).await?;
             if latest_session.session_id != state.session_id {
                 return Err(MezError::invalid_state(
                     "snapshot latest index session entry points to another session",

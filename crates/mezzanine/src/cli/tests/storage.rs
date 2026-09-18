@@ -349,3 +349,103 @@ fn storage_export_project_trust_prints_legacy_rows() {
     assert!(export.contains("export-project"), "{export}");
     assert!(export.contains("trusted"), "{export}");
 }
+
+/// Builds one snapshot manifest for the snapshots export fixture.
+fn storage_snapshot_manifest(
+    id: &str,
+    session_id: &str,
+    created_at: &str,
+) -> crate::storage::snapshot::SnapshotManifest {
+    crate::storage::snapshot::SnapshotManifest {
+        state: crate::storage::snapshot::SnapshotState {
+            id: id.to_string(),
+            version: 1,
+            session_id: session_id.to_string(),
+            name: Some("manual".to_string()),
+            created_at: created_at.to_string(),
+            kind: crate::storage::snapshot::SnapshotKind::Manual,
+            restorable: true,
+            window_count: 1,
+            pane_count: 1,
+            limitations: Vec::new(),
+            storage_ref: format!("{id}.payload"),
+        },
+        contains_terminal_history: false,
+        contains_agent_transcripts: false,
+        contains_raw_credentials: false,
+        active_approvals_restored: false,
+        restart_required_panes: Vec::new(),
+    }
+}
+
+/// Verifies `mez storage export snapshots` prints the latest winners in the
+/// retired `latest.index` shape, and never creates the store it inspects.
+#[test]
+fn storage_export_snapshots_prints_legacy_latest_index_rows() {
+    let (env, _home) = test_env("storage-export-snapshots");
+    let paths = env.config_paths().unwrap();
+    let root = paths.root().join("snapshots");
+    let repository = crate::storage::snapshot::SnapshotRepository::new(root.clone());
+    repository
+        .write(&storage_snapshot_manifest(
+            "snap-a",
+            "$a",
+            "2026-04-30T00:00:00Z",
+        ))
+        .unwrap();
+    repository
+        .write(&storage_snapshot_manifest(
+            "snap-b",
+            "$b",
+            "2026-04-30T00:00:01Z",
+        ))
+        .unwrap();
+
+    let mut stderr = Vec::new();
+    let mut stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "storage".to_string(),
+            "export".to_string(),
+            "snapshots".to_string(),
+        ],
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    let export = String::from_utf8(stdout).unwrap();
+    assert_eq!(
+        export, "all\tsnap-b\nsession\t$a\tsnap-a\nsession\t$b\tsnap-b\n",
+        "the export keeps the retired latest-index line shape"
+    );
+
+    let (absent_env, _absent_home) = test_env("storage-export-snapshots-absent");
+    let absent_root = absent_env.config_paths().unwrap().root().join("snapshots");
+    let mut absent_stderr = Vec::new();
+    let mut absent_stdout = Vec::new();
+    let error = run_with(
+        vec![
+            "mez".to_string(),
+            "storage".to_string(),
+            "export".to_string(),
+            "snapshots".to_string(),
+        ],
+        absent_env,
+        false,
+        &mut absent_stdout,
+        &mut absent_stderr,
+    )
+    .unwrap_err();
+    assert!(
+        error.message().contains("no snapshot index found"),
+        "an absent store reports a missing index: {}",
+        error.message()
+    );
+    assert!(
+        !absent_root.exists(),
+        "the inspection command must not create the snapshot store"
+    );
+}

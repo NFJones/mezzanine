@@ -306,3 +306,98 @@ fn json_rpc_parser_uses_top_level_fields_and_requires_object_params() {
             .unwrap_err();
     assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
 }
+
+/// Builds one snapshot manifest for the snapshot/list parity fixture.
+fn parity_snapshot_manifest(
+    session: &Session,
+    id: &str,
+    created_at: &str,
+) -> crate::storage::snapshot::SnapshotManifest {
+    crate::storage::snapshot::SnapshotManifest {
+        state: crate::storage::snapshot::SnapshotState {
+            id: id.to_string(),
+            version: 1,
+            session_id: session.id.to_string(),
+            name: Some("manual".to_string()),
+            created_at: created_at.to_string(),
+            kind: crate::storage::snapshot::SnapshotKind::Manual,
+            restorable: true,
+            window_count: 1,
+            pane_count: 1,
+            limitations: Vec::new(),
+            storage_ref: format!("{id}.payload"),
+        },
+        contains_terminal_history: false,
+        contains_agent_transcripts: false,
+        contains_raw_credentials: false,
+        active_approvals_restored: false,
+        restart_required_panes: Vec::new(),
+    }
+}
+
+/// Verifies `snapshot/list` returns a byte-identical protocol body whether the
+/// metadata index answered from a warm database or was rebuilt from manifests.
+///
+/// Deleting `snapshots.sqlite` is the documented recovery path - the payloads
+/// and manifests stay - so the response for the same snapshot state must not
+/// depend on which table answered it.
+#[test]
+fn snapshot_list_protocol_body_matches_between_warm_and_rebuilt_indexes() {
+    let (mut session, primary) = test_session();
+    let root = temp_root("snapshot-list-index-parity");
+    let snapshots = SnapshotRepository::new(root.path().to_path_buf());
+    snapshots
+        .write(&parity_snapshot_manifest(
+            &session,
+            "snap-1",
+            "2026-04-30T00:00:00Z",
+        ))
+        .unwrap();
+    snapshots
+        .write(&parity_snapshot_manifest(
+            &session,
+            "snap-2",
+            "2026-04-30T00:00:01Z",
+        ))
+        .unwrap();
+
+    let warm = dispatch_control_request_with_snapshots(
+        &JsonRpcRequestBuilder::method("snapshot/list")
+            .params_json(r#"{"target":null}"#)
+            .build(),
+        &mut session,
+        &primary,
+        &snapshots,
+    );
+
+    let rebuilt_root = temp_root("snapshot-list-index-parity-rebuilt");
+    for id in ["snap-1", "snap-2"] {
+        fs::copy(
+            root.join(format!("{id}.manifest")),
+            rebuilt_root.join(format!("{id}.manifest")),
+        )
+        .unwrap();
+    }
+    let rebuilt_snapshots = SnapshotRepository::new(rebuilt_root.path().to_path_buf());
+    let rebuilt = dispatch_control_request_with_snapshots(
+        &JsonRpcRequestBuilder::method("snapshot/list")
+            .params_json(r#"{"target":null}"#)
+            .build(),
+        &mut session,
+        &primary,
+        &rebuilt_snapshots,
+    );
+
+    assert!(
+        warm.contains(r#""id":"snap-1""#),
+        "the fixture lists its snapshots: {warm}"
+    );
+    assert!(
+        warm.contains(r#""id":"snap-2""#),
+        "the fixture lists its snapshots: {warm}"
+    );
+    assert_eq!(
+        warm, rebuilt,
+        "the index rebuild answers with the same protocol body"
+    );
+}

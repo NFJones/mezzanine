@@ -35,6 +35,7 @@ pub(super) const STORAGE_EXPORTERS: &[&str] = &[
     "assignments",
     "history",
     "project-trust",
+    "snapshots",
 ];
 
 /// Typed process CLI arguments for `mez storage export`.
@@ -137,6 +138,16 @@ fn storage_export_body(store: &str, env: &CliEnv) -> Result<String> {
             .ok_or_else(|| {
                 MezError::invalid_state(
                     "no project trust database found; decide project trust first",
+                )
+            })
+        }
+        "snapshots" => {
+            let paths = env.config_paths()?;
+            let repository =
+                crate::storage::snapshot::SnapshotRepository::new(paths.root().join("snapshots"));
+            repository.export_tsv_read_only()?.ok_or_else(|| {
+                MezError::invalid_state(
+                    "no snapshot index found; create a snapshot with `mez snapshot create` first",
                 )
             })
         }

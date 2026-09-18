@@ -22,7 +22,7 @@ use super::super::shared_sqlite::{
 use super::repository::LatestSnapshotIndex;
 use super::types::{SnapshotKind, SnapshotState};
 use crate::error::{MezError, Result};
-use rusqlite::{Connection, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use std::path::{Path, PathBuf};
 
 /// Database file owned by the snapshot repository.
@@ -300,6 +300,76 @@ pub(super) fn read_metadata(directory: &Path) -> Result<Option<Vec<SnapshotState
     Ok((!states.is_empty()).then_some(states))
 }
 
+/// Reads one metadata row, or `None` when the snapshot has no indexed row.
+///
+/// The latest-index update reads the previous winner here instead of parsing
+/// its manifest: the row carries the same ordering fields the comparison needs,
+/// and a missing row tells the caller to rebuild the index from the manifests.
+pub(super) fn read_metadata_row(
+    directory: &Path,
+    snapshot_id: &str,
+) -> Result<Option<SnapshotState>> {
+    let connection = open(directory)?;
+    let row = connection
+        .query_row(
+            "SELECT snapshot_id, version, session_id, name, created_at, kind, restorable, window_count, pane_count, limitations, storage_ref\n             FROM snapshot_metadata WHERE snapshot_id = ?1",
+            params![snapshot_id],
+            |row| {
+                Ok(StoredMetadataRow {
+                    snapshot_id: row.get(0)?,
+                    version: row.get(1)?,
+                    session_id: row.get(2)?,
+                    name: row.get(3)?,
+                    created_at: row.get(4)?,
+                    kind: row.get(5)?,
+                    restorable: row.get(6)?,
+                    window_count: row.get(7)?,
+                    pane_count: row.get(8)?,
+                    limitations: row.get(9)?,
+                    storage_ref: row.get(10)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(database_error)?;
+    row.map(StoredMetadataRow::into_state).transpose()
+}
+
+/// Renders the stored winners in the retired `latest.index` shape.
+///
+/// `mez storage export snapshots` prints this body so the winners stay
+/// inspectable and diffable after the file disappeared: one `all` line for the
+/// global winner, then one `session` line per session, both tab separated and
+/// ordered by scope. The read is read-only, so an inspection command never
+/// creates, migrates, or writes the store.
+pub(super) fn export_tsv_read_only(directory: &Path) -> Result<Option<String>> {
+    let Some(connection) = open_shared_database_read_only(&database_path(directory))? else {
+        return Ok(None);
+    };
+    let mut statement = connection
+        .prepare("SELECT scope, snapshot_id FROM latest_snapshot ORDER BY scope")
+        .map_err(database_error)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(database_error)?;
+    let mut body = String::new();
+    for row in rows {
+        let (scope, snapshot_id) = row.map_err(database_error)?;
+        if scope == GLOBAL_SCOPE {
+            body.push_str("all\t");
+        } else {
+            body.push_str("session\t");
+            body.push_str(&scope);
+            body.push('\t');
+        }
+        body.push_str(&snapshot_id);
+        body.push('\n');
+    }
+    Ok(Some(body))
+}
+
 /// Replaces every metadata row with one complete set.
 ///
 /// The rebuild path calls this after scanning the manifests, so the replacement
@@ -449,6 +519,15 @@ mod tests {
         updated.storage_ref = "elsewhere.payload".to_string();
         insert_metadata_row(&root, &updated).unwrap();
         assert_eq!(
+            read_metadata_row(&root, "snap-0001").unwrap(),
+            Some(updated.clone()),
+            "one row answers the latest-index comparison"
+        );
+        assert!(
+            read_metadata_row(&root, "snap-missing").unwrap().is_none(),
+            "a snapshot without a row reports no state"
+        );
+        assert_eq!(
             read_metadata(&root).unwrap(),
             Some(vec![updated.clone(), second.clone()]),
             "one write replaces the row for its snapshot id"
@@ -467,6 +546,37 @@ mod tests {
             "a removed row leaves the table empty"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Verifies the export body keeps the retired latest-index line shape and
+    /// reports an absent database instead of creating one.
+    #[test]
+    fn export_renders_retired_latest_index_rows_without_creating_a_database() {
+        let root = test_root("export");
+        assert!(export_tsv_read_only(&root).unwrap().is_none());
+        let index = LatestSnapshotIndex {
+            latest_all: Some("snap-0002".to_string()),
+            latest_by_session: std::collections::BTreeMap::from([
+                ("$a".to_string(), "snap-0001".to_string()),
+                ("$b".to_string(), "snap-0002".to_string()),
+            ]),
+        };
+        write(&root, &index).unwrap();
+
+        assert_eq!(
+            export_tsv_read_only(&root).unwrap().unwrap(),
+            "all\tsnap-0002\nsession\t$a\tsnap-0001\nsession\t$b\tsnap-0002\n",
+            "the export renders the global winner first and sessions in scope order"
+        );
+
+        let absent = test_root("export-absent");
+        assert!(export_tsv_read_only(&absent).unwrap().is_none());
+        assert!(
+            !database_path(&absent).exists(),
+            "an inspection command must not create the store"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&absent);
     }
 
     /// Verifies a database written at an older schema version is rebuilt instead
