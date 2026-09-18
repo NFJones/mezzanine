@@ -1822,12 +1822,27 @@ impl RuntimeSessionService {
             .as_ref()?
             .record_browser
             .as_ref()?;
-        Some(match record_browser.source.as_ref()? {
+        Some(Self::record_browser_refresh_key_for(
+            record_browser.source.as_ref()?,
+            &record_browser.pane_id,
+        ))
+    }
+
+    /// Returns the refresh key a record browser with this source and pane uses.
+    ///
+    /// Keyed by family in one place so a dismissal or a registration can bump and
+    /// forget exactly the key the overlay that closed, or the picker that is about
+    /// to open, will use.
+    pub(crate) fn record_browser_refresh_key_for(
+        source: &RuntimeRecordBrowserOverlaySource,
+        pane_id: &str,
+    ) -> String {
+        match source {
             RuntimeRecordBrowserOverlaySource::SavedSessions { .. } => {
                 crate::runtime::SAVED_SESSION_OVERLAY_REFRESH_KEY.to_string()
             }
-            _ => record_browser.pane_id.clone(),
-        })
+            _ => pane_id.to_string(),
+        }
     }
 
     /// Reports whether the active record browser still shows one source.
@@ -1950,17 +1965,14 @@ impl RuntimeSessionService {
 
     /// Dismisses the primary display overlay after deferred resume succeeds.
     pub(crate) fn dismiss_primary_display_overlay(&mut self) -> bool {
-        let dismissed = self.presentation.primary_display_overlay.take().is_some();
-        if dismissed {
-            // Claims queued for the picker belong to a page that just closed; a
-            // reopen must not inherit their rebuild.
+        // Claims queued for the browser about to close must not settle into a later
+        // one: bump and forget the live key, whichever family owns it.
+        if let Some(refresh_key) = self.active_record_browser_refresh_key() {
+            self.presentation.begin_record_browser_refresh(&refresh_key);
             self.presentation
-                .begin_record_browser_refresh(crate::runtime::SAVED_SESSION_OVERLAY_REFRESH_KEY);
-            self.presentation.clear_record_browser_pending_target(
-                crate::runtime::SAVED_SESSION_OVERLAY_REFRESH_KEY,
-            );
+                .clear_record_browser_pending_target(&refresh_key);
         }
-        dismissed
+        self.presentation.primary_display_overlay.take().is_some()
     }
 
     /// Shows or clears the primary-client command display overlay.

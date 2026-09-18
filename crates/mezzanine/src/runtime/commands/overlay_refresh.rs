@@ -31,7 +31,9 @@
 //! dropped filter - and a delete is the one intent that owns its page even in
 //! detail, because the row that detail showed is gone. A filter key also keeps
 //! the row index the operator was on when the new filters no longer match the
-//! focused record, which is where the raw-index refresh left them.
+//! focused record, which matches the raw-index refresh sites (the lifecycle
+//! toggle, the filter prompt, and the deletes); the inline scope toggle used to
+//! reset to the first row instead.
 
 use super::RuntimeSessionService;
 use crate::error::{MezError, MezErrorKind, Result};

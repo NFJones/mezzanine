@@ -2085,6 +2085,56 @@ fn runtime_agent_shell_record_browser_filter_claims_its_page() {
         "the fixture opens on the project's issue"
     );
 
+    // A claim from another pane's key must not settle here even when its source
+    // matches: pane keys are not bumped on registration, so the live key has to
+    // name the overlay that made the claim.
+    let live_source = service
+        .active_record_browser_source()
+        .expect("the issues browser keeps its source");
+    let foreign = crate::runtime::RuntimeRecordBrowserRefreshWork {
+        refresh_key: "foreign-pane".to_string(),
+        generation: 0,
+        active_source: live_source.clone(),
+        source: live_source.clone(),
+        intent: crate::runtime::RuntimeRecordBrowserRefreshIntent::RefreshInPlace {
+            active_record_id: None,
+        },
+        transcript_store: None,
+        config_root: Some(config_root.clone()),
+        issue_database_path: Some(crate::storage::issues::issue_database_location(
+            &config_root,
+            None,
+        )),
+        prompt_width: 40,
+        title_policy: service.agent_session_title_policy(),
+    };
+    let foreign_page = crate::runtime::RuntimeSessionService::read_issue_browser_for_refresh(
+        crate::storage::issues::issue_database_location(&config_root, None),
+        &live_source,
+    )
+    .unwrap();
+    assert!(
+        !service
+            .complete_record_browser_refresh(
+                &foreign,
+                crate::runtime::RuntimeRecordBrowserRefreshOutcome::Rebuilt {
+                    browser: Box::new(foreign_page),
+                    source: live_source.clone(),
+                    active_index: None,
+                },
+            )
+            .unwrap(),
+        "a claim from another pane key must not settle here"
+    );
+    assert_eq!(
+        service
+            .primary_display_overlay()
+            .and_then(|overlay| overlay.record_browser.as_ref())
+            .map(|record_browser| record_browser.browser.records().len()),
+        Some(1),
+        "the dropped claim leaves the displayed page alone"
+    );
+
     // Submit a project filter that matches nothing, so the settled page is empty
     // and the retained source proves the filter reached the worker.
     apply_record_browser_input(&mut service, &primary, b"p");
