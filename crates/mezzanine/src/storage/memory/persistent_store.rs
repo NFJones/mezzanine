@@ -23,6 +23,15 @@ use super::{
 const SCHEMA_VERSION: i64 = 5;
 const LEGACY_TSV_FILE_NAME: &str = "memory.tsv";
 
+/// Busy timeout for one persistent-memory connection.
+///
+/// Deferred `/show-memories` reads open their own connection on a worker while
+/// memory mutations still write on the actor, and the read path runs schema
+/// initialization plus a first-open legacy import. Without a timeout rusqlite
+/// fails the loser immediately with `SQLITE_BUSY`; this budget matches the other
+/// small stores.
+const MEMORY_STORE_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
+
 impl PersistentMemoryStore {
     /// Runs the under config root operation for this subsystem.
     ///
@@ -333,6 +342,7 @@ impl PersistentMemoryStore {
         }
         let existed = self.path.exists();
         let mut connection = Connection::open(&self.path)?;
+        connection.busy_timeout(MEMORY_STORE_BUSY_TIMEOUT)?;
         initialize_schema(&mut connection, self.fts_enabled)?;
         if !existed {
             self.import_legacy_tsv(&mut connection)?;
