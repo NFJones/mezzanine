@@ -195,9 +195,9 @@ fn registry_imports_the_legacy_flat_file_once() {
 
 /// Verifies a rejected legacy record leaves the flat file authoritative.
 ///
-/// The import runs in one transaction, so a record that decodes but fails
-/// validation must fail the mutation, leave the flat file byte-identical, and
-/// keep it as the readable source instead of publishing a partial registry.
+/// The malformed row is rejected while the flat file is decoded into the import,
+/// so the mutation must fail, leave the flat file byte-identical, and keep it as
+/// the readable source instead of publishing a partial registry.
 #[test]
 fn registry_failed_import_keeps_the_legacy_flat_file_authoritative() {
     let root = test_root("sqlite-import-failure");
