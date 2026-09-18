@@ -248,6 +248,10 @@ pub(super) fn encode_prompt_history_entry(prompt: &str) -> Result<String> {
 }
 
 /// Encodes one prompt together with the ranges that remain collapsed on recall.
+///
+/// The SQLite history store keeps provenance in columns, so this encoder only
+/// exists for tests that reproduce an older build's legacy TSV rows.
+#[cfg(test)]
 pub(super) fn encode_structured_prompt_history_entry(
     entry: &ReadlineHistoryEntry,
 ) -> Result<String> {

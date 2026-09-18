@@ -2,8 +2,9 @@
 //!
 //! Each agent session is stored in a private directory under the configured
 //! session root. The directory contains an append-only transcript, while the
-//! session root contains bounded shared prompt-history metadata for agent and
-//! primary command prompts. A rebuildable SQLite catalog indexes saved-session
+//! session root contains one bounded SQLite prompt-history database shared by
+//! agent and primary command prompts; its legacy TSV files are imported once and
+//! then left untouched. A rebuildable SQLite catalog indexes saved-session
 //! discovery metadata without moving transcript or presentation payloads out
 //! of their inspectable per-session files.
 
@@ -26,6 +27,11 @@ mod encoding;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod fs;
+/// Exposes the history module boundary.
+///
+/// Both prompt histories share one SQLite database; the legacy TSV files are
+/// imported once and then left untouched.
+mod history;
 /// Exposes the store module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

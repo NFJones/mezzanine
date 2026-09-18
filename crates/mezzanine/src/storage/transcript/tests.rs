@@ -16,8 +16,8 @@ use super::encoding::{
     encode_structured_prompt_history_entry, encode_transcript_entry,
 };
 use super::store::{
-    PRESENTATION_CLEAR_TAIL_COMPACT_BYTES, PROMPT_HISTORY_COMPACTION_BYTES,
-    SESSION_OBJECTIVE_MIRRORS_MAX_BYTES, SESSION_OBJECTIVE_MIRRORS_MAX_ENTRIES,
+    PRESENTATION_CLEAR_TAIL_COMPACT_BYTES, SESSION_OBJECTIVE_MIRRORS_MAX_BYTES,
+    SESSION_OBJECTIVE_MIRRORS_MAX_ENTRIES,
 };
 use super::{
     AgentPresentationEntry, AgentTranscriptStore, CompareAndSwapTranscriptEntryResult,
@@ -1528,9 +1528,10 @@ async fn transcript_store_async_appends_entries_and_prompt_history() {
     assert_eq!(history, vec![String::from("inspect project")]);
     assert_eq!(command_history, vec![String::from("list-buffers")]);
     assert!(root.join("conv1").join("history.tsv").exists());
-    assert!(root.join("prompt-history.tsv").exists());
+    assert!(root.join("history.sqlite").exists());
     assert!(!root.join("conv1").join("prompt-history.tsv").exists());
-    assert!(root.join("command-prompt-history.tsv").exists());
+    assert!(!root.join("prompt-history.tsv").exists());
+    assert!(!root.join("command-prompt-history.tsv").exists());
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1592,7 +1593,8 @@ fn transcript_store_under_config_root_uses_session_directories() {
 }
 
 /// Verifies that submitted agent prompts are retained in one shared history
-/// file, survive lookup through any conversation, and are not copied by forks.
+/// database, survive lookup through any conversation, and are not copied by
+/// forks.
 #[test]
 fn transcript_store_persists_prompt_history_in_shared_file() {
     let root = temp_root("prompt-history");
@@ -1619,17 +1621,10 @@ fn transcript_store_persists_prompt_history_in_shared_file() {
     ];
     assert_eq!(store.prompt_history("conv1").unwrap(), history);
     assert_eq!(store.prompt_history("conv2").unwrap(), history);
-    assert!(root.join("prompt-history.tsv").exists());
+    assert!(root.join("history.sqlite").exists());
     assert!(!root.join("conv1").join("prompt-history.tsv").exists());
     assert!(!root.join("conv2").join("prompt-history.tsv").exists());
     assert_eq!(store.list().unwrap().len(), 1);
-    assert_eq!(
-        fs::read_to_string(root.join("prompt-history.tsv"))
-            .unwrap()
-            .lines()
-            .count(),
-        history.len()
-    );
 
     let fork = store.fork("conv1", "conv3", 99).unwrap();
     assert_eq!(fork.conversation_id, "conv3");
@@ -1639,8 +1634,8 @@ fn transcript_store_persists_prompt_history_in_shared_file() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies pathological prompt history rejects one oversized entry and
-/// compacts append-only rows to the newest aggregate byte-bounded set.
+/// Verifies pathological prompt history rejects one oversized entry and keeps
+/// only the newest aggregate byte-bounded set.
 #[test]
 fn transcript_store_bounds_and_compacts_pathological_prompt_history() {
     let root = temp_root("prompt-history-bounds");
@@ -1667,16 +1662,23 @@ fn transcript_store_bounds_and_compacts_pathological_prompt_history() {
             .is_some_and(|entry| entry.starts_with("05-"))
     );
     assert!(history.last().is_some_and(|entry| entry.starts_with("08-")));
-    assert!(
-        fs::metadata(root.join("prompt-history.tsv")).unwrap().len()
-            <= PROMPT_HISTORY_COMPACTION_BYTES
-    );
+    let connection = rusqlite::Connection::open(root.join("history.sqlite")).unwrap();
+    let rows: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM history WHERE scope = 'agent'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(rows, 4, "retention keeps only the newest bounded rows");
+    drop(connection);
 
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies that the temporary per-conversation history layout is imported
-/// once in deterministic path order without deleting the source files.
+/// Verifies that the temporary per-conversation history layout is imported into
+/// the history database once on the first write, in deterministic path order,
+/// without deleting the source files or reading legacy rows afterwards.
 #[test]
 fn transcript_store_imports_isolated_prompt_history_once() {
     let root = temp_root("prompt-history-migration");
@@ -1721,12 +1723,23 @@ fn transcript_store_imports_isolated_prompt_history_once() {
             String::from("from b"),
         ]
     );
-    assert!(root.join(".prompt-history-shared-v1").exists());
+    assert!(
+        !root.join("history.sqlite").exists(),
+        "a read must not create or migrate the store"
+    );
     assert!(
         root.join("conversation-a")
             .join("prompt-history.tsv")
             .exists()
     );
+
+    // The first accepted append imports the legacy rows exactly once.
+    assert!(
+        store
+            .append_prompt_history("current", "after import")
+            .unwrap()
+    );
+    assert!(root.join("history.sqlite").exists());
     fs::write(
         root.join("conversation-a").join("prompt-history.tsv"),
         format!(
@@ -1741,6 +1754,7 @@ fn transcript_store_imports_isolated_prompt_history_once() {
             String::from("shared first"),
             String::from("from a"),
             String::from("from b"),
+            String::from("after import"),
         ]
     );
 
@@ -1784,8 +1798,8 @@ fn transcript_store_serializes_shared_prompt_history_writers() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies that primary command prompt history is stored separately from the
-/// agent prompt history while using the same shared, bounded reload behavior.
+/// Verifies that primary command prompt history is stored under its own scope
+/// in the shared history database while using the same bounded reload behavior.
 #[test]
 fn transcript_store_persists_command_prompt_history_in_shared_file() {
     let root = temp_root("command-history");
@@ -1813,16 +1827,10 @@ fn transcript_store_persists_command_prompt_history_in_shared_file() {
         store.prompt_history("conv1").unwrap(),
         vec![String::from("agent prompt")]
     );
-    assert!(root.join("command-prompt-history.tsv").exists());
-    assert!(root.join("prompt-history.tsv").exists());
+    assert!(root.join("history.sqlite").exists());
+    assert!(!root.join("prompt-history.tsv").exists());
+    assert!(!root.join("command-prompt-history.tsv").exists());
     assert!(!root.join("conv1").join("prompt-history.tsv").exists());
-    assert_eq!(
-        fs::read_to_string(root.join("command-prompt-history.tsv"))
-            .unwrap()
-            .lines()
-            .count(),
-        3
-    );
 
     let _ = fs::remove_dir_all(root);
 }
