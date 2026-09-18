@@ -565,7 +565,7 @@ impl RuntimeSessionService {
                 source,
                 RuntimeRecordBrowserOverlaySource::SavedSessions { .. }
             ) {
-                self.begin_record_browser_preserving_claim(source, active_record_id)?;
+                self.begin_record_browser_preserving_claim(source, active_record_id, None)?;
                 return Ok(Some(false));
             }
             let (source, browser) = self
@@ -600,7 +600,7 @@ impl RuntimeSessionService {
                 .active_record_id()
                 .map(str::to_string);
             let source = self.record_browser_source_toggled_subagents(&source);
-            self.begin_record_browser_preserving_claim(source, active_record_id)?;
+            self.begin_record_browser_preserving_claim(source, active_record_id, None)?;
             return Ok(Some(false));
         }
         if input == b"r"
@@ -613,7 +613,7 @@ impl RuntimeSessionService {
                 return Ok(Some(false));
             };
             let source = self.record_browser_source_toggled_session_lifecycle(&source);
-            self.begin_record_browser_preserving_claim(source, None)?;
+            self.begin_record_browser_preserving_claim(source, None, None)?;
             return Ok(Some(false));
         }
         if input == b"A"
@@ -897,23 +897,9 @@ impl RuntimeSessionService {
             let source = record_browser.source.clone().ok_or_else(|| {
                 MezError::invalid_state("saved-session browser is missing its backend source")
             })?;
-            let (source, browser) =
-                self.clear_saved_session_name_from_browser(&source, &record_id)?;
-            let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
-                return Ok(Some(false));
-            };
-            let Some(record_browser) = overlay.record_browser.as_mut() else {
-                return Ok(None);
-            };
-            record_browser.source = Some(source);
-            record_browser.browser = browser;
-            return Ok(Some(render_record_browser_overlay(
-                overlay,
-                &mut self.presentation.overlay_action_registry,
-                &self.presentation.settings.ui_theme,
-                terminal_width,
-                prose_width,
-            )));
+            self.clear_saved_session_name(&record_id)?;
+            self.begin_record_browser_preserving_claim(source, Some(record_id), None)?;
+            return Ok(Some(false));
         }
         if input == b"d" && record_browser.browser.deletion_enabled() {
             let source = record_browser.source.clone().ok_or_else(|| {
@@ -1716,7 +1702,7 @@ impl RuntimeSessionService {
                     mez_mux::record_browser::RecordBrowserFilterField::Text,
                     query.as_deref().unwrap_or_default(),
                 )?;
-                self.begin_record_browser_preserving_claim(source, active_record_id)?;
+                self.begin_record_browser_preserving_claim(source, active_record_id, None)?;
                 return Ok(false);
             }
             let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {

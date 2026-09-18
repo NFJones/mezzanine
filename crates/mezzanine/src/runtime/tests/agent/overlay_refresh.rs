@@ -571,3 +571,52 @@ fn overlay_refresh_keeps_source_derived_keys_on_the_displayed_page() {
         "the detail key still opens the displayed active row"
     );
 }
+
+/// Verifies a post-mutation refresh installs its page with the settlement status.
+///
+/// An archive settlement claims the refresh with the status string and the row to
+/// keep; the worker stamps that status on the page it rebuilds, exactly as the
+/// inline refresh did before installing.
+#[test]
+fn overlay_refresh_installs_a_post_mutation_page_with_its_settlement_status() {
+    let mut service = test_runtime_service();
+    let _primary = open_saved_session_picker(&mut service, "overlay-refresh-settlement", 45);
+    let mut source = service
+        .active_saved_session_browser_source()
+        .expect("the picker keeps a saved-session source");
+    // The status renders in the page's empty state, so the claim targets a search
+    // that matches nothing and the settlement status is the only content left.
+    let RuntimeRecordBrowserOverlaySource::SavedSessions { search, .. } = &mut source else {
+        panic!("the picker keeps a saved-session source");
+    };
+    *search = Some("no-such-prompt".to_string());
+    assert!(
+        service
+            .begin_record_browser_preserving_claim(
+                source,
+                None,
+                Some("archive completed for fixture".to_string()),
+            )
+            .unwrap()
+            .is_some(),
+        "an open picker claims the settlement refresh"
+    );
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the settlement page installs while its claim is current"
+    );
+    assert!(saved_session_page_ids(&service).is_empty());
+    let rendered = service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .expect("the picker stays open")
+        .browser
+        .render_page()
+        .markdown;
+    assert!(
+        rendered.contains("Error: archive completed for fixture"),
+        "the settlement status rides the installed page: {rendered}"
+    );
+}

@@ -369,16 +369,16 @@ impl RuntimeSessionService {
         conversation_id: &str,
         error: Option<&str>,
     ) -> Result<()> {
-        let source = self.active_saved_session_browser_source();
-        let Some(source @ crate::runtime::service_state::RuntimeRecordBrowserOverlaySource::SavedSessions { .. }) = source else {
+        let Some(source) = self.active_saved_session_browser_source() else {
             return Ok(());
         };
-        let (source, mut browser) = self.refresh_saved_session_browser_preserving(
-            &source,
-            error.is_some().then_some(conversation_id),
+        // The settlement status and the row to keep both ride the claim, and the
+        // catalog read runs off the actor like every other picker refresh.
+        self.begin_record_browser_preserving_claim(
+            source,
+            error.is_some().then(|| conversation_id.to_string()),
+            error.map(str::to_string),
         )?;
-        browser.set_error(error.map(str::to_string));
-        self.replace_active_saved_session_browser(source, browser);
         Ok(())
     }
 
@@ -387,8 +387,7 @@ impl RuntimeSessionService {
         let Some(source) = self.active_saved_session_browser_source() else {
             return Ok(());
         };
-        let (source, browser) = self.refresh_saved_session_browser_preserving(&source, None)?;
-        self.replace_active_saved_session_browser(source, browser);
+        self.begin_record_browser_preserving_claim(source, None, None)?;
         Ok(())
     }
 

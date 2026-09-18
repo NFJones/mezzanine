@@ -455,6 +455,8 @@ pub(crate) enum RuntimeRecordBrowserRefreshIntent {
         target: Box<super::RuntimeRecordBrowserOverlaySource>,
         /// Focused record the rebuilt page restores, when one was focused.
         active_record_id: Option<String>,
+        /// Settlement error the rebuilt page displays, when one applies.
+        error: Option<String>,
     },
 }
 

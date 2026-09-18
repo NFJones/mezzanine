@@ -246,23 +246,21 @@ impl RuntimeSessionService {
         Ok(browser)
     }
 
-    /// Clears one saved conversation name and refreshes the resume browser.
+    /// Clears one saved conversation name through its store.
     ///
-    /// Unnamed conversations are an idempotent no-op. The refreshed browser
-    /// keeps the same conversation selected even when removing its name moves
-    /// it from the named partition into the ordinary activity ordering.
-    pub(crate) fn clear_saved_session_name_from_browser(
-        &mut self,
-        source: &RuntimeRecordBrowserOverlaySource,
-        record_id: &str,
-    ) -> Result<(RuntimeRecordBrowserOverlaySource, RecordBrowser)> {
+    /// The page refresh that follows runs in the overlay refresh lane, so this
+    /// keeps only the store mutation and the selector invalidation. Unnamed
+    /// conversations are an idempotent no-op, and the refreshed page keeps the
+    /// same conversation selected even when removing its name moves it from the
+    /// named partition into the ordinary activity ordering.
+    pub(crate) fn clear_saved_session_name(&mut self, record_id: &str) -> Result<()> {
         let store = self
             .persistence
             .cloned_transcript_store()
             .ok_or_else(|| MezError::invalid_state("resume requires transcript storage"))?;
         store.clear_session_name(record_id)?;
         self.invalidate_agent_prompt_selector_extra_candidates();
-        self.refresh_saved_session_browser_preserving(source, Some(record_id))
+        Ok(())
     }
 
     /// Deletes one pane-owned transcript record and refreshes its context browser.

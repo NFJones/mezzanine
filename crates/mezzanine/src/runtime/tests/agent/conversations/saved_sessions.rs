@@ -359,6 +359,12 @@ fn runtime_resume_browser_archives_browses_details_and_deletes_sessions() {
         .unwrap();
     assert!(
         service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the archive settlement claims the archived page"
+    );
+    assert!(
+        service
             .primary_display_overlay()
             .and_then(|overlay| overlay.record_browser.as_ref())
             .unwrap()
@@ -2200,6 +2206,12 @@ fn runtime_resume_browser_clear_name_hotkey_preserves_session_and_selection() {
     service
         .apply_primary_display_overlay_input(&primary, b"c")
         .unwrap();
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the clear-name refresh claims the rebuilt page"
+    );
 
     assert!(
         transcript_store
