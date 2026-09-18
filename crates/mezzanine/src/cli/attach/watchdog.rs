@@ -17,27 +17,36 @@ pub(super) const ATTACH_RESPONSE_HINT_THRESHOLD: Duration = Duration::from_milli
 /// Interval the caller waits between watchdog checks while a response is due.
 pub(super) const ATTACH_RESPONSE_HINT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
-/// Test-only override for the hint threshold.
-///
-/// A delayed-response regression must observe the hint without waiting the
-/// production 500 ms, and the loop constructs its watchdog through
-/// [`AttachResponseWatchdog::new`], so the override is process-wide and
-/// monotonic: focused tests that need their own threshold use
-/// [`AttachResponseWatchdog::with_threshold`] instead.
 #[cfg(test)]
-static TEST_HINT_THRESHOLD_MS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+tokio::task_local! {
+    /// Test-only hint threshold scoped to the task running one client loop.
+    ///
+    /// A delayed-response regression must observe the hint without waiting the
+    /// production 500 ms, but attach tests share one process and run in
+    /// parallel, so a process-wide override would leak a shortened threshold
+    /// into every other loop test in the binary and make their exact-frame
+    /// assertions flaky. The seam is therefore scoped to the task that drives
+    /// the loop under test; every other task keeps the production threshold and
+    /// the poll interval is unchanged everywhere.
+    pub(super) static TEST_HINT_THRESHOLD: Duration;
+}
 
-/// Installs the test-only hint threshold for the current process.
+/// Runs one future with a test-only hint threshold scoped to its task.
 #[cfg(test)]
-pub(super) fn install_test_hint_threshold(milliseconds: u64) {
-    let _ = TEST_HINT_THRESHOLD_MS.set(milliseconds);
+pub(super) async fn with_test_hint_threshold<F>(milliseconds: u64, future: F) -> F::Output
+where
+    F: std::future::Future,
+{
+    TEST_HINT_THRESHOLD
+        .scope(Duration::from_millis(milliseconds), future)
+        .await
 }
 
 /// Returns the hint threshold production and focused tests should both observe.
 fn attach_response_hint_threshold() -> Duration {
     #[cfg(test)]
-    if let Some(milliseconds) = TEST_HINT_THRESHOLD_MS.get() {
-        return Duration::from_millis(*milliseconds);
+    if let Ok(threshold) = TEST_HINT_THRESHOLD.try_with(|threshold| *threshold) {
+        return threshold;
     }
     ATTACH_RESPONSE_HINT_THRESHOLD
 }
@@ -174,25 +183,40 @@ mod tests {
         assert!(!painted.clear(), "the hint is cleared only once");
     }
 
-    /// Verifies the process-wide test override reaches the loop's constructor
-    /// while an explicit threshold still wins.
-    #[test]
-    fn attach_response_watchdog_test_threshold_override_applies() {
-        install_test_hint_threshold(1);
+    /// Verifies the test threshold reaches the loop's constructor only inside
+    /// its task scope, never leaks into a task without it, and still loses to an
+    /// explicit threshold.
+    #[tokio::test(flavor = "current_thread")]
+    async fn attach_response_watchdog_test_threshold_override_stays_scoped() {
         let start = Instant::now();
-        let mut loop_watchdog = AttachResponseWatchdog::new(start);
-        assert!(
-            loop_watchdog
-                .pending_hint(start + Duration::from_millis(2))
-                .is_some(),
-            "the override threshold reaches the loop constructor"
-        );
-        let mut explicit =
-            AttachResponseWatchdog::with_threshold(start, Duration::from_millis(10_000));
+        let mut unscoped = AttachResponseWatchdog::new(start);
         assert_eq!(
-            explicit.pending_hint(start + Duration::from_millis(2)),
+            unscoped.pending_hint(start + Duration::from_millis(2)),
             None,
-            "an explicit threshold is not overridden"
+            "a task without the override keeps the production threshold"
+        );
+        with_test_hint_threshold(1, async {
+            let mut loop_watchdog = AttachResponseWatchdog::new(std::time::Instant::now());
+            assert!(
+                loop_watchdog
+                    .pending_hint(std::time::Instant::now() + Duration::from_millis(2))
+                    .is_some(),
+                "the scoped override reaches the loop constructor"
+            );
+            let mut explicit =
+                AttachResponseWatchdog::with_threshold(start, Duration::from_millis(10_000));
+            assert_eq!(
+                explicit.pending_hint(start + Duration::from_millis(2)),
+                None,
+                "an explicit threshold is not overridden"
+            );
+        })
+        .await;
+        let mut after_scope = AttachResponseWatchdog::new(start);
+        assert_eq!(
+            after_scope.pending_hint(start + Duration::from_millis(2)),
+            None,
+            "the override does not outlive its scope"
         );
     }
 

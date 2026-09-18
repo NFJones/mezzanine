@@ -285,26 +285,70 @@ async fn present_iroh_wakeup_while_step_pending<I: AsyncAttachedTerminalIo>(
     }
 }
 
+/// Frame rows a locally painted busy hint can be overlaid on.
+trait AttachBusyHintFrame {
+    /// Returns the frame's rows, their style spans, and its output modes.
+    fn busy_hint_rows(
+        &self,
+    ) -> (
+        &[String],
+        &[Vec<mez_terminal::TerminalStyleSpan>],
+        super::AttachedTerminalOutputModes,
+    );
+}
+
+impl AttachBusyHintFrame for super::AttachClientFrame {
+    fn busy_hint_rows(
+        &self,
+    ) -> (
+        &[String],
+        &[Vec<mez_terminal::TerminalStyleSpan>],
+        super::AttachedTerminalOutputModes,
+    ) {
+        (&self.lines, &self.line_style_spans, self.modes)
+    }
+}
+
+impl AttachBusyHintFrame for AttachHintFrame {
+    fn busy_hint_rows(
+        &self,
+    ) -> (
+        &[String],
+        &[Vec<mez_terminal::TerminalStyleSpan>],
+        super::AttachedTerminalOutputModes,
+    ) {
+        (&self.lines, &self.line_style_spans, self.modes)
+    }
+}
+
 /// Paints the local busy hint while a terminal-step response is outstanding.
 ///
 /// The hint is the client's own feedback for a stalled daemon, so it never
-/// depends on a prior render: with a cached frame the hint replaces that
-/// frame's last row and drops the row's server styles, and without one it is
-/// painted as a bare line in default output modes. The caller invalidates the
-/// frame when the response clears the hint, which repaints the real layout.
+/// depends on a prior render: a cached frame with rows keeps its layout and only
+/// its last row is replaced, with that row's server styles dropped, while a
+/// client with nothing to overlay (no frame yet, or an empty frame the daemon
+/// sent between renders) still gets a bare hint line in default output modes.
+/// The caller invalidates the frame when the response clears the hint, which
+/// repaints the real layout.
 ///
 /// Returns whether the attached terminal is still connected.
-async fn paint_attached_busy_hint<I: AsyncAttachedTerminalIo>(
+async fn paint_attached_busy_hint<I, F>(
     terminal_io: &mut I,
-    cached_frame: Option<&super::AttachClientFrame>,
+    cached_frame: Option<&F>,
     hint: &str,
-) -> Result<bool> {
-    let (lines, line_style_spans, modes) = match cached_frame {
+) -> Result<bool>
+where
+    I: AsyncAttachedTerminalIo,
+    F: AttachBusyHintFrame + ?Sized,
+{
+    let overlaid = cached_frame.filter(|frame| !frame.busy_hint_rows().0.is_empty());
+    let (lines, line_style_spans, modes) = match overlaid {
         Some(frame) => {
-            let row = frame.lines.len().saturating_sub(1);
+            let (frame_lines, frame_spans, modes) = frame.busy_hint_rows();
+            let row = frame_lines.len().saturating_sub(1);
             let (lines, line_style_spans) =
-                compose_operator_hint(&frame.lines, &frame.line_style_spans, row, hint);
-            (lines, line_style_spans, frame.modes)
+                compose_operator_hint(frame_lines, frame_spans, row, hint);
+            (lines, line_style_spans, modes)
         }
         None => (
             vec![hint.to_string()],
@@ -1032,6 +1076,116 @@ mod pushed_snapshot_tests {
         }
     }
 
+    /// Client input that can be queued after the loop under test has started.
+    #[derive(Debug, Default)]
+    struct InjectableInput {
+        bytes: std::sync::Mutex<std::collections::VecDeque<Vec<u8>>>,
+        ready: tokio::sync::Notify,
+    }
+
+    impl InjectableInput {
+        /// Queues one input batch for the loop's next input read.
+        fn push(&self, input: impl Into<Vec<u8>>) {
+            self.bytes.lock().unwrap().push_back(input.into());
+            self.ready.notify_one();
+        }
+    }
+
+    /// Terminal fake that records frames and waits for injected input.
+    ///
+    /// The runtime-events loop reads input before it renders, so a regression
+    /// that needs a view before its terminal step must queue input after the
+    /// loop has started; the fake therefore waits for input instead of
+    /// reporting the immediate empty read that the loop treats as EOF.
+    #[derive(Debug, Default)]
+    struct InjectableTerminalIo {
+        input: std::sync::Arc<InjectableInput>,
+        frames: Vec<InjectableFrame>,
+        invalidated_output_frames: usize,
+    }
+
+    /// One frame captured by the injectable terminal fake.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct InjectableFrame {
+        lines: Vec<String>,
+        line_style_spans: Vec<Vec<super::super::TerminalStyleSpan>>,
+    }
+
+    impl InjectableTerminalIo {
+        /// Creates the fake and the handle used to inject input mid-loop.
+        fn new() -> (Self, std::sync::Arc<InjectableInput>) {
+            let io = Self::default();
+            let input = io.input.clone();
+            (io, input)
+        }
+    }
+
+    impl AsyncAttachedTerminalIo for InjectableTerminalIo {
+        fn poll_readiness<'a>(
+            &'a mut self,
+        ) -> crate::host::async_runtime::AsyncTerminalIoFuture<
+            'a,
+            Vec<crate::host::terminal::AttachedTerminalFdReadiness>,
+        > {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+
+        fn poll_input_readiness<'a>(
+            &'a mut self,
+        ) -> crate::host::async_runtime::AsyncTerminalIoFuture<
+            'a,
+            Vec<crate::host::terminal::AttachedTerminalFdReadiness>,
+        > {
+            Box::pin(async move {
+                let notified = self.input.ready.notified();
+                if self.input.bytes.lock().unwrap().is_empty() {
+                    notified.await;
+                }
+                Ok(Vec::new())
+            })
+        }
+
+        fn read_input<'a>(
+            &'a mut self,
+            max_bytes: usize,
+        ) -> crate::host::async_runtime::AsyncTerminalIoFuture<'a, Vec<u8>> {
+            Box::pin(async move {
+                loop {
+                    let queued = self.input.bytes.lock().unwrap().pop_front();
+                    if let Some(mut bytes) = queued {
+                        bytes.truncate(max_bytes);
+                        return Ok(bytes);
+                    }
+                    self.input.ready.notified().await;
+                }
+            })
+        }
+
+        fn write_styled_output_with_modes<'a>(
+            &'a mut self,
+            lines: &'a [String],
+            line_style_spans: &'a [Vec<super::super::TerminalStyleSpan>],
+            _modes: super::super::AttachedTerminalOutputModes,
+        ) -> crate::host::async_runtime::AsyncTerminalIoFuture<'a, usize> {
+            Box::pin(async move {
+                self.frames.push(InjectableFrame {
+                    lines: lines.to_vec(),
+                    line_style_spans: line_style_spans.to_vec(),
+                });
+                Ok(lines.iter().map(String::len).sum())
+            })
+        }
+
+        fn invalidate_output_frame<'a>(
+            &'a mut self,
+        ) -> crate::host::async_runtime::AsyncTerminalIoFuture<'a, ()> {
+            Box::pin(async move {
+                self.invalidated_output_frames = self.invalidated_output_frames.saturating_add(1);
+                Ok(())
+            })
+        }
+    }
+
     /// Verifies negotiated v3 renders its initial pushed snapshot and exits on
     /// terminal EOF without issuing the legacy RTT-bound `terminal/view`.
     #[tokio::test(flavor = "current_thread")]
@@ -1254,7 +1408,7 @@ mod pushed_snapshot_tests {
     /// leaving the terminal silently frozen, and that the arriving response
     /// clears the hint and repaints the real layout.
     ///
-    /// The production threshold is 500 ms; the process-wide test override
+    /// The production threshold is 500 ms; the task-scoped test override
     /// shortens it so the assertion is deterministic. The daemon holds its
     /// acknowledgement until the client has written the hint frame, which pins
     /// the ordering under test: the hint is the client's own feedback, not
@@ -1262,7 +1416,6 @@ mod pushed_snapshot_tests {
     /// be painted as a bare line with no server spans.
     #[tokio::test(flavor = "current_thread")]
     async fn primary_v3_paints_busy_hint_for_a_delayed_response() {
-        super::super::watchdog::install_test_hint_threshold(1);
         let (mut client_stream, mut server_stream) = tokio::io::duplex(16 * 1024);
         let hint_painted = std::sync::Arc::new(tokio::sync::Notify::new());
         let mut terminal_io = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
@@ -1290,15 +1443,18 @@ mod pushed_snapshot_tests {
                 .await
                 .unwrap();
         };
-        let client = run_iroh_attached_primary_client_loop_async_with_events(
-            &mut client_stream,
-            &mut terminal_io,
-            None,
-            ClientId::parse('c', "c1".to_string()).unwrap(),
-            Size::new(80, 24).unwrap(),
-            std::time::Duration::from_secs(10),
-            None,
-            true,
+        let client = super::super::watchdog::with_test_hint_threshold(
+            1,
+            run_iroh_attached_primary_client_loop_async_with_events(
+                &mut client_stream,
+                &mut terminal_io,
+                None,
+                ClientId::parse('c', "c1".to_string()).unwrap(),
+                Size::new(80, 24).unwrap(),
+                std::time::Duration::from_secs(10),
+                None,
+                true,
+            ),
         );
         let (client, ()) = tokio::join!(client, server);
         client.unwrap();
@@ -1333,7 +1489,6 @@ mod pushed_snapshot_tests {
     /// layout while the daemon is stalled.
     #[tokio::test(flavor = "current_thread")]
     async fn primary_v3_paints_busy_hint_over_the_cached_pushed_frame() {
-        super::super::watchdog::install_test_hint_threshold(1);
         let (mut client_stream, mut server_stream) = tokio::io::duplex(16 * 1024);
         let mut terminal_io = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
         terminal_io.push_input(b"x".to_vec());
@@ -1377,15 +1532,18 @@ mod pushed_snapshot_tests {
                 .await
                 .unwrap();
         };
-        let client = run_iroh_attached_primary_client_loop_async_with_events(
-            &mut client_stream,
-            &mut terminal_io,
-            None,
-            ClientId::parse('c', "c1".to_string()).unwrap(),
-            Size::new(80, 24).unwrap(),
-            std::time::Duration::from_secs(10),
-            Some(&mut receiver),
-            true,
+        let client = super::super::watchdog::with_test_hint_threshold(
+            1,
+            run_iroh_attached_primary_client_loop_async_with_events(
+                &mut client_stream,
+                &mut terminal_io,
+                None,
+                ClientId::parse('c', "c1".to_string()).unwrap(),
+                Size::new(80, 24).unwrap(),
+                std::time::Duration::from_secs(10),
+                Some(&mut receiver),
+                true,
+            ),
         );
         let (client, ()) = tokio::join!(client, server);
         client.unwrap();
@@ -1506,6 +1664,162 @@ mod pushed_snapshot_tests {
         );
         let (client, ()) = tokio::join!(client, server);
         client.unwrap();
+    }
+
+    /// Decodes one control request, asserts its method, and builds the response.
+    fn control_request_response(
+        request: &[u8],
+        method: &str,
+        build: impl FnOnce(String) -> serde_json::Value,
+    ) -> String {
+        let (body, _) = decode_control_frame(request, 1024 * 1024).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            parsed.get("method").and_then(serde_json::Value::as_str),
+            Some(method),
+            "{body}"
+        );
+        let id = parsed
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .expect("control request carries an id")
+            .to_string();
+        build(id).to_string()
+    }
+
+    /// Writes one encoded control response body to a fake daemon stream.
+    async fn write_control_body<S>(stream: &mut S, body: &str)
+    where
+        S: tokio::io::AsyncWrite + Unpin,
+    {
+        tokio::io::AsyncWriteExt::write_all(stream, &super::super::encode_control_body(body))
+            .await
+            .unwrap();
+        tokio::io::AsyncWriteExt::flush(stream).await.unwrap();
+    }
+
+    /// Verifies the runtime-events control-socket loop keeps the last painted
+    /// frame when a later view carries no frame at all, so a delayed terminal
+    /// step still paints the busy hint over the layout the client is showing.
+    ///
+    /// The daemon answers the first view with two rows and the second view with
+    /// no frame, then injects input so the loop issues a terminal step whose
+    /// acknowledgement is withheld past the hint threshold. Without the retained
+    /// frame the hint would degrade to a bare line even though the earlier rows
+    /// are still on screen.
+    #[tokio::test(flavor = "current_thread")]
+    async fn control_socket_loop_paints_busy_hint_over_the_last_painted_frame() {
+        let (client_stream, server_stream) = std::os::unix::net::UnixStream::pair().unwrap();
+        client_stream.set_nonblocking(true).unwrap();
+        server_stream.set_nonblocking(true).unwrap();
+        let mut client_stream = tokio::net::UnixStream::from_std(client_stream).unwrap();
+        let mut server_stream = tokio::net::UnixStream::from_std(server_stream).unwrap();
+        let (mut terminal_io, input) = InjectableTerminalIo::new();
+
+        let server = async move {
+            let request = read_async_control_response_frames(&mut server_stream, 1024 * 1024, 1)
+                .await
+                .unwrap();
+            let response = control_request_response(&request, "terminal/view", |id| {
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {"view": {
+                        "lines": ["cached row one", "cached row two"],
+                        "line_style_spans": [[], []],
+                        "cursor": {"row": 0, "column": 12, "visible": true, "style": "bar", "blink": false},
+                        "output_modes": {"application_keypad": false, "animation_refresh_interval_ms": 100}
+                    }}
+                })
+            });
+            write_control_body(&mut server_stream, &response).await;
+
+            let request = read_async_control_response_frames(&mut server_stream, 1024 * 1024, 1)
+                .await
+                .unwrap();
+            let response = control_request_response(&request, "terminal/view", |id| {
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {"view": {
+                        "lines": [],
+                        "line_style_spans": [],
+                        "cursor": {"row": 0, "column": 0, "visible": false, "style": "bar", "blink": false},
+                        "output_modes": {"application_keypad": false}
+                    }}
+                })
+            });
+            write_control_body(&mut server_stream, &response).await;
+
+            // The step only exists once the client has input, and the empty
+            // view above is what must not discard the frame already drawn.
+            input.push(b"x".to_vec());
+            let request = read_async_control_response_frames(&mut server_stream, 1024 * 1024, 1)
+                .await
+                .unwrap();
+            let response = control_request_response(&request, "terminal/step", |id| {
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "input_bytes": 1,
+                        "application": {
+                            "forwarded_bytes": 1,
+                            "mux_actions_applied": 0,
+                            "mouse_actions_reported": 0,
+                            "agent_prompt_inputs_applied": 0,
+                            "view_refresh_required": false,
+                            "full_redraw_required": false,
+                            "unsupported_actions": []
+                        },
+                        "view": null,
+                        "ui_theme": null
+                    }
+                })
+            });
+            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+            write_control_body(&mut server_stream, &response).await;
+        };
+        let client = super::super::watchdog::with_test_hint_threshold(
+            1,
+            run_control_socket_attached_primary_client_loop_async_with_runtime_events(
+                &mut client_stream,
+                &mut terminal_io,
+                ClientId::parse('c', "c1".to_string()).unwrap(),
+                Size::new(80, 24).unwrap(),
+                None,
+            ),
+        );
+        let (client, ()) = tokio::join!(client, server);
+        client.unwrap();
+
+        assert_eq!(
+            terminal_io.frames.first().map(|frame| frame.lines.clone()),
+            Some(vec![
+                "cached row one".to_string(),
+                "cached row two".to_string()
+            ]),
+            "the first view caches the two rendered rows"
+        );
+        let hinted = terminal_io
+            .frames
+            .iter()
+            .find(|frame| {
+                frame
+                    .lines
+                    .iter()
+                    .any(|line| line.contains("waiting for daemon"))
+            })
+            .expect("a delayed terminal step must paint the local busy hint");
+        assert_eq!(
+            hinted.lines,
+            ["cached row one", "waiting for daemon (0s)"],
+            "the hint overlays the last painted frame instead of degrading to a bare line"
+        );
+        assert!(
+            hinted.line_style_spans.last().is_some_and(Vec::is_empty),
+            "locally authored hint text must not carry server style spans"
+        );
     }
 }
 
@@ -1703,7 +2017,12 @@ where
                 break Ok(());
             }
             animation_refresh.update_from_rendered_view(outcome.animation_refresh_interval_ms);
-            hint_frame = outcome.hint_frame;
+            // A view that carries no frame (an empty server frame, or a render
+            // path that does not retain one) must not discard the last frame
+            // the client already painted: the hint still overlays what is on
+            // screen, and the post-response invalidation repaints real state.
+            let rendered_frame = outcome.hint_frame.filter(|frame| !frame.lines.is_empty());
+            hint_frame = rendered_frame.or(hint_frame);
             render_requested = false;
             iteration = iteration.saturating_add(1);
             continue;
@@ -1735,34 +2054,8 @@ where
                         let Some(hint) = watchdog.pending_hint(std::time::Instant::now()) else {
                             continue;
                         };
-                        // Feedback must not depend on a prior render: without a
-                        // cached frame the hint is still painted as a bare line,
-                        // and the frame invalidation after the response repaints
-                        // the real layout.
-                        let (lines, line_style_spans, modes) = match hint_frame.as_ref() {
-                            Some(frame) => {
-                                let row = frame.lines.len().saturating_sub(1);
-                                let (lines, line_style_spans) = compose_operator_hint(
-                                    &frame.lines,
-                                    &frame.line_style_spans,
-                                    row,
-                                    &hint,
-                                );
-                                (lines, line_style_spans, frame.modes)
-                            }
-                            None => (
-                                vec![hint.clone()],
-                                vec![Vec::new()],
-                                super::AttachedTerminalOutputModes::default(),
-                            ),
-                        };
-                        if !write_styled_output_or_disconnected_async(
-                            terminal_io,
-                            &lines,
-                            &line_style_spans,
-                            modes,
-                        )
-                        .await?
+                        if !paint_attached_busy_hint(terminal_io, hint_frame.as_ref(), &hint)
+                            .await?
                         {
                             break None;
                         }
