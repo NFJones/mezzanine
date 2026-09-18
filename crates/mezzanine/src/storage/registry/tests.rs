@@ -531,3 +531,41 @@ fn resolves_session_records_by_exact_id_and_index_alias() {
     );
     assert!(resolve_session_record_target(&records, "$99").is_none());
 }
+
+/// Verifies the export renders the legacy shape without creating the store.
+///
+/// An absent store reports that nothing exists, a seeded store exports exactly
+/// the flat-file bytes, and a legacy-only root exports its rows without the
+/// database appearing, so the operator escape hatch never creates or migrates.
+#[test]
+fn registry_export_renders_the_legacy_shape_without_creating_the_store() {
+    let root = test_root("sqlite-export");
+    let _ = fs::remove_dir_all(&root);
+    let registry = SessionRegistry::new(root.clone(), effective_uid_for_tests());
+    assert_eq!(registry.export_tsv_read_only().unwrap(), None);
+    assert!(!super::sqlite::database_path(&registry).exists());
+    assert!(!registry.registry_file().exists());
+
+    registry.upsert(record("$1")).unwrap();
+    assert_eq!(
+        registry.export_tsv_read_only().unwrap(),
+        Some(format!("{}\n", record("$1").encode().unwrap()))
+    );
+
+    let legacy_root = test_root("sqlite-export-legacy");
+    let _ = fs::remove_dir_all(&legacy_root);
+    let legacy = SessionRegistry::new(legacy_root.clone(), effective_uid_for_tests());
+    legacy
+        .write_legacy_records_for_tests(vec![record("$2")])
+        .unwrap();
+    assert_eq!(
+        legacy.export_tsv_read_only().unwrap(),
+        Some(format!("{}\n", record("$2").encode().unwrap()))
+    );
+    assert!(
+        !super::sqlite::database_path(&legacy).exists(),
+        "an export must not create the registry database"
+    );
+    let _ = fs::remove_dir_all(root);
+    let _ = fs::remove_dir_all(legacy_root);
+}
