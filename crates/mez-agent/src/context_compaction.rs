@@ -251,6 +251,7 @@ fn plan_model_context_compaction_with_projection(
         model_context_retained_tail_budget_words(context_budget_words, retained_tail_percent);
     let retained_groups = model_context_retained_group_indexes(
         &immutable_chronology,
+        &chronology_visible,
         &execution_groups,
         &eligible_groups,
         tail_budget,
@@ -549,6 +550,7 @@ fn normalize_model_context_retained_tail_percent(retained_tail_percent: usize) -
 /// Finds the first complete execution group in the retained raw suffix.
 fn model_context_retained_group_indexes(
     blocks: &[ContextBlock],
+    block_visible: &[bool],
     groups: &[Range<usize>],
     eligible_groups: &[usize],
     tail_budget_words: usize,
@@ -569,7 +571,13 @@ fn model_context_retained_group_indexes(
         {
             continue;
         }
-        let group_words = model_context_total_words(&blocks[group.clone()]);
+        // Only rendered blocks consume the raw tail budget: a block the active
+        // provider never receives must not displace a rendered group that the
+        // next turn actually resumes from.
+        let group_words = model_context_visible_total_words(
+            &blocks[group.clone()],
+            &block_visible[group.clone()],
+        );
         if retained_words.saturating_add(group_words) > tail_budget_words {
             continue;
         }
@@ -732,6 +740,49 @@ mod tests {
             plan.summary_budget_words() > 0,
             "the active projection keeps the summary budget: {}",
             plan.summary_budget_words()
+        );
+    }
+
+    /// Verifies the raw tail budget counts only blocks the active provider renders.
+    ///
+    /// A group whose blocks are all unrendered cannot consume the tail budget, so a
+    /// rendered group that would otherwise be displaced stays in the raw suffix the
+    /// next turn resumes from.
+    #[test]
+    fn model_context_retained_tail_counts_only_rendered_blocks() {
+        let blocks = vec![
+            ContextBlock::assistant_event("rendered head", "rendered ".repeat(10)),
+            ContextBlock::assistant_event("unrendered", "unrendered ".repeat(10)),
+            ContextBlock::assistant_event("rendered tail", "rendered ".repeat(10)),
+        ];
+        let groups = vec![0..1, 1..2, 2..3];
+        let eligible = vec![0usize, 1, 2];
+        let budget = model_context_total_words(&blocks[0..1]);
+
+        let all_rendered = model_context_retained_group_indexes(
+            &blocks,
+            &[true, true, true],
+            &groups,
+            &eligible,
+            budget,
+        );
+        let with_unrendered = model_context_retained_group_indexes(
+            &blocks,
+            &[true, false, true],
+            &groups,
+            &eligible,
+            budget,
+        );
+
+        assert_eq!(
+            all_rendered,
+            vec![2],
+            "only the newest rendered group fits the raw tail budget"
+        );
+        assert_eq!(
+            with_unrendered,
+            vec![1, 2],
+            "an unrendered group must not displace a rendered group from the tail"
         );
     }
 
