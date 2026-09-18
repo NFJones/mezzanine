@@ -2190,6 +2190,88 @@ fn runtime_agent_shell_list_personalities_falls_back_from_stale_pane_selection()
     );
 }
 
+/// Verifies `/show-approvals` projects the pending queue through the deferred
+/// lane and still refuses an unknown approval id with the inline error body.
+///
+/// The pending queue is actor-owned, so the claim captures a copy: this pins the
+/// acknowledgement, the applied page, the installed overlay source, and that the
+/// not-found refusal arrives as an error body rather than a panic.
+#[test]
+fn runtime_agent_shell_show_approvals_defers_and_refuses_unknown_ids() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+    let approval_id = service
+        .queue_blocked_approval(pending_approval_request(
+            "agent-lane",
+            &pane_id,
+            "cargo lane",
+        ))
+        .unwrap();
+
+    let ack = service
+        .execute_agent_shell_command(&primary, "/show-approvals")
+        .unwrap();
+    assert!(
+        ack.contains(r#""body":null"#),
+        "the deferred lane acknowledges /show-approvals: {ack}"
+    );
+    let page = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred approval browser applies its page");
+    assert!(page.contains(&approval_id), "{page}");
+    let overlay = service.primary_display_overlay().unwrap();
+    assert!(
+        matches!(
+            overlay
+                .record_browser
+                .as_ref()
+                .and_then(|state| state.source.as_ref()),
+            Some(crate::runtime::service_state::RuntimeRecordBrowserOverlaySource::Approvals)
+        ),
+        "the deferred browser keeps the approvals overlay source"
+    );
+
+    let refused = service
+        .execute_agent_shell_command(&primary, "/show-approvals missing-approval")
+        .unwrap();
+    assert!(refused.contains(r#""body":null"#), "{refused}");
+    let refused = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred refusal applies an error body");
+    assert!(
+        refused.contains("pending approval was not found"),
+        "{refused}"
+    );
+}
+
+/// Opens the `/show-approvals` browser through the deferred lane.
+///
+/// `/show-approvals` defers its queue projection, so the command is submitted for
+/// its acknowledgement and the pending work is applied before the caller inspects
+/// the overlay or drives it with key input.
+fn open_show_approvals(service: &mut RuntimeSessionService, primary: &mez_core::ids::ClientId) {
+    let ack = service
+        .execute_agent_shell_command(primary, "/show-approvals")
+        .unwrap();
+    assert!(
+        ack.contains(r#""body":null"#),
+        "the deferred lane acknowledges /show-approvals: {ack}"
+    );
+    service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred approval browser applies its page");
+}
+
 /// Sends one key sequence through the attached terminal into the active pager.
 fn apply_record_browser_input(
     service: &mut RuntimeSessionService,
@@ -2271,12 +2353,7 @@ fn runtime_agent_shell_show_approvals_decides_selected_stable_ids() {
         ))
         .unwrap();
 
-    let response = service
-        .execute_agent_shell_command(&primary, "/show-approvals")
-        .unwrap();
-    service
-        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
-        .unwrap();
+    open_show_approvals(&mut service, &primary);
     let overlay = service.primary_display_overlay().unwrap();
     let page = overlay
         .record_browser
@@ -2485,12 +2562,7 @@ fn runtime_agent_shell_show_approvals_maps_wrapped_links_to_logical_records() {
         ))
         .unwrap();
 
-    let response = service
-        .execute_agent_shell_command(&primary, "/show-approvals")
-        .unwrap();
-    service
-        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
-        .unwrap();
+    open_show_approvals(&mut service, &primary);
 
     let overlay = service.primary_display_overlay().unwrap();
     let first_fragment_count = overlay
@@ -2553,12 +2625,7 @@ fn runtime_agent_shell_show_approvals_frames_batched_arrow_input() {
             .unwrap();
     }
 
-    let response = service
-        .execute_agent_shell_command(&primary, "/show-approvals")
-        .unwrap();
-    service
-        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
-        .unwrap();
+    open_show_approvals(&mut service, &primary);
 
     apply_record_browser_input(&mut service, &primary, b"\x1b[B\x1b[1;2B");
 
@@ -2632,12 +2699,7 @@ fn runtime_agent_shell_show_approvals_closes_while_external_action_is_queued() {
     assert_eq!(execution.terminal_state, AgentTurnState::Blocked);
     let approval_id = service.blocked_approvals().pending()[0].id.clone();
 
-    let response = service
-        .execute_agent_shell_command(&primary, "/show-approvals")
-        .unwrap();
-    service
-        .set_agent_prompt_response_display_output_for_tests("%1", &response)
-        .unwrap();
+    open_show_approvals(&mut service, &primary);
     apply_record_browser_input(&mut service, &primary, b"a");
 
     assert_eq!(
@@ -2687,12 +2749,7 @@ fn runtime_agent_shell_show_approvals_preserves_search_input_precedence() {
         ))
         .unwrap();
 
-    let response = service
-        .execute_agent_shell_command(&primary, "/show-approvals")
-        .unwrap();
-    service
-        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
-        .unwrap();
+    open_show_approvals(&mut service, &primary);
     apply_record_browser_input(&mut service, &primary, b"/");
     apply_record_browser_input(&mut service, &primary, b"a");
 
@@ -2731,12 +2788,7 @@ fn runtime_agent_shell_record_browser_search_accepts_literal_q_and_slash() {
         ))
         .unwrap();
 
-    let response = service
-        .execute_agent_shell_command(&primary, "/show-approvals")
-        .unwrap();
-    service
-        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
-        .unwrap();
+    open_show_approvals(&mut service, &primary);
     apply_record_browser_input(&mut service, &primary, b"/");
     apply_record_browser_input(&mut service, &primary, b"q");
     apply_record_browser_input(&mut service, &primary, b"/");
@@ -2772,12 +2824,7 @@ fn runtime_agent_shell_record_browser_refresh_clears_stale_search_status() {
         ))
         .unwrap();
 
-    let response = service
-        .execute_agent_shell_command(&primary, "/show-approvals")
-        .unwrap();
-    service
-        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
-        .unwrap();
+    open_show_approvals(&mut service, &primary);
     apply_record_browser_input(&mut service, &primary, b"/");
     apply_record_browser_input(&mut service, &primary, b"absent");
     apply_record_browser_input(&mut service, &primary, b"\r");
@@ -2835,12 +2882,7 @@ fn runtime_agent_shell_show_approvals_rejects_stale_selected_id() {
         ))
         .unwrap();
 
-    let response = service
-        .execute_agent_shell_command(&primary, "/show-approvals")
-        .unwrap();
-    service
-        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
-        .unwrap();
+    open_show_approvals(&mut service, &primary);
     let settle = format!(
         r#"{{"jsonrpc":"2.0","id":"concurrent","method":"approval/decide","params":{{"approval_id":"{stale_id}","decision":"disapprove","idempotency_key":"concurrent-settlement"}}}}"#
     );

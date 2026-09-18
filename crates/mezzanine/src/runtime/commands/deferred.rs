@@ -41,6 +41,7 @@ pub(crate) const RUNTIME_AGENT_OFF_ACTOR_COMMANDS: &[&str] = &[
     "sync-builtin-skills",
     "resume",
     "list-modified-files",
+    "show-approvals",
 ];
 
 /// Prepared-input family one moved slash command consumes off the actor.
@@ -64,6 +65,8 @@ pub(crate) enum RuntimeAgentCommandFamily {
     SavedSessionsBrowser,
     /// Pane-local modified-file summaries.
     ModifiedFiles,
+    /// Pending-approval browser reads.
+    ApprovalsBrowser,
 }
 
 /// Returns the prepared-input family for one moved command.
@@ -83,6 +86,7 @@ pub(crate) fn off_actor_command_family(command: &str) -> Option<RuntimeAgentComm
         "sync-builtin-skills" => Some(RuntimeAgentCommandFamily::BuiltinSkillSync),
         "resume" => Some(RuntimeAgentCommandFamily::SavedSessionsBrowser),
         "list-modified-files" => Some(RuntimeAgentCommandFamily::ModifiedFiles),
+        "show-approvals" => Some(RuntimeAgentCommandFamily::ApprovalsBrowser),
         _ => None,
     }
 }
@@ -333,6 +337,16 @@ impl RuntimeSessionService {
                     files: self.retained_agent_modified_files(pane_id).cloned(),
                 }
             }
+            RuntimeAgentCommandFamily::ApprovalsBrowser => {
+                RuntimeAgentCommandPrepared::ApprovalsBrowser {
+                    approvals: self
+                        .blocked_approvals()
+                        .pending()
+                        .into_iter()
+                        .cloned()
+                        .collect(),
+                }
+            }
         };
         Ok(Some(RuntimeAgentCommandAsyncWork {
             pane_id: pane_id.to_string(),
@@ -562,6 +576,40 @@ impl RuntimeSessionService {
             }
             RuntimeAgentCommandPrepared::ModifiedFiles { files } => {
                 super::lists::runtime_agent_modified_files_body(files.as_ref())
+            }
+            RuntimeAgentCommandPrepared::ApprovalsBrowser { approvals } => {
+                return match super::show_records::runtime_agent_approval_args(&work.input).and_then(
+                    |active| {
+                        super::show_records::runtime_agent_approval_browser(
+                            approvals.clone(),
+                            active.as_deref(),
+                        )
+                    },
+                ) {
+                    Ok(browser) => {
+                        let page = browser.render_page();
+                        let outcome = AgentShellCommandOutcome::Display {
+                            command: "show-approvals".to_string(),
+                            body: page.raw_markdown,
+                        };
+                        RuntimeAgentCommandAsyncOutcome::RecordBrowser {
+                            body: runtime_agent_shell_command_response_json(
+                                &work.pane_id,
+                                &work.input,
+                                Some(&outcome),
+                            ),
+                            command: "show-approvals".to_string(),
+                            browser: Box::new(browser),
+                            source: Some(
+                                crate::runtime::service_state::RuntimeRecordBrowserOverlaySource::Approvals,
+                            ),
+                        }
+                    }
+                    Err(error) => RuntimeAgentCommandAsyncOutcome::Failed {
+                        message: error.message().to_string(),
+                        kind: error.kind(),
+                    },
+                };
             }
         };
         let outcome = AgentShellCommandOutcome::Display {

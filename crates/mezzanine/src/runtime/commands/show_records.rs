@@ -29,25 +29,14 @@ impl RuntimeSessionService {
         pane_id: &str,
         input: &str,
     ) -> Result<AgentShellCommandOutcome> {
-        let slash = parse_slash_command(input)?.ok_or_else(|| {
-            MezError::invalid_args("show-approvals command must be a slash command")
-        })?;
-        let args = slash.args.split_whitespace().collect::<Vec<_>>();
-        if args.len() > 1 {
-            return Err(MezError::invalid_args(
-                "show-approvals accepts at most one approval id",
-            ));
-        }
-        let mut browser = self.approval_record_browser()?;
-        if let Some(approval_id) = args.first() {
-            if !browser.set_active_record_id(approval_id) {
-                return Err(MezError::new(
-                    crate::error::MezErrorKind::NotFound,
-                    "pending approval was not found",
-                ));
-            }
-            browser.apply_action(mez_mux::record_browser::RecordBrowserAction::OpenActive)?;
-        }
+        let browser = runtime_agent_approval_browser(
+            self.blocked_approvals()
+                .pending()
+                .into_iter()
+                .cloned()
+                .collect(),
+            runtime_agent_approval_args(input)?.as_deref(),
+        )?;
         let page = browser.render_page();
         self.register_pending_record_browser_overlay(
             pane_id,
@@ -63,33 +52,14 @@ impl RuntimeSessionService {
 
     /// Builds a deterministic session-wide browser for pending approvals.
     pub(crate) fn approval_record_browser(&self) -> Result<RecordBrowser> {
-        let mut approvals = self.blocked_approvals().pending();
-        approvals.sort_by(|left, right| {
-            left.created_at_unix_seconds
-                .cmp(&right.created_at_unix_seconds)
-                .then_with(|| left.id.cmp(&right.id))
-        });
-        let mut browser = RecordBrowser::new(
-            "Pending approvals",
-            approvals.into_iter().map(approval_browser_record).collect(),
-            Vec::new(),
-        )?;
-        browser.set_table_id_column("Approval");
-        browser.set_table_columns(vec![
-            "Summary".to_string(),
-            "Pane".to_string(),
-            "Agent".to_string(),
-            "Action".to_string(),
-        ]);
-        browser.set_help(
-            Some(
-                "**Keys:** `↑`/`↓` focus approval ID · `Enter` open · `y` copy · `a` approve once · `d` deny · `/` search"
-                    .to_string(),
-            ),
-            Some("**Keys:** `Esc` back · `y` copy · `a` approve once · `d` deny · `/` search".to_string()),
-        );
-        browser.set_empty_message(Some("No pending approvals.".to_string()));
-        Ok(browser)
+        runtime_agent_approval_browser(
+            self.blocked_approvals()
+                .pending()
+                .into_iter()
+                .cloned()
+                .collect(),
+            None,
+        )
     }
 
     /// Executes `/show-context` for the active pane conversation.
@@ -1230,6 +1200,72 @@ fn set_record_browser_scope_indicator(
             .unwrap_or_else(|| "all scopes".to_string()),
     };
     browser.set_scope_indicator(Some(indicator));
+}
+
+/// Returns the optional approval id for one `/show-approvals` invocation.
+///
+/// The inline handler and the deferred executor share this validation, so both
+/// lanes reject an over-long argument list with the same inline error kind.
+pub(crate) fn runtime_agent_approval_args(input: &str) -> Result<Option<String>> {
+    let slash = parse_slash_command(input)?
+        .ok_or_else(|| MezError::invalid_args("show-approvals command must be a slash command"))?;
+    let args = slash.args.split_whitespace().collect::<Vec<_>>();
+    if args.len() > 1 {
+        return Err(MezError::invalid_args(
+            "show-approvals accepts at most one approval id",
+        ));
+    }
+    Ok(args.first().map(|approval_id| (*approval_id).to_string()))
+}
+
+/// Builds the pending-approval browser from an owned queue snapshot.
+///
+/// The snapshot keeps the build independent of actor state: the inline handler
+/// borrows the live queue, the deferred executor clones the claimed copy, and an
+/// unknown requested id refuses with the same not-found error in both lanes.
+pub(crate) fn runtime_agent_approval_browser(
+    approvals: Vec<mez_agent::permissions::BlockedApprovalRequest>,
+    active_approval_id: Option<&str>,
+) -> Result<RecordBrowser> {
+    let mut approvals = approvals;
+    approvals.sort_by(|left, right| {
+        left.created_at_unix_seconds
+            .cmp(&right.created_at_unix_seconds)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let mut browser = RecordBrowser::new(
+        "Pending approvals",
+        approvals.iter().map(approval_browser_record).collect(),
+        Vec::new(),
+    )?;
+    browser.set_table_id_column("Approval");
+    browser.set_table_columns(vec![
+        "Summary".to_string(),
+        "Pane".to_string(),
+        "Agent".to_string(),
+        "Action".to_string(),
+    ]);
+    browser.set_help(
+        Some(
+            "**Keys:** `↑`/`↓` focus approval ID · `Enter` open · `y` copy · `a` approve once · `d` deny · `/` search"
+                .to_string(),
+        ),
+        Some(
+            "**Keys:** `Esc` back · `y` copy · `a` approve once · `d` deny · `/` search"
+                .to_string(),
+        ),
+    );
+    browser.set_empty_message(Some("No pending approvals.".to_string()));
+    if let Some(approval_id) = active_approval_id {
+        if !browser.set_active_record_id(approval_id) {
+            return Err(MezError::new(
+                crate::error::MezErrorKind::NotFound,
+                "pending approval was not found",
+            ));
+        }
+        browser.apply_action(mez_mux::record_browser::RecordBrowserAction::OpenActive)?;
+    }
+    Ok(browser)
 }
 
 /// Projects one pending approval into a single-link browser record.

@@ -310,6 +310,15 @@ pub(crate) enum RuntimeAgentCommandPrepared {
             >,
         >,
     },
+    /// Reads the pending approval queue for the `/show-approvals` browser.
+    ///
+    /// The queue is actor-owned, so the claim captures a copy and the worker
+    /// builds the browser; an unknown requested id refuses in the worker with the
+    /// same not-found error the inline lane produced.
+    ApprovalsBrowser {
+        /// Pending approval requests captured from the live queue.
+        approvals: Vec<mez_agent::permissions::BlockedApprovalRequest>,
+    },
 }
 
 /// Result a worker prepares for the actor to apply.
