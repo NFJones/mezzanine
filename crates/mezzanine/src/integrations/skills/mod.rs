@@ -318,10 +318,12 @@ fn write_builtin_skill_assets(name: &str, skill_dir: &Path) -> Result<()> {
     let staged = staging_root.join(format!("{stem}.{unique}.staging"));
     let evicted = staging_root.join(format!("{stem}.{unique}.evicted"));
     let _ = fs::remove_dir_all(&staged);
+    let _ = fs::remove_dir_all(&evicted);
     for asset in builtin_skill_assets(name)? {
         let path = staged.join(&asset.relative_path);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|error| {
+                let _ = fs::remove_dir_all(&staged);
                 MezError::new(
                     MezErrorKind::Io,
                     format!(
@@ -333,6 +335,7 @@ fn write_builtin_skill_assets(name: &str, skill_dir: &Path) -> Result<()> {
             })?;
         }
         fs::write(&path, asset.contents).map_err(|error| {
+            let _ = fs::remove_dir_all(&staged);
             MezError::new(
                 MezErrorKind::Io,
                 format!(
@@ -371,6 +374,8 @@ fn write_builtin_skill_assets(name: &str, skill_dir: &Path) -> Result<()> {
         ));
     }
     if evicted.exists() {
+        // Best effort: the swap already succeeded, so an artifact left here is
+        // only disk usage in a directory discovery never reads.
         let _ = fs::remove_dir_all(&evicted);
     }
     Ok(())
