@@ -10,7 +10,7 @@
 use crate::{
     AgentContext, AgentContextError, AgentContextResult, ContextBlock, ContextEventSequence,
     ContextRetention, ContextSemanticKind, ContextSourceKind, ModelContextCompactionReport,
-    context_block_is_compaction_summary, model_context_block_header,
+    ProviderApiCompatibility, context_block_is_compaction_summary, model_context_block_header,
 };
 use std::ops::Range;
 
@@ -18,6 +18,25 @@ use std::ops::Range;
 const MODEL_CONTEXT_BLOCK_LIMIT_BYTES: usize = 128 * 1024;
 /// Default raw suffix percent retained around model-authored compaction.
 pub const DEFAULT_MODEL_CONTEXT_RETAINED_TAIL_PERCENT: usize = 10;
+
+/// Identifies the provider one plan budgets words for.
+///
+/// Request assembly renders a durable block that carries a provider owner only
+/// when the owner matches the active API and provider id, and renders ownerless
+/// blocks always. The planner applies the same rule, so a block the active
+/// provider never receives cannot consume budget it can never use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderBudgetProjection<'a> {
+    api: ProviderApiCompatibility,
+    provider_id: &'a str,
+}
+
+impl<'a> ProviderBudgetProjection<'a> {
+    /// Builds the projection for one provider API and configured provider id.
+    pub fn new(api: ProviderApiCompatibility, provider_id: &'a str) -> Self {
+        Self { api, provider_id }
+    }
+}
 
 /// Deterministic replacement plan awaiting a model-authored summary.
 ///
@@ -114,16 +133,67 @@ impl ModelContextCompactionPlan {
 /// `consumed_sequence_high_water`. Call
 /// [`apply_model_context_compaction_plan`] only after a provider returns a
 /// validated summary for [`ModelContextCompactionPlan::replacement_blocks`].
+///
+/// This entry point budgets for every block. A caller that knows the active
+/// provider uses [`plan_model_context_compaction_for_provider`] instead.
 pub fn plan_model_context_compaction_at_consumed_sequence(
     context: &AgentContext,
     context_budget_words: usize,
     retained_tail_percent: usize,
     consumed_sequence_high_water: u64,
 ) -> AgentContextResult<ModelContextCompactionPlan> {
+    plan_model_context_compaction_with_projection(
+        context,
+        context_budget_words,
+        retained_tail_percent,
+        consumed_sequence_high_water,
+        None,
+    )
+}
+
+/// Plans model-authored compaction for one provider's rendered projection.
+///
+/// Identical to [`plan_model_context_compaction_at_consumed_sequence`] except
+/// that a durable block whose provider owner does not match `provider_projection`
+/// is excluded from the word accounting, because request assembly never renders
+/// it for that provider. Ownerless blocks always count.
+pub fn plan_model_context_compaction_for_provider(
+    context: &AgentContext,
+    context_budget_words: usize,
+    retained_tail_percent: usize,
+    consumed_sequence_high_water: u64,
+    provider_projection: ProviderBudgetProjection<'_>,
+) -> AgentContextResult<ModelContextCompactionPlan> {
+    plan_model_context_compaction_with_projection(
+        context,
+        context_budget_words,
+        retained_tail_percent,
+        consumed_sequence_high_water,
+        Some(provider_projection),
+    )
+}
+
+/// Shares the planner between the provider-aware and projection-free entry points.
+fn plan_model_context_compaction_with_projection(
+    context: &AgentContext,
+    context_budget_words: usize,
+    retained_tail_percent: usize,
+    consumed_sequence_high_water: u64,
+    provider_projection: Option<ProviderBudgetProjection<'_>>,
+) -> AgentContextResult<ModelContextCompactionPlan> {
     context.validate_durable()?;
     let blocks = context.blocks();
     let retained_tail_percent =
         normalize_model_context_retained_tail_percent(retained_tail_percent);
+    let mut stable_prefix_visible = Vec::new();
+    let mut chronology_visible = Vec::new();
+    for (index, block) in blocks.iter().enumerate() {
+        let visible = model_context_block_is_provider_visible(context, index, provider_projection);
+        match block.placement {
+            crate::ContextPlacement::StablePrefix => stable_prefix_visible.push(visible),
+            crate::ContextPlacement::ConversationAppend => chronology_visible.push(visible),
+        }
+    }
     let stable_prefix = blocks
         .iter()
         .filter(|block| block.placement == crate::ContextPlacement::StablePrefix)
@@ -136,12 +206,18 @@ pub fn plan_model_context_compaction_at_consumed_sequence(
         .collect::<Vec<_>>();
     let protected_words = stable_prefix
         .iter()
+        .zip(stable_prefix_visible.iter())
+        .filter(|(_, visible)| **visible)
+        .map(|(block, _)| model_context_block_words(block))
         .chain(
             immutable_chronology
                 .iter()
-                .filter(|block| model_context_block_is_protected_barrier(block)),
+                .zip(chronology_visible.iter())
+                .filter(|(block, visible)| {
+                    **visible && model_context_block_is_protected_barrier(block)
+                })
+                .map(|(block, _)| model_context_block_words(block)),
         )
-        .map(model_context_block_words)
         .fold(0usize, usize::saturating_add);
     if protected_words > context_budget_words {
         return Err(AgentContextError::new(format!(
@@ -215,14 +291,23 @@ pub fn plan_model_context_compaction_at_consumed_sequence(
                 .cloned()
         })
         .collect::<Vec<_>>();
-    let retained_chronology = immutable_chronology
+    let retained_unsigned = immutable_chronology
         .iter()
         .enumerate()
         .filter(|(index, _)| !replacement_ranges.iter().any(|range| range.contains(index)))
+        .collect::<Vec<_>>();
+    let retained_chronology_visible = retained_unsigned
+        .iter()
+        .map(|(index, _)| chronology_visible.get(*index).copied().unwrap_or(true))
+        .collect::<Vec<_>>();
+    let retained_chronology = retained_unsigned
+        .into_iter()
         .map(|(_, block)| block.clone())
         .collect::<Vec<_>>();
-    let stable_prefix_words = model_context_total_words(&stable_prefix);
-    let retained_chronology_words = model_context_total_words(&retained_chronology);
+    let stable_prefix_words =
+        model_context_visible_total_words(&stable_prefix, &stable_prefix_visible);
+    let retained_chronology_words =
+        model_context_visible_total_words(&retained_chronology, &retained_chronology_visible);
     let summary_budget_words = context_budget_words
         .saturating_sub(stable_prefix_words.saturating_add(retained_chronology_words));
     if summary_budget_words == 0 {
@@ -398,6 +483,45 @@ fn model_context_total_words(blocks: &[ContextBlock]) -> usize {
         .fold(0usize, usize::saturating_add)
 }
 
+/// Returns the aggregate word cost of the blocks one provider actually renders.
+///
+/// `visible` runs parallel to `blocks`; a block the active provider never
+/// receives must not consume budget it can never use. Each counted block costs
+/// exactly what [`model_context_total_words`] would charge, so a fully visible
+/// slice keeps the previous total.
+fn model_context_visible_total_words(blocks: &[ContextBlock], visible: &[bool]) -> usize {
+    blocks
+        .iter()
+        .zip(visible.iter())
+        .filter(|(_, visible)| **visible)
+        .map(|(block, _)| model_context_block_words(block))
+        .fold(0usize, usize::saturating_add)
+}
+
+/// Returns whether request assembly renders one durable block for this provider.
+///
+/// The rule mirrors request assembly: a block with a provider owner is rendered
+/// only when the owner matches the supplied API and provider id, and a block with
+/// no owner is always rendered. Ownership is stored in the block metadata, so the
+/// caller passes the block's index in [`AgentContext::blocks`]. Without a
+/// projection the planner budgets for every block, which is what a caller that
+/// cannot resolve the active provider must do.
+fn model_context_block_is_provider_visible(
+    context: &AgentContext,
+    index: usize,
+    provider_projection: Option<ProviderBudgetProjection<'_>>,
+) -> bool {
+    let Some(projection) = provider_projection else {
+        return true;
+    };
+    let Some(metadata) = context.metadata_for_block(index) else {
+        return true;
+    };
+    metadata
+        .provider_owner()
+        .is_none_or(|owner| owner.matches_provider(projection.api, projection.provider_id))
+}
+
 /// Returns the retained raw-tail word budget.
 fn model_context_retained_tail_budget_words(
     context_budget_words: usize,
@@ -517,6 +641,97 @@ mod tests {
         assert_eq!(
             compacted.chronology()[0].block().content,
             "The model-authored summary preserves the earlier decision and outcome."
+        );
+    }
+
+    /// Verifies a durable block whose provider owner does not match the active
+    /// provider does not consume the summary budget it can never use.
+    ///
+    /// Request assembly renders an owned block only for its matching provider. A
+    /// block owned by another provider therefore never reaches the wire, so
+    /// charging its words to the budget can zero out the summary budget and fail
+    /// the plan with `no budget remains` for text the active provider never
+    /// receives. Planning for the active projection keeps that budget.
+    #[test]
+    fn model_context_compaction_projection_excludes_unrendered_provider_blocks() {
+        use crate::{ContextExecutionGroupId, ProviderContinuityOwner, ProviderTranscriptEvent};
+
+        let native_content = ProviderTranscriptEvent::validated_openai_response_output(
+            (0..300)
+                .map(|index| {
+                    serde_json::json!({
+                        "type": "reasoning",
+                        "id": format!("reasoning-{index}"),
+                        "text": "native provider continuity replay segment",
+                    })
+                })
+                .collect(),
+        )
+        .unwrap()
+        .to_transcript_content();
+        let owner = ProviderContinuityOwner::new(
+            ProviderApiCompatibility::OpenAiResponses,
+            "configured-openai",
+        )
+        .unwrap();
+        let mut context = AgentContext::new_durable(vec![
+            ContextBlock::assistant_event("older decision", "decision ".repeat(50)),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "older outcome",
+                "outcome ".repeat(50),
+            ),
+        ])
+        .unwrap();
+        let consumed_sequence_high_water = context.event_sequence_high_water_mark();
+        let native_group = ContextExecutionGroupId::new("native-execution").unwrap();
+        context
+            .append_assistant_event(
+                "native assistant turn",
+                "native call emitted ahead of its transcript",
+                native_group.clone(),
+            )
+            .unwrap();
+        context
+            .append_evidence_event(
+                ContextSourceKind::TranscriptTool,
+                "native response",
+                native_content,
+                native_group,
+                Some(owner),
+                false,
+            )
+            .unwrap();
+
+        let without_projection = plan_model_context_compaction_at_consumed_sequence(
+            &context,
+            200,
+            10,
+            consumed_sequence_high_water,
+        )
+        .unwrap_err();
+        assert!(
+            without_projection.message().contains("no budget remains"),
+            "the unrendered native block consumes the summary budget: {}",
+            without_projection.message()
+        );
+
+        let plan = plan_model_context_compaction_for_provider(
+            &context,
+            200,
+            10,
+            consumed_sequence_high_water,
+            ProviderBudgetProjection::new(
+                ProviderApiCompatibility::DeepSeekChatCompletions,
+                "configured-deepseek",
+            ),
+        )
+        .unwrap();
+        assert!(plan.changes_context());
+        assert!(
+            plan.summary_budget_words() > 0,
+            "the active projection keeps the summary budget: {}",
+            plan.summary_budget_words()
         );
     }
 

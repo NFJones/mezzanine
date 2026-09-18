@@ -299,13 +299,13 @@ impl RuntimeSessionService {
         }
         .max(1);
         let retained_tail_percent = self.agent_compaction_raw_retention_percent();
-        let plan = mez_agent::plan_model_context_compaction_at_consumed_sequence(
+        let plan = self.plan_agent_context_compaction(
+            &model_profile,
             &context,
             recovery_budget_words,
             retained_tail_percent,
             consumed_sequence_high_water,
-        )
-        .map_err(|error| MezError::invalid_state(error.message()))?;
+        )?;
         if !plan.changes_context() {
             self.append_agent_trace_turn_event(
                 &turn.pane_id,
@@ -400,6 +400,58 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Resolves the active provider's budget projection for one model profile.
+    ///
+    /// A missing provider record or an unknown configured API leaves the
+    /// projection unresolved, and the planner then budgets for every block - the
+    /// conservative previous behavior - instead of failing a recovery that is
+    /// already reducing context. Provider ownership is exclusive, so a resolved
+    /// projection can only make the budget more accurate.
+    fn agent_provider_budget_projection<'a>(
+        &self,
+        model_profile: &'a ModelProfile,
+    ) -> Option<mez_agent::ProviderBudgetProjection<'a>> {
+        let provider_config = self.provider_registry().provider(&model_profile.provider)?;
+        let api =
+            mez_agent::resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())
+                .ok()?;
+        Some(mez_agent::ProviderBudgetProjection::new(
+            api,
+            &model_profile.provider,
+        ))
+    }
+
+    /// Plans model-authored compaction against the active provider's projection.
+    ///
+    /// Blocks the active provider never renders are excluded from the word
+    /// accounting, so a durable block owned by another provider cannot consume the
+    /// budget that decides whether a summary can be requested at all.
+    fn plan_agent_context_compaction(
+        &self,
+        model_profile: &ModelProfile,
+        context: &mez_agent::AgentContext,
+        context_budget_words: usize,
+        retained_tail_percent: usize,
+        consumed_sequence_high_water: u64,
+    ) -> Result<mez_agent::ModelContextCompactionPlan> {
+        let plan = match self.agent_provider_budget_projection(model_profile) {
+            Some(provider_projection) => mez_agent::plan_model_context_compaction_for_provider(
+                context,
+                context_budget_words,
+                retained_tail_percent,
+                consumed_sequence_high_water,
+                provider_projection,
+            ),
+            None => mez_agent::plan_model_context_compaction_at_consumed_sequence(
+                context,
+                context_budget_words,
+                retained_tail_percent,
+                consumed_sequence_high_water,
+            ),
+        };
+        plan.map_err(|error| MezError::invalid_state(error.message()))
+    }
+
     /// Defers an oversized configured-cap request into bounded active-turn compaction.
     ///
     /// The supplied estimate is for the fully assembled provider wire request.
@@ -487,13 +539,13 @@ impl RuntimeSessionService {
         // reservation prevents the complete request from fitting. Exact and
         // post-boundary context remains protected by the compaction planner.
         let retained_tail_percent = 0;
-        let plan = mez_agent::plan_model_context_compaction_at_consumed_sequence(
+        let plan = self.plan_agent_context_compaction(
+            model_profile,
             durable,
             context_budget_words,
             retained_tail_percent,
             durable.event_sequence_high_water_mark(),
-        )
-        .map_err(|error| MezError::invalid_state(error.message()))?;
+        )?;
         if !plan.changes_context() {
             return Err(MezError::invalid_state(format!(
                 "configured input cap exceeded but no eligible durable context can be compacted: estimated_input_tokens={} max_input_tokens={max_input_tokens}",
