@@ -2362,4 +2362,20 @@ fn runtime_configured_input_cap_retries_a_non_reducing_pass() {
         !message.contains("did not reduce"),
         "an internal consistency message must never surface for this condition: {message}"
     );
+
+    assert_eq!(
+        RuntimeSessionService::configured_input_cap_pass_budget(2_000, false),
+        2_000,
+        "an ordinary pass keeps the derived word budget"
+    );
+    assert_eq!(
+        RuntimeSessionService::configured_input_cap_pass_budget(2_000, true),
+        1_000,
+        "a non-reducing pass retries against half the word budget"
+    );
+    assert_eq!(
+        RuntimeSessionService::configured_input_cap_pass_budget(1, true),
+        1,
+        "a tightened budget never drops below one word"
+    );
 }

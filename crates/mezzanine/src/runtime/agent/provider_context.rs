@@ -382,6 +382,22 @@ impl RuntimeSessionService {
         })
     }
 
+    /// Returns the word budget one configured-cap compaction pass plans against.
+    ///
+    /// A non-reducing pass tightens the budget, because repeating the same budget
+    /// reproduces the same plan; the retry never drops below one word, so it still
+    /// has a budget to plan against.
+    pub(crate) fn configured_input_cap_pass_budget(
+        context_budget_words: usize,
+        non_reducing: bool,
+    ) -> usize {
+        if non_reducing {
+            context_budget_words.saturating_div(2).max(1)
+        } else {
+            context_budget_words
+        }
+    }
+
     /// Defers an oversized configured-cap request into bounded active-turn compaction.
     ///
     /// The supplied estimate is for the fully assembled provider wire request.
@@ -454,14 +470,8 @@ impl RuntimeSessionService {
             .saturating_sub(fixed_input_tokens)
             .saturating_mul(3)
             .saturating_div(4);
-        // Repeating the same budget reproduces the same plan, so a non-reducing
-        // pass halves it for the retry; never below one word, so the retry still
-        // has a budget to plan against.
-        let context_budget_words = if non_reducing_pass {
-            context_budget_words.saturating_div(2).max(1)
-        } else {
-            context_budget_words
-        };
+        let context_budget_words =
+            Self::configured_input_cap_pass_budget(context_budget_words, non_reducing_pass);
         if context_budget_words == 0 {
             return Err(MezError::invalid_state(format!(
                 "configured input cap is smaller than fixed provider request overhead: estimated_input_tokens={} fixed_input_tokens={fixed_input_tokens} max_input_tokens={max_input_tokens}",
