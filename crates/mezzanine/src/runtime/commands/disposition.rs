@@ -43,6 +43,7 @@ pub(crate) const RUNTIME_AGENT_INLINE_SLASH_COMMANDS: &[&str] = &[
     "directive",
     "exit",
     "show-context",
+    "status",
     "plan",
     "model",
     "thinking",
@@ -90,24 +91,34 @@ pub(crate) const RUNTIME_AGENT_DEFERRED_SLASH_COMMANDS: &[&str] = &[
     "list-personalities",
     "fork",
     "resume",
-    "status",
     "debug-config",
 ];
 
 /// Runtime commands that must stay inline although they are not part of the
 /// dependency-neutral mez-agent slash registry.
 ///
-/// `show-metrics` renders the actor's cached metrics snapshot, which the actor
-/// publishes on demand for the request families that run display commands. The
-/// deferred executor would classify an unknown command as deferred, read a
-/// snapshot that was never published for that path, and regress the freshness
-/// guarantee, so display commands that read actor-published state are pinned
-/// inline here instead of falling through the unknown-command default.
+/// These commands render live in-memory state: session, pane, client, message,
+/// and agent bookkeeping plus, for `show-metrics`, the actor's cached metrics
+/// snapshot that is published on demand for the request families that run
+/// display commands. The deferred executor would classify an unknown command as
+/// deferred, move a pure display off actor for no I/O benefit, and - for
+/// `show-metrics` - read a snapshot that was never published for that path, so
+/// they are pinned inline here instead of falling through the unknown-command
+/// default. Aliases of runtime-only display commands are pinned with them
+/// because the dispatcher matches the alias spelling directly.
 #[allow(
     dead_code,
     reason = "f526838b phase 2 step (a): the deferred executor consumes this classification next"
 )]
-pub(crate) const RUNTIME_AGENT_INLINE_DISPLAY_COMMANDS: &[&str] = &["show-metrics"];
+pub(crate) const RUNTIME_AGENT_INLINE_DISPLAY_COMMANDS: &[&str] = &[
+    "list-clients",
+    "listc",
+    "list-panes",
+    "listp",
+    "show-messages",
+    "show-metrics",
+    "show-pane-status",
+];
 
 /// Returns the execution lane for one canonical slash command name.
 ///
@@ -191,13 +202,22 @@ mod tests {
         }
     }
 
-    /// Verifies display commands that read actor-published state stay inline
-    /// even though they are not registry commands.
+    /// Verifies in-memory display commands stay inline even though they are not
+    /// registry commands, and that the registry `status` command shares the lane
+    /// because its display never touches a store.
     #[test]
     fn runtime_slash_command_disposition_keeps_display_commands_inline() {
+        for name in RUNTIME_AGENT_INLINE_DISPLAY_COMMANDS {
+            assert_eq!(
+                runtime_agent_slash_command_disposition(name),
+                RuntimeAgentSlashCommandDisposition::Inline,
+                "{name} renders live in-memory state and must stay inline"
+            );
+        }
         assert_eq!(
-            runtime_agent_slash_command_disposition("show-metrics"),
-            RuntimeAgentSlashCommandDisposition::Inline
+            runtime_agent_slash_command_disposition("status"),
+            RuntimeAgentSlashCommandDisposition::Inline,
+            "status reads only in-memory session and provider bookkeeping"
         );
     }
 
