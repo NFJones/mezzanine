@@ -1009,6 +1009,7 @@ fn runtime_agent_shell_deferred_lane_drops_superseded_work() {
             &stale_work,
             crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed {
                 message: "superseded".to_string(),
+                kind: crate::error::MezErrorKind::InvalidState,
             },
         )
         .unwrap();

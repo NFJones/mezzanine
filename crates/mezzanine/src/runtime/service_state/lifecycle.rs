@@ -239,6 +239,12 @@ pub(crate) enum RuntimeAgentCommandAsyncOutcome {
     Failed {
         /// Diagnostic reported through the invalid-command response path.
         message: String,
+        /// Error kind the inline lane would have reported for this failure.
+        ///
+        /// Carrying the kind keeps the deferred body's `agent command error: ..
+        /// (code)` suffix byte-identical to the inline lane; without it every
+        /// deferred failure would render a normalized `invalid_state`.
+        kind: crate::error::MezErrorKind,
     },
 }
 

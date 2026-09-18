@@ -33,6 +33,29 @@ use crate::runtime::{
 pub(crate) const RUNTIME_AGENT_OFF_ACTOR_COMMANDS: &[&str] =
     &["list-skills", "list-macros", "auth-status"];
 
+/// Prepared-input family one moved slash command consumes off the actor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimeAgentCommandFamily {
+    /// Catalog displays that walk the configured and project catalogs.
+    Catalog,
+    /// Provider credential status reads.
+    AuthStatus,
+}
+
+/// Returns the prepared-input family for one moved command.
+///
+/// The claim uses this as the single authority for which commands may run off the
+/// actor, and the guard test pins every [`RUNTIME_AGENT_OFF_ACTOR_COMMANDS`]
+/// entry to a family, so a name cannot be added to the dispatcher list without
+/// prepared inputs and then be acknowledged and silently dropped at claim time.
+pub(crate) fn off_actor_command_family(command: &str) -> Option<RuntimeAgentCommandFamily> {
+    match command {
+        "list-skills" | "list-macros" => Some(RuntimeAgentCommandFamily::Catalog),
+        "auth-status" => Some(RuntimeAgentCommandFamily::AuthStatus),
+        _ => None,
+    }
+}
+
 impl RuntimeSessionService {
     /// Starts one actor-owned claim for a deferred slash command.
     ///
@@ -105,18 +128,20 @@ impl RuntimeSessionService {
         if !visible {
             return Ok(None);
         }
-        // Each moved family names exactly what the worker may read; a command
-        // with no prepared-input variant has no off-actor executor yet and keeps
-        // executing inline.
-        let prepared = match command {
-            "list-skills" | "list-macros" => RuntimeAgentCommandPrepared::Catalog {
+        let Some(family) = off_actor_command_family(command) else {
+            return Ok(None);
+        };
+        // Each family names exactly what the worker may read; a command with no
+        // family has no off-actor executor yet and keeps executing inline.
+        let prepared = match family {
+            RuntimeAgentCommandFamily::Catalog => RuntimeAgentCommandPrepared::Catalog {
                 config_root: self
                     .integration
                     .config_root()
                     .map(std::path::Path::to_path_buf),
                 project_root: self.trusted_skill_project_root_for_pane(pane_id),
             },
-            "auth-status" => RuntimeAgentCommandPrepared::AuthStatus {
+            RuntimeAgentCommandFamily::AuthStatus => RuntimeAgentCommandPrepared::AuthStatus {
                 providers: self
                     .provider_registry()
                     .providers()
@@ -125,7 +150,6 @@ impl RuntimeSessionService {
                     .collect(),
                 auth_store: self.auth_store().cloned(),
             },
-            _ => return Ok(None),
         };
         Ok(Some(RuntimeAgentCommandAsyncWork {
             pane_id: pane_id.to_string(),
@@ -168,6 +192,7 @@ impl RuntimeSessionService {
                         message: format!(
                             "deferred catalog command `{other}` has no off-actor executor"
                         ),
+                        kind: crate::error::MezErrorKind::InvalidState,
                     };
                 }
             },
@@ -181,6 +206,7 @@ impl RuntimeSessionService {
                     Err(error) => {
                         return RuntimeAgentCommandAsyncOutcome::Failed {
                             message: error.message().to_string(),
+                            kind: error.kind(),
                         };
                     }
                 }
@@ -225,16 +251,29 @@ impl RuntimeSessionService {
         }
         let body = match outcome {
             RuntimeAgentCommandAsyncOutcome::Response { body } => body,
-            RuntimeAgentCommandAsyncOutcome::Failed { message } => {
-                agent_shell_invalid_command_response_json(
-                    &work.pane_id,
-                    &work.input,
-                    &MezError::invalid_state(message),
-                )
+            RuntimeAgentCommandAsyncOutcome::Failed { message, kind } => {
+                RuntimeSessionService::deferred_agent_command_failure_body(work, &message, kind)
             }
         };
         self.apply_deferred_agent_shell_response_body(&work.pane_id, &body)?;
         Ok(true)
+    }
+
+    /// Builds the invalid-command response body for one deferred failure.
+    ///
+    /// The inline lane reports the error kind it received, so the deferred lane
+    /// carries that kind through the outcome and renders the same code instead of
+    /// normalizing every failure to `invalid_state`.
+    pub(crate) fn deferred_agent_command_failure_body(
+        work: &RuntimeAgentCommandAsyncWork,
+        message: &str,
+        kind: crate::error::MezErrorKind,
+    ) -> String {
+        agent_shell_invalid_command_response_json(
+            &work.pane_id,
+            &work.input,
+            &MezError::new(kind, message),
+        )
     }
 
     /// Runs every queued deferred slash command through the worker lane.
@@ -261,7 +300,11 @@ impl RuntimeSessionService {
             let outcome = RuntimeSessionService::execute_deferred_agent_command(&work);
             let body = match &outcome {
                 RuntimeAgentCommandAsyncOutcome::Response { body } => body.clone(),
-                RuntimeAgentCommandAsyncOutcome::Failed { .. } => String::new(),
+                RuntimeAgentCommandAsyncOutcome::Failed { message, kind } => {
+                    RuntimeSessionService::deferred_agent_command_failure_body(
+                        &work, message, *kind,
+                    )
+                }
             };
             if !self.complete_agent_command_work(&work, outcome)? {
                 continue;
@@ -284,12 +327,51 @@ mod tests {
     #[test]
     fn runtime_agent_off_actor_commands_are_classified_deferred() {
         for command in RUNTIME_AGENT_OFF_ACTOR_COMMANDS {
+            assert!(
+                off_actor_command_family(command).is_some(),
+                "`{command}` is dispatched off actor, so it must have prepared inputs"
+            );
             assert_eq!(
                 runtime_agent_slash_command_disposition(command),
                 RuntimeAgentSlashCommandDisposition::Deferred,
                 "`{command}` runs off the actor, so the disposition classifier must defer it"
             );
         }
+    }
+
+    /// Verifies a deferred failure keeps the error kind it carried.
+    ///
+    /// The inline lane reports the kind it received from the failing read; the
+    /// deferred lane must render the same code instead of normalizing every
+    /// failure to `invalid_state`, or the two lanes would disagree about how a
+    /// credential or config error is reported.
+    #[test]
+    fn runtime_agent_deferred_failure_keeps_the_carried_error_kind() {
+        let work = RuntimeAgentCommandAsyncWork {
+            pane_id: "%1".to_string(),
+            primary_client_id: mez_core::ids::ClientId::parse('c', "c1".to_string()).unwrap(),
+            command: "auth-status".to_string(),
+            input: "/auth-status".to_string(),
+            claim_generation: 1,
+            prepared: RuntimeAgentCommandPrepared::AuthStatus {
+                providers: Vec::new(),
+                auth_store: None,
+            },
+        };
+        let body = RuntimeSessionService::deferred_agent_command_failure_body(
+            &work,
+            "credential store is unreadable",
+            crate::error::MezErrorKind::Io,
+        );
+        assert!(
+            body.contains("internal_error"),
+            "an io failure must keep the code the inline lane reported: {body}"
+        );
+        assert!(body.contains("credential store is unreadable"), "{body}");
+        assert!(
+            !body.contains("invalid_state"),
+            "the deferred lane must not normalize the error code: {body}"
+        );
     }
 
     /// Verifies the catalog executor renders the same body the inline lane
