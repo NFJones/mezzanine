@@ -786,6 +786,8 @@ fn overlay_refresh_delete_fallback_reports_no_kept_index() {
             active_index: 5,
         },
         transcript_store: Some(store),
+        config_root: None,
+        issue_database_path: None,
         prompt_width: service.saved_session_prompt_width(),
         title_policy: service.agent_session_title_policy(),
     };

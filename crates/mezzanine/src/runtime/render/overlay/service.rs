@@ -558,14 +558,27 @@ impl RuntimeSessionService {
                 .active_record_id()
                 .map(str::to_string);
             let source = self.record_browser_source_toggled_scope(&source);
-            // The scope key is shared with the other browse families, whose
-            // rebuilds still run inline; only the saved-session picker reads a
-            // store tall enough to need the deferred lane.
+            // The scope key is shared with every browse family: the saved-session
+            // picker composes pending targets, the other store-backed families
+            // rebuild through their own read below, and the in-memory families
+            // keep their inline path.
             if matches!(
                 source,
                 RuntimeRecordBrowserOverlaySource::SavedSessions { .. }
             ) {
                 self.begin_record_browser_preserving_claim(source, active_record_id, None)?;
+                return Ok(Some(false));
+            }
+            let active_index =
+                record_browser_active_index(overlay, record_browser.browser.active_index());
+            if self
+                .begin_record_browser_pane_claim(
+                    source.clone(),
+                    active_record_id.clone(),
+                    Some(active_index),
+                )?
+                .is_some()
+            {
                 return Ok(Some(false));
             }
             let (source, browser) = self
@@ -683,23 +696,8 @@ impl RuntimeSessionService {
             let active_index =
                 record_browser_active_index(overlay, record_browser.browser.active_index());
             let source = self.record_browser_source_toggled_closed_issues(&source);
-            let mut browser = self.refresh_record_browser_overlay_source(&source)?;
-            browser.set_active_index(active_index);
-            let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
-                return Ok(Some(false));
-            };
-            let Some(record_browser) = overlay.record_browser.as_mut() else {
-                return Ok(None);
-            };
-            record_browser.source = Some(source);
-            record_browser.browser = browser;
-            return Ok(Some(render_record_browser_overlay(
-                overlay,
-                &mut self.presentation.overlay_action_registry,
-                &self.presentation.settings.ui_theme,
-                terminal_width,
-                prose_width,
-            )));
+            self.begin_record_browser_pane_claim(source, None, Some(active_index))?;
+            return Ok(Some(false));
         }
         if input == b"f"
             && matches!(
@@ -1540,6 +1538,21 @@ impl RuntimeSessionService {
                     .unwrap_or((None, 0));
                 if let Some(source) = source {
                     let source = self.record_browser_source_with_filter(&source, field, &value)?;
+                    let claimed = if matches!(
+                        source,
+                        RuntimeRecordBrowserOverlaySource::SavedSessions { .. }
+                    ) {
+                        self.begin_record_browser_preserving_claim(source.clone(), None, None)?
+                    } else {
+                        self.begin_record_browser_pane_claim(
+                            source.clone(),
+                            None,
+                            Some(active_index),
+                        )?
+                    };
+                    if claimed.is_some() {
+                        return Ok(false);
+                    }
                     let mut browser = self.refresh_record_browser_overlay_source(&source)?;
                     browser.set_active_index(active_index);
                     let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
@@ -1786,6 +1799,84 @@ impl RuntimeSessionService {
             .cloned()
     }
 
+    /// Returns the source of the active record browser, whichever family it is.
+    pub(crate) fn active_record_browser_source(&self) -> Option<RuntimeRecordBrowserOverlaySource> {
+        self.presentation
+            .primary_display_overlay
+            .as_ref()?
+            .record_browser
+            .as_ref()?
+            .source
+            .clone()
+    }
+
+    /// Returns the refresh key of the active record browser.
+    ///
+    /// The shared saved-session picker keeps its one key; every pane-scoped
+    /// browser keys by the pane that owns it, so two overlays never share a
+    /// generation or a pending filter target.
+    pub(crate) fn active_record_browser_refresh_key(&self) -> Option<String> {
+        let record_browser = self
+            .presentation
+            .primary_display_overlay
+            .as_ref()?
+            .record_browser
+            .as_ref()?;
+        Some(match record_browser.source.as_ref()? {
+            RuntimeRecordBrowserOverlaySource::SavedSessions { .. } => {
+                crate::runtime::SAVED_SESSION_OVERLAY_REFRESH_KEY.to_string()
+            }
+            _ => record_browser.pane_id.clone(),
+        })
+    }
+
+    /// Reports whether the active record browser still shows one source.
+    pub(crate) fn active_record_browser_matches(
+        &self,
+        source: &RuntimeRecordBrowserOverlaySource,
+    ) -> bool {
+        self.active_record_browser_source().as_ref() == Some(source)
+    }
+
+    /// Replaces the active record browser after backend settlement.
+    pub(crate) fn replace_active_record_browser(
+        &mut self,
+        source: RuntimeRecordBrowserOverlaySource,
+        browser: mez_mux::record_browser::RecordBrowser,
+    ) -> bool {
+        let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+            return false;
+        };
+        let Some(record_browser) = overlay.record_browser.as_mut() else {
+            return false;
+        };
+        record_browser.source = Some(source);
+        record_browser.browser = browser;
+        self.reflow_primary_record_browser_overlay();
+        true
+    }
+
+    /// Records one refresh failure on the active record browser.
+    pub(crate) fn set_active_record_browser_error(&mut self, message: &str) -> bool {
+        let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+            return false;
+        };
+        let Some(record_browser) = overlay.record_browser.as_mut() else {
+            return false;
+        };
+        record_browser.browser.set_error(Some(message.to_string()));
+        true
+    }
+
+    /// Reports whether the active record browser shows one record's detail.
+    pub(crate) fn active_record_browser_is_detail(&self) -> bool {
+        self.presentation
+            .primary_display_overlay
+            .as_ref()
+            .and_then(|overlay| overlay.record_browser.as_ref())
+            .is_some_and(|record_browser| record_browser.browser.is_detail_view())
+    }
+
     /// Returns the focused saved-session record id while that browser is open.
     ///
     /// A derived-title refresh rebuilds the current page in place, so this keeps
@@ -1855,65 +1946,6 @@ impl RuntimeSessionService {
                 .record_browser_pending_target(crate::runtime::SAVED_SESSION_OVERLAY_REFRESH_KEY)
                 .unwrap_or(source),
         )
-    }
-
-    /// Reports whether the active saved-session browser shows one record's detail.
-    ///
-    /// A deferred rebuild must not replace the page the operator opened into
-    /// detail after the claim was made, so the completion drops it while this is
-    /// true.
-    pub(crate) fn active_saved_session_browser_is_detail(&self) -> bool {
-        self.presentation
-            .primary_display_overlay
-            .as_ref()
-            .and_then(|overlay| overlay.record_browser.as_ref())
-            .is_some_and(|record_browser| record_browser.browser.is_detail_view())
-    }
-
-    /// Records one refresh failure on the active saved-session browser.
-    ///
-    /// The inline refresh surfaced a failed rebuild by rebuilding the page with
-    /// the error text; the deferred completion cannot re-read the store, so it
-    /// keeps the current page and marks it instead.
-    pub(crate) fn set_active_saved_session_browser_error(&mut self, message: &str) -> bool {
-        let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
-            return false;
-        };
-        let Some(record_browser) = overlay.record_browser.as_mut() else {
-            return false;
-        };
-        if !matches!(
-            record_browser.source,
-            Some(RuntimeRecordBrowserOverlaySource::SavedSessions { .. })
-        ) {
-            return false;
-        }
-        record_browser.browser.set_error(Some(message.to_string()));
-        true
-    }
-
-    /// Replaces the active saved-session browser after backend settlement.
-    pub(crate) fn replace_active_saved_session_browser(
-        &mut self,
-        source: RuntimeRecordBrowserOverlaySource,
-        browser: mez_mux::record_browser::RecordBrowser,
-    ) -> bool {
-        let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
-            return false;
-        };
-        let Some(record_browser) = overlay.record_browser.as_mut() else {
-            return false;
-        };
-        if !matches!(
-            record_browser.source,
-            Some(RuntimeRecordBrowserOverlaySource::SavedSessions { .. })
-        ) {
-            return false;
-        }
-        record_browser.source = Some(source);
-        record_browser.browser = browser;
-        self.reflow_primary_record_browser_overlay();
-        true
     }
 
     /// Dismisses the primary display overlay after deferred resume succeeds.

@@ -228,6 +228,12 @@ impl RuntimeSessionService {
                     ));
                 }
                 self.invalidate_agent_prompt_selector_extra_candidates();
+                if self
+                    .begin_record_browser_delete_claim(active_index)?
+                    .is_some()
+                {
+                    return Ok(None);
+                }
                 Some(self.refresh_record_browser_overlay_source(source)?)
             }
             RuntimeRecordBrowserOverlaySource::Memories { .. } => {
@@ -243,6 +249,12 @@ impl RuntimeSessionService {
                         crate::error::MezErrorKind::NotFound,
                         "memory browser record was already deleted",
                     ));
+                }
+                if self
+                    .begin_record_browser_delete_claim(active_index)?
+                    .is_some()
+                {
+                    return Ok(None);
                 }
                 Some(self.refresh_record_browser_overlay_source(source)?)
             }

@@ -421,6 +421,11 @@ pub(crate) struct RuntimeRecordBrowserRefreshWork {
     pub intent: RuntimeRecordBrowserRefreshIntent,
     /// Transcript store the saved-session page reads.
     pub transcript_store: Option<crate::storage::transcript::AgentTranscriptStore>,
+    /// Config root the store-backed families resolve their stores from.
+    pub config_root: Option<std::path::PathBuf>,
+    /// Issue database resolved when the claim was made, when the source is an
+    /// issue browser; the resolver reads live config, so the worker cannot.
+    pub issue_database_path: Option<crate::storage::issues::IssueDatabasePath>,
     /// Prompt column budget each rebuilt row may use.
     pub prompt_width: usize,
     /// Title policy captured from live configuration.
@@ -455,6 +460,9 @@ pub(crate) enum RuntimeRecordBrowserRefreshIntent {
         target: Box<super::RuntimeRecordBrowserOverlaySource>,
         /// Focused record the rebuilt page restores, when one was focused.
         active_record_id: Option<String>,
+        /// Row index the rebuilt page keeps for the families that have no anchors
+        /// to restore by, used when the focused record left the page.
+        active_index: Option<usize>,
         /// Settlement error the rebuilt page displays, when one applies.
         error: Option<String>,
     },

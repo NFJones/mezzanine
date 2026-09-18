@@ -1300,6 +1300,12 @@ enabled = true
     );
 
     apply_record_browser_input(&mut service, &primary, b"r");
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the closed-issue toggle claims its page"
+    );
     let overlay = service.primary_display_overlay().unwrap();
     assert!(
         overlay
@@ -1313,6 +1319,12 @@ enabled = true
     );
 
     apply_record_browser_input(&mut service, &primary, b"r");
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the second closed-issue toggle claims its page again"
+    );
 
     let toggle_all = service
         .apply_attached_terminal_step_plan(
@@ -1328,7 +1340,12 @@ enabled = true
         )
         .unwrap();
     assert_eq!(toggle_all.forwarded_bytes, 0);
-    assert!(toggle_all.view_refresh_required);
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the scope toggle claims its page"
+    );
     let overlay = service.primary_display_overlay().unwrap();
     assert!(
         overlay
@@ -1360,6 +1377,12 @@ enabled = true
             },
         )
         .unwrap();
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the project scope toggle claims its page"
+    );
     let overlay = service.primary_display_overlay().unwrap();
     assert!(
         !overlay
@@ -1986,6 +2009,82 @@ fn runtime_record_browser_editable_prompts_accept_pager_hotkey_characters() {
             .and_then(|record_browser| record_browser.browser.prompt()),
         Some(mez_mux::record_browser::RecordBrowserPrompt::Filter { field: mez_mux::record_browser::RecordBrowserFilterField::ProjectGlob, input }) if input == "/q/*"
     ));
+}
+
+/// Verifies a submitted pager filter claims its page in the refresh lane.
+///
+/// The issues browser's filter prompt applies the glob to its retained source,
+/// and the rebuild that follows reads the issues store off the actor, so the
+/// page settles through the same lane as every other refresh.
+#[test]
+fn runtime_agent_shell_record_browser_filter_claims_its_page() {
+    let root = temp_root("runtime-record-browser-filter-claim");
+    let _ = fs::remove_dir_all(&root);
+    let config_root = root.join("config");
+    fs::create_dir_all(&config_root).unwrap();
+    let mut service = test_runtime_service();
+    service.set_config_root(config_root.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 12).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+    let source = crate::runtime::service_state::RuntimeRecordBrowserOverlaySource::Issues {
+        project_glob: Some("alpha".to_string()),
+        default_project_glob: Some("alpha".to_string()),
+        kind: None,
+        state: None,
+        active_only: false,
+        text: None,
+        limit: 20,
+    };
+    let browser = crate::runtime::RuntimeSessionService::read_issue_browser_for_refresh(
+        crate::storage::issues::issue_database_location(&config_root, None),
+        &source,
+    )
+    .unwrap();
+    let page = browser.render_page();
+    service.register_pending_record_browser_overlay(&pane_id, "show-issues", browser, Some(source));
+    let response = crate::runtime::runtime_agent_shell_command_response_json(
+        &pane_id,
+        "/show-issues",
+        Some(&crate::runtime::AgentShellCommandOutcome::Display {
+            command: "show-issues".to_string(),
+            body: page.raw_markdown,
+        }),
+    );
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+
+    // Submit a project filter that matches nothing, so the settled page is empty
+    // and the retained source proves the filter reached the worker.
+    apply_record_browser_input(&mut service, &primary, b"p");
+    for input in [b"n".as_slice(), b"o", b"n", b"e"] {
+        apply_record_browser_input(&mut service, &primary, input);
+    }
+    apply_record_browser_input(&mut service, &primary, b"\r");
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the submitted filter claims its page"
+    );
+    let overlay = service.primary_display_overlay().unwrap();
+    let record_browser = overlay.record_browser.as_ref().unwrap();
+    assert!(record_browser.browser.records().is_empty());
+    let crate::runtime::service_state::RuntimeRecordBrowserOverlaySource::Issues {
+        project_glob,
+        ..
+    } = record_browser.source.as_ref().unwrap()
+    else {
+        panic!("the filtered browser keeps an issue source");
+    };
+    assert_eq!(project_glob.as_deref(), Some("none"));
+    let _ = fs::remove_dir_all(root);
 }
 
 /// Verifies `/list-personalities` renders only safe configured profile metadata
@@ -3099,6 +3198,12 @@ fn runtime_agent_shell_show_memories_deletes_the_selected_record() {
     apply_record_browser_input(&mut service, &primary, b"d");
 
     assert!(store.inspect("memory-delete").is_err());
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the memory delete claims the page it left"
+    );
     let overlay = service.primary_display_overlay().unwrap();
     assert!(
         overlay
@@ -3287,6 +3392,12 @@ fn runtime_agent_shell_show_issues_blocks_open_dependents_then_deletes() {
     apply_record_browser_input(&mut service, &primary, b"d");
 
     assert!(store.get_issue(project, prerequisite.id).unwrap().is_none());
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the issue delete claims the page it left"
+    );
     let overlay = service.primary_display_overlay().unwrap();
     assert!(
         !overlay

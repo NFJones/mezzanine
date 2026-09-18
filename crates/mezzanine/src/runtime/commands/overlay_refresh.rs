@@ -143,12 +143,14 @@ impl RuntimeSessionService {
             RuntimeRecordBrowserRefreshIntent::ApplyFilter {
                 target: Box::new(target),
                 active_record_id,
+                active_index: None,
                 error,
             },
         )))
     }
 
-    /// Claims one page rebuild after a saved-session delete.
+    /// Claims one page rebuild after a delete, whatever store-backed browser the
+    /// delete happened in.
     ///
     /// The caller has already removed the row, so the claim rebuilds the page the
     /// delete left and keeps the row index the operator was on: the deleted row
@@ -157,15 +159,66 @@ impl RuntimeSessionService {
         &mut self,
         active_index: usize,
     ) -> Result<Option<u64>> {
-        if self.active_saved_session_browser_source().is_none() {
+        let Some(source) = self.active_record_browser_source() else {
+            return Ok(None);
+        };
+        if !matches!(
+            source,
+            RuntimeRecordBrowserOverlaySource::SavedSessions { .. }
+                | RuntimeRecordBrowserOverlaySource::Issues { .. }
+                | RuntimeRecordBrowserOverlaySource::Memories { .. }
+                | RuntimeRecordBrowserOverlaySource::Context { .. }
+        ) {
             return Ok(None);
         }
-        self.persistence
-            .transcript_store()
-            .ok_or_else(|| MezError::invalid_state("resume requires transcript storage"))?;
+        let Some(refresh_key) = self.active_record_browser_refresh_key() else {
+            return Ok(None);
+        };
+        if matches!(
+            source,
+            RuntimeRecordBrowserOverlaySource::SavedSessions { .. }
+        ) && self.persistence.transcript_store().is_none()
+        {
+            return Err(MezError::invalid_state(
+                "resume requires transcript storage",
+            ));
+        }
         Ok(Some(self.begin_record_browser_refresh_claim_for_intent(
-            SAVED_SESSION_OVERLAY_REFRESH_KEY,
+            &refresh_key,
             RuntimeRecordBrowserRefreshIntent::RefreshAfterDelete { active_index },
+        )))
+    }
+
+    /// Claims one page rebuild for a pane-scoped store-backed browser.
+    ///
+    /// The saved-session picker keeps its own entries because it also composes
+    /// pending filter targets; the other store-backed families refresh from the
+    /// source their key derived, with the same staleness and install rules.
+    pub(crate) fn begin_record_browser_pane_claim(
+        &mut self,
+        target: RuntimeRecordBrowserOverlaySource,
+        active_record_id: Option<String>,
+        active_index: Option<usize>,
+    ) -> Result<Option<u64>> {
+        let Some(refresh_key) = self.active_record_browser_refresh_key() else {
+            return Ok(None);
+        };
+        if !matches!(
+            target,
+            RuntimeRecordBrowserOverlaySource::Issues { .. }
+                | RuntimeRecordBrowserOverlaySource::Memories { .. }
+                | RuntimeRecordBrowserOverlaySource::Context { .. }
+        ) {
+            return Ok(None);
+        }
+        Ok(Some(self.begin_record_browser_refresh_claim_for_intent(
+            &refresh_key,
+            RuntimeRecordBrowserRefreshIntent::ApplyFilter {
+                target: Box::new(target),
+                active_record_id,
+                active_index,
+                error: None,
+            },
         )))
     }
 
@@ -187,7 +240,7 @@ impl RuntimeSessionService {
         {
             return Ok(None);
         }
-        let Some(active_source) = self.active_saved_session_browser_source() else {
+        let Some(active_source) = self.active_record_browser_source() else {
             return Ok(None);
         };
         let Some(intent) = self
@@ -204,6 +257,16 @@ impl RuntimeSessionService {
             | RuntimeRecordBrowserRefreshIntent::FetchAdjacent { .. }
             | RuntimeRecordBrowserRefreshIntent::RefreshAfterDelete { .. } => active_source.clone(),
         };
+        let config_root = self
+            .integration
+            .config_root()
+            .map(|path| path.to_path_buf());
+        let issue_database_path = match &source {
+            RuntimeRecordBrowserOverlaySource::Issues { .. } => config_root
+                .as_ref()
+                .map(|root| super::issues::runtime_issue_database_path(self, root)),
+            _ => None,
+        };
         Ok(Some(RuntimeRecordBrowserRefreshWork {
             refresh_key: refresh_key.to_string(),
             generation,
@@ -211,6 +274,8 @@ impl RuntimeSessionService {
             active_source,
             intent,
             transcript_store: self.persistence.transcript_store().cloned(),
+            config_root,
+            issue_database_path,
             prompt_width: self.saved_session_prompt_width(),
             title_policy: self.agent_session_title_policy(),
         }))
@@ -223,29 +288,30 @@ impl RuntimeSessionService {
     pub(crate) fn execute_record_browser_refresh(
         work: &RuntimeRecordBrowserRefreshWork,
     ) -> RuntimeRecordBrowserRefreshOutcome {
+        if let RuntimeRecordBrowserRefreshIntent::ApplyFilter {
+            active_record_id,
+            active_index,
+            error,
+            ..
+        } = &work.intent
+        {
+            return Self::execute_filter_page_refresh(
+                work,
+                active_record_id.as_deref(),
+                *active_index,
+                error.as_deref(),
+            );
+        }
+        if let RuntimeRecordBrowserRefreshIntent::RefreshAfterDelete { active_index } = &work.intent
+        {
+            return Self::execute_delete_refresh(work, *active_index);
+        }
         let Some(store) = work.transcript_store.as_ref() else {
             return RuntimeRecordBrowserRefreshOutcome::Failed {
                 message: "record browser refresh requires transcript storage".to_string(),
                 kind: MezErrorKind::InvalidState,
             };
         };
-        if let RuntimeRecordBrowserRefreshIntent::ApplyFilter {
-            active_record_id,
-            error,
-            ..
-        } = &work.intent
-        {
-            return Self::execute_preserving_page_refresh(
-                store,
-                work,
-                active_record_id.as_deref(),
-                error.as_deref(),
-            );
-        }
-        if let RuntimeRecordBrowserRefreshIntent::RefreshAfterDelete { active_index } = &work.intent
-        {
-            return Self::execute_delete_refresh(store, work, *active_index);
-        }
         let mut source = work.source.clone();
         let mut active_index = None;
         if let RuntimeRecordBrowserRefreshIntent::FetchAdjacent {
@@ -344,6 +410,96 @@ impl RuntimeSessionService {
             browser: Box::new(browser),
             source,
             active_index,
+        }
+    }
+
+    /// Rebuilds one page for a filter change, whatever store backs it.
+    ///
+    /// Saved sessions run the preserving refresh that restores the focused row;
+    /// the other store-backed families rebuild their page and restore that row
+    /// when the new filters still match it.
+    fn execute_filter_page_refresh(
+        work: &RuntimeRecordBrowserRefreshWork,
+        active_record_id: Option<&str>,
+        active_index: Option<usize>,
+        error: Option<&str>,
+    ) -> RuntimeRecordBrowserRefreshOutcome {
+        if matches!(
+            work.source,
+            RuntimeRecordBrowserOverlaySource::SavedSessions { .. }
+        ) {
+            let Some(store) = work.transcript_store.as_ref() else {
+                return RuntimeRecordBrowserRefreshOutcome::Failed {
+                    message: "record browser refresh requires transcript storage".to_string(),
+                    kind: MezErrorKind::InvalidState,
+                };
+            };
+            return Self::execute_preserving_page_refresh(store, work, active_record_id, error);
+        }
+        let mut browser = match Self::rebuild_store_backed_page(work) {
+            Ok(browser) => browser,
+            Err(error) => {
+                return RuntimeRecordBrowserRefreshOutcome::Failed {
+                    message: error.message().to_string(),
+                    kind: error.kind(),
+                };
+            }
+        };
+        // The focused row restores by id when the new filters still match it; the
+        // index the operator was on stands when they do not.
+        let kept_index = match active_record_id {
+            Some(record_id) if browser.set_active_record_id(record_id) => None,
+            _ => active_index,
+        };
+        RuntimeRecordBrowserRefreshOutcome::Rebuilt {
+            browser: Box::new(browser),
+            source: work.source.clone(),
+            active_index: kept_index,
+        }
+    }
+
+    /// Rebuilds one page for a store-backed browser off actor ownership.
+    ///
+    /// Each family reads the store its source names; the claim captured whatever
+    /// the read needs from live configuration, so the worker stays static.
+    fn rebuild_store_backed_page(
+        work: &RuntimeRecordBrowserRefreshWork,
+    ) -> Result<mez_mux::record_browser::RecordBrowser> {
+        match &work.source {
+            RuntimeRecordBrowserOverlaySource::Issues { .. } => {
+                let Some(database_path) = work.issue_database_path.clone() else {
+                    return Err(MezError::config(
+                        "show-issues requires a configured config root",
+                    ));
+                };
+                RuntimeSessionService::read_issue_browser_for_refresh(database_path, &work.source)
+            }
+            RuntimeRecordBrowserOverlaySource::Memories { .. } => {
+                let Some(config_root) = work.config_root.clone() else {
+                    return Err(MezError::invalid_state(
+                        "show-memories requires a configured Mezzanine config root",
+                    ));
+                };
+                RuntimeSessionService::read_memory_browser_for_refresh(config_root, &work.source)
+            }
+            RuntimeRecordBrowserOverlaySource::Context {
+                conversation_id,
+                pane_id,
+            } => {
+                let Some(store) = work.transcript_store.as_ref() else {
+                    return Err(MezError::invalid_state(
+                        "context browser refresh requires transcript storage",
+                    ));
+                };
+                RuntimeSessionService::read_context_browser_for_refresh(
+                    store,
+                    conversation_id,
+                    pane_id,
+                )
+            }
+            _ => Err(MezError::invalid_state(
+                "record browser refresh requires a store-backed source",
+            )),
         }
     }
 
@@ -477,10 +633,36 @@ impl RuntimeSessionService {
     /// anchored page) falls back to the head of the same source, exactly as the
     /// inline path did.
     fn execute_delete_refresh(
-        store: &crate::storage::transcript::AgentTranscriptStore,
         work: &RuntimeRecordBrowserRefreshWork,
         active_index: usize,
     ) -> RuntimeRecordBrowserRefreshOutcome {
+        if !matches!(
+            work.source,
+            RuntimeRecordBrowserOverlaySource::SavedSessions { .. }
+        ) {
+            // The other store-backed families keep the row index the delete left
+            // and rebuild through the same per-family read as a filter change.
+            let browser = match Self::rebuild_store_backed_page(work) {
+                Ok(browser) => browser,
+                Err(error) => {
+                    return RuntimeRecordBrowserRefreshOutcome::Failed {
+                        message: error.message().to_string(),
+                        kind: error.kind(),
+                    };
+                }
+            };
+            return RuntimeRecordBrowserRefreshOutcome::Rebuilt {
+                browser: Box::new(browser),
+                source: work.source.clone(),
+                active_index: Some(active_index),
+            };
+        }
+        let Some(store) = work.transcript_store.as_ref() else {
+            return RuntimeRecordBrowserRefreshOutcome::Failed {
+                message: "record browser refresh requires transcript storage".to_string(),
+                kind: MezErrorKind::InvalidState,
+            };
+        };
         let mut source = work.source.clone();
         let mut kept_index = Some(active_index);
         let mut browser = match Self::rebuild_saved_session_page(store, &source, work) {
@@ -583,14 +765,13 @@ impl RuntimeSessionService {
                 {
                     return Ok(false);
                 }
-                if self.active_saved_session_browser_source().as_ref() != Some(&work.active_source)
-                {
+                if !self.active_record_browser_matches(&work.active_source) {
                     return Ok(false);
                 }
-                if self.active_saved_session_browser_is_detail() {
+                if self.active_record_browser_is_detail() {
                     return Ok(false);
                 }
-                Ok(self.set_active_saved_session_browser_error(&format!(
+                Ok(self.set_active_record_browser_error(&format!(
                     "overlay refresh failed: {message} ({kind:?})"
                 )))
             }
@@ -606,18 +787,26 @@ impl RuntimeSessionService {
                 {
                     return Ok(false);
                 }
-                if self.active_saved_session_browser_source().as_ref() != Some(&work.active_source)
-                {
-                    return Ok(false);
-                }
-                if self.active_saved_session_browser_is_detail() {
+                if !self.active_record_browser_matches(&work.active_source) {
                     return Ok(false);
                 }
                 let mut browser = *browser;
+                // A delete owns the page it emptied: the row whose detail was open
+                // is gone, so the rebuilt page replaces it. Every other intent
+                // leaves an open detail alone, which keeps a rebuild that settles
+                // late from closing a record the operator just opened.
+                if self.active_record_browser_is_detail()
+                    && !matches!(
+                        work.intent,
+                        RuntimeRecordBrowserRefreshIntent::RefreshAfterDelete { .. }
+                    )
+                {
+                    return Ok(false);
+                }
                 if let Some(active_index) = active_index {
                     browser.set_active_index(active_index);
                 }
-                Ok(self.replace_active_saved_session_browser(source, browser))
+                Ok(self.replace_active_record_browser(source, browser))
             }
         }
     }
