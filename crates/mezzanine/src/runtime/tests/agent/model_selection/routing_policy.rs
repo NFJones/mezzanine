@@ -1844,6 +1844,47 @@ fn runtime_agent_model_identity_restore_reinstalls_or_degrades() {
             .contains_key("agent-%9"),
         "a missing name without a selection must not install an override"
     );
+
+    let restorable = crate::storage::transcript::AgentModelProfileSelection {
+        provider: "deepseek".to_string(),
+        model: "deepseek-v4-flash".to_string(),
+        reasoning_profile: Some("low".to_string()),
+        latency_preference: None,
+        provider_options: std::collections::BTreeMap::new(),
+    };
+    service.restore_agent_model_profile_identity(
+        "%10",
+        "runtime-generated:restored",
+        Some(&restorable),
+    );
+    let restored_name = service
+        .integration
+        .model_profile_overrides()
+        .agent_profiles
+        .get("agent-%10")
+        .cloned()
+        .expect("a resolvable selection must be re-materialized and installed");
+    let restored_profile = service
+        .provider_registry()
+        .profile(&restored_name)
+        .expect("the re-materialized profile must resolve");
+    assert_eq!(restored_profile.model, "deepseek-v4-flash");
+    assert_eq!(restored_profile.reasoning_profile.as_deref(), Some("low"));
+
+    let degraded_events = service
+        .event_log()
+        .expect("the runtime test service owns an event log")
+        .replay_for(&crate::protocol::event::EventAudience::AllPrimaries)
+        .into_iter()
+        .filter(|event| {
+            event.kind == crate::runtime::EventKind::AgentStatus
+                && event.payload.contains("\"model_profile\":\"degraded\"")
+        })
+        .count();
+    assert_eq!(
+        degraded_events, 2,
+        "both unresolvable restores must report the degradation once"
+    );
 }
 
 /// Verifies a durable child profile pins the requested reasoning level even

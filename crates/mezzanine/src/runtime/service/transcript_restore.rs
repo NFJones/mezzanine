@@ -175,15 +175,6 @@ impl RuntimeSessionService {
             }
             let pane_id = metadata.pane_id.clone();
             let conversation_id = metadata.conversation_id.clone();
-            if let Some((profile_name, selection)) =
-                store.conversation_model_identity(&conversation_id)?
-            {
-                self.restore_agent_model_profile_identity(
-                    &pane_id,
-                    &profile_name,
-                    selection.as_ref(),
-                );
-            }
             let conversation_allowed_actions =
                 store.conversation_allowed_actions(&conversation_id)?;
             let conversation_kind = store.conversation_kind(&conversation_id)?;
@@ -511,6 +502,19 @@ impl RuntimeSessionService {
                     self.remove_pane_current_working_directory(&pane_id);
                 }
                 return Err(error);
+            }
+            // The identity is installed only once every skip decision and
+            // validation in this iteration has passed, so a skipped conversation
+            // cannot leave its profile override behind for the next conversation
+            // restored onto the same pane.
+            if let Some((profile_name, selection)) =
+                store.conversation_model_identity(&conversation_id)?
+            {
+                self.restore_agent_model_profile_identity(
+                    &pane_id,
+                    &profile_name,
+                    selection.as_ref(),
+                );
             }
             if running_turn_id.is_some() {
                 interrupted = interrupted.saturating_add(1);

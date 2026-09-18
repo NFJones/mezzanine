@@ -841,7 +841,7 @@ impl RuntimeSessionService {
                 &selection.selected_profile_name,
                 selection.selected_profile.clone(),
             ) {
-                Ok(profile_name) => Some(profile_name),
+                Ok(profile_name) => Some((profile_name, true)),
                 Err(error) => {
                     self.cleanup_failed_subagent_spawn(
                         controller,
@@ -855,22 +855,30 @@ impl RuntimeSessionService {
             None => profile
                 .model_profile
                 .clone()
-                .or_else(|| self.inherited_model_profile_for_child_agent(&spawn.parent_agent_id)),
+                .or_else(|| self.inherited_model_profile_for_child_agent(&spawn.parent_agent_id))
+                .map(|profile_name| (profile_name, false)),
         };
-        if let Some(profile_name) = child_model_profile {
-            let selection = self
-                .provider_registry()
-                .profile_definitions
-                .get(&profile_name)
-                .map(
-                    |definition| crate::storage::transcript::AgentModelProfileSelection {
-                        provider: definition.provider.clone(),
-                        model: definition.model.clone(),
-                        reasoning_profile: definition.reasoning_profile.clone(),
-                        latency_preference: definition.latency_preference.clone(),
-                        provider_options: definition.provider_options.clone(),
-                    },
-                );
+        if let Some((profile_name, runtime_generated)) = child_model_profile {
+            // Only a runtime-generated name carries a selection. A configured
+            // profile must keep resolving from configuration, so removing it
+            // later degrades to the documented fallback instead of being
+            // re-materialized from a stale captured definition.
+            let selection = if runtime_generated {
+                self.provider_registry()
+                    .profile_definitions
+                    .get(&profile_name)
+                    .map(
+                        |definition| crate::storage::transcript::AgentModelProfileSelection {
+                            provider: definition.provider.clone(),
+                            model: definition.model.clone(),
+                            reasoning_profile: definition.reasoning_profile.clone(),
+                            latency_preference: definition.latency_preference.clone(),
+                            provider_options: definition.provider_options.clone(),
+                        },
+                    )
+            } else {
+                None
+            };
             if let Some(store) = self.persistence.cloned_transcript_store()
                 && let Err(error) = store.save_conversation_model_identity(
                     &child_conversation_id,

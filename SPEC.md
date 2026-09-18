@@ -7494,7 +7494,9 @@ inherited-parent inheritance unchanged. Per-turn routing remains the pane’s
 separate configured policy, so a later turn of an explicitly sized child stays
 eligible for router dispatch when routing is enabled. Runtime-generated child
 profiles and agent-scoped overrides MUST be captured on the child conversation's
-durable metadata when the identity is installed, and a resume or restart MUST
+durable metadata when the child is spawned - a runtime-generated name together
+with the selection needed to re-materialize it, a configured name without a
+selection so configuration keeps precedence - and a resume or restart MUST
 restore that identity before the conversation's next turn. A captured name that
 still resolves MUST restore by name so configuration keeps precedence, and a
 runtime-generated profile MUST be re-materialized from its captured provider,
@@ -7502,7 +7504,10 @@ model, and reasoning selection so the child keeps the model and reasoning level
 it was created with. When the captured identity cannot be resolved or
 re-materialized, the runtime MUST keep the existing fallback resolution and
 report the degradation as an agent status event instead of silently changing the
-model. Successful spawn state and action-result metadata MUST
+model. An agent-scope profile change made outside spawn (for example through a
+later model command aimed at a child agent) is not yet captured and does not
+survive a restart; only the spawn-time identity is durable. Successful spawn
+state and action-result metadata MUST
 report the effective requested size, reasoning effort, and resolved
 model-profile identity.
 
