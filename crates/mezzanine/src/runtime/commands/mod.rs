@@ -67,7 +67,7 @@ mod context_documents;
 mod deferred;
 mod disposition;
 mod issues;
-mod lists;
+pub(crate) mod lists;
 mod model;
 mod model_catalog;
 mod preferences;

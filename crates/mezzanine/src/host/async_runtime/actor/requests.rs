@@ -477,6 +477,7 @@ impl AsyncRuntimeSessionActor {
                         self.queue_deferred_pane_io_side_effects_from_service()?;
                         self.queue_runtime_side_effects(transition.side_effects)?;
                         self.queue_pending_provider_dispatch_side_effects()?;
+                        self.queue_pending_deferred_agent_command_side_effects()?;
                         self.queue_shell_lifecycle_timer_side_effects()?;
                         if let Some(client_id) = connection.caller_client_id().cloned() {
                             self.ensure_client_render_timers_or_defer_to_pending_render(
@@ -603,6 +604,7 @@ impl AsyncRuntimeSessionActor {
                         self.queue_deferred_pane_io_side_effects_from_service()?;
                         self.queue_runtime_side_effects(transition.side_effects)?;
                         self.queue_pending_provider_dispatch_side_effects()?;
+                        self.queue_pending_deferred_agent_command_side_effects()?;
                         self.queue_shell_lifecycle_timer_side_effects()?;
                         if let Some(client_id) = connection.caller_client_id().cloned() {
                             self.ensure_client_render_timers_or_defer_to_pending_render(
@@ -992,23 +994,7 @@ impl AsyncRuntimeSessionActor {
                     // become worker-claimed effects in the same drain, so the
                     // actor request that applied the input never performs the
                     // command's store or filesystem read itself.
-                    let deferred_commands = self.service.take_pending_deferred_agent_commands();
-                    if !deferred_commands.is_empty() {
-                        self.queue_runtime_side_effects(
-                            deferred_commands
-                                .into_iter()
-                                .map(|dispatch| {
-                                    crate::runtime::RuntimeSideEffect::DispatchAgentCommand {
-                                        primary_client_id: dispatch.primary_client_id,
-                                        pane_id: dispatch.pane_id,
-                                        command: dispatch.command,
-                                        input: dispatch.input,
-                                        claim_generation: dispatch.claim_generation,
-                                    }
-                                })
-                                .collect(),
-                        )?;
-                    }
+                    self.queue_pending_deferred_agent_command_side_effects()?;
                     Ok(application)
                 });
                 let _ = reply.send(result);
@@ -1176,6 +1162,7 @@ impl AsyncRuntimeSessionActor {
                         self.queue_deferred_pane_io_side_effects_from_service()?;
                         self.queue_shell_lifecycle_timer_side_effects()?;
                         self.queue_pending_provider_dispatch_side_effects()?;
+                        self.queue_pending_deferred_agent_command_side_effects()?;
                         Ok(output)
                     });
                 let should_notify = result.is_ok();
@@ -1204,6 +1191,7 @@ impl AsyncRuntimeSessionActor {
                         self.queue_deferred_pane_io_side_effects_from_service()?;
                         self.queue_shell_lifecycle_timer_side_effects()?;
                         self.queue_pending_provider_dispatch_side_effects()?;
+                        self.queue_pending_deferred_agent_command_side_effects()?;
                         Ok(output)
                     });
                 let should_notify = result.is_ok();

@@ -918,6 +918,32 @@ impl AsyncRuntimeSessionActor {
         Ok(count)
     }
 
+    /// Queues worker-claimed effects for deferred slash commands drained here.
+    ///
+    /// Prompt submission only records the dispatch: the display for a deferred
+    /// command arrives through the completion path, so the ingress that applied
+    /// the input must hand the effect to the provider worker. Every ingress that
+    /// can defer a command calls this - the in-process attached step and both
+    /// control-input arms the detachable attach client uses - because a queue that
+    /// only one of them drains would acknowledge the command and never display it.
+    pub(super) fn queue_pending_deferred_agent_command_side_effects(&mut self) -> Result<usize> {
+        let side_effects = self
+            .service
+            .take_pending_deferred_agent_commands()
+            .into_iter()
+            .map(|dispatch| RuntimeSideEffect::DispatchAgentCommand {
+                primary_client_id: dispatch.primary_client_id,
+                pane_id: dispatch.pane_id,
+                command: dispatch.command,
+                input: dispatch.input,
+                claim_generation: dispatch.claim_generation,
+            })
+            .collect::<Vec<_>>();
+        let count = side_effects.len();
+        self.queue_runtime_side_effects(side_effects)?;
+        Ok(count)
+    }
+
     /// Runs the queue deferred pane io side effects from service operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

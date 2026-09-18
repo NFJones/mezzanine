@@ -175,6 +175,11 @@ impl RuntimeSessionService {
     /// match the dispatched one, so an earlier attempt cannot overwrite a display
     /// the user asked for again. A failure is reported through the same
     /// invalid-command response path the inline lane used.
+    ///
+    /// A pane that was hidden or closed while the worker ran also drops its
+    /// display: the prompt that asked for it no longer exists, and the claim
+    /// refuses work for a pane whose agent prompt is not visible, matching the
+    /// submit-time guard the inline lane applied.
     pub(crate) fn complete_agent_command_work(
         &mut self,
         work: &RuntimeAgentCommandAsyncWork,
@@ -211,6 +216,7 @@ impl RuntimeSessionService {
     pub(crate) fn run_pending_deferred_agent_command_for_tests(
         &mut self,
     ) -> Result<Option<String>> {
+        let mut last_body = None;
         for dispatch in self.take_pending_deferred_agent_commands() {
             let Some(work) = self.claim_agent_command_work(
                 &dispatch.primary_client_id,
@@ -230,9 +236,9 @@ impl RuntimeSessionService {
             if !self.complete_agent_command_work(&work, outcome)? {
                 continue;
             }
-            return Ok(Some(body));
+            last_body = Some(body);
         }
-        Ok(None)
+        Ok(last_body)
     }
 }
 

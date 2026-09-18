@@ -869,3 +869,198 @@ Keep this override.
         fs::read_to_string(config_root.join("skills/create-skill/SKILL.md")).unwrap();
     assert!(override_text.contains("Keep this override."));
 }
+
+/// Verifies the deferred catalog read uses the pane's own discovery inputs.
+///
+/// A worker renders the catalog from the roots the actor captured, so this pins
+/// the deferred body against the body the inline lane produced from
+/// `effective_skill_catalog_for_pane`: if the prepared inputs ever stop matching
+/// the inline discovery inputs, the two bodies diverge and the assertions below
+/// fail instead of users seeing a different catalog.
+#[test]
+fn runtime_agent_shell_deferred_list_skills_matches_the_pane_catalog() {
+    let config_root = temp_root("runtime-list-skills-parity");
+    let skill_dir = config_root.join("skills/review");
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: review\ndescription: Review workflow\n---\n\nCheck tests and risks.\n",
+    )
+    .unwrap();
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_config_root(config_root);
+
+    service
+        .execute_agent_shell_command(&primary, "/list-skills")
+        .unwrap();
+    let dispatch = service
+        .take_pending_deferred_agent_commands()
+        .into_iter()
+        .next()
+        .expect("a deferred command submission queues one dispatch");
+    assert_eq!(dispatch.command, "list-skills");
+    let work = service
+        .claim_agent_command_work(
+            &dispatch.primary_client_id,
+            &dispatch.pane_id,
+            &dispatch.command,
+            &dispatch.input,
+            dispatch.claim_generation,
+        )
+        .unwrap()
+        .expect("the current generation claims its work");
+
+    let crate::runtime::RuntimeAgentCommandAsyncOutcome::Response { body } =
+        crate::runtime::RuntimeSessionService::execute_deferred_agent_command(&work)
+    else {
+        panic!("the catalog executor must produce a response body");
+    };
+    let inline = crate::runtime::runtime_agent_shell_command_response_json(
+        "%1",
+        "/list-skills",
+        Some(&crate::runtime::AgentShellCommandOutcome::Display {
+            command: "list-skills".to_string(),
+            body: crate::runtime::commands::lists::runtime_agent_skill_catalog_body(
+                &service.effective_skill_catalog_for_pane("%1"),
+            ),
+        }),
+    );
+    assert_eq!(
+        body, inline,
+        "the deferred read must use the pane's own catalog discovery inputs"
+    );
+    assert!(
+        body.contains("| `$review` | user | Review workflow |"),
+        "{body}"
+    );
+}
+
+/// Verifies a superseded or stale deferred command cannot paint its display.
+///
+/// Submitting the same command again while the first attempt is in flight is a
+/// user asking for the newer read, so the older generation must fail to claim and
+/// must not apply; the newest generation still applies normally.
+#[test]
+fn runtime_agent_shell_deferred_lane_drops_superseded_work() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_config_root(temp_root("runtime-list-skills-superseded"));
+
+    service
+        .execute_agent_shell_command(&primary, "/list-skills")
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, "/list-skills")
+        .unwrap();
+    let dispatches = service.take_pending_deferred_agent_commands();
+    assert_eq!(
+        dispatches.len(),
+        2,
+        "each submission queues its own dispatch"
+    );
+    assert!(
+        dispatches[1].claim_generation > dispatches[0].claim_generation,
+        "a resubmission stamps a newer generation"
+    );
+
+    let superseded_claim = service
+        .claim_agent_command_work(
+            &dispatches[0].primary_client_id,
+            &dispatches[0].pane_id,
+            &dispatches[0].command,
+            &dispatches[0].input,
+            dispatches[0].claim_generation,
+        )
+        .unwrap();
+    assert!(
+        superseded_claim.is_none(),
+        "the superseded generation must not claim work"
+    );
+
+    let work = service
+        .claim_agent_command_work(
+            &dispatches[1].primary_client_id,
+            &dispatches[1].pane_id,
+            &dispatches[1].command,
+            &dispatches[1].input,
+            dispatches[1].claim_generation,
+        )
+        .unwrap()
+        .expect("the newest generation claims work");
+    let stale_work = crate::runtime::RuntimeAgentCommandAsyncWork {
+        claim_generation: dispatches[0].claim_generation,
+        ..work.clone()
+    };
+    let stale_applied = service
+        .complete_agent_command_work(
+            &stale_work,
+            crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed {
+                message: "superseded".to_string(),
+            },
+        )
+        .unwrap();
+    assert!(!stale_applied, "a stale completion must be dropped");
+
+    let outcome = crate::runtime::RuntimeSessionService::execute_deferred_agent_command(&work);
+    assert!(
+        service.complete_agent_command_work(&work, outcome).unwrap(),
+        "the current generation applies its display"
+    );
+}
+
+/// Verifies a deferred command whose submitting primary detached cannot claim.
+///
+/// The prompt that asked for the display is gone once its primary detaches, so the
+/// claim refuses the work instead of painting a catalog for a client that is no
+/// longer attached.
+#[test]
+fn runtime_agent_shell_deferred_lane_drops_detached_submitters() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_config_root(temp_root("runtime-list-skills-detached"));
+
+    service
+        .execute_agent_shell_command(&primary, "/list-skills")
+        .unwrap();
+    let dispatch = service
+        .take_pending_deferred_agent_commands()
+        .into_iter()
+        .next()
+        .expect("a deferred command submission queues one dispatch");
+    service
+        .detach_primary(&primary, Size::new(80, 24).unwrap())
+        .unwrap();
+
+    let claim = service
+        .claim_agent_command_work(
+            &dispatch.primary_client_id,
+            &dispatch.pane_id,
+            &dispatch.command,
+            &dispatch.input,
+            dispatch.claim_generation,
+        )
+        .unwrap();
+    assert!(
+        claim.is_none(),
+        "a detached submitter must not claim deferred work"
+    );
+}
