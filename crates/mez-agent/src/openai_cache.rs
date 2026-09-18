@@ -167,6 +167,8 @@ const CACHE_IDENTITY_EXCLUDED_CONTROL_PATHS: &[&[&str]] = &[
     // prefix material, and the OpenAI Responses body never emits them.
     &["temperature"],
     &["stop"],
+    // Anthropic spells the stop control `stop_sequences`.
+    &["stop_sequences"],
     &["max_tokens"],
 ];
 
@@ -696,6 +698,7 @@ mod tests {
             "verbosity": "low",
             "temperature": 0.9,
             "stop": ["END"],
+            "stop_sequences": ["END"],
             "max_tokens": 4096,
         });
         let projection = openai_cache_identity_control_projection(&controls);
@@ -827,6 +830,10 @@ mod tests {
             (
                 r#"{"model":"m","messages":[],"temperature":0.2}"#,
                 r#"{"model":"m","messages":[],"temperature":0.9}"#,
+            ),
+            (
+                r#"{"model":"m","messages":[],"stop_sequences":["END"]}"#,
+                r#"{"model":"m","messages":[],"stop_sequences":["STOP"]}"#,
             ),
         ] {
             let mut previous = request_chain_fixture(Vec::new());
