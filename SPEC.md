@@ -687,6 +687,11 @@ legacy flat file untouched so a rollback to the previous build still finds its
 data. Retaining or deleting that file after the first successful
 post-migration write is the adopting store's documented choice.
 
+Once a store's import marker exists, older binaries MUST NOT keep running
+against that store: a write from a build that only knows the flat file would
+diverge invisibly from the database, so upgrade and downgrade MUST stop at the
+migration boundary instead of mixing writers.
+
 Because the SQLite binding is synchronous, every database call MUST run on the
 blocking pool and MUST NOT run on the async runtime reactor. Short-lived,
 read-only CLI commands MUST open a store without creating schema, migrating, or
