@@ -921,11 +921,30 @@ impl RuntimeSessionService {
         provider: &str,
         definition: ModelProfileDefinition,
     ) -> Result<String> {
+        let (profile_name, _materialized) =
+            self.derive_runtime_generated_model_profile(provider, &definition)?;
+        let _ =
+            self.register_runtime_generated_model_profile(&profile_name, provider, definition)?;
+        Ok(profile_name)
+    }
+
+    /// Materializes one runtime-generated selection and returns its deterministic
+    /// name together with the effective profile, registering neither.
+    ///
+    /// Deriving and registering are separate so a caller holding a durable captured
+    /// name can register that name instead: registering the derived name first
+    /// would leave a stray entry that a later restore of a colliding identity could
+    /// not use, which made the captured-name authority order-dependent.
+    pub(crate) fn derive_runtime_generated_model_profile(
+        &mut self,
+        provider: &str,
+        definition: &ModelProfileDefinition,
+    ) -> Result<(String, ModelProfile)> {
         let catalog = self.cached_provider_model_catalog(provider);
-        let catalog = catalog.as_ref().map(|catalog| &catalog.catalog);
+        let catalog = catalog.as_ref().map(|catalog| catalog.catalog());
         let materialized = self
             .provider_registry()
-            .materialize_profile_definition(&definition, catalog)?;
+            .materialize_profile_definition(definition, catalog)?;
         let profile_name = runtime_generated_model_profile_name(
             self.provider_registry(),
             &materialized.provider,
@@ -933,20 +952,37 @@ impl RuntimeSessionService {
             materialized.reasoning_profile.as_deref(),
             &materialized,
         );
-        if self.provider_registry().profile(&profile_name).is_none() {
-            self.integration
-                .provider_registry_mut()
-                .insert_profile_definition(profile_name.clone(), definition, catalog)?;
-            // Only a definition this helper actually created is a runtime-generated
-            // name: a name that already resolved is either configured or already
-            // marked, and a later inheriting spawn must not capture a selection for
-            // configuration-owned identity.
-            self.integration
-                .model_profile_overrides_mut()
-                .runtime_generated_profiles
-                .insert(profile_name.clone());
+        Ok((profile_name, materialized))
+    }
+
+    /// Registers one runtime-generated definition under a chosen name and marks it.
+    ///
+    /// A name that already resolves is left untouched - it is either
+    /// configuration-owned or already describes this identity - and reports
+    /// `false`, because overwriting it could drop definition fields the captured
+    /// selection cannot represent.
+    pub(crate) fn register_runtime_generated_model_profile(
+        &mut self,
+        name: &str,
+        provider: &str,
+        definition: ModelProfileDefinition,
+    ) -> Result<bool> {
+        if self.provider_registry().profile(name).is_some() {
+            return Ok(false);
         }
-        Ok(profile_name)
+        let catalog = self.cached_provider_model_catalog(provider);
+        let catalog = catalog.as_ref().map(|catalog| catalog.catalog());
+        self.integration
+            .provider_registry_mut()
+            .insert_profile_definition(name.to_string(), definition, catalog)?;
+        // Only a definition this call created is a runtime-generated name: a name
+        // that already resolved is configuration-owned or already marked, and a
+        // later inheriting spawn must not capture a selection for it.
+        self.integration
+            .model_profile_overrides_mut()
+            .runtime_generated_profiles
+            .insert(name.to_string());
+        Ok(true)
     }
 
     pub(crate) fn active_model_profile_for_pane(

@@ -840,21 +840,36 @@ impl RuntimeSessionService {
             provider_options: selection.provider_options.clone(),
             ..mez_agent::ModelProfileDefinition::default()
         };
-        let derived_name = match self
-            .restore_runtime_generated_model_profile(&selection.provider, definition.clone())
-        {
-            Ok(restored) => restored,
-            Err(error) => {
-                self.report_agent_model_identity_degradation(
-                    pane_id,
-                    profile_name,
-                    &format!("re-materialization failed: {error}"),
-                );
-                return;
-            }
-        };
+        // A captured name that resolves and is not a runtime-generated owner belongs
+        // to configuration: installation by name keeps configuration authoritative,
+        // nothing needs reporting, and the configured definition is never rewritten
+        // by a selection that cannot represent its definition-level fields.
+        let generated_owner = self
+            .integration
+            .model_profile_overrides()
+            .runtime_generated_profiles
+            .contains(profile_name);
+        if !generated_owner && self.provider_registry().profile(profile_name).is_some() {
+            self.integration
+                .model_profile_overrides_mut()
+                .agent_profiles
+                .insert(agent_id, profile_name.to_string());
+            return;
+        }
+        let (derived_name, materialized) =
+            match self.derive_runtime_generated_model_profile(&selection.provider, &definition) {
+                Ok(restored) => restored,
+                Err(error) => {
+                    self.report_agent_model_identity_degradation(
+                        pane_id,
+                        profile_name,
+                        &format!("re-materialization failed: {error}"),
+                    );
+                    return;
+                }
+            };
         if let Some(differences) =
-            self.agent_model_profile_identity_differences(&derived_name, selection)
+            Self::agent_model_profile_identity_differences(&materialized, selection)
         {
             // The identity the child ran is what must survive, so a difference in
             // any captured field - including an option only the restore-side catalog
@@ -865,34 +880,45 @@ impl RuntimeSessionService {
                 &format!("re-materialized identity differs from the capture: {differences}"),
             );
         }
-        let installed = if derived_name == profile_name {
-            derived_name
-        } else if self.agent_model_profile_name_describes_selection(profile_name, selection) {
-            let catalog = self.cached_provider_model_catalog(&selection.provider);
-            let catalog = catalog.as_ref().map(|catalog| catalog.catalog());
-            let registered = self
-                .integration
-                .provider_registry_mut()
-                .insert_profile_definition(profile_name.to_string(), definition, catalog);
-            match registered {
-                Ok(()) => profile_name.to_string(),
-                Err(error) => {
+        let installed =
+            if self.agent_model_profile_name_describes_selection(profile_name, selection) {
+                // The captured name is authoritative: register it when it is free, so
+                // the restored identity cannot depend on which names happen to be free in
+                // this process. An entry that already describes this identity stays.
+                match self.register_runtime_generated_model_profile(
+                    profile_name,
+                    &selection.provider,
+                    definition,
+                ) {
+                    Ok(_) => profile_name.to_string(),
+                    Err(error) => {
+                        self.report_agent_model_identity_degradation(
+                            pane_id,
+                            profile_name,
+                            &format!("captured name could not be registered: {error}"),
+                        );
+                        derived_name
+                    }
+                }
+            } else {
+                self.report_agent_model_identity_degradation(
+                    pane_id,
+                    profile_name,
+                    "captured name already describes a different identity",
+                );
+                if let Err(error) = self.register_runtime_generated_model_profile(
+                    &derived_name,
+                    &selection.provider,
+                    definition,
+                ) {
                     self.report_agent_model_identity_degradation(
                         pane_id,
                         profile_name,
-                        &format!("captured name could not be registered: {error}"),
+                        &format!("derived name could not be registered: {error}"),
                     );
-                    derived_name
                 }
-            }
-        } else {
-            self.report_agent_model_identity_degradation(
-                pane_id,
-                profile_name,
-                "captured name already describes a different identity",
-            );
-            derived_name
-        };
+                derived_name
+            };
         self.integration
             .model_profile_overrides_mut()
             .agent_profiles
@@ -906,14 +932,29 @@ impl RuntimeSessionService {
             .insert(installed);
     }
 
-    /// Returns the captured identity fields one restored profile does not
-    /// reproduce, or `None` when it reproduces all of them.
-    fn agent_model_profile_identity_differences(
+    /// Reports whether one profile name is free or already describes the captured
+    /// identity, so registering under it cannot displace another identity.
+    fn agent_model_profile_name_describes_selection(
         &self,
         profile_name: &str,
         selection: &crate::storage::transcript::AgentModelProfileSelection,
+    ) -> bool {
+        self.provider_registry()
+            .profile(profile_name)
+            .is_none_or(|profile| {
+                Self::agent_model_profile_identity_differences(profile, selection).is_none()
+            })
+    }
+
+    /// Returns the captured identity fields one profile does not reproduce.
+    ///
+    /// `None` means the profile reproduces every captured field; otherwise the
+    /// returned text names the differing fields so a degradation event is
+    /// actionable rather than a bare warning.
+    fn agent_model_profile_identity_differences(
+        profile: &mez_agent::ModelProfile,
+        selection: &crate::storage::transcript::AgentModelProfileSelection,
     ) -> Option<String> {
-        let profile = self.provider_registry().profile(profile_name)?;
         let mut differing = Vec::new();
         if profile.provider != selection.provider {
             differing.push("provider");
@@ -931,17 +972,6 @@ impl RuntimeSessionService {
             differing.push("provider_options");
         }
         (!differing.is_empty()).then(|| differing.join(","))
-    }
-
-    /// Reports whether one profile name is free or already describes the captured
-    /// identity, so registering under it cannot displace another identity.
-    fn agent_model_profile_name_describes_selection(
-        &self,
-        profile_name: &str,
-        selection: &crate::storage::transcript::AgentModelProfileSelection,
-    ) -> bool {
-        self.agent_model_profile_identity_differences(profile_name, selection)
-            .is_none_or(|_| self.provider_registry().profile(profile_name).is_none())
     }
 
     /// Reports one unrecoverable agent model identity degradation.

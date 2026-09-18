@@ -7513,10 +7513,14 @@ that child or that the child inherited from an ancestor MUST be captured
 together with the selection needed to re-materialize it, and any other name MUST
 be captured without a selection so configuration keeps precedence. A resume or
 restart MUST restore that identity before the conversation's next turn. A captured name that
-still resolves MUST restore by name so configuration keeps precedence, and a
-runtime-generated profile MUST be re-materialized from its captured provider,
-model, and reasoning selection so the child keeps the model and reasoning level
-it was created with. When the captured identity cannot be resolved or
+still resolves and does not belong to the runtime-generated profile set MUST
+restore by name so configuration keeps precedence, and that configured definition
+MUST NOT be rewritten by a restored selection. A runtime-generated identity MUST
+be re-materialized from its captured provider, model, reasoning, latency, and
+options so the child keeps the model and reasoning level it was created with, and
+it MUST be registered under its captured name whenever that name is free or
+already describes the same identity, so a restart cannot depend on which names
+happen to be free. When the captured identity cannot be resolved or
 re-materialized, the runtime MUST keep the existing fallback resolution and
 report the degradation as an agent status event instead of silently changing the
 model. The captured selection MUST describe the effective profile the child ran,
