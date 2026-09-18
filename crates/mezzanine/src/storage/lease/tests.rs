@@ -561,3 +561,46 @@ fn test_root(name: &str) -> PathBuf {
     fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
     root
 }
+
+/// A failed row replacement leaves the stored lease database unchanged.
+///
+/// The repository validates every mutation before writing, so a database-level
+/// failure is forced directly through the storage layer: a duplicate lease id
+/// violates the primary key inside the replacement transaction, which must roll
+/// back and leave the previously stored rows, the boot generation, and the
+/// legacy JSON document untouched.
+#[test]
+fn lease_database_row_replacement_is_transactional() {
+    let root = test_root("row-replacement-atomicity");
+    let repository = RemoteSessionLeaseRepository::new(root.clone());
+    let created = repository
+        .reserve_pending(reservation(
+            "lease-atomic",
+            "$1",
+            "device-1",
+            "create-atomic",
+            "fingerprint-atomic",
+        ))
+        .unwrap();
+    let stored = repository.list().unwrap();
+    assert_eq!(stored.len(), 1);
+    let boot_generation = repository.boot_generation().unwrap();
+
+    let duplicate = super::repository::LeaseDatabase {
+        version: 1,
+        boot_generation,
+        leases: vec![stored[0].clone(), stored[0].clone()],
+        snapshot_cleanup_candidates: Vec::new(),
+    };
+    assert!(
+        super::sqlite::write_database(&root, &duplicate).is_err(),
+        "duplicate lease ids must fail the replacement transaction"
+    );
+    assert_eq!(repository.list().unwrap(), stored);
+    assert_eq!(repository.boot_generation().unwrap(), boot_generation);
+    assert_eq!(
+        repository.get(&created.lease().lease_id).unwrap(),
+        Some(stored[0].clone())
+    );
+    let _ = fs::remove_dir_all(root);
+}

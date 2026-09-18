@@ -11,7 +11,7 @@
 
 use super::super::shared_sqlite::{
     SharedSchemaState, import_legacy_file_once, migration_completed, open_shared_database,
-    open_shared_database_read_only, set_schema_version,
+    open_shared_database_read_only, schema_version, set_schema_version,
 };
 use super::repository::LeaseDatabase;
 use super::{MezError, RemoteSessionLease, Result};
@@ -22,7 +22,11 @@ use std::path::{Path, PathBuf};
 pub(super) const LEASE_DATABASE_FILE_NAME: &str = "session-reservations.sqlite";
 
 /// Schema version owned by the lease tables.
-const LEASE_SCHEMA_VERSION: i64 = 1;
+///
+/// Version 2 added the non-negative CHECK constraints on the counting columns;
+/// a database written by an intermediate build is rejected instead of being read
+/// without them.
+const LEASE_SCHEMA_VERSION: i64 = 2;
 
 /// One-time import marker for the legacy JSON document.
 const LEASE_IMPORT_MARKER: &str = "leases.json";
@@ -73,6 +77,13 @@ pub(super) fn load_database(directory: &Path) -> Result<LeaseDatabase> {
     let Some(connection) = open_shared_database_read_only(&path)? else {
         return legacy_database(directory);
     };
+    let version = schema_version(&connection)?;
+    if version != LEASE_SCHEMA_VERSION {
+        return Err(MezError::invalid_state(format!(
+            "remote session lease database schema version {version} does not match this build's version {LEASE_SCHEMA_VERSION}; restart with the build that wrote it, or delete {} and let the next write import the legacy JSON document",
+            path.display()
+        )));
+    }
     if !migration_completed(&connection, LEASE_IMPORT_MARKER)? {
         return legacy_database(directory);
     }
@@ -105,7 +116,7 @@ fn create_schema(connection: &mut Connection) -> Result<()> {
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(database_error)?;
     transaction
-        .execute_batch("CREATE TABLE leases (lease_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, state TEXT NOT NULL, expires_at_unix_seconds INTEGER, boot_generation INTEGER NOT NULL, payload TEXT NOT NULL); CREATE INDEX leases_by_session ON leases(session_id); CREATE INDEX leases_by_state ON leases(state); CREATE INDEX leases_by_expiry ON leases(expires_at_unix_seconds); CREATE TABLE lease_state (id INTEGER PRIMARY KEY CHECK (id = 1), boot_generation INTEGER NOT NULL); CREATE TABLE snapshot_cleanup_candidates (snapshot_id TEXT PRIMARY KEY);")
+        .execute_batch("CREATE TABLE leases (lease_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, state TEXT NOT NULL, expires_at_unix_seconds INTEGER CHECK (expires_at_unix_seconds IS NULL OR expires_at_unix_seconds >= 0), boot_generation INTEGER NOT NULL CHECK (boot_generation >= 0), payload TEXT NOT NULL); CREATE INDEX leases_by_session ON leases(session_id); CREATE INDEX leases_by_state ON leases(state); CREATE INDEX leases_by_expiry ON leases(expires_at_unix_seconds); CREATE TABLE lease_state (id INTEGER PRIMARY KEY CHECK (id = 1), boot_generation INTEGER NOT NULL CHECK (boot_generation >= 0)); CREATE TABLE snapshot_cleanup_candidates (snapshot_id TEXT PRIMARY KEY);")
         .map_err(database_error)?;
     set_schema_version(&transaction, LEASE_SCHEMA_VERSION)?;
     transaction.commit().map_err(database_error)
