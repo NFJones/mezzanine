@@ -5,9 +5,7 @@
 //! their control sockets, and the primary-attachment state needed for attach
 //! decisions. Live process ownership remains with the future session service.
 
-use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::error::{MezError, Result};
@@ -19,6 +17,11 @@ use mez_mux::session::{Session, SessionState};
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod encoding;
+/// Exposes the store module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+mod sqlite;
 /// Exposes the store module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

@@ -6,15 +6,12 @@
 #[cfg(test)]
 use super::Path;
 use super::{
-    BTreeMap, MezError, OpenOptions, PathBuf, REGISTRY_FILE_NAME, Read, Result, SessionRecord,
-    SessionRegistry, Write, decode_records, ensure_private_socket_directory, fs,
-    set_private_file_permissions,
+    MezError, OpenOptions, PathBuf, REGISTRY_FILE_NAME, Result, SessionRecord, SessionRegistry,
+    ensure_private_socket_directory, fs, set_private_file_permissions,
 };
 use rustix::fs::{FlockOperation, flock};
 #[cfg(test)]
-use tokio::fs as tokio_fs;
-#[cfg(test)]
-use tokio::io::AsyncReadExt;
+use std::io::Write;
 
 /// Defines the REGISTRY LOCK FILE NAME const used by this subsystem.
 ///
@@ -101,16 +98,7 @@ impl SessionRegistry {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn list(&self) -> Result<Vec<SessionRecord>> {
-        let path = self.registry_file();
-        if !path.exists() {
-            return Ok(Vec::new());
-        }
-
-        let mut data = String::new();
-        fs::File::open(path)?.read_to_string(&mut data)?;
-        let mut records = decode_records(&data)?;
-        records.sort_by(|left, right| left.session_id.cmp(&right.session_id));
-        Ok(records)
+        super::sqlite::list(self)
     }
 
     /// Runs the list async operation for this subsystem.
@@ -120,20 +108,8 @@ impl SessionRegistry {
     /// on duplicated control-flow logic.
     #[cfg(test)]
     pub async fn list_async(&self) -> Result<Vec<SessionRecord>> {
-        let path = self.registry_file();
-        let mut data = String::new();
-        match tokio_fs::File::open(path).await {
-            Ok(mut file) => {
-                file.read_to_string(&mut data).await?;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Vec::new());
-            }
-            Err(error) => return Err(error.into()),
-        }
-        let mut records = decode_records(&data)?;
-        records.sort_by(|left, right| left.session_id.cmp(&right.session_id));
-        Ok(records)
+        let registry = self.clone();
+        run_blocking_registry_mutation(move || super::sqlite::list(&registry)).await
     }
 
     /// Runs the get operation for this subsystem.
@@ -147,10 +123,7 @@ impl SessionRegistry {
         reason = "test-only adapter retained for focused boundary coverage"
     )]
     pub fn get(&self, session_id: &str) -> Result<Option<SessionRecord>> {
-        Ok(self
-            .list()?
-            .into_iter()
-            .find(|record| record.session_id == session_id))
+        super::sqlite::get(self, session_id)
     }
 
     /// Runs the prune stale operation for this subsystem.
@@ -159,22 +132,7 @@ impl SessionRegistry {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn prune_stale(&self) -> Result<usize> {
-        if !self.registry_file().exists() {
-            return Ok(0);
-        }
-
-        let _lock = self.acquire_exclusive_lock()?;
-        let records = self.list()?;
-        let original_len = records.len();
-        let live_records = records
-            .into_iter()
-            .filter(|record| record.socket_path.exists())
-            .collect::<Vec<_>>();
-        let pruned = original_len.saturating_sub(live_records.len());
-        if pruned > 0 {
-            self.write_records(live_records)?;
-        }
-        Ok(pruned)
+        super::sqlite::prune_stale(self)
     }
 
     /// Runs the upsert operation for this subsystem.
@@ -183,17 +141,7 @@ impl SessionRegistry {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn upsert(&self, record: SessionRecord) -> Result<()> {
-        record.validate()?;
-        let _lock = self.acquire_exclusive_lock()?;
-        ensure_private_socket_directory(&self.root, self.owner_uid)?;
-
-        let mut by_id = self
-            .list()?
-            .into_iter()
-            .map(|record| (record.session_id.clone(), record))
-            .collect::<BTreeMap<_, _>>();
-        by_id.insert(record.session_id.clone(), record);
-        self.write_records(by_id.into_values().collect())
+        super::sqlite::upsert(self, record)
     }
 
     /// Runs the upsert async operation for this subsystem.
@@ -212,28 +160,7 @@ impl SessionRegistry {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn remove(&self, session_id: &str) -> Result<bool> {
-        if !self.registry_file().exists() {
-            return Ok(false);
-        }
-
-        let _lock = self.acquire_exclusive_lock()?;
-        let mut removed = false;
-        let records = self
-            .list()?
-            .into_iter()
-            .filter(|record| {
-                let keep = record.session_id != session_id;
-                if !keep {
-                    removed = true;
-                }
-                keep
-            })
-            .collect::<Vec<_>>();
-
-        if removed {
-            self.write_records(records)?;
-        }
-        Ok(removed)
+        super::sqlite::remove(self, session_id)
     }
 
     /// Runs the remove async operation for this subsystem.
@@ -266,12 +193,9 @@ impl SessionRegistry {
         Ok(SessionRegistryLock { _file: file })
     }
 
-    /// Runs the write records operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn write_records(&self, records: Vec<SessionRecord>) -> Result<()> {
+    /// Writes the legacy flat registry for focused migration tests.
+    #[cfg(test)]
+    pub(super) fn write_legacy_records_for_tests(&self, records: Vec<SessionRecord>) -> Result<()> {
         ensure_private_socket_directory(&self.root, self.owner_uid)?;
         let path = self.registry_file();
         let temporary = self.root.join(format!(

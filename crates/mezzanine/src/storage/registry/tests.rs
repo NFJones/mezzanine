@@ -97,12 +97,16 @@ fn upsert_round_trips_registry_records() {
     let records = registry.list().unwrap();
     assert_eq!(records, vec![record("$1")]);
     assert_eq!(
-        fs::metadata(registry.registry_file())
+        fs::metadata(super::sqlite::database_path(&registry))
             .unwrap()
             .permissions()
             .mode()
             & 0o777,
         0o600
+    );
+    assert!(
+        !registry.registry_file().exists(),
+        "a fresh registry must not create the legacy flat file"
     );
 
     let _ = fs::remove_dir_all(root);
@@ -127,16 +131,60 @@ async fn async_upsert_and_remove_round_trip_registry_records() {
     let records = registry.list_async().await.unwrap();
     assert_eq!(records, vec![updated, record("$2")]);
     assert_eq!(
-        fs::metadata(registry.registry_file())
+        fs::metadata(super::sqlite::database_path(&registry))
             .unwrap()
             .permissions()
             .mode()
             & 0o777,
         0o600
     );
+    assert!(
+        !registry.registry_file().exists(),
+        "a fresh registry must not create the legacy flat file"
+    );
     assert!(registry.remove_async("$1").await.unwrap());
     assert_eq!(registry.list_async().await.unwrap(), vec![record("$2")]);
 
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies that registry read-modify-write updates hold an interprocess file
+/// Verifies the one-time legacy import keeps reads working without a database.
+///
+/// A reader must never create the store, the flat file must survive the
+/// migration for rollback, and re-running mutations must not import the same
+/// rows twice.
+#[test]
+fn registry_imports_the_legacy_flat_file_once() {
+    let root = test_root("sqlite-import");
+    let _ = fs::remove_dir_all(&root);
+    let registry = SessionRegistry::new(root.clone(), effective_uid_for_tests());
+    registry
+        .write_legacy_records_for_tests(vec![record("$1"), record("$2")])
+        .unwrap();
+
+    assert_eq!(registry.list().unwrap(), vec![record("$1"), record("$2")]);
+    assert!(
+        !super::sqlite::database_path(&registry).exists(),
+        "a read must not create the registry database"
+    );
+
+    registry.upsert(record("$3")).unwrap();
+    assert!(super::sqlite::database_path(&registry).exists());
+    assert!(
+        registry.registry_file().exists(),
+        "the legacy flat file is retained so a rollback can still read it"
+    );
+    assert_eq!(
+        registry.list().unwrap(),
+        vec![record("$1"), record("$2"), record("$3")]
+    );
+
+    registry.upsert(record("$4")).unwrap();
+    assert_eq!(
+        registry.list().unwrap(),
+        vec![record("$1"), record("$2"), record("$3"), record("$4")]
+    );
     let _ = fs::remove_dir_all(root);
 }
 

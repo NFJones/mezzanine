@@ -159,6 +159,7 @@ impl SessionRecord {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub(super) fn encode(&self) -> Result<String> {
         self.validate()?;
         let socket_path = self
@@ -411,6 +412,7 @@ pub(super) fn validate_non_empty(field: &str, value: &str) -> Result<()> {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 fn encode_field(value: &str) -> String {
     let mut encoded = String::new();
     for ch in value.chars() {
