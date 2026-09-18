@@ -4351,8 +4351,24 @@ impl RuntimeSessionService {
     }
 
     /// Prevents queued presentation work from exposing provisional divider geometry.
+    #[cfg(test)]
     pub(crate) fn reconcile_pending_divider_render_effects(
         &mut self,
+        side_effects: &mut Vec<RuntimeSideEffect>,
+    ) {
+        if self.divider_render_effects_are_superseded(side_effects) {
+            self.commit_pending_divider_render_effects(side_effects);
+            return;
+        }
+        self.filter_pending_divider_render_effects(side_effects);
+    }
+
+    /// Drops effects hidden by a divider gesture from one enqueue batch.
+    ///
+    /// Only the caller's batch is transformed and no pending gesture state is
+    /// consumed, so an admission path may run this before its capacity verdict.
+    pub(crate) fn filter_pending_divider_render_effects(
+        &self,
         side_effects: &mut Vec<RuntimeSideEffect>,
     ) {
         let window_ids = self.presentation.deferred_pane_content_window_ids();
@@ -4378,14 +4394,6 @@ impl RuntimeSessionService {
                 _ => None,
             })
             .collect::<std::collections::HashSet<_>>();
-        if self.divider_render_effects_are_superseded(side_effects) {
-            self.presentation.clear_mouse_resize_drag_state();
-            side_effects.extend(
-                self.presentation
-                    .take_agent_presentation_resize_dispatch_effects(),
-            );
-            return;
-        }
         side_effects.retain(|effect| match effect {
             RuntimeSideEffect::RenderClient {
                 reason: RenderInvalidationReason::ResizeDrag,
@@ -4399,6 +4407,41 @@ impl RuntimeSessionService {
             }
             _ => true,
         });
+    }
+
+    /// Consumes pending divider gesture state into one admitted enqueue batch.
+    ///
+    /// This clears the mouse resize-drag state and takes the agent presentation
+    /// resize dispatches, so callers run it only on the path that commits the
+    /// enqueue: a rejected enqueue must leave that work recoverable.
+    pub(crate) fn commit_pending_divider_render_effects(
+        &mut self,
+        side_effects: &mut Vec<RuntimeSideEffect>,
+    ) {
+        if self
+            .presentation
+            .deferred_pane_content_window_ids()
+            .is_empty()
+        {
+            return;
+        }
+        self.presentation.clear_mouse_resize_drag_state();
+        side_effects.extend(
+            self.presentation
+                .take_agent_presentation_resize_dispatch_effects(),
+        );
+    }
+
+    /// Reports whether one enqueue batch supersedes the pending divider render.
+    ///
+    /// The probe is side-effect free: an admission path asks this before its
+    /// capacity verdict to decide whether a later commit would consume pending
+    /// gesture state.
+    pub(crate) fn pending_divider_render_effects_are_superseded(
+        &self,
+        side_effects: &[RuntimeSideEffect],
+    ) -> bool {
+        self.divider_render_effects_are_superseded(side_effects)
     }
 
     /// Reports whether one enqueue batch supersedes the pending divider render.

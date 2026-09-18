@@ -154,11 +154,27 @@ impl AsyncRuntimeSessionActor {
         &mut self,
         mut side_effects: Vec<RuntimeSideEffect>,
     ) -> Result<()> {
-        self.service
-            .reconcile_pending_divider_render_effects(&mut side_effects);
+        // Divider reconciliation consumes pending divider gesture state in its
+        // superseded branch, and a rejected enqueue must not lose that work, so
+        // only the non-destructive filter runs before the capacity verdict. The
+        // matching commit runs on the admitted path below, where the effects it
+        // merges are admitted outside the capacity budget exactly like the
+        // compensation redraws.
+        let divider_superseded = self
+            .service
+            .pending_divider_render_effects_are_superseded(&side_effects);
+        if !divider_superseded {
+            self.service
+                .filter_pending_divider_render_effects(&mut side_effects);
+        }
         let mut queued_side_effects = self.side_effects.drain(..).collect::<Vec<_>>();
-        self.service
-            .reconcile_pending_divider_render_effects(&mut queued_side_effects);
+        let queued_divider_superseded = self
+            .service
+            .pending_divider_render_effects_are_superseded(&queued_side_effects);
+        if !queued_divider_superseded {
+            self.service
+                .filter_pending_divider_render_effects(&mut queued_side_effects);
+        }
         self.side_effects.extend(queued_side_effects);
         let terminal_config_invalidated = side_effects
             .iter()
@@ -263,6 +279,18 @@ impl AsyncRuntimeSessionActor {
                 runtime_side_effect_kind_summary(self.side_effects.iter()),
                 runtime_side_effect_kind_summary(side_effects.iter())
             )));
+        }
+        // The enqueue is admitted: consume the pending divider gesture state the
+        // probes above deliberately left untouched.
+        if divider_superseded {
+            self.service
+                .commit_pending_divider_render_effects(&mut side_effects);
+        }
+        if queued_divider_superseded {
+            let mut queued_committed = self.side_effects.drain(..).collect::<Vec<_>>();
+            self.service
+                .commit_pending_divider_render_effects(&mut queued_committed);
+            self.side_effects.extend(queued_committed);
         }
         if terminal_config_invalidated {
             self.terminal_config_generation = self.terminal_config_generation.wrapping_add(1);
