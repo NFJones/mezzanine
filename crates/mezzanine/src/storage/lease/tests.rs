@@ -818,3 +818,111 @@ fn lease_pending_writes_cover_only_changed_rows() {
     );
     let _ = fs::remove_dir_all(root);
 }
+
+/// The removed four-megabyte document cap no longer turns a large lease set
+/// into an error: twenty thousand stored leases still load, expire, and roll
+/// their boot generation.
+#[test]
+fn lease_database_grows_past_the_removed_document_cap() {
+    let root = test_root("uncapped");
+    let repository = RemoteSessionLeaseRepository::new(root.clone());
+    repository
+        .reserve_pending(reservation(
+            "lease-seed",
+            "$seed",
+            "device-1",
+            "create-seed",
+            "fingerprint-seed",
+        ))
+        .unwrap();
+    let seed = repository.get("lease-seed").unwrap().unwrap();
+    let before = super::repository::LeaseDatabase {
+        version: 1,
+        boot_generation: repository.boot_generation().unwrap(),
+        leases: repository.list().unwrap(),
+        snapshot_cleanup_candidates: Vec::new(),
+    };
+    let leases = (0..20_000)
+        .map(|index| {
+            let mut lease = seed.clone();
+            lease.lease_id = format!("lease-cap-{index:05}");
+            lease.session_id = format!("$cap-{index:05}");
+            lease.idempotency_key = format!("create-cap-{index:05}");
+            lease.creation_fingerprint = format!("fingerprint-cap-{index:05}");
+            // The reservation instant is 10, so the expiry must not precede it
+            // and must still be due when the sweep runs at 100.
+            lease.expires_at_unix_seconds = Some(11);
+            lease
+        })
+        .collect::<Vec<_>>();
+    super::sqlite::write_database(
+        &root,
+        &before,
+        &super::repository::LeaseDatabase {
+            version: 1,
+            boot_generation: seed.boot_generation,
+            leases,
+            snapshot_cleanup_candidates: Vec::new(),
+        },
+    )
+    .unwrap();
+
+    let mut stored_bytes = fs::metadata(root.join("session-reservations.sqlite"))
+        .unwrap()
+        .len();
+    if let Ok(wal) = fs::metadata(root.join("session-reservations.sqlite-wal")) {
+        stored_bytes = stored_bytes.saturating_add(wal.len());
+    }
+    assert!(
+        stored_bytes > 4 * 1024 * 1024,
+        "the fixture must exceed the removed four-megabyte document cap"
+    );
+
+    let expired = repository.expire_due(100).unwrap();
+    assert_eq!(expired.len(), 20_000);
+    assert_eq!(repository.list().unwrap().len(), 20_000);
+    assert_eq!(repository.advance_boot_generation(200).unwrap(), 1);
+    assert_eq!(
+        repository.get("lease-cap-19999").unwrap().unwrap().state,
+        RemoteSessionLeaseState::Revoked
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A store read sees committed rows and never blocks on an uncommitted writer,
+/// which is what lets a short-lived read-only command inspect the store while
+/// the daemon holds a write transaction.
+#[test]
+fn lease_reads_never_block_on_an_uncommitted_writer() {
+    let root = test_root("wal-reader");
+    let repository = RemoteSessionLeaseRepository::new(root.clone());
+    repository
+        .reserve_pending(reservation(
+            "lease-committed",
+            "$1",
+            "device-1",
+            "create-committed",
+            "fingerprint-committed",
+        ))
+        .unwrap();
+
+    let connection = rusqlite::Connection::open(root.join("session-reservations.sqlite")).unwrap();
+    connection
+        .execute_batch("BEGIN IMMEDIATE; DELETE FROM leases;")
+        .unwrap();
+    let read = repository.list().unwrap();
+    assert_eq!(
+        read.len(),
+        1,
+        "an uncommitted delete must stay invisible to a reader"
+    );
+    assert!(
+        repository.export_tsv_read_only().unwrap().is_some(),
+        "an export must read through the same uncommitted writer"
+    );
+    connection.execute_batch("ROLLBACK").unwrap();
+    drop(connection);
+
+    assert_eq!(repository.list().unwrap().len(), 1);
+    let _ = fs::remove_dir_all(root);
+}

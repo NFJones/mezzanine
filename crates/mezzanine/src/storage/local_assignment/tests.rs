@@ -380,6 +380,43 @@ fn assignment_database_grows_past_the_removed_document_cap() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A store read sees committed rows and never blocks on an uncommitted writer,
+/// which is what lets a short-lived read-only command inspect the store while
+/// the daemon holds a write transaction.
+#[test]
+fn assignment_reads_never_block_on_an_uncommitted_writer() {
+    let root = test_root("wal-reader");
+    let repository = LocalSessionAssignmentRepository::new(root.clone());
+    repository
+        .reserve_pending(LocalAssignmentReservationRequest {
+            session_id: "$committed".to_string(),
+            name: "committed".to_string(),
+            default_for_host: false,
+            now_unix_seconds: 10,
+        })
+        .unwrap();
+
+    let connection = rusqlite::Connection::open(root.join("assignments.sqlite")).unwrap();
+    connection
+        .execute_batch("BEGIN IMMEDIATE; DELETE FROM assignments;")
+        .unwrap();
+    let read = repository.list().unwrap();
+    assert_eq!(
+        read.len(),
+        1,
+        "an uncommitted delete must stay invisible to a reader"
+    );
+    assert!(
+        repository.export_tsv_read_only().unwrap().is_some(),
+        "an export must read through the same uncommitted writer"
+    );
+    connection.execute_batch("ROLLBACK").unwrap();
+    drop(connection);
+
+    assert_eq!(repository.list().unwrap().len(), 1);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// The key columns are a checked mirror of the payload: a row whose state
 /// column disagrees with the encoded record fails closed instead of being read
 /// as trusted data.
