@@ -2246,6 +2246,10 @@ fn snapshot_repository_updates_the_latest_index_from_metadata_rows() {
         fs::Permissions::from_mode(0o000),
     )
     .unwrap();
+    // A malformed extra manifest makes the recovery fallback observable: an
+    // implementation that still parsed the previous winner would fail that parse
+    // and then fail this rebuild, while the metadata-row comparison succeeds.
+    fs::write(root.join("garbage.manifest"), "malformed").unwrap();
     let mut new = manifest();
     new.state.id = "snap-new".to_string();
     new.state.created_at = "2026-04-30T00:00:01Z".to_string();
@@ -2260,6 +2264,107 @@ fn snapshot_repository_updates_the_latest_index_from_metadata_rows() {
     assert_eq!(
         latest_index.latest_by_session.get("$1").map(String::as_str),
         Some("snap-new")
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a latest lookup repairs a winners table that lags a crashed delete
+/// instead of failing on the deleted snapshot.
+///
+/// The delete path removes the manifest, the payload, and the metadata row
+/// before it rebuilds the winners. A crash between those steps leaves the
+/// winners naming a snapshot whose row and manifest are already gone - a state
+/// the listing cannot see, because the surviving ids and files agree - so the
+/// lookup itself has to rebuild the index and answer with the survivor.
+#[test]
+fn snapshot_repository_repairs_a_stale_winner_on_latest_lookup() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-snapshot-repo-stale-winner-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let repo = SnapshotRepository::new(root.clone());
+    let mut old = manifest();
+    old.state.id = "snap-old".to_string();
+    old.state.created_at = "2026-04-30T00:00:00Z".to_string();
+    old.state.storage_ref = "snap-old.payload".to_string();
+    let mut new = manifest();
+    new.state.id = "snap-new".to_string();
+    new.state.created_at = "2026-04-30T00:00:01Z".to_string();
+    new.state.storage_ref = "snap-new.payload".to_string();
+    repo.write(&old).unwrap();
+    repo.write(&new).unwrap();
+
+    fs::remove_file(root.join("snap-new.manifest")).unwrap();
+    super::sqlite::remove_metadata_row(&root, "snap-new").unwrap();
+    let winners = super::sqlite::read(&root)
+        .unwrap()
+        .expect("the winners table survives the crash window");
+    assert_eq!(
+        winners.latest_all.as_deref(),
+        Some("snap-new"),
+        "the fixture leaves the winners naming the deleted snapshot"
+    );
+
+    assert_eq!(repo.latest(None).unwrap().unwrap().id, "snap-old");
+    assert_eq!(repo.latest(Some("$1")).unwrap().unwrap().id, "snap-old");
+    assert_eq!(
+        super::sqlite::read(&root)
+            .unwrap()
+            .unwrap()
+            .latest_all
+            .as_deref(),
+        Some("snap-old"),
+        "the repaired winners table no longer names the deleted snapshot"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies one unpublished manifest and one stale row cannot cancel out and
+/// leave the listing stale.
+#[test]
+fn snapshot_repository_rebuilds_when_ids_disagree_even_though_counts_match() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-snapshot-repo-index-offset-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let repo = SnapshotRepository::new(root.clone());
+    let mut first = manifest();
+    first.state.storage_ref = "snap-1.payload".to_string();
+    let mut second = manifest();
+    second.state.id = "snap-2".to_string();
+    second.state.created_at = "2026-04-30T00:00:01Z".to_string();
+    second.state.storage_ref = "snap-2.payload".to_string();
+    repo.write(&first).unwrap();
+    repo.write(&second).unwrap();
+
+    // Two manifests and two rows, but neither pair matches.
+    fs::remove_file(root.join("snap-2.manifest")).unwrap();
+    let mut third = manifest();
+    third.state.id = "snap-3".to_string();
+    third.state.created_at = "2026-04-30T00:00:02Z".to_string();
+    third.state.storage_ref = "snap-3.payload".to_string();
+    third.write_to_dir(&root).unwrap();
+
+    let listed = repo.list().unwrap();
+
+    assert_eq!(
+        listed
+            .iter()
+            .map(|state| state.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["snap-1", "snap-3"],
+        "the repair drops the stale row and indexes the unpublished manifest"
+    );
+    assert_eq!(
+        super::sqlite::read_metadata(&root)
+            .unwrap()
+            .unwrap()
+            .iter()
+            .map(|state| state.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["snap-1", "snap-3"]
     );
     let _ = fs::remove_dir_all(root);
 }

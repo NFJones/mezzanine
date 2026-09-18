@@ -4,7 +4,7 @@
 //! deletion, and idempotent creation from live sessions.
 
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -165,17 +165,16 @@ impl SnapshotRepository {
     /// Lists every published snapshot from the metadata index.
     ///
     /// The index answers the call without opening a manifest. It is a derived
-    /// cache, so the listing rebuilds it from the manifests whenever the number
-    /// of indexed rows and the number of manifest files disagree: a first run
-    /// after this migration, a deleted database, or an interrupted write or
-    /// delete heals on the next listing instead of hiding or inventing a
-    /// snapshot.
+    /// cache, so the listing rebuilds it from the manifests whenever the indexed
+    /// snapshot ids and the manifest files disagree: a first run after this
+    /// migration, a deleted database, or an interrupted write or delete heals on
+    /// the next listing instead of hiding or inventing a snapshot.
     pub fn list(&self) -> Result<Vec<SnapshotState>> {
         if !self.root.exists() {
             return Ok(Vec::new());
         }
         if let Some(states) = super::sqlite::read_metadata(&self.root)?
-            && Self::metadata_covers_manifests(&self.root, states.len())?
+            && Self::metadata_covers_manifests(&self.root, &states)?
         {
             return Ok(states);
         }
@@ -191,7 +190,7 @@ impl SnapshotRepository {
         let indexed =
             spawn_blocking_snapshot_index(move || super::sqlite::read_metadata(&root)).await?;
         if let Some(states) = indexed
-            && Self::metadata_covers_manifests_async(&self.root, states.len()).await?
+            && Self::metadata_covers_manifests_async(&self.root, &states).await?
         {
             return Ok(states);
         }
@@ -208,43 +207,57 @@ impl SnapshotRepository {
         super::sqlite::export_tsv_read_only(&self.root)
     }
 
-    /// Reports whether the metadata index covers every manifest on disk.
+    /// Reports whether the metadata index covers exactly the manifests on disk.
     ///
     /// The check reads directory entries only: it never opens a manifest, so a
     /// listing stays a metadata query while still noticing a manifest that a
     /// crashed writer published without its row, or a row whose manifest is
-    /// already gone. Both cases rebuild the index from the manifests.
-    fn metadata_covers_manifests(root: &Path, indexed_rows: usize) -> Result<bool> {
-        let mut manifests = 0;
+    /// already gone. It compares the snapshot ids carried by the file names
+    /// rather than counts, so one unpublished manifest and one stale row cannot
+    /// cancel out and leave the index looking current.
+    fn metadata_covers_manifests(root: &Path, states: &[SnapshotState]) -> Result<bool> {
+        let mut indexed = BTreeSet::new();
+        for state in states {
+            indexed.insert(state.id.as_str());
+        }
         for entry in fs::read_dir(root)? {
-            let entry = entry?;
-            if entry
-                .path()
-                .extension()
-                .and_then(|extension| extension.to_str())
-                == Some("manifest")
-            {
-                manifests += 1;
+            let path = entry?.path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("manifest") {
+                continue;
+            }
+            let Some(id) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                return Ok(false);
+            };
+            if !indexed.remove(id) {
+                return Ok(false);
             }
         }
-        Ok(manifests == indexed_rows)
+        Ok(indexed.is_empty())
     }
 
     /// Async counterpart to [`Self::metadata_covers_manifests`].
-    async fn metadata_covers_manifests_async(root: &Path, indexed_rows: usize) -> Result<bool> {
+    async fn metadata_covers_manifests_async(
+        root: &Path,
+        states: &[SnapshotState],
+    ) -> Result<bool> {
+        let mut indexed = BTreeSet::new();
+        for state in states {
+            indexed.insert(state.id.as_str());
+        }
         let mut entries = tokio::fs::read_dir(root).await?;
-        let mut manifests = 0;
         while let Some(entry) = entries.next_entry().await? {
-            if entry
-                .path()
-                .extension()
-                .and_then(|extension| extension.to_str())
-                == Some("manifest")
-            {
-                manifests += 1;
+            let path = entry.path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("manifest") {
+                continue;
+            }
+            let Some(id) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                return Ok(false);
+            };
+            if !indexed.remove(id) {
+                return Ok(false);
             }
         }
-        Ok(manifests == indexed_rows)
+        Ok(indexed.is_empty())
     }
 
     /// Rebuilds the metadata index from every manifest and returns the listing.
@@ -643,8 +656,12 @@ impl SnapshotRepository {
 
     /// Returns the snapshot selected by the persisted latest index, when present.
     ///
-    /// The helper keeps latest lookups on the small indexed winners instead of
-    /// requiring callers to enumerate every manifest on hot paths.
+    /// The helper answers from the indexed winners and their metadata rows
+    /// instead of parsing the winner manifest. The winners table is derived too,
+    /// so a winner whose manifest or row is already gone rebuilds the index once
+    /// and retries: a delete that crashed between removing the snapshot and
+    /// rebuilding the winners heals on the next lookup instead of reporting a
+    /// snapshot that no longer exists.
     pub(crate) fn latest_from_index(
         &self,
         session_id: Option<&str>,
@@ -652,9 +669,18 @@ impl SnapshotRepository {
         let Some(snapshot_id) = self.read_latest_index(session_id)? else {
             return Ok(None);
         };
-        let manifest = self.inspect(&snapshot_id)?;
-        if session_id.is_none_or(|session_id| manifest.state.session_id == session_id) {
-            Ok(Some(manifest.state))
+        let state = match self.indexed_winner_state(&snapshot_id) {
+            Ok(state) => state,
+            Err(_) => {
+                self.rebuild_latest_indexes()?;
+                let Some(snapshot_id) = self.read_latest_index(session_id)? else {
+                    return Ok(None);
+                };
+                self.indexed_winner_state(&snapshot_id)?
+            }
+        };
+        if session_id.is_none_or(|session_id| state.session_id == session_id) {
+            Ok(Some(state))
         } else {
             Ok(None)
         }

@@ -14,6 +14,13 @@
 //! database written by a newer schema version is rejected by the shared storage
 //! helper with its actionable downgrade error rather than discarded, so a
 //! downgrade cannot mix writers.
+//!
+//! Replacing an older database is that store's migration, not a silent open at
+//! the old version: the file is removed, the current schema is created, and
+//! every row is regenerated from the manifests, so no older table is ever read
+//! or written. The replacement is safe for a concurrent handle because nothing
+//! held in the database is authoritative - a writer racing it can lose only rows
+//! the manifests can reproduce.
 
 use super::super::shared_sqlite::{
     SharedSchemaState, open_shared_database, open_shared_database_read_only, schema_version,
@@ -138,11 +145,15 @@ fn open(directory: &Path) -> Result<Connection> {
     if state == SharedSchemaState::Fresh {
         // The composite index orders one session's snapshots by creation time
         // and id, which is the ordering latest selection and a retention scan
-        // read; listing itself uses the primary key order.
-        let transaction = connection.transaction().map_err(database_error)?;
+        // read; listing itself uses the primary key order. The DDL is idempotent
+        // and the transaction immediate because two first opens can both observe
+        // a fresh database.
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(database_error)?;
         transaction
             .execute_batch(
-                "CREATE TABLE latest_snapshot (\n                    scope TEXT PRIMARY KEY,\n                    snapshot_id TEXT NOT NULL\n                );\n                CREATE TABLE snapshot_metadata (\n                    snapshot_id TEXT PRIMARY KEY,\n                    version INTEGER NOT NULL,\n                    session_id TEXT NOT NULL,\n                    name TEXT,\n                    created_at TEXT NOT NULL,\n                    kind TEXT NOT NULL,\n                    restorable INTEGER NOT NULL,\n                    window_count INTEGER NOT NULL,\n                    pane_count INTEGER NOT NULL,\n                    limitations TEXT NOT NULL,\n                    storage_ref TEXT NOT NULL\n                );\n                CREATE INDEX snapshot_metadata_session_created ON snapshot_metadata (session_id, created_at DESC, snapshot_id DESC);",
+                "CREATE TABLE IF NOT EXISTS latest_snapshot (\n                    scope TEXT PRIMARY KEY,\n                    snapshot_id TEXT NOT NULL\n                );\n                CREATE TABLE IF NOT EXISTS snapshot_metadata (\n                    snapshot_id TEXT PRIMARY KEY,\n                    version INTEGER NOT NULL,\n                    session_id TEXT NOT NULL,\n                    name TEXT,\n                    created_at TEXT NOT NULL,\n                    kind TEXT NOT NULL,\n                    restorable INTEGER NOT NULL,\n                    window_count INTEGER NOT NULL,\n                    pane_count INTEGER NOT NULL,\n                    limitations TEXT NOT NULL,\n                    storage_ref TEXT NOT NULL\n                );\n                CREATE INDEX IF NOT EXISTS snapshot_metadata_session_created ON snapshot_metadata (session_id, created_at DESC, snapshot_id DESC);",
             )
             .map_err(database_error)?;
         set_schema_version(&transaction, SNAPSHOT_SCHEMA_VERSION)?;
