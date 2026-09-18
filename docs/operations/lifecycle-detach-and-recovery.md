@@ -93,6 +93,14 @@ snapshot files as sensitive metadata: inspect their paths and titles before
 sharing, copying, or backing them up outside your normal private storage
 boundary.
 
+The snapshot directory also holds `snapshots.sqlite`, a derived index the
+daemon and the snapshot CLI keep for listing, latest selection, and deletion.
+It can be deleted at any time: the manifests remain the source of truth, so the
+next read rebuilds the index from them, and a database left by an older build
+is replaced the same way. `mez storage export snapshots` prints the latest
+winners in the retired `latest.index` shape without creating or migrating the
+database.
+
 Use `mez snapshot inspect <snapshot-id>` to inspect saved snapshot metadata.
 `mez snapshot resume <snapshot-id>` reconstructs a saved session model without
 starting a daemon; add `--serve` to start it as a live foreground daemon.
