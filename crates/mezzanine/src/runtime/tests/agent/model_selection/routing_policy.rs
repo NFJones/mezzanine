@@ -2364,6 +2364,10 @@ fn runtime_config_apply_clears_generated_marker_for_configured_names() {
 /// The sized-child definition is derived from the base profile definition at spawn
 /// time, so mutating it between two spawns gives two children that share model,
 /// reasoning, and latency but differ in one effective provider option.
+///
+/// Only the definition map is mutated: the sizing spawn derives the child definition
+/// from it, and a restore rebuilds its definition from the captured selection, so the
+/// materialized base profile entry is deliberately left untouched.
 fn set_sized_base_option(service: &mut RuntimeSessionService, value: &str) {
     service
         .integration
@@ -2504,6 +2508,12 @@ fn runtime_restore_order_preserves_sibling_model_identities() {
         })
         .map(|event| event.payload.clone())
         .collect::<Vec<_>>();
+    // Both captured names are free in this fixture, so the captured-name authority
+    // contract is pinned directly: no rename and no identity degradation at all.
+    assert!(
+        degradations.is_empty(),
+        "a restore whose captured names are free must not report an identity change: {degradations:?}"
+    );
     for (pane_id, restored_name, captured_name) in [
         (
             first_pane_id.as_str(),
@@ -2516,11 +2526,10 @@ fn runtime_restore_order_preserves_sibling_model_identities() {
             second_name.as_str(),
         ),
     ] {
-        assert!(
-            restored_name == captured_name
-                || degradations.iter().any(|payload| payload.contains(pane_id)),
-            "a restore that had to change the name must report it: pane={pane_id} \
-             captured={captured_name} restored={restored_name} degradations={degradations:?}"
+        assert_eq!(
+            restored_name, captured_name,
+            "the captured name is authoritative while it is free: pane={pane_id} \
+             restored={restored_name} captured={captured_name}"
         );
     }
 }
