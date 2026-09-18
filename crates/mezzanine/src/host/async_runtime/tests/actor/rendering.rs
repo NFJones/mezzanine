@@ -83,7 +83,8 @@ async fn async_actor_pumps_deferred_record_browser_refresh_for_applied_events() 
     let mut service = test_service();
     // One claim is queued, exactly as a settled generated title queues it, and the
     // runtime-event path has to drain it.
-    service.queue_record_browser_refresh_for_tests("saved-sessions");
+    service
+        .queue_record_browser_refresh_for_tests(crate::runtime::SAVED_SESSION_OVERLAY_REFRESH_KEY);
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();

@@ -1,5 +1,6 @@
 //! Regression coverage for the deferred record-browser refresh lane.
 
+use crate::runtime::RuntimeRecordBrowserRefreshOutcome;
 use crate::runtime::RuntimeSessionService;
 use crate::runtime::service_state::RuntimeRecordBrowserOverlaySource;
 use crate::runtime::tests::{temp_root, test_runtime_service};
@@ -89,5 +90,18 @@ fn overlay_refresh_installs_current_generation_and_drops_superseded_pages() {
             .complete_record_browser_refresh(&work, stale_outcome)
             .unwrap(),
         "a superseded generation must not replace the page its successor owns"
+    );
+
+    // The same guard covers failures: a superseded rebuild that fails must not
+    // stamp an error onto the page its successor owns.
+    let failed = RuntimeRecordBrowserRefreshOutcome::Failed {
+        message: "superseded rebuild failed".to_string(),
+        kind: crate::error::MezErrorKind::InvalidState,
+    };
+    assert!(
+        !service
+            .complete_record_browser_refresh(&work, failed)
+            .unwrap(),
+        "a superseded failure must not mark the successor page"
     );
 }

@@ -399,9 +399,7 @@ impl RuntimeSessionService {
     /// runs in the overlay refresh lane, because the row read is the same store
     /// walk `/resume` opens with and does not belong inside the actor request.
     pub(crate) fn refresh_saved_session_overlay_after_title_change(&mut self) -> Result<()> {
-        self.begin_record_browser_refresh_claim(
-            crate::runtime::commands::SAVED_SESSION_OVERLAY_REFRESH_KEY,
-        );
+        self.begin_record_browser_refresh_claim(crate::runtime::SAVED_SESSION_OVERLAY_REFRESH_KEY);
         Ok(())
     }
 

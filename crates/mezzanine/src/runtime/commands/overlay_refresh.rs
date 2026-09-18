@@ -2,7 +2,7 @@
 //!
 //! An overlay refresh re-reads a store before the page can be shown. Reading it
 //! inside the actor request parks every other client message behind a bounded
-//! store wait, so a refresh instead claims a per-pane generation, queues one
+//! store wait, so a refresh instead claims a per-key generation, queues one
 //! dispatch, and lets a worker rebuild the page off the actor. The completion
 //! installs the rebuilt page only while the overlay still shows the same source
 //! and no newer claim has been made, which keeps overlay state, selection, and

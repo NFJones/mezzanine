@@ -1531,7 +1531,8 @@ impl AsyncRuntimeSessionActor {
                     // generated title queues one saved-session refresh - and the
                     // control-input and command arms are the only other drains, so
                     // an otherwise idle session would keep the stale page.
-                    // Best effort: a queue error surfaces on the next drain.
+                    // Best effort: the dispatches are already taken, so a failed
+                    // enqueue drops this rebuild instead of retrying it.
                     let _ = self.queue_pending_deferred_agent_command_side_effects();
                 }
                 let _ = reply.send(result);

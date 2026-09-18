@@ -400,6 +400,7 @@ pub(crate) use agent_state::{
     RuntimeNativeShellDispatch, RuntimeNativeShellFailure, RuntimeNativeShellOutcome,
     RuntimeNativeShellProgress, RuntimeNativeShellWorkerProgress,
 };
+pub(crate) use commands::SAVED_SESSION_OVERLAY_REFRESH_KEY;
 pub(crate) use commands::{
     RuntimeAgentPromptProviderInfoRefresh, RuntimeProviderInfoRefreshOutcome,
     RuntimeProviderInfoRefreshWork, fetch_raw_provider_model_catalog,

@@ -1459,7 +1459,7 @@ impl RuntimePresentationComponent {
         self.pending_deferred_agent_commands.push(dispatch);
     }
 
-    /// Bumps one pane's refresh generation and returns the new claim value.
+    /// Bumps one refresh key's generation and returns the new claim value.
     ///
     /// Each claimed refresh carries the generation it started from, so a page
     /// rebuilt for a superseded source is dropped when it settles instead of
@@ -1473,7 +1473,7 @@ impl RuntimePresentationComponent {
         *generation
     }
 
-    /// Returns one pane's current refresh generation.
+    /// Returns one refresh key's current generation.
     pub(crate) fn record_browser_refresh_generation(&self, refresh_key: &str) -> u64 {
         self.record_browser_refresh_generations
             .get(refresh_key)
@@ -1481,10 +1481,10 @@ impl RuntimePresentationComponent {
             .unwrap_or(0)
     }
 
-    /// Queues one deferred record-browser refresh, coalescing per pane.
+    /// Queues one deferred record-browser refresh, coalescing per key.
     ///
     /// Rapid paging or typing claims one refresh after another; only the newest
-    /// claim for a pane stays queued, so a burst of keystrokes costs one worker
+    /// claim for a key stays queued, so a burst of keystrokes costs one worker
     /// item instead of one per keystroke.
     pub(crate) fn push_pending_record_browser_refresh(
         &mut self,
