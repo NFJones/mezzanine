@@ -5195,6 +5195,17 @@ establish a fresh comparison baseline without changing durable history or adding
 warning text to model context. Content-free warnings MUST be observable in pane
 output and diagnostics; warning presentation failure MUST NOT block execution.
 Validation of the current request and durable context remains mandatory.
+Operational request controls that change provider behaviour without changing
+model-visible content or the provider-side cache key - `reasoning`,
+`service_tier`, `text.verbosity`, provider-native dialect spellings of those
+controls (for example DeepSeek `thinking` and Anthropic `output_config.effort`),
+and sampling or output caps that providers do not fold into cached prefix
+material (`temperature`, `stop`, `max_tokens`) - MUST NOT take part in
+prompt-cache identity material: a change to only these controls MUST NOT rotate
+the local epoch, record a `Changed` transition, or be reported as a
+request-control continuity divergence, while the emitted body keeps carrying
+them as wire parameters. New operational controls MUST be added to that
+exclusion set rather than silently becoming identity material.
 Diagnostics MUST report complete-wire append
 continuity as the provider-prefix result. A local projection MAY be retained as
 a secondary diagnostic but MUST NOT be presented as proof of provider cache

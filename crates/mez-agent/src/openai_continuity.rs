@@ -23,7 +23,8 @@ pub struct OpenAiRequestMessageDigest {
 pub struct OpenAiRequestContinuitySnapshot {
     /// Canonical serialized request byte count.
     pub request_bytes: usize,
-    /// SHA-256 of all provider-visible cache-affecting request material.
+    /// SHA-256 of the complete provider-visible request body, including the
+    /// operational controls that are deliberately excluded from cache identity.
     pub request_sha256: String,
     /// Canonical serialized byte count of the effective OpenAI `input` array.
     pub input_bytes: usize,

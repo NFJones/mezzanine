@@ -153,13 +153,21 @@ fn provider_request_epoch(
 /// New operational controls belong in this list instead of silently becoming
 /// identity material.
 const CACHE_IDENTITY_EXCLUDED_CONTROL_PATHS: &[&[&str]] = &[
+    // The OpenAI Responses reasoning object: every member today is operational.
     &["reasoning"],
-    &["service_tier"],
-    &["text", "verbosity"],
+    // Provider-native reasoning spellings, including DeepSeek's thinking object.
+    &["thinking"],
     &["output_config", "effort"],
     &["output_config", "verbosity"],
     &["reasoning_effort"],
+    &["service_tier"],
+    &["text", "verbosity"],
     &["verbosity"],
+    // Sampling and output caps: they change generation, not one byte of cached
+    // prefix material, and the OpenAI Responses body never emits them.
+    &["temperature"],
+    &["stop"],
+    &["max_tokens"],
 ];
 
 /// Returns one request-control shape reduced to the fields that define
@@ -680,11 +688,15 @@ mod tests {
             "model": "gpt-test",
             "stream": true,
             "reasoning": { "effort": "high" },
+            "thinking": { "type": "enabled" },
             "service_tier": "priority",
             "text": { "format": { "type": "json_object" }, "verbosity": "low" },
             "output_config": { "effort": "high" },
             "reasoning_effort": "high",
             "verbosity": "low",
+            "temperature": 0.9,
+            "stop": ["END"],
+            "max_tokens": 4096,
         });
         let projection = openai_cache_identity_control_projection(&controls);
         assert_eq!(
@@ -770,6 +782,18 @@ mod tests {
         assert!(continuity.cache_envelope_unchanged, "{continuity:#?}");
         assert!(continuity.request_prefix_append_only, "{continuity:#?}");
         assert_eq!(continuity.category, "identical", "{continuity:#?}");
+        assert_ne!(
+            medium_diagnostics.continuity_snapshot.request_sha256,
+            high_diagnostics.continuity_snapshot.request_sha256,
+            "the raw complete-request digest must still describe the literal body"
+        );
+        assert_eq!(
+            medium_diagnostics
+                .continuity_snapshot
+                .request_control_sha256,
+            high_diagnostics.continuity_snapshot.request_control_sha256,
+            "only the cache-identity control digest is reduced"
+        );
     }
 
     /// Verifies a native provider effort change does not warn about a changed
@@ -791,6 +815,18 @@ mod tests {
             (
                 r#"{"model":"m","messages":[],"reasoning_effort":"low"}"#,
                 r#"{"model":"m","messages":[],"reasoning_effort":"high"}"#,
+            ),
+            (
+                r#"{"model":"m","messages":[],"thinking":{"type":"disabled"}}"#,
+                r#"{"model":"m","messages":[],"thinking":{"type":"enabled"}}"#,
+            ),
+            (
+                r#"{"model":"m","messages":[],"max_tokens":1024}"#,
+                r#"{"model":"m","messages":[],"max_tokens":4096}"#,
+            ),
+            (
+                r#"{"model":"m","messages":[],"temperature":0.2}"#,
+                r#"{"model":"m","messages":[],"temperature":0.9}"#,
             ),
         ] {
             let mut previous = request_chain_fixture(Vec::new());

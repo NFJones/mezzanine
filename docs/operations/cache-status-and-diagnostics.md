@@ -111,9 +111,11 @@ shape, compaction epoch, or an explicitly exceptional interaction start a new
 cache epoch. Other changes to cache-affecting instructions, tools, tool choice,
 response format, or request controls fail closed before an ordinary continuation
 is sent. Operational controls - reasoning effort, service tier, and verbosity -
-are excluded from cache identity: the emitted body keeps carrying them, but a
-change to only those never starts an epoch or reports a continuity divergence by
-itself.
+are excluded from cache identity, as are provider-native reasoning objects
+(DeepSeek `thinking`, Anthropic `output_config.effort`) and sampling or output
+caps (`temperature`, `stop`, `max_tokens`): the emitted body keeps carrying them,
+but a change to only those never starts an epoch or reports a continuity
+divergence by itself.
 
 ## Escalate a diagnostic safely
 
