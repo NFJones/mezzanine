@@ -170,6 +170,52 @@ pub(crate) enum RuntimeSnapshotControlAsyncWorkKind {
     },
 }
 
+/// One deferred runtime slash command handed to a worker.
+///
+/// The actor owns prompt, overlay, and presentation state; the worker prepares
+/// an owned outcome value from this work item and never reaches into live
+/// service state, mirroring the snapshot control and provider persistence work.
+#[allow(
+    dead_code,
+    reason = "f526838b phase 2 step (b): the worker claim materialises this next"
+)]
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeAgentCommandAsyncWork {
+    /// Pane whose agent shell prompt submitted the command.
+    pub pane_id: String,
+    /// Primary client that submitted the command.
+    pub primary_client_id: mez_core::ids::ClientId,
+    /// Canonical command name the disposition classifier deferred.
+    pub command: String,
+    /// Full prompt input including the command name and arguments.
+    pub input: String,
+    /// Actor-owned claim generation compared when the outcome settles.
+    pub claim_generation: u64,
+}
+
+/// Result a worker prepares for the actor to apply.
+///
+/// Presentation stays byte-identical to the inline path: the actor turns the
+/// response body into the same command response it returns today, and reports a
+/// failure through the same invalid-command response path.
+#[allow(
+    dead_code,
+    reason = "f526838b phase 2 step (b): the completion request consumes this next"
+)]
+#[derive(Debug)]
+pub(crate) enum RuntimeAgentCommandAsyncOutcome {
+    /// Command response body the actor returns to the caller.
+    Response {
+        /// Body produced by the deferred execution.
+        body: String,
+    },
+    /// Deferred execution could not prepare a response.
+    Failed {
+        /// Diagnostic reported through the invalid-command response path.
+        message: String,
+    },
+}
+
 /// Repository result returned to the actor after async snapshot control work.
 #[derive(Debug)]
 pub(crate) enum RuntimeSnapshotControlAsyncOutcome {

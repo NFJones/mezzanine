@@ -47,6 +47,7 @@ async fn async_actor_drains_deferred_agent_command_effects() {
         pane_id: "%1".to_string(),
         command: "resume".to_string(),
         input: "/resume".to_string(),
+        claim_generation: 1,
     };
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .config(AsyncRuntimeActorConfig::default())

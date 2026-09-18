@@ -971,6 +971,14 @@ pub enum RuntimeSideEffect {
         command: String,
         /// Full prompt input including the command name and arguments.
         input: String,
+        /// Actor-owned claim generation used to drop stale outcomes.
+        ///
+        /// The submitted input alone is not a unique execution identity: the
+        /// same command can be resubmitted while an earlier attempt is still in
+        /// flight, so the actor stamps each dispatch with a generation and the
+        /// completion path applies an outcome only when its generation is still
+        /// the current one for the pane.
+        claim_generation: u64,
     },
     /// Rebuild one resized source-backed agent presentation outside the actor.
     DispatchAgentPresentationResize {
