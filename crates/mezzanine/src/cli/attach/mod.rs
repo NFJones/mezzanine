@@ -304,6 +304,11 @@ mod primary;
 mod requests;
 mod responses;
 mod selection;
+#[allow(
+    dead_code,
+    reason = "54abacd5 phase 1: the primary client loop consumes this watchdog next"
+)]
+mod watchdog;
 
 #[cfg(test)]
 pub(super) use event_stream::{AttachRenderAction, AttachedRuntimeEventStream};
