@@ -212,7 +212,18 @@ impl AsyncRuntimeSessionActor {
             let handler_started = std::time::Instant::now();
             self.commands_processed += 1;
             self.metrics.commands_processed = self.commands_processed;
-            self.sync_metrics_snapshot_to_service();
+            // The cached snapshot is read only by display commands, which arrive
+            // as control requests or carried terminal steps, so it is published
+            // on demand for those families before the handler that reads it.
+            // Every other request - render, event, provider, side-effect - no
+            // longer pays two full metric clones on the actor's hot path.
+            if matches!(
+                envelope.family,
+                crate::host::async_runtime::AsyncRuntimeRequestFamily::Control
+                    | crate::host::async_runtime::AsyncRuntimeRequestFamily::Terminal
+            ) {
+                self.sync_metrics_snapshot_to_service();
+            }
             let should_shutdown = self.handle_request(envelope.request).await;
             let handler_duration_ms =
                 u64::try_from(handler_started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -223,7 +234,6 @@ impl AsyncRuntimeSessionActor {
                     handler_duration_ms,
                 );
             }
-            self.sync_metrics_snapshot_to_service();
             if should_shutdown {
                 break;
             }

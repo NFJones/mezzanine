@@ -6,6 +6,37 @@ use crate::host::terminal::{
 };
 use mez_mux::layout::SplitDirection;
 
+/// Verifies the cached metrics snapshot is published on demand for the request
+/// families that can execute the display commands reading it - control requests
+/// and carried terminal steps - instead of for every actor request in both
+/// directions.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_publishes_metrics_snapshot_only_for_control_requests() {
+    let service = test_service();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .config(AsyncRuntimeActorConfig::default())
+        .build()
+        .unwrap();
+    let client = async {
+        // A side-effect-family request still counts toward the live counters,
+        // but it must not publish the cached snapshot.
+        handle.drain_runtime_side_effects(1).await.unwrap();
+        assert!(
+            handle.metrics().await.unwrap().commands_processed >= 1,
+            "live metrics keep counting every request"
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert!(
+        exit.service.async_runtime_metrics().is_none(),
+        "requests that cannot run a display command must not publish the cached metrics snapshot"
+    );
+}
+
 /// Verifies the deferred agent-command family belongs to the worker-claimed
 /// side-effect families, so the drain hands it to a worker instead of retaining
 /// it for the actor.
