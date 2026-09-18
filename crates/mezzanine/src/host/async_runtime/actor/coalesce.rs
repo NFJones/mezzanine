@@ -384,6 +384,41 @@ pub(super) fn runtime_side_effect_kind_summary<'a>(
         .join(",")
 }
 
+/// One queued effect that may be dropped under transient queue pressure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum DroppableRepaintEffect {
+    /// A level-triggered render invalidation for one client.
+    RenderClient(ClientId),
+    /// A level-triggered full client-output frame for one client.
+    FlushClientOutput(ClientId),
+}
+
+/// Classifies one queued side effect as droppable repaint work.
+///
+/// Only repaint effects are droppable: the durable state they describe is
+/// already committed, so dropping the effect loses no mutation, and the drain
+/// path always compensates with a full redraw. Pane and shell input writes,
+/// timers, persistence, dispatch, hooks, registry updates, and status providers
+/// are never droppable.
+pub(super) fn droppable_repaint_effect(
+    effect: &RuntimeSideEffect,
+) -> Option<DroppableRepaintEffect> {
+    match effect {
+        RuntimeSideEffect::RenderClient { client_id, .. } => {
+            Some(DroppableRepaintEffect::RenderClient(client_id.clone()))
+        }
+        RuntimeSideEffect::FlushClientOutput { client_id, .. } => {
+            Some(DroppableRepaintEffect::FlushClientOutput(client_id.clone()))
+        }
+        _ => None,
+    }
+}
+
+/// Returns whether one side effect is droppable repaint work.
+pub(super) fn runtime_side_effect_is_droppable_repaint(effect: &RuntimeSideEffect) -> bool {
+    droppable_repaint_effect(effect).is_some()
+}
+
 /// Returns a stable diagnostic family for one queued side effect.
 pub(super) fn runtime_side_effect_kind(effect: &RuntimeSideEffect) -> &'static str {
     match effect {

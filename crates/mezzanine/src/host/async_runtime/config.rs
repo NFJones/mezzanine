@@ -294,6 +294,12 @@ pub struct AsyncRuntimeActorMetrics {
     pub runtime_side_effects_queued: u64,
     /// Number of runtime side effects drained by supervised workers.
     pub runtime_side_effects_drained: u64,
+    /// Number of droppable repaint side effects dropped under queue pressure.
+    pub runtime_side_effects_evicted: u64,
+    /// Number of queued render invalidations dropped under queue pressure.
+    pub render_client_side_effects_evicted: u64,
+    /// Number of queued client-output flushes dropped under queue pressure.
+    pub flush_client_output_side_effects_evicted: u64,
     /// Histogram of queued side-effect counts per enqueue pass.
     pub runtime_side_effect_enqueue_sizes: RuntimeHistogram,
     /// Histogram of drained side-effect counts per drain pass.

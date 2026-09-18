@@ -828,6 +828,18 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
             "runtime_side_effects_drained = {}",
             metrics.runtime_side_effects_drained
         ),
+        format!(
+            "runtime_side_effects_evicted = {}",
+            metrics.runtime_side_effects_evicted
+        ),
+        format!(
+            "render_client_side_effects_evicted = {}",
+            metrics.render_client_side_effects_evicted
+        ),
+        format!(
+            "flush_client_output_side_effects_evicted = {}",
+            metrics.flush_client_output_side_effects_evicted
+        ),
         format!("pane_output_chunks = {}", metrics.pane_output_chunks),
         format!("pane_output_bytes = {}", metrics.pane_output_bytes),
         format!(

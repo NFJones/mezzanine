@@ -1182,6 +1182,13 @@ pub enum PersistenceWriteMode {
     CreateNew,
 }
 
+/// Maximum events submitted to the actor in one ingress batch.
+///
+/// The actor applies one batch per request without draining other work in
+/// between, so oversized producer batches are split into chunks of this size
+/// before submission instead of delaying every other request behind them.
+pub const MAX_RUNTIME_EVENT_BATCH_EVENTS: usize = 32;
+
 /// Ordered batch of runtime events received from one async wakeup.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RuntimeEventBatch {
@@ -1198,6 +1205,28 @@ impl RuntimeEventBatch {
     /// Appends one event to the batch.
     pub fn push(&mut self, event: RuntimeEvent) {
         self.events.push(event);
+    }
+
+    /// Splits this batch into bounded chunks in actor application order.
+    ///
+    /// The actor applies one batch per request without draining other work in
+    /// between, so oversized producer batches are chunked before submission.
+    /// Chunking happens after `prioritized_events` so the documented priority
+    /// ordering is preserved across chunks rather than only inside each one.
+    pub fn into_bounded_chunks(self, max_events: usize) -> Vec<RuntimeEventBatch> {
+        let max_events = max_events.max(1);
+        let mut chunks = Vec::new();
+        let mut chunk = RuntimeEventBatch::new();
+        for event in self.prioritized_events() {
+            chunk.push(event);
+            if chunk.events.len() >= max_events {
+                chunks.push(std::mem::take(&mut chunk));
+            }
+        }
+        if !chunk.events.is_empty() {
+            chunks.push(chunk);
+        }
+        chunks
     }
 
     /// Returns events in actor application order while preserving FIFO order
@@ -1295,4 +1324,56 @@ pub struct RuntimeTransition {
     pub(crate) applied: bool,
     /// Ordered external work emitted by the state transition.
     pub(crate) side_effects: Vec<RuntimeSideEffect>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies oversized batches split into bounded chunks that preserve the
+    /// batch's actor application order.
+    ///
+    /// The actor applies one batch per request, so an oversized producer batch
+    /// must be chunked after prioritization; otherwise a high-priority event
+    /// that arrived late in the batch could apply after lower-priority work
+    /// from an earlier chunk.
+    #[test]
+    fn oversized_batches_split_into_bounded_prioritized_chunks() {
+        let client = mez_core::ids::ClientId::opaque("client-bounded-chunks".to_string()).unwrap();
+        let mut batch = RuntimeEventBatch::new();
+        // A low-priority client signal arrives first and a higher-priority pane
+        // output event arrives last, so chunking must sort before splitting.
+        batch.push(RuntimeEvent::Client(ClientEvent::ResizeSignal {
+            client_id: client.clone(),
+        }));
+        batch.push(RuntimeEvent::Pane(PaneEvent::Output {
+            pane_id: "%1".to_string(),
+            bytes: vec![b'x'],
+        }));
+        batch.push(RuntimeEvent::Client(ClientEvent::ResizeSignal {
+            client_id: client.clone(),
+        }));
+        batch.push(RuntimeEvent::Client(ClientEvent::ResizeSignal {
+            client_id: client,
+        }));
+        let expected = batch.clone().prioritized_events();
+        let chunks = batch.into_bounded_chunks(2);
+        assert_eq!(chunks.len(), 2);
+        assert!(
+            chunks.iter().all(|chunk| chunk.events.len() <= 2),
+            "{chunks:?}"
+        );
+        assert!(
+            matches!(
+                chunks[0].events[0],
+                RuntimeEvent::Pane(PaneEvent::Output { .. })
+            ),
+            "prioritization must happen before chunking: {chunks:?}"
+        );
+        let flattened = chunks
+            .into_iter()
+            .flat_map(|chunk| chunk.events)
+            .collect::<Vec<_>>();
+        assert_eq!(flattened, expected);
+    }
 }

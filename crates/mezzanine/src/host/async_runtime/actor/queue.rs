@@ -2,7 +2,8 @@
 
 use super::coalesce::{
     async_runtime_current_unix_millis, async_runtime_duration_millis,
-    coalesce_output_side_effects_for_enqueue, pane_io_side_effect_targets_pane,
+    coalesce_output_side_effects_for_enqueue, droppable_repaint_effect,
+    pane_io_side_effect_targets_pane, runtime_side_effect_is_droppable_repaint,
     runtime_side_effect_kind_summary,
 };
 use super::{
@@ -10,6 +11,30 @@ use super::{
     DEFAULT_PANE_PIPE_HEALTH_DELAY_MS, DEFAULT_SHELL_RECOVERY_INTERVAL_MS, MezError,
     RenderInvalidationReason, Result, RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind,
 };
+
+/// Message prefix of the retryable side-effect-queue-full condition.
+pub(super) const SIDE_EFFECT_QUEUE_FULL_PREFIX: &str = "async runtime side-effect queue is full";
+
+/// Returns whether one actor error is the retryable queue-full condition.
+///
+/// Producers may retry this condition briefly: the queue drains as workers
+/// claim effects, so a transient backlog resolves without failing a pane
+/// worker or supervised service.
+pub(super) fn is_side_effect_queue_full_error(error: &MezError) -> bool {
+    error.message().starts_with(SIDE_EFFECT_QUEUE_FULL_PREFIX)
+}
+
+/// Returns whether a queue-full error is safe for a producer to retry.
+///
+/// Only an error raised before any event of the submitted chunk was applied may
+/// be retried: re-submitting a partially applied chunk would re-apply committed
+/// work, so the event-application path tags queue-full failures with how many
+/// events it had already applied. Failures raised after the batch consumed
+/// destructive service-side drains carry an extra `consumed=1` marker and are
+/// never retryable because a retry cannot restore that work.
+pub(super) fn is_retryable_side_effect_queue_full_error(error: &MezError) -> bool {
+    is_side_effect_queue_full_error(error) && error.message().ends_with("applied=0")
+}
 
 impl AsyncRuntimeSessionActor {
     /// Reconciles the daily saved-session retention maintenance timer.
@@ -138,11 +163,100 @@ impl AsyncRuntimeSessionActor {
         let terminal_config_invalidated = side_effects
             .iter()
             .any(runtime_side_effect_invalidates_terminal_config);
-        let (side_effects, coalesced) =
+        let (mut side_effects, coalesced) =
             coalesce_output_side_effects_for_enqueue(&mut self.side_effects, side_effects);
-        if self.side_effects.len().saturating_add(side_effects.len()) > self.side_effect_buffer {
+        // Repaint work is level-triggered, so a transient backlog drops the
+        // oldest droppable repaint effect - queued work first, then incoming
+        // work when non-droppable queued work already consumes capacity -
+        // instead of failing the producer. The capacity budget covers only the
+        // caller's work: compensation redraws are admitted outside it because
+        // they are droppable repaint effects bounded by attached clients, and
+        // dropping them would strand the pixels the eviction invalidated.
+        let mut owed_full_redraws: Vec<ClientId> = Vec::new();
+        let mut evicted_render_clients = 0usize;
+        let mut evicted_flush_outputs = 0usize;
+        let mut over_capacity =
+            self.side_effects.len() + side_effects.len() > self.side_effect_buffer;
+        while over_capacity {
+            let dropped = match self
+                .side_effects
+                .iter()
+                .position(runtime_side_effect_is_droppable_repaint)
+            {
+                Some(position) => self
+                    .side_effects
+                    .remove(position)
+                    .expect("queued repaint position is valid by construction"),
+                None => match side_effects
+                    .iter()
+                    .position(runtime_side_effect_is_droppable_repaint)
+                {
+                    Some(position) => side_effects.remove(position),
+                    None => break,
+                },
+            };
+            match droppable_repaint_effect(&dropped) {
+                Some(super::coalesce::DroppableRepaintEffect::RenderClient(client_id)) => {
+                    if !owed_full_redraws.contains(&client_id) {
+                        owed_full_redraws.push(client_id);
+                    }
+                    evicted_render_clients = evicted_render_clients.saturating_add(1);
+                }
+                Some(super::coalesce::DroppableRepaintEffect::FlushClientOutput(client_id)) => {
+                    if !owed_full_redraws.contains(&client_id) {
+                        owed_full_redraws.push(client_id);
+                    }
+                    evicted_flush_outputs = evicted_flush_outputs.saturating_add(1);
+                }
+                None => break,
+            }
+            over_capacity = self.side_effects.len() + side_effects.len() > self.side_effect_buffer;
+        }
+        let evicted_repaint_effects = evicted_render_clients.saturating_add(evicted_flush_outputs);
+        if evicted_repaint_effects > 0 {
+            self.metrics.runtime_side_effects_evicted = self
+                .metrics
+                .runtime_side_effects_evicted
+                .saturating_add(u64::try_from(evicted_repaint_effects).unwrap_or(u64::MAX));
+            self.metrics.render_client_side_effects_evicted = self
+                .metrics
+                .render_client_side_effects_evicted
+                .saturating_add(u64::try_from(evicted_render_clients).unwrap_or(u64::MAX));
+            self.metrics.flush_client_output_side_effects_evicted = self
+                .metrics
+                .flush_client_output_side_effects_evicted
+                .saturating_add(u64::try_from(evicted_flush_outputs).unwrap_or(u64::MAX));
+        }
+        let compensation_redraws = owed_full_redraws.len();
+        for client_id in owed_full_redraws {
+            // Any other queued or incoming repaint request for this client is
+            // merged with this one by the actor's render-invalidation drain, so
+            // each affected client owes exactly one coalesced full redraw. This
+            // runs before the capacity verdict so an eviction is never left
+            // uncompensated, even when non-droppable work still overflows.
+            self.enqueue_runtime_side_effect(RuntimeSideEffect::RenderClient {
+                client_id,
+                reason: RenderInvalidationReason::FullRedraw,
+            });
+        }
+        if over_capacity {
+            if compensation_redraws > 0 {
+                // The compensation admitted above is real queued work: count and
+                // notify it even though the caller's non-droppable overflow
+                // fails, so the owed redraw cannot wait for an unrelated wakeup.
+                self.metrics.runtime_side_effects_queued = self
+                    .metrics
+                    .runtime_side_effects_queued
+                    .saturating_add(u64::try_from(compensation_redraws).unwrap_or(u64::MAX));
+                self.metrics.side_effect_queue_depth = self.side_effects.len();
+                self.metrics.side_effect_queue_high_water = self
+                    .metrics
+                    .side_effect_queue_high_water
+                    .max(self.side_effects.len());
+                self.notify_side_effect_delivery();
+            }
             return Err(MezError::invalid_state(format!(
-                "async runtime side-effect queue is full: queued={} incoming={} capacity={} queued_kinds={} incoming_kinds={}",
+                "{SIDE_EFFECT_QUEUE_FULL_PREFIX}: queued={} incoming={} capacity={} queued_kinds={} incoming_kinds={}",
                 self.side_effects.len(),
                 side_effects.len(),
                 self.side_effect_buffer,
@@ -164,8 +278,11 @@ impl AsyncRuntimeSessionActor {
             .iter()
             .filter(|effect| matches!(effect, RuntimeSideEffect::CancelTimer { .. }))
             .count();
-        let queued = side_effects.len();
-        let should_notify = !side_effects.is_empty();
+        // Compensation redraws count as queued work and must notify the
+        // delivery chain: an eviction-only enqueue adds no incoming effect, so
+        // otherwise the redraw could wait for an unrelated notification.
+        let queued = side_effects.len().saturating_add(compensation_redraws);
+        let should_notify = queued > 0;
         for effect in &side_effects {
             self.track_runtime_timer_side_effect(effect);
         }
@@ -598,4 +715,38 @@ fn runtime_side_effect_invalidates_terminal_config(effect: &RuntimeSideEffect) -
                 RenderInvalidationReason::CursorBlink | RenderInvalidationReason::StatusLine
             )
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_retryable_side_effect_queue_full_error, is_side_effect_queue_full_error};
+    use crate::MezError;
+
+    /// Verifies only pre-application, pre-drain queue-full failures are retryable.
+    ///
+    /// A partial application would be re-applied by a retry, and a failure raised
+    /// after destructive service-side drains cannot restore that work, so both
+    /// must stay out of the retry gate while an untagged queue-full error remains
+    /// the diagnostic producers report.
+    #[test]
+    fn only_pre_application_queue_full_errors_are_retryable() {
+        let queue_full = |suffix: &str| {
+            MezError::invalid_state(format!(
+                "async runtime side-effect queue is full: queued=2 incoming=1 capacity=2{suffix}"
+            ))
+        };
+        assert!(is_side_effect_queue_full_error(&queue_full("")));
+        assert!(is_retryable_side_effect_queue_full_error(&queue_full(
+            " applied=0"
+        )));
+        assert!(!is_retryable_side_effect_queue_full_error(&queue_full(
+            " applied=1"
+        )));
+        assert!(!is_retryable_side_effect_queue_full_error(&queue_full(
+            " applied=0 consumed=1"
+        )));
+        assert!(!is_retryable_side_effect_queue_full_error(
+            &MezError::invalid_state("unrelated failure")
+        ));
+    }
 }

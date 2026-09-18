@@ -1032,6 +1032,254 @@ async fn async_actor_coalesces_render_side_effects_before_capacity_check() {
     assert_eq!(exit.metrics.side_effect_queue_high_water, 1);
 }
 
+/// Verifies that queue pressure drops only droppable repaint work, counts the
+/// evictions, and owes each affected client one compensating full redraw.
+///
+/// A transient backlog must never fail a producer over repaint-only work: the
+/// durable state those effects describe is already committed, so the oldest
+/// repaint effects are dropped and replaced by a single full redraw per
+/// affected client while non-droppable families keep their bounded slots.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_evicts_droppable_repaint_effects_under_pressure() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .config(AsyncRuntimeActorConfig {
+            side_effect_buffer: 2,
+            ..AsyncRuntimeActorConfig::default()
+        })
+        .build()
+        .unwrap();
+
+    let client = async {
+        // A non-droppable dispatch occupies one of the two queue slots.
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::DispatchAgentProvider {
+                agent_id: AgentId::opaque("agent-%1").unwrap(),
+                turn_id: "turn-evict".to_string(),
+            }])
+            .await
+            .unwrap();
+        // A repaint-only burst cannot fit, so both repaint effects are dropped
+        // and one full redraw is owed to the affected client.
+        let queued = handle
+            .queue_runtime_side_effects(vec![
+                RuntimeSideEffect::RenderClient {
+                    client_id: primary.clone(),
+                    reason: RenderInvalidationReason::PaneOutput,
+                },
+                RuntimeSideEffect::FlushClientOutput {
+                    client_id: primary.clone(),
+                    presentation_ids: Vec::new(),
+                    lines: Vec::new(),
+                    line_style_spans: Vec::new(),
+                    modes: AttachedTerminalOutputModes::default(),
+                },
+            ])
+            .await
+            .unwrap();
+        assert_eq!(queued, 2);
+        let drained = handle.drain_runtime_side_effects(8).await.unwrap();
+        assert_eq!(drained.len(), 3, "{drained:?}");
+        assert!(matches!(
+            drained[0],
+            RuntimeSideEffect::DispatchAgentProvider { .. }
+        ));
+        assert_eq!(
+            drained[1],
+            RuntimeSideEffect::RenderClient {
+                client_id: primary.clone(),
+                reason: RenderInvalidationReason::FullRedraw,
+            }
+        );
+        assert!(matches!(
+            drained[2],
+            RuntimeSideEffect::FlushClientOutput { .. }
+        ));
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.metrics.runtime_side_effects_evicted, 1);
+    assert_eq!(exit.metrics.render_client_side_effects_evicted, 1);
+    assert_eq!(exit.metrics.flush_client_output_side_effects_evicted, 0);
+    assert_eq!(exit.metrics.side_effect_queue_high_water, 3);
+}
+
+/// Verifies that a backlog made only of non-droppable effects still fails the
+/// enqueue with the family diagnostics producers must not retry blindly.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_rejects_non_droppable_side_effect_overflow() {
+    let mut service = test_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .config(AsyncRuntimeActorConfig {
+            side_effect_buffer: 2,
+            ..AsyncRuntimeActorConfig::default()
+        })
+        .build()
+        .unwrap();
+
+    let client = async {
+        for (agent, turn) in [("agent-%1", "turn-a"), ("agent-%1", "turn-b")] {
+            handle
+                .queue_runtime_side_effects(vec![RuntimeSideEffect::DispatchAgentProvider {
+                    agent_id: AgentId::opaque(agent).unwrap(),
+                    turn_id: turn.to_string(),
+                }])
+                .await
+                .unwrap();
+        }
+        let error = handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::DispatchAgentProvider {
+                agent_id: AgentId::opaque("agent-%1").unwrap(),
+                turn_id: "turn-c".to_string(),
+            }])
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .message()
+                .contains("async runtime side-effect queue is full"),
+            "{}",
+            error.message()
+        );
+        assert!(
+            error.message().contains("queued_kinds="),
+            "{}",
+            error.message()
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.metrics.runtime_side_effects_evicted, 0);
+}
+
+/// Verifies that an oversized producer batch is split into bounded chunks that
+/// other actor work can interleave with.
+///
+/// The actor applies one event batch per request without draining in between,
+/// so a batch above `MAX_RUNTIME_EVENT_BATCH_EVENTS` must become two bounded
+/// submissions while still reporting every accepted and applied event.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_splits_oversized_event_batches_into_bounded_chunks() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let event_count = crate::runtime::MAX_RUNTIME_EVENT_BATCH_EVENTS + 8;
+
+    let client = async {
+        let mut batch = RuntimeEventBatch::new();
+        for _ in 0..event_count {
+            batch.push(RuntimeEvent::Client(ClientEvent::ResizeSignal {
+                client_id: primary.clone(),
+            }));
+        }
+        let report = handle.submit_runtime_events(batch).await.unwrap();
+        assert_eq!(report.accepted, event_count);
+        assert_eq!(report.applied, event_count);
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.metrics.runtime_event_batches, 2);
+}
+
+/// Verifies repaint-only pressure never fails a producer and that evictions are
+/// still counted and compensated when non-droppable work overflows afterwards.
+///
+/// Compensation redraws are admitted outside the capacity budget, so a queue
+/// filled with non-droppable work must accept a repaint-only burst by dropping
+/// that burst and owing one full redraw, and the later non-droppable overflow
+/// must keep both the counter and the owed redraw.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_compensates_repaint_evictions_around_non_droppable_overflow() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .config(AsyncRuntimeActorConfig {
+            side_effect_buffer: 2,
+            ..AsyncRuntimeActorConfig::default()
+        })
+        .build()
+        .unwrap();
+    let dispatch = |turn: &str| RuntimeSideEffect::DispatchAgentProvider {
+        agent_id: AgentId::opaque("agent-%1").unwrap(),
+        turn_id: turn.to_string(),
+    };
+
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![dispatch("turn-a")])
+            .await
+            .unwrap();
+        handle
+            .queue_runtime_side_effects(vec![dispatch("turn-b")])
+            .await
+            .unwrap();
+        // Capacity is consumed by non-droppable work, so the repaint-only burst
+        // is dropped and compensated instead of failing the producer.
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::RenderClient {
+                client_id: primary.clone(),
+                reason: RenderInvalidationReason::PaneOutput,
+            }])
+            .await
+            .unwrap();
+        // A non-droppable overflow still fails, but it must not discard the
+        // eviction counter or the owed compensating redraw.
+        let error = handle
+            .queue_runtime_side_effects(vec![dispatch("turn-c")])
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .message()
+                .contains("async runtime side-effect queue is full"),
+            "{}",
+            error.message()
+        );
+        let drained = handle.drain_runtime_side_effects(8).await.unwrap();
+        assert_eq!(
+            drained.last(),
+            Some(&RuntimeSideEffect::RenderClient {
+                client_id: primary.clone(),
+                reason: RenderInvalidationReason::FullRedraw,
+            }),
+            "{drained:?}"
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.metrics.runtime_side_effects_evicted, 2);
+    assert_eq!(exit.metrics.render_client_side_effects_evicted, 2);
+    assert_eq!(exit.metrics.flush_client_output_side_effects_evicted, 0);
+}
+
 /// Verifies that full client-output flushes are coalesced before bounded queue
 /// capacity is checked. Pane output bursts can produce new full-frame flushes
 /// faster than a terminal can write them; only the latest pending frame for a

@@ -16,6 +16,32 @@ use super::{
 use crate::integrations::agent::actions::recovery::maap_provider_error_is_repairable;
 use crate::runtime::PaneProcessEvent;
 
+/// Annotates a side-effect queue failure with the number of events already
+/// applied in this batch.
+///
+/// Producers may only retry a queue-full submission that applied nothing;
+/// re-submitting a partially applied chunk would re-apply committed work.
+fn runtime_event_queue_error_with_applied(error: MezError, applied: usize) -> MezError {
+    if !super::queue::is_side_effect_queue_full_error(&error) {
+        return error;
+    }
+    MezError::invalid_state(format!("{} applied={applied}", error.message()))
+}
+
+/// Annotates a side-effect queue failure raised after the batch already
+/// consumed destructive service-side drains.
+///
+/// Such a failure is never retryable: re-submitting the chunk cannot restore
+/// pane IO, presentation, persistence, provider settlement, or hook work that
+/// `deferred_service_side_effects_from_service` already consumed, so the marker
+/// keeps producers from silently losing that work.
+fn runtime_event_queue_error_after_service_drain(error: MezError, applied: usize) -> MezError {
+    if !super::queue::is_side_effect_queue_full_error(&error) {
+        return error;
+    }
+    MezError::invalid_state(format!("{} applied={applied} consumed=1", error.message()))
+}
+
 impl AsyncRuntimeSessionActor {
     /// Runs the notify message delivery operation for this subsystem.
     ///
@@ -133,7 +159,8 @@ impl AsyncRuntimeSessionActor {
             report.side_effects = report
                 .side_effects
                 .saturating_add(application.side_effects.len());
-            self.queue_runtime_side_effects(application.side_effects)?;
+            self.queue_runtime_side_effects(application.side_effects)
+                .map_err(|error| runtime_event_queue_error_with_applied(error, report.applied))?;
         }
         let mut batch_side_effects = Vec::new();
         if report.applied > 0 {
@@ -167,7 +194,10 @@ impl AsyncRuntimeSessionActor {
             || side_effects_include_registry_persistence(&batch_side_effects);
         report.side_effects = report.side_effects.saturating_add(batch_side_effects.len());
         if !batch_side_effects.is_empty() {
-            self.queue_runtime_side_effects(batch_side_effects)?;
+            self.queue_runtime_side_effects(batch_side_effects)
+                .map_err(|error| {
+                    runtime_event_queue_error_after_service_drain(error, report.applied)
+                })?;
         }
         if report.applied > 0
             && registry_persistence_required
@@ -181,7 +211,10 @@ impl AsyncRuntimeSessionActor {
             self.queue_runtime_side_effects(vec![RuntimeSideEffect::PersistRegistry {
                 registry,
                 update,
-            }])?;
+            }])
+            .map_err(|error| {
+                runtime_event_queue_error_after_service_drain(error, report.applied)
+            })?;
             report.side_effects = report.side_effects.saturating_add(1);
         }
         self.metrics.runtime_event_batches = self.metrics.runtime_event_batches.saturating_add(1);

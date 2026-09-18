@@ -18,7 +18,27 @@ use super::{
     RuntimeEventConnectionTable,
 };
 use crate::host::async_runtime::actor_types::AsyncClientRenderToken;
+use crate::runtime::MAX_RUNTIME_EVENT_BATCH_EVENTS;
 use crate::runtime::RuntimeNativeShellDispatch;
+
+use super::queue::is_retryable_side_effect_queue_full_error;
+
+/// Bounded retries for one chunk submitted into a transiently full effect queue.
+const SIDE_EFFECT_QUEUE_FULL_RETRIES: u32 = 5;
+
+/// Merges one chunk ingress report into the aggregated submission report.
+///
+/// Families are concatenated in chunk order so diagnostics keep the delivery
+/// order of an oversized producer batch.
+fn merge_runtime_event_ingress_report(
+    aggregate: &mut RuntimeEventIngressReport,
+    chunk: RuntimeEventIngressReport,
+) {
+    aggregate.accepted = aggregate.accepted.saturating_add(chunk.accepted);
+    aggregate.applied = aggregate.applied.saturating_add(chunk.applied);
+    aggregate.side_effects = aggregate.side_effects.saturating_add(chunk.side_effects);
+    aggregate.families.extend(chunk.families);
+}
 
 impl AsyncRuntimeSessionHandle {
     /// Installs the privacy-safe diagnostics populated by a host-routed Iroh transport.
@@ -913,8 +933,61 @@ impl AsyncRuntimeSessionHandle {
         &self,
         batch: RuntimeEventBatch,
     ) -> Result<RuntimeEventIngressReport> {
-        self.request(|reply| AsyncRuntimeRequest::SubmitRuntimeEvents { batch, reply })
-            .await?
+        // The actor applies one event batch per request without draining other
+        // work in between, so oversized producer batches are split into bounded
+        // chunks that other requests can interleave with. A transiently full
+        // side-effect queue is retried a bounded number of times before the
+        // submission fails, so a repaint-heavy backpressure spike does not fail
+        // the calling pane worker or supervised service.
+        // Ingress families stay in the producer's delivery order even though
+        // each chunk is submitted in actor application order.
+        let families = batch.families().into_iter().map(str::to_string).collect();
+        let mut report = RuntimeEventIngressReport {
+            accepted: 0,
+            applied: 0,
+            side_effects: 0,
+            families: Vec::new(),
+        };
+        for chunk in batch.into_bounded_chunks(MAX_RUNTIME_EVENT_BATCH_EVENTS) {
+            merge_runtime_event_ingress_report(
+                &mut report,
+                self.submit_runtime_event_chunk(chunk).await?,
+            );
+        }
+        report.families = families;
+        Ok(report)
+    }
+
+    /// Submits one bounded runtime event chunk, retrying only the retryable
+    /// side-effect-queue-full condition.
+    async fn submit_runtime_event_chunk(
+        &self,
+        batch: RuntimeEventBatch,
+    ) -> Result<RuntimeEventIngressReport> {
+        let mut attempt = 0u32;
+        loop {
+            let result = self
+                .request(|reply| AsyncRuntimeRequest::SubmitRuntimeEvents {
+                    batch: batch.clone(),
+                    reply,
+                })
+                .await?;
+            match result {
+                Ok(report) => return Ok(report),
+                Err(error)
+                    if attempt < SIDE_EFFECT_QUEUE_FULL_RETRIES
+                        && is_retryable_side_effect_queue_full_error(&error) =>
+                {
+                    attempt = attempt.saturating_add(1);
+                    tokio::task::yield_now().await;
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        u64::from(attempt).saturating_mul(5),
+                    ))
+                    .await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     /// Drains queued actor side effects for supervised external adapters.

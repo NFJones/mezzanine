@@ -473,6 +473,7 @@ pub use status_pills::{
 };
 #[cfg(test)]
 pub(crate) use transitions::MAX_CLIENT_CLIPBOARD_BYTES;
+pub(crate) use transitions::MAX_RUNTIME_EVENT_BATCH_EVENTS;
 pub use transitions::{
     AgentCompactionEvent, AgentProviderEvent, AgentRememberEvent, AgentSessionTitleEvent,
     AgentSessionTitleOutcome, AsyncHookEvent, ClientClipboardWrite, ClientEvent,
