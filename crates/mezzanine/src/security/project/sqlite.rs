@@ -16,6 +16,8 @@
 //! create or migrate another store's files.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
+use std::time::Duration;
 
 use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
@@ -42,6 +44,28 @@ pub(super) const LEGACY_TRUST_HEADER: &str = "# Mezzanine project trust database
 
 /// Schema version owned by the trust table.
 const TRUST_SCHEMA_VERSION: i64 = 1;
+
+/// Bounded retries for one busy connection-setup attempt.
+const BUSY_RETRIES: usize = 3;
+
+/// Delay between busy connection-setup attempts.
+const BUSY_RETRY_DELAY: Duration = Duration::from_millis(50);
+
+/// Serializes in-process trust writers.
+///
+/// The shared helper's connection setup can return an immediate busy conflict
+/// when several writers publish their pragmas at once, before any transaction
+/// can apply the busy budget; the guard keeps one process's writers apart and
+/// the retry below absorbs the remaining cross-process window.
+static WRITE_LOCK: Mutex<()> = Mutex::new(());
+
+/// Acquires the in-process writer lock, ignoring poisoning because the lock
+/// guards no data.
+fn write_guard() -> MutexGuard<'static, ()> {
+    WRITE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// Returns the legacy TSV path that sits beside one trust database path.
 fn legacy_path(database_path: &Path) -> PathBuf {
@@ -118,11 +142,13 @@ pub(super) fn update<F>(database_path: &Path, update: F) -> Result<ProjectTrustS
 where
     F: FnOnce(&mut ProjectTrustStore) -> Result<()>,
 {
+    let _guard = write_guard();
     update_once(database_path, update)
 }
 
 /// Persists one complete store, importing the legacy document first when needed.
 pub(super) fn save(database_path: &Path, store: &ProjectTrustStore) -> Result<()> {
+    let _guard = write_guard();
     save_once(database_path, store)
 }
 
@@ -149,12 +175,31 @@ fn open_for_write(database_path: &Path) -> Result<Connection> {
     Ok(connection)
 }
 
+/// Opens the store for one write, retrying the shared helper's
+/// connection-setup conflict while another writer holds the database lock.
+fn open_for_write_with_retry(database_path: &Path) -> Result<Connection> {
+    let mut attempt = 0usize;
+    loop {
+        match open_for_write(database_path) {
+            Ok(connection) => return Ok(connection),
+            Err(error)
+                if attempt + 1 < BUSY_RETRIES
+                    && error.kind() == crate::error::MezErrorKind::Conflict =>
+            {
+                attempt += 1;
+                std::thread::sleep(BUSY_RETRY_DELAY);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 /// Runs one update attempt.
 fn update_once<F>(database_path: &Path, update: F) -> Result<ProjectTrustSnapshot>
 where
     F: FnOnce(&mut ProjectTrustStore) -> Result<()>,
 {
-    let mut connection = open_for_write(database_path)?;
+    let mut connection = open_for_write_with_retry(database_path)?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(database_error)?;
@@ -168,7 +213,7 @@ where
 
 /// Runs one complete-store write attempt.
 fn save_once(database_path: &Path, store: &ProjectTrustStore) -> Result<()> {
-    let mut connection = open_for_write(database_path)?;
+    let mut connection = open_for_write_with_retry(database_path)?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(database_error)?;
