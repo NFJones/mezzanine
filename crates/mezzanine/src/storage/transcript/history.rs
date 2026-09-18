@@ -561,6 +561,18 @@ mod tests {
             )
             .unwrap()
         );
+        // The read view already filters an over-entry row, so the database
+        // state is what proves the trim deleted it instead of leaving it.
+        let connection = rusqlite::Connection::open(database_path(&root)).unwrap();
+        let rows: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM history WHERE scope = 'agent'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        drop(connection);
+        assert_eq!(rows, 0, "the unfittable row is deleted, not filtered");
         assert!(read(&root, HistoryScope::Agent).unwrap().is_empty());
         let _ = std::fs::remove_dir_all(root);
     }
