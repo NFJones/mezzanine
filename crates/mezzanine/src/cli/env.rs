@@ -83,6 +83,8 @@ pub(super) enum CliCommand {
     Issue(super::issue::IssueCliArgs),
     /// Manages persistent agent memory.
     Memory(super::memory::MemoryCliArgs),
+    /// Prints converted session-state stores in their legacy flat-file shape.
+    Storage(super::storage::StorageCliArgs),
     /// Inspects and rebuilds the saved-session discovery catalog.
     SessionCatalog(super::session_catalog::SessionCatalogCliArgs),
     /// Manages remote transport pairing and trusted clients through local control.

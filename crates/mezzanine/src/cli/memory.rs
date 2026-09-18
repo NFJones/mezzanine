@@ -147,11 +147,19 @@ pub(super) fn run_memory<W: Write>(
             write_json_or_plain(stdout, output_format, &output)?;
         }
         MemoryCliCommand::Export => {
+            // Export is an inspection command: it must never create, migrate,
+            // or initialize the store it prints.
+            let records = store.list_read_only()?.unwrap_or_default();
             if output_format == CliOutputFormat::Json {
-                let output = memory_records_json(&store.list()?)?;
+                let output = memory_records_json(&records)?;
                 write_json_or_plain(stdout, output_format, &output)?;
             } else {
-                write!(stdout, "{}", store.export_tsv()?)?;
+                let mut body = String::new();
+                for record in &records {
+                    body.push_str(&record.encode()?);
+                    body.push('\n');
+                }
+                write!(stdout, "{body}")?;
             }
         }
         MemoryCliCommand::Search {

@@ -152,6 +152,8 @@ mod session_catalog;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod snapshot;
+/// Exposes the storage module boundary.
+mod storage;
 /// Owns client-local X11 display, credential, and forwarding preparation.
 ///
 /// Control negotiation and stream ownership consume this staged boundary in
@@ -203,6 +205,7 @@ use serve::{
 };
 use session_catalog::run_session_catalog;
 use snapshot::run_snapshot;
+use storage::run_storage;
 
 /// Exposes the tests module boundary.
 ///

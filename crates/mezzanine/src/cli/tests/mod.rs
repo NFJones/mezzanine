@@ -270,4 +270,5 @@ mod remote;
 mod sandbox;
 mod session_catalog;
 mod snapshot;
+mod storage;
 mod terminal_protocol;

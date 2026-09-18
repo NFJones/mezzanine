@@ -693,9 +693,11 @@ read-only CLI commands MUST open a store without creating schema, migrating, or
 writing any other store's files.
 
 Store adoption MUST preserve existing behaviour: record validation, ordering,
-retention, and permission checks MUST NOT change. An operator escape hatch (for
-example `mez storage export <store>`) MUST render rows in the legacy flat-file
-shape so the disappearance of the visible file does not remove inspectability.
+retention, and permission checks MUST NOT change. `mez storage export <store>`
+MUST render that store's rows in the legacy flat-file shape so the
+disappearance of the visible file does not remove inspectability, and an
+unsupported store name MUST fail with the supported list instead of printing an
+empty export.
 
 ## 6. Terminal Multiplexing
 

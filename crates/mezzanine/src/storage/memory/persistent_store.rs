@@ -278,18 +278,45 @@ impl PersistentMemoryStore {
         Ok(selected)
     }
 
-    /// Runs the export tsv operation for this subsystem.
+    /// Exports the store's rows in the legacy TSV shape without mutating it.
     ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn export_tsv(&self) -> Result<String> {
+    /// Inspection commands must not create, migrate, or initialize the store,
+    /// so this opens the database read-only, performs no schema, migration, or
+    /// FTS setup, and returns `None` when the store does not exist yet.
+    pub fn export_tsv_read_only(&self) -> Result<Option<String>> {
+        let Some(records) = self.list_read_only()? else {
+            return Ok(None);
+        };
         let mut output = String::new();
-        for record in self.list()? {
+        for record in &records {
             output.push_str(&record.encode()?);
             output.push('\n');
         }
-        Ok(output)
+        Ok(Some(output))
+    }
+
+    /// Lists the store's rows without creating, migrating, or initializing it.
+    ///
+    /// Returns `None` when the store does not exist yet, so read-only commands
+    /// can report that instead of materializing an empty store.
+    pub fn list_read_only(&self) -> Result<Option<Vec<MemoryRecord>>> {
+        let Some(connection) =
+            crate::storage::shared_sqlite::open_shared_database_read_only(&self.path)?
+        else {
+            return Ok(None);
+        };
+        let mut statement = connection.prepare(
+            "SELECT id, scope, created_at, updated_at, source, priority, kind, state,
+                    last_used_at, use_count, confirmed_count, last_confirmed_at,
+                    supersedes_id, expires_at, expiration_duration_seconds, content
+             FROM memory_records
+             ORDER BY id ASC",
+        )?;
+        let rows = statement.query_map([], row_to_record)?;
+        let records = rows
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(MezError::from)?;
+        Ok(Some(records))
     }
 
     /// Searches persistent memory with SQLite FTS and metadata filters.

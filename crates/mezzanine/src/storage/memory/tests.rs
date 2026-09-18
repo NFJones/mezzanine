@@ -44,8 +44,9 @@ fn persistent_memory_can_inspect_edit_export_and_delete() {
     assert_eq!(edited.updated_at_unix_seconds, 12);
     assert!(
         store
-            .export_tsv()
+            .export_tsv_read_only()
             .unwrap()
+            .expect("the store exists after writes")
             .contains("cargo test --all-targets")
     );
     assert!(store.delete("m1").unwrap());

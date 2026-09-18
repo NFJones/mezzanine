@@ -82,6 +82,32 @@ pub(crate) fn open_shared_database(
 
 /// Applies the shared pragmas to one connection.
 pub(crate) fn configure_connection(connection: &Connection) -> Result<()> {
+    configure_connection_read_write(connection)
+}
+
+/// Opens an existing shared database read-only for inspection commands.
+///
+/// Returns `Ok(None)` when the database file does not exist, so an inspection
+/// command never creates a store. Nothing is created, migrated, or imported,
+/// and the journal-mode pragma is deliberately skipped because it needs write
+/// access; only the bounded busy timeout is applied so a concurrent daemon
+/// writer cannot make an export fail instantly.
+pub(crate) fn open_shared_database_read_only(path: &Path) -> Result<Option<Connection>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|error| {
+            MezError::invalid_state(format!("open database read-only failed: {error}"))
+        })?;
+    connection
+        .busy_timeout(Duration::from_millis(SHARED_BUSY_TIMEOUT_MS))
+        .map_err(database_error)?;
+    Ok(Some(connection))
+}
+
+/// Applies the read-write pragmas to one connection.
+fn configure_connection_read_write(connection: &Connection) -> Result<()> {
     connection
         .busy_timeout(Duration::from_millis(SHARED_BUSY_TIMEOUT_MS))
         .map_err(database_error)?;
@@ -557,5 +583,42 @@ mod tests {
             error.message()
         );
         holder.execute_batch("COMMIT;").unwrap();
+    }
+
+    /// Verifies the read-only open used by inspection commands never creates a
+    /// database and rejects writes, so an export cannot create or migrate the
+    /// store it is printing.
+    #[test]
+    fn shared_database_read_only_open_never_writes() {
+        let dir = unique_temp_dir("read-only");
+        let path = dir.join("store.sqlite");
+        assert!(
+            open_shared_database_read_only(&path).unwrap().is_none(),
+            "a missing database reports nothing to inspect"
+        );
+        assert!(
+            !path.exists(),
+            "a read-only open must not create the database file"
+        );
+
+        let (connection, _) = open_shared_database(&path, 1).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE items (id INTEGER PRIMARY KEY);\n PRAGMA user_version = 1;",
+            )
+            .unwrap();
+        drop(connection);
+
+        let reader = open_shared_database_read_only(&path).unwrap().unwrap();
+        let rows: i64 = reader
+            .query_row("SELECT COUNT(*) FROM items", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 0);
+        assert!(
+            reader
+                .execute("INSERT INTO items (id) VALUES (1)", [])
+                .is_err(),
+            "a read-only connection rejects writes"
+        );
     }
 }
