@@ -230,6 +230,86 @@ fn pin_time_independent_window_status(service: &mut RuntimeSessionService) {
         .unwrap();
 }
 
+/// Verifies divider gesture state survives probes and non-destructive filters
+/// and is consumed only by an explicit commit.
+///
+/// The actor queue probes and filters an enqueue batch before its capacity
+/// verdict and commits afterwards, so a rejected enqueue must leave the mouse
+/// resize-drag state and the pending agent-presentation resize dispatches
+/// recoverable for the caller's retry.
+#[test]
+fn runtime_divider_gesture_state_is_consumed_only_by_commit() {
+    let mut service = test_runtime_service();
+    let size = Size::new(80, 24).unwrap();
+    let source = service.attach_primary("source", true, size, 120).unwrap();
+    service
+        .session
+        .split_active_pane(&source, SplitDirection::Vertical)
+        .unwrap();
+    let border = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap()
+        .mouse_border_cells
+        .into_iter()
+        .next()
+        .expect("vertical split should expose a divider");
+    let drag = |column| AttachedTerminalClientStepPlan {
+        actions: vec![TerminalClientLoopAction::HandleMouse(
+            MouseAction::ResizePane {
+                column,
+                row: border.row,
+            },
+        )],
+        output_lines: Vec::new(),
+        output_line_style_spans: Vec::new(),
+        input_hangup: false,
+        output_hangup: false,
+        error_roles: Vec::new(),
+    };
+    for column in [border.column, border.column.saturating_add(3)] {
+        service
+            .apply_attached_terminal_step_transition(&source, &drag(column))
+            .unwrap();
+    }
+
+    let superseding = || {
+        vec![RuntimeSideEffect::RenderClient {
+            client_id: source.clone(),
+            reason: crate::runtime::RenderInvalidationReason::FullRedraw,
+        }]
+    };
+    assert!(
+        service.pending_divider_render_effects_are_superseded(&superseding()),
+        "the drag fixture must leave deferred divider geometry"
+    );
+    assert!(
+        service.pending_divider_render_effects_are_superseded(&superseding()),
+        "probing repeatedly must not consume the gesture state"
+    );
+    let mut drag_effects = vec![RuntimeSideEffect::RenderClient {
+        client_id: source.clone(),
+        reason: crate::runtime::RenderInvalidationReason::ResizeDrag,
+    }];
+    service.filter_pending_divider_render_effects(&mut drag_effects);
+    assert_eq!(
+        drag_effects.len(),
+        1,
+        "a drag-owner redraw is never filtered out"
+    );
+    assert!(
+        service.pending_divider_render_effects_are_superseded(&superseding()),
+        "filtering must not consume the gesture state"
+    );
+
+    let mut committed = superseding();
+    service.commit_pending_divider_render_effects(&mut committed);
+    assert!(
+        !service.pending_divider_render_effects_are_superseded(&superseding()),
+        "the commit is what consumes the divider gesture state"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies a changed divider is projected only to its drag owner over a blank
 /// window body, then commits once to every client projecting the resized
 /// window. The owner's rendered divider and mouse hit cells must use the same
