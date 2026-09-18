@@ -57,8 +57,8 @@ pub(crate) use lifecycle::{
     RuntimeSnapshotOwnedCreationContext,
 };
 pub(crate) use lifecycle::{
-    RuntimeRecordBrowserRefreshDispatch, RuntimeRecordBrowserRefreshOutcome,
-    RuntimeRecordBrowserRefreshWork,
+    RuntimeRecordBrowserRefreshDispatch, RuntimeRecordBrowserRefreshIntent,
+    RuntimeRecordBrowserRefreshOutcome, RuntimeRecordBrowserRefreshWork,
 };
 pub(crate) use mcp_transport::{
     RuntimeAgentProviderPreparationOutcome, RuntimeAgentProviderPreparationWork,

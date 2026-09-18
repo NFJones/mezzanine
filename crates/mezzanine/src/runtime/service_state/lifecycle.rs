@@ -412,14 +412,37 @@ pub(crate) struct RuntimeRecordBrowserRefreshWork {
     pub generation: u64,
     /// Overlay source the page is rebuilt from.
     pub source: super::RuntimeRecordBrowserOverlaySource,
-    /// Focused record the rebuilt page restores, when one was focused.
-    pub active_record_id: Option<String>,
+    /// What the worker rebuilds for this claim.
+    pub intent: RuntimeRecordBrowserRefreshIntent,
     /// Transcript store the saved-session page reads.
     pub transcript_store: Option<crate::storage::transcript::AgentTranscriptStore>,
     /// Prompt column budget each rebuilt row may use.
     pub prompt_width: usize,
     /// Title policy captured from live configuration.
     pub title_policy: crate::session_title::SessionTitlePolicy,
+}
+
+/// What one deferred refresh rebuilds for its key.
+#[derive(Debug, Clone)]
+pub(crate) enum RuntimeRecordBrowserRefreshIntent {
+    /// Rebuild the current page in place, restoring the focused row when one was
+    /// focused.
+    CurrentPage {
+        /// Focused record the rebuilt page restores, when one was focused.
+        active_record_id: Option<String>,
+    },
+    /// Fetch the adjacent page after cursor movement crossed a page edge.
+    ///
+    /// The page identity is captured in memory when the claim is made; the cursor
+    /// lookup and the page rebuild both happen in the worker.
+    AdjacentPage {
+        /// Signed cursor movement: positive pages forward, negative backward.
+        delta: isize,
+        /// First record id on the page the cursor moved off.
+        first_id: String,
+        /// Last record id on the page the cursor moved off.
+        last_id: String,
+    },
 }
 
 /// Result a refresh worker prepares for the actor to install or drop.
@@ -429,6 +452,10 @@ pub(crate) enum RuntimeRecordBrowserRefreshOutcome {
     Rebuilt {
         /// Browser the worker rendered from the captured store read.
         browser: Box<mez_mux::record_browser::RecordBrowser>,
+        /// Source the rebuilt page belongs to, including any resolved anchor.
+        source: super::RuntimeRecordBrowserOverlaySource,
+        /// Selection the rebuilt page installs, when the intent named one.
+        active_index: Option<usize>,
     },
     /// Rebuild failed; the actor keeps the current page.
     Failed {

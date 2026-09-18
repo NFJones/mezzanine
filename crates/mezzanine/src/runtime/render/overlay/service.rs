@@ -123,114 +123,17 @@ fn move_record_browser_cursor(
 }
 
 impl RuntimeSessionService {
-    /// Fetches the adjacent saved-session page when cursor movement crosses a page edge.
+    /// Claims the adjacent saved-session page when cursor movement crosses a page edge.
+    ///
+    /// The edge check and the page identity both read retained overlay state, so
+    /// a page-up or page-down never parks the actor behind a catalog read; the
+    /// overlay refresh lane resolves the edge cursor record and rebuilds the
+    /// page. The keypress therefore reports no immediate change and the claim's
+    /// completion installs the fetched page.
     fn page_saved_session_browser_for_cursor(&mut self, delta: isize) -> Result<Option<bool>> {
-        let Some((source, active_index, record_count, first_id, last_id)) = self
-            .presentation
-            .primary_display_overlay
-            .as_ref()
-            .and_then(|overlay| {
-                let record_browser = overlay.record_browser.as_ref()?;
-                let RuntimeRecordBrowserOverlaySource::SavedSessions { .. } =
-                    record_browser.source.as_ref()?
-                else {
-                    return None;
-                };
-                let records = record_browser.browser.records();
-                Some((
-                    record_browser.source.clone()?,
-                    record_browser_active_index(overlay, record_browser.browser.active_index()),
-                    records.len(),
-                    records.first()?.id.clone(),
-                    records.last()?.id.clone(),
-                ))
-            })
-        else {
-            return Ok(None);
-        };
-        let crosses_edge = if delta.is_positive() {
-            active_index.saturating_add(delta.unsigned_abs()) >= record_count
-        } else if delta.is_negative() {
-            delta.unsigned_abs() > active_index
-        } else {
-            false
-        };
-        if !crosses_edge {
-            return Ok(None);
-        }
-
-        let store = self
-            .persistence
-            .transcript_store()
-            .ok_or_else(|| MezError::invalid_state("resume requires transcript storage"))?;
-        let cursor_id = if delta.is_positive() {
-            &last_id
-        } else {
-            &first_id
-        };
-        let cursor = store
-            .saved_session(cursor_id)?
-            .as_ref()
-            .map(crate::storage::transcript::SavedSessionCursor::from_session)
-            .ok_or_else(|| {
-                MezError::new(
-                    crate::error::MezErrorKind::NotFound,
-                    "saved-session page cursor was not found",
-                )
-            })?;
-        let mut next_source = source.clone();
-        let current_anchor = match &source {
-            RuntimeRecordBrowserOverlaySource::SavedSessions { anchor, .. } => anchor,
-            _ => unreachable!("saved-session page source was validated above"),
-        };
-        let next_anchor = if delta.is_positive() {
-            crate::storage::transcript::SavedSessionPageAnchor::After(cursor)
-        } else if current_anchor.is_none() {
-            crate::storage::transcript::SavedSessionPageAnchor::Last
-        } else {
-            crate::storage::transcript::SavedSessionPageAnchor::Before(cursor)
-        };
-        if let RuntimeRecordBrowserOverlaySource::SavedSessions { anchor, .. } = &mut next_source {
-            *anchor = Some(next_anchor);
-        }
-        let mut browser = self.refresh_record_browser_overlay_source(&next_source)?;
-        if browser.records().is_empty() {
-            if let RuntimeRecordBrowserOverlaySource::SavedSessions { anchor, .. } =
-                &mut next_source
-            {
-                *anchor = if delta.is_positive() {
-                    None
-                } else {
-                    Some(crate::storage::transcript::SavedSessionPageAnchor::Last)
-                };
-            }
-            browser = self.refresh_record_browser_overlay_source(&next_source)?;
-        }
-        if delta.is_negative() {
-            browser.set_active_index(browser.records().len().saturating_sub(1));
-        } else {
-            browser.set_active_index(0);
-        }
-
-        let terminal_width = usize::from(self.session.authoritative_size.columns).max(1);
-        let prose_width = terminal_width
-            .min(self.presentation.settings.terminal_agent_wrap_column_cap)
-            .max(1);
-        let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
-            return Ok(Some(false));
-        };
-        let Some(record_browser) = overlay.record_browser.as_mut() else {
-            return Ok(Some(false));
-        };
-        record_browser.source = Some(next_source);
-        record_browser.browser = browser;
-        Ok(Some(render_record_browser_overlay(
-            overlay,
-            &mut self.presentation.overlay_action_registry,
-            &self.presentation.settings.ui_theme,
-            terminal_width,
-            prose_width,
-        )))
+        Ok(self
+            .begin_record_browser_adjacent_page_claim(delta)?
+            .map(|_| false))
     }
 
     /// Reflows an active record browser after terminal geometry changes.
@@ -1954,6 +1857,31 @@ impl RuntimeSessionService {
             .browser
             .active_record_id()
             .map(str::to_string)
+    }
+
+    /// Returns the focused index, page length, and page edge ids of the active
+    /// saved-session browser page.
+    ///
+    /// A paging keypress decides from these retained facts whether the cursor
+    /// left its page, so claiming the adjacent page never waits on the store; the
+    /// worker later resolves the edge record into a keyset anchor.
+    pub(crate) fn active_saved_session_browser_page_edges(
+        &self,
+    ) -> Option<(usize, usize, String, String)> {
+        let overlay = self.presentation.primary_display_overlay.as_ref()?;
+        let record_browser = overlay.record_browser.as_ref()?;
+        let RuntimeRecordBrowserOverlaySource::SavedSessions { .. } =
+            record_browser.source.as_ref()?
+        else {
+            return None;
+        };
+        let records = record_browser.browser.records();
+        Some((
+            record_browser_active_index(overlay, record_browser.browser.active_index()),
+            records.len(),
+            records.first()?.id.clone(),
+            records.last()?.id.clone(),
+        ))
     }
 
     /// Records one refresh failure on the active saved-session browser.

@@ -500,6 +500,9 @@ pub(crate) struct RuntimePresentationComponent {
     pending_record_browser_refreshes: Vec<crate::runtime::RuntimeRecordBrowserRefreshDispatch>,
     /// Per-key refresh generations used to drop superseded rebuilt pages.
     record_browser_refresh_generations: std::collections::BTreeMap<String, u64>,
+    /// Per-key refresh intents describing what the claimed rebuild does.
+    record_browser_refresh_intents:
+        std::collections::BTreeMap<String, crate::runtime::RuntimeRecordBrowserRefreshIntent>,
     /// Background selector discoveries keyed by exact client and pane owner.
     agent_prompt_selector_refreshes: std::collections::HashMap<
         (mez_core::ids::ClientId, String),
@@ -1485,14 +1488,31 @@ impl RuntimePresentationComponent {
     ///
     /// Rapid paging or typing claims one refresh after another; only the newest
     /// claim for a key stays queued, so a burst of keystrokes costs one worker
-    /// item instead of one per keystroke.
+    /// item instead of one per keystroke. The newest intent replaces the one its
+    /// dropped predecessor carried, because a dropped dispatch is one no worker
+    /// has read yet.
     pub(crate) fn push_pending_record_browser_refresh(
         &mut self,
         dispatch: crate::runtime::RuntimeRecordBrowserRefreshDispatch,
+        intent: crate::runtime::RuntimeRecordBrowserRefreshIntent,
     ) {
+        self.record_browser_refresh_intents
+            .insert(dispatch.refresh_key.clone(), intent);
         self.pending_record_browser_refreshes
             .retain(|queued| queued.refresh_key != dispatch.refresh_key);
         self.pending_record_browser_refreshes.push(dispatch);
+    }
+
+    /// Takes the intent one refresh key was claimed with.
+    ///
+    /// A claim consumes its intent because the derived work carries it into the
+    /// worker. A superseded generation never reaches this call, so its intent is
+    /// replaced by the successor claim instead of leaking.
+    pub(crate) fn take_record_browser_refresh_intent(
+        &mut self,
+        refresh_key: &str,
+    ) -> Option<crate::runtime::RuntimeRecordBrowserRefreshIntent> {
+        self.record_browser_refresh_intents.remove(refresh_key)
     }
 
     /// Removes pane-scoped interaction state from every retained client.

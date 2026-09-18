@@ -6,15 +6,18 @@
 //! dispatch, and lets a worker rebuild the page off the actor. The completion
 //! installs the rebuilt page only while the overlay still shows the same source
 //! and no newer claim has been made, which keeps overlay state, selection, and
-//! rendering unchanged apart from arrival timing.
+//! rendering unchanged apart from arrival timing. Each claim carries an intent:
+//! a current-page rebuild restores the focused row, while an adjacent-page fetch
+//! resolves the cursor record the operator stepped off into a keyset anchor.
 
 use super::RuntimeSessionService;
-use crate::error::{MezErrorKind, Result};
+use crate::error::{MezError, MezErrorKind, Result};
 use crate::runtime::service_state::RuntimeRecordBrowserOverlaySource;
 use crate::runtime::{
-    RuntimeRecordBrowserRefreshDispatch, RuntimeRecordBrowserRefreshOutcome,
-    RuntimeRecordBrowserRefreshWork,
+    RuntimeRecordBrowserRefreshDispatch, RuntimeRecordBrowserRefreshIntent,
+    RuntimeRecordBrowserRefreshOutcome, RuntimeRecordBrowserRefreshWork,
 };
+use crate::storage::transcript::SavedSessionPageAnchor;
 
 /// Refresh key for the shared saved-session picker overlay.
 ///
@@ -31,22 +34,78 @@ impl RuntimeSessionService {
     /// that family reads a store tall enough to park the actor.
     pub(crate) fn begin_record_browser_refresh_claim(&mut self, refresh_key: &str) -> Option<u64> {
         self.active_saved_session_browser_source()?;
+        Some(self.begin_record_browser_refresh_claim_for_intent(
+            refresh_key,
+            RuntimeRecordBrowserRefreshIntent::CurrentPage {
+                active_record_id: self.active_saved_session_browser_record_id(),
+            },
+        ))
+    }
+
+    /// Claims one adjacent saved-session page and queues its worker dispatch.
+    ///
+    /// The page-edge check and the page identity both read retained overlay
+    /// state, so the keypress path never waits on the store: the worker resolves
+    /// the edge cursor record and rebuilds the page. Returns `Ok(None)` when the
+    /// overlay is not a saved-session page or the cursor stayed inside its page,
+    /// which leaves cursor movement to the in-page handler.
+    pub(crate) fn begin_record_browser_adjacent_page_claim(
+        &mut self,
+        delta: isize,
+    ) -> Result<Option<u64>> {
+        let Some((active_index, record_count, first_id, last_id)) =
+            self.active_saved_session_browser_page_edges()
+        else {
+            return Ok(None);
+        };
+        let crosses_edge = if delta.is_positive() {
+            active_index.saturating_add(delta.unsigned_abs()) >= record_count
+        } else if delta.is_negative() {
+            delta.unsigned_abs() > active_index
+        } else {
+            false
+        };
+        if !crosses_edge {
+            return Ok(None);
+        }
+        self.persistence
+            .transcript_store()
+            .ok_or_else(|| MezError::invalid_state("resume requires transcript storage"))?;
+        Ok(Some(self.begin_record_browser_refresh_claim_for_intent(
+            SAVED_SESSION_OVERLAY_REFRESH_KEY,
+            RuntimeRecordBrowserRefreshIntent::AdjacentPage {
+                delta,
+                first_id,
+                last_id,
+            },
+        )))
+    }
+
+    /// Claims one refresh generation for an intent and queues its dispatch.
+    fn begin_record_browser_refresh_claim_for_intent(
+        &mut self,
+        refresh_key: &str,
+        intent: RuntimeRecordBrowserRefreshIntent,
+    ) -> u64 {
         let generation = self.presentation.begin_record_browser_refresh(refresh_key);
         self.presentation.push_pending_record_browser_refresh(
             RuntimeRecordBrowserRefreshDispatch {
                 refresh_key: refresh_key.to_string(),
                 generation,
             },
+            intent,
         );
-        Some(generation)
+        generation
     }
 
     /// Builds the owned work one queued refresh dispatch needs.
     ///
     /// Returns `None` when the claim is stale or the overlay no longer shows a
-    /// saved-session browser, so a superseded dispatch costs nothing.
+    /// saved-session browser, so a superseded dispatch costs nothing. The claim
+    /// consumes the intent the generation was queued with, because the work it
+    /// builds is the only owner of that intent from here on.
     pub(crate) fn claim_record_browser_refresh(
-        &self,
+        &mut self,
         refresh_key: &str,
         generation: u64,
     ) -> Result<Option<RuntimeRecordBrowserRefreshWork>> {
@@ -60,11 +119,17 @@ impl RuntimeSessionService {
         let Some(source) = self.active_saved_session_browser_source() else {
             return Ok(None);
         };
+        let Some(intent) = self
+            .presentation
+            .take_record_browser_refresh_intent(refresh_key)
+        else {
+            return Ok(None);
+        };
         Ok(Some(RuntimeRecordBrowserRefreshWork {
             refresh_key: refresh_key.to_string(),
             generation,
             source,
-            active_record_id: self.active_saved_session_browser_record_id(),
+            intent,
             transcript_store: self.persistence.transcript_store().cloned(),
             prompt_width: self.saved_session_prompt_width(),
             title_policy: self.agent_session_title_policy(),
@@ -84,6 +149,115 @@ impl RuntimeSessionService {
                 kind: MezErrorKind::InvalidState,
             };
         };
+        let mut source = work.source.clone();
+        let mut active_index = None;
+        if let RuntimeRecordBrowserRefreshIntent::AdjacentPage {
+            delta,
+            first_id,
+            last_id,
+        } = &work.intent
+        {
+            let current_anchor = match &source {
+                RuntimeRecordBrowserOverlaySource::SavedSessions { anchor, .. } => anchor.clone(),
+                _ => None,
+            };
+            let cursor_id = if delta.is_positive() {
+                last_id
+            } else {
+                first_id
+            };
+            let cursor = match store.saved_session(cursor_id) {
+                Ok(Some(session)) => {
+                    crate::storage::transcript::SavedSessionCursor::from_session(&session)
+                }
+                Ok(None) => {
+                    return RuntimeRecordBrowserRefreshOutcome::Failed {
+                        message: "saved-session page cursor was not found".to_string(),
+                        kind: MezErrorKind::NotFound,
+                    };
+                }
+                Err(error) => {
+                    return RuntimeRecordBrowserRefreshOutcome::Failed {
+                        message: error.message().to_string(),
+                        kind: error.kind(),
+                    };
+                }
+            };
+            let next_anchor = if delta.is_positive() {
+                SavedSessionPageAnchor::After(cursor)
+            } else if current_anchor.is_none() {
+                SavedSessionPageAnchor::Last
+            } else {
+                SavedSessionPageAnchor::Before(cursor)
+            };
+            if let RuntimeRecordBrowserOverlaySource::SavedSessions { anchor, .. } = &mut source {
+                *anchor = Some(next_anchor);
+            }
+        }
+        let mut browser = match Self::rebuild_saved_session_page(store, &source, work) {
+            Ok(browser) => browser,
+            Err(error) => {
+                return RuntimeRecordBrowserRefreshOutcome::Failed {
+                    message: error.message().to_string(),
+                    kind: error.kind(),
+                };
+            }
+        };
+        match &work.intent {
+            RuntimeRecordBrowserRefreshIntent::CurrentPage { active_record_id } => {
+                if let Some(active_record_id) = active_record_id.as_deref() {
+                    browser.set_active_record_id(active_record_id);
+                }
+            }
+            RuntimeRecordBrowserRefreshIntent::AdjacentPage { delta, .. } => {
+                if browser.records().is_empty() {
+                    // The cursor record is the last row the catalog served, so an
+                    // empty neighbour means the catalog ended between the two
+                    // reads; the fallback anchor shows the same edge the inline
+                    // fetch showed.
+                    if let RuntimeRecordBrowserOverlaySource::SavedSessions { anchor, .. } =
+                        &mut source
+                    {
+                        *anchor = if delta.is_positive() {
+                            None
+                        } else {
+                            Some(SavedSessionPageAnchor::Last)
+                        };
+                    }
+                    browser = match Self::rebuild_saved_session_page(store, &source, work) {
+                        Ok(browser) => browser,
+                        Err(error) => {
+                            return RuntimeRecordBrowserRefreshOutcome::Failed {
+                                message: error.message().to_string(),
+                                kind: error.kind(),
+                            };
+                        }
+                    };
+                }
+                active_index = Some(if delta.is_negative() {
+                    browser.records().len().saturating_sub(1)
+                } else {
+                    0
+                });
+            }
+        }
+        RuntimeRecordBrowserRefreshOutcome::Rebuilt {
+            browser: Box::new(browser),
+            source,
+            active_index,
+        }
+    }
+
+    /// Rebuilds one saved-session page from owned work inputs.
+    ///
+    /// The store read stays in one place so both intents rebuild through the
+    /// same query the inline refresh used, and a non-saved-session source fails
+    /// with the kind the inline path reported.
+    fn rebuild_saved_session_page(
+        store: &crate::storage::transcript::AgentTranscriptStore,
+        source: &RuntimeRecordBrowserOverlaySource,
+        work: &RuntimeRecordBrowserRefreshWork,
+    ) -> Result<mez_mux::record_browser::RecordBrowser> {
         let RuntimeRecordBrowserOverlaySource::SavedSessions {
             directory,
             lifecycle,
@@ -92,14 +266,13 @@ impl RuntimeSessionService {
             anchor,
             limit,
             ..
-        } = &work.source
+        } = source
         else {
-            return RuntimeRecordBrowserRefreshOutcome::Failed {
-                message: "record browser refresh requires a saved-session source".to_string(),
-                kind: MezErrorKind::InvalidState,
-            };
+            return Err(MezError::invalid_state(
+                "record browser refresh requires a saved-session source",
+            ));
         };
-        match super::resume::runtime_agent_saved_sessions_browser(
+        super::resume::runtime_agent_saved_sessions_browser(
             store,
             directory.as_deref(),
             *lifecycle,
@@ -109,20 +282,7 @@ impl RuntimeSessionService {
             *limit,
             work.prompt_width,
             work.title_policy,
-        ) {
-            Ok(mut browser) => {
-                if let Some(active_record_id) = work.active_record_id.as_deref() {
-                    browser.set_active_record_id(active_record_id);
-                }
-                RuntimeRecordBrowserRefreshOutcome::Rebuilt {
-                    browser: Box::new(browser),
-                }
-            }
-            Err(error) => RuntimeRecordBrowserRefreshOutcome::Failed {
-                message: error.message().to_string(),
-                kind: error.kind(),
-            },
-        }
+        )
     }
 
     /// Queues one refresh dispatch without an open overlay for tests.
@@ -131,11 +291,10 @@ impl RuntimeSessionService {
     /// instead of standing up the picker.
     #[cfg(test)]
     pub(crate) fn queue_record_browser_refresh_for_tests(&mut self, refresh_key: &str) {
-        let generation = self.presentation.begin_record_browser_refresh(refresh_key);
-        self.presentation.push_pending_record_browser_refresh(
-            RuntimeRecordBrowserRefreshDispatch {
-                refresh_key: refresh_key.to_string(),
-                generation,
+        self.begin_record_browser_refresh_claim_for_intent(
+            refresh_key,
+            RuntimeRecordBrowserRefreshIntent::CurrentPage {
+                active_record_id: None,
             },
         );
     }
@@ -189,7 +348,11 @@ impl RuntimeSessionService {
                     "overlay refresh failed: {message} ({kind:?})"
                 )))
             }
-            RuntimeRecordBrowserRefreshOutcome::Rebuilt { browser } => {
+            RuntimeRecordBrowserRefreshOutcome::Rebuilt {
+                browser,
+                source,
+                active_index,
+            } => {
                 if self
                     .presentation
                     .record_browser_refresh_generation(&work.refresh_key)
@@ -200,7 +363,11 @@ impl RuntimeSessionService {
                 if self.active_saved_session_browser_source().as_ref() != Some(&work.source) {
                     return Ok(false);
                 }
-                Ok(self.replace_active_saved_session_browser(work.source.clone(), *browser))
+                let mut browser = *browser;
+                if let Some(active_index) = active_index {
+                    browser.set_active_index(active_index);
+                }
+                Ok(self.replace_active_saved_session_browser(source, browser))
             }
         }
     }

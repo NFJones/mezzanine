@@ -1500,6 +1500,12 @@ fn runtime_resume_browser_pages_and_searches_catalog_results() {
     service
         .apply_primary_display_overlay_input(&primary, b"\x1b[B")
         .unwrap();
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the crossing keypress fetches the next catalog page"
+    );
     let second_ids = service
         .primary_display_overlay()
         .and_then(|overlay| overlay.record_browser.as_ref())
@@ -1515,6 +1521,12 @@ fn runtime_resume_browser_pages_and_searches_catalog_results() {
     service
         .apply_primary_display_overlay_input(&primary, b"\x1b[A")
         .unwrap();
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the backward crossing keypress fetches the previous catalog page"
+    );
     let previous_ids = service
         .primary_display_overlay()
         .and_then(|overlay| overlay.record_browser.as_ref())
