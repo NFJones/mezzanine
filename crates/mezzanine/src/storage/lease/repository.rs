@@ -1,11 +1,9 @@
 //! Locked atomic repository operations for durable leases.
 
 use std::collections::HashSet;
-use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::fs;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use rustix::fs::{FlockOperation, Mode, OFlags, flock, open};
 use serde::{Deserialize, Serialize};
@@ -18,27 +16,15 @@ use super::{
 use crate::runtime::current_effective_uid;
 
 const DATABASE_VERSION: u32 = 1;
-const DATABASE_FILE_NAME: &str = "leases.json";
 const LOCK_FILE_NAME: &str = "leases.lock";
-const MAX_DATABASE_BYTES: u64 = 4 * 1024 * 1024;
-static NEXT_TEMPORARY_ID: AtomicU64 = AtomicU64::new(1);
-
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum LeasePublicationFailurePhase {
-    AfterWrite,
-    AfterFileSync,
-    BeforeRename,
-    BeforeDirectorySync,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct LeaseDatabase {
-    version: u32,
-    boot_generation: u64,
-    leases: Vec<RemoteSessionLease>,
+pub(super) struct LeaseDatabase {
+    pub(super) version: u32,
+    pub(super) boot_generation: u64,
+    pub(super) leases: Vec<RemoteSessionLease>,
     #[serde(default)]
-    snapshot_cleanup_candidates: Vec<String>,
+    pub(super) snapshot_cleanup_candidates: Vec<String>,
 }
 
 impl Default for LeaseDatabase {
@@ -685,49 +671,11 @@ impl RemoteSessionLeaseRepository {
     }
 
     fn load_database(&self) -> Result<LeaseDatabase> {
-        let path = self.directory.join(DATABASE_FILE_NAME);
-        let file = match open_private_file_read(&path) {
-            Ok(file) => file,
-            Err(error) if error.io_kind() == Some(std::io::ErrorKind::NotFound) => {
-                return Ok(LeaseDatabase::default());
-            }
-            Err(error) => return Err(error),
-        };
-        if file.metadata()?.len() > MAX_DATABASE_BYTES {
-            return Err(MezError::invalid_state(
-                "remote session lease database exceeds the protected size limit",
-            ));
-        }
-        let mut bytes = Vec::new();
-        file.take(MAX_DATABASE_BYTES.saturating_add(1))
-            .read_to_end(&mut bytes)?;
-        if bytes.len() as u64 > MAX_DATABASE_BYTES {
-            return Err(MezError::invalid_state(
-                "remote session lease database exceeds the protected size limit",
-            ));
-        }
-        let database: LeaseDatabase = serde_json::from_slice(&bytes).map_err(|error| {
-            MezError::invalid_state(format!(
-                "remote session lease database is malformed: {error}"
-            ))
-        })?;
-        validate_database(&database)?;
-        Ok(database)
+        super::sqlite::load_database(&self.directory)
     }
 
     fn write_database(&self, database: &LeaseDatabase) -> Result<()> {
-        let mut bytes = serde_json::to_vec_pretty(database).map_err(|error| {
-            MezError::invalid_state(format!(
-                "failed to encode remote session lease database: {error}"
-            ))
-        })?;
-        bytes.push(b'\n');
-        if bytes.len() as u64 > MAX_DATABASE_BYTES {
-            return Err(MezError::invalid_state(
-                "remote session lease database exceeds the protected size limit",
-            ));
-        }
-        write_private_atomic(&self.directory.join(DATABASE_FILE_NAME), &bytes)
+        super::sqlite::write_database(&self.directory, database)
     }
 }
 
@@ -785,7 +733,7 @@ fn gc_preview(
     }
 }
 
-fn validate_database(database: &LeaseDatabase) -> Result<()> {
+pub(super) fn validate_database(database: &LeaseDatabase) -> Result<()> {
     if database.version != DATABASE_VERSION {
         return Err(MezError::invalid_state(format!(
             "unsupported remote session lease database version {}",
@@ -887,84 +835,6 @@ fn validate_private_file(path: &Path, metadata: &fs::Metadata) -> Result<()> {
         return Err(MezError::forbidden(format!(
             "remote session lease path {} must be a private regular file owned by the current user",
             path.display()
-        )));
-    }
-    Ok(())
-}
-
-fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    write_private_atomic_impl(path, bytes, None)
-}
-
-#[cfg(test)]
-pub(super) fn write_private_atomic_failing(
-    path: &Path,
-    bytes: &[u8],
-    phase: LeasePublicationFailurePhase,
-) -> Result<()> {
-    write_private_atomic_impl(path, bytes, Some(phase))
-}
-
-#[cfg(test)]
-type ConfiguredLeasePublicationFailure = Option<LeasePublicationFailurePhase>;
-#[cfg(not(test))]
-type ConfiguredLeasePublicationFailure = Option<()>;
-
-fn write_private_atomic_impl(
-    path: &Path,
-    bytes: &[u8],
-    _failure: ConfiguredLeasePublicationFailure,
-) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| MezError::invalid_args("remote session lease path has no parent"))?;
-    ensure_private_directory(parent)?;
-    if let Ok(metadata) = fs::symlink_metadata(path) {
-        validate_private_file(path, &metadata)?;
-    }
-    let temporary = parent.join(format!(
-        ".{DATABASE_FILE_NAME}.{}.{}.tmp",
-        std::process::id(),
-        NEXT_TEMPORARY_ID.fetch_add(1, Ordering::Relaxed)
-    ));
-    let result = (|| -> Result<()> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temporary)?;
-        file.write_all(bytes)?;
-        file.flush()?;
-        #[cfg(test)]
-        fail_lease_publication_at(_failure, LeasePublicationFailurePhase::AfterWrite)?;
-        file.sync_all()?;
-        #[cfg(test)]
-        fail_lease_publication_at(_failure, LeasePublicationFailurePhase::AfterFileSync)?;
-        drop(file);
-        #[cfg(test)]
-        fail_lease_publication_at(_failure, LeasePublicationFailurePhase::BeforeRename)?;
-        fs::rename(&temporary, path)?;
-        let metadata = fs::symlink_metadata(path)?;
-        validate_private_file(path, &metadata)?;
-        #[cfg(test)]
-        fail_lease_publication_at(_failure, LeasePublicationFailurePhase::BeforeDirectorySync)?;
-        fs::File::open(parent)?.sync_all()?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(temporary);
-    }
-    result
-}
-
-#[cfg(test)]
-fn fail_lease_publication_at(
-    configured: ConfiguredLeasePublicationFailure,
-    phase: LeasePublicationFailurePhase,
-) -> Result<()> {
-    if configured == Some(phase) {
-        return Err(MezError::invalid_state(format!(
-            "injected lease publication failure at {phase:?}"
         )));
     }
     Ok(())
