@@ -292,9 +292,10 @@ pub(super) enum AssignmentRowWrite<'a> {
 /// Returns the row-level writes that turn `before` into `after`.
 ///
 /// Unchanged rows produce no write, so a mutation that touches one assignment
-/// writes one row instead of rewriting the whole store. The plan follows the
-/// caller's in-memory order, which the repository keeps sorted by session id,
-/// so it is deterministic.
+/// writes one row instead of rewriting the whole store. Removals come first so
+/// a key-changing mutation can never collide an insert with the row the same
+/// plan removes, and the plan follows the caller's in-memory order, which the
+/// repository keeps sorted by session id, so it is deterministic.
 pub(super) fn pending_writes<'a>(
     before: &'a LocalAssignmentDatabase,
     after: &'a LocalAssignmentDatabase,
@@ -310,16 +311,18 @@ pub(super) fn pending_writes<'a>(
         .map(|assignment| assignment.session_id.as_str())
         .collect();
     let mut writes = Vec::new();
+    // Removals come first so a mutation that changed a session id can never
+    // collide its insert with the row this plan deletes.
+    for assignment in &before.assignments {
+        if !after_ids.contains(assignment.session_id.as_str()) {
+            writes.push(AssignmentRowWrite::Delete(assignment.session_id.as_str()));
+        }
+    }
     for assignment in &after.assignments {
         match before_by_id.get(assignment.session_id.as_str()) {
             Some(existing) if *existing == assignment => {}
             Some(_) => writes.push(AssignmentRowWrite::Update(assignment)),
             None => writes.push(AssignmentRowWrite::Insert(assignment)),
-        }
-    }
-    for assignment in &before.assignments {
-        if !after_ids.contains(assignment.session_id.as_str()) {
-            writes.push(AssignmentRowWrite::Delete(assignment.session_id.as_str()));
         }
     }
     writes

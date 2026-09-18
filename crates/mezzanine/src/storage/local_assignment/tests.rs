@@ -283,13 +283,14 @@ fn assignment_repository_rejects_symlink_database_and_lock_paths() {
     }
 }
 
-/// A failed row replacement leaves the stored assignment database unchanged.
+/// A failed write leaves the stored assignment database unchanged.
 ///
 /// The repository validates every mutation before writing, so a database-level
-/// failure is forced directly through the storage layer: a duplicate session id
-/// violates the primary key inside the replacement transaction, which must roll
-/// back and leave the previously stored rows, the stored boot generation, and
-/// the already-recorded import marker untouched.
+/// failure is forced directly through the storage layer: two rows carrying the
+/// same new session id, with neither present in the store, make the second
+/// insert violate the primary key inside the write transaction, which must roll
+/// back and leave the previously stored rows and the stored boot generation
+/// untouched.
 #[test]
 fn assignment_database_row_replacement_is_transactional() {
     let root = test_root("row-replacement-atomicity");
@@ -307,10 +308,12 @@ fn assignment_database_row_replacement_is_transactional() {
     let stored = repository.list().unwrap();
     assert_eq!(stored.len(), 1);
 
+    let mut duplicate_row = stored[0].clone();
+    duplicate_row.session_id = "$duplicate".to_string();
     let duplicate = super::repository::LocalAssignmentDatabase {
         version: 1,
         boot_generation,
-        assignments: vec![stored[0].clone(), stored[0].clone()],
+        assignments: vec![duplicate_row.clone(), duplicate_row],
     };
     assert!(
         super::sqlite::write_database(
@@ -319,7 +322,7 @@ fn assignment_database_row_replacement_is_transactional() {
             &duplicate,
         )
         .is_err(),
-        "duplicate session ids must fail the write transaction"
+        "two rows with the same new session id must fail the write transaction"
     );
     assert_eq!(repository.list().unwrap(), stored);
     assert_eq!(
@@ -565,9 +568,9 @@ fn assignment_pending_writes_cover_only_changed_rows() {
     assert_eq!(
         rendered,
         vec![
+            "delete $b".to_string(),
             "update $a".to_string(),
             "insert $d".to_string(),
-            "delete $b".to_string(),
         ],
         "only changed, added, and removed rows are written"
     );

@@ -562,13 +562,13 @@ fn test_root(name: &str) -> PathBuf {
     root
 }
 
-/// A failed row replacement leaves the stored lease database unchanged.
+/// A failed write leaves the stored lease database unchanged.
 ///
 /// The repository validates every mutation before writing, so a database-level
-/// failure is forced directly through the storage layer: a duplicate lease id
-/// violates the primary key inside the replacement transaction, which must roll
-/// back and leave the previously stored rows, the boot generation, and the
-/// legacy JSON document untouched.
+/// failure is forced directly through the storage layer: two rows carrying the
+/// same new lease id, with neither present in the store, make the second insert
+/// violate the primary key inside the write transaction, which must roll back
+/// and leave the previously stored rows and the boot generation untouched.
 #[test]
 fn lease_database_row_replacement_is_transactional() {
     let root = test_root("row-replacement-atomicity");
@@ -586,10 +586,12 @@ fn lease_database_row_replacement_is_transactional() {
     assert_eq!(stored.len(), 1);
     let boot_generation = repository.boot_generation().unwrap();
 
+    let mut duplicate_row = stored[0].clone();
+    duplicate_row.lease_id = "lease-duplicate".to_string();
     let duplicate = super::repository::LeaseDatabase {
         version: 1,
         boot_generation,
-        leases: vec![stored[0].clone(), stored[0].clone()],
+        leases: vec![duplicate_row.clone(), duplicate_row],
         snapshot_cleanup_candidates: Vec::new(),
     };
     assert!(
@@ -599,7 +601,7 @@ fn lease_database_row_replacement_is_transactional() {
             &duplicate,
         )
         .is_err(),
-        "duplicate lease ids must fail the write transaction"
+        "two rows with the same new lease id must fail the write transaction"
     );
     assert_eq!(repository.list().unwrap(), stored);
     assert_eq!(repository.boot_generation().unwrap(), boot_generation);
@@ -808,9 +810,9 @@ fn lease_pending_writes_cover_only_changed_rows() {
     assert_eq!(
         rendered,
         vec![
+            "delete lease-b".to_string(),
             "update lease-a".to_string(),
             "insert lease-d".to_string(),
-            "delete lease-b".to_string(),
         ],
         "only changed, added, and removed rows are written"
     );

@@ -298,9 +298,10 @@ pub(super) enum LeaseRowWrite<'a> {
 /// Returns the row-level writes that turn `before` into `after`.
 ///
 /// Unchanged rows produce no write, so a mutation that touches one lease
-/// writes one row instead of rewriting the whole store. The plan follows the
-/// caller's in-memory order, which the repository keeps sorted by lease id, so
-/// it is deterministic.
+/// writes one row instead of rewriting the whole store. Removals come first so
+/// a key-changing mutation can never collide an insert with the row the same
+/// plan removes, and the plan follows the caller's in-memory order, which the
+/// repository keeps sorted by lease id, so it is deterministic.
 pub(super) fn pending_writes<'a>(
     before: &'a LeaseDatabase,
     after: &'a LeaseDatabase,
@@ -316,16 +317,18 @@ pub(super) fn pending_writes<'a>(
         .map(|lease| lease.lease_id.as_str())
         .collect();
     let mut writes = Vec::new();
+    // Removals come first so a mutation that changed a lease id can never
+    // collide its insert with the row this plan deletes.
+    for lease in &before.leases {
+        if !after_ids.contains(lease.lease_id.as_str()) {
+            writes.push(LeaseRowWrite::Delete(lease.lease_id.as_str()));
+        }
+    }
     for lease in &after.leases {
         match before_by_id.get(lease.lease_id.as_str()) {
             Some(existing) if *existing == lease => {}
             Some(_) => writes.push(LeaseRowWrite::Update(lease)),
             None => writes.push(LeaseRowWrite::Insert(lease)),
-        }
-    }
-    for lease in &before.leases {
-        if !after_ids.contains(lease.lease_id.as_str()) {
-            writes.push(LeaseRowWrite::Delete(lease.lease_id.as_str()));
         }
     }
     writes
@@ -410,6 +413,8 @@ fn synchronize_candidates(
     }
     for snapshot_id in &before.snapshot_cleanup_candidates {
         if !after_candidates.contains(snapshot_id.as_str()) {
+            // Candidate removal is idempotent: an id that is already absent is
+            // simply nothing to delete, so no changed-row guard is needed.
             transaction
                 .execute(
                     "DELETE FROM snapshot_cleanup_candidates WHERE snapshot_id = ?1",
