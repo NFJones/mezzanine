@@ -290,6 +290,13 @@ fn runtime_agent_shell_list_modified_files_reports_compact_rows() {
         crate::runtime::commands::lists::runtime_agent_modified_files_body(None),
         "## modified files\n\nno modified files tracked for this agent conversation."
     );
+    assert_eq!(
+        crate::runtime::commands::lists::runtime_agent_modified_files_body(Some(
+            &std::collections::BTreeMap::new()
+        )),
+        "## modified files\n\nno modified files tracked for this agent conversation.",
+        "an empty tracked map renders the same empty state as no map at all"
+    );
 }
 
 /// Verifies prompt submission does not run fallback context accounting before
