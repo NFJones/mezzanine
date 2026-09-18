@@ -2304,10 +2304,20 @@ impl RuntimeSessionService {
         source: Option<RuntimeRecordBrowserOverlaySource>,
     ) {
         let key = (pane_id.to_string(), command.to_string());
-        if let Some(source) = source {
-            self.presentation
-                .pending_record_browser_overlay_sources
-                .insert(key.clone(), source);
+        // A registration owns the key: without a source the previous entry must
+        // go, or a later refresh of this overlay would query the old backend and
+        // replace the browser the caller just registered.
+        match source {
+            Some(source) => {
+                self.presentation
+                    .pending_record_browser_overlay_sources
+                    .insert(key.clone(), source);
+            }
+            None => {
+                self.presentation
+                    .pending_record_browser_overlay_sources
+                    .remove(&key);
+            }
         }
         self.presentation
             .pending_record_browser_overlays
