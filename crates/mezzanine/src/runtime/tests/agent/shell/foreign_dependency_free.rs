@@ -1083,10 +1083,11 @@ bootstrap\tcomplete\t1714500000\n";
         Some("certified"),
         "a remote bootstrap without the authenticated managed child must not certify: \
          phase={bootstrap_phase:?} receiver_installed={} environment_signature_published={} \
-         authority_certified={}",
+         authority_certified={} inputs={}",
         service.managed_child_receiver_is_installed_for_tests(&pane_id),
         service.pane_environment_signature(&pane_id).is_some(),
         service.pane_environment_authority_is_certified_for_tests(&pane_id),
+        service.pane_certification_inputs_for_tests(&pane_id),
     );
     assert_ne!(
         service.pane_foreground_certified_shell_state(&pane_id),

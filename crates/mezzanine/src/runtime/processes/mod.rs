@@ -2892,6 +2892,53 @@ impl RuntimeSessionService {
             .map(|boundary| boundary.phase.as_str())
     }
 
+    /// Reports the certification inputs that decide one pane's bootstrap phase.
+    ///
+    /// Intermittent failures of the remote-certification regression need to
+    /// name which input flipped, so this renders the boundary identity, the
+    /// certified shell identity, and the pending and rejected certification
+    /// entries for one pane.
+    #[cfg(test)]
+    pub(crate) fn pane_certification_inputs_for_tests(&self, pane_id: &str) -> String {
+        let boundary = self
+            .process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .map(|boundary| {
+                format!(
+                    "phase={} primary={} interaction_generation={}",
+                    boundary.phase.as_str(),
+                    boundary.primary_process_id,
+                    boundary.interaction_generation
+                )
+            })
+            .unwrap_or_else(|| "phase=none".to_string());
+        let identity = self
+            .process
+            .pane_certified_shell_identities
+            .get(pane_id)
+            .map(|identity| {
+                format!(
+                    "primary={} interaction_generation={} authority_published={}",
+                    identity.primary_process_id,
+                    identity.interaction_generation,
+                    identity.authority_published
+                )
+            })
+            .unwrap_or_else(|| "none".to_string());
+        format!(
+            "boundary[{}] certified_identity[{}] pending={} rejected={}",
+            boundary,
+            identity,
+            self.process
+                .pending_agent_subshell_certifications
+                .contains_key(pane_id),
+            self.process
+                .pane_agent_subshell_certification_rejections
+                .contains_key(pane_id)
+        )
+    }
+
     /// Returns the foreign bootstrap phase's idle-deadline origin for tests.
     pub(crate) fn foreign_shell_bootstrap_phase_started_at_for_tests(
         &self,
