@@ -116,6 +116,24 @@ impl AgentNetworkActionHistory {
     pub fn mark_progress(&mut self) {
         self.progress_epoch = self.progress_epoch.saturating_add(1);
     }
+
+    /// Returns the current consecutive streak of identical URL fetches.
+    ///
+    /// Every fetch starts a fresh no-progress epoch because one retrieval can
+    /// be concrete progress, so the streak counts trailing identical fetch
+    /// records rather than epoch-scoped ones. Repeatedly retrieving the same URL
+    /// is not progress even when a single fetch is, and a concrete non-network
+    /// step in between deliberately does not re-arm the streak: the guard stays
+    /// fail-closed until the model changes the URL or approach.
+    pub fn equivalent_fetch_url_streak(&self, request: &str) -> usize {
+        self.actions
+            .iter()
+            .rev()
+            .take_while(|record| {
+                record.kind == AgentNetworkActionKind::FetchUrl && record.request == request
+            })
+            .count()
+    }
 }
 
 /// Typed kind of runtime-network action retained in per-turn activity history.
@@ -250,8 +268,32 @@ mod tests {
             history.equivalent_search_streak("bedrock model access documentation", &[]),
             0
         );
-        assert_eq!(history.requests.len(), 3);
-        assert_eq!(history.actions.len(), 3);
+        assert_eq!(history.equivalent_fetch_url_streak("request-3"), 1);
+        history.record_fetch_url("request-3");
+        assert_eq!(history.equivalent_fetch_url_streak("request-3"), 2);
+        history.record_fetch_url("request-4");
+        assert_eq!(
+            history.equivalent_fetch_url_streak("request-3"),
+            0,
+            "a different URL breaks the identical-fetch streak"
+        );
+        assert_eq!(history.equivalent_fetch_url_streak("request-4"), 1);
+        history.record_web_search("request-5", "another topic", &[]);
+        assert_eq!(
+            history.equivalent_fetch_url_streak("request-4"),
+            0,
+            "a search between fetches breaks the identical-fetch streak"
+        );
+        history.record_fetch_url("request-6");
+        history.mark_progress();
+        history.record_fetch_url("request-6");
+        assert_eq!(
+            history.equivalent_fetch_url_streak("request-6"),
+            2,
+            "a concrete non-network step does not re-arm an identical-fetch streak"
+        );
+        assert_eq!(history.requests.len(), 8);
+        assert_eq!(history.actions.len(), 8);
     }
 
     /// Verifies a materially different topic is not rejected merely because

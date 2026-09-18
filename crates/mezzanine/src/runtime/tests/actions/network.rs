@@ -401,3 +401,216 @@ fn runtime_equivalent_web_searches_receive_guidance_then_fail_closed() {
     );
     service.terminate_all_pane_processes().unwrap();
 }
+/// Verifies a repeatedly fetched identical URL fails closed with guard
+/// diagnostics instead of spinning until the turn budget is exhausted.
+#[test]
+fn runtime_repeated_identical_fetches_fail_closed() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-network-fetch-guard","input":"fetch the guide"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.remove_pending_agent_provider_task("turn-1");
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-1")
+        .cloned()
+        .unwrap();
+    let url = "https://docs.example.test/guide";
+    let fetch = |id: &str, url: &str| mez_agent::AgentAction {
+        id: id.to_string(),
+        payload: mez_agent::AgentActionPayload::FetchUrl {
+            url: url.to_string(),
+            format: None,
+            max_bytes: None,
+        },
+    };
+    for index in 0..2 {
+        assert!(
+            service
+                .evaluate_and_record_network_action_for_tests(
+                    &turn,
+                    &fetch(&format!("fetch-{index}"), url),
+                    url,
+                )
+                .unwrap()
+                .is_none(),
+            "fetch {index} stays within the allowed identical-fetch streak"
+        );
+    }
+    let guarded = service
+        .evaluate_and_record_network_action_for_tests(&turn, &fetch("fetch-3", url), url)
+        .unwrap()
+        .expect("a third identical fetch should be rejected");
+    assert_eq!(guarded.status, ActionStatus::Failed);
+    assert_eq!(
+        guarded.error.as_ref().map(|error| error.code.as_str()),
+        Some("network_action_no_progress")
+    );
+    let diagnostics = guarded.structured_content_json.clone().unwrap_or_default();
+    assert!(
+        diagnostics.contains(r#""reason":"identical_fetch_no_progress""#)
+            && diagnostics.contains(r#""repeated_fetches":2"#),
+        "{diagnostics}"
+    );
+    assert!(mez_agent::outcome::runtime_action_result_is_feedback_candidate(&guarded));
+    assert!(
+        service
+            .evaluate_and_record_network_action_for_tests(
+                &turn,
+                &fetch("fetch-4", "https://docs.example.test/other"),
+                "https://docs.example.test/other",
+            )
+            .unwrap()
+            .is_none(),
+        "a different URL starts a fresh fetch streak"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a deferred `fetch_url` settlement commits its result to model
+/// context through the worker lane.
+///
+/// The deferred lane settles network actions after the actor request that
+/// queued them, so the settlement itself must append the `ActionResult` block.
+/// Without it the provider tool-result projection is suppressed for the whole
+/// execution group and the model repeats a call whose answer it never received.
+#[tokio::test]
+async fn runtime_deferred_fetch_url_result_reaches_model_context() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-network-deferred","input":"fetch the docs"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.remove_pending_agent_provider_task("turn-1");
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-1")
+        .cloned()
+        .unwrap();
+    let action = mez_agent::AgentAction {
+        id: "fetch-deferred".to_string(),
+        payload: mez_agent::AgentActionPayload::FetchUrl {
+            url: "https://example.test/deferred".to_string(),
+            format: None,
+            max_bytes: None,
+        },
+    };
+    // A still-running sibling keeps the turn's live context available while the
+    // first result settles, matching the deferred lane's real chronology.
+    let sibling = mez_agent::AgentAction {
+        id: "fetch-deferred-sibling".to_string(),
+        payload: mez_agent::AgentActionPayload::FetchUrl {
+            url: "https://example.test/deferred-sibling".to_string(),
+            format: None,
+            max_bytes: None,
+        },
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "fetching the requested page".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "retrieve the documented behavior".to_string(),
+                actions: vec![action.clone(), sibling.clone()],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![
+            mez_agent::ActionResult::running(
+                &turn,
+                &action,
+                vec!["network action queued for worker execution".to_string()],
+                None,
+            ),
+            mez_agent::ActionResult::running(
+                &turn,
+                &sibling,
+                vec!["network action queued for worker execution".to_string()],
+                None,
+            ),
+        ],
+        final_turn: true,
+        terminal_state: AgentTurnState::Running,
+    };
+    service
+        .apply_agent_provider_completed_event(
+            &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            &turn.turn_id,
+            execution,
+        )
+        .await
+        .unwrap();
+
+    let dispatch = service
+        .claim_approved_external_action(&turn.turn_id, &action.id)
+        .unwrap()
+        .expect("a deferred network action should be claimable by the worker");
+    let succeeded = mez_agent::ActionResult::succeeded(
+        &turn,
+        &action,
+        vec!["deferred fetch body".to_string()],
+        None,
+    );
+    assert!(
+        service
+            .complete_approved_external_action(
+                crate::runtime::RuntimeApprovedExternalActionOutcome {
+                    turn_id: turn.turn_id.clone(),
+                    action_id: action.id.clone(),
+                    attempt: dispatch.attempt,
+                    result: Ok(succeeded),
+                    mcp_transport: None,
+                },
+            )
+            .unwrap()
+    );
+    let durable = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    assert!(
+        durable.blocks().iter().any(|block| {
+            block.source == ContextSourceKind::ActionResult
+                && block
+                    .content
+                    .contains("[action_result fetch-deferred fetch_url succeeded]")
+                && block.content.contains("deferred fetch body")
+        }),
+        "a deferred fetch result must commit to model context: {:?}",
+        durable
+            .blocks()
+            .iter()
+            .map(|block| block.content.as_str())
+            .collect::<Vec<_>>()
+    );
+    service.terminate_all_pane_processes().unwrap();
+}

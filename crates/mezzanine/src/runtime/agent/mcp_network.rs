@@ -39,6 +39,19 @@ fn unbound_schema_binding_failure(
     (RUNTIME_MCP_SCHEMA_UNBOUND_CODE, error.message().to_string())
 }
 
+/// Returns whether one settled external action result must be committed to
+/// model-visible context by its deferred settlement lane.
+///
+/// The provider tool-result projection requires an `ActionResult` block for
+/// every action in the execution group, so a deferred lane that skips this
+/// commit suppresses the whole group and makes the model repeat a call it never
+/// saw answered. MCP calls and both network families commit here; a future
+/// deferred family must extend this predicate rather than hand-roll its own
+/// commit.
+fn runtime_external_action_commits_model_context(result: &ActionResult) -> bool {
+    matches!(result.action_type, "mcp_call" | "web_search" | "fetch_url")
+}
+
 impl RuntimeSessionService {
     /// Queues immediately runnable MCP calls for worker execution.
     ///
@@ -801,10 +814,12 @@ impl RuntimeSessionService {
             self.agent_turn_executions_mut().remove(&turn.turn_id);
             return Ok(true);
         }
-        if matches!(&action.payload, AgentActionPayload::McpCall { .. }) {
-            let observed_result = execution.action_results[result_index].clone();
-            self.append_action_result_context_if_absent(&turn.turn_id, &observed_result)?;
-        }
+        // Every deferred external family - MCP calls and network actions - must
+        // commit its settled result here, otherwise the provider tool-result
+        // projection is suppressed for the whole execution group and the model
+        // repeats a call whose answer it never received.
+        let observed_result = execution.action_results[result_index].clone();
+        self.append_settled_external_action_context(&turn.turn_id, &observed_result)?;
         let ready_for_provider_continuation =
             runtime_execution_ready_for_provider_continuation(&execution);
         if ready_for_provider_continuation && turn.state == AgentTurnState::Running {
@@ -1210,6 +1225,23 @@ impl RuntimeSessionService {
                 .insert(turn.turn_id.clone());
         }
         Ok(executed.saturating_add(preexecuted))
+    }
+
+    /// Commits one settled external action result to model-visible context.
+    ///
+    /// Deferred external lanes call this after settlement so the provider
+    /// tool-result projection can emit the call's result for the whole execution
+    /// group. Families that do not commit through a deferred lane are ignored,
+    /// and the append itself stays idempotent.
+    pub(crate) fn append_settled_external_action_context(
+        &mut self,
+        turn_id: &str,
+        result: &ActionResult,
+    ) -> Result<()> {
+        if !runtime_external_action_commits_model_context(result) {
+            return Ok(());
+        }
+        self.append_action_result_context_if_absent(turn_id, result)
     }
 
     /// Records presentation and audit side effects for network actions that

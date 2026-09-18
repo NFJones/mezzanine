@@ -36,6 +36,9 @@ use mez_agent::{
 };
 
 const ALLOWED_EQUIVALENT_WEB_SEARCHES: usize = 3;
+/// Maximum consecutive identical URL fetches before the no-progress guard fails
+/// the request. One retrieval can be progress; repeating the same URL is not.
+const ALLOWED_IDENTICAL_FETCHES: usize = 2;
 const NETWORK_SEARCH_PROGRESS_GUIDANCE: &str = "Search results are already available. Process them now: fetch a selected URL, materially change source or scope, proceed with available evidence, choose another action path, or report a concrete blocker. Do not issue another paraphrased search.";
 
 /// Describes why an `apply_patch` snapshot cannot safely reach write planning.
@@ -932,20 +935,37 @@ impl RuntimeSessionService {
         action: &AgentAction,
         request: &str,
     ) -> Result<Option<ActionResult>> {
-        let AgentActionPayload::WebSearch { query, domains, .. } = &action.payload else {
-            return Ok(None);
-        };
         let history = self
             .agent
             .agent_turn_network_action_history
             .get(&turn.turn_id)
             .cloned()
             .unwrap_or_default();
-        let equivalent_searches = history.equivalent_search_streak(query, domains);
-        if equivalent_searches < ALLOWED_EQUIVALENT_WEB_SEARCHES {
-            return Ok(None);
-        }
-        let message = "repeated equivalent web searches made no concrete progress; process existing results, fetch a selected URL, materially change source or scope, proceed with available evidence, or report a concrete blocker";
+        let (reason, diagnostics, message) = match &action.payload {
+            AgentActionPayload::WebSearch { query, domains, .. } => {
+                let equivalent_searches = history.equivalent_search_streak(query, domains);
+                if equivalent_searches < ALLOWED_EQUIVALENT_WEB_SEARCHES {
+                    return Ok(None);
+                }
+                (
+                    "equivalent_search_no_progress",
+                    format!(r#""equivalent_searches":{equivalent_searches}"#),
+                    "repeated equivalent web searches made no concrete progress; process existing results, fetch a selected URL, materially change source or scope, proceed with available evidence, or report a concrete blocker",
+                )
+            }
+            AgentActionPayload::FetchUrl { .. } => {
+                let repeated_fetches = history.equivalent_fetch_url_streak(request);
+                if repeated_fetches < ALLOWED_IDENTICAL_FETCHES {
+                    return Ok(None);
+                }
+                (
+                    "identical_fetch_no_progress",
+                    format!(r#""repeated_fetches":{repeated_fetches}"#),
+                    "the same URL was fetched repeatedly without progress; use the retrieved content, change the URL or approach, continue with available evidence, or report a concrete blocker",
+                )
+            }
+            _ => return Ok(None),
+        };
         let mut result = ActionResult::failed(
             turn,
             action,
@@ -955,9 +975,8 @@ impl RuntimeSessionService {
         )
         .map_err(|error| MezError::invalid_state(error.to_string()))?;
         result.structured_content_json = Some(format!(
-            r#"{{"guard":"network_action_loop","reason":"equivalent_search_no_progress","request":"{}","equivalent_searches":{},"guidance":"{}"}}"#,
+            r#"{{"guard":"network_action_loop","reason":"{reason}","request":"{}",{diagnostics},"guidance":"{}"}}"#,
             json_escape(request),
-            equivalent_searches,
             json_escape(message)
         ));
         Ok(Some(result))
@@ -1013,7 +1032,9 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Resets network no-progress detection after another concrete task action.
+    /// Resets epoch-scoped network no-progress detection after another concrete
+    /// task action. Identical-fetch streaks are epoch-independent and are not
+    /// reset here; only a different URL or approach clears them.
     pub(super) fn mark_network_action_progress(&mut self, turn_id: &str) {
         if let Some(history) = self
             .agent
