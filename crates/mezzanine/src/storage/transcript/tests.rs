@@ -2944,6 +2944,22 @@ fn transcript_store_interactive_catalog_read_fails_fast_when_lock_held() {
         elapsed < std::time::Duration::from_millis(900),
         "interactive reads must use the short lock budget: elapsed={elapsed:?}"
     );
+    let started = std::time::Instant::now();
+    let detail_error = store
+        .saved_session("018f6b3a-1b2c-7000-9000-cafebabefeed")
+        .expect_err("a locked detail read must fail");
+    let detail_elapsed = started.elapsed();
+    assert!(
+        detail_error
+            .message()
+            .contains("saved-session catalog is busy"),
+        "{}",
+        detail_error.message()
+    );
+    assert!(
+        detail_elapsed < std::time::Duration::from_millis(900),
+        "picker detail reads must use the short lock budget: elapsed={detail_elapsed:?}"
+    );
     drop(lock_file);
 }
 

@@ -398,12 +398,17 @@ pub(super) fn delete(store: &AgentTranscriptStore, conversation_id: &str) -> Res
 }
 
 /// Loads one catalog record by exact conversation id.
+///
+/// The picker's cursor and detail views resolve rows through this read, so it
+/// takes the interactive budget like the page rebuilds: a contended catalog
+/// answers with the retryable busy diagnostic instead of parking the serialized
+/// actor for the longer startup and writer wait.
 pub(super) fn record(
     store: &AgentTranscriptStore,
     conversation_id: &str,
 ) -> Result<Option<CatalogRecord>> {
     note_indexed_query();
-    let connection = schema::open(&catalog_path(store))?;
+    let connection = open_catalog_for_interactive_read(store)?;
     query::record(&connection, conversation_id)
 }
 
