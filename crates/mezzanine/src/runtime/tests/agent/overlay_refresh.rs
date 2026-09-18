@@ -668,3 +668,79 @@ fn overlay_refresh_shows_a_failed_archive_settlement_status() {
         "the failure status rides the installed page: {rendered}"
     );
 }
+
+/// Verifies a delete refresh rebuilds the page and keeps the row index.
+///
+/// The deleted row held the focus and its id is gone, so the claim records the
+/// raw index the operator was on and the page shows the row that slid into it.
+#[test]
+fn overlay_refresh_after_delete_keeps_the_row_index() {
+    let mut service = test_runtime_service();
+    let primary = open_saved_session_picker(&mut service, "overlay-refresh-delete", 45);
+    let first_ids = saved_session_page_ids(&service);
+    service
+        .apply_primary_display_overlay_input(&primary, b"\x1b[B")
+        .unwrap();
+    service
+        .apply_primary_display_overlay_input(&primary, b"d")
+        .unwrap();
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the delete claims the page it left behind"
+    );
+    let remaining = saved_session_page_ids(&service);
+    assert_eq!(
+        remaining.len(),
+        first_ids.len(),
+        "the page refills from the rows the delete left behind"
+    );
+    assert!(!remaining.contains(&first_ids[1]));
+    assert_eq!(
+        remaining[1], first_ids[2],
+        "the rebuilt page keeps the deleted row's index"
+    );
+    assert_eq!(
+        service.active_saved_session_browser_record_id(),
+        Some(first_ids[2].clone()),
+        "the focus stays on the kept index"
+    );
+}
+
+/// Verifies a delete that empties an anchored page falls back to its source head.
+///
+/// Deleting every row of a later page leaves the anchored query empty, so the
+/// worker re-reads the head of the same source exactly as the inline path did.
+#[test]
+fn overlay_refresh_after_delete_falls_back_when_the_page_empties() {
+    let mut service = test_runtime_service();
+    let primary = open_saved_session_picker(&mut service, "overlay-refresh-delete-fallback", 45);
+    let first_ids = saved_session_page_ids(&service);
+    move_saved_session_cursor_to_last_row(&mut service, &primary);
+    service
+        .apply_primary_display_overlay_input(&primary, b"\x1b[B")
+        .unwrap();
+    assert!(settle_saved_session_page_claim(&mut service));
+    let later_page = saved_session_page_ids(&service);
+    assert_eq!(later_page.len(), first_ids.len());
+    assert!(first_ids.iter().all(|id| !later_page.contains(id)));
+
+    // The anchored page serves the catalog's tail: everything after the page the
+    // operator left, which is the whole fixture minus its first page.
+    let tail_len = 45 - first_ids.len();
+    for deleted in 0..tail_len {
+        service
+            .apply_primary_display_overlay_input(&primary, b"d")
+            .unwrap();
+        assert!(
+            settle_saved_session_page_claim(&mut service),
+            "delete {deleted} claims the page it leaves"
+        );
+    }
+    assert_eq!(
+        saved_session_page_ids(&service),
+        first_ids,
+        "the emptied anchored page falls back to the source head"
+    );
+}

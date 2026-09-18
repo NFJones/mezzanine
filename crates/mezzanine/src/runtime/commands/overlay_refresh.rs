@@ -148,6 +148,27 @@ impl RuntimeSessionService {
         )))
     }
 
+    /// Claims one page rebuild after a saved-session delete.
+    ///
+    /// The caller has already removed the row, so the claim rebuilds the page the
+    /// delete left and keeps the row index the operator was on: the deleted row
+    /// held the focus, and the rebuilt page has no id left to restore.
+    pub(crate) fn begin_record_browser_delete_claim(
+        &mut self,
+        active_index: usize,
+    ) -> Result<Option<u64>> {
+        if self.active_saved_session_browser_source().is_none() {
+            return Ok(None);
+        }
+        self.persistence
+            .transcript_store()
+            .ok_or_else(|| MezError::invalid_state("resume requires transcript storage"))?;
+        Ok(Some(self.begin_record_browser_refresh_claim_for_intent(
+            SAVED_SESSION_OVERLAY_REFRESH_KEY,
+            RuntimeRecordBrowserRefreshIntent::RefreshAfterDelete { active_index },
+        )))
+    }
+
     /// Builds the owned work one queued refresh dispatch needs.
     ///
     /// Returns `None` when the claim is stale or the overlay no longer shows a
@@ -180,7 +201,8 @@ impl RuntimeSessionService {
                 target.as_ref().clone()
             }
             RuntimeRecordBrowserRefreshIntent::RefreshInPlace { .. }
-            | RuntimeRecordBrowserRefreshIntent::FetchAdjacent { .. } => active_source.clone(),
+            | RuntimeRecordBrowserRefreshIntent::FetchAdjacent { .. }
+            | RuntimeRecordBrowserRefreshIntent::RefreshAfterDelete { .. } => active_source.clone(),
         };
         Ok(Some(RuntimeRecordBrowserRefreshWork {
             refresh_key: refresh_key.to_string(),
@@ -219,6 +241,10 @@ impl RuntimeSessionService {
                 active_record_id.as_deref(),
                 error.as_deref(),
             );
+        }
+        if let RuntimeRecordBrowserRefreshIntent::RefreshAfterDelete { active_index } = &work.intent
+        {
+            return Self::execute_delete_refresh(store, work, *active_index);
         }
         let mut source = work.source.clone();
         let mut active_index = None;
@@ -312,6 +338,7 @@ impl RuntimeSessionService {
                 });
             }
             RuntimeRecordBrowserRefreshIntent::ApplyFilter { .. } => {}
+            RuntimeRecordBrowserRefreshIntent::RefreshAfterDelete { .. } => {}
         }
         RuntimeRecordBrowserRefreshOutcome::Rebuilt {
             browser: Box::new(browser),
@@ -440,6 +467,48 @@ impl RuntimeSessionService {
                 message: error.message().to_string(),
                 kind: error.kind(),
             },
+        }
+    }
+
+    /// Rebuilds the page one delete left behind and restores its row index.
+    ///
+    /// The deleted row held the focus, so the rebuilt page keeps the raw index
+    /// instead of a record id. A page that comes back empty (the last row of an
+    /// anchored page) falls back to the head of the same source, exactly as the
+    /// inline path did.
+    fn execute_delete_refresh(
+        store: &crate::storage::transcript::AgentTranscriptStore,
+        work: &RuntimeRecordBrowserRefreshWork,
+        active_index: usize,
+    ) -> RuntimeRecordBrowserRefreshOutcome {
+        let mut source = work.source.clone();
+        let mut browser = match Self::rebuild_saved_session_page(store, &source, work) {
+            Ok(browser) => browser,
+            Err(error) => {
+                return RuntimeRecordBrowserRefreshOutcome::Failed {
+                    message: error.message().to_string(),
+                    kind: error.kind(),
+                };
+            }
+        };
+        if browser.records().is_empty() {
+            if let RuntimeRecordBrowserOverlaySource::SavedSessions { anchor, .. } = &mut source {
+                *anchor = None;
+            }
+            browser = match Self::rebuild_saved_session_page(store, &source, work) {
+                Ok(browser) => browser,
+                Err(error) => {
+                    return RuntimeRecordBrowserRefreshOutcome::Failed {
+                        message: error.message().to_string(),
+                        kind: error.kind(),
+                    };
+                }
+            };
+        }
+        RuntimeRecordBrowserRefreshOutcome::Rebuilt {
+            browser: Box::new(browser),
+            source,
+            active_index: Some(active_index),
         }
     }
 

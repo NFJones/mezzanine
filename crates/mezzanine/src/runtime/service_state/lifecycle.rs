@@ -458,6 +458,12 @@ pub(crate) enum RuntimeRecordBrowserRefreshIntent {
         /// Settlement error the rebuilt page displays, when one applies.
         error: Option<String>,
     },
+    /// Rebuild the page one saved-session delete left behind.
+    RefreshAfterDelete {
+        /// Row index the rebuilt page keeps: the deleted row held the focus and
+        /// its id is gone, so the page restores the raw index instead.
+        active_index: usize,
+    },
 }
 
 /// Result a refresh worker prepares for the actor to install or drop.

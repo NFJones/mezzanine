@@ -422,6 +422,12 @@ fn runtime_resume_browser_archives_browses_details_and_deletes_sessions() {
         .apply_primary_display_overlay_input(&primary, b"d")
         .unwrap();
     assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the delete claims the page it left behind"
+    );
+    assert!(
         store
             .inspect_archived_session("browser-archive")
             .unwrap()

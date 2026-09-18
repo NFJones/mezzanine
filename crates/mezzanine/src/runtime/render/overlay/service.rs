@@ -923,8 +923,9 @@ impl RuntimeSessionService {
             else {
                 return Ok(None);
             };
-            let mut browser = match self.delete_record_browser_entry(&source, &id, active_index) {
-                Ok(browser) => browser,
+            let browser = match self.delete_record_browser_entry(&source, &id, active_index) {
+                Ok(Some(browser)) => browser,
+                Ok(None) => return Ok(Some(false)),
                 Err(error) => {
                     let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                         return Ok(Some(false));
@@ -944,13 +945,6 @@ impl RuntimeSessionService {
                     )));
                 }
             };
-            let mut source = source;
-            if browser.records().is_empty()
-                && let RuntimeRecordBrowserOverlaySource::SavedSessions { anchor, .. } = &mut source
-            {
-                *anchor = None;
-                browser = self.refresh_record_browser_overlay_source(&source)?;
-            }
             let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                 return Ok(Some(false));
             };

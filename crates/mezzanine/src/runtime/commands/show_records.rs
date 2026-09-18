@@ -129,13 +129,17 @@ impl RuntimeSessionService {
 
     /// Deletes one selected record through its retained backend source and
     /// returns a refreshed browser with a valid active selection.
+    ///
+    /// Returns `None` when the delete claimed its page in the overlay refresh
+    /// lane: the saved-session picker rebuilds its catalog off the actor, so the
+    /// caller installs nothing and the lane completion does.
     pub(crate) fn delete_record_browser_entry(
         &mut self,
         source: &RuntimeRecordBrowserOverlaySource,
         record_id: &str,
         active_index: usize,
-    ) -> Result<RecordBrowser> {
-        let mut browser = match source {
+    ) -> Result<Option<RecordBrowser>> {
+        let browser = match source {
             RuntimeRecordBrowserOverlaySource::Approvals => {
                 return Err(MezError::invalid_state(
                     "approval browser records cannot be deleted",
@@ -170,7 +174,8 @@ impl RuntimeSessionService {
                     ));
                 }
                 self.invalidate_agent_prompt_selector_extra_candidates();
-                self.refresh_record_browser_overlay_source(source)?
+                self.begin_record_browser_delete_claim(active_index)?;
+                return Ok(None);
             }
             RuntimeRecordBrowserOverlaySource::Personalities { .. } => {
                 return Err(MezError::invalid_state(
@@ -180,7 +185,7 @@ impl RuntimeSessionService {
             RuntimeRecordBrowserOverlaySource::Context {
                 conversation_id,
                 pane_id,
-            } => self.delete_context_browser_record(conversation_id, pane_id, record_id)?,
+            } => Some(self.delete_context_browser_record(conversation_id, pane_id, record_id)?),
             RuntimeRecordBrowserOverlaySource::Issues {
                 project_glob,
                 kind,
@@ -223,7 +228,7 @@ impl RuntimeSessionService {
                     ));
                 }
                 self.invalidate_agent_prompt_selector_extra_candidates();
-                self.refresh_record_browser_overlay_source(source)?
+                Some(self.refresh_record_browser_overlay_source(source)?)
             }
             RuntimeRecordBrowserOverlaySource::Memories { .. } => {
                 let config_root = self.integration.config_root().ok_or_else(|| {
@@ -239,11 +244,14 @@ impl RuntimeSessionService {
                         "memory browser record was already deleted",
                     ));
                 }
-                self.refresh_record_browser_overlay_source(source)?
+                Some(self.refresh_record_browser_overlay_source(source)?)
             }
         };
+        let Some(mut browser) = browser else {
+            return Ok(None);
+        };
         browser.set_active_index(active_index);
-        Ok(browser)
+        Ok(Some(browser))
     }
 
     /// Clears one saved conversation name through its store.
