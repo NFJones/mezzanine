@@ -269,6 +269,15 @@ pub(crate) enum RuntimeAgentCommandPrepared {
         /// Project key the read is scoped to.
         project: String,
     },
+    /// Syncs managed built-in skill copies from the captured config root.
+    ///
+    /// `/sync-builtin-skills` writes managed skill copies under the config root,
+    /// which is the filesystem work the inline path used to perform inside the
+    /// actor request.
+    BuiltinSkillSync {
+        /// Configured Mezzanine config root whose skill copies are synced.
+        config_root: std::path::PathBuf,
+    },
 }
 
 /// Result a worker prepares for the actor to apply.

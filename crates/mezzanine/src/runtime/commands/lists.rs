@@ -40,46 +40,11 @@ impl RuntimeSessionService {
                 "sync-builtin-skills requires a configured config root",
             ));
         };
-        let report = crate::integrations::skills::sync_managed_builtin_skills(config_root)?;
         Ok(AgentShellCommandOutcome::Mutated {
             command: "sync-builtin-skills".to_string(),
-            body: Self::runtime_agent_builtin_skill_sync_display(&report),
+            body: runtime_agent_builtin_skill_sync_body(config_root)?,
             visibility: AgentShellVisibility::Visible,
         })
-    }
-
-    /// Builds the user-facing sync report for managed built-in skill copies.
-    fn runtime_agent_builtin_skill_sync_display(
-        report: &crate::integrations::skills::ManagedBuiltinSkillSyncReport,
-    ) -> String {
-        use crate::integrations::skills::ManagedBuiltinSkillSyncStatus;
-
-        let changed = report.count(ManagedBuiltinSkillSyncStatus::Created)
-            + report.count(ManagedBuiltinSkillSyncStatus::ReplacedStale)
-            + report.count(ManagedBuiltinSkillSyncStatus::ReplacedMalformed);
-        let mut lines = vec![
-            "## Built-in skill sync".to_string(),
-            String::new(),
-            format!(
-                "{} built-in skills checked; {} changed.",
-                report.entries.len(),
-                changed
-            ),
-            String::new(),
-        ];
-        let rows = report
-            .entries
-            .iter()
-            .map(|entry| {
-                vec![
-                    format!("`${}`", entry.name),
-                    entry.status.as_str().to_string(),
-                    format!("`{}`", entry.path.display()),
-                ]
-            })
-            .collect::<Vec<_>>();
-        lines.extend(runtime_markdown_table(&["Skill", "Status", "Path"], &rows));
-        lines.join("\n")
     }
 
     /// Executes `/list-macros` and returns the effective macro catalog.
@@ -154,6 +119,53 @@ impl RuntimeSessionService {
     fn markdown_modified_file_count_span(class_name: &str, sign: char, count: usize) -> String {
         format!(r#"<span class="{class_name}">{sign}{count}</span>"#)
     }
+}
+
+/// Runs one managed built-in skill sync from a configured root.
+///
+/// The inline handler and the deferred executor share this sequence, so the
+/// report - and the managed skill copies it writes - is identical whichever lane
+/// ran it. The sync writes files, which is why the deferred lane runs it on a
+/// worker instead of inside the actor request.
+pub(crate) fn runtime_agent_builtin_skill_sync_body(
+    config_root: &std::path::Path,
+) -> Result<String> {
+    let report = crate::integrations::skills::sync_managed_builtin_skills(config_root)?;
+    Ok(runtime_agent_builtin_skill_sync_display(&report))
+}
+
+/// Builds the user-facing sync report for managed built-in skill copies.
+fn runtime_agent_builtin_skill_sync_display(
+    report: &crate::integrations::skills::ManagedBuiltinSkillSyncReport,
+) -> String {
+    use crate::integrations::skills::ManagedBuiltinSkillSyncStatus;
+
+    let changed = report.count(ManagedBuiltinSkillSyncStatus::Created)
+        + report.count(ManagedBuiltinSkillSyncStatus::ReplacedStale)
+        + report.count(ManagedBuiltinSkillSyncStatus::ReplacedMalformed);
+    let mut lines = vec![
+        "## Built-in skill sync".to_string(),
+        String::new(),
+        format!(
+            "{} built-in skills checked; {} changed.",
+            report.entries.len(),
+            changed
+        ),
+        String::new(),
+    ];
+    let rows = report
+        .entries
+        .iter()
+        .map(|entry| {
+            vec![
+                format!("`${}`", entry.name),
+                entry.status.as_str().to_string(),
+                format!("`{}`", entry.path.display()),
+            ]
+        })
+        .collect::<Vec<_>>();
+    lines.extend(runtime_markdown_table(&["Skill", "Status", "Path"], &rows));
+    lines.join("\n")
 }
 
 /// Renders the user-facing skill catalog display for `/list-skills`.

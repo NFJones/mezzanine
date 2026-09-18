@@ -38,6 +38,7 @@ pub(crate) const RUNTIME_AGENT_OFF_ACTOR_COMMANDS: &[&str] = &[
     "show-issues",
     "show-memories",
     "context-doc",
+    "sync-builtin-skills",
 ];
 
 /// Prepared-input family one moved slash command consumes off the actor.
@@ -55,6 +56,8 @@ pub(crate) enum RuntimeAgentCommandFamily {
     MemoryBrowser,
     /// Context-document reads.
     ContextDocument,
+    /// Managed built-in skill syncs.
+    BuiltinSkillSync,
 }
 
 /// Returns the prepared-input family for one moved command.
@@ -71,6 +74,7 @@ pub(crate) fn off_actor_command_family(command: &str) -> Option<RuntimeAgentComm
         "show-issues" => Some(RuntimeAgentCommandFamily::IssueBrowser),
         "show-memories" => Some(RuntimeAgentCommandFamily::MemoryBrowser),
         "context-doc" => Some(RuntimeAgentCommandFamily::ContextDocument),
+        "sync-builtin-skills" => Some(RuntimeAgentCommandFamily::BuiltinSkillSync),
         _ => None,
     }
 }
@@ -137,6 +141,7 @@ impl RuntimeSessionService {
                         input,
                     )
             }
+            "sync-builtin-skills" => self.integration.config_root().is_some(),
             _ => true,
         }
     }
@@ -285,6 +290,16 @@ impl RuntimeSessionService {
                     config_root,
                     project,
                 }
+            }
+            RuntimeAgentCommandFamily::BuiltinSkillSync => {
+                let Some(config_root) = self
+                    .integration
+                    .config_root()
+                    .map(std::path::Path::to_path_buf)
+                else {
+                    return Ok(None);
+                };
+                RuntimeAgentCommandPrepared::BuiltinSkillSync { config_root }
             }
         };
         Ok(Some(RuntimeAgentCommandAsyncWork {
@@ -444,6 +459,28 @@ impl RuntimeSessionService {
                         };
                     }
                 }
+            }
+            RuntimeAgentCommandPrepared::BuiltinSkillSync { config_root } => {
+                return match super::lists::runtime_agent_builtin_skill_sync_body(config_root) {
+                    Ok(body) => {
+                        let outcome = AgentShellCommandOutcome::Mutated {
+                            command: "sync-builtin-skills".to_string(),
+                            body,
+                            visibility: AgentShellVisibility::Visible,
+                        };
+                        RuntimeAgentCommandAsyncOutcome::Response {
+                            body: runtime_agent_shell_command_response_json(
+                                &work.pane_id,
+                                &work.input,
+                                Some(&outcome),
+                            ),
+                        }
+                    }
+                    Err(error) => RuntimeAgentCommandAsyncOutcome::Failed {
+                        message: error.message().to_string(),
+                        kind: error.kind(),
+                    },
+                };
             }
         };
         let outcome = AgentShellCommandOutcome::Display {

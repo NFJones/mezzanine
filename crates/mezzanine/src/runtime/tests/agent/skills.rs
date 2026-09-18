@@ -855,6 +855,14 @@ Keep this override.
     let response = service
         .execute_agent_shell_command(&primary, "/sync-builtin-skills")
         .unwrap();
+    assert!(
+        response.contains(r#""body":null"#),
+        "the deferred lane acknowledges /sync-builtin-skills: {response}"
+    );
+    let response = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /sync-builtin-skills applies its report");
 
     assert!(response.contains("## Built-in skill sync"), "{response}");
     assert!(
