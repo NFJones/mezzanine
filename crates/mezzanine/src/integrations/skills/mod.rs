@@ -21,6 +21,7 @@ use mez_mux::theme::UI_COLOR_SLOT_NAMES;
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use mez_agent::{
     SKILL_FILE_NAME, SkillCatalog, SkillDiagnostic, SkillDocument, SkillSource, SkillSummary,
@@ -256,21 +257,69 @@ fn classify_existing_builtin_skill_copy(name: &str, text: &str) -> ExistingBuilt
 }
 
 /// Writes every materialized asset for one built-in skill directory.
+///
+/// Assets are staged in a hidden sibling directory and then swapped into place,
+/// so a reader that walks these paths - a deferred `/list-skills` discovery, or a
+/// second sync worker - never observes a truncated or half-written `SKILL.md`,
+/// and two concurrent syncs cannot interleave writes inside one directory. The
+/// previous copy is moved aside instead of deleted in place, so a failed install
+/// can always restore it.
+///
+/// The staging root sits beside the skill root rather than inside it: discovery
+/// lists the skill root one level deep, so a staged copy left there for even a
+/// moment would surface as a directory whose name does not match its declared
+/// skill name.
 fn write_builtin_skill_assets(name: &str, skill_dir: &Path) -> Result<()> {
-    if skill_dir.exists() {
-        fs::remove_dir_all(skill_dir).map_err(|error| {
-            MezError::new(
-                MezErrorKind::Io,
-                format!(
-                    "failed to replace managed built-in skill directory {}: {}",
-                    skill_dir.display(),
-                    error
-                ),
-            )
-        })?;
-    }
+    /// Keeps staging and eviction paths of concurrent syncs apart.
+    static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let parent = skill_dir.parent().ok_or_else(|| {
+        MezError::new(
+            MezErrorKind::Io,
+            format!(
+                "managed built-in skill directory {} has no parent directory",
+                skill_dir.display()
+            ),
+        )
+    })?;
+    fs::create_dir_all(parent).map_err(|error| {
+        MezError::new(
+            MezErrorKind::Io,
+            format!(
+                "failed to create managed built-in skill directory {}: {}",
+                parent.display(),
+                error
+            ),
+        )
+    })?;
+    let stem = skill_dir
+        .file_name()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| name.to_string());
+    let unique = format!(
+        "{}-{}",
+        std::process::id(),
+        STAGING_COUNTER.fetch_add(1, Ordering::Relaxed)
+    );
+    let staging_root = parent
+        .parent()
+        .map(|root| root.join(".mez-managed-skill-staging"))
+        .unwrap_or_else(|| parent.to_path_buf());
+    fs::create_dir_all(&staging_root).map_err(|error| {
+        MezError::new(
+            MezErrorKind::Io,
+            format!(
+                "failed to create the managed built-in skill staging directory {}: {}",
+                staging_root.display(),
+                error
+            ),
+        )
+    })?;
+    let staged = staging_root.join(format!("{stem}.{unique}.staging"));
+    let evicted = staging_root.join(format!("{stem}.{unique}.evicted"));
+    let _ = fs::remove_dir_all(&staged);
     for asset in builtin_skill_assets(name)? {
-        let path = skill_dir.join(&asset.relative_path);
+        let path = staged.join(&asset.relative_path);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|error| {
                 MezError::new(
@@ -293,6 +342,36 @@ fn write_builtin_skill_assets(name: &str, skill_dir: &Path) -> Result<()> {
                 ),
             )
         })?;
+    }
+    if skill_dir.exists() {
+        fs::rename(skill_dir, &evicted).map_err(|error| {
+            let _ = fs::remove_dir_all(&staged);
+            MezError::new(
+                MezErrorKind::Io,
+                format!(
+                    "failed to move the managed built-in skill directory {} aside: {}",
+                    skill_dir.display(),
+                    error
+                ),
+            )
+        })?;
+    }
+    if let Err(error) = fs::rename(&staged, skill_dir) {
+        if evicted.exists() {
+            let _ = fs::rename(&evicted, skill_dir);
+        }
+        let _ = fs::remove_dir_all(&staged);
+        return Err(MezError::new(
+            MezErrorKind::Io,
+            format!(
+                "failed to install managed built-in skill directory {}: {}",
+                skill_dir.display(),
+                error
+            ),
+        ));
+    }
+    if evicted.exists() {
+        let _ = fs::remove_dir_all(&evicted);
     }
     Ok(())
 }
@@ -578,7 +657,8 @@ mod tests {
         BUILTIN_ADD_DOC_SKILL_NAME, BUILTIN_ADD_ISSUES_SKILL_NAME, BUILTIN_ADD_RESEARCH_SKILL_NAME,
         BUILTIN_CREATE_MACRO_NAME, BUILTIN_CREATE_SKILL_NAME, BUILTIN_FIX_ISSUES_SKILL_NAME,
         BUILTIN_MEZ_REFERENCE_SKILL_NAME, BUILTIN_SKILL_PATH_PREFIX, ManagedBuiltinSkillSyncStatus,
-        discover_skill_catalog, load_skill_document, sync_managed_builtin_skills,
+        discover_skill_catalog, load_skill_document, managed_builtin_skill_text,
+        sync_managed_builtin_skills,
     };
     use mez_agent::{SkillSource, skill_context_text, split_skill_front_matter};
     use std::fs;
@@ -708,6 +788,68 @@ mod tests {
         let project_text =
             fs::read_to_string(project_root.join(".mezzanine/skills/add-doc/SKILL.md")).unwrap();
         assert!(project_text.contains("Project skill must remain untouched."));
+    }
+
+    /// Verifies a replacement sync swaps skill directories into place.
+    ///
+    /// A worker runs this sync outside the serialized actor, so the staging copy
+    /// must stay outside the scanned skill root and no staging or eviction
+    /// artifact may survive: discovery lists the skill root one level deep, and a
+    /// directory left there would be reported as a skill whose name does not
+    /// match its declared front matter.
+    #[test]
+    fn managed_builtin_skill_sync_swaps_copies_without_staging_leftovers() {
+        let root = test_temp_root("managed-sync-swap");
+        let user_root = root.join("user");
+
+        let created = sync_managed_builtin_skills(&user_root).unwrap();
+        assert_eq!(created.entries.len(), 7);
+        fs::write(
+            user_root.join("skills/add-issues/SKILL.md"),
+            "not valid skill front matter\n",
+        )
+        .unwrap();
+
+        let synced = sync_managed_builtin_skills(&user_root).unwrap();
+        assert_eq!(
+            synced.count(ManagedBuiltinSkillSyncStatus::ReplacedMalformed),
+            1
+        );
+        assert_eq!(
+            fs::read_to_string(user_root.join("skills/add-issues/SKILL.md")).unwrap(),
+            managed_builtin_skill_text("add-issues")
+        );
+
+        let catalog = discover_skill_catalog(Some(&user_root), None);
+        assert_eq!(catalog.names().len(), 7);
+        let staging_diagnostics = catalog
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                let path = diagnostic.path.to_string_lossy();
+                path.contains(".staging") || path.contains(".evicted")
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            staging_diagnostics.is_empty(),
+            "a staged sync copy surfaced in discovery: {:?}",
+            staging_diagnostics
+        );
+        let mut leftovers = Vec::new();
+        for entry in fs::read_dir(user_root.join("skills")).unwrap() {
+            let file_name = entry.unwrap().file_name().to_string_lossy().into_owned();
+            if file_name.contains(".staging") || file_name.contains(".evicted") {
+                leftovers.push(file_name);
+            }
+        }
+        assert!(leftovers.is_empty(), "staging leftovers: {leftovers:?}");
+        assert_eq!(
+            fs::read_dir(user_root.join(".mez-managed-skill-staging"))
+                .unwrap()
+                .count(),
+            0,
+            "the staging root is empty after a completed sync"
+        );
     }
 
     /// Verifies user and project skill roots share the same layout while
