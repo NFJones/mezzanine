@@ -86,6 +86,19 @@ impl RuntimeSessionService {
         if !RUNTIME_AGENT_OFF_ACTOR_COMMANDS.contains(&command) {
             return false;
         }
+        // The disposition classifier is the contract this executor consumes, so a
+        // moved command must be a known deferred command: membership rejects an
+        // unclassified name the classifier would default to deferred, and the
+        // classifier check rejects a name a later edit also pinned inline. Either
+        // disagreement would silently change where a read runs.
+        if !super::disposition::RUNTIME_AGENT_DEFERRED_SLASH_COMMANDS.contains(&command) {
+            return false;
+        }
+        if super::disposition::runtime_agent_slash_command_disposition(command)
+            != super::disposition::RuntimeAgentSlashCommandDisposition::Deferred
+        {
+            return false;
+        }
         match command {
             "issue" => {
                 super::issues::runtime_issues_enabled(self)

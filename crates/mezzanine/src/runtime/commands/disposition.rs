@@ -26,10 +26,6 @@ pub(crate) enum RuntimeAgentSlashCommandDisposition {
 ///
 /// Every entry mutates state the actor owns (the agent shell session, the active
 /// model, or policy) and does no store or filesystem read that could block.
-#[allow(
-    dead_code,
-    reason = "f526838b phase 2 step (a): the deferred executor consumes this classification next"
-)]
 pub(crate) const RUNTIME_AGENT_INLINE_SLASH_COMMANDS: &[&str] = &[
     "help",
     "permissions",
@@ -65,10 +61,6 @@ pub(crate) const RUNTIME_AGENT_INLINE_SLASH_COMMANDS: &[&str] = &[
 /// Every entry reads a store (transcripts, issues, memory, records), the skill
 /// catalog, or project files, or performs provider/network work; unknown
 /// commands default here as well.
-#[allow(
-    dead_code,
-    reason = "f526838b phase 2 step (a): the deferred executor consumes this classification next"
-)]
 pub(crate) const RUNTIME_AGENT_DEFERRED_SLASH_COMMANDS: &[&str] = &[
     "show-approvals",
     "list-macros",
@@ -106,10 +98,6 @@ pub(crate) const RUNTIME_AGENT_DEFERRED_SLASH_COMMANDS: &[&str] = &[
 /// they are pinned inline here instead of falling through the unknown-command
 /// default. Aliases of runtime-only display commands are pinned with them
 /// because the dispatcher matches the alias spelling directly.
-#[allow(
-    dead_code,
-    reason = "f526838b phase 2 step (a): the deferred executor consumes this classification next"
-)]
 pub(crate) const RUNTIME_AGENT_INLINE_DISPLAY_COMMANDS: &[&str] = &[
     "list-clients",
     "listc",
@@ -124,10 +112,6 @@ pub(crate) const RUNTIME_AGENT_INLINE_DISPLAY_COMMANDS: &[&str] = &[
 ///
 /// Unknown names default to [`RuntimeAgentSlashCommandDisposition::Deferred`]
 /// so a command this runtime does not model still keeps its I/O off the actor.
-#[allow(
-    dead_code,
-    reason = "f526838b phase 2 step (a): the deferred executor consumes this classifier next"
-)]
 pub(crate) fn runtime_agent_slash_command_disposition(
     name: &str,
 ) -> RuntimeAgentSlashCommandDisposition {
