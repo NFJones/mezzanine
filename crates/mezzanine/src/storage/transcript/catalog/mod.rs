@@ -433,11 +433,47 @@ pub(super) fn record(
     query::record(&connection, conversation_id)
 }
 
-/// Loads the most recently active root-session row.
-pub(super) fn latest_root_record(store: &AgentTranscriptStore) -> Result<Option<CatalogRecord>> {
+/// Keyset position for one walk of the latest-root ordering.
+///
+/// The ordering is `(last_created_at DESC, first_created_at DESC,
+/// conversation_id ASC)`. Carrying the last examined row's keys lets a caller
+/// walk past a row it cannot use without deleting that row, so the walk stays
+/// bounded even when the indexed conversation kind is stale.
+#[derive(Debug, Clone)]
+pub(super) struct RootRecordCursor {
+    /// SQLite `last_created_at` of the last examined row.
+    last_created_at: i64,
+    /// SQLite `first_created_at` of the last examined row.
+    first_created_at: i64,
+    /// `conversation_id` of the last examined row.
+    conversation_id: String,
+}
+
+impl RootRecordCursor {
+    /// Builds the keyset position of one examined row.
+    pub(super) fn after(record: &CatalogRecord) -> Result<Self> {
+        Ok(Self {
+            last_created_at: schema::sqlite_i64(
+                record.session.summary.last_created_at_unix_seconds,
+                "last_created_at",
+            )?,
+            first_created_at: schema::sqlite_i64(
+                record.session.summary.first_created_at_unix_seconds,
+                "first_created_at",
+            )?,
+            conversation_id: record.session.summary.conversation_id.clone(),
+        })
+    }
+}
+
+/// Loads the most recently active root-session row after one keyset position.
+pub(super) fn latest_root_record(
+    store: &AgentTranscriptStore,
+    after: Option<&RootRecordCursor>,
+) -> Result<Option<CatalogRecord>> {
     note_indexed_query();
     let connection = schema::open(&catalog_path(store))?;
-    query::latest_root_record(&connection)
+    query::latest_root_record(&connection, after)
 }
 
 /// Lists all catalog sessions for temporary compatibility callers.

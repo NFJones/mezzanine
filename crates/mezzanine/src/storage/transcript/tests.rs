@@ -2687,6 +2687,58 @@ fn transcript_store_catalog_healthy_startup_defers_legacy_child_quarantine_to_ex
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies the latest-root walk skips an unresumable row that sorts first.
+///
+/// Reads no longer delete the rows they cannot resume, so the walk itself must
+/// make progress: the indexed query re-selects the same newest row on every
+/// call, and a root-indexed row whose sidecar later became a version-one child
+/// document would otherwise spin `/resume --latest` forever. The cursor must
+/// advance past the unresumable row and still return the newest resumable root,
+/// without deleting the row it skipped.
+#[test]
+fn transcript_store_latest_root_session_skips_unresumable_legacy_child() {
+    let root = temp_root("latest-root-unresumable-child");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("healthy-root", 1, TranscriptRole::User))
+        .unwrap();
+    store
+        .append(&entry("stale-legacy-child", 9, TranscriptRole::User))
+        .unwrap();
+    store.initialize(100).unwrap();
+    assert!(
+        store
+            .catalog_saved_session("stale-legacy-child")
+            .unwrap()
+            .is_some(),
+        "the child is indexed as a root row before its sidecar changes"
+    );
+    fs::write(
+        root.join("stale-legacy-child").join("metadata.json"),
+        b"{\"version\":1,\"conversation_kind\":\"subagent\"}\n",
+    )
+    .unwrap();
+
+    let latest = store
+        .latest_root_session()
+        .unwrap()
+        .expect("the healthy root stays resumable behind the skipped row");
+    assert_eq!(latest.summary.conversation_id, "healthy-root");
+    assert!(
+        store.saved_session("stale-legacy-child").unwrap().is_none(),
+        "the stale child is not resumable"
+    );
+    assert!(
+        store
+            .catalog_saved_session("stale-legacy-child")
+            .unwrap()
+            .is_some(),
+        "skipping a row must not delete it"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies ordinary metadata mutations update the catalog only after their
 /// filesystem payload or compatibility sidecar has been persisted.
 ///

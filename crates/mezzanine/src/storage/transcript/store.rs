@@ -503,9 +503,15 @@ impl AgentTranscriptStore {
     }
 
     /// Loads the most recently active root conversation through the catalog.
+    ///
+    /// The walk carries a keyset cursor: a row that cannot be resumed is skipped
+    /// without deleting it, and the cursor keeps the walk bounded even when the
+    /// indexed conversation kind is stale.
     pub fn latest_root_session(&self) -> Result<Option<SavedAgentSession>> {
-        while let Some(record) = catalog::latest_root_record(self)? {
+        let mut cursor = None;
+        while let Some(record) = catalog::latest_root_record(self, cursor.as_ref())? {
             let conversation_id = record.session.summary.conversation_id.clone();
+            cursor = Some(catalog::RootRecordCursor::after(&record)?);
             match self.saved_session(&conversation_id)? {
                 Some(session) if session.conversation_kind == AgentConversationKind::Root => {
                     return Ok(Some(session));

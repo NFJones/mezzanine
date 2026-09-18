@@ -12,7 +12,7 @@ use super::super::types::{
     SavedSessionQuery,
 };
 use super::schema::sqlite_i64;
-use super::{CatalogPayloadLayout, CatalogRecord};
+use super::{CatalogPayloadLayout, CatalogRecord, RootRecordCursor};
 
 /// Loads one catalog row by its exact durable identity.
 pub(super) fn record(
@@ -37,8 +37,14 @@ pub(super) fn record(
 }
 
 /// Loads the most recently active root conversation with an indexed query.
-pub(super) fn latest_root_record(connection: &Connection) -> Result<Option<CatalogRecord>> {
-    let mut statement = connection.prepare(
+///
+/// `after` carries the keyset position of the last examined row, so a caller
+/// that walks past an unusable row advances instead of re-selecting it.
+pub(super) fn latest_root_record(
+    connection: &Connection,
+    after: Option<&RootRecordCursor>,
+) -> Result<Option<CatalogRecord>> {
+    let mut sql = String::from(
         "SELECT conversation_id, conversation_kind, name, entry_count,
                 first_created_at, last_created_at, last_turn_id,
                 agent_id, pane_id, directory, initial_prompt,
@@ -46,17 +52,39 @@ pub(super) fn latest_root_record(connection: &Connection) -> Result<Option<Catal
                 payload_layout, archived_at, archive_compressed_bytes,
                 archive_sha256
          FROM saved_conversations
-         WHERE conversation_kind = 'root' AND archived_at IS NULL
-         ORDER BY last_created_at DESC, first_created_at DESC, conversation_id ASC
-         LIMIT 1",
-    )?;
-    statement
-        .query_row([], |row| {
+         WHERE conversation_kind = 'root' AND archived_at IS NULL",
+    );
+    if after.is_some() {
+        sql.push_str(
+            " AND (last_created_at < ?1
+                    OR (last_created_at = ?1
+                        AND (first_created_at < ?2
+                            OR (first_created_at = ?2 AND conversation_id > ?3))))",
+        );
+    }
+    sql.push_str(
+        " ORDER BY last_created_at DESC, first_created_at DESC, conversation_id ASC LIMIT 1",
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let record = match after {
+        Some(cursor) => statement.query_row(
+            params![
+                cursor.last_created_at,
+                cursor.first_created_at,
+                cursor.conversation_id
+            ],
+            |row| {
+                let conversation_id: String = row.get(0)?;
+                decode_record_offset(row, &conversation_id, 1)
+            },
+        ),
+        None => statement.query_row([], |row| {
             let conversation_id: String = row.get(0)?;
             decode_record_offset(row, &conversation_id, 1)
-        })
-        .optional()
-        .map_err(Into::into)
+        }),
+    }
+    .optional()?;
+    Ok(record)
 }
 
 /// Lists all saved sessions for temporary compatibility callers.
