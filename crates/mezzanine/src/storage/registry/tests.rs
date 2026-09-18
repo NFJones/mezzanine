@@ -229,8 +229,9 @@ fn registry_failed_import_keeps_the_legacy_flat_file_authoritative() {
         "the flat file stays authoritative and still surfaces its malformed content"
     );
 
-    // A row that decodes but fails record validation must fail the import too,
-    // which covers the import closure's own validation line rather than decode's.
+    // A capacity violation is rejected the same way. Note that decode validates
+    // too, so no TSV fixture can reach the import closure's own validation call;
+    // that call stays as defence in depth for records built in memory.
     let second = test_root("sqlite-import-invalid-count");
     let _ = fs::remove_dir_all(&second);
     let registry = SessionRegistry::new(second.clone(), effective_uid_for_tests());
