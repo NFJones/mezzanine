@@ -264,6 +264,14 @@ fn runtime_agent_shell_list_modified_files_reports_compact_rows() {
     let response = service
         .execute_agent_shell_command(&primary, "/list-modified-files")
         .unwrap();
+    assert!(
+        response.contains(r#""body":null"#),
+        "the deferred lane acknowledges /list-modified-files: {response}"
+    );
+    let response = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /list-modified-files applies its page");
 
     assert!(response.contains("## modified files"), "{response}");
     assert!(response.contains("edited `src/lib.rs`"), "{response}");
@@ -278,6 +286,10 @@ fn runtime_agent_shell_list_modified_files_reports_compact_rows() {
     assert!(!response.contains("Added:"), "{response}");
     assert!(!response.contains("Removed:"), "{response}");
     assert!(!response.contains("`summary`"), "{response}");
+    assert_eq!(
+        crate::runtime::commands::lists::runtime_agent_modified_files_body(None),
+        "## modified files\n\nno modified files tracked for this agent conversation."
+    );
 }
 
 /// Verifies prompt submission does not run fallback context accounting before

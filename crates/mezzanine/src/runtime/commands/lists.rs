@@ -76,49 +76,65 @@ impl RuntimeSessionService {
 
     /// Builds the pane-local modified-file summary used by the agent shell.
     fn runtime_agent_modified_files_display(&self, pane_id: &str) -> String {
-        let Some(files) = self.retained_agent_modified_files(pane_id) else {
-            return "## modified files\n\nno modified files tracked for this agent conversation."
-                .to_string();
-        };
-        if files.is_empty() {
-            return "## modified files\n\nno modified files tracked for this agent conversation."
-                .to_string();
-        }
-        let total_added = files.values().map(|summary| summary.added).sum::<usize>();
-        let total_removed = files.values().map(|summary| summary.removed).sum::<usize>();
-        let mut lines = vec![
-            "## modified files".to_string(),
-            String::new(),
-            format!(
-                "{} ({} {}, {} files)",
-                "summary",
-                Self::markdown_modified_file_count_span("mez-diff-addition", '+', total_added),
-                Self::markdown_modified_file_count_span("mez-diff-deletion", '-', total_removed),
-                files.len()
-            ),
-            String::new(),
-        ];
-        for summary in files.values() {
-            lines.push(format!(
-                "- edited `{}` ({} {})",
-                summary.path,
-                Self::markdown_modified_file_count_span("mez-diff-addition", '+', summary.added),
-                Self::markdown_modified_file_count_span("mez-diff-deletion", '-', summary.removed)
-            ));
-        }
-        lines.join("\n")
+        runtime_agent_modified_files_body(self.retained_agent_modified_files(pane_id))
     }
+}
 
-    /// Wraps one modified-file line count in a markdown span consumed by the
-    /// terminal markdown renderer.
-    ///
-    /// # Parameters
-    /// - `class_name`: The renderer-recognized presentation class.
-    /// - `sign`: The leading `+` or `-` count sign.
-    /// - `count`: The count to render.
-    fn markdown_modified_file_count_span(class_name: &str, sign: char, count: usize) -> String {
-        format!(r#"<span class="{class_name}">{sign}{count}</span>"#)
+/// Renders the pane-local modified-file summary used by the agent shell.
+///
+/// The inline handler and the deferred executor share this formatter, so the page
+/// a worker renders off the actor is byte-identical to the inline one: the caller
+/// owns the tracked summary map, because the actor owns that pane state.
+pub(crate) fn runtime_agent_modified_files_body(
+    files: Option<
+        &std::collections::BTreeMap<
+            String,
+            crate::runtime::service_state::RuntimeAgentModifiedFileSummary,
+        >,
+    >,
+) -> String {
+    let Some(files) = files else {
+        return "## modified files\n\nno modified files tracked for this agent conversation."
+            .to_string();
+    };
+    if files.is_empty() {
+        return "## modified files\n\nno modified files tracked for this agent conversation."
+            .to_string();
     }
+    let total_added = files.values().map(|summary| summary.added).sum::<usize>();
+    let total_removed = files.values().map(|summary| summary.removed).sum::<usize>();
+    let mut lines = vec![
+        "## modified files".to_string(),
+        String::new(),
+        format!(
+            "{} ({} {}, {} files)",
+            "summary",
+            markdown_modified_file_count_span("mez-diff-addition", '+', total_added),
+            markdown_modified_file_count_span("mez-diff-deletion", '-', total_removed),
+            files.len()
+        ),
+        String::new(),
+    ];
+    for summary in files.values() {
+        lines.push(format!(
+            "- edited `{}` ({} {})",
+            summary.path,
+            markdown_modified_file_count_span("mez-diff-addition", '+', summary.added),
+            markdown_modified_file_count_span("mez-diff-deletion", '-', summary.removed)
+        ));
+    }
+    lines.join("\n")
+}
+
+/// Wraps one modified-file line count in a markdown span consumed by the
+/// terminal markdown renderer.
+///
+/// # Parameters
+/// - `class_name`: The renderer-recognized presentation class.
+/// - `sign`: The leading `+` or `-` count sign.
+/// - `count`: The count to render.
+fn markdown_modified_file_count_span(class_name: &str, sign: char, count: usize) -> String {
+    format!(r#"<span class="{class_name}">{sign}{count}</span>"#)
 }
 
 /// Runs one managed built-in skill sync from a configured root.

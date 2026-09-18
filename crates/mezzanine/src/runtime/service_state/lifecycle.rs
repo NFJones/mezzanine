@@ -295,6 +295,21 @@ pub(crate) enum RuntimeAgentCommandPrepared {
         /// Session-title policy captured from live config.
         title_policy: crate::session_title::SessionTitlePolicy,
     },
+    /// Renders the pane's tracked modified-file summary.
+    ///
+    /// `/list-modified-files` formats the pane's retained modification map; the
+    /// claim captures a copy so the worker can build the page without touching
+    /// actor-owned pane state.
+    ModifiedFiles {
+        /// Tracked modification summaries for the pane, when any were recorded.
+        #[allow(clippy::type_complexity)]
+        files: Option<
+            std::collections::BTreeMap<
+                String,
+                crate::runtime::service_state::RuntimeAgentModifiedFileSummary,
+            >,
+        >,
+    },
 }
 
 /// Result a worker prepares for the actor to apply.

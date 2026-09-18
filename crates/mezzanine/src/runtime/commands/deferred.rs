@@ -40,6 +40,7 @@ pub(crate) const RUNTIME_AGENT_OFF_ACTOR_COMMANDS: &[&str] = &[
     "context-doc",
     "sync-builtin-skills",
     "resume",
+    "list-modified-files",
 ];
 
 /// Prepared-input family one moved slash command consumes off the actor.
@@ -61,6 +62,8 @@ pub(crate) enum RuntimeAgentCommandFamily {
     BuiltinSkillSync,
     /// Saved-session catalog reads for the `/resume` picker.
     SavedSessionsBrowser,
+    /// Pane-local modified-file summaries.
+    ModifiedFiles,
 }
 
 /// Returns the prepared-input family for one moved command.
@@ -79,6 +82,7 @@ pub(crate) fn off_actor_command_family(command: &str) -> Option<RuntimeAgentComm
         "context-doc" => Some(RuntimeAgentCommandFamily::ContextDocument),
         "sync-builtin-skills" => Some(RuntimeAgentCommandFamily::BuiltinSkillSync),
         "resume" => Some(RuntimeAgentCommandFamily::SavedSessionsBrowser),
+        "list-modified-files" => Some(RuntimeAgentCommandFamily::ModifiedFiles),
         _ => None,
     }
 }
@@ -324,6 +328,11 @@ impl RuntimeSessionService {
                     title_policy: self.agent_session_title_policy(),
                 }
             }
+            RuntimeAgentCommandFamily::ModifiedFiles => {
+                RuntimeAgentCommandPrepared::ModifiedFiles {
+                    files: self.retained_agent_modified_files(pane_id).cloned(),
+                }
+            }
         };
         Ok(Some(RuntimeAgentCommandAsyncWork {
             pane_id: pane_id.to_string(),
@@ -550,6 +559,9 @@ impl RuntimeSessionService {
                         kind: error.kind(),
                     },
                 };
+            }
+            RuntimeAgentCommandPrepared::ModifiedFiles { files } => {
+                super::lists::runtime_agent_modified_files_body(files.as_ref())
             }
         };
         let outcome = AgentShellCommandOutcome::Display {
