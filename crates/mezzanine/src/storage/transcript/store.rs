@@ -2349,6 +2349,12 @@ impl AgentTranscriptStore {
         history::database_path(&self.root)
     }
 
+    /// Renders both prompt histories in their legacy TSV shape without creating
+    /// or migrating the store.
+    pub fn export_prompt_history_tsv_read_only(&self) -> Result<Option<String>> {
+        history::export_tsv_read_only(&self.root)
+    }
+
     /// Returns the durable active agent-session metadata file path.
     #[cfg(test)]
     pub fn agent_session_metadata_file(&self) -> PathBuf {

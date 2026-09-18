@@ -28,7 +28,8 @@ enum StorageCliCommand {
 ///
 /// Each store conversion appends its store here; the error message and the
 /// exporter match below both derive from this list so they cannot diverge.
-pub(super) const STORAGE_EXPORTERS: &[&str] = &["memory", "sessions", "leases", "assignments"];
+pub(super) const STORAGE_EXPORTERS: &[&str] =
+    &["memory", "sessions", "leases", "assignments", "history"];
 
 /// Typed process CLI arguments for `mez storage export`.
 #[derive(Debug, Clone, Args)]
@@ -109,6 +110,16 @@ fn storage_export_body(store: &str, env: &CliEnv) -> Result<String> {
             repository.export_tsv_read_only()?.ok_or_else(|| {
                 MezError::invalid_state(
                     "no local session assignment store found; create one with `mez new` first",
+                )
+            })
+        }
+        "history" => {
+            let paths = env.config_paths()?;
+            let store =
+                crate::storage::transcript::AgentTranscriptStore::under_config_root(paths.root());
+            store.export_prompt_history_tsv_read_only()?.ok_or_else(|| {
+                MezError::invalid_state(
+                    "no prompt history store found; submit an agent prompt or run a command first",
                 )
             })
         }

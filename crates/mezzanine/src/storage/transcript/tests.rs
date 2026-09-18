@@ -1835,6 +1835,61 @@ fn transcript_store_persists_command_prompt_history_in_shared_file() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies the prompt-history export renders both scopes in the legacy TSV
+/// shape, keeps collapsed-paste provenance, and never creates the store.
+#[test]
+fn transcript_store_exports_prompt_history_without_creating_the_store() {
+    let root = temp_root("prompt-history-export");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    assert!(
+        store
+            .export_prompt_history_tsv_read_only()
+            .unwrap()
+            .is_none(),
+        "an absent store reports nothing to export"
+    );
+    assert!(
+        !root.join("history.sqlite").exists() && !root.join("prompt-history.tsv").exists(),
+        "an inspection must not create the store"
+    );
+
+    let structured = ReadlineHistoryEntry {
+        text: "exported prompt".to_string(),
+        collapsed_paste_ranges: vec![ReadlinePasteRange { start: 0, end: 8 }],
+    };
+    assert!(
+        store
+            .append_structured_prompt_history("conv", &structured)
+            .unwrap()
+    );
+    assert!(store.append_command_prompt_history("help").unwrap());
+
+    let export = store
+        .export_prompt_history_tsv_read_only()
+        .unwrap()
+        .unwrap();
+    assert!(
+        export.starts_with("# agent\n"),
+        "the export opens the agent section: {export}"
+    );
+    assert!(
+        export.contains("\n# command\n"),
+        "the export opens the command section: {export}"
+    );
+    assert!(
+        export.contains(&encode_structured_prompt_history_entry(&structured).unwrap()),
+        "the agent row keeps its collapsed-paste provenance: {export}"
+    );
+    assert!(
+        export.contains(&encode_prompt_history_entry("help").unwrap()),
+        "the command row renders in the legacy shape: {export}"
+    );
+    assert!(!root.join("prompt-history.tsv").exists());
+    assert!(!root.join("command-prompt-history.tsv").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies that active agent-session metadata is replaced per Mezzanine
 /// session while preserving rows for unrelated sessions.
 #[test]

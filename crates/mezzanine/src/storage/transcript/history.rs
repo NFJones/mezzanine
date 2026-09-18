@@ -22,6 +22,7 @@ use super::super::shared_sqlite::{
     open_shared_database_read_only, schema_version, set_schema_version,
 };
 use super::encoding::decode_structured_prompt_history_entry;
+use super::encoding::encode_structured_prompt_history_entry;
 use super::store::{DEFAULT_AGENT_PROMPT_HISTORY_LIMIT, canonicalize_structured_history};
 use mez_mux::readline::{ReadlineHistoryEntry, ReadlinePasteRange};
 
@@ -84,6 +85,47 @@ impl HistoryScope {
 /// Returns the history database path for one transcript store root.
 pub(super) fn database_path(root: &Path) -> PathBuf {
     root.join(HISTORY_DATABASE_FILE_NAME)
+}
+
+/// Renders both prompt histories in the legacy TSV shape without creating or
+/// migrating the store.
+///
+/// Returns `None` when neither the database nor any legacy file exists, so an
+/// inspection command never creates the store. Each history renders as its own
+/// `# <scope>` section followed by the encoded rows the legacy files held, and
+/// the rows come from the same read path the runtime serves, so an export cannot
+/// block a daemon writer or observe uncommitted rows.
+pub(super) fn export_tsv_read_only(root: &Path) -> Result<Option<String>> {
+    let path = database_path(root);
+    reject_symlink(&path)?;
+    if !path_exists(&path) && !legacy_history_exists(root) {
+        return Ok(None);
+    }
+    let mut output = String::new();
+    for scope in [HistoryScope::Agent, HistoryScope::Command] {
+        output.push_str("# ");
+        output.push_str(scope.as_str());
+        output.push('\n');
+        for entry in read(root, scope)? {
+            output.push_str(&encode_structured_prompt_history_entry(&entry)?);
+            output.push('\n');
+        }
+    }
+    Ok(Some(output))
+}
+
+/// Reports whether any legacy history file exists below one store root.
+fn legacy_history_exists(root: &Path) -> bool {
+    if path_exists(&root.join(LEGACY_AGENT_HISTORY_FILE_NAME))
+        || path_exists(&root.join(LEGACY_COMMAND_HISTORY_FILE_NAME))
+    {
+        return true;
+    }
+    std::fs::read_dir(root).is_ok_and(|entries| {
+        entries
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .any(|path| path.is_dir() && path_exists(&path.join(LEGACY_AGENT_HISTORY_FILE_NAME)))
+    })
 }
 
 /// Maps one rusqlite failure to an actionable history error.

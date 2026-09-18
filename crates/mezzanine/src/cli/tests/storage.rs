@@ -270,3 +270,39 @@ fn storage_export_reservation_stores_print_rows() {
         "the assignment export renders its row: {export}"
     );
 }
+
+/// Verifies `mez storage export history` prints both prompt-history scopes in
+/// the legacy TSV shape below the configured root.
+#[test]
+fn storage_export_history_prints_both_scopes() {
+    let (env, _home) = test_env("storage-export-history");
+    let paths = env.config_paths().unwrap();
+    let store = crate::storage::transcript::AgentTranscriptStore::under_config_root(paths.root());
+    assert!(
+        store
+            .append_prompt_history("conv", "exported prompt")
+            .unwrap()
+    );
+    assert!(store.append_command_prompt_history("help").unwrap());
+
+    let mut stderr = Vec::new();
+    let mut stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "storage".to_string(),
+            "export".to_string(),
+            "history".to_string(),
+        ],
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    let export = String::from_utf8(stdout).unwrap();
+    assert!(export.starts_with("# agent\n"), "{export}");
+    assert!(export.contains("\n# command\n"), "{export}");
+    assert!(export.contains("exported prompt"), "{export}");
+    assert!(export.contains("help"), "{export}");
+}
