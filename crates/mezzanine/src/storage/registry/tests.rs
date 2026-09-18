@@ -228,6 +228,33 @@ fn registry_failed_import_keeps_the_legacy_flat_file_authoritative() {
         registry.list().is_err(),
         "the flat file stays authoritative and still surfaces its malformed content"
     );
+
+    // A row that decodes but fails record validation must fail the import too,
+    // which covers the import closure's own validation line rather than decode's.
+    let second = test_root("sqlite-import-invalid-count");
+    let _ = fs::remove_dir_all(&second);
+    let registry = SessionRegistry::new(second.clone(), effective_uid_for_tests());
+    let mut fields = record("$1")
+        .encode()
+        .unwrap()
+        .split('\t')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    fields[10] = "9".to_string();
+    fields[11] = "1".to_string();
+    let over_capacity = format!("{}\n", fields.join("\t"));
+    drop(registry.acquire_exclusive_lock().unwrap());
+    fs::write(registry.registry_file(), &over_capacity).unwrap();
+    assert!(
+        registry.upsert(record("$2")).is_err(),
+        "a row whose primary count exceeds capacity must fail the import"
+    );
+    assert_eq!(
+        fs::read_to_string(registry.registry_file()).unwrap(),
+        over_capacity,
+        "the flat file is never modified by a failed import"
+    );
+    let _ = fs::remove_dir_all(second);
     let _ = fs::remove_dir_all(root);
 }
 
