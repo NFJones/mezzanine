@@ -441,13 +441,17 @@ pub enum AgentActionPayload {
         ///
         /// Omission preserves the existing isolated child-session behavior.
         session_mode: Option<SubagentSessionMode>,
-        /// Optional explicit initial child model-size selection.
+        /// Optional explicit child model-size selection.
         ///
-        /// The value is valid only when paired with `reasoning_effort`.
+        /// The value is valid only when paired with `reasoning_effort`. The
+        /// pair selects the child’s initial turn when one is started and always
+        /// becomes the child’s durable agent-scoped model profile, including
+        /// the first peer-message turn of an idle persistent child.
         size: Option<String>,
-        /// Optional explicit initial child reasoning selection.
+        /// Optional explicit child reasoning selection.
         ///
-        /// The value is valid only when paired with `size`.
+        /// The value is valid only when paired with `size` and is carried by
+        /// the same durable child profile.
         reasoning_effort: Option<String>,
         /// Whether the child is one-shot or reusable through MMP.
         lifetime: crate::SubagentLifetime,
@@ -989,11 +993,6 @@ impl AgentAction {
                     })?;
                     crate::messaging::normalize_objective(objective)
                         .map_err(|error| MaapContractError::invalid_args(error.message()))?;
-                    if task_prompt.trim().is_empty() && size.is_some() {
-                        return Err(MaapContractError::invalid_args(
-                            "persistent idle spawn cannot select an initial model size",
-                        ));
-                    }
                 }
                 match (size.as_deref(), reasoning_effort.as_deref()) {
                     (None, None) => Ok(()),
@@ -2295,18 +2294,17 @@ mod tests {
             "task subagent spawn must not define a persistent objective"
         );
 
-        let idle_sizing = parse_maap_action_batch_json_for_turn(
+        // A promptless persistent spawn provisions an idle actor that starts
+        // with its first peer-message turn, so an atomic size/reasoning pair
+        // must validate here and become that child's durable model identity.
+        parse_maap_action_batch_json_for_turn(
             r#"{"rationale":"provision","actions":[{"type":"spawn_agent","role":"worker","lifetime":"persistent","objective":"Handle peer requests","size":"small","reasoning_effort":"low","task_prompt":""}]}"#,
             "turn-1",
             "agent-1",
         )
         .unwrap()
         .validate_harness_contract(&[], &[])
-        .unwrap_err();
-        assert_eq!(
-            idle_sizing.message(),
-            "persistent idle spawn cannot select an initial model size"
-        );
+        .expect("a promptless persistent spawn may select an explicit model size");
     }
 
     #[test]

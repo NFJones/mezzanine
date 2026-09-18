@@ -5667,6 +5667,10 @@ impl RuntimeSessionService {
             .model_profile_overrides_mut()
             .agent_profiles
             .remove(&agent_id);
+        self.integration
+            .model_profile_overrides_mut()
+            .subagent_profiles
+            .remove(&agent_id);
         self.remove_subagent_authority_state(&agent_id);
         self.deregister_macro_managed_subagent(&agent_id);
         if let Some(agent_id) = AgentId::opaque(agent_id) {

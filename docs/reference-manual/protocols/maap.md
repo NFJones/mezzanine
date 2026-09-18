@@ -54,7 +54,7 @@ family; otherwise the current surface is final for that response.
 | `send_message` | `recipient`, `content_type`, `payload` | Requests local MMP delivery to one recipient or scope. After acceptance, an eligible sender pane may show one `${recipient}<` row; this proves acceptance or queueing only, not recipient observation or completion. Optional `correlation_id` names the message being answered. Approval is per message and per recipient. A recipient that fails the grammar is not policy-gated: the planner neither admits nor denies it, and delivery fails with `invalid_message_recipient` so the recipient can be corrected. |
 | `list_agents` | none | Read-only peer discovery; no approval mode prompts for it. Optional `agent_type` filters kinds. Omitted or null `scope` uses the requester's trusted project membership; explicit `session` widens to otherwise matching session identities. |
 | `wait` | none | Parks the same turn until model-originated MMP peer mail arrives. It is valid only for active inter-agent MMP coordination, must be the only executable action in its batch, and is not a general delay or external-event primitive. |
-| `spawn_agent` | `role`, `task_prompt` | Requests pane-backed delegation. Optional `session: fork | new` selects a bounded immutable parent-history snapshot or an isolated child session. Optional atomic `size` and `reasoning_effort`, advertised per configured size, select the initial child turn only. `lifetime: persistent` is exclusively for reusable inter-agent MMP actors and requires `objective`; it must never be used for another purpose. Scope and policy remain runtime-controlled. |
+| `spawn_agent` | `role`, `task_prompt` | Requests pane-backed delegation. Optional `session: fork | new` selects a bounded immutable parent-history snapshot or an isolated child session. Optional atomic `size` and `reasoning_effort`, advertised per configured size, select the child's model identity: they set the initial child turn and become the child's durable profile for later turns. `lifetime: persistent` is exclusively for reusable inter-agent MMP actors and requires `objective`; it must never be used for another purpose. Scope and policy remain runtime-controlled. |
 | `close_agent` | `agent_id` | Closes one live persistent child owned by the calling parent conversation. Discover the target through `list_agents`; unknown, foreign, stale, non-persistent, and already-closed targets return one opaque unavailable result. |
 | `config_change` | `setting_path`, `operation`, `value` | Proposes a supported live leaf configuration mutation. Set values accept strings, signed integers, booleans, or string arrays; objects, null set-values, floats, and mixed arrays are rejected. Provider schemas carry the value as a string containing a JSON scalar or string array, while plain non-JSON text is a string value. |
 | `mcp_server_search` | `query` | Searches configured MCP directory records and persists safe results as durable action evidence. An optional `limit` is from 1 through 20. |
@@ -98,14 +98,25 @@ provider schema may omit from a particular turn:
   `null` means `task`. Use `persistent` exclusively for a reusable agent that
   will be interacted with over MMP, never for any other circumstance, and
   provide its continuing `objective`. An empty persistent `task_prompt`
-  provisions an idle actor; a non-empty prompt starts an optional initial turn.
+  provisions an idle actor whose first turn is a later peer-message turn; a
+  non-empty prompt starts an optional initial turn. An explicit
+  `size`/`reasoning_effort` pair is valid for both shapes and always becomes the
+  child's durable agent-scoped model identity.
   Persistent agents remain discoverable and messageable between turns and are
   owned by the creating parent conversation, not globally. `size` is
   `small`, `medium`, or `large`; both fields are required together, and the
   provider schema lists each configured size profile plus the reasoning efforts
   that size accepts. A valid pair resolves against the inherited auto-sizing
-  configuration, applies only to the initial child turn, and bypasses automatic
-  routing for that turn. `session: fork` copies the bounded parent transcript
+  configuration, applies to the initial child turn, becomes the child's durable
+  agent-scoped model profile for later turns, and bypasses automatic routing for
+  that initial turn. Later turns of that child keep the requested model and
+  reasoning level; because the identity is agent-scoped, subagent- and
+  agent-scoped profile overrides still outrank it while pane-, window-, and
+  session-scoped profile overrides do not apply to that child until it is
+  cleared. Per-turn routing stays the pane's separate configured policy, and
+  the generated identity lasts for the runtime session because agent-scoped
+  overrides are not restored across a restart. `session: fork` copies the
+  bounded parent transcript
   into a distinct child conversation;
   `session: new`, or omission, creates an isolated child conversation. Include
   task-critical facts in `task_prompt` in either mode. Session selection never

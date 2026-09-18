@@ -912,7 +912,7 @@ fn maap_spawn_agent_action_schema(sizing: Option<&SpawnAgentSizing>) -> serde_js
 /// tells the model which configured profile each size resolves to so it can
 /// reason about capability and cost before choosing.
 fn maap_spawn_agent_size_description(sizing: Option<&SpawnAgentSizing>) -> String {
-    const BASE: &str = "Optional initial child model size. Provide it together with reasoning_effort to override automatic routing for the initial child turn only. Bias toward a smaller size than your first estimate, choosing the smallest size adequate for task scope, uncertainty, blast radius, and validation burden; use validation to detect and correct an inadequate choice.";
+    const BASE: &str = "Optional child model size. Provide it together with reasoning_effort to select the child's model identity: the pair sets the child's initial turn when one is started, bypasses automatic routing for that turn, and becomes the child's durable profile for later turns, including the first peer-message turn of an idle persistent child. Bias toward a smaller size than your first estimate, choosing the smallest size adequate for task scope, uncertainty, blast radius, and validation burden; use validation to detect and correct an inadequate choice.";
     let Some(sizing) = sizing else {
         return BASE.to_string();
     };
@@ -964,7 +964,7 @@ fn maap_spawn_agent_size_schema(sizing: Option<&SpawnAgentSizing>) -> serde_json
 /// Without routed-size data the field keeps the static canonical guidance so
 /// non-routed contexts behave unchanged.
 fn maap_spawn_agent_reasoning_schema(sizing: Option<&SpawnAgentSizing>) -> serde_json::Value {
-    const BASE: &str = "Optional initial child reasoning effort. Provide it together with size. Choose the lowest adequate effort for diagnostic depth, ambiguity, and consequence; implementation, debugging, refactoring, test-writing, and repository exploration must not use low. Use validation to detect and correct an inadequate choice.";
+    const BASE: &str = "Optional child reasoning effort. Provide it together with size. The pair sets the child's initial turn when one is started and becomes the child's durable profile for later turns, including an idle persistent child's first peer-message turn. Choose the lowest adequate effort for diagnostic depth, ambiguity, and consequence; implementation, debugging, refactoring, test-writing, and repository exploration must not use low. Use validation to detect and correct an inadequate choice.";
     let Some(sizing) = sizing else {
         return serde_json::json!({
             "type": ["string", "null"],

@@ -53,6 +53,11 @@ to select a model or supported reasoning level for the pane. When live provider
 metadata is unavailable, the list can fall back to configured models and labels
 that source accordingly.
 
+Profile overrides resolve in subagent, agent, pane, window, session, then
+default order. `/model --scope subagent --target <agent-id>` stores its override
+under that child agent's id, so the child's turns resolve it ahead of the child's
+own spawn-selected profile; clearing the override restores the spawn selection.
+
 For a compatible custom provider with no configured or discoverable models,
 the typed list output includes an `add` command and live-catalog guidance rather
 than presenting an unexplained empty result.

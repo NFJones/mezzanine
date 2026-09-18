@@ -1530,3 +1530,674 @@ fn runtime_shell_pane_not_ready_queues_model_self_correction() {
     );
     service.terminate_all_pane_processes().unwrap();
 }
+
+/// Configures distinct auto-sizing targets whose models and reasoning levels
+/// differ from the parent default, so explicit child sizing is observable.
+///
+/// The `deepseek-large` target configures `high` reasoning while allowing
+/// `low`, which lets regressions distinguish a requested effort from the target
+/// profile's own configured effort.
+const EXPLICIT_SUBAGENT_SIZING_CONFIG: &str = "[agents]\ndefault_provider = \"deepseek\"\ndefault_model_profile = \"deepseek-default\"\nshell_mode = \"native\"\n\n[agents.auto_sizing]\nrouter_model_profile = \"deepseek-router\"\nsmall_model_profile = \"deepseek-small\"\nmedium_model_profile = \"deepseek-medium\"\nlarge_model_profile = \"deepseek-large\"\nallowed_reasoning_efforts = [\"low\", \"high\"]\n\n[permissions]\napproval_policy = \"ask\"\nsandbox = \"policy-only\"\n\n[providers.deepseek]\nkind = \"deepseek\"\ndefault_model = \"deepseek-v4-pro\"\n\n[providers.deepseek.models.deepseek-v4-flash]\nid = \"deepseek-v4-flash\"\nreasoning_levels = [\"low\", \"high\", \"max\"]\n\n[providers.deepseek.models.deepseek-v4-pro]\nid = \"deepseek-v4-pro\"\nreasoning_levels = [\"low\", \"high\", \"max\"]\n\n[providers.deepseek.models.deepseek-v4-max]\nid = \"deepseek-v4-max\"\nreasoning_levels = [\"low\", \"high\", \"max\"]\n\n[model_profiles.deepseek-default]\nprovider = \"deepseek\"\nmodel = \"deepseek-v4-pro\"\nreasoning_profile = \"high\"\n\n[model_profiles.deepseek-router]\nprovider = \"deepseek\"\nmodel = \"deepseek-v4-flash\"\nreasoning_profile = \"low\"\n\n[model_profiles.deepseek-small]\nprovider = \"deepseek\"\nmodel = \"deepseek-v4-flash\"\nreasoning_profile = \"low\"\n\n[model_profiles.deepseek-medium]\nprovider = \"deepseek\"\nmodel = \"deepseek-v4-pro\"\nreasoning_profile = \"low\"\n\n[model_profiles.deepseek-large]\nprovider = \"deepseek\"\nmodel = \"deepseek-v4-max\"\nreasoning_profile = \"high\"\n";
+
+/// Verifies an explicit `spawn_agent` size/reasoning pair becomes the spawned
+/// child's durable model identity instead of a single-turn override.
+///
+/// The frozen sizing catalog resolves `size` and `reasoning_effort` into one
+/// execution profile, and the spawn response advertises that selection as the
+/// child's model. Every later child turn must keep resolving the requested
+/// model and reasoning level; reverting to the parent profile on the second
+/// turn is the defect this regression pins.
+#[test]
+fn runtime_spawn_explicit_size_pair_governs_child_model_profile() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "explicit-subagent-sizing".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: EXPLICIT_SUBAGENT_SIZING_CONFIG.to_string(),
+        }])
+        .unwrap();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let (parent_profile_name, parent_profile) = service
+        .active_model_profile_for_pane("%1", "agent-%1", None)
+        .unwrap();
+    assert_eq!(parent_profile_name, "deepseek-default");
+    assert_eq!(parent_profile.model, "deepseek-v4-pro");
+
+    let spawned = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: mez_agent::SubagentSessionMode::New,
+                initial_model_size: Some("large".to_string()),
+                initial_reasoning_effort: Some("high".to_string()),
+                task_prompt: "inspect the explicit subagent size policy".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: false,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap();
+    let spawned = serde_json::from_str::<serde_json::Value>(&spawned).unwrap();
+    let child_agent_id = spawned["agent"]["id"].as_str().unwrap().to_string();
+    let child_pane_id = spawned["agent"]["pane_id"].as_str().unwrap().to_string();
+    assert_eq!(
+        spawned["agent"]["initial_model_size"].as_str(),
+        Some("large")
+    );
+    assert_eq!(
+        spawned["agent"]["initial_model_profile"].as_str(),
+        Some("deepseek-large")
+    );
+    let (durable_profile_name, durable_profile) = service
+        .active_model_profile_for_pane(&child_pane_id, &child_agent_id, None)
+        .unwrap();
+    assert_ne!(durable_profile_name, parent_profile_name);
+    assert_eq!(durable_profile.model, "deepseek-v4-max");
+    assert_eq!(
+        spawned["agent"]["model_profile"].as_str(),
+        Some(durable_profile_name.as_str()),
+        "the spawn response must report the child's durable model profile"
+    );
+    let child_turn_id = spawned["turn"]["id"].as_str().unwrap().to_string();
+    let child_turn_profile = service
+        .agent_turn_model_profile(&child_turn_id)
+        .expect("child initial turn profile should exist")
+        .clone();
+    assert_eq!(child_turn_profile.model, "deepseek-v4-max");
+    assert_eq!(
+        child_turn_profile.reasoning_profile.as_deref(),
+        Some("high")
+    );
+
+    // A real follow-up child turn resolves the child's durable agent-scoped
+    // profile instead of the initial turn selection, so the explicit pair must
+    // be reflected there too.
+    let follow_up = service
+        .start_agent_prompt_turn(&child_pane_id, "continue the review")
+        .unwrap();
+    let follow_up_profile = service
+        .agent_turn_model_profile(&follow_up.turn_id)
+        .expect("follow-up child turn profile should exist")
+        .clone();
+    assert_eq!(
+        (
+            follow_up_profile.model.as_str(),
+            follow_up_profile.reasoning_profile.as_deref(),
+        ),
+        ("deepseek-v4-max", Some("high")),
+        "a later child turn must keep the explicit size pair, not the parent profile {:?}",
+        (parent_profile_name.as_str(), parent_profile.model.as_str())
+    );
+    let (later_profile_name, later_profile) = service
+        .active_model_profile_for_pane(&child_pane_id, &child_agent_id, None)
+        .unwrap();
+    assert_ne!(later_profile_name, parent_profile_name);
+    assert_eq!(later_profile.model, "deepseek-v4-max");
+    assert_eq!(later_profile.reasoning_profile.as_deref(), Some("high"));
+    let follow_up_turn_profile_name = service
+        .agent_turn_ledger()
+        .turn(&follow_up.turn_id)
+        .map(|turn| turn.model_profile.clone())
+        .expect("follow-up child turn should be recorded");
+    assert_eq!(later_profile_name, follow_up_turn_profile_name);
+}
+
+/// Spawns one explorer child with an explicit size/reasoning pair and returns
+/// its agent id, pane id, and initial turn id.
+///
+/// The helper keeps the requested-effort regressions focused on profile
+/// identity instead of repeating the full spawn request shape.
+fn spawn_explicitly_sized_child(
+    service: &mut RuntimeSessionService,
+    primary: &mez_core::ids::ClientId,
+    size: &str,
+    reasoning_effort: &str,
+) -> (String, String, String) {
+    let spawned = service
+        .spawn_runtime_subagent(
+            primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: mez_agent::SubagentSessionMode::New,
+                initial_model_size: Some(size.to_string()),
+                initial_reasoning_effort: Some(reasoning_effort.to_string()),
+                task_prompt: "review the requested reasoning level".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: false,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap();
+    let spawned = serde_json::from_str::<serde_json::Value>(&spawned).unwrap();
+    (
+        spawned["agent"]["id"].as_str().unwrap().to_string(),
+        spawned["agent"]["pane_id"].as_str().unwrap().to_string(),
+        spawned["turn"]["id"].as_str().unwrap().to_string(),
+    )
+}
+
+/// Verifies a durable child profile pins the requested reasoning level even
+/// when it differs from the configured target profile's own reasoning level.
+///
+/// The generated profile name embeds the reasoning level, so two children that
+/// request different efforts for the same size must resolve distinct profiles
+/// with distinct reasoning levels instead of collapsing onto one identity.
+#[test]
+fn runtime_spawn_explicit_reasoning_pins_requested_effort() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "explicit-subagent-sizing-reasoning".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"gpt-default\"\nshell_mode = \"native\"\n\n[agents.auto_sizing]\nrouter_model_profile = \"gpt-router\"\nsmall_model_profile = \"gpt-small\"\nmedium_model_profile = \"gpt-medium\"\nlarge_model_profile = \"gpt-large\"\nallowed_reasoning_efforts = [\"low\", \"high\"]\n\n[permissions]\napproval_policy = \"ask\"\nsandbox = \"policy-only\"\n\n[providers.openai]\nkind = \"openai\"\napi = \"openai-responses\"\ndefault_model = \"gpt-5.6-terra\"\n\n[providers.openai.models.gpt-5-6-terra]\nid = \"gpt-5.6-terra\"\nreasoning_levels = [\"low\", \"medium\", \"high\", \"xhigh\"]\n\n[providers.openai.models.gpt-5-6-sol]\nid = \"gpt-5.6-sol\"\nreasoning_levels = [\"low\", \"medium\", \"high\", \"xhigh\"]\n\n[providers.openai.models.gpt-5-6-luna]\nid = \"gpt-5.6-luna\"\nreasoning_levels = [\"low\", \"medium\", \"high\", \"xhigh\"]\n\n[model_profiles.gpt-default]\nprovider = \"openai\"\nmodel = \"gpt-5.6-terra\"\nreasoning_profile = \"high\"\n\n[model_profiles.gpt-router]\nprovider = \"openai\"\nmodel = \"gpt-5.6-luna\"\nreasoning_profile = \"low\"\n\n[model_profiles.gpt-small]\nprovider = \"openai\"\nmodel = \"gpt-5.6-luna\"\nreasoning_profile = \"low\"\n\n[model_profiles.gpt-medium]\nprovider = \"openai\"\nmodel = \"gpt-5.6-terra\"\nreasoning_profile = \"medium\"\n\n[model_profiles.gpt-large]\nprovider = \"openai\"\nmodel = \"gpt-5.6-sol\"\nreasoning_profile = \"high\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let (high_agent_id, high_pane_id, high_turn_id) =
+        spawn_explicitly_sized_child(&mut service, &primary, "large", "high");
+    let (low_agent_id, low_pane_id, low_turn_id) =
+        spawn_explicitly_sized_child(&mut service, &primary, "large", "low");
+
+    let high_turn_profile = service
+        .agent_turn_model_profile(&high_turn_id)
+        .expect("high-reasoning child turn profile should exist")
+        .clone();
+    let low_turn_profile = service
+        .agent_turn_model_profile(&low_turn_id)
+        .expect("low-reasoning child turn profile should exist")
+        .clone();
+    assert_eq!(high_turn_profile.model, "gpt-5.6-sol");
+    assert_eq!(high_turn_profile.reasoning_profile.as_deref(), Some("high"));
+    assert_eq!(low_turn_profile.model, "gpt-5.6-sol");
+    assert_eq!(low_turn_profile.reasoning_profile.as_deref(), Some("low"));
+
+    let (high_profile_name, high_profile) = service
+        .active_model_profile_for_pane(&high_pane_id, &high_agent_id, None)
+        .unwrap();
+    let (low_profile_name, low_profile) = service
+        .active_model_profile_for_pane(&low_pane_id, &low_agent_id, None)
+        .unwrap();
+    assert_eq!(high_profile.model, "gpt-5.6-sol");
+    assert_eq!(high_profile.reasoning_profile.as_deref(), Some("high"));
+    assert_eq!(low_profile.model, "gpt-5.6-sol");
+    assert_eq!(low_profile.reasoning_profile.as_deref(), Some("low"));
+    assert_ne!(
+        high_profile_name, low_profile_name,
+        "different requested reasoning levels must not collapse onto one child identity"
+    );
+}
+
+/// Verifies a subagent-scoped model-profile override governs a child's turn
+/// resolution and that clearing it restores the child's durable identity.
+///
+/// `/model --scope subagent` stores overrides under the child's agent id, so
+/// every turn path that resolves that child must consult the scope instead of
+/// silently resolving the agent-, pane-, or default-scoped profile.
+#[test]
+fn runtime_subagent_scope_override_governs_child_turn_resolution() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "subagent-scope-resolution".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: EXPLICIT_SUBAGENT_SIZING_CONFIG.to_string(),
+        }])
+        .unwrap();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let (child_agent_id, child_pane_id, _turn_id) =
+        spawn_explicitly_sized_child(&mut service, &primary, "large", "high");
+    let (_, durable) = service
+        .active_model_profile_for_pane(&child_pane_id, &child_agent_id, None)
+        .unwrap();
+    assert_eq!(durable.model, "deepseek-v4-max");
+    assert_eq!(durable.reasoning_profile.as_deref(), Some("high"));
+
+    service
+        .integration
+        .model_profile_overrides_mut()
+        .subagent_profiles
+        .insert(child_agent_id.clone(), "deepseek-small".to_string());
+    let (scoped_name, scoped) = service
+        .active_model_profile_for_pane(&child_pane_id, &child_agent_id, None)
+        .unwrap();
+    assert_eq!(scoped_name, "deepseek-small");
+    assert_eq!(scoped.model, "deepseek-v4-flash");
+    assert_eq!(scoped.reasoning_profile.as_deref(), Some("low"));
+
+    service.stop_agent_turn_for_pane(&child_pane_id).unwrap();
+    let turn = service
+        .start_agent_prompt_turn(&child_pane_id, "review under the scoped profile")
+        .unwrap();
+    let turn_profile = service
+        .agent_turn_model_profile(&turn.turn_id)
+        .expect("scoped child turn profile should exist")
+        .clone();
+    assert_eq!(turn_profile.model, "deepseek-v4-flash");
+    assert_eq!(turn_profile.reasoning_profile.as_deref(), Some("low"));
+
+    service
+        .integration
+        .model_profile_overrides_mut()
+        .subagent_profiles
+        .remove(&child_agent_id);
+    let (_, restored) = service
+        .active_model_profile_for_pane(&child_pane_id, &child_agent_id, None)
+        .unwrap();
+    assert_eq!(restored.model, "deepseek-v4-max");
+    assert_eq!(restored.reasoning_profile.as_deref(), Some("high"));
+}
+
+/// Verifies a nested child inherits its parent's effective model identity,
+/// including a subagent-scoped override on that parent.
+///
+/// A child of an explicitly sized child must inherit the profile the parent
+/// actually resolves — its subagent-scoped override — rather than the parent's
+/// agent-scoped spawn identity, matching resolver precedence.
+#[test]
+fn runtime_nested_child_inherits_parent_effective_profile() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "nested-inheritance".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: EXPLICIT_SUBAGENT_SIZING_CONFIG.to_string(),
+        }])
+        .unwrap();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let (parent_agent_id, parent_pane_id, _) =
+        spawn_explicitly_sized_child(&mut service, &primary, "large", "high");
+    let (parent_profile_name, parent_profile) = service
+        .active_model_profile_for_pane(&parent_pane_id, &parent_agent_id, None)
+        .unwrap();
+    assert_eq!(parent_profile.model, "deepseek-v4-max");
+    assert_eq!(
+        service.inherited_model_profile_for_child_agent(&parent_agent_id),
+        Some(parent_profile_name),
+        "a child inherits the parent's own model identity"
+    );
+    service
+        .integration
+        .model_profile_overrides_mut()
+        .subagent_profiles
+        .insert(parent_agent_id.clone(), "deepseek-small".to_string());
+    assert_eq!(
+        service.inherited_model_profile_for_child_agent(&parent_agent_id),
+        Some("deepseek-small".to_string()),
+        "the parent's subagent-scoped override must be the inherited identity"
+    );
+
+    let nested = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: parent_agent_id.clone(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: mez_agent::SubagentSessionMode::New,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
+                task_prompt: "inspect the nested inheritance".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: false,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: false,
+            },
+        )
+        .unwrap();
+    let nested = serde_json::from_str::<serde_json::Value>(&nested).unwrap();
+    let nested_agent_id = nested["agent"]["id"].as_str().unwrap().to_string();
+    let nested_pane_id = nested["agent"]["pane_id"].as_str().unwrap().to_string();
+    let (nested_profile_name, nested_profile) = service
+        .active_model_profile_for_pane(&nested_pane_id, &nested_agent_id, None)
+        .unwrap();
+    assert_eq!(nested_profile_name, "deepseek-small");
+    assert_eq!(nested_profile.model, "deepseek-v4-flash");
+    assert_eq!(nested_profile.reasoning_profile.as_deref(), Some("low"));
+}
+
+/// Verifies a promptless persistent spawn accepts an explicit size/reasoning
+/// pair and applies it to the idle child before any turn exists.
+///
+/// An idle persistent child starts with its first peer-message turn, so the
+/// spawn response must report the requested pair and the durable child profile,
+/// and that first message-triggered turn must already run at the requested
+/// model and reasoning level.
+#[test]
+fn runtime_idle_persistent_spawn_accepts_explicit_size_pair() {
+    let mut service = test_runtime_service();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    service.set_agent_transcript_store(AgentTranscriptStore::new(temp_root(
+        "runtime-idle-persistent-sizing",
+    )));
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "idle-persistent-sizing".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: EXPLICIT_SUBAGENT_SIZING_CONFIG.to_string(),
+        }])
+        .unwrap();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let parent_conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+
+    let spawned = service
+        .spawn_runtime_persistent_subagent_session_owned(
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: mez_agent::SubagentSessionMode::New,
+                initial_model_size: Some("large".to_string()),
+                initial_reasoning_effort: Some("high".to_string()),
+                task_prompt: String::new(),
+                explicit_user_approval: false,
+                skip_initial_turn: true,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: false,
+            },
+            &parent_conversation_id,
+            "Review repository issues on request",
+        )
+        .unwrap();
+    let spawned = serde_json::from_str::<serde_json::Value>(&spawned).unwrap();
+    let child_agent_id = spawned["agent"]["id"].as_str().unwrap().to_string();
+    let child_pane_id = spawned["agent"]["pane_id"].as_str().unwrap().to_string();
+    assert_eq!(
+        spawned["agent"]["initial_model_size"].as_str(),
+        Some("large")
+    );
+    assert_eq!(
+        spawned["agent"]["initial_reasoning_effort"].as_str(),
+        Some("high")
+    );
+    assert_eq!(
+        spawned["agent"]["initial_model_profile"].as_str(),
+        Some("deepseek-large")
+    );
+    assert!(spawned["turn"].is_null());
+
+    let (child_profile_name, child_profile) = service
+        .active_model_profile_for_pane(&child_pane_id, &child_agent_id, None)
+        .unwrap();
+    assert_eq!(child_profile.model, "deepseek-v4-max");
+    assert_eq!(child_profile.reasoning_profile.as_deref(), Some("high"));
+    assert_eq!(
+        spawned["agent"]["model_profile"].as_str(),
+        Some(child_profile_name.as_str())
+    );
+
+    // The idle child's first peer-message turn must already use the pair.
+    let now_ms = crate::runtime::current_unix_millis();
+    let parent_identity = service
+        .ensure_runtime_message_identity("agent-%1", None, "agent", &[], now_ms)
+        .unwrap();
+    service
+        .control
+        .message_service_mut()
+        .accept_at_with_scope(
+            &parent_identity.agent_id,
+            mez_agent::messaging::Envelope {
+                protocol: "mmp/1",
+                id: "idle-persistent-review".to_string(),
+                message_type: "send".to_string(),
+                time: format!("runtime:{now_ms}"),
+                sender: parent_identity.clone(),
+                recipient: mez_agent::messaging::Recipient::Agent(
+                    mez_core::ids::AgentId::opaque(child_agent_id.clone()).unwrap(),
+                ),
+                correlation_id: None,
+                ttl_ms: None,
+                content_type: "text/plain; charset=utf-8".to_string(),
+                payload: "review the pending issue".to_string(),
+                extension_fields: Vec::new(),
+            },
+            mez_agent::messaging::MessageScope::Session,
+            now_ms,
+        )
+        .unwrap();
+    assert_eq!(
+        service
+            .deliver_pending_runtime_agent_messages(now_ms)
+            .unwrap(),
+        1
+    );
+    let child_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.agent_id == child_agent_id)
+        .cloned()
+        .expect("idle persistent child should start one peer-message turn");
+    let child_turn_profile = service
+        .agent_turn_model_profile(&child_turn.turn_id)
+        .expect("peer-message child turn profile should exist")
+        .clone();
+    assert_eq!(child_turn_profile.model, "deepseek-v4-max");
+    assert_eq!(
+        child_turn_profile.reasoning_profile.as_deref(),
+        Some("high")
+    );
+}
+
+/// Verifies a generated child profile keeps the supplied reasoning level even
+/// when the base profile definition configures no reasoning level.
+///
+/// An explicit spawn selection always supplies a reasoning level, so the pin
+/// must not depend on the base definition carrying one.
+#[test]
+fn runtime_generated_child_profile_pins_reasoning_without_base_reasoning() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "bare-reasoning-profile".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"bare-default\"\n\n[providers.openai]\nkind = \"openai\"\napi = \"openai-responses\"\ndefault_model = \"gpt-5.6-sol\"\n\n[model_profiles.bare-default]\nprovider = \"openai\"\nmodel = \"gpt-5.6-sol\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+
+    let mut profile = service
+        .provider_registry()
+        .resolve_profile("bare-default")
+        .expect("configured bare profile should resolve");
+    assert!(profile.reasoning_profile.is_none());
+    profile.reasoning_profile = Some("low".to_string());
+    let generated = service
+        .insert_runtime_generated_model_profile("bare-default", profile)
+        .expect("generated child profile should register");
+    let resolved = service
+        .provider_registry()
+        .resolve_profile(&generated)
+        .expect("generated child profile should resolve");
+    assert_eq!(resolved.provider, "openai");
+    assert_eq!(resolved.model, "gpt-5.6-sol");
+    assert_eq!(resolved.reasoning_profile.as_deref(), Some("low"));
+}
+
+/// Verifies a spawn without an explicit size/reasoning pair keeps the existing
+/// role-then-parent profile inheritance for every child turn.
+///
+/// Durable child sizing must not leak into ordinary spawns: a child that omits
+/// the pair continues to resolve the inherited parent profile (or the global
+/// default profile when the parent resolves the default) instead of acquiring a
+/// generated profile of its own.
+#[test]
+fn runtime_spawn_without_explicit_size_keeps_inherited_child_profile() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "inherited-subagent-profile".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_provider = \"deepseek\"\ndefault_model_profile = \"deepseek-default\"\nshell_mode = \"native\"\n\n[permissions]\napproval_policy = \"ask\"\nsandbox = \"policy-only\"\n\n[providers.deepseek]\nkind = \"deepseek\"\ndefault_model = \"deepseek-v4-pro\"\n\n[providers.deepseek.models.deepseek-v4-pro]\nid = \"deepseek-v4-pro\"\nreasoning_levels = [\"low\", \"high\", \"max\"]\n\n[model_profiles.deepseek-default]\nprovider = \"deepseek\"\nmodel = \"deepseek-v4-pro\"\nreasoning_profile = \"high\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let (parent_profile_name, parent_profile) = service
+        .active_model_profile_for_pane("%1", "agent-%1", None)
+        .unwrap();
+    assert_eq!(parent_profile_name, "deepseek-default");
+
+    let spawned = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                session_mode: mez_agent::SubagentSessionMode::New,
+                initial_model_size: None,
+                initial_reasoning_effort: None,
+                task_prompt: "inspect inherited child sizing".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: false,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap();
+    let spawned = serde_json::from_str::<serde_json::Value>(&spawned).unwrap();
+    let child_agent_id = spawned["agent"]["id"].as_str().unwrap().to_string();
+    let child_pane_id = spawned["agent"]["pane_id"].as_str().unwrap().to_string();
+    assert_eq!(
+        spawned["agent"]["initial_model_size"],
+        serde_json::Value::Null
+    );
+    let child_turn_id = spawned["turn"]["id"].as_str().unwrap().to_string();
+    let child_turn_profile = service
+        .agent_turn_model_profile(&child_turn_id)
+        .expect("child initial turn profile should exist")
+        .clone();
+    assert_eq!(child_turn_profile.model, parent_profile.model);
+    assert_eq!(
+        child_turn_profile.reasoning_profile,
+        parent_profile.reasoning_profile
+    );
+    let (child_profile_name, child_profile) = service
+        .active_model_profile_for_pane(&child_pane_id, &child_agent_id, None)
+        .unwrap();
+    assert_eq!(child_profile_name, parent_profile_name);
+    assert_eq!(child_profile.model, parent_profile.model);
+}

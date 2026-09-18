@@ -3592,11 +3592,17 @@ fn runtime_agent_user_prompt_renders_pasted_provider_error_without_terminal_fail
     assert!(pane_text.contains("terminal step failed"), "{pane_text}");
 }
 
-/// Verifies an explicit spawn size and reasoning pair selects the child’s
-/// first profile before provider scheduling, then leaves later child turns on
-/// the inherited default routing path.
+/// Verifies an explicit spawn size and reasoning pair pins the child’s durable
+/// model identity while per-turn routing stays the pane’s configured policy.
+///
+/// The pair selects the child’s first profile before provider scheduling and
+/// suppresses automatic routing for that turn, and it must also become the
+/// child’s agent-scoped profile so later turns keep the requested model and
+/// reasoning level instead of the inherited default. Routing remains a
+/// separate, user-configured policy: when the pane enables it, later turns stay
+/// eligible for router dispatch.
 #[test]
-fn runtime_subagent_explicit_selection_applies_only_to_initial_turn() {
+fn runtime_subagent_explicit_selection_pins_child_model_identity() {
     let mut service = test_runtime_service();
     service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
     service
@@ -3709,6 +3715,7 @@ allowed_actions = ["say", "shell_command"]
         )
         .unwrap();
     let spawned = serde_json::from_str::<serde_json::Value>(&spawned).unwrap();
+    let child_agent_id = spawned["agent"]["id"].as_str().unwrap().to_string();
     let child_pane_id = spawned["pane"]["pane_id"].as_str().unwrap().to_string();
     let first_turn_id = spawned["turn"]["id"].as_str().unwrap().to_string();
     let child_catalog = service
@@ -3760,9 +3767,18 @@ allowed_actions = ["say", "shell_command"]
         .unwrap();
     let second_profile = service.agent_turn_model_profile(&second.turn_id).unwrap();
 
-    assert_eq!(second_turn.model_profile, "default");
-    assert_eq!(second_profile.model, "gpt-default");
+    let (durable_profile_name, durable_profile) = service
+        .active_model_profile_for_pane(&child_pane_id, &child_agent_id, None)
+        .unwrap();
+    assert_eq!(second_turn.model_profile, durable_profile_name);
+    assert_eq!(second_profile.model, "gpt-large");
+    assert_eq!(second_profile.reasoning_profile.as_deref(), Some("high"));
+    assert_eq!(durable_profile.model, "gpt-large");
+    assert_eq!(durable_profile.reasoning_profile.as_deref(), Some("high"));
     assert!(!service.agent_turn_routing_applied(&second.turn_id));
+    // Routing stays the pane's separate per-turn policy: this fixture enables
+    // it, so a later child turn remains eligible for router dispatch even
+    // though the explicit pair defines the child's model.
     assert!(
         service
             .runtime_auto_sizing_dispatch_for_turn(&second_turn, second_profile)

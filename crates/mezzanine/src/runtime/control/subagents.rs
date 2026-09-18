@@ -13,10 +13,10 @@ use crate::integrations::agent::subagent::SUBAGENT_NONHUMAN_NAMES;
 use super::{
     AuditActor, AuditRecord, ClientRole, Envelope, EventKind, MezError, PaneProcessStart, Path,
     PathBuf, Recipient, Result, RuntimeAutoSizingConfig, RuntimeSessionService, RuntimeSideEffect,
-    RuntimeSubagentLineage, RuntimeSubagentPlacement, SUBAGENT_HUMAN_NAMES, SplitDirection,
-    SubagentScopeDeclaration, SubagentSpawnRequest, TaskState, TaskStatusPayload,
-    compare_permission_preset_authority, current_unix_seconds, json_escape,
-    pane_id_from_runtime_agent_id, runtime_agent_turn_state_json,
+    RuntimeSubagentLineage, RuntimeSubagentModelProfiles, RuntimeSubagentPlacement,
+    SUBAGENT_HUMAN_NAMES, SplitDirection, SubagentScopeDeclaration, SubagentSpawnRequest,
+    TaskState, TaskStatusPayload, compare_permission_preset_authority, current_unix_seconds,
+    json_escape, pane_id_from_runtime_agent_id, runtime_agent_turn_state_json,
     runtime_bridge_initial_spawn_extension_fields, runtime_cooperation_mode_name,
     runtime_pane_by_id, runtime_subagent_placement_mode, runtime_subagent_spawn_request,
     runtime_subagent_state_json,
@@ -829,18 +829,39 @@ impl RuntimeSessionService {
                 "injected subagent failure after fork persistence",
             ));
         }
-        if let Some(profile_name) = profile.model_profile.as_deref() {
+        // An explicit spawn size/reasoning pair is the child's durable model
+        // identity: later turns resolve this agent-scoped profile instead of
+        // reverting to the role or inherited parent profile. The generated
+        // profile name keeps the selected target profile and the requested
+        // reasoning level together, so both survive beyond the initial turn.
+        // Without an explicit pair, the previous role-then-parent inheritance
+        // order still applies.
+        let child_model_profile = match initial_selection.as_ref() {
+            Some(selection) => match self.insert_runtime_generated_model_profile(
+                &selection.selected_profile_name,
+                selection.selected_profile.clone(),
+            ) {
+                Ok(profile_name) => Some(profile_name),
+                Err(error) => {
+                    self.cleanup_failed_subagent_spawn(
+                        controller,
+                        &started.pane_id,
+                        &child_agent_id,
+                        None,
+                    );
+                    return Err(error);
+                }
+            },
+            None => profile
+                .model_profile
+                .clone()
+                .or_else(|| self.inherited_model_profile_for_child_agent(&spawn.parent_agent_id)),
+        };
+        if let Some(profile_name) = child_model_profile {
             self.integration
                 .model_profile_overrides_mut()
                 .agent_profiles
-                .insert(child_agent_id.clone(), profile_name.to_string());
-        } else if let Some(parent_profile) =
-            self.inherited_model_profile_for_child_agent(&spawn.parent_agent_id)
-        {
-            self.integration
-                .model_profile_overrides_mut()
-                .agent_profiles
-                .insert(child_agent_id.clone(), parent_profile);
+                .insert(child_agent_id.clone(), profile_name);
         }
         if let Some(enabled) = self.inherited_routing_for_child_agent(&spawn.parent_agent_id) {
             self.set_agent_routing_override(&started.pane_id, Some(enabled));
@@ -916,11 +937,17 @@ impl RuntimeSessionService {
                     &child_display_name,
                     &spawn,
                     None as Option<&RuntimeAgentPromptTurnStart>,
-                    self.integration
-                        .model_profile_overrides()
-                        .agent_profiles
-                        .get(child_agent_id.as_str())
-                        .map(String::as_str),
+                    RuntimeSubagentModelProfiles {
+                        model_profile: self
+                            .integration
+                            .model_profile_overrides()
+                            .agent_profiles
+                            .get(child_agent_id.as_str())
+                            .map(String::as_str),
+                        initial_model_profile: initial_selection
+                            .as_ref()
+                            .map(|selection| selection.selected_profile_name.as_str()),
+                    },
                 ),
                 self.runtime_control_pane_state_json(window, pane),
                 child_allowed_action_names,
@@ -1033,13 +1060,15 @@ impl RuntimeSessionService {
                 &child_display_name,
                 &spawn,
                 Some(&turn),
-                initial_model_profile.as_deref().or_else(|| {
-                    self.integration
+                RuntimeSubagentModelProfiles {
+                    model_profile: self
+                        .integration
                         .model_profile_overrides()
                         .agent_profiles
                         .get(child_agent_id.as_str())
-                        .map(String::as_str)
-                }),
+                        .map(String::as_str),
+                    initial_model_profile: initial_model_profile.as_deref(),
+                },
             ),
             self.runtime_control_pane_state_json(window, pane),
             runtime_agent_turn_state_json(&turn),
@@ -1523,6 +1552,10 @@ impl RuntimeSessionService {
         self.integration
             .model_profile_overrides_mut()
             .agent_profiles
+            .remove(child_agent_id);
+        self.integration
+            .model_profile_overrides_mut()
+            .subagent_profiles
             .remove(child_agent_id);
         if let Some(conversation_id) = child_conversation_id.as_deref() {
             self.persistence

@@ -7427,10 +7427,24 @@ or the configured global list when the target's supported levels are unknown.
 The runtime MUST resolve the pair against the child’s inherited auto-sizing
 policy, including globally allowed and target-supported reasoning levels, before
 the child provider request begins. A valid pair MUST select the child’s initial
-turn profile and suppress automatic routing for that turn only; it MUST NOT
-mutate the child’s role-profile or inherited default for later turns. Successful
-spawn state and action-result metadata MUST report the effective requested size,
-reasoning effort, and resolved model-profile identity.
+turn profile when the spawn starts one and suppress automatic routing for that
+turn. It MUST also become the child’s agent-scoped model identity for the
+runtime session, including when a persistent spawn provisions an idle child
+whose first turn is a later peer-message turn: Mezzanine MUST
+register a runtime-generated child profile pinning the selected target profile
+and the requested reasoning effort so every later turn of that child resolves
+the requested model and reasoning level instead of the role-profile or
+inherited parent default. Because that identity is agent-scoped, subagent- and
+agent-scoped profile overrides still take precedence over it, while pane-,
+window-, and session-scoped profile overrides do not apply to that child until
+the identity is cleared. A spawn that omits the pair MUST keep role-profile and
+inherited-parent inheritance unchanged. Per-turn routing remains the pane’s
+separate configured policy, so a later turn of an explicitly sized child stays
+eligible for router dispatch when routing is enabled. Runtime-generated child
+profiles and agent-scoped overrides are memory-only and are not restored across
+a runtime restart. Successful spawn state and action-result metadata MUST
+report the effective requested size, reasoning effort, and resolved
+model-profile identity.
 
 A `config_change` action MUST include setting path, operation, and value,
 unset marker, or reset marker. Provider-facing `config_change` schemas MUST

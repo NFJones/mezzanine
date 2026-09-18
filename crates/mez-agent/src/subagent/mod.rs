@@ -381,9 +381,19 @@ pub struct SubagentSpawnRequest {
     /// `New` preserves the existing isolated child-session behavior, while
     /// `Fork` requests a bounded durable snapshot of parent chronology.
     pub session_mode: SubagentSessionMode,
-    /// Optional explicit model size for the child’s initial turn only.
+    /// Optional explicit model size for the child’s model identity.
+    ///
+    /// The value is valid only when paired with `initial_reasoning_effort`. The
+    /// pair selects the child’s initial turn profile when one is started and
+    /// always becomes the child’s durable agent-scoped profile, so later turns
+    /// — including the first peer-message turn of an idle persistent child —
+    /// keep the requested size instead of reverting to the role or inherited
+    /// parent profile.
     pub initial_model_size: Option<String>,
-    /// Optional explicit reasoning effort for the child’s initial turn only.
+    /// Optional explicit reasoning effort for the child’s model identity.
+    ///
+    /// The value is valid only when paired with `initial_model_size` and is
+    /// carried by the same durable child profile.
     pub initial_reasoning_effort: Option<String>,
     /// Initial task prompt for the child.
     pub task_prompt: String,
@@ -409,12 +419,6 @@ impl SubagentSpawnRequest {
             return Err(SubagentContractError::new(
                 SubagentContractErrorKind::InvalidArgs,
                 "subagent initial size and reasoning effort must be provided together",
-            ));
-        }
-        if self.skip_initial_turn && self.initial_model_size.is_some() {
-            return Err(SubagentContractError::new(
-                SubagentContractErrorKind::InvalidArgs,
-                "subagent initial model selection requires an initial turn",
             ));
         }
         if let Some(size) = self.initial_model_size.as_deref()

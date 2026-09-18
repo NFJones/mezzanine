@@ -193,6 +193,18 @@ pub(crate) fn runtime_agent_turn_state_json(started: &RuntimeAgentPromptTurnStar
     )
 }
 
+/// Model-profile identity reported for one spawned subagent.
+///
+/// `model_profile` is the child's durable agent-scoped profile, which carries an
+/// explicit spawn size/reasoning selection for later turns when one was
+/// requested. `initial_model_profile` names the profile that supplied that
+/// explicit selection and stays absent when the spawn omitted the pair.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct RuntimeSubagentModelProfiles<'a> {
+    pub(crate) model_profile: Option<&'a str>,
+    pub(crate) initial_model_profile: Option<&'a str>,
+}
+
 /// Runs the runtime subagent state json operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -205,9 +217,9 @@ pub(crate) fn runtime_subagent_state_json(
     display_name: &str,
     spawn: &SubagentSpawnRequest,
     turn: Option<&RuntimeAgentPromptTurnStart>,
-    model_profile: Option<&str>,
+    profiles: RuntimeSubagentModelProfiles<'_>,
 ) -> String {
-    let model = model_profile.unwrap_or("default");
+    let model = profiles.model_profile.unwrap_or("default");
     let initial_model_size = spawn
         .initial_model_size
         .as_deref()
@@ -218,10 +230,12 @@ pub(crate) fn runtime_subagent_state_json(
         .as_deref()
         .map(|value| format!(r#""{}""#, json_escape(value)))
         .unwrap_or_else(|| "null".to_string());
-    let initial_model_profile = if spawn.initial_model_size.is_some() {
-        format!(r#""{}""#, json_escape(model))
-    } else {
-        "null".to_string()
+    let initial_model_profile = match (
+        spawn.initial_model_size.is_some(),
+        profiles.initial_model_profile,
+    ) {
+        (true, Some(profile_name)) => format!(r#""{}""#, json_escape(profile_name)),
+        _ => "null".to_string(),
     };
     let visible = matches!(
         spawn.placement.as_str(),

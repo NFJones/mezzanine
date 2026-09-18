@@ -862,8 +862,15 @@ impl RuntimeSessionService {
     }
 
     /// Inserts a runtime-generated profile while preserving all provider
-    /// options carried by the supplied profile.
-    fn insert_runtime_generated_model_profile(
+    /// options carried by the supplied profile, and returns the deterministic
+    /// generated profile name.
+    ///
+    /// Subagent dispatch shares this helper so an explicit spawn size and
+    /// reasoning pair can become a named, reusable child profile instead of a
+    /// single-turn override. The generated name is derived from the base
+    /// profile name, provider, model, reasoning level, and effective options,
+    /// so identical selections reuse one registered definition.
+    pub(crate) fn insert_runtime_generated_model_profile(
         &mut self,
         base_profile_name: &str,
         profile: ModelProfile,
@@ -892,6 +899,13 @@ impl RuntimeSessionService {
                 }
             }
         }
+        // The supplied profile is the authoritative effective selection. An
+        // explicit spawn size/reasoning pair can differ from the base
+        // definition's configured reasoning or latency, and the generated
+        // name embeds both, so pin them here instead of inheriting the base
+        // definition's values for later turns.
+        definition.reasoning_profile = profile.reasoning_profile.clone();
+        definition.latency_preference = profile.latency_preference.clone();
         let catalog = self.cached_provider_model_catalog(&profile.provider);
         let catalog = catalog.as_ref().map(|catalog| &catalog.catalog);
         let materialized = self
@@ -926,6 +940,16 @@ impl RuntimeSessionService {
             .find_pane_descriptor(pane_id)
             .map(|descriptor| descriptor.window_id.to_string());
         let model_profile_overrides = self.integration.model_profile_overrides();
+        // Subagent-scoped overrides are stored under the child's agent id
+        // (`/model --scope subagent`), and turn resolution for that same child
+        // must consult them. Callers that name an explicit subagent scope key
+        // keep it; otherwise an agent with subagent lineage resolves against
+        // its own identity so the scope is never silently ignored.
+        let subagent_key = match subagent_id {
+            Some(id) => Some(id.to_string()),
+            None if self.subagent_lineage(agent_id).is_some() => Some(agent_id.to_string()),
+            None => None,
+        };
         let overrides = ModelProfileOverrides {
             default_profile: self
                 .agent_selected_personality_profile(pane_id)
@@ -939,8 +963,8 @@ impl RuntimeSessionService {
                 .agent_profiles
                 .get(agent_id)
                 .cloned(),
-            subagent_profile: subagent_id
-                .and_then(|id| model_profile_overrides.subagent_profiles.get(id).cloned()),
+            subagent_profile: subagent_key
+                .and_then(|id| model_profile_overrides.subagent_profiles.get(&id).cloned()),
         };
         let selection = select_model_profile(&overrides, default_profile)?;
         let profile = self
@@ -1024,12 +1048,18 @@ impl RuntimeSessionService {
         &self,
         parent_agent_id: &str,
     ) -> Option<String> {
-        if let Some(profile) = self
-            .integration
-            .model_profile_overrides()
-            .agent_profiles
-            .get(parent_agent_id)
+        // A child inherits its parent's *effective* model identity, so the
+        // parent's own scope precedence applies here too: a subagent-scoped
+        // override outranks the parent's agent-scoped entry, which outranks the
+        // pane/window/session/default resolution (with the global default
+        // name filtered out so an unconfigured parent adds no override).
+        let overrides = self.integration.model_profile_overrides();
+        if self.subagent_lineage(parent_agent_id).is_some()
+            && let Some(profile) = overrides.subagent_profiles.get(parent_agent_id)
         {
+            return Some(profile.clone());
+        }
+        if let Some(profile) = overrides.agent_profiles.get(parent_agent_id) {
             return Some(profile.clone());
         }
         let parent_pane = parent_agent_id.strip_prefix("agent-")?;
