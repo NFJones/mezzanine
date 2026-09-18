@@ -17,6 +17,31 @@ pub(super) const ATTACH_RESPONSE_HINT_THRESHOLD: Duration = Duration::from_milli
 /// Interval the caller waits between watchdog checks while a response is due.
 pub(super) const ATTACH_RESPONSE_HINT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
+/// Test-only override for the hint threshold.
+///
+/// A delayed-response regression must observe the hint without waiting the
+/// production 500 ms, and the loop constructs its watchdog through
+/// [`AttachResponseWatchdog::new`], so the override is process-wide and
+/// monotonic: focused tests that need their own threshold use
+/// [`AttachResponseWatchdog::with_threshold`] instead.
+#[cfg(test)]
+static TEST_HINT_THRESHOLD_MS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+
+/// Installs the test-only hint threshold for the current process.
+#[cfg(test)]
+pub(super) fn install_test_hint_threshold(milliseconds: u64) {
+    let _ = TEST_HINT_THRESHOLD_MS.set(milliseconds);
+}
+
+/// Returns the hint threshold production and focused tests should both observe.
+fn attach_response_hint_threshold() -> Duration {
+    #[cfg(test)]
+    if let Some(milliseconds) = TEST_HINT_THRESHOLD_MS.get() {
+        return Duration::from_millis(*milliseconds);
+    }
+    ATTACH_RESPONSE_HINT_THRESHOLD
+}
+
 /// Tracks how long one daemon response has been outstanding.
 #[derive(Debug, Clone)]
 pub(super) struct AttachResponseWatchdog {
@@ -30,7 +55,7 @@ impl AttachResponseWatchdog {
     pub(super) fn new(started_at: Instant) -> Self {
         Self {
             started_at,
-            threshold: ATTACH_RESPONSE_HINT_THRESHOLD,
+            threshold: attach_response_hint_threshold(),
             painted_seconds: None,
         }
     }
@@ -147,6 +172,28 @@ mod tests {
         );
         assert!(painted.clear(), "clearing reports the painted hint");
         assert!(!painted.clear(), "the hint is cleared only once");
+    }
+
+    /// Verifies the process-wide test override reaches the loop's constructor
+    /// while an explicit threshold still wins.
+    #[test]
+    fn attach_response_watchdog_test_threshold_override_applies() {
+        install_test_hint_threshold(1);
+        let start = Instant::now();
+        let mut loop_watchdog = AttachResponseWatchdog::new(start);
+        assert!(
+            loop_watchdog
+                .pending_hint(start + Duration::from_millis(2))
+                .is_some(),
+            "the override threshold reaches the loop constructor"
+        );
+        let mut explicit =
+            AttachResponseWatchdog::with_threshold(start, Duration::from_millis(10_000));
+        assert_eq!(
+            explicit.pending_hint(start + Duration::from_millis(2)),
+            None,
+            "an explicit threshold is not overridden"
+        );
     }
 
     /// Verifies the hint overlay replaces exactly one row, drops that row's
