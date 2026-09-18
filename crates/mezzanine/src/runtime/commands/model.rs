@@ -937,11 +937,15 @@ impl RuntimeSessionService {
             self.integration
                 .provider_registry_mut()
                 .insert_profile_definition(profile_name.clone(), definition, catalog)?;
+            // Only a definition this helper actually created is a runtime-generated
+            // name: a name that already resolved is either configured or already
+            // marked, and a later inheriting spawn must not capture a selection for
+            // configuration-owned identity.
+            self.integration
+                .model_profile_overrides_mut()
+                .runtime_generated_profiles
+                .insert(profile_name.clone());
         }
-        self.integration
-            .model_profile_overrides_mut()
-            .runtime_generated_profiles
-            .insert(profile_name.clone());
         Ok(profile_name)
     }
 
