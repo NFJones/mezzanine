@@ -652,6 +652,51 @@ When Mezzanine terminates a pane explicitly, it SHOULD first request graceful
 termination through the pane shell or foreground process group and SHOULD allow
 escalation according to a documented timeout policy.
 
+### 5.3 Shared SQLite Session-State Storage
+
+Session-state stores that adopt SQLite MUST use one database per concern. A
+single shared database that mixes the session registry, session reservations,
+prompt history, project trust, and snapshot metadata MUST NOT be created: those
+stores have different writer and reader sets, retention policies, permission and
+trust domains, and failure domains, and WAL mode does not provide atomicity
+across separate database files anyway. Files MAY be consolidated only when the
+writer and reader set, the lifecycle and retention policy, and the permission
+and trust domain all match and a transaction may need to span both stores.
+
+Every converted database MUST be created with an explicit file name, owner
+process set, schema version, migration marker, and export command. Adopting
+stores MUST use the shared storage helper for:
+
+- connection setup: `PRAGMA journal_mode = WAL`, `PRAGMA foreign_keys = ON`, and
+  a 5000 ms `busy_timeout` that matches the historical flock wait budget;
+- private permissions on the database, its parent directory, and its `-wal` and
+  `-shm` sidecar files;
+- a `user_version` schema version published in the same transaction that
+  creates the schema, so a failed creation cannot advertise tables that do not
+  exist;
+- an on-demand `PRAGMA integrity_check` helper.
+
+A schema version newer than the version the running binary supports MUST be
+rejected with an actionable error, and a downgrade MUST NOT be silently
+accepted. An older version MUST report the migration that is required instead of
+opening the database.
+
+A one-shot legacy-file import MUST run inside a single immediate transaction,
+MUST record a migration marker only for a successful import, and MUST leave the
+legacy flat file untouched so a rollback to the previous build still finds its
+data. Retaining or deleting that file after the first successful
+post-migration write is the adopting store's documented choice.
+
+Because the SQLite binding is synchronous, every database call MUST run on the
+blocking pool and MUST NOT run on the async runtime reactor. Short-lived,
+read-only CLI commands MUST open a store without creating schema, migrating, or
+writing any other store's files.
+
+Store adoption MUST preserve existing behaviour: record validation, ordering,
+retention, and permission checks MUST NOT change. An operator escape hatch (for
+example `mez storage export <store>`) MUST render rows in the legacy flat-file
+shape so the disappearance of the visible file does not remove inspectability.
+
 ## 6. Terminal Multiplexing
 
 ### 6.1 Windows

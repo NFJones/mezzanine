@@ -13,6 +13,11 @@ pub(crate) mod lease;
 pub(crate) mod local_assignment;
 pub(crate) mod memory;
 pub(crate) mod registry;
+#[allow(
+    dead_code,
+    reason = "shared groundwork for the session-state conversions in 3b8c6774, f6382169, 6f30066a, 5e099d41, and bddc716e; the first conversion consumes it"
+)]
+pub(crate) mod shared_sqlite;
 pub(crate) mod snapshot;
 pub(crate) mod token_usage;
 pub(crate) mod transcript;
