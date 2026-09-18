@@ -2092,6 +2092,14 @@ fn runtime_sized_child_identity_captures_catalog_materialized_options() {
                 .contains_key("model_capabilities"),
         "the seeded catalog must reach the effective profile: {effective:?}"
     );
+    assert_eq!(
+        effective
+            .provider_options
+            .get("captured_variant")
+            .map(String::as_str),
+        Some("effective"),
+        "the seeded catalog option must reach the effective profile: {effective:?}"
+    );
 
     let (captured_name, captured_selection) =
         persisted_model_identity(&service, &transcript_store, &child_pane_id);
@@ -2303,6 +2311,30 @@ fn runtime_config_apply_clears_generated_marker_for_configured_names() {
             .runtime_generated_profiles
             .contains(&generated_name),
         "the generated name must be marked"
+    );
+
+    // A config apply that changes provider metadata without defining the name must
+    // keep the marker: the reload path rebases the preserved generated definition
+    // into the registry, and a rebased generated name is not configuration-owned.
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "explicit-subagent-sizing-marker".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: format!(
+                "{EXPLICIT_SUBAGENT_SIZING_CONFIG}\n[providers.deepseek.models.deepseek-v4-mini]\nid = \"deepseek-v4-mini\"\nreasoning_levels = [\"low\", \"high\"]\n"
+            ),
+        }])
+        .unwrap();
+    assert!(
+        service
+            .integration
+            .model_profile_overrides()
+            .runtime_generated_profiles
+            .contains(&generated_name),
+        "an apply that does not define the name must keep its runtime-generated marker"
     );
 
     service

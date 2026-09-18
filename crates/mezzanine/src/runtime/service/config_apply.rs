@@ -702,6 +702,14 @@ impl RuntimeSessionService {
             );
             let preserved_model_profiles = self.preserved_model_override_profiles();
             let mut provider_registry = runtime_provider_registry_from_config(&structured)?;
+            // Names configuration defines, captured before preserved generated
+            // definitions are rebased into the registry below: a rebased generated
+            // name is not configuration-owned and must keep its marker.
+            let configured_names = provider_registry
+                .profiles
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>();
             for (name, (definition, profile)) in preserved_model_profiles {
                 if provider_registry.provider(&profile.provider).is_some() {
                     if provider_registry.profile(&name).is_some() {
@@ -750,17 +758,10 @@ impl RuntimeSessionService {
             }
             self.integration
                 .replace_provider_registry(provider_registry);
-            // A name configuration now defines must not keep a runtime-generated
-            // marker: the marker asserts this process generated that name, and a
-            // marker on a configuration-owned name would suppress the degrade report
-            // if the name later leaves configuration.
-            let configured_names = self
-                .integration
-                .provider_registry()
-                .profiles
-                .keys()
-                .cloned()
-                .collect::<std::collections::BTreeSet<_>>();
+            // A name configuration defines must not keep a runtime-generated marker:
+            // the marker asserts this process generated that name, and a marker on a
+            // configuration-owned name would suppress the degrade report if the name
+            // later leaves configuration.
             self.integration
                 .model_profile_overrides_mut()
                 .runtime_generated_profiles
