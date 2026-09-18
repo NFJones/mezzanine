@@ -61,6 +61,10 @@ static WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Acquires the in-process writer lock, ignoring poisoning because the lock
 /// guards no data.
+///
+/// The guard is not reentrant, so a closure passed to [`update`] must not call
+/// [`update`] or [`save`] again. The closure signature already prevents that by
+/// handing out only the in-memory store instead of a path.
 fn write_guard() -> MutexGuard<'static, ()> {
     WRITE_LOCK
         .lock()
