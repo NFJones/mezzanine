@@ -954,50 +954,17 @@ fn runtime_remote_certification_requires_authenticated_managed_install() {
         .execute_terminal_command(&primary, "agent-shell")
         .unwrap();
 
-    let (identity_marker, identity_turn_id) = service
-        .running_shell_transactions_for_tests()
-        .iter()
-        .find_map(|(marker, transaction)| {
-            matches!(
-                transaction.kind,
-                RunningShellTransactionKind::ShellIdentityProbe { .. }
-            )
-            .then(|| (marker.clone(), transaction.turn_id.clone()))
-        })
-        .expect("dependency-free identity probe should be registered");
-    service
-        .observe_agent_shell_transaction_start(
-            &pane_id,
-            &identity_marker,
-            &identity_turn_id,
-            &format!("agent-{pane_id}"),
-            &pane_id,
-        )
-        .unwrap();
-    let identity_output = format!(
-        "\u{1e}mez_shell_identity_begin={identity_marker}\n\
-         \u{1e}mez_shell_path=/bin/bash\n\
-         \u{1e}mez_shell_version=GNU bash, version 5.2\n\
-         \u{1e}mez_shell_identity_end={identity_marker}\n"
+    settle_dependency_free_identity_probe(
+        &mut service,
+        &pane_id,
+        "/bin/bash",
+        "GNU bash, version 5.2",
     );
-    {
-        let transaction = service
-            .running_shell_transactions_mut_for_tests()
-            .get_mut(&identity_marker)
-            .unwrap();
-        transaction.observed_output_bytes = identity_output.len();
-        transaction.observed_output_preview = identity_output;
-    }
-    service
-        .observe_agent_shell_transaction_end(
-            &pane_id,
-            &identity_marker,
-            &identity_turn_id,
-            &format!("agent-{pane_id}"),
-            &pane_id,
-            0,
-        )
-        .unwrap();
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("child-launch-pending"),
+        "the pinned bash dialect must settle the probe into the deferred child launch"
+    );
     assert_eq!(
         service.maybe_bootstrap_ready_panes().unwrap(),
         1,
