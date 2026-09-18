@@ -61,7 +61,7 @@ fn storage_export_rejects_unknown_store() {
             "mez".to_string(),
             "storage".to_string(),
             "export".to_string(),
-            "sessions".to_string(),
+            "bogus".to_string(),
         ],
         env,
         false,
@@ -70,7 +70,9 @@ fn storage_export_rejects_unknown_store() {
     )
     .unwrap_err();
     assert!(
-        error.message().contains("supported stores: memory"),
+        error
+            .message()
+            .contains("supported stores: memory, sessions"),
         "unknown stores report the supported list: {}",
         error.message()
     );

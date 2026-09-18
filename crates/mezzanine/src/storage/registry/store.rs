@@ -92,6 +92,24 @@ impl SessionRegistry {
         self.root.join(REGISTRY_LOCK_FILE_NAME)
     }
 
+    /// Renders the registry in its legacy flat-file shape without creating it.
+    ///
+    /// Returns `None` when neither representation exists, so an inspection
+    /// command never creates the store, and the rows come from the same
+    /// read-only path the listing command uses, so an export cannot block a
+    /// daemon writer.
+    pub fn export_tsv_read_only(&self) -> Result<Option<String>> {
+        if !super::sqlite::database_path(self).exists() && !self.registry_file().exists() {
+            return Ok(None);
+        }
+        let mut output = String::new();
+        for record in self.list()? {
+            output.push_str(&record.encode()?);
+            output.push('\n');
+        }
+        Ok(Some(output))
+    }
+
     /// Runs the list operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

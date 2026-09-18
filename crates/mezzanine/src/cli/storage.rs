@@ -28,7 +28,7 @@ enum StorageCliCommand {
 ///
 /// Each store conversion appends its store here; the error message and the
 /// exporter match below both derive from this list so they cannot diverge.
-pub(super) const STORAGE_EXPORTERS: &[&str] = &["memory"];
+pub(super) const STORAGE_EXPORTERS: &[&str] = &["memory", "sessions"];
 
 /// Typed process CLI arguments for `mez storage export`.
 #[derive(Debug, Clone, Args)]
@@ -73,6 +73,17 @@ fn storage_export_body(store: &str, env: &CliEnv) -> Result<String> {
             body.ok_or_else(|| {
                 MezError::invalid_state(
                     "no persistent memory store found; create one with `mez memory add` first",
+                )
+            })
+        }
+        "sessions" => {
+            let selection = super::env::default_socket_selection(&env.runtime)?;
+            let root = super::env::registry_root(&selection)?;
+            let registry = crate::storage::registry::SessionRegistry::new(root, env.runtime.uid);
+            let body = registry.export_tsv_read_only()?;
+            body.ok_or_else(|| {
+                MezError::invalid_state(
+                    "no session registry found; start a session with `mez new` first",
                 )
             })
         }
