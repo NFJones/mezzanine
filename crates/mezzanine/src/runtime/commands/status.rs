@@ -26,6 +26,45 @@ const TOKEN_USAGE_TABLE_COLUMNS: [&str; 7] = [
     "Cumulative Cache Hit %",
 ];
 
+/// Builds the `/auth-status` display from a provider set and credential store.
+///
+/// The inline lane passes its live registry and store; the deferred executor
+/// passes the owned snapshot the actor captured, so both lanes render the same
+/// secret-safe rows from the same inputs instead of duplicating the table.
+pub(crate) fn runtime_agent_auth_status_body(
+    providers: &[String],
+    auth_store: Option<&crate::security::auth::AuthStore>,
+) -> Result<String> {
+    let rows = providers
+        .iter()
+        .map(|provider| match auth_store {
+            Some(auth_store) => Ok(auth_status_store_table_row(
+                provider,
+                auth_store.status_for_provider(provider)?,
+            )),
+            None => Ok(vec![
+                provider.clone(),
+                "unknown".to_string(),
+                "none".to_string(),
+                "unavailable".to_string(),
+                "auth-store-unavailable".to_string(),
+            ]),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let body = runtime_markdown_table(
+        &[
+            "Provider",
+            "Authenticated",
+            "Profile",
+            "Credential store",
+            "State",
+        ],
+        &rows,
+    )
+    .join("\n");
+    Ok(format!("## Authentication Status\n\n{body}"))
+}
+
 impl RuntimeSessionService {
     /// Executes `/auth-status` against the live authentication store.
     pub(super) fn execute_agent_shell_auth_status_command(
@@ -39,38 +78,15 @@ impl RuntimeSessionService {
                 "auth-status does not accept arguments",
             ));
         }
-        let rows = self
+        let providers = self
             .provider_registry()
             .providers()
             .keys()
-            .map(|provider| match self.auth_store() {
-                Some(auth_store) => Ok(auth_status_store_table_row(
-                    provider,
-                    auth_store.status_for_provider(provider)?,
-                )),
-                None => Ok(vec![
-                    provider.clone(),
-                    "unknown".to_string(),
-                    "none".to_string(),
-                    "unavailable".to_string(),
-                    "auth-store-unavailable".to_string(),
-                ]),
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let body = runtime_markdown_table(
-            &[
-                "Provider",
-                "Authenticated",
-                "Profile",
-                "Credential store",
-                "State",
-            ],
-            &rows,
-        )
-        .join("\n");
+            .cloned()
+            .collect::<Vec<_>>();
         Ok(AgentShellCommandOutcome::Display {
             command: "auth-status".to_string(),
-            body: format!("## Authentication Status\n\n{body}"),
+            body: runtime_agent_auth_status_body(&providers, self.auth_store())?,
         })
     }
 

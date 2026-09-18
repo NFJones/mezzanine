@@ -30,7 +30,8 @@ use crate::runtime::{
 /// Every entry must also be classified
 /// [`super::disposition::RuntimeAgentSlashCommandDisposition::Deferred`], which
 /// the guard test below pins.
-pub(crate) const RUNTIME_AGENT_OFF_ACTOR_COMMANDS: &[&str] = &["list-skills", "list-macros"];
+pub(crate) const RUNTIME_AGENT_OFF_ACTOR_COMMANDS: &[&str] =
+    &["list-skills", "list-macros", "auth-status"];
 
 impl RuntimeSessionService {
     /// Starts one actor-owned claim for a deferred slash command.
@@ -104,15 +105,27 @@ impl RuntimeSessionService {
         if !visible {
             return Ok(None);
         }
-        if !RUNTIME_AGENT_OFF_ACTOR_COMMANDS.contains(&command) {
-            return Ok(None);
-        }
-        let prepared = RuntimeAgentCommandPrepared::Catalog {
-            config_root: self
-                .integration
-                .config_root()
-                .map(std::path::Path::to_path_buf),
-            project_root: self.trusted_skill_project_root_for_pane(pane_id),
+        // Each moved family names exactly what the worker may read; a command
+        // with no prepared-input variant has no off-actor executor yet and keeps
+        // executing inline.
+        let prepared = match command {
+            "list-skills" | "list-macros" => RuntimeAgentCommandPrepared::Catalog {
+                config_root: self
+                    .integration
+                    .config_root()
+                    .map(std::path::Path::to_path_buf),
+                project_root: self.trusted_skill_project_root_for_pane(pane_id),
+            },
+            "auth-status" => RuntimeAgentCommandPrepared::AuthStatus {
+                providers: self
+                    .provider_registry()
+                    .providers()
+                    .keys()
+                    .cloned()
+                    .collect(),
+                auth_store: self.auth_store().cloned(),
+            },
+            _ => return Ok(None),
         };
         Ok(Some(RuntimeAgentCommandAsyncWork {
             pane_id: pane_id.to_string(),
@@ -133,27 +146,44 @@ impl RuntimeSessionService {
     pub(crate) fn execute_deferred_agent_command(
         work: &RuntimeAgentCommandAsyncWork,
     ) -> RuntimeAgentCommandAsyncOutcome {
-        let RuntimeAgentCommandPrepared::Catalog {
-            config_root,
-            project_root,
-        } = &work.prepared;
-        let body = match work.command.as_str() {
-            "list-skills" => runtime_agent_skill_catalog_body(
-                &crate::integrations::skills::discover_skill_catalog(
-                    config_root.as_deref(),
-                    project_root.as_deref(),
+        let body = match &work.prepared {
+            RuntimeAgentCommandPrepared::Catalog {
+                config_root,
+                project_root,
+            } => match work.command.as_str() {
+                "list-skills" => runtime_agent_skill_catalog_body(
+                    &crate::integrations::skills::discover_skill_catalog(
+                        config_root.as_deref(),
+                        project_root.as_deref(),
+                    ),
                 ),
-            ),
-            "list-macros" => runtime_agent_macro_catalog_body(
-                &crate::integrations::macros::discover_macro_catalog(
-                    config_root.as_deref(),
-                    project_root.as_deref(),
+                "list-macros" => runtime_agent_macro_catalog_body(
+                    &crate::integrations::macros::discover_macro_catalog(
+                        config_root.as_deref(),
+                        project_root.as_deref(),
+                    ),
                 ),
-            ),
-            other => {
-                return RuntimeAgentCommandAsyncOutcome::Failed {
-                    message: format!("deferred slash command `{other}` has no off-actor executor"),
-                };
+                other => {
+                    return RuntimeAgentCommandAsyncOutcome::Failed {
+                        message: format!(
+                            "deferred catalog command `{other}` has no off-actor executor"
+                        ),
+                    };
+                }
+            },
+            RuntimeAgentCommandPrepared::AuthStatus {
+                providers,
+                auth_store,
+            } => {
+                match super::status::runtime_agent_auth_status_body(providers, auth_store.as_ref())
+                {
+                    Ok(body) => body,
+                    Err(error) => {
+                        return RuntimeAgentCommandAsyncOutcome::Failed {
+                            message: error.message().to_string(),
+                        };
+                    }
+                }
             }
         };
         let outcome = AgentShellCommandOutcome::Display {

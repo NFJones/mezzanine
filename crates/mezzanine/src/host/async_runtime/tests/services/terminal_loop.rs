@@ -1487,3 +1487,109 @@ async fn async_attached_terminal_loop_schedules_render_timers_after_direct_flush
 
     assert!(exit.commands_processed >= 5);
 }
+
+/// Verifies a deferred slash command submitted through the attached terminal
+/// loop reaches the worker-claimed effect queue.
+///
+/// The prompt submission only records the dispatch, so the ingress that applied
+/// the input must convert it into `DispatchAgentCommand`; without that the
+/// command acknowledges in flight and no worker ever claims it.
+#[tokio::test(flavor = "current_thread")]
+async fn async_attached_terminal_loop_drains_deferred_agent_command_effects() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let mut io = FakeAttachedTerminalLoopIo {
+        readiness_batches: vec![vec![
+            AttachedTerminalFdReadiness {
+                role: AttachedTerminalFdRole::Input,
+                fd: 0,
+                interest: TerminalFdInterest::read(),
+                readable: true,
+                writable: false,
+                hangup: false,
+                error: false,
+            },
+            AttachedTerminalFdReadiness {
+                role: AttachedTerminalFdRole::Output,
+                fd: 1,
+                interest: TerminalFdInterest::write(),
+                readable: false,
+                writable: true,
+                hangup: false,
+                error: false,
+            },
+        ]],
+        input_batches: vec![b"/auth-status\r".to_vec()],
+        written_batches: Vec::new(),
+        write_error_kinds: Vec::new(),
+    };
+
+    let client = async {
+        let report = run_async_attached_terminal_client_loop(
+            &handle,
+            &mut io,
+            AsyncAttachedTerminalLoopRequest {
+                role: ClientViewRole::Primary,
+                client_id: primary.clone(),
+                primary_client_id: Some(primary.clone()),
+                client_size: Size::new(80, 24).unwrap(),
+                terminal_config: TerminalClientLoopConfig::default(),
+                loop_config: AttachedTerminalClientLoopConfig {
+                    max_iterations: 1,
+                    max_input_bytes: 64,
+                },
+            },
+            |_| Ok(None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.iterations, 1);
+        assert!(
+            !report.actions.is_empty(),
+            "the loop must forward the submitted command: {:?}",
+            report.actions
+        );
+
+        let effects = handle.drain_runtime_side_effects(8).await.unwrap();
+        let deferred = effects
+            .iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::DispatchAgentCommand {
+                    pane_id,
+                    command,
+                    input,
+                    claim_generation,
+                    ..
+                } => Some((
+                    pane_id.clone(),
+                    command.clone(),
+                    input.clone(),
+                    *claim_generation,
+                )),
+                _ => None,
+            })
+            .expect("the prompt submission must queue the deferred command effect");
+        assert_eq!(deferred.0, "%1");
+        assert_eq!(deferred.1, "auth-status");
+        assert_eq!(deferred.2, "/auth-status");
+        assert_eq!(deferred.3, 1, "the first dispatch stamps generation one");
+
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+
+    assert!(exit.commands_processed >= 1);
+}

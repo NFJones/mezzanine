@@ -669,6 +669,14 @@ fn runtime_agent_shell_auth_status_lists_configured_provider_rows() {
     let status = service
         .execute_agent_shell_command(&primary, "/auth-status")
         .unwrap();
+    assert!(
+        status.contains(r#""body":null"#),
+        "the deferred lane acknowledges /auth-status before its credential read: {status}"
+    );
+    let status = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /auth-status lane applies its provider table");
 
     assert!(status.contains("## Authentication Status"), "{status}");
     assert!(
@@ -720,6 +728,14 @@ fn runtime_agent_shell_auth_status_marks_unavailable_auth_store_per_provider() {
     let status = service
         .execute_agent_shell_command(&primary, "/auth-status")
         .unwrap();
+    assert!(
+        status.contains(r#""body":null"#),
+        "the deferred lane acknowledges /auth-status before its credential read: {status}"
+    );
+    let status = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /auth-status lane applies its provider table");
 
     assert!(
         status.contains("| deepseek | unknown | none | unavailable | auth-store-unavailable |"),

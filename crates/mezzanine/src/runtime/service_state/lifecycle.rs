@@ -210,6 +210,17 @@ pub(crate) enum RuntimeAgentCommandPrepared {
         /// Trusted project root whose project-scoped catalogs may apply.
         project_root: Option<std::path::PathBuf>,
     },
+    /// Reads provider credential status from the captured store.
+    ///
+    /// `/auth-status` reads credential metadata and credential-store state for
+    /// every configured provider, which is the filesystem work the inline path
+    /// used to perform inside the actor request.
+    AuthStatus {
+        /// Configured provider keys in registry order.
+        providers: Vec<String>,
+        /// Credential store handle, or `None` when no store is configured.
+        auth_store: Option<crate::security::auth::AuthStore>,
+    },
 }
 
 /// Result a worker prepares for the actor to apply.
