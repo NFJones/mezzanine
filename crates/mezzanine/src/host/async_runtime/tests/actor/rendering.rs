@@ -72,6 +72,45 @@ async fn async_actor_drains_deferred_agent_command_effects() {
     let ((), _exit) = tokio::join!(client, actor.run());
 }
 
+/// Verifies an applied runtime-event batch pumps the deferred refresh queue.
+///
+/// A settled generated title queues a saved-session refresh while the actor is
+/// applying a runtime event, and the control-input and command arms are the only
+/// other drains, so an otherwise idle session has to be pumped from this path or
+/// the open picker keeps its stale title until an unrelated command arrives.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_pumps_deferred_record_browser_refresh_for_applied_events() {
+    let mut service = test_service();
+    // One claim is queued, exactly as a settled generated title queues it, and the
+    // runtime-event path has to drain it.
+    service.queue_record_browser_refresh_for_tests("saved-sessions");
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::Pane(PaneEvent::Output {
+            pane_id: "%1".to_string(),
+            bytes: b"pump-output\n".to_vec(),
+        }));
+        let report = handle.submit_runtime_events(batch).await.unwrap();
+        assert!(report.applied > 0, "the batch must apply: {report:?}");
+        let drained = handle.drain_runtime_side_effects(8).await.unwrap();
+        assert!(
+            drained.iter().any(|effect| matches!(
+                effect,
+                RuntimeSideEffect::DispatchRecordBrowserRefresh { .. }
+            )),
+            "the applied batch must pump the queued refresh: {drained:?}"
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+    let ((), _exit) = tokio::join!(client, actor.run());
+}
+
 /// Verifies that a foreground resize signal can wake the render path without
 /// directly mutating geometry in the actor event. The attached terminal service
 /// owns the actual terminal-size read, so the signal event should only enqueue

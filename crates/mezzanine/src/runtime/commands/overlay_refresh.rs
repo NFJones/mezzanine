@@ -16,6 +16,13 @@ use crate::runtime::{
     RuntimeRecordBrowserRefreshWork,
 };
 
+/// Refresh key for the shared saved-session picker overlay.
+///
+/// The picker is one primary-overlay page whatever rows changed, so title changes
+/// from different conversations claim the same key and coalesce into one rebuild;
+/// pane-keyed refreshes for pane-scoped overlays arrive with their own slices.
+pub(crate) const SAVED_SESSION_OVERLAY_REFRESH_KEY: &str = "saved-sessions";
+
 impl RuntimeSessionService {
     /// Claims one overlay refresh and queues its worker dispatch.
     ///
@@ -118,6 +125,21 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Queues one refresh dispatch without an open overlay for tests.
+    ///
+    /// A test that asserts the actor emits what a real claim queues uses this
+    /// instead of standing up the picker.
+    #[cfg(test)]
+    pub(crate) fn queue_record_browser_refresh_for_tests(&mut self, refresh_key: &str) {
+        let generation = self.presentation.begin_record_browser_refresh(refresh_key);
+        self.presentation.push_pending_record_browser_refresh(
+            RuntimeRecordBrowserRefreshDispatch {
+                refresh_key: refresh_key.to_string(),
+                generation,
+            },
+        );
+    }
+
     /// Runs one queued refresh through claim, execute, and complete for tests.
     ///
     /// The actor's real path emits a side effect a worker consumes; a test that
@@ -152,10 +174,21 @@ impl RuntimeSessionService {
         outcome: RuntimeRecordBrowserRefreshOutcome,
     ) -> Result<bool> {
         match outcome {
-            RuntimeRecordBrowserRefreshOutcome::Failed { message, kind } => Ok(self
-                .set_active_saved_session_browser_error(&format!(
+            RuntimeRecordBrowserRefreshOutcome::Failed { message, kind } => {
+                if self
+                    .presentation
+                    .record_browser_refresh_generation(&work.refresh_key)
+                    != work.generation
+                {
+                    return Ok(false);
+                }
+                if self.active_saved_session_browser_source().as_ref() != Some(&work.source) {
+                    return Ok(false);
+                }
+                Ok(self.set_active_saved_session_browser_error(&format!(
                     "overlay refresh failed: {message} ({kind:?})"
-                ))),
+                )))
+            }
             RuntimeRecordBrowserRefreshOutcome::Rebuilt { browser } => {
                 if self
                     .presentation

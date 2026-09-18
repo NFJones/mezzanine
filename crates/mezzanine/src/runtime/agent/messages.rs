@@ -1842,7 +1842,7 @@ impl RuntimeSessionService {
             .unwrap_or(false);
         if changed {
             self.invalidate_agent_prompt_selector_extra_candidates();
-            let _ = self.refresh_saved_session_overlay_after_title_change(conversation_id);
+            let _ = self.refresh_saved_session_overlay_after_title_change();
         }
         // Publishing the objective is where a conversation becomes eligible for
         // turn-less generated-title work. Admission is idempotent, never creates

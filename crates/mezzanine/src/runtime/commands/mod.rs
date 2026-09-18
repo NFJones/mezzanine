@@ -71,6 +71,7 @@ pub(crate) mod lists;
 mod model;
 mod model_catalog;
 mod overlay_refresh;
+pub(crate) use overlay_refresh::SAVED_SESSION_OVERLAY_REFRESH_KEY;
 mod preferences;
 mod remember;
 mod resume;

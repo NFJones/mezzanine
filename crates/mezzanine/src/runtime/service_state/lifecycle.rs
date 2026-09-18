@@ -432,7 +432,7 @@ pub(crate) enum RuntimeRecordBrowserRefreshOutcome {
     },
     /// Rebuild failed; the actor keeps the current page.
     Failed {
-        /// Diagnostic recorded on the actor trace.
+        /// Diagnostic marked on the current page while it still owns the claim.
         message: String,
         /// Error kind the inline refresh would have reported.
         kind: crate::error::MezErrorKind,

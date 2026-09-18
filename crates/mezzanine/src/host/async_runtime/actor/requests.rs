@@ -1526,6 +1526,14 @@ impl AsyncRuntimeSessionActor {
                 let previous_lifecycle_state = self.service.lifecycle_state();
                 let result = self.apply_runtime_event_batch(batch).await;
                 let should_notify = result.as_ref().is_ok_and(|report| report.applied > 0);
+                if should_notify {
+                    // An applied event can queue a deferred dispatch - a settled
+                    // generated title queues one saved-session refresh - and the
+                    // control-input and command arms are the only other drains, so
+                    // an otherwise idle session would keep the stale page.
+                    // Best effort: a queue error surfaces on the next drain.
+                    let _ = self.queue_pending_deferred_agent_command_side_effects();
+                }
                 let _ = reply.send(result);
                 if should_notify {
                     self.notify_event_delivery();

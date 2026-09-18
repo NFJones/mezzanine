@@ -496,9 +496,9 @@ pub(crate) struct RuntimePresentationComponent {
     pending_agent_prompt_provider_info_refreshes: Vec<RuntimeAgentPromptProviderInfoRefresh>,
     /// Deferred slash commands submitted from agent prompts awaiting dispatch.
     pending_deferred_agent_commands: Vec<crate::runtime::RuntimeAgentCommandDispatch>,
-    /// Deferred record-browser refreshes awaiting dispatch, newest per pane.
+    /// Deferred record-browser refreshes awaiting dispatch, newest per key.
     pending_record_browser_refreshes: Vec<crate::runtime::RuntimeRecordBrowserRefreshDispatch>,
-    /// Per-pane refresh generations used to drop superseded rebuilt pages.
+    /// Per-key refresh generations used to drop superseded rebuilt pages.
     record_browser_refresh_generations: std::collections::BTreeMap<String, u64>,
     /// Background selector discoveries keyed by exact client and pane owner.
     agent_prompt_selector_refreshes: std::collections::HashMap<
