@@ -476,10 +476,13 @@ impl AgentTranscriptStore {
     }
 
     /// Loads one exact saved session, repairing catalog divergence from its files.
+    ///
+    /// An unresumable version-one child reads as absent without deleting catalog
+    /// state: this is a read path, and [`Self::enforce_saved_session_retention`]
+    /// owns reclaiming those rows.
     pub fn saved_session(&self, conversation_id: &str) -> Result<Option<SavedAgentSession>> {
         validate_conversation_id(conversation_id)?;
         if self.is_unrestorable_legacy_subagent(conversation_id)? {
-            catalog::delete(self, conversation_id)?;
             return Ok(None);
         }
         let mut session = match catalog::record(self, conversation_id)? {
@@ -2625,6 +2628,10 @@ impl AgentTranscriptStore {
     /// enforcement. Protected durable conversations and archived rows are never
     /// deleted. Independent deletion failures are reported while later
     /// candidates continue.
+    ///
+    /// Unresumable version-one child rows are reclaimed first: reads report them
+    /// as absent instead of deleting them, and a reclaimed row must not consume
+    /// the count-retention budget.
     pub fn enforce_saved_session_retention(
         &self,
         now_unix_seconds: u64,
@@ -2633,6 +2640,7 @@ impl AgentTranscriptStore {
         const RETENTION_BATCH_LIMIT: usize = 256;
         const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
 
+        let _ = catalog::quarantine_unrestorable_legacy_subagents_at_retention(self)?;
         let retention_seconds = self
             .saved_session_retention
             .retention_days

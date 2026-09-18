@@ -146,7 +146,7 @@ pub(super) fn initialize(store: &AgentTranscriptStore, now_unix_seconds: u64) ->
         migration::import(store, &mut connection, now_unix_seconds)?;
         write_migration_marker(store)?;
         set_catalog_permissions(store)?;
-        quarantine_unrestorable_legacy_subagents(store, &connection)?;
+        let _ = quarantine_unrestorable_legacy_subagents(store, &connection)?;
     }
     Ok(())
 }
@@ -154,10 +154,16 @@ pub(super) fn initialize(store: &AgentTranscriptStore, now_unix_seconds: u64) ->
 /// Removes indexed rows whose current version-one child sidecar cannot prove a
 /// durable delegation contract, without rebuilding the catalog or disturbing
 /// healthy rows.
+///
+/// Every indexed row is inspected because the indexed conversation kind can be
+/// stale: a row written while its sidecar was absent, or one whose sidecar was
+/// later replaced by a version-one document, still has to be reclaimed. Healthy
+/// startup never enumerates sidecars - this runs at import time and in the
+/// retention pass - so ordinary reads pay nothing for it.
 fn quarantine_unrestorable_legacy_subagents(
     store: &AgentTranscriptStore,
     connection: &Connection,
-) -> Result<()> {
+) -> Result<usize> {
     let conversation_ids = {
         let mut statement =
             connection.prepare("SELECT conversation_id FROM saved_conversations")?;
@@ -165,12 +171,27 @@ fn quarantine_unrestorable_legacy_subagents(
             .query_map([], |row| row.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?
     };
+    let mut quarantined = 0usize;
     for conversation_id in conversation_ids {
         if store.is_unrestorable_legacy_subagent(&conversation_id)? {
             mutation::delete(connection, &conversation_id)?;
+            quarantined += 1;
         }
     }
-    Ok(())
+    Ok(quarantined)
+}
+
+/// Reclaims unresumable legacy child rows during the retention pass.
+///
+/// Exact-access reads report such rows as absent without deleting them, so the
+/// retention pass owns the reclaim for rows that became unresumable after the
+/// one-time import quarantine ran.
+pub(super) fn quarantine_unrestorable_legacy_subagents_at_retention(
+    store: &AgentTranscriptStore,
+) -> Result<usize> {
+    let _lock = acquire_shared_lock(store)?;
+    let connection = schema::open(&catalog_path(store))?;
+    quarantine_unrestorable_legacy_subagents(store, &connection)
 }
 
 /// Rebuilds a verified catalog from retained payload metadata and sidecars.

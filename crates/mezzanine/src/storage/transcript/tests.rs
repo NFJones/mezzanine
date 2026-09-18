@@ -2620,7 +2620,8 @@ fn transcript_store_catalog_skips_legacy_subagent_without_durable_contract() {
 }
 
 /// Verifies healthy catalog startup does not enumerate every indexed sidecar,
-/// while exact access still fail-closes a newly incomplete legacy child.
+/// exact access fail-closes a newly incomplete legacy child without deleting
+/// catalog state, and the retention pass reclaims the unreachable row.
 #[test]
 fn transcript_store_catalog_healthy_startup_defers_legacy_child_quarantine_to_exact_access() {
     let root = temp_root("catalog-indexed-legacy-subagent-contract");
@@ -2670,8 +2671,18 @@ fn transcript_store_catalog_healthy_startup_defers_legacy_child_quarantine_to_ex
         store
             .catalog_saved_session("indexed-legacy-child")
             .unwrap()
+            .is_some(),
+        "a read must not delete the unresumable legacy child's catalog row"
+    );
+    store
+        .enforce_saved_session_retention(102, &BTreeSet::new())
+        .unwrap();
+    assert!(
+        store
+            .catalog_saved_session("indexed-legacy-child")
+            .unwrap()
             .is_none(),
-        "exact access quarantines the unresumable legacy child"
+        "the retention pass reclaims the unresumable legacy child"
     );
     let _ = fs::remove_dir_all(root);
 }
