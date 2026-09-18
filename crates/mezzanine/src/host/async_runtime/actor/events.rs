@@ -927,7 +927,7 @@ impl AsyncRuntimeSessionActor {
     /// control-input arms the detachable attach client uses - because a queue that
     /// only one of them drains would acknowledge the command and never display it.
     pub(super) fn queue_pending_deferred_agent_command_side_effects(&mut self) -> Result<usize> {
-        let side_effects = self
+        let mut side_effects = self
             .service
             .take_pending_deferred_agent_commands()
             .into_iter()
@@ -939,6 +939,15 @@ impl AsyncRuntimeSessionActor {
                 claim_generation: dispatch.claim_generation,
             })
             .collect::<Vec<_>>();
+        side_effects.extend(
+            self.service
+                .take_pending_record_browser_refreshes()
+                .into_iter()
+                .map(|dispatch| RuntimeSideEffect::DispatchRecordBrowserRefresh {
+                    refresh_key: dispatch.refresh_key,
+                    generation: dispatch.generation,
+                }),
+        );
         let count = side_effects.len();
         self.queue_runtime_side_effects(side_effects)?;
         Ok(count)

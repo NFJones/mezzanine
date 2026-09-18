@@ -870,6 +870,24 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Reports whether the actor applied the outcome instead of dropping it.
         reply: oneshot::Sender<Result<bool>>,
     },
+    /// Claims one queued record-browser refresh for off-actor execution.
+    ClaimRecordBrowserRefresh {
+        /// Overlay refresh key the claim was stamped for.
+        refresh_key: String,
+        /// Actor-owned refresh generation stamped when the refresh was claimed.
+        generation: u64,
+        /// Claimed owned work, or `None` when the claim is stale or unusable.
+        reply: oneshot::Sender<Result<Option<crate::runtime::RuntimeRecordBrowserRefreshWork>>>,
+    },
+    /// Applies one settled record-browser refresh inside the actor.
+    CompleteRecordBrowserRefresh {
+        /// Work item the outcome belongs to.
+        work: Box<crate::runtime::RuntimeRecordBrowserRefreshWork>,
+        /// Worker outcome to apply.
+        outcome: Box<crate::runtime::RuntimeRecordBrowserRefreshOutcome>,
+        /// Reports whether the actor installed the rebuilt page.
+        reply: oneshot::Sender<Result<bool>>,
+    },
     /// Claims a queued model-backed conversation compaction task.
     ClaimAgentCompactionTask {
         /// Pane whose queued compaction should be claimed.
@@ -1269,6 +1287,8 @@ impl AsyncRuntimeRequest {
             | Self::CompleteApprovedExternalAction { .. }
             | Self::ClaimAgentCommandWork { .. }
             | Self::CompleteAgentCommandWork { .. }
+            | Self::ClaimRecordBrowserRefresh { .. }
+            | Self::CompleteRecordBrowserRefresh { .. }
             | Self::ClaimAgentCompactionTask { .. }
             | Self::ClaimAgentRememberTask { .. }
             | Self::ClaimAgentSessionTitleTask { .. }

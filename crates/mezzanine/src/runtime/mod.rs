@@ -449,7 +449,8 @@ pub(crate) use service_state::{
     RuntimeAgentCommandAsyncOutcome, RuntimeAgentCommandAsyncWork, RuntimeAgentCommandDispatch,
     RuntimeAgentCommandPrepared, RuntimeAgentProviderPreparationOutcome,
     RuntimeAgentProviderPreparationWork, RuntimeMcpDiscoveryOutcome, RuntimeMcpDiscoverySuccess,
-    RuntimePersistentSubagent,
+    RuntimePersistentSubagent, RuntimeRecordBrowserRefreshDispatch,
+    RuntimeRecordBrowserRefreshOutcome, RuntimeRecordBrowserRefreshWork,
 };
 pub(crate) use sockets::hosted_session_socket_path;
 pub use sockets::{

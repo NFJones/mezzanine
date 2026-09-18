@@ -444,6 +444,7 @@ pub(super) fn runtime_side_effect_kind(effect: &RuntimeSideEffect) -> &'static s
         RuntimeSideEffect::DispatchAgentRemember { .. } => "dispatch-agent-remember",
         RuntimeSideEffect::DispatchAgentSessionTitle { .. } => "dispatch-agent-session-title",
         RuntimeSideEffect::DispatchAgentCommand { .. } => "dispatch-agent-command",
+        RuntimeSideEffect::DispatchRecordBrowserRefresh { .. } => "dispatch-record-browser-refresh",
         RuntimeSideEffect::DispatchAgentPresentationResize { .. } => {
             "dispatch-agent-presentation-resize"
         }

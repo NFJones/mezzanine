@@ -1416,6 +1416,36 @@ impl AsyncRuntimeSessionActor {
                 self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
                 false
             }
+            AsyncRuntimeRequest::ClaimRecordBrowserRefresh {
+                refresh_key,
+                generation,
+                reply,
+            } => {
+                let result = self
+                    .service
+                    .claim_record_browser_refresh(&refresh_key, generation);
+                let should_notify = result.is_ok();
+                let _ = reply.send(result);
+                if should_notify {
+                    self.notify_event_delivery();
+                }
+                false
+            }
+            AsyncRuntimeRequest::CompleteRecordBrowserRefresh {
+                work,
+                outcome,
+                reply,
+            } => {
+                let result = self
+                    .service
+                    .complete_record_browser_refresh(&work, *outcome);
+                let should_notify = result.as_ref().is_ok_and(|applied| *applied);
+                let _ = reply.send(result);
+                if should_notify {
+                    self.notify_event_delivery();
+                }
+                false
+            }
             AsyncRuntimeRequest::ClaimAgentCompactionTask { pane_id, reply } => {
                 let result = self.service.claim_agent_compaction_task(&pane_id);
                 let should_notify = result.is_ok();

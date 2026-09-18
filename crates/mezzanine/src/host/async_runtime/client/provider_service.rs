@@ -501,6 +501,33 @@ async fn dispatch_agent_provider_side_effects(
                     Ok(None)
                 });
             }
+            RuntimeSideEffect::DispatchRecordBrowserRefresh {
+                refresh_key,
+                generation,
+            } => {
+                let work = match handle
+                    .claim_record_browser_refresh(refresh_key, generation)
+                    .await
+                {
+                    Ok(Some(work)) => work,
+                    Ok(None) | Err(_) => continue,
+                };
+                let handle = handle.clone();
+                workers.spawn(async move {
+                    let execution_work = work.clone();
+                    let Ok(outcome) = tokio::task::spawn_blocking(move || {
+                        crate::runtime::RuntimeSessionService::execute_record_browser_refresh(
+                            &execution_work,
+                        )
+                    })
+                    .await
+                    else {
+                        return Ok(None);
+                    };
+                    let _ = handle.complete_record_browser_refresh(work, outcome).await;
+                    Ok(None)
+                });
+            }
             RuntimeSideEffect::DispatchAgentCompaction { pane_id } => {
                 let dispatch = match handle.claim_agent_compaction_task(pane_id.clone()).await {
                     Ok(Some(dispatch)) => dispatch,

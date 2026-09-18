@@ -978,6 +978,17 @@ pub enum RuntimeSideEffect {
         /// the current one for the pane.
         claim_generation: u64,
     },
+    /// Rebuild one record-browser page outside the serialized actor.
+    ///
+    /// The overlay keeps its state, selection, and rendering on the actor: this
+    /// effect only names the refresh claim, and the worker's completion installs
+    /// the rebuilt page while that claim is still current.
+    DispatchRecordBrowserRefresh {
+        /// Overlay refresh key the claim was stamped for.
+        refresh_key: String,
+        /// Actor-owned refresh generation used to drop stale outcomes.
+        generation: u64,
+    },
     /// Rebuild one resized source-backed agent presentation outside the actor.
     DispatchAgentPresentationResize {
         /// Pane whose newest coalesced target geometry should be projected.

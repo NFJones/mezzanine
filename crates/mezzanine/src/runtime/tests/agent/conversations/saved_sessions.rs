@@ -1141,6 +1141,12 @@ fn runtime_title_refresh_keeps_unfiltered_resume_scope() {
     );
 
     assert!(service.mirror_runtime_agent_objective("refresh-scope", Some("Refreshed objective")));
+    assert!(
+        service
+            .run_pending_record_browser_refresh_for_tests()
+            .unwrap(),
+        "the title refresh lane rebuilds the picker page"
+    );
     let (toggle, rendered) = open_resume_scope_state(&service);
     assert!(
         !toggle,

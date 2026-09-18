@@ -392,20 +392,17 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Refreshes an open saved-session browser after a derived title changed.
+    /// Queues one saved-session page rebuild after a derived title changed.
     ///
     /// The current page anchor and the focused row are preserved, so a title
-    /// refresh never moves an operator who is browsing a later page.
-    pub(crate) fn refresh_saved_session_overlay_after_title_change(&mut self) -> Result<()> {
-        let Some(source) = self.active_saved_session_browser_source() else {
-            return Ok(());
-        };
-        let active_id = self.active_saved_session_browser_record_id();
-        let mut browser = self.refresh_record_browser_overlay_source(&source)?;
-        if let Some(active_id) = active_id {
-            browser.set_active_record_id(&active_id);
-        }
-        self.replace_active_saved_session_browser(source, browser);
+    /// refresh never moves an operator who is browsing a later page. The rebuild
+    /// runs in the overlay refresh lane, because the row read is the same store
+    /// walk `/resume` opens with and does not belong inside the actor request.
+    pub(crate) fn refresh_saved_session_overlay_after_title_change(
+        &mut self,
+        conversation_id: &str,
+    ) -> Result<()> {
+        self.begin_record_browser_refresh_claim(conversation_id);
         Ok(())
     }
 

@@ -56,6 +56,10 @@ pub(crate) use lifecycle::{
     RuntimeSnapshotControlAsyncWork, RuntimeSnapshotControlAsyncWorkKind,
     RuntimeSnapshotOwnedCreationContext,
 };
+pub(crate) use lifecycle::{
+    RuntimeRecordBrowserRefreshDispatch, RuntimeRecordBrowserRefreshOutcome,
+    RuntimeRecordBrowserRefreshWork,
+};
 pub(crate) use mcp_transport::{
     RuntimeAgentProviderPreparationOutcome, RuntimeAgentProviderPreparationWork,
     RuntimeHookPipelineBlock, RuntimeHttpMcpTransportState, RuntimeMcpDiscoveryOutcome,

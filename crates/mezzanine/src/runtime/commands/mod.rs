@@ -70,6 +70,7 @@ mod issues;
 pub(crate) mod lists;
 mod model;
 mod model_catalog;
+mod overlay_refresh;
 mod preferences;
 mod remember;
 mod resume;

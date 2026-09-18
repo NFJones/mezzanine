@@ -496,6 +496,10 @@ pub(crate) struct RuntimePresentationComponent {
     pending_agent_prompt_provider_info_refreshes: Vec<RuntimeAgentPromptProviderInfoRefresh>,
     /// Deferred slash commands submitted from agent prompts awaiting dispatch.
     pending_deferred_agent_commands: Vec<crate::runtime::RuntimeAgentCommandDispatch>,
+    /// Deferred record-browser refreshes awaiting dispatch, newest per pane.
+    pending_record_browser_refreshes: Vec<crate::runtime::RuntimeRecordBrowserRefreshDispatch>,
+    /// Per-pane refresh generations used to drop superseded rebuilt pages.
+    record_browser_refresh_generations: std::collections::BTreeMap<String, u64>,
     /// Background selector discoveries keyed by exact client and pane owner.
     agent_prompt_selector_refreshes: std::collections::HashMap<
         (mez_core::ids::ClientId, String),
@@ -1453,6 +1457,42 @@ impl RuntimePresentationComponent {
         dispatch: crate::runtime::RuntimeAgentCommandDispatch,
     ) {
         self.pending_deferred_agent_commands.push(dispatch);
+    }
+
+    /// Bumps one pane's refresh generation and returns the new claim value.
+    ///
+    /// Each claimed refresh carries the generation it started from, so a page
+    /// rebuilt for a superseded source is dropped when it settles instead of
+    /// replacing newer content.
+    pub(crate) fn begin_record_browser_refresh(&mut self, refresh_key: &str) -> u64 {
+        let generation = self
+            .record_browser_refresh_generations
+            .entry(refresh_key.to_string())
+            .or_insert(0);
+        *generation = generation.saturating_add(1);
+        *generation
+    }
+
+    /// Returns one pane's current refresh generation.
+    pub(crate) fn record_browser_refresh_generation(&self, refresh_key: &str) -> u64 {
+        self.record_browser_refresh_generations
+            .get(refresh_key)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Queues one deferred record-browser refresh, coalescing per pane.
+    ///
+    /// Rapid paging or typing claims one refresh after another; only the newest
+    /// claim for a pane stays queued, so a burst of keystrokes costs one worker
+    /// item instead of one per keystroke.
+    pub(crate) fn push_pending_record_browser_refresh(
+        &mut self,
+        dispatch: crate::runtime::RuntimeRecordBrowserRefreshDispatch,
+    ) {
+        self.pending_record_browser_refreshes
+            .retain(|queued| queued.refresh_key != dispatch.refresh_key);
+        self.pending_record_browser_refreshes.push(dispatch);
     }
 
     /// Removes pane-scoped interaction state from every retained client.

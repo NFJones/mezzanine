@@ -889,6 +889,34 @@ impl AsyncRuntimeSessionHandle {
         .await?
     }
 
+    /// Claims one queued record-browser refresh for off-actor execution.
+    pub async fn claim_record_browser_refresh(
+        &self,
+        refresh_key: String,
+        generation: u64,
+    ) -> Result<Option<crate::runtime::RuntimeRecordBrowserRefreshWork>> {
+        self.request(|reply| AsyncRuntimeRequest::ClaimRecordBrowserRefresh {
+            refresh_key,
+            generation,
+            reply,
+        })
+        .await?
+    }
+
+    /// Applies one settled record-browser refresh inside the actor.
+    pub async fn complete_record_browser_refresh(
+        &self,
+        work: crate::runtime::RuntimeRecordBrowserRefreshWork,
+        outcome: crate::runtime::RuntimeRecordBrowserRefreshOutcome,
+    ) -> Result<bool> {
+        self.request(|reply| AsyncRuntimeRequest::CompleteRecordBrowserRefresh {
+            work: Box::new(work),
+            outcome: Box::new(outcome),
+            reply,
+        })
+        .await?
+    }
+
     /// Claims one queued model-backed durable memory task for async execution.
     pub async fn claim_agent_remember_task(
         &self,

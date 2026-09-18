@@ -398,6 +398,57 @@ pub(crate) struct RuntimeAgentCommandDispatch {
     pub claim_generation: u64,
 }
 
+/// One deferred record-browser refresh handed to a worker.
+///
+/// The actor owns overlay and presentation state; the worker rebuilds one page
+/// from owned inputs and never reaches into live service state, the same split
+/// the deferred slash-command lane uses.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeRecordBrowserRefreshWork {
+    /// Overlay refresh key: the pane whose overlay is refreshed, or the
+    /// conversation whose row changed for the shared saved-session picker.
+    pub refresh_key: String,
+    /// Actor-owned refresh generation compared when the outcome settles.
+    pub generation: u64,
+    /// Overlay source the page is rebuilt from.
+    pub source: super::RuntimeRecordBrowserOverlaySource,
+    /// Focused record the rebuilt page restores, when one was focused.
+    pub active_record_id: Option<String>,
+    /// Transcript store the saved-session page reads.
+    pub transcript_store: Option<crate::storage::transcript::AgentTranscriptStore>,
+    /// Prompt column budget each rebuilt row may use.
+    pub prompt_width: usize,
+    /// Title policy captured from live configuration.
+    pub title_policy: crate::session_title::SessionTitlePolicy,
+}
+
+/// Result a refresh worker prepares for the actor to install or drop.
+#[derive(Debug)]
+pub(crate) enum RuntimeRecordBrowserRefreshOutcome {
+    /// Rebuilt page ready to install when the overlay is still current.
+    Rebuilt {
+        /// Browser the worker rendered from the captured store read.
+        browser: Box<mez_mux::record_browser::RecordBrowser>,
+    },
+    /// Rebuild failed; the actor keeps the current page.
+    Failed {
+        /// Diagnostic recorded on the actor trace.
+        message: String,
+        /// Error kind the inline refresh would have reported.
+        kind: crate::error::MezErrorKind,
+    },
+}
+
+/// One deferred refresh the actor queued for off-actor execution.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeRecordBrowserRefreshDispatch {
+    /// Overlay refresh key: the pane whose overlay is refreshed, or the
+    /// conversation whose row changed for the shared saved-session picker.
+    pub refresh_key: String,
+    /// Actor-owned refresh generation used to drop stale outcomes.
+    pub generation: u64,
+}
+
 /// Repository result returned to the actor after async snapshot control work.
 #[derive(Debug)]
 pub(crate) enum RuntimeSnapshotControlAsyncOutcome {

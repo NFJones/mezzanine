@@ -11,6 +11,7 @@ mod conversations;
 mod macros;
 mod mcp_schema;
 mod model_selection;
+mod overlay_refresh;
 mod presentation;
 mod prompt;
 mod provider_failure_audit;

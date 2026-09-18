@@ -1956,6 +1956,28 @@ impl RuntimeSessionService {
             .map(str::to_string)
     }
 
+    /// Records one refresh failure on the active saved-session browser.
+    ///
+    /// The inline refresh surfaced a failed rebuild by rebuilding the page with
+    /// the error text; the deferred completion cannot re-read the store, so it
+    /// keeps the current page and marks it instead.
+    pub(crate) fn set_active_saved_session_browser_error(&mut self, message: &str) -> bool {
+        let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+            return false;
+        };
+        let Some(record_browser) = overlay.record_browser.as_mut() else {
+            return false;
+        };
+        if !matches!(
+            record_browser.source,
+            Some(RuntimeRecordBrowserOverlaySource::SavedSessions { .. })
+        ) {
+            return false;
+        }
+        record_browser.browser.set_error(Some(message.to_string()));
+        true
+    }
+
     /// Replaces the active saved-session browser after backend settlement.
     pub(crate) fn replace_active_saved_session_browser(
         &mut self,

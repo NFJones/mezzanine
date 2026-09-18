@@ -400,6 +400,13 @@ impl RuntimeSessionService {
         std::mem::take(&mut self.presentation.pending_deferred_agent_commands)
     }
 
+    /// Drains deferred record-browser refreshes queued by overlay flows.
+    pub(crate) fn take_pending_record_browser_refreshes(
+        &mut self,
+    ) -> Vec<crate::runtime::RuntimeRecordBrowserRefreshDispatch> {
+        std::mem::take(&mut self.presentation.pending_record_browser_refreshes)
+    }
+
     /// Drains exact clients whose latest divider action must rearm debounce.
     pub(crate) fn take_divider_resize_debounce_requests(&mut self) -> Vec<mez_core::ids::ClientId> {
         self.presentation.take_divider_resize_debounce_requests()
