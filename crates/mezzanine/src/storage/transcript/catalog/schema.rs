@@ -25,9 +25,27 @@ enum SchemaFailure {
     Semantic(MezError),
 }
 
+/// Busy wait used by one interactive catalog read.
+///
+/// Interactive reads run inside the serialized runtime actor while handling
+/// input, so a contended writer must not park key handling for the standard
+/// one-second wait.
+pub(super) const INTERACTIVE_CATALOG_BUSY_TIMEOUT: Duration = Duration::from_millis(250);
+
 /// Opens one short-lived configured catalog connection.
 pub(super) fn open(path: &Path) -> Result<Connection> {
-    open_inner(path).map_err(SchemaFailure::into_mez_error)
+    open_inner_with_busy_timeout(path, Duration::from_secs(1))
+        .map_err(SchemaFailure::into_mez_error)
+}
+
+/// Opens one catalog connection for an interactive read.
+///
+/// A contended writer maps to the caller's retryable diagnostic instead of the
+/// standard busy timeout, so the picker can report the contention and the user
+/// can retry without freezing the pane.
+pub(super) fn open_interactive(path: &Path, busy_message: &str) -> Result<Connection> {
+    open_inner_with_busy_timeout(path, INTERACTIVE_CATALOG_BUSY_TIMEOUT)
+        .map_err(|error| error.into_interactive_mez_error(busy_message))
 }
 
 /// Opens an existing catalog read-only without creating or migrating it.
@@ -40,7 +58,7 @@ pub(super) fn open_read_only(path: &Path) -> rusqlite::Result<Connection> {
 /// Opens and validates an existing catalog while retaining exact corruption
 /// classification for the initialization recovery path.
 pub(super) fn open_for_initialization(path: &Path) -> Result<InitializationOpen> {
-    match open_inner(path).and_then(|connection| {
+    match open_inner_with_busy_timeout(path, Duration::from_secs(1)).and_then(|connection| {
         validate_inner(&connection)?;
         Ok(connection)
     }) {
@@ -54,10 +72,13 @@ pub(super) fn open_for_initialization(path: &Path) -> Result<InitializationOpen>
 }
 
 /// Opens and configures one catalog connection without discarding SQLite codes.
-fn open_inner(path: &Path) -> std::result::Result<Connection, SchemaFailure> {
+fn open_inner_with_busy_timeout(
+    path: &Path,
+    busy_timeout: Duration,
+) -> std::result::Result<Connection, SchemaFailure> {
     let connection = Connection::open(path).map_err(SchemaFailure::Sqlite)?;
     connection
-        .busy_timeout(Duration::from_secs(1))
+        .busy_timeout(busy_timeout)
         .map_err(SchemaFailure::Sqlite)?;
     connection
         .execute_batch(
@@ -363,6 +384,27 @@ impl SchemaFailure {
                 "saved-conversation catalog integrity check failed: {result}"
             )),
             Self::Semantic(error) => error,
+        }
+    }
+
+    /// Returns whether this failure is a contended database lock.
+    fn is_busy(&self) -> bool {
+        matches!(
+            self,
+            Self::Sqlite(rusqlite::Error::SqliteFailure(error, _))
+                if matches!(
+                    error.code,
+                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                )
+        )
+    }
+
+    /// Converts the failure, mapping one contended lock to a retryable message.
+    fn into_interactive_mez_error(self, busy_message: &str) -> MezError {
+        if self.is_busy() {
+            MezError::invalid_state(busy_message)
+        } else {
+            self.into_mez_error()
         }
     }
 }

@@ -11753,7 +11753,11 @@ operation that performs a full saved-session scan. It MUST wait only a bounded
 time for exclusive ownership, clean failed temporary SQLite files, retain the
 previous database as a backup after successful verification, and refuse to
 replace a readable future schema. Ordinary metadata mutations MUST hold shared
-catalog ownership so they cannot race an exclusive rebuild.
+catalog ownership so they cannot race an exclusive rebuild. Interactive catalog
+reads that run while handling user input (saved-session picker pages and prefix
+completion) MUST use a shorter bounded wait than startup, migration, and
+mutation paths, and MUST fail with a retryable `saved-session catalog is busy`
+diagnostic instead of parking key handling for the longer budget.
 
 The legacy name index and per-session summary and classification sidecars MUST
 remain enabled as rebuild and rollback inputs for catalog schema version 1.

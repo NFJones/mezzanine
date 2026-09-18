@@ -2837,6 +2837,116 @@ fn transcript_store_catalog_latest_root_skips_subagents_and_stale_rows() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies an interactive catalog read fails fast with a retryable busy
+/// diagnostic while another writer holds the catalog.
+///
+/// Picker reads and prefix completion run inside the serialized runtime actor,
+/// so a contended writer must surface a retryable message within the short
+/// interactive budget instead of parking key handling behind the standard
+/// one-second database wait.
+#[test]
+fn transcript_store_interactive_catalog_read_fails_fast_when_busy() {
+    let root = temp_root("interactive-catalog-busy");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root);
+    store.initialize(100).unwrap();
+    let query = SavedSessionQuery {
+        lifecycle: SavedSessionLifecycleFilter::Active,
+        directory: None,
+        include_subagents: false,
+        require_latest_user_prompt: false,
+        search: None,
+        anchor: None,
+        limit: 1,
+    };
+    store
+        .query_saved_sessions(&query)
+        .expect("an uncontended interactive read should succeed");
+
+    let catalog = super::catalog::catalog_path(&store);
+    let holder = Connection::open(&catalog).unwrap();
+    holder
+        .busy_timeout(std::time::Duration::from_millis(0))
+        .unwrap();
+    holder.execute_batch("BEGIN IMMEDIATE;").unwrap();
+
+    let started = std::time::Instant::now();
+    let error = store
+        .query_saved_sessions(&query)
+        .expect_err("a contended interactive read must fail");
+    let elapsed = started.elapsed();
+    assert!(
+        error.message().contains("saved-session catalog is busy"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        elapsed < std::time::Duration::from_millis(900),
+        "interactive reads must use the short budget: elapsed={elapsed:?}"
+    );
+    holder.execute_batch("ROLLBACK;").unwrap();
+}
+
+/// Verifies an interactive catalog read surfaces the retryable busy diagnostic
+/// when the exclusive migration lock is already held.
+///
+/// The interactive lock budget is independent of the database busy wait: a
+/// reader that cannot take the shared migration lock within the short budget
+/// must report the same retryable message instead of waiting for the startup
+/// timeout.
+#[test]
+fn transcript_store_interactive_catalog_read_fails_fast_when_lock_held() {
+    let root = temp_root("interactive-catalog-lock-busy");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root);
+    store.initialize(100).unwrap();
+    let query = SavedSessionQuery {
+        lifecycle: SavedSessionLifecycleFilter::Active,
+        directory: None,
+        include_subagents: false,
+        require_latest_user_prompt: false,
+        search: None,
+        anchor: None,
+        limit: 1,
+    };
+    store
+        .query_saved_sessions(&query)
+        .expect("an uncontended interactive read should succeed");
+
+    let lock_path = super::catalog::catalog_path(&store)
+        .parent()
+        .expect("catalog lives under the store root")
+        .join(".catalog-migration.lock");
+    let lock_file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .unwrap();
+    rustix::fs::flock(
+        &lock_file,
+        rustix::fs::FlockOperation::NonBlockingLockExclusive,
+    )
+    .unwrap();
+
+    let started = std::time::Instant::now();
+    let error = store
+        .query_saved_sessions(&query)
+        .expect_err("a locked interactive read must fail");
+    let elapsed = started.elapsed();
+    assert!(
+        error.message().contains("saved-session catalog is busy"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        elapsed < std::time::Duration::from_millis(900),
+        "interactive reads must use the short lock budget: elapsed={elapsed:?}"
+    );
+    drop(lock_file);
+}
+
 /// Verifies completion is bounded and root-only, while picker pages retain
 /// deterministic named-first ordering across forward, backward, and last-page
 /// keyset boundaries.

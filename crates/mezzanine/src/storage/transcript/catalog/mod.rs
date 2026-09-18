@@ -48,6 +48,17 @@ const CATALOG_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 /// Short bounded lock wait used by deterministic contention regressions.
 #[cfg(test)]
 const CATALOG_LOCK_TIMEOUT: Duration = Duration::from_millis(100);
+/// Maximum wait for one interactive catalog read (picker pages, prefix
+/// completion).
+///
+/// Interactive reads run inside the serialized runtime actor, so a contended
+/// migration lock must fail fast with a retryable diagnostic instead of parking
+/// every keystroke, pane write, and provider event behind the startup budget.
+#[cfg(not(test))]
+const CATALOG_INTERACTIVE_LOCK_TIMEOUT: Duration = Duration::from_millis(250);
+/// Short bounded interactive wait used by deterministic contention regressions.
+#[cfg(test)]
+const CATALOG_INTERACTIVE_LOCK_TIMEOUT: Duration = Duration::from_millis(50);
 
 /// Process-local count of indexed normal-operation queries.
 static INDEXED_QUERY_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -436,6 +447,22 @@ pub(super) fn age_retention_candidates(
     )
 }
 
+/// Retryable diagnostic for a contended startup or migration lock.
+const CATALOG_MIGRATION_BUSY_MESSAGE: &str = "saved-session catalog migration lock is busy; retry after the active startup or rebuild completes";
+/// Retryable diagnostic for a contended interactive read.
+const CATALOG_INTERACTIVE_BUSY_MESSAGE: &str = "saved-session catalog is busy; retry the request";
+
+/// Opens the catalog for one interactive read.
+///
+/// Interactive reads run inside the serialized runtime actor, so they take the
+/// short shared-lock budget and the short database busy wait, and a contended
+/// writer surfaces the retryable interactive diagnostic instead of parking key
+/// handling behind the startup or standard wait.
+fn open_catalog_for_interactive_read(store: &AgentTranscriptStore) -> Result<Connection> {
+    let _lock = acquire_interactive_shared_lock(store)?;
+    schema::open_interactive(&catalog_path(store), CATALOG_INTERACTIVE_BUSY_MESSAGE)
+}
+
 /// Returns the active payload-backed session count.
 pub(super) fn active_payload_session_count(store: &AgentTranscriptStore) -> Result<usize> {
     note_indexed_query();
@@ -461,7 +488,7 @@ pub(super) fn root_session_completions(
     limit: usize,
 ) -> Result<Vec<SavedAgentSession>> {
     note_indexed_query();
-    let connection = schema::open(&catalog_path(store))?;
+    let connection = open_catalog_for_interactive_read(store)?;
     query::root_session_completions(&connection, prefix, limit)
 }
 
@@ -471,7 +498,7 @@ pub(super) fn query_saved_sessions(
     query: &SavedSessionQuery,
 ) -> Result<SavedSessionPage> {
     note_indexed_query();
-    let connection = schema::open(&catalog_path(store))?;
+    let connection = open_catalog_for_interactive_read(store)?;
     query::query_saved_sessions(&connection, query)
 }
 
@@ -488,18 +515,44 @@ fn ensure_root(store: &AgentTranscriptStore) -> Result<()> {
 
 /// Acquires the cross-process catalog migration lock.
 fn acquire_lock(store: &AgentTranscriptStore) -> Result<fs::File> {
-    acquire_lock_with_operation(store, FlockOperation::NonBlockingLockExclusive)
+    acquire_lock_with_operation(
+        store,
+        FlockOperation::NonBlockingLockExclusive,
+        CATALOG_LOCK_TIMEOUT,
+        CATALOG_MIGRATION_BUSY_MESSAGE,
+    )
 }
 
 /// Acquires shared catalog ownership for one ordinary metadata mutation.
 fn acquire_shared_lock(store: &AgentTranscriptStore) -> Result<fs::File> {
-    acquire_lock_with_operation(store, FlockOperation::NonBlockingLockShared)
+    acquire_lock_with_operation(
+        store,
+        FlockOperation::NonBlockingLockShared,
+        CATALOG_LOCK_TIMEOUT,
+        CATALOG_MIGRATION_BUSY_MESSAGE,
+    )
+}
+
+/// Acquires shared catalog ownership for one interactive read.
+///
+/// The shorter interactive budget keeps a contended migration lock from parking
+/// the serialized actor for the full startup timeout; the returned error is
+/// retryable and is surfaced by the picker/prefix completion path.
+fn acquire_interactive_shared_lock(store: &AgentTranscriptStore) -> Result<fs::File> {
+    acquire_lock_with_operation(
+        store,
+        FlockOperation::NonBlockingLockShared,
+        CATALOG_INTERACTIVE_LOCK_TIMEOUT,
+        CATALOG_INTERACTIVE_BUSY_MESSAGE,
+    )
 }
 
 /// Acquires catalog ownership with a bounded wait and actionable diagnostic.
 fn acquire_lock_with_operation(
     store: &AgentTranscriptStore,
     operation: FlockOperation,
+    wait: Duration,
+    busy_message: &str,
 ) -> Result<fs::File> {
     let path = store.root.join(CATALOG_LOCK_FILE_NAME);
     let file = OpenOptions::new()
@@ -509,7 +562,7 @@ fn acquire_lock_with_operation(
         .truncate(false)
         .open(&path)?;
     set_private_file_permissions(&path)?;
-    let deadline = Instant::now() + CATALOG_LOCK_TIMEOUT;
+    let deadline = Instant::now() + wait;
     loop {
         match flock(&file, operation) {
             Ok(()) => return Ok(file),
@@ -519,9 +572,7 @@ fn acquire_lock_with_operation(
                     return Err(error.into());
                 }
                 if Instant::now() >= deadline {
-                    return Err(MezError::invalid_state(
-                        "saved-session catalog migration lock is busy; retry after the active startup or rebuild completes",
-                    ));
+                    return Err(MezError::invalid_state(busy_message));
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
