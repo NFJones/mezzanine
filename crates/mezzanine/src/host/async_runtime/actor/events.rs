@@ -204,7 +204,7 @@ impl AsyncRuntimeSessionActor {
             && report
                 .families
                 .iter()
-                .any(|family| family.as_str() != "persistence")
+                .any(|family| *family != "persistence")
             && !registry_persistence_queued
             && let Some((registry, update)) = self.service.registry_update_for_async_persistence()
         {

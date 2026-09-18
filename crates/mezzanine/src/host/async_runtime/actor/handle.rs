@@ -941,7 +941,7 @@ impl AsyncRuntimeSessionHandle {
         // the calling pane worker or supervised service.
         // Ingress families stay in the producer's delivery order even though
         // each chunk is submitted in actor application order.
-        let families = batch.families().into_iter().map(str::to_string).collect();
+        let families = batch.families();
         let mut report = RuntimeEventIngressReport {
             accepted: 0,
             applied: 0,

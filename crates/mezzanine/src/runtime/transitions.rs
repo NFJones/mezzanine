@@ -1275,7 +1275,7 @@ impl RuntimeEventBatch {
             accepted: self.events.len(),
             applied: 0,
             side_effects: 0,
-            families: self.families().into_iter().map(str::to_string).collect(),
+            families: self.families(),
         }
     }
 }
@@ -1329,7 +1329,7 @@ pub struct RuntimeEventIngressReport {
     /// Number of actor side effects queued while applying the batch.
     pub side_effects: usize,
     /// Stable event-family names in delivery order.
-    pub families: Vec<String>,
+    pub families: Vec<&'static str>,
 }
 
 /// Result of applying one transport-neutral runtime transition.
