@@ -1309,6 +1309,68 @@ fn runtime_status_separates_latest_and_cumulative_cache_reuse() {
     assert_eq!(latest.usage.cached_input_tokens, Some(90));
 }
 
+/// Verifies `/status` reports how long the running turn has been in flight,
+/// whether provider work is still queued for it, and whether a retry is
+/// pending, and that those fields read `none` while no turn is running.
+#[test]
+fn runtime_status_reports_turn_elapsed_provider_claim_and_retry() {
+    let mut idle = test_runtime_service();
+    idle.attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    idle.agent_shell_store_mut().enter_or_resume("%1").unwrap();
+    let idle_status = idle.runtime_agent_status_display("%1").unwrap();
+    let idle_line = |label: &str| {
+        idle_status
+            .lines()
+            .find(|line| line.contains(label))
+            .unwrap_or_else(|| panic!("{label} row missing from: {idle_status}"))
+            .to_string()
+    };
+    assert!(idle_line("Turn elapsed").contains("none"), "{idle_status}");
+    assert!(
+        idle_line("Provider claim").contains("none"),
+        "{idle_status}"
+    );
+    assert!(
+        idle_line("Provider retry").contains("none"),
+        "{idle_status}"
+    );
+
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let output = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"status-provider-state","method":"agent/shell/command","params":{"idempotency_key":"status-provider-state","input":"start a turn"}}"#,
+        &primary,
+    );
+    assert!(output.contains(r#""state":"running""#), "{output}");
+    let status = service.runtime_agent_status_display("%1").unwrap();
+    let line = |label: &str| {
+        status
+            .lines()
+            .find(|line| line.contains(label))
+            .unwrap_or_else(|| panic!("{label} row missing from: {status}"))
+            .to_string()
+    };
+    assert!(
+        !line("Turn elapsed").contains("none"),
+        "a running turn reports elapsed seconds: {status}"
+    );
+    assert!(
+        line("Provider claim").contains("queued"),
+        "a freshly started turn still owns queued provider work: {status}"
+    );
+    assert!(
+        line("Provider retry").contains("none"),
+        "a fresh turn is not awaiting a retry: {status}"
+    );
+}
+
 /// Verifies `/status` identifies configured input limits as a proactive
 /// compaction trigger while retaining the existing trigger list when a profile
 /// does not configure that limit.

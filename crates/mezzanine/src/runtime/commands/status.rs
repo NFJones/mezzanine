@@ -221,6 +221,42 @@ impl RuntimeSessionService {
             .owner_pane_id
             .as_deref()
             .unwrap_or("none");
+        // A provider claim lease can keep a turn running for the transport
+        // timeout plus its grace window while pane output stays quiet, so the
+        // status display reports how long the running turn has been in flight,
+        // whether provider work is still queued for it, and whether any turn is
+        // waiting on a retry.
+        let running_turn_record = session.running_turn_id.as_deref().and_then(|turn_id| {
+            self.agent_turn_ledger()
+                .turns()
+                .iter()
+                .find(|turn| turn.turn_id == turn_id)
+        });
+        let running_turn_elapsed = running_turn_record
+            .map(|turn| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|elapsed| elapsed.as_secs())
+                    .unwrap_or_default()
+                    .saturating_sub(turn.started_at_unix_seconds)
+                    .to_string()
+            })
+            .unwrap_or_else(|| "none".to_string());
+        let provider_claim = running_turn_record
+            .map(|turn| {
+                if self.agent_provider_task_is_pending(&turn.turn_id) {
+                    "queued".to_string()
+                } else {
+                    "idle".to_string()
+                }
+            })
+            .unwrap_or_else(|| "none".to_string());
+        let retrying_turns = self.agent_provider_retry_turn_ids().count();
+        let provider_retry = if retrying_turns == 0 {
+            "none".to_string()
+        } else {
+            format!("{retrying_turns} turn(s) awaiting retry")
+        };
         let rows = vec![
             vec!["Pane".to_string(), session.pane_id.clone()],
             vec!["Session".to_string(), session.session_id.clone()],
@@ -229,6 +265,9 @@ impl RuntimeSessionService {
                 agent_shell_visibility_json_name(session.visibility).to_string(),
             ],
             vec!["Running turn".to_string(), running_turn],
+            vec!["Turn elapsed (s)".to_string(), running_turn_elapsed],
+            vec!["Provider claim".to_string(), provider_claim],
+            vec!["Provider retry".to_string(), provider_retry],
             vec![
                 "Transcript entries".to_string(),
                 session.transcript_entries.to_string(),
