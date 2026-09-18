@@ -94,6 +94,21 @@ pub(crate) const RUNTIME_AGENT_DEFERRED_SLASH_COMMANDS: &[&str] = &[
     "debug-config",
 ];
 
+/// Runtime commands that must stay inline although they are not part of the
+/// dependency-neutral mez-agent slash registry.
+///
+/// `show-metrics` renders the actor's cached metrics snapshot, which the actor
+/// publishes on demand for the request families that run display commands. The
+/// deferred executor would classify an unknown command as deferred, read a
+/// snapshot that was never published for that path, and regress the freshness
+/// guarantee, so display commands that read actor-published state are pinned
+/// inline here instead of falling through the unknown-command default.
+#[allow(
+    dead_code,
+    reason = "f526838b phase 2 step (a): the deferred executor consumes this classification next"
+)]
+pub(crate) const RUNTIME_AGENT_INLINE_DISPLAY_COMMANDS: &[&str] = &["show-metrics"];
+
 /// Returns the execution lane for one canonical slash command name.
 ///
 /// Unknown names default to [`RuntimeAgentSlashCommandDisposition::Deferred`]
@@ -106,6 +121,9 @@ pub(crate) fn runtime_agent_slash_command_disposition(
     name: &str,
 ) -> RuntimeAgentSlashCommandDisposition {
     if RUNTIME_AGENT_INLINE_SLASH_COMMANDS.contains(&name) {
+        return RuntimeAgentSlashCommandDisposition::Inline;
+    }
+    if RUNTIME_AGENT_INLINE_DISPLAY_COMMANDS.contains(&name) {
         return RuntimeAgentSlashCommandDisposition::Inline;
     }
     RuntimeAgentSlashCommandDisposition::Deferred
@@ -164,6 +182,22 @@ mod tests {
         assert!(
             classified.len() == registry.len(),
             "classification lists must not keep names the registry dropped: {classified:?}"
+        );
+        for name in RUNTIME_AGENT_INLINE_DISPLAY_COMMANDS {
+            assert!(
+                !classified.contains(*name),
+                "display commands live outside the registry and stay in their own list: {name}"
+            );
+        }
+    }
+
+    /// Verifies display commands that read actor-published state stay inline
+    /// even though they are not registry commands.
+    #[test]
+    fn runtime_slash_command_disposition_keeps_display_commands_inline() {
+        assert_eq!(
+            runtime_agent_slash_command_disposition("show-metrics"),
+            RuntimeAgentSlashCommandDisposition::Inline
         );
     }
 
