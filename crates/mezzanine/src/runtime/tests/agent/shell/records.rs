@@ -2909,9 +2909,14 @@ fn runtime_agent_shell_show_memories_opens_arrow_selected_table_record() {
     let response = service
         .execute_agent_shell_command(&primary, "/show-memories --scope global")
         .unwrap();
+    assert!(
+        response.contains(r#""body":null"#),
+        "the deferred lane acknowledges /show-memories: {response}"
+    );
     service
-        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
-        .unwrap();
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /show-memories browser applies");
     let overlay = service.primary_display_overlay().unwrap();
     let page = overlay
         .record_browser
@@ -3013,9 +3018,14 @@ fn runtime_agent_shell_show_memories_deletes_the_selected_record() {
     let response = service
         .execute_agent_shell_command(&primary, "/show-memories memory-delete")
         .unwrap();
+    assert!(
+        response.contains(r#""body":null"#),
+        "the deferred lane acknowledges /show-memories detail: {response}"
+    );
     service
-        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
-        .unwrap();
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /show-memories detail applies");
     apply_record_browser_input(&mut service, &primary, b"d");
 
     assert!(store.inspect("memory-delete").is_err());
@@ -3027,6 +3037,82 @@ fn runtime_agent_shell_show_memories_deletes_the_selected_record() {
             .any(|line| line.contains("No memories found."))
     );
     assert_eq!(overlay.active_selection_index, None);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies the `/show-memories` gate: the browser form defers and installs its
+/// overlay through the completion, while the `--save` form keeps the inline
+/// page write.
+#[test]
+fn runtime_agent_shell_show_memories_defers_its_browser_and_refuses_save() {
+    let root = temp_root("runtime-show-memories-deferred");
+    let _ = fs::remove_dir_all(&root);
+    let config_root = root.join("config");
+    fs::create_dir_all(&config_root).unwrap();
+    let mut service = test_runtime_service();
+    service.set_config_root(config_root.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 14).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+    let store = crate::storage::memory::PersistentMemoryStore::under_config_root(&config_root);
+    store
+        .upsert(MemoryRecord::new_with_defaults(
+            "memory-deferred",
+            mez_agent::memory::MemoryScope::Global,
+            10,
+            10,
+            mez_agent::memory::MemorySource::Agent,
+            50,
+            "deferred memory row",
+        ))
+        .unwrap();
+
+    let show = service
+        .execute_agent_shell_command(&primary, "/show-memories --scope global")
+        .unwrap();
+    assert!(
+        show.contains(r#""body":null"#),
+        "the deferred lane acknowledges /show-memories: {show}"
+    );
+    assert!(
+        service.pending_record_browser_overlays_is_empty(),
+        "the overlay must arrive with the settled outcome"
+    );
+    let body = service
+        .run_pending_deferred_agent_command_for_tests()
+        .unwrap()
+        .expect("the deferred /show-memories browser applies");
+    assert!(body.contains("deferred memory row"), "{body}");
+    let overlay = service
+        .primary_display_overlay()
+        .expect("the deferred memory browser opens its overlay");
+    assert_eq!(
+        overlay
+            .record_browser
+            .as_ref()
+            .expect("the overlay retains the memory browser")
+            .command,
+        "show-memories"
+    );
+
+    // The --save form writes a page file, so it keeps the inline path.
+    let save_path = root.join("memories-page.md");
+    let saved = service
+        .execute_agent_shell_command(
+            &primary,
+            &format!("/show-memories --save {}", save_path.display()),
+        )
+        .unwrap();
+    assert!(saved.contains("show-memories saved path="), "{saved}");
+    assert!(
+        save_path.exists(),
+        "the inline --save form writes its page file"
+    );
     let _ = fs::remove_dir_all(root);
 }
 

@@ -407,9 +407,6 @@ impl RuntimeSessionService {
         pane_id: &str,
         input: &str,
     ) -> Result<AgentShellCommandOutcome> {
-        let slash = parse_slash_command(input)?.ok_or_else(|| {
-            MezError::invalid_args("show-memories command must be a slash command")
-        })?;
         if !self.runtime_persistent_memory_enabled() {
             return Err(MezError::invalid_state(
                 "show-memories requires persistent memory to be enabled; run /memory on first",
@@ -424,72 +421,23 @@ impl RuntimeSessionService {
                 "show-memories requires a configured Mezzanine config root",
             ));
         };
-        let args = parse_show_memories_args(&slash.args)?;
-        let store = crate::storage::memory::PersistentMemoryStore::under_config_root(&config_root);
-        let scope = if args.all_scopes {
-            None
-        } else {
-            Some(
-                args.scope
-                    .unwrap_or_else(|| self.runtime_remember_scope_for_pane(pane_id)),
-            )
-        };
-        let memory_state = Some(args.state.unwrap_or(mez_agent::memory::MemoryState::Active));
-        let source = Some(RuntimeRecordBrowserOverlaySource::Memories {
-            scope: scope.clone(),
-            default_scope: scope.clone(),
-            kind: args.kind,
-            state: memory_state,
-            text: args.text.clone(),
-            limit: args.limit,
-        });
-        let records = if let Some(id) = args.detail_id.as_ref() {
-            vec![store.inspect(id)?]
-        } else {
-            store
-                .search(&MemorySearchRequest {
-                    query: args.text.clone(),
-                    scope: scope.clone(),
-                    kind: args.kind,
-                    state: memory_state,
-                    source: None,
-                    limit: args.limit,
-                })?
-                .into_iter()
-                .map(|result| result.record)
-                .collect()
-        };
-        let mut browser = RecordBrowser::new(
-            if args.detail_id.is_some() {
-                "Memory detail"
-            } else {
-                "Memories"
-            },
-            records.into_iter().map(memory_browser_record).collect(),
-            memory_kind_filter_choices(),
+        let read = read_memory_browser(
+            config_root,
+            self.runtime_remember_scope_for_pane(pane_id),
+            input,
         )?;
-        browser.enable_deletion();
-        configure_memory_record_browser(&mut browser);
-        browser.set_kind_filter_value(args.kind.map(|kind| kind_name(kind).to_string()))?;
-        if let Some(source) = source.as_ref() {
-            set_record_browser_scope_indicator(&mut browser, source);
+        if let Some(path) = read.save_path {
+            return self.save_record_browser_page(pane_id, "show-memories", path, read.markdown);
         }
-        if args.detail_id.is_some() {
-            browser.show_first_record_detail();
-        }
-        let page = browser.render_page();
-        if let Some(path) = args.save_path {
-            return self.save_record_browser_page(
-                pane_id,
-                "show-memories",
-                path,
-                page.raw_markdown,
-            );
-        }
-        self.register_pending_record_browser_overlay(pane_id, "show-memories", browser, source);
+        self.register_pending_record_browser_overlay(
+            pane_id,
+            "show-memories",
+            read.browser,
+            read.source,
+        );
         Ok(AgentShellCommandOutcome::Display {
             command: "show-memories".to_string(),
-            body: page.raw_markdown,
+            body: read.markdown,
         })
     }
 
@@ -1108,6 +1056,106 @@ pub(crate) fn show_issues_args_are_browser_form(input: &str) -> bool {
     };
     matches!(
         parse_show_issues_args(invocation.args.trim()),
+        Ok(args) if args.save_path.is_none()
+    )
+}
+
+/// One `/show-memories` read rendered for whichever lane asked for it.
+pub(crate) struct RuntimeMemoryBrowserRead {
+    /// Browser the actor installs as the pane overlay.
+    pub browser: RecordBrowser,
+    /// Overlay source retained for refreshes and scope indicators.
+    pub source: Option<RuntimeRecordBrowserOverlaySource>,
+    /// Page markdown the response body carries.
+    pub markdown: String,
+    /// `--save` destination argument, when the invocation asked for a page file.
+    pub save_path: Option<String>,
+}
+
+/// Builds the `/show-memories` browser from one persistent-memory read.
+///
+/// The inline handler and the deferred executor share this sequence, so the page,
+/// the overlay, and the scope indicator are identical whichever lane produced
+/// them. `pane_scope` is the pane's effective remember scope, which the caller
+/// resolves while it still owns the pane. Saving is the caller's job: the inline
+/// lane writes the page file, and the deferred gate keeps the `--save` form there.
+pub(crate) fn read_memory_browser(
+    config_root: std::path::PathBuf,
+    pane_scope: mez_agent::memory::MemoryScope,
+    input: &str,
+) -> Result<RuntimeMemoryBrowserRead> {
+    let slash = parse_slash_command(input)?
+        .ok_or_else(|| MezError::invalid_args("show-memories command must be a slash command"))?;
+    let args = parse_show_memories_args(&slash.args)?;
+    let store = crate::storage::memory::PersistentMemoryStore::under_config_root(&config_root);
+    let scope = if args.all_scopes {
+        None
+    } else {
+        Some(args.scope.unwrap_or(pane_scope))
+    };
+    let memory_state = Some(args.state.unwrap_or(mez_agent::memory::MemoryState::Active));
+    let source = Some(RuntimeRecordBrowserOverlaySource::Memories {
+        scope: scope.clone(),
+        default_scope: scope.clone(),
+        kind: args.kind,
+        state: memory_state,
+        text: args.text.clone(),
+        limit: args.limit,
+    });
+    let records = if let Some(id) = args.detail_id.as_ref() {
+        vec![store.inspect(id)?]
+    } else {
+        store
+            .search(&MemorySearchRequest {
+                query: args.text.clone(),
+                scope: scope.clone(),
+                kind: args.kind,
+                state: memory_state,
+                source: None,
+                limit: args.limit,
+            })?
+            .into_iter()
+            .map(|result| result.record)
+            .collect()
+    };
+    let mut browser = RecordBrowser::new(
+        if args.detail_id.is_some() {
+            "Memory detail"
+        } else {
+            "Memories"
+        },
+        records.into_iter().map(memory_browser_record).collect(),
+        memory_kind_filter_choices(),
+    )?;
+    browser.enable_deletion();
+    configure_memory_record_browser(&mut browser);
+    browser.set_kind_filter_value(args.kind.map(|kind| kind_name(kind).to_string()))?;
+    if let Some(source) = source.as_ref() {
+        set_record_browser_scope_indicator(&mut browser, source);
+    }
+    if args.detail_id.is_some() {
+        browser.show_first_record_detail();
+    }
+    let page = browser.render_page();
+    Ok(RuntimeMemoryBrowserRead {
+        browser,
+        source,
+        markdown: page.raw_markdown,
+        save_path: args.save_path,
+    })
+}
+
+/// Reports whether one `/show-memories` invocation renders a browser overlay.
+///
+/// The `--save` form writes a page file, so it keeps running inline until the
+/// deferred outcome can carry a mutation body the way the browser form carries
+/// the overlay.
+pub(crate) fn show_memories_args_are_browser_form(input: &str) -> bool {
+    let Ok(Some(invocation)) = parse_slash_command(input) else {
+        return false;
+    };
+    matches!(
+        parse_show_memories_args(invocation.args.trim()),
         Ok(args) if args.save_path.is_none()
     )
 }

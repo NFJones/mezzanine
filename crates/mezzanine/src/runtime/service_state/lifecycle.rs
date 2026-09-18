@@ -245,6 +245,18 @@ pub(crate) enum RuntimeAgentCommandPrepared {
         /// Project key the browser is scoped to by default.
         project: String,
     },
+    /// Builds the persistent-memory browser from the captured store read.
+    ///
+    /// `/show-memories` searches the persistent-memory store and renders a record
+    /// browser; the worker does both, and the actor installs the browser overlay
+    /// when the outcome settles. The `--save` form keeps the inline path because it
+    /// also writes a page file.
+    MemoryBrowser {
+        /// Configured Mezzanine config root whose memory store is read.
+        config_root: std::path::PathBuf,
+        /// Pane's effective remember scope when the invocation does not name one.
+        pane_scope: mez_agent::memory::MemoryScope,
+    },
 }
 
 /// Result a worker prepares for the actor to apply.

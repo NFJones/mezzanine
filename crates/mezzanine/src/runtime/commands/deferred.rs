@@ -36,6 +36,7 @@ pub(crate) const RUNTIME_AGENT_OFF_ACTOR_COMMANDS: &[&str] = &[
     "auth-status",
     "issue",
     "show-issues",
+    "show-memories",
 ];
 
 /// Prepared-input family one moved slash command consumes off the actor.
@@ -49,6 +50,8 @@ pub(crate) enum RuntimeAgentCommandFamily {
     IssueStore,
     /// Local issue browser reads.
     IssueBrowser,
+    /// Persistent-memory browser reads.
+    MemoryBrowser,
 }
 
 /// Returns the prepared-input family for one moved command.
@@ -63,6 +66,7 @@ pub(crate) fn off_actor_command_family(command: &str) -> Option<RuntimeAgentComm
         "auth-status" => Some(RuntimeAgentCommandFamily::AuthStatus),
         "issue" => Some(RuntimeAgentCommandFamily::IssueStore),
         "show-issues" => Some(RuntimeAgentCommandFamily::IssueBrowser),
+        "show-memories" => Some(RuntimeAgentCommandFamily::MemoryBrowser),
         _ => None,
     }
 }
@@ -117,6 +121,11 @@ impl RuntimeSessionService {
                 super::issues::runtime_issues_enabled(self)
                     && self.integration.config_root().is_some()
                     && super::show_records::show_issues_args_are_browser_form(input)
+            }
+            "show-memories" => {
+                self.runtime_persistent_memory_enabled()
+                    && self.integration.config_root().is_some()
+                    && super::show_records::show_memories_args_are_browser_form(input)
             }
             _ => true,
         }
@@ -240,6 +249,19 @@ impl RuntimeSessionService {
                     ),
                 }
             }
+            RuntimeAgentCommandFamily::MemoryBrowser => {
+                let Some(config_root) = self
+                    .integration
+                    .config_root()
+                    .map(std::path::Path::to_path_buf)
+                else {
+                    return Ok(None);
+                };
+                RuntimeAgentCommandPrepared::MemoryBrowser {
+                    config_root,
+                    pane_scope: self.runtime_remember_scope_for_pane(pane_id),
+                }
+            }
         };
         Ok(Some(RuntimeAgentCommandAsyncWork {
             pane_id: pane_id.to_string(),
@@ -340,6 +362,37 @@ impl RuntimeSessionService {
                                 Some(&outcome),
                             ),
                             command: "show-issues".to_string(),
+                            browser: Box::new(read.browser),
+                            source: read.source,
+                        }
+                    }
+                    Err(error) => RuntimeAgentCommandAsyncOutcome::Failed {
+                        message: error.message().to_string(),
+                        kind: error.kind(),
+                    },
+                };
+            }
+            RuntimeAgentCommandPrepared::MemoryBrowser {
+                config_root,
+                pane_scope,
+            } => {
+                return match super::show_records::read_memory_browser(
+                    config_root.clone(),
+                    pane_scope.clone(),
+                    &work.input,
+                ) {
+                    Ok(read) => {
+                        let outcome = AgentShellCommandOutcome::Display {
+                            command: "show-memories".to_string(),
+                            body: read.markdown,
+                        };
+                        RuntimeAgentCommandAsyncOutcome::RecordBrowser {
+                            body: runtime_agent_shell_command_response_json(
+                                &work.pane_id,
+                                &work.input,
+                                Some(&outcome),
+                            ),
+                            command: "show-memories".to_string(),
                             browser: Box::new(read.browser),
                             source: read.source,
                         }
