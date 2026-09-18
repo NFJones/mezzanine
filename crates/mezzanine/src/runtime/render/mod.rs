@@ -501,6 +501,8 @@ pub(crate) struct RuntimePresentationComponent {
         (mez_core::ids::ClientId, String),
         RuntimeAgentSelectorCandidateRefresh,
     >,
+    /// Bounded selector-refresh workers owned by this presentation state.
+    agent_prompt_selector_refresh_pool: Option<selector_pool::RuntimeAgentSelectorRefreshPool>,
     /// Pane-local owner-aware transient shell-output projections.
     agent_shell_output_previews:
         std::collections::BTreeMap<String, RuntimeAgentShellPreviewPresentation>,
@@ -2740,6 +2742,23 @@ impl RuntimeSessionService {
         self.presentation.agent_prompt_inputs.clear();
         self.presentation.agent_prompt_selector_refreshes.clear();
         self.presentation.external_agent_prompt_edits.clear();
+        if let Some(pool) = self
+            .presentation
+            .agent_prompt_selector_refresh_pool
+            .as_mut()
+        {
+            pool.shutdown();
+        }
+        self.presentation.agent_prompt_selector_refresh_pool = None;
+    }
+
+    /// Returns the selector-refresh pool, starting it on first use.
+    pub(crate) fn agent_prompt_selector_refresh_pool(
+        &mut self,
+    ) -> &mut selector_pool::RuntimeAgentSelectorRefreshPool {
+        self.presentation
+            .agent_prompt_selector_refresh_pool
+            .get_or_insert_with(selector_pool::RuntimeAgentSelectorRefreshPool::new)
     }
 
     /// Drains command-backed status pill refreshes scheduled during rendering.
@@ -3028,6 +3047,7 @@ mod mux;
 mod overlay;
 mod paste;
 mod presentation;
+mod selector_pool;
 pub(crate) use presentation::{
     PeerMessagePresentation, peer_message_presentation_receive_identity,
 };

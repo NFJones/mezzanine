@@ -792,34 +792,42 @@ impl RuntimeSessionService {
         let transcript_store = self.persistence.cloned_transcript_store();
         let session_title_policy = self.agent_session_title_policy();
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-        self.presentation.agent_prompt_selector_refreshes.insert(
+        let snapshot = super::selector_pool::RuntimeAgentSelectorRefreshSnapshot {
+            candidates,
+            user_config_root,
+            project_root,
+            issue_database_path,
+            transcript_store,
+            session_title_policy,
+            #[cfg(test)]
+            test_gate: None,
+        };
+        let outcome = self.agent_prompt_selector_refresh_pool().submit(
             refresh_key.clone(),
-            super::RuntimeAgentSelectorCandidateRefresh {
-                generation,
-                receiver,
-            },
+            generation,
+            snapshot,
+            sender,
         );
-        let spawn = std::thread::Builder::new()
-            .name("mez-selector-refresh".to_string())
-            .spawn(move || {
-                let candidates = runtime_agent_selector_extra_candidates_from_snapshot(
-                    candidates,
-                    user_config_root,
-                    project_root,
-                    issue_database_path,
-                    transcript_store,
-                    session_title_policy,
+        match outcome {
+            super::selector_pool::RuntimeAgentSelectorRefreshOutcome::Queued => {
+                self.presentation.agent_prompt_selector_refreshes.insert(
+                    refresh_key,
+                    super::RuntimeAgentSelectorCandidateRefresh {
+                        generation,
+                        receiver,
+                    },
                 );
-                let _ = sender.send(candidates);
-            });
-        if spawn.is_err() {
-            self.presentation
-                .agent_prompt_selector_refreshes
-                .remove(&refresh_key);
-            if let Some(state) = self.presentation.agent_prompt_inputs.get_mut(pane_id)
-                && state.selector_extra_candidates_generation == generation
-            {
-                state.selector_extra_candidates_loaded = true;
+            }
+            // The pool is busy: keep the prior candidates and leave the prompt
+            // unloaded for this generation, so a later invalidation or poll
+            // resubmits instead of queueing another catalog walk.
+            super::selector_pool::RuntimeAgentSelectorRefreshOutcome::Saturated => {}
+            super::selector_pool::RuntimeAgentSelectorRefreshOutcome::Stopped => {
+                if let Some(state) = self.presentation.agent_prompt_inputs.get_mut(pane_id)
+                    && state.selector_extra_candidates_generation == generation
+                {
+                    state.selector_extra_candidates_loaded = true;
+                }
             }
         }
     }
@@ -914,7 +922,7 @@ impl RuntimeSessionService {
 ///
 /// This function is intentionally independent of `RuntimeSessionService` so it
 /// can run on a blocking worker without touching serialized actor-owned state.
-fn runtime_agent_selector_extra_candidates_from_snapshot(
+pub(super) fn runtime_agent_selector_extra_candidates_from_snapshot(
     mut candidates: Vec<SelectorExtraCandidate>,
     user_config_root: Option<std::path::PathBuf>,
     project_root: Option<std::path::PathBuf>,
