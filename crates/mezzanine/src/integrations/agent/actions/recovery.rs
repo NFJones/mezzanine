@@ -20,11 +20,14 @@ use mez_agent::{
 
 /// Reports whether a provider error came from malformed model MAAP output that
 /// can be repaired by asking the same model to re-emit the action batch.
+///
+/// Both accepted forms are crate-owned diagnostics the provider boundary writes
+/// when the model's output could not be parsed, so repair does not depend on an
+/// attached raw excerpt: the excerpt only enriches the repair evidence, and
+/// requiring it classified an identical malformed output as terminal whenever the
+/// boundary withheld the text.
 pub(crate) fn maap_provider_error_is_repairable(error: &MezError) -> bool {
-    error
-        .message()
-        .starts_with("provider MAAP output is malformed:")
-        && error.provider_raw_text().is_some()
+    mez_agent::provider_error_is_malformed_maap_output(error.message())
         || error.message().contains(
             "assistant message with 'tool_calls' must be followed by tool messages responding to each 'tool_call_id'",
         )

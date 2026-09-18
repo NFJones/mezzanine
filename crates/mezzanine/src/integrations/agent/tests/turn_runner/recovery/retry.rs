@@ -98,6 +98,80 @@ fn turn_runner_retries_malformed_provider_maap_output() {
 }
 
 #[test]
+/// Verifies malformed provider MAAP output is repairable without an excerpt.
+///
+/// The malformed-output diagnostic is crate-owned text the provider boundary
+/// writes when the model's output could not be parsed, and the repair request's
+/// excerpt only enriches the evidence. Coupling repairability to an attached
+/// excerpt classified the same malformed output as terminal whenever the boundary
+/// withheld the text, so this turn shape must still reach the repair request.
+fn turn_runner_repairs_malformed_provider_maap_output_without_raw_excerpt() {
+    let turn = turn();
+    let malformed =
+        crate::MezError::invalid_args("provider MAAP output is malformed: missing required field");
+    let corrected = ModelResponse {
+        provider: "batch".to_string(),
+        model: "test".to_string(),
+        raw_text: "corrected malformed response".to_string(),
+        usage: Default::default(),
+        latest_request_usage: None,
+        quota_usage: Default::default(),
+        action_batch: Some(MaapBatch {
+            rationale: "test action batch rationale".to_string(),
+            actions: vec![say_action("say-1", "Corrected.")],
+        }),
+        provider_transcript_events: Vec::new(),
+    };
+    let provider = SequencedProvider::new(vec![Err(malformed), Ok(corrected)]);
+    let policy = PermissionPolicy::default();
+    let approvals = SessionApprovalStore::default();
+    let mut ledger = AgentTurnLedger::new(false);
+    let runner = AgentTurnRunner {
+        provider: &provider,
+        model_profile: ModelProfile {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            model_capabilities: Default::default(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        permissions: &crate::security::permissions::ProductPermissionPlanning::new(
+            &policy, &approvals, None,
+        ),
+        subagent_scope: None,
+        subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
+        available_mcp_servers: Vec::new(),
+        available_mcp_tools: &[],
+        memory_actions_enabled: false,
+        issue_actions_enabled: true,
+    };
+
+    let execution = runner
+        .run_turn(
+            &mut ledger,
+            turn,
+            AgentContext::new(vec![ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: "user".to_string(),
+                content: "reply".to_string(),
+            }])
+            .unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    let requests = provider.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "a malformed output without an excerpt must still reach a repair request"
+    );
+}
+#[test]
 /// Verifies exhausted malformed-output repairs still report the provider cause.
 ///
 /// The bounded MAAP repair budget accepts two corrective requests. When the
