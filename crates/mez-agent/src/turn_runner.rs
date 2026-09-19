@@ -17,8 +17,8 @@ use crate::{
     BatchContinuationInput, BatchContinuationPlan, BatchValidationFailure, MaapBatch,
     McpPromptTool, ModelInteractionKind, ModelMessage, ModelRequest, ModelResponse,
     ProviderErrorRetryClass, ProviderResponseAcceptance, append_maap_repair_evidence,
-    apply_default_action_gates, failed_turn_execution_without_batch, maap_repair_request,
-    plan_batch_continuation, plan_turn_execution_from_batch,
+    apply_default_action_gates, maap_repair_request, plan_batch_continuation,
+    plan_turn_execution_from_batch,
 };
 
 /// Default number of ephemeral repairs accepted during one provider negotiation phase.
@@ -112,6 +112,18 @@ pub trait AgentTurnEnvironment {
         turn: &AgentTurnRecord,
         action: &AgentAction,
     ) -> Result<ActionResult, Self::Error>;
+
+    /// Reports whether one action-planning error is correctable by re-emitting.
+    ///
+    /// Planning runs before the turn executes, so a repairable planning failure
+    /// spends the same bounded recovery budget a batch-validation failure does.
+    /// Every other kind stays terminal, which keeps controller invariants
+    /// (missing internal plan inputs, controller-owned payloads) out of the
+    /// model's repair surface; environments that never repair planning keep the
+    /// default.
+    fn planning_error_is_repairable(&self, _error: &Self::Error) -> bool {
+        false
+    }
 
     /// Constructs a product invalid-argument error without coupling the lower crate to it.
     fn invalid_args(&self, message: String) -> Self::Error;
@@ -210,7 +222,7 @@ pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
     let mut continuation_signatures = BTreeSet::new();
     let mut previous_request = environment.previous_request().cloned();
 
-    let mut response = loop {
+    let execution = loop {
         if provider_interactions >= limits.max_provider_interactions {
             project_ledger_result(ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed))?;
             return Err(environment.invalid_state(format!(
@@ -417,7 +429,61 @@ pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
                 request = *next_request;
                 continue;
             }
-            Ok(BatchContinuationPlan::Execute) => break response,
+            Ok(BatchContinuationPlan::Execute) => {
+                response.usage = negotiation.cumulative_response_usage();
+                response.quota_usage = negotiation.latest_quota_usage().to_vec();
+                // Planning is the last step before execution, and the model can
+                // correct a repairable planning failure by re-emitting the batch:
+                // route it through the same bounded recovery budget the validation
+                // failures spend. Every other kind keeps its terminal error.
+                match plan_turn_execution_from_batch(
+                    &turn,
+                    context,
+                    negotiation.durable_request().clone(),
+                    response.clone(),
+                    negotiation.latest_response_usage(),
+                    batch,
+                    |action| environment.plan_action_result(&turn, action),
+                ) {
+                    Ok(execution) => break execution,
+                    Err(error) => {
+                        if environment.planning_error_is_repairable(&error)
+                            && negotiation.record_recovery_attempt()
+                        {
+                            let attempt = negotiation.recovery_attempts();
+                            negotiation.update_durable_request(|durable_request| {
+                                append_maap_repair_evidence(
+                                    durable_request,
+                                    environment.error_message(&error),
+                                    attempt,
+                                );
+                            });
+                            request = maap_repair_request(
+                                &response_request,
+                                environment.error_message(&error),
+                                &response.raw_text,
+                                attempt,
+                            );
+                            continue;
+                        }
+                        project_ledger_result(
+                            ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed),
+                        )?;
+                        response.usage = negotiation.cumulative_response_usage();
+                        response.quota_usage = negotiation.latest_quota_usage().to_vec();
+                        return Ok(failed_validation_execution_with_summary(
+                            environment,
+                            &turn,
+                            negotiation.durable_request().clone(),
+                            response,
+                            negotiation.latest_response_usage(),
+                            &error,
+                            "action_planning",
+                        )
+                        .await);
+                    }
+                }
+            }
             Err(rejection) => {
                 let error = match rejection.error {
                     BatchContinuationError::Recovery(error) => {
@@ -442,26 +508,6 @@ pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
         }
     };
 
-    response.usage = negotiation.cumulative_response_usage();
-    response.quota_usage = negotiation.latest_quota_usage().to_vec();
-    let Some(batch) = response.action_batch.clone() else {
-        project_ledger_result(ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed))?;
-        return Ok(failed_turn_execution_without_batch(
-            negotiation.durable_request().clone(),
-            response,
-            negotiation.latest_response_usage(),
-        ));
-    };
-
-    let execution = plan_turn_execution_from_batch(
-        &turn,
-        context,
-        negotiation.durable_request().clone(),
-        response,
-        negotiation.latest_response_usage(),
-        &batch,
-        |action| environment.plan_action_result(&turn, action),
-    )?;
     if execution.terminal_state != AgentTurnState::Running {
         project_ledger_result(ledger.finish_turn(&turn.turn_id, execution.terminal_state))?;
     }
@@ -633,6 +679,19 @@ mod tests {
         requests: RefCell<Vec<ModelRequest>>,
     }
 
+    thread_local! {
+        /// Planning failure injected into the fake environment for one regression.
+        ///
+        /// Every turn regression shares the same fake environment struct, so the
+        /// injection is kept beside the tests instead of widening each literal: the
+        /// value carries the model-facing message and whether the environment
+        /// classifies that failure as repairable. The fake environment reports the
+        /// failure only until the first repair request is recorded, so a repaired
+        /// turn can then complete.
+        static INJECTED_PLANNING_FAILURE: RefCell<Option<(String, bool)>> =
+            const { RefCell::new(None) };
+    }
+
     impl AgentTurnEnvironment for FakeEnvironment {
         type Error = TestError;
 
@@ -718,12 +777,26 @@ mod tests {
             turn: &AgentTurnRecord,
             action: &AgentAction,
         ) -> Result<ActionResult, Self::Error> {
+            let injected = INJECTED_PLANNING_FAILURE.with(|slot| slot.borrow().clone());
+            if let Some((message, _)) = injected
+                && self.requests.borrow().len() < 2
+            {
+                return Err(TestError(message));
+            }
             Ok(ActionResult::succeeded(
                 turn,
                 action,
                 vec!["completed".to_string()],
                 None,
             ))
+        }
+
+        fn planning_error_is_repairable(&self, _error: &Self::Error) -> bool {
+            INJECTED_PLANNING_FAILURE.with(|slot| {
+                slot.borrow()
+                    .as_ref()
+                    .is_some_and(|(_, repairable)| *repairable)
+            })
         }
 
         fn invalid_args(&self, message: String) -> Self::Error {
@@ -1215,6 +1288,93 @@ mod tests {
         assert_eq!(execution.terminal_state, AgentTurnState::Completed);
         assert!(execution.response.action_batch.is_none());
         assert_eq!(execution.response.raw_text, handoff);
+        assert_eq!(environment.requests.borrow().len(), 1);
+    }
+
+    /// Verifies a repairable planning failure spends one bounded repair round.
+    ///
+    /// Planning runs before any action executes, so a failure the model can
+    /// correct by re-emitting the batch must produce a second provider request
+    /// carrying the repair evidence instead of ending the turn with a terminal
+    /// error, and the repaired turn must then be able to complete.
+    #[test]
+    fn repairable_planning_failure_repairs_before_execution() {
+        let turn = test_turn();
+        let environment = FakeEnvironment {
+            responses: RefCell::new(VecDeque::from([
+                final_response(&turn),
+                final_response(&turn),
+            ])),
+            requests: RefCell::new(Vec::new()),
+        };
+        INJECTED_PLANNING_FAILURE.with(|slot| {
+            *slot.borrow_mut() = Some(("the batch cannot be planned yet".to_string(), true));
+        });
+        let mut ledger = AgentTurnLedger::new(false);
+
+        let execution = run_ready(run_agent_turn_async(
+            &environment,
+            &mut ledger,
+            turn,
+            &test_context(),
+            None,
+            None,
+        ));
+        INJECTED_PLANNING_FAILURE.with(|slot| *slot.borrow_mut() = None);
+        let execution = execution.expect("a repaired planning failure should complete the turn");
+
+        assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+        let requests = environment.requests.borrow();
+        assert_eq!(
+            requests.len(),
+            2,
+            "the repairable planning failure re-asks the provider once"
+        );
+        assert!(
+            requests[1]
+                .messages
+                .iter()
+                .any(|message| message.content.contains("MAAP repair evidence")),
+            "the repaired request carries the planning diagnostic"
+        );
+    }
+
+    /// Verifies a controller-invariant planning failure stays terminal.
+    ///
+    /// Only failures the model can fix by re-emitting the batch may spend a
+    /// repair round; a failure the environment does not classify as repairable
+    /// must end the turn with its own diagnostic and no second request.
+    #[test]
+    fn non_repairable_planning_failure_terminates_without_repair() {
+        let turn = test_turn();
+        let environment = FakeEnvironment {
+            responses: RefCell::new(VecDeque::from([final_response(&turn)])),
+            requests: RefCell::new(Vec::new()),
+        };
+        INJECTED_PLANNING_FAILURE.with(|slot| {
+            *slot.borrow_mut() = Some(("planning inputs are missing".to_string(), false));
+        });
+        let mut ledger = AgentTurnLedger::new(false);
+
+        let execution = run_ready(run_agent_turn_async(
+            &environment,
+            &mut ledger,
+            turn,
+            &test_context(),
+            None,
+            None,
+        ));
+        INJECTED_PLANNING_FAILURE.with(|slot| *slot.borrow_mut() = None);
+        let execution = execution.expect("a terminal planning failure returns a failed execution");
+
+        assert_eq!(execution.terminal_state, AgentTurnState::Failed);
+        assert!(
+            execution
+                .response
+                .raw_text
+                .contains("planning inputs are missing"),
+            "the terminal failure keeps the planning diagnostic"
+        );
         assert_eq!(environment.requests.borrow().len(), 1);
     }
 }

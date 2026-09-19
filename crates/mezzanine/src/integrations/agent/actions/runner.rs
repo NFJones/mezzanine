@@ -26,6 +26,7 @@ use super::recovery::{
 use super::recovery::{
     summarize_controller_failure_execution, summarize_provider_failure_execution,
 };
+use crate::error::MezErrorKind;
 #[cfg(test)]
 use crate::integrations::agent::provider::ModelProvider;
 #[cfg(test)]
@@ -123,6 +124,16 @@ impl<P: ModelProvider> AgentTurnEnvironment for SyncProductAgentTurnEnvironment<
             &self.runner.available_mcp_servers,
             self.runner.available_mcp_tools,
         )?)
+    }
+
+    /// Routes a product-repairable planning failure into the recovery budget.
+    ///
+    /// The product planner reports model-correctable planning failures as invalid
+    /// arguments - the harness shell-source policy and the subagent scope enforcer
+    /// own that classification - while controller invariants keep their invalid
+    /// state, so only the model's own re-emittable mistakes reach the repair path.
+    fn planning_error_is_repairable(&self, error: &MezError) -> bool {
+        error.kind() == MezErrorKind::InvalidArgs
     }
 
     fn plan_action_result(
@@ -452,6 +463,16 @@ impl<P: AsyncModelProvider> AgentTurnEnvironment for ProductAgentTurnEnvironment
             &self.runner.available_mcp_servers,
             self.runner.available_mcp_tools,
         )?)
+    }
+
+    /// Routes a product-repairable planning failure into the recovery budget.
+    ///
+    /// The product planner reports model-correctable planning failures as invalid
+    /// arguments - the harness shell-source policy and the subagent scope enforcer
+    /// own that classification - while controller invariants keep their invalid
+    /// state, so only the model's own re-emittable mistakes reach the repair path.
+    fn planning_error_is_repairable(&self, error: &MezError) -> bool {
+        error.kind() == MezErrorKind::InvalidArgs
     }
 
     fn plan_action_result(
