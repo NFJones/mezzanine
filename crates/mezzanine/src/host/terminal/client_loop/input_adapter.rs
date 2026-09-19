@@ -17,6 +17,46 @@ use mez_mux::input::{
     classify_terminal_input_with_command_bindings, key_chord_input_bytes, parse_key_chord_bytes,
 };
 
+/// Splits one ordinary copy-mode read into its complete key chords.
+///
+/// A held key arrives as a rapid run of complete chords inside one client read,
+/// and the copy-mode classifier accepts exactly one chord, so an unsplit run is
+/// either discarded or forwarded into the pane. Returns `None` unless the read
+/// is a multi-chord run of complete chords, which keeps single chords,
+/// incomplete escapes, and every non-copy-mode read on the existing path.
+fn split_complete_copy_mode_chords(input: &[u8]) -> Option<Vec<&[u8]>> {
+    let mut chords = Vec::new();
+    let mut remaining = input;
+    while !remaining.is_empty() {
+        let (_, consumed) = parse_key_chord_bytes(remaining)?;
+        if consumed == 0 || consumed > remaining.len() {
+            return None;
+        }
+        let (chord, rest) = remaining.split_at(consumed);
+        chords.push(chord);
+        remaining = rest;
+    }
+    (chords.len() > 1).then_some(chords)
+}
+
+/// Routes one ordinary input segment, chord by chord while copy mode owns it.
+fn push_ordinary_client_input_actions(
+    actions: &mut Vec<TerminalClientLoopAction>,
+    input: &[u8],
+    config: &TerminalClientLoopConfig,
+) -> Result<()> {
+    if config.mouse_policy.copy_mode_active
+        && let Some(chords) = split_complete_copy_mode_chords(input)
+    {
+        for chord in chords {
+            actions.push(route_client_input(chord, config)?);
+        }
+        return Ok(());
+    }
+    actions.push(route_client_input(input, config)?);
+    Ok(())
+}
+
 /// Routes one host-input unit into a product terminal-loop action.
 pub fn route_client_input(
     input: &[u8],
@@ -411,12 +451,12 @@ pub(crate) fn route_client_input_actions_with_host_paste_state(
             .and_then(|prefix| input_sequence_start(remaining, prefix));
         let Some(special_start) = earliest_sequence_start([paste_start, mouse_start, prefix_start])
         else {
-            actions.push(route_client_input(remaining, &config)?);
+            push_ordinary_client_input_actions(&mut actions, remaining, &config)?;
             break;
         };
 
         if special_start > 0 {
-            actions.push(route_client_input(&remaining[..special_start], &config)?);
+            push_ordinary_client_input_actions(&mut actions, &remaining[..special_start], &config)?;
             remaining = &remaining[special_start..];
             continue;
         }

@@ -1125,3 +1125,66 @@ fn client_loop_routes_copy_mode_keys_without_forwarding_to_pane() {
         TerminalClientLoopAction::HandleCopyMode(CopyModeKeyAction::Ignore)
     );
 }
+
+/// Verifies batched copy-mode arrow repeats each move the copy cursor.
+///
+/// A held arrow key arrives as a rapid run of complete chords inside one host
+/// read, and copy mode classifies exactly one chord at a time, so the client
+/// loop has to split the run before routing: every repeat must become its own
+/// copy-mode move instead of the whole read collapsing into one ignored action.
+#[test]
+fn client_loop_repeats_batched_copy_mode_arrows() {
+    let mut config = TerminalClientLoopConfig::default();
+    config.mouse_policy.copy_mode_active = true;
+
+    assert_eq!(
+        route_client_input_actions(b"\x1b[B\x1b[B\x1b[B", &config).unwrap(),
+        vec![
+            TerminalClientLoopAction::HandleCopyMode(CopyModeKeyAction::MoveDown),
+            TerminalClientLoopAction::HandleCopyMode(CopyModeKeyAction::MoveDown),
+            TerminalClientLoopAction::HandleCopyMode(CopyModeKeyAction::MoveDown),
+        ]
+    );
+}
+
+/// Verifies batched copy-mode arrows never leak into the pane under the view.
+///
+/// The scrollback branch hands input copy mode does not classify to the general
+/// classifier, which forwards a multi-chord read into the pane; splitting the
+/// run first keeps copy mode's precedence over pane forwarding for every repeat.
+#[test]
+fn client_loop_repeats_batched_copy_mode_arrows_in_scrollback() {
+    let mut config = TerminalClientLoopConfig::default();
+    config.mouse_policy.copy_mode_active = true;
+    config.scrollback_copy_mode_active = true;
+
+    assert_eq!(
+        route_client_input_actions(b"\x1b[B\x1b[B\x1b[B", &config).unwrap(),
+        vec![
+            TerminalClientLoopAction::HandleCopyMode(CopyModeKeyAction::MoveDown),
+            TerminalClientLoopAction::HandleCopyMode(CopyModeKeyAction::MoveDown),
+            TerminalClientLoopAction::HandleCopyMode(CopyModeKeyAction::MoveDown),
+        ]
+    );
+}
+
+/// Verifies ordinary bytes in batched copy-mode input keep their own routing.
+///
+/// Splitting a held-key run must not change what a key copy mode does not own
+/// does: an unclassified byte such as `q` still forwards to the pane while the
+/// moves around it stay copy-mode actions.
+#[test]
+fn client_loop_forwards_ordinary_bytes_in_batched_copy_mode_input() {
+    let mut config = TerminalClientLoopConfig::default();
+    config.mouse_policy.copy_mode_active = true;
+    config.scrollback_copy_mode_active = true;
+
+    assert_eq!(
+        route_client_input_actions(b"\x1b[Bq\x1b[B", &config).unwrap(),
+        vec![
+            TerminalClientLoopAction::HandleCopyMode(CopyModeKeyAction::MoveDown),
+            TerminalClientLoopAction::ForwardToPane(b"q".to_vec()),
+            TerminalClientLoopAction::HandleCopyMode(CopyModeKeyAction::MoveDown),
+        ]
+    );
+}
