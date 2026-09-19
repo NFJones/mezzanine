@@ -65,10 +65,11 @@ pub use client_loop::AttachedTerminalClientLoopIo;
 pub use client_loop::route_client_input;
 pub(crate) use client_loop::route_client_input_actions;
 pub use client_loop::{
-    AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS, AttachedTerminalClientLoopConfig,
-    AttachedTerminalClientLoopReport, AttachedTerminalClientStepPlan,
-    ReadlinePromptClientPresentation, ReadlinePromptStatusRow, TerminalClientLoopAction,
-    attached_terminal_output_disconnected, plan_attached_terminal_client_step,
+    AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS, AGENT_STATUS_WAVE_REFRESH_INTERVAL_MS,
+    AttachedTerminalClientLoopConfig, AttachedTerminalClientLoopReport,
+    AttachedTerminalClientStepPlan, ReadlinePromptClientPresentation, ReadlinePromptStatusRow,
+    TerminalClientLoopAction, attached_terminal_output_disconnected,
+    plan_attached_terminal_client_step,
 };
 pub(crate) use client_loop::{
     HostBracketedPasteBufferState, plan_attached_terminal_client_step_with_host_paste_buffer,

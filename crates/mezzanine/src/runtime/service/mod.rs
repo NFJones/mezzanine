@@ -4,7 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use crate::host::terminal::AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS;
+use crate::host::terminal::AGENT_STATUS_WAVE_REFRESH_INTERVAL_MS;
 
 use super::{
     AgentLogLevel, AgentSessionMetadata, AgentShellVisibility, AgentTranscriptStore,
@@ -118,8 +118,10 @@ fn runtime_status_refresh_required_by_config(config: &TerminalClientLoopConfig) 
 
 /// Returns the periodic status-refresh interval for one terminal configuration.
 fn runtime_status_refresh_interval_ms_for_config(config: &TerminalClientLoopConfig) -> u64 {
-    if config.frame_context.animation_tick_ms > 0 {
-        AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS
+    if config.frame_context.agent_status_wave_active {
+        AGENT_STATUS_WAVE_REFRESH_INTERVAL_MS
+    } else if config.frame_context.animation_tick_ms > 0 {
+        crate::host::terminal::AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS
     } else {
         DEFAULT_STATUS_REFRESH_INTERVAL_MS
     }

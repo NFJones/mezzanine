@@ -1448,6 +1448,8 @@ impl RuntimeSessionService {
             session_id: Some(self.session.id.to_string()),
             pressed_window_action: self.presentation.pressed_window_action.clone(),
             animation_tick_ms: self.runtime_frame_animation_tick_ms(),
+            agent_status_wave_active: !self.presentation.settings.terminal_reduced_motion
+                && self.active_window_has_agent_animation(),
             reduced_motion: self.presentation.settings.terminal_reduced_motion,
             completion_attention_static: !self
                 .presentation

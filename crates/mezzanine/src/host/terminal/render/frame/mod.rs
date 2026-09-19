@@ -36,9 +36,10 @@ pub(crate) use pane::{
 #[cfg(test)]
 pub(in crate::host::terminal::render) use style::group_frame_text;
 pub(in crate::host::terminal::render) use style::{
-    AGENT_STATUS_SCAN_BAND_WIDTH, frame_pill_color_overridden_rendition, pane_border_rendition,
-    pane_frame_rendition, pane_frame_right_status_style_spans, styled_group_frame_line,
-    styled_pane_frame_line, styled_window_frame_line, window_pillbox_rendition,
+    AGENT_STATUS_WAVE_INTENSITY_MAX, agent_status_scan_column,
+    frame_pill_color_overridden_rendition, pane_border_rendition, pane_frame_rendition,
+    pane_frame_right_status_style_spans, styled_group_frame_line, styled_pane_frame_line,
+    styled_window_frame_line, window_pillbox_rendition,
 };
 pub(crate) use window::window_iroh_status_slot_layout;
 pub(in crate::host::terminal::render) use window::{

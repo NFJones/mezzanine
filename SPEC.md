@@ -3970,6 +3970,10 @@ frame/status animations MUST render as static UI while preserving the same
 semantic status text and color category.
 Completion-attention title pills MUST use their stable attention color instead
 of flashing while reduced motion is enabled.
+When reduced motion is disabled, active-agent status waves MUST repaint
+independently of completion attention: their moving phase uses a 60 ms repaint
+cadence and advances one terminal cell every 180 ms, while completion-attention
+flashing remains on its slower 400 ms phase.
 
 `terminal.streaming_output` MUST default to true. When true, Mezzanine MAY
 render provisional provider `say` output incrementally while a response is

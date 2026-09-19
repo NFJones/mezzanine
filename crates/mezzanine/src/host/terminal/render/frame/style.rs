@@ -3,12 +3,13 @@
 #[cfg(test)]
 use super::super::fit_width;
 use super::super::{
-    AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS, DEFAULT_WINDOW_FRAME_TEMPLATE, GraphicRendition,
-    TerminalFrameContext, TerminalFrameStyle, TerminalStyleSpan, TerminalStyledLine, UiColorPair,
-    UiTheme, Window, agent_status_running_gradient_palette, animated_scan_background,
-    blend_terminal_color, compose_frame_pillbox_row, contrasting_binary_foreground,
-    frame_style_rendition, gradient_highlight_for_offset, group_frame_visible,
-    neutral_surface_step, push_or_extend_style_span, styled_frame_line_with_rendition,
+    AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS, AGENT_STATUS_WAVE_REFRESH_INTERVAL_MS,
+    DEFAULT_WINDOW_FRAME_TEMPLATE, GraphicRendition, TerminalFrameContext, TerminalFrameStyle,
+    TerminalStyleSpan, TerminalStyledLine, UiColorPair, UiTheme, Window,
+    agent_status_running_gradient_palette, animated_scan_background, blend_terminal_color,
+    compose_frame_pillbox_row, contrasting_binary_foreground, frame_style_rendition,
+    gradient_highlight_for_offset, group_frame_visible, neutral_surface_step,
+    push_or_extend_style_span, styled_frame_line_with_rendition,
 };
 #[cfg(test)]
 use super::window_frame_pillbox_text_from_entries;
@@ -548,6 +549,42 @@ pub(in crate::host::terminal::render) fn pane_frame_agent_status_is_active(statu
 /// Shared scan width for active agent status animations.
 pub(in crate::host::terminal::render) const AGENT_STATUS_SCAN_BAND_WIDTH: usize = 9;
 
+/// Time for the active-status wave center to travel one terminal cell.
+pub(in crate::host::terminal::render) const AGENT_STATUS_WAVE_CELL_TRAVEL_MS: u64 = 180;
+
+const AGENT_STATUS_WAVE_SUBCELLS_PER_CELL: usize =
+    (AGENT_STATUS_WAVE_CELL_TRAVEL_MS / AGENT_STATUS_WAVE_REFRESH_INTERVAL_MS) as usize;
+
+pub(in crate::host::terminal::render) const AGENT_STATUS_WAVE_INTENSITY_MAX: usize =
+    AGENT_STATUS_SCAN_BAND_WIDTH * AGENT_STATUS_WAVE_SUBCELLS_PER_CELL;
+
+/// Returns the fixed-point offset and intensity for one active-status wave cell.
+///
+/// The center advances by a subcell on every repaint, while the full-cell
+/// position changes every 180 ms. Both pane-frame and prompt status renderers
+/// use this helper to remain synchronized.
+pub(in crate::host::terminal::render) fn agent_status_scan_column(
+    column: usize,
+    width: usize,
+    tick_ms: u64,
+) -> (isize, usize) {
+    let cycle_cells = width.saturating_add(AGENT_STATUS_SCAN_BAND_WIDTH).max(1);
+    let cycle_subcells = cycle_cells.saturating_mul(AGENT_STATUS_WAVE_SUBCELLS_PER_CELL);
+    let phase_subcells =
+        (tick_ms / AGENT_STATUS_WAVE_REFRESH_INTERVAL_MS) as usize % cycle_subcells;
+    let center_subcells = phase_subcells as isize
+        - (AGENT_STATUS_SCAN_BAND_WIDTH.saturating_mul(AGENT_STATUS_WAVE_SUBCELLS_PER_CELL) / 2)
+            as isize;
+    let offset_subcells =
+        column.saturating_mul(AGENT_STATUS_WAVE_SUBCELLS_PER_CELL) as isize - center_subcells;
+    let distance_subcells = offset_subcells.unsigned_abs();
+    let intensity = AGENT_STATUS_WAVE_INTENSITY_MAX.saturating_sub(distance_subcells);
+    (
+        offset_subcells / AGENT_STATUS_WAVE_SUBCELLS_PER_CELL as isize,
+        intensity,
+    )
+}
+
 /// Builds the animated scan background for an active agent status pill.
 pub(in crate::host::terminal::render) fn pane_frame_agent_status_scan_spans(
     start: usize,
@@ -560,20 +597,15 @@ pub(in crate::host::terminal::render) fn pane_frame_agent_status_scan_spans(
     }
     let base_pair = ui_theme.colors.agent_status_running;
     let palette = agent_status_running_gradient_palette(ui_theme);
-    let phase = ((tick_ms / AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS) as usize)
-        % width.saturating_add(AGENT_STATUS_SCAN_BAND_WIDTH);
-    let center = phase as isize - (AGENT_STATUS_SCAN_BAND_WIDTH as isize / 2);
     let mut spans = Vec::with_capacity(width);
     for column in 0..width {
-        let offset = column as isize - center;
-        let distance = offset.unsigned_abs();
-        let intensity = AGENT_STATUS_SCAN_BAND_WIDTH.saturating_sub(distance);
+        let (offset, intensity) = agent_status_scan_column(column, width, tick_ms);
         let highlight = gradient_highlight_for_offset(&palette, offset);
         let background = animated_scan_background(
             base_pair.background,
             highlight,
             intensity,
-            AGENT_STATUS_SCAN_BAND_WIDTH,
+            AGENT_STATUS_WAVE_INTENSITY_MAX,
         );
         push_or_extend_style_span(
             &mut spans,
@@ -715,6 +747,28 @@ pub(in crate::host::terminal::render) fn themed_frame_rendition(
     }
     rendition.bold |= bold;
     rendition
+}
+
+#[cfg(test)]
+mod agent_status_wave_tests {
+    use super::*;
+
+    /// Verifies the moving active-status wave advances through distinct
+    /// fixed-point subcell phases while preserving its 180 ms per-cell travel.
+    #[test]
+    fn active_status_wave_uses_fractional_phases_and_fixed_cell_travel() {
+        assert_eq!(AGENT_STATUS_WAVE_CELL_TRAVEL_MS, 180);
+        let width = 7;
+        let at_zero = agent_status_scan_column(4, width, 0);
+        let at_sixty = agent_status_scan_column(4, width, 60);
+        let at_one_twenty = agent_status_scan_column(4, width, 120);
+        assert_ne!(at_zero, at_sixty);
+        assert_ne!(at_sixty, at_one_twenty);
+        assert_eq!(
+            agent_status_scan_column(4, width, AGENT_STATUS_WAVE_CELL_TRAVEL_MS),
+            agent_status_scan_column(3, width, 0),
+        );
+    }
 }
 
 #[cfg(test)]

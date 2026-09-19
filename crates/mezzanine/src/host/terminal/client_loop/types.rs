@@ -16,11 +16,14 @@ use mez_terminal::TerminalStyleSpan;
 
 // Attached terminal loop planning and I/O abstraction.
 
-/// Refresh cadence for active agent status animations.
+/// Slow phase cadence for completion and approval attention flashing.
 ///
-/// Renderers advance the scan phase at this interval, and attach clients use
-/// the same value to request fresh views only while animation is active.
+/// Wave movement uses its own faster cadence so preserving a calm attention
+/// flash never makes the active-agent status scan appear to jump.
 pub const AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS: u64 = 400;
+
+/// Refresh cadence for the moving active-agent status wave.
+pub const AGENT_STATUS_WAVE_REFRESH_INTERVAL_MS: u64 = 60;
 
 /// Carries Terminal Client Loop Action state for this subsystem.
 ///

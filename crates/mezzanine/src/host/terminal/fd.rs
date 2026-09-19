@@ -63,6 +63,8 @@ pub struct TerminalFrameContext {
     pub pressed_window_action: Option<WindowFrameAction>,
     /// Monotonic-ish wall-clock tick used by animated frame elements.
     pub animation_tick_ms: u64,
+    /// Whether a visible active-agent status wave needs its faster repaint cadence.
+    pub agent_status_wave_active: bool,
     /// Whether optional frame/status animations should render as static UI.
     pub reduced_motion: bool,
     /// Whether completion-attention title pills use their stable attention color.

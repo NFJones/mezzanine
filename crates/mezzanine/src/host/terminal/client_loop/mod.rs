@@ -30,7 +30,8 @@ pub(crate) use runtime_step::plan_attached_terminal_client_step_with_host_paste_
 pub use types::AttachedTerminalClientLoopIo;
 pub(crate) use types::HostBracketedPasteBufferState;
 pub use types::{
-    AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS, AttachedTerminalClientLoopConfig,
-    AttachedTerminalClientLoopReport, AttachedTerminalClientStepPlan,
-    ReadlinePromptClientPresentation, ReadlinePromptStatusRow, TerminalClientLoopAction,
+    AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS, AGENT_STATUS_WAVE_REFRESH_INTERVAL_MS,
+    AttachedTerminalClientLoopConfig, AttachedTerminalClientLoopReport,
+    AttachedTerminalClientStepPlan, ReadlinePromptClientPresentation, ReadlinePromptStatusRow,
+    TerminalClientLoopAction,
 };

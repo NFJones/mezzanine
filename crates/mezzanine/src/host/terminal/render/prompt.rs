@@ -28,10 +28,9 @@ use mez_terminal::{
     active_terminal_text_width as terminal_text_width, terminal_graphemes,
 };
 
-use super::super::AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS;
 use super::{
-    AGENT_STATUS_SCAN_BAND_WIDTH, normalize_overlay_canvas, overlay_text_style_width,
-    pane_agent_prompt_space_reserved,
+    AGENT_STATUS_WAVE_INTENSITY_MAX, agent_status_scan_column, normalize_overlay_canvas,
+    overlay_text_style_width, pane_agent_prompt_space_reserved,
 };
 #[cfg(test)]
 use super::{compose_client_presentation_with_styles, normalize_overlay_style_spans};
@@ -869,9 +868,6 @@ pub(super) fn agent_live_footer_style_spans(
     let base = agent_live_footer_base_gray(ui_theme);
     let palette = agent_live_footer_grayscale_palette(ui_theme);
     let parenthetical_rendition = agent_live_footer_parenthetical_rendition(ui_theme);
-    let phase = ((animation_tick_ms / AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS) as usize)
-        % state_label_width.saturating_add(AGENT_STATUS_SCAN_BAND_WIDTH);
-    let center = phase as isize - (AGENT_STATUS_SCAN_BAND_WIDTH as isize / 2);
     let mut column = 0usize;
     for grapheme in terminal_graphemes(&text) {
         let grapheme_width = terminal_grapheme_width(grapheme);
@@ -879,12 +875,15 @@ pub(super) fn agent_live_footer_style_spans(
             continue;
         }
         if column < state_label_width && !grapheme.chars().all(char::is_whitespace) {
-            let offset = column as isize - center;
-            let distance = offset.unsigned_abs();
-            let intensity = AGENT_STATUS_SCAN_BAND_WIDTH.saturating_sub(distance);
+            let (offset, intensity) =
+                agent_status_scan_column(column, state_label_width, animation_tick_ms);
             let highlight = gradient_highlight_for_offset(&palette, offset);
-            let foreground =
-                animated_scan_background(base, highlight, intensity, AGENT_STATUS_SCAN_BAND_WIDTH);
+            let foreground = animated_scan_background(
+                base,
+                highlight,
+                intensity,
+                AGENT_STATUS_WAVE_INTENSITY_MAX,
+            );
             push_or_extend_style_span(
                 &mut style_spans,
                 TerminalStyleSpan {

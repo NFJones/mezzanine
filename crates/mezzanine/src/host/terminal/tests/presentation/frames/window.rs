@@ -178,13 +178,14 @@ fn render_window_completion_attention_respects_flashing_preference() {
             title_span.length,
             title_span.rendition.background,
             config.ui_theme.colors.agent_status_blocked.background,
+            view.animation_refresh_interval_ms,
         )
     };
 
-    let attention_on = render_phase(0, false, false);
-    let attention_off = render_phase(400, false, false);
-    let reduced_motion = render_phase(400, true, false);
-    let flashing_disabled = render_phase(400, false, true);
+    let attention_on = render_phase(1, false, false);
+    let attention_off = render_phase(401, false, false);
+    let reduced_motion = render_phase(401, true, false);
+    let flashing_disabled = render_phase(401, false, true);
 
     assert_eq!(attention_on.0, attention_off.0);
     assert_eq!(attention_on.1, attention_off.1);
@@ -192,6 +193,8 @@ fn render_window_completion_attention_respects_flashing_preference() {
     assert_ne!(attention_off.2, attention_on.2);
     assert_eq!(reduced_motion.2, Some(reduced_motion.3));
     assert_eq!(flashing_disabled.2, Some(flashing_disabled.3));
+    assert_eq!(attention_on.4, 400);
+    assert_eq!(attention_off.4, 400);
 }
 
 /// Verifies approval attention uses its own semantic theme color rather than

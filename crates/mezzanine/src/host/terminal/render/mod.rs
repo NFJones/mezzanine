@@ -7,10 +7,10 @@
 //! into those lower plans.
 
 use super::{
-    AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS, GraphicRendition, MezError,
-    MousePaneAgentStatusCell, MouseWindowActionFrameCell, Result, TerminalClientLoopConfig,
-    TerminalFrameContext, TerminalPaneFrameContext, TerminalScreen, TerminalStyleSpan,
-    TerminalStyledLine, WindowFrameAction,
+    AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS, AGENT_STATUS_WAVE_REFRESH_INTERVAL_MS,
+    GraphicRendition, MezError, MousePaneAgentStatusCell, MouseWindowActionFrameCell, Result,
+    TerminalClientLoopConfig, TerminalFrameContext, TerminalPaneFrameContext, TerminalScreen,
+    TerminalStyleSpan, TerminalStyledLine, WindowFrameAction,
 };
 #[cfg(test)]
 use super::{BTreeMap, PaneRenderInput};
@@ -48,10 +48,8 @@ pub(crate) use dividers::project_provisional_pane_resize;
 use dividers::{merged_pane_frame_boundary_style_spans, pane_divider_rendition};
 pub(crate) use frame::render_focus_label;
 pub(crate) use frame::window_iroh_status_slot_layout;
-use frame::{
-    AGENT_STATUS_SCAN_BAND_WIDTH, pane_agent_prompt_space_reserved, pane_agent_shell_visible,
-    pane_border_rendition, render_styled_pane_lines, styled_group_frame_line,
-    styled_window_frame_line, write_styled_merged_pane_frames_on_dividers,
+pub(in crate::host::terminal::render) use frame::{
+    AGENT_STATUS_WAVE_INTENSITY_MAX, agent_status_scan_column,
 };
 pub(crate) use frame::{
     PaneStatusDiagnosticProjection, pane_frame_row_layout, pane_frame_status_diagnostic_projection,
@@ -60,6 +58,11 @@ pub(crate) use frame::{
 use frame::{
     group_frame_text, render_pane_lines, render_window_frame_text,
     write_merged_pane_frames_on_dividers,
+};
+use frame::{
+    pane_agent_prompt_space_reserved, pane_agent_shell_visible, pane_border_rendition,
+    render_styled_pane_lines, styled_group_frame_line, styled_window_frame_line,
+    write_styled_merged_pane_frames_on_dividers,
 };
 pub use frame::{
     pane_frame_agent_status_pillbox_cells, window_frame_action_pillbox_cells,
@@ -315,7 +318,9 @@ pub fn render_attached_client_view_with_screen_and_row_resolvers<'a>(
         alternate_screen: active_pane_screen
             .is_some_and(|screen| screen.presentation_alternate_screen_active()),
         host_mouse_reporting: config.mouse_policy.enabled,
-        animation_refresh_interval_ms: if config.frame_context.animation_tick_ms > 0 {
+        animation_refresh_interval_ms: if config.frame_context.agent_status_wave_active {
+            AGENT_STATUS_WAVE_REFRESH_INTERVAL_MS
+        } else if config.frame_context.animation_tick_ms > 0 {
             AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS
         } else {
             0
