@@ -129,9 +129,10 @@ impl<P: ModelProvider> AgentTurnEnvironment for SyncProductAgentTurnEnvironment<
     /// Routes a product-repairable planning failure into the recovery budget.
     ///
     /// The product planner reports model-correctable planning failures as invalid
-    /// arguments - the harness shell-source policy and the subagent scope enforcer
-    /// own that classification - while controller invariants keep their invalid
-    /// state, so only the model's own re-emittable mistakes reach the repair path.
+    /// arguments - the agent-authored shell-command policy, apply-patch planning,
+    /// and the subagent scope enforcer own that classification - while controller
+    /// invariants keep their invalid state, so only the model's own re-emittable
+    /// mistakes reach the repair path.
     fn planning_error_is_repairable(&self, error: &MezError) -> bool {
         error.kind() == MezErrorKind::InvalidArgs
     }
@@ -468,9 +469,10 @@ impl<P: AsyncModelProvider> AgentTurnEnvironment for ProductAgentTurnEnvironment
     /// Routes a product-repairable planning failure into the recovery budget.
     ///
     /// The product planner reports model-correctable planning failures as invalid
-    /// arguments - the harness shell-source policy and the subagent scope enforcer
-    /// own that classification - while controller invariants keep their invalid
-    /// state, so only the model's own re-emittable mistakes reach the repair path.
+    /// arguments - the agent-authored shell-command policy, apply-patch planning,
+    /// and the subagent scope enforcer own that classification - while controller
+    /// invariants keep their invalid state, so only the model's own re-emittable
+    /// mistakes reach the repair path.
     fn planning_error_is_repairable(&self, error: &MezError) -> bool {
         error.kind() == MezErrorKind::InvalidArgs
     }

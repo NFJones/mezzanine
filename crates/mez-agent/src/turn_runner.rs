@@ -469,18 +469,7 @@ pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
                         project_ledger_result(
                             ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed),
                         )?;
-                        response.usage = negotiation.cumulative_response_usage();
-                        response.quota_usage = negotiation.latest_quota_usage().to_vec();
-                        return Ok(failed_validation_execution_with_summary(
-                            environment,
-                            &turn,
-                            negotiation.durable_request().clone(),
-                            response,
-                            negotiation.latest_response_usage(),
-                            &error,
-                            "action_planning",
-                        )
-                        .await);
+                        return Err(error);
                     }
                 }
             }
@@ -690,6 +679,31 @@ mod tests {
         /// turn can then complete.
         static INJECTED_PLANNING_FAILURE: RefCell<Option<(String, bool)>> =
             const { RefCell::new(None) };
+    }
+
+    /// Clears the injected planning failure when one regression ends.
+    ///
+    /// The injection is thread-local state shared by every turn regression, so it
+    /// is set through a guard that clears on drop: a panic anywhere between the
+    /// injection and the test's last assertion - including a runner invariant or
+    /// the `Pending` panic in `run_ready` - must not leave the next test scheduled
+    /// on the same worker thread with an injected planning failure.
+    struct InjectedPlanningFailure;
+
+    impl InjectedPlanningFailure {
+        /// Injects one planning failure until the returned guard drops.
+        fn inject(message: &str, repairable: bool) -> Self {
+            INJECTED_PLANNING_FAILURE.with(|slot| {
+                *slot.borrow_mut() = Some((message.to_string(), repairable));
+            });
+            Self
+        }
+    }
+
+    impl Drop for InjectedPlanningFailure {
+        fn drop(&mut self) {
+            INJECTED_PLANNING_FAILURE.with(|slot| *slot.borrow_mut() = None);
+        }
     }
 
     impl AgentTurnEnvironment for FakeEnvironment {
@@ -1307,9 +1321,7 @@ mod tests {
             ])),
             requests: RefCell::new(Vec::new()),
         };
-        INJECTED_PLANNING_FAILURE.with(|slot| {
-            *slot.borrow_mut() = Some(("the batch cannot be planned yet".to_string(), true));
-        });
+        let _injection = InjectedPlanningFailure::inject("the batch cannot be planned yet", true);
         let mut ledger = AgentTurnLedger::new(false);
 
         let execution = run_ready(run_agent_turn_async(
@@ -1320,7 +1332,6 @@ mod tests {
             None,
             None,
         ));
-        INJECTED_PLANNING_FAILURE.with(|slot| *slot.borrow_mut() = None);
         let execution = execution.expect("a repaired planning failure should complete the turn");
 
         assert_eq!(execution.terminal_state, AgentTurnState::Completed);
@@ -1351,30 +1362,20 @@ mod tests {
             responses: RefCell::new(VecDeque::from([final_response(&turn)])),
             requests: RefCell::new(Vec::new()),
         };
-        INJECTED_PLANNING_FAILURE.with(|slot| {
-            *slot.borrow_mut() = Some(("planning inputs are missing".to_string(), false));
-        });
+        let _injection = InjectedPlanningFailure::inject("planning inputs are missing", false);
         let mut ledger = AgentTurnLedger::new(false);
 
-        let execution = run_ready(run_agent_turn_async(
+        let error = run_ready(run_agent_turn_async(
             &environment,
             &mut ledger,
             turn,
             &test_context(),
             None,
             None,
-        ));
-        INJECTED_PLANNING_FAILURE.with(|slot| *slot.borrow_mut() = None);
-        let execution = execution.expect("a terminal planning failure returns a failed execution");
+        ))
+        .expect_err("a terminal planning failure returns the product error unchanged");
 
-        assert_eq!(execution.terminal_state, AgentTurnState::Failed);
-        assert!(
-            execution
-                .response
-                .raw_text
-                .contains("planning inputs are missing"),
-            "the terminal failure keeps the planning diagnostic"
-        );
+        assert_eq!(error.0, "planning inputs are missing");
         assert_eq!(environment.requests.borrow().len(), 1);
     }
 }
