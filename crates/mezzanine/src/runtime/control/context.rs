@@ -144,6 +144,18 @@ pub(super) fn runtime_agent_transcript_context(
     }
     for (index, entry) in entries.iter().enumerate() {
         if entry.role == TranscriptRole::System
+            && let Some(TranscriptContextEvent::UserEvent { label, content, .. }) =
+                TranscriptContextEvent::from_transcript_content(&entry.content)
+        {
+            blocks.push(ContextBlock {
+                source: ContextSourceKind::TranscriptUser,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label,
+                content,
+            });
+            continue;
+        }
+        if entry.role == TranscriptRole::System
             && let Some(TranscriptContextEvent::ExecutionBlock {
                 source,
                 execution_group_id,

@@ -3,7 +3,7 @@
 //! Summaries are derived from decoded entries rather than separate index files
 //! so listing reflects the durable transcript contents.
 
-use super::{TranscriptEntry, TranscriptRole};
+use super::{TranscriptContextEvent, TranscriptEntry, TranscriptRole};
 
 /// Summary of one saved conversation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,13 +41,13 @@ pub fn summarize_conversation(entries: Vec<TranscriptEntry>) -> Option<Conversat
     let directory = conversation_directory(&entries);
     let initial_prompt = entries
         .iter()
-        .find(|entry| entry.role == TranscriptRole::User && !entry.content.trim().is_empty())
-        .map(|entry| bounded_summary_text(&entry.content, 120));
+        .find_map(transcript_entry_user_content)
+        .map(|content| bounded_summary_text(&content, 120));
     let latest_user_prompt = entries
         .iter()
         .rev()
-        .find(|entry| entry.role == TranscriptRole::User && !entry.content.trim().is_empty())
-        .map(|entry| bounded_summary_text(&entry.content, 120));
+        .find_map(transcript_entry_user_content)
+        .map(|content| bounded_summary_text(&content, 120));
     Some(ConversationSummary {
         conversation_id: first.conversation_id.clone(),
         entries: entries.len(),
@@ -60,6 +60,25 @@ pub fn summarize_conversation(entries: Vec<TranscriptEntry>) -> Option<Conversat
         initial_prompt,
         latest_user_prompt,
     })
+}
+
+/// Returns user-authored text from legacy rows or typed canonical user events.
+///
+/// Typed events retain chronology occurrence identity while legacy user rows
+/// remain readable by existing transcripts and persistence adapters.
+pub fn transcript_entry_user_content(entry: &TranscriptEntry) -> Option<String> {
+    if entry.role == TranscriptRole::User && !entry.content.trim().is_empty() {
+        return Some(entry.content.clone());
+    }
+    if entry.role != TranscriptRole::System {
+        return None;
+    }
+    match TranscriptContextEvent::from_transcript_content(&entry.content) {
+        Some(TranscriptContextEvent::UserEvent { content, .. }) if !content.trim().is_empty() => {
+            Some(content)
+        }
+        _ => None,
+    }
 }
 
 /// Returns the best-known project root or working directory from transcript

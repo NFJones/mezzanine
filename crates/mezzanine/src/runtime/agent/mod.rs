@@ -821,6 +821,13 @@ impl RuntimeAgentComponent {
             })
     }
 
+    /// Reports whether one pane currently owns a non-terminal deferred command.
+    pub(crate) fn agent_command_is_active(&self, pane_id: &str) -> bool {
+        self.agent_command_lifecycles
+            .get(pane_id)
+            .is_some_and(|lifecycle| !lifecycle.phase.is_terminal())
+    }
+
     /// Records one terminal phase for the current claimed command.
     pub(crate) fn settle_agent_command(
         &mut self,

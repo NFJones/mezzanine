@@ -1397,6 +1397,20 @@ async fn async_actor_serves_steps_while_deferred_command_work_is_outstanding() {
             .unwrap()
             .expect("the current generation claims its work");
 
+        let busy_view = handle
+            .render_client_view(
+                ClientViewRole::Primary,
+                Size::new(80, 24).unwrap(),
+                TerminalClientLoopConfig::default(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let busy_text = busy_view.lines.join("\n");
+        assert!(busy_text.contains("command running"), "{busy_text}");
+        assert!(!busy_text.contains("requires_runtime"), "{busy_text}");
+        assert!(!busy_text.contains("deferred"), "{busy_text}");
+
         let follow_up = AttachedTerminalClientStepPlan {
             actions: vec![TerminalClientLoopAction::ForwardToPane(b"x".to_vec())],
             output_lines: Vec::new(),
@@ -1411,7 +1425,21 @@ async fn async_actor_serves_steps_while_deferred_command_work_is_outstanding() {
             .unwrap();
         assert_eq!(
             application.agent_prompt_inputs_applied, 1,
-            "the actor must keep serving agent prompt input while deferred command work is outstanding"
+            "the actor must promptly refuse owning-prompt input while command work is outstanding"
+        );
+        let refused_view = handle
+            .render_client_view(
+                ClientViewRole::Primary,
+                Size::new(80, 24).unwrap(),
+                TerminalClientLoopConfig::default(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let refused_text = refused_view.lines.join("\n");
+        assert!(
+            refused_text.contains("command is still running in this pane"),
+            "{refused_text}"
         );
 
         // Settling the outstanding work still applies its display.
@@ -1422,6 +1450,23 @@ async fn async_actor_serves_steps_while_deferred_command_work_is_outstanding() {
                 .await
                 .unwrap(),
             "the settled outcome applies for the current generation"
+        );
+        let settled_view = handle
+            .render_client_view(
+                ClientViewRole::Primary,
+                Size::new(80, 24).unwrap(),
+                TerminalClientLoopConfig::default(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            !settled_view
+                .lines
+                .iter()
+                .any(|line| line.contains("command running")),
+            "{:?}",
+            settled_view.lines
         );
 
         let _ = handle.shutdown().await.unwrap();

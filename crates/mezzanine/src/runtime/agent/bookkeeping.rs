@@ -560,6 +560,17 @@ impl RuntimeSessionService {
             turn,
             execution,
         )?;
+        // Canonical chronology owns every user-event occurrence. Request
+        // projections cannot distinguish identical prompt and steering text,
+        // so exclude them rather than backdating or coalescing user events.
+        execution_entries.retain(|entry| entry.role != TranscriptRole::User);
+        self.insert_initial_user_transcript_event(
+            &mut execution_entries,
+            conversation_id,
+            sequence,
+            created_at_unix_seconds,
+            turn,
+        )?;
         self.insert_prompt_boundary_transcript_events(
             &mut execution_entries,
             conversation_id,
@@ -589,6 +600,48 @@ impl RuntimeSessionService {
         Ok(entries)
     }
 
+    /// Inserts the canonical initial prompt before its display projection.
+    fn insert_initial_user_transcript_event(
+        &self,
+        entries: &mut Vec<TranscriptEntry>,
+        conversation_id: &str,
+        sequence: u64,
+        created_at_unix_seconds: u64,
+        turn: &AgentTurnRecord,
+    ) -> Result<()> {
+        let Some(event) = self
+            .agent_turn_contexts()
+            .get(&turn.turn_id)
+            .and_then(|context| {
+                context.chronology().iter().find(|event| {
+                    event.block().source == ContextSourceKind::UserInstruction
+                        && event.block().label == "user prompt"
+                })
+            })
+        else {
+            return Ok(());
+        };
+        let transcript_event = TranscriptContextEvent::user_event(
+            event.sequence().get(),
+            event.block().label.clone(),
+            event.block().content.clone(),
+        )
+        .ok_or_else(|| MezError::invalid_state("turn initial user event is invalid"))?;
+        let entry = TranscriptEntry {
+            conversation_id: conversation_id.to_string(),
+            sequence,
+            created_at_unix_seconds,
+            role: TranscriptRole::System,
+            turn_id: turn.turn_id.clone(),
+            agent_id: turn.agent_id.clone(),
+            pane_id: turn.pane_id.clone(),
+            content: transcript_event.to_transcript_content(),
+        };
+        entry.validate()?;
+        entries.insert(0, entry);
+        Ok(())
+    }
+
     /// Inserts exact prompt-boundary context before its owning user entry.
     fn insert_prompt_boundary_transcript_events(
         &self,
@@ -597,10 +650,13 @@ impl RuntimeSessionService {
         created_at_unix_seconds: u64,
         turn: &AgentTurnRecord,
     ) -> Result<()> {
-        let Some(insertion_index) = entries
-            .iter()
-            .position(|entry| entry.role == TranscriptRole::User)
-        else {
+        let Some(insertion_index) = entries.iter().position(|entry| {
+            entry.role == TranscriptRole::User
+                || matches!(
+                    TranscriptContextEvent::from_transcript_content(&entry.content),
+                    Some(TranscriptContextEvent::UserEvent { .. })
+                )
+        }) else {
             return Ok(());
         };
         let first_sequence = entries[insertion_index].sequence;
@@ -694,8 +750,8 @@ impl RuntimeSessionService {
         Ok(entries)
     }
 
-    /// Appends exact cache-visible execution blocks after the ordinary display
-    /// transcript projection for one completed turn.
+    /// Appends canonical user events and exact execution blocks after the
+    /// ordinary display transcript projection for one completed turn.
     fn append_exact_execution_block_transcript_events(
         &self,
         entries: &mut Vec<TranscriptEntry>,
@@ -715,8 +771,32 @@ impl RuntimeSessionService {
         let mut active_user_seen = false;
         for event in context.chronology().iter().skip(imported_history_events) {
             let block = event.block();
-            if block.source == ContextSourceKind::UserInstruction && block.label == "user prompt" {
+            if block.source == ContextSourceKind::UserInstruction {
                 active_user_seen = true;
+                if block.label == "user prompt" {
+                    continue;
+                }
+                let transcript_event = TranscriptContextEvent::user_event(
+                    event.sequence().get(),
+                    block.label.clone(),
+                    block.content.clone(),
+                )
+                .ok_or_else(|| {
+                    MezError::invalid_state("turn user event is empty, oversized, or unsupported")
+                })?;
+                let entry = TranscriptEntry {
+                    conversation_id: conversation_id.to_string(),
+                    sequence,
+                    created_at_unix_seconds,
+                    role: TranscriptRole::System,
+                    turn_id: turn.turn_id.clone(),
+                    agent_id: turn.agent_id.clone(),
+                    pane_id: turn.pane_id.clone(),
+                    content: transcript_event.to_transcript_content(),
+                };
+                entry.validate()?;
+                entries.push(entry);
+                sequence = sequence.saturating_add(1);
                 continue;
             }
             let transcript_event = if block.source == ContextSourceKind::McpCatalogSnapshot

@@ -829,13 +829,13 @@ impl RuntimeSessionService {
             return 0;
         }
         let pane_context = TerminalPaneFrameContext {
-            agent_prompt: Some(
+            agent_prompt: (!self.agent_command_is_active(pane_id)).then(|| {
                 self.presentation
                     .agent_prompt_inputs
                     .get(pane_id)
                     .map(|input| input.prompt.clone())
-                    .unwrap_or_else(|| ReadlinePrompt::new(ReadlinePromptKind::Agent)),
-            ),
+                    .unwrap_or_else(|| ReadlinePrompt::new(ReadlinePromptKind::Agent))
+            }),
             agent_display_lines: self.runtime_agent_prompt_display_lines_for_pane(pane_id),
             ..TerminalPaneFrameContext::default()
         };
@@ -858,6 +858,9 @@ impl RuntimeSessionService {
 
     /// Builds the live working footer shown at the tail of an active agent pane.
     fn runtime_agent_working_footer_line(&self, pane_id: &str) -> Option<String> {
+        if self.agent_command_is_active(pane_id) {
+            return Some("command running".to_string());
+        }
         if let Some(started_at) = self.agent_compaction_started_at(pane_id) {
             let elapsed = current_unix_seconds().saturating_sub(started_at);
             return Some(format!(
@@ -1779,19 +1782,16 @@ impl RuntimeSessionService {
                         agent_context_usage,
                         history_position,
                         status_pills: self.pane_status_provider_values(&pane_id),
-                        agent_prompt: agent_session
-                            .is_some_and(|session| {
-                                matches!(session.visibility, AgentShellVisibility::Visible)
-                            })
-                            .then(|| {
-                                self.presentation
-                                    .agent_prompt_inputs
-                                    .get(&pane_id)
-                                    .map(|input| input.prompt.clone())
-                                    .unwrap_or_else(|| {
-                                        ReadlinePrompt::new(ReadlinePromptKind::Agent)
-                                    })
-                            }),
+                        agent_prompt: (agent_session.is_some_and(|session| {
+                            matches!(session.visibility, AgentShellVisibility::Visible)
+                        }) && !self.agent_command_is_active(pane_id.as_str()))
+                        .then(|| {
+                            self.presentation
+                                .agent_prompt_inputs
+                                .get(&pane_id)
+                                .map(|input| input.prompt.clone())
+                                .unwrap_or_else(|| ReadlinePrompt::new(ReadlinePromptKind::Agent))
+                        }),
                         agent_display_lines: self
                             .runtime_agent_prompt_display_lines_for_pane(&pane_id),
                     },

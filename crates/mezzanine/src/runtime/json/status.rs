@@ -67,18 +67,18 @@ pub(crate) fn runtime_terminal_step_result_json(
     )
 }
 
-/// Builds the in-flight response for one deferred agent-shell slash command.
+/// Builds the suppressed acceptance response for one deferred slash command.
 ///
-/// The command has been handed to a worker, so the response carries no body: the
-/// completion applies the real display through the inline display path once the
-/// work settles, and the prompt stays usable in the meantime.
+/// The command owns its pane prompt until completion applies the ordinary
+/// synchronous result. The acceptance response is therefore an internal state
+/// transition with no user-facing body or asynchronous implementation detail.
 pub(crate) fn runtime_agent_shell_deferred_command_response_json(
     pane_id: &str,
     input: &str,
     command: &str,
 ) -> String {
     format!(
-        r#"{{"pane_id":"{}","input":"{}","kind":"requires_runtime","command":"{}","body":null,"turn":null}}"#,
+        r#"{{"pane_id":"{}","input":"{}","kind":"mutated","command":"{}","body":null,"turn":null}}"#,
         json_escape(pane_id),
         json_escape(input),
         json_escape(command)

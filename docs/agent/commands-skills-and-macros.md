@@ -28,6 +28,11 @@ terminal commands.
 Use the following agent-shell commands to control the current pane without
 turning the command into an ordinary model request:
 
+Commands that need store or filesystem work keep synchronous pane behavior:
+after submission, that pane's prompt shows `command running` and refuses new
+prompt input until the ordinary command result appears. Other panes and global
+multiplexer controls remain available.
+
 | Goal | Commands |
 | --- | --- |
 | Inspect or change authority and execution mode | `/status`, `/permissions`, `/approval`, `/approve`, `/show-approvals`, `/sandbox`, and `/shell-mode` |

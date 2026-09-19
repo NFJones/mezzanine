@@ -40,8 +40,8 @@ use super::types::{
     SessionTitleMirrorHandleState, SessionTitleMirrorStatus, SessionTitleMirrorWriteRead,
 };
 use mez_agent::transcript::{
-    AgentSessionMetadata, ConversationSummary, TranscriptEntry, TranscriptRole,
-    bounded_summary_text, summarize_conversation, validate_conversation_id,
+    AgentSessionMetadata, ConversationSummary, TranscriptEntry, bounded_summary_text,
+    summarize_conversation, transcript_entry_user_content, validate_conversation_id,
 };
 use mez_agent::{AgentConversationKind, AllowedActionSet};
 use mez_mux::readline::ReadlineHistoryEntry;
@@ -2512,8 +2512,8 @@ impl AgentTranscriptStore {
         } else if let Some(directory) = transcript_entry_project_root(entry) {
             summary.directory = Some(directory);
         }
-        if entry.role == TranscriptRole::User {
-            let preview = bounded_summary_text(&entry.content, 120);
+        if let Some(content) = transcript_entry_user_content(entry) {
+            let preview = bounded_summary_text(&content, 120);
             if summary.initial_prompt.is_none() {
                 summary.initial_prompt = Some(preview.clone());
             }
@@ -2561,13 +2561,14 @@ impl AgentTranscriptStore {
         if !path.exists() {
             return Ok(None);
         }
-        let first = self.first_transcript_entry(conversation_id)?;
+        let prefix = self.inspect_initial(conversation_id, DEFAULT_TRANSCRIPT_TAIL_READ_BYTES)?;
+        let first = prefix.first();
         let tail = self.inspect_recent(conversation_id, 64, DEFAULT_TRANSCRIPT_TAIL_READ_BYTES)?;
-        let Some(last) = tail.last().or(first.as_ref()) else {
+        let Some(last) = tail.last().or(first) else {
             return Ok(None);
         };
-        let first_entry = first.as_ref().unwrap_or(last);
-        let mut directory = first.as_ref().and_then(transcript_entry_directory);
+        let first_entry = first.unwrap_or(last);
+        let mut directory = first.and_then(transcript_entry_directory);
         for entry in &tail {
             if let Some(project_root) = transcript_entry_project_root(entry) {
                 directory = Some(project_root);
@@ -2575,15 +2576,15 @@ impl AgentTranscriptStore {
                 directory = transcript_entry_directory(entry);
             }
         }
-        let initial_prompt = first
-            .as_ref()
-            .filter(|entry| entry.role == TranscriptRole::User)
-            .map(|entry| bounded_summary_text(&entry.content, 120));
+        let initial_prompt = prefix
+            .iter()
+            .find_map(transcript_entry_user_content)
+            .map(|content| bounded_summary_text(&content, 120));
         let latest_user_prompt = tail
             .iter()
             .rev()
-            .find(|entry| entry.role == TranscriptRole::User)
-            .map(|entry| bounded_summary_text(&entry.content, 120))
+            .find_map(transcript_entry_user_content)
+            .map(|content| bounded_summary_text(&content, 120))
             .or_else(|| initial_prompt.clone());
         Ok(Some(ConversationSummary {
             conversation_id: conversation_id.to_string(),
@@ -2599,25 +2600,30 @@ impl AgentTranscriptStore {
         }))
     }
 
-    /// Reads the first complete transcript entry for legacy summary fallback.
-    fn first_transcript_entry(&self, conversation_id: &str) -> Result<Option<TranscriptEntry>> {
+    /// Reads a bounded complete transcript prefix for summary reconstruction.
+    fn inspect_initial(
+        &self,
+        conversation_id: &str,
+        max_bytes: u64,
+    ) -> Result<Vec<TranscriptEntry>> {
         let path = self.existing_transcript_path_for(conversation_id)?;
         if !path.exists() {
-            return Ok(None);
+            return Ok(Vec::new());
         }
-        let file = std_fs::File::open(path)?;
-        let mut reader = BufReader::new(file);
-        let mut line = String::new();
-        loop {
-            line.clear();
-            let bytes = reader.read_line(&mut line)?;
-            if bytes == 0 {
-                return Ok(None);
-            }
-            if !line.trim().is_empty() {
-                return decode_transcript_entry(line.trim_end_matches(['\r', '\n'])).map(Some);
-            }
-        }
+        let mut bytes = Vec::new();
+        std_fs::File::open(path)?
+            .take(max_bytes)
+            .read_to_end(&mut bytes)?;
+        bytes
+            .split_inclusive(|byte| *byte == b'\n')
+            .filter(|line| line.ends_with(b"\n") && !line.iter().all(u8::is_ascii_whitespace))
+            .map(|line| {
+                let line = std::str::from_utf8(line).map_err(|error| {
+                    MezError::invalid_args(format!("transcript is not UTF-8: {error}"))
+                })?;
+                decode_transcript_entry(line.trim_end_matches(['\r', '\n']))
+            })
+            .collect()
     }
 
     /// Writes the latest presentation sequence index.

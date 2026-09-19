@@ -8757,6 +8757,13 @@ use a shaded foreground derived from the same contrast decision. Invalid slash
 commands or invalid slash-command arguments MUST produce a readable pane-local
 error message and MUST NOT terminate Mezzanine or tear down the agent prompt.
 
+An accepted slash command that continues outside the serialized runtime owner
+MUST retain synchronous semantics in its pane: the submitting prompt MUST stop
+accepting input until that exact command completes, fails, or is cancelled.
+The internal acceptance acknowledgement MUST NOT be rendered or expose runtime,
+worker, or deferred-execution terminology. Other panes and global multiplexer
+controls MUST remain responsive while the command owns its prompt.
+
 Command names MAY add aliases, but the slash command names listed below MUST be
 accepted unless the command is explicitly unsupported by this specification.
 

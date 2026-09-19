@@ -1091,8 +1091,14 @@ fn transcript_store_list_uses_summary_sidecar_without_full_decode() {
     let store = AgentTranscriptStore::new(root.clone());
     let mut first = entry("conv1", 1, TranscriptRole::System);
     first.content = "project_root=/workspace/mezzanine".to_string();
-    let mut second = entry("conv1", 2, TranscriptRole::User);
-    second.content = "continue the performance work".to_string();
+    let mut second = entry("conv1", 2, TranscriptRole::System);
+    second.content = mez_agent::TranscriptContextEvent::user_event(
+        2,
+        "user prompt",
+        "continue the performance work",
+    )
+    .unwrap()
+    .to_transcript_content();
 
     store.append(&first).unwrap();
     store.append(&second).unwrap();
@@ -1116,6 +1122,87 @@ fn transcript_store_list_uses_summary_sidecar_without_full_decode() {
         Some("continue the performance work")
     );
     assert!(store.inspect("conv1").is_err());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies bounded summary reconstruction finds a typed initial prompt after
+/// a leading session-metadata row when the summary sidecar is unavailable.
+///
+/// Runtime persistence emits directory metadata before canonical user events.
+/// Saved-session recovery must therefore scan its bounded prefix rather than
+/// treating the first physical transcript row as the only possible prompt.
+#[test]
+fn transcript_store_summary_recovers_typed_prompt_after_leading_metadata() {
+    let root = temp_root("summary-typed-prefix");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let mut metadata = entry("conv-typed-prefix", 1, TranscriptRole::System);
+    metadata.content = "project_root=/workspace/mezzanine".to_string();
+    let mut prompt = entry("conv-typed-prefix", 2, TranscriptRole::System);
+    prompt.content = mez_agent::TranscriptContextEvent::user_event(
+        2,
+        "user prompt",
+        "restore the canonical initial prompt",
+    )
+    .unwrap()
+    .to_transcript_content();
+
+    store.append(&metadata).unwrap();
+    store.append(&prompt).unwrap();
+    fs::remove_file(root.join("conv-typed-prefix").join("summary.json")).unwrap();
+
+    let summary = store.summary("conv-typed-prefix").unwrap().unwrap();
+
+    assert_eq!(
+        summary.initial_prompt.as_deref(),
+        Some("restore the canonical initial prompt")
+    );
+    assert_eq!(summary.latest_user_prompt, summary.initial_prompt);
+    assert_eq!(summary.directory.as_deref(), Some("/workspace/mezzanine"));
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies bounded summary reconstruction scans past many prompt-boundary
+/// records before finding a typed initial prompt when its sidecar is missing.
+///
+/// Runtime turns may retain more than 64 safe boundary records before their
+/// prompt. The fallback remains byte-bounded but must not impose a separate
+/// entry-count cutoff that hides a valid saved-session prompt preview.
+#[test]
+fn transcript_store_summary_recovers_typed_prompt_after_many_boundary_records() {
+    let root = temp_root("summary-typed-many-boundaries");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    for sequence in 1..=65 {
+        let mut boundary = entry(
+            "conv-typed-many-boundaries",
+            sequence,
+            TranscriptRole::System,
+        );
+        boundary.content = format!("prompt boundary {sequence}");
+        store.append(&boundary).unwrap();
+    }
+    let mut prompt = entry("conv-typed-many-boundaries", 66, TranscriptRole::System);
+    prompt.content = mez_agent::TranscriptContextEvent::user_event(
+        66,
+        "user prompt",
+        "recover the prompt after many boundaries",
+    )
+    .unwrap()
+    .to_transcript_content();
+    store.append(&prompt).unwrap();
+    fs::remove_file(root.join("conv-typed-many-boundaries").join("summary.json")).unwrap();
+
+    let summary = store
+        .summary("conv-typed-many-boundaries")
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        summary.initial_prompt.as_deref(),
+        Some("recover the prompt after many boundaries")
+    );
+    assert_eq!(summary.latest_user_prompt, summary.initial_prompt);
     let _ = fs::remove_dir_all(root);
 }
 

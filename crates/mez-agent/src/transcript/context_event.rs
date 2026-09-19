@@ -21,6 +21,8 @@ pub const TRANSCRIPT_CONTEXT_EVENT_MARKER: &str = "[mez-transcript-context-event
 const TRANSCRIPT_CONTEXT_EVENT_VERSION: &str = "mez-transcript-context-event/v1";
 /// Event kind for a summarized routed-worker handoff.
 const ROUTED_HANDOFF_KIND: &str = "routed_handoff";
+/// Event kind for one canonical user-authored chronology event.
+const USER_EVENT_KIND: &str = "user_event";
 /// Event kind for a user turn stopped before normal completion.
 const INTERRUPTED_TURN_KIND: &str = "interrupted_turn";
 /// Event kind for one immutable pane-environment projection.
@@ -47,6 +49,15 @@ const EXECUTION_BLOCK_LABEL_LIMIT_BYTES: usize = 4 * 1024;
 /// Provider-independent context that is durable across conversation turns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TranscriptContextEvent {
+    /// One exact user-authored event with immutable chronology identity.
+    UserEvent {
+        /// Original non-zero chronological event sequence.
+        event_sequence: u64,
+        /// Exact model-visible block label.
+        label: String,
+        /// Exact model-visible user content.
+        content: String,
+    },
     /// Validated routed-worker summary presented through the parent model.
     RoutedHandoff {
         /// Serialized summarized handoff content.
@@ -110,6 +121,31 @@ pub enum TranscriptContextEvent {
 }
 
 impl TranscriptContextEvent {
+    /// Builds one validated canonical user event for durable replay.
+    pub fn user_event(
+        event_sequence: u64,
+        label: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Option<Self> {
+        let label = label.into();
+        let content = content.into();
+        if event_sequence == 0
+            || label.trim().is_empty()
+            || content.trim().is_empty()
+            || label.len() > EXECUTION_BLOCK_LABEL_LIMIT_BYTES
+            || content.len() > EXECUTION_BLOCK_CONTENT_LIMIT_BYTES
+            || label.bytes().any(|byte| byte == 0)
+            || content.bytes().any(|byte| byte == 0)
+        {
+            return None;
+        }
+        Some(Self::UserEvent {
+            event_sequence,
+            label,
+            content,
+        })
+    }
+
     /// Builds one validated immutable environment-snapshot event.
     ///
     /// Empty or oversized projections return `None`; accepted content receives
@@ -239,6 +275,17 @@ impl TranscriptContextEvent {
     /// Encodes one event as a reserved system transcript entry.
     pub fn to_transcript_content(&self) -> String {
         let payload = match self {
+            Self::UserEvent {
+                event_sequence,
+                label,
+                content,
+            } => serde_json::json!({
+                "version": TRANSCRIPT_CONTEXT_EVENT_VERSION,
+                "kind": USER_EVENT_KIND,
+                "event_sequence": event_sequence,
+                "label": label,
+                "content": content,
+            }),
             Self::RoutedHandoff { content } => serde_json::json!({
                 "version": TRANSCRIPT_CONTEXT_EVENT_VERSION,
                 "kind": ROUTED_HANDOFF_KIND,
@@ -332,6 +379,11 @@ impl TranscriptContextEvent {
             return None;
         }
         match value.get("kind")?.as_str()? {
+            USER_EVENT_KIND => Self::user_event(
+                value.get("event_sequence")?.as_u64()?,
+                value.get("label")?.as_str()?,
+                value.get("content")?.as_str()?,
+            ),
             ROUTED_HANDOFF_KIND => {
                 let content = value.get("content")?.as_str()?.trim();
                 if content.is_empty() {

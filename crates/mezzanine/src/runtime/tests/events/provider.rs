@@ -1480,6 +1480,171 @@ fn runtime_multiple_steering_events_preserve_failure_and_cancellation_order() {
     }
 }
 
+/// Verifies durable transcript persistence preserves a steering event between
+/// the assistant work that preceded it and its later settled action result.
+///
+/// A completed turn projects display rows as well as exact chronology. The
+/// replay path must use the canonical exact rows so a request-derived user
+/// projection cannot move steering ahead of earlier assistant work.
+#[test]
+fn runtime_transcript_persistence_preserves_interleaved_user_steering_order() {
+    let mut service = test_runtime_service();
+    let transcript_root = temp_root("runtime-transcript-steering-order");
+    let transcript_store = AgentTranscriptStore::new(transcript_root.clone());
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "repeat this instruction exactly")
+        .unwrap();
+    service.remove_pending_agent_provider_task(&started.turn_id);
+    let turn = service
+        .agent_turn_ledger()
+        .turn(&started.turn_id)
+        .cloned()
+        .unwrap();
+    let group = mez_agent::ContextExecutionGroupId::new("persisted-steering-order").unwrap();
+    service
+        .agent_turn_contexts_mut()
+        .get_mut(&turn.turn_id)
+        .unwrap()
+        .append_assistant_event(
+            "assistant work before steering",
+            "inspect the original task before accepting later direction",
+            group,
+        )
+        .unwrap();
+    service
+        .agent_turn_contexts_mut()
+        .get_mut(&turn.turn_id)
+        .unwrap()
+        .append_user_event("user steering", "repeat this instruction exactly")
+        .unwrap();
+    let action = mez_agent::AgentAction {
+        id: "settled-after-steering".to_string(),
+        payload: mez_agent::AgentActionPayload::Say {
+            status: mez_agent::SayStatus::Progress,
+            text: "completed later work".to_string(),
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+    };
+    let result = mez_agent::ActionResult::succeeded(
+        &turn,
+        &action,
+        vec!["the action settled after steering".to_string()],
+        None,
+    );
+    service
+        .commit_settled_action_results_context(&turn.turn_id, std::slice::from_ref(&result))
+        .unwrap();
+    service
+        .agent_turn_contexts_mut()
+        .get_mut(&turn.turn_id)
+        .unwrap()
+        .append_user_event("repeated user steering", "repeat this instruction exactly")
+        .unwrap();
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture(&turn.turn_id),
+        response: mez_agent::ModelResponse {
+            provider: "openai".to_string(),
+            model: "test".to_string(),
+            raw_text: "completed later work".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Vec::new(),
+            action_batch: Some(mez_agent::MaapBatch {
+                rationale: "persist the completed result".to_string(),
+                actions: vec![action],
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![result],
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+
+    assert!(
+        service
+            .persist_runtime_agent_turn_execution_transcript(&turn, &execution)
+            .unwrap()
+            > 0
+    );
+    let entries = transcript_store.inspect(&turn.conversation_id).unwrap();
+    let assistant_index = entries
+        .iter()
+        .position(|entry| {
+            matches!(
+                mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
+                Some(mez_agent::TranscriptContextEvent::ExecutionBlock { label, .. })
+                    if label == "assistant work before steering"
+            )
+        })
+        .unwrap();
+    let user_event_indices = entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            matches!(
+                mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
+                Some(mez_agent::TranscriptContextEvent::UserEvent { content, .. })
+                    if content == "repeat this instruction exactly"
+            )
+            .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let result_index = entries
+        .iter()
+        .position(|entry| {
+            matches!(
+                mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
+                Some(mez_agent::TranscriptContextEvent::ExecutionBlock { label, .. })
+                    if label == "action result settled-after-steering"
+            )
+        })
+        .unwrap();
+    assert_eq!(user_event_indices.len(), 3, "{entries:#?}");
+    assert!(
+        user_event_indices[0] < assistant_index
+            && assistant_index < user_event_indices[1]
+            && user_event_indices[1] < result_index
+            && result_index < user_event_indices[2]
+    );
+
+    let replayed = service
+        .agent_context_for_pane_prompt("%1", "continue after restoration", 0)
+        .unwrap();
+    let replayed_assistant = replayed
+        .blocks()
+        .iter()
+        .position(|block| block.label == "assistant work before steering")
+        .unwrap();
+    let replayed_steering = replayed
+        .blocks()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, block)| {
+            (block.content == "repeat this instruction exactly").then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let replayed_result = replayed
+        .blocks()
+        .iter()
+        .position(|block| block.label == "action result settled-after-steering")
+        .unwrap();
+    assert_eq!(replayed_steering.len(), 3, "{:#?}", replayed.blocks());
+    assert!(
+        replayed_steering[0] < replayed_assistant
+            && replayed_assistant < replayed_steering[1]
+            && replayed_steering[1] < replayed_result
+            && replayed_result < replayed_steering[2]
+    );
+    let _ = std::fs::remove_dir_all(transcript_root);
+}
+
 /// Verifies terminal transcript persistence accepts one complete execution
 /// group exactly once even when two lifecycle paths attempt finalization.
 ///
@@ -1586,7 +1751,13 @@ fn runtime_terminal_execution_transcript_persistence_is_idempotent() {
         .expect("environment transition should be persisted");
     let user_index = entries
         .iter()
-        .position(|entry| entry.role == TranscriptRole::User)
+        .position(|entry| {
+            matches!(
+                mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
+                Some(mez_agent::TranscriptContextEvent::UserEvent { label, .. })
+                    if label == "user prompt"
+            )
+        })
         .expect("user prompt should be persisted");
     let plan_index = entries
         .iter()
@@ -1983,7 +2154,13 @@ fn runtime_routed_handoff_summary_persists_once_and_rehydrates_with_parent_answe
         .collect::<Vec<_>>();
     let user_index = entries
         .iter()
-        .position(|entry| entry.role == TranscriptRole::User)
+        .position(|entry| {
+            matches!(
+                mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
+                Some(mez_agent::TranscriptContextEvent::UserEvent { label, .. })
+                    if label == "user prompt"
+            )
+        })
         .unwrap();
     let assistant_index = entries
         .iter()
@@ -1992,11 +2169,11 @@ fn runtime_routed_handoff_summary_persists_once_and_rehydrates_with_parent_answe
 
     assert!(first > 0);
     assert_eq!(replay, 0);
-    assert_eq!(event_positions.len(), 1);
-    assert!(user_index < event_positions[0].0);
-    assert!(event_positions[0].0 < assistant_index);
+    assert_eq!(event_positions.len(), 2);
+    assert_eq!(user_index, event_positions[0].0);
+    assert!(event_positions[1].0 < assistant_index);
     assert_eq!(
-        event_positions[0].1,
+        event_positions[1].1,
         mez_agent::TranscriptContextEvent::RoutedHandoff {
             content: handoff.to_string()
         }

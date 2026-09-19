@@ -115,6 +115,11 @@ impl RuntimeSessionService {
             .begin_agent_command_claim(pane_id, conversation_id)
     }
 
+    /// Reports whether the pane prompt is owned by a deferred command.
+    pub(crate) fn agent_command_is_active(&self, pane_id: &str) -> bool {
+        self.agent.agent_command_is_active(pane_id)
+    }
+
     /// Reports whether one prompt command may run through the deferred lane.
     ///
     /// The dispatcher owns this decision because part of it depends on live

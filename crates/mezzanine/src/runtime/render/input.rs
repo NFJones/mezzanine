@@ -307,6 +307,12 @@ impl RuntimeSessionService {
         if input.is_empty() {
             return Ok(false);
         }
+        if self.agent_command_is_active(pane_id) {
+            self.show_primary_error_overlay(vec![
+                "command is still running in this pane".to_string(),
+            ])?;
+            return Ok(true);
+        }
         if self.defer_agent_prompt_input_for_pending_clipboard(pane_id, input) {
             return Ok(true);
         }
