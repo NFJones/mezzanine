@@ -1,14 +1,15 @@
 //! Unit tests for auth metadata, credential stores, and auth-store orchestration.
 
 use super::{
-    AuthCredentialKind, AuthCredentialState, AuthMetadata, AuthMethod, AuthPaths, AuthStore,
-    CommandBackedCredentialStore, CredentialCommandOutput, CredentialCommandRunner,
-    CredentialStore, CredentialStoreAvailability, CredentialStoreKind, CredentialStorePlan,
-    FileCredentialFallbackReason, MCP_TEST_LONG_ACCESS_TOKEN, MCP_TEST_LONG_REFRESH_TOKEN,
-    McpAuthMetadata, McpCredentialKind, McpOAuthCredential, OpenAiProviderCredential,
-    PrivateFileCredentialStore, SECRET_TOOL_PROGRAM,
+    AuthCredentialKind, AuthCredentialState, AuthMetadata, AuthMethod, AuthPaths,
+    AuthProfileCredentialSource, AuthStore, CommandBackedCredentialStore, CredentialCommandOutput,
+    CredentialCommandRunner, CredentialStore, CredentialStoreAvailability, CredentialStoreKind,
+    CredentialStorePlan, FileCredentialFallbackReason, MCP_TEST_LONG_ACCESS_TOKEN,
+    MCP_TEST_LONG_REFRESH_TOKEN, McpAuthMetadata, McpCredentialKind, McpOAuthCredential,
+    OpenAiProviderCredential, PrivateFileCredentialStore, SECRET_TOOL_PROGRAM,
 };
 use crate::error::Result;
+use mez_agent::ProviderCredentialSource;
 use secrecy::{ExposeSecret, SecretString};
 use sha2::Digest;
 use std::cell::RefCell;
@@ -917,6 +918,64 @@ fn api_key_login_stores_secret_and_persists_only_metadata_reference() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies explicit auth profiles select shared credentials while the default
+/// profile keeps legacy provider-keyed credential lookup.
+#[test]
+fn auth_profile_credential_source_uses_selected_profile() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-auth-profile-source-test-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let store = AuthStore::new(AuthPaths::under_config_root(&root));
+    let reference = store
+        .write_file_secret("shared-auth", "sk-shared-profile")
+        .unwrap();
+    let mut metadata = AuthMetadata::new("shared-auth", "default");
+    metadata.credential_store_ref = Some(reference);
+    store.write_metadata(&metadata).unwrap();
+    let source = AuthProfileCredentialSource::new(&store, "shared-auth");
+
+    assert_eq!(
+        source
+            .provider_auth_metadata("configured-provider")
+            .unwrap()
+            .unwrap()
+            .credential_kind,
+        mez_agent::ProviderCredentialKind::ApiKey
+    );
+    assert_eq!(
+        source
+            .provider_credential("configured-provider")
+            .unwrap()
+            .expose_secret(),
+        "sk-shared-profile"
+    );
+    assert!(
+        store
+            .read_metadata_for_provider("configured-provider")
+            .unwrap()
+            .is_none()
+    );
+
+    let provider_reference = store
+        .write_file_secret("configured-provider", "sk-provider-default")
+        .unwrap();
+    let mut provider_metadata = AuthMetadata::new("configured-provider", "default");
+    provider_metadata.credential_store_ref = Some(provider_reference);
+    store.write_metadata(&provider_metadata).unwrap();
+    let default_source = AuthProfileCredentialSource::new(&store, "default");
+    assert_eq!(
+        default_source
+            .provider_credential("configured-provider")
+            .unwrap()
+            .expose_secret(),
+        "sk-provider-default"
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies static MCP bearer login stores the token as a secret while MCP
 /// auth metadata remains secret-safe and refresh-ineligible.
 ///
@@ -1343,12 +1402,13 @@ fn provider_login_persists_access_and_refresh_secrets_as_references() {
 }
 
 /// Verifies the refresh scheduling predicate used at daemon startup. Refresh
-/// attempts should only be started for OpenAI metadata that has a refresh-token
+/// attempts should only be started for ChatGPT metadata that has a refresh-token
 /// reference and whose access-token expiry is already inside the configured
-/// leeway window.
+/// leeway window, regardless of its configured auth-profile identity.
 #[test]
 fn openai_refresh_needed_only_when_expiry_is_inside_leeway_and_refresh_exists() {
     let mut metadata = AuthMetadata::new("openai", "default");
+    metadata.credential_kind = AuthCredentialKind::ChatGpt;
     metadata.refresh_credential_store_ref = Some("file:/tmp/refresh".to_string());
     metadata.token_expires_at = Some("110".to_string());
 
@@ -1360,7 +1420,7 @@ fn openai_refresh_needed_only_when_expiry_is_inside_leeway_and_refresh_exists() 
 
     metadata.refresh_credential_store_ref = Some("file:/tmp/refresh".to_string());
     metadata.provider = "other".to_string();
-    assert!(!super::store::openai_refresh_needed_at(&metadata, 100, 10));
+    assert!(super::store::openai_refresh_needed_at(&metadata, 100, 10));
 }
 
 /// Verifies provider secret loads referenced secret without metadata leakage.

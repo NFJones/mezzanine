@@ -23,6 +23,8 @@ pub(crate) struct RuntimeAgentProviderPreparationWork {
     pub(crate) auth_store: Option<AuthStore>,
     /// Proactive OpenAI credential refresh leeway.
     pub(crate) provider_auth_refresh_leeway_seconds: u64,
+    /// Deduplicated configured auth profiles eligible for ChatGPT credential refresh.
+    pub(crate) provider_auth_refresh_profiles: Vec<String>,
     /// Whether this preparation pass should refresh provider credentials.
     pub(crate) refresh_provider_credential: bool,
     /// Number of MCP servers considered by this preparation pass.

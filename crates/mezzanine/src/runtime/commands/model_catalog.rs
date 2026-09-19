@@ -7,11 +7,10 @@
 //! execution focused on state transitions and profile overrides.
 
 use super::{
-    AgentShellCommandOutcome, AsyncModelProvider, AuthCredentialKind, DEFAULT_PROVIDER_TIMEOUT_MS,
-    MezError, ModelCatalog, ModelCatalogCandidate, ModelCatalogEntry, ModelCatalogInput,
-    ModelCatalogSource, ModelProfile, ProviderApiCompatibility, ProviderModelCatalog,
-    ProviderModelInfo, ProviderQuotaUsage, ReqwestProviderHttpTransport, Result,
-    RuntimeSessionService,
+    AgentShellCommandOutcome, AsyncModelProvider, DEFAULT_PROVIDER_TIMEOUT_MS, MezError,
+    ModelCatalog, ModelCatalogCandidate, ModelCatalogEntry, ModelCatalogInput, ModelCatalogSource,
+    ModelProfile, ProviderApiCompatibility, ProviderModelCatalog, ProviderModelInfo,
+    ProviderQuotaUsage, ReqwestProviderHttpTransport, Result, RuntimeSessionService,
     deepseek_chat_completions_provider_from_auth_store_with_provider_options, json_escape,
     normalize_model_catalog_values,
     openai_compatible_provider_from_auth_store_with_provider_options_and_brand,
@@ -19,7 +18,9 @@ use super::{
     resolve_provider_api, runtime_default_config_model_records,
     runtime_recommended_model_for_provider,
 };
+use crate::security::auth::AuthProfileCredentialSource;
 use futures_util::StreamExt;
+use mez_agent::{ProviderCredentialKind, ProviderCredentialSource};
 
 /// Immutable provider catalog inputs moved out of the serialized runtime actor.
 pub(crate) struct RuntimeProviderInfoRefreshWork {
@@ -405,10 +406,12 @@ impl RuntimeSessionService {
                 "provider model listing requires an attached auth store",
             ));
         };
-        let metadata = auth_store.read_metadata_for_provider(provider_id)?;
+        let credential_source =
+            AuthProfileCredentialSource::new(auth_store, &provider_config.auth_profile);
+        let metadata = credential_source.provider_auth_metadata(provider_id)?;
         if metadata
             .as_ref()
-            .is_some_and(|metadata| metadata.credential_kind == AuthCredentialKind::ChatGpt)
+            .is_some_and(|metadata| metadata.credential_kind == ProviderCredentialKind::ChatGpt)
         {
             self.append_credential_access_audit(
                 provider_id,
@@ -427,7 +430,7 @@ impl RuntimeSessionService {
         let provider_result: Result<Box<dyn AsyncModelProvider>> = match api {
             ProviderApiCompatibility::OpenAiResponses => {
                 openai_responses_provider_from_auth_store_with_provider_options(
-                    auth_store,
+                    &credential_source,
                     provider_id,
                     endpoint_override,
                     &provider_config.options,
@@ -438,7 +441,7 @@ impl RuntimeSessionService {
             }
             ProviderApiCompatibility::OpenAiChatCompletions => {
                 openai_compatible_provider_from_auth_store_with_provider_options_and_brand(
-                    auth_store,
+                    &credential_source,
                     provider_id,
                     provider_config.kind == "openai",
                     endpoint_override,
@@ -450,7 +453,7 @@ impl RuntimeSessionService {
             }
             ProviderApiCompatibility::DeepSeekChatCompletions => {
                 deepseek_chat_completions_provider_from_auth_store_with_provider_options(
-                    auth_store,
+                    &credential_source,
                     provider_id,
                     endpoint_override,
                     DEFAULT_PROVIDER_TIMEOUT_MS,
@@ -551,6 +554,8 @@ pub(crate) async fn fetch_raw_provider_model_catalog(
 ) -> Result<ProviderModelCatalog> {
     let provider = tokio::task::spawn_blocking(move || {
         let api = resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())?;
+        let credential_source =
+            AuthProfileCredentialSource::new(&auth_store, &provider_config.auth_profile);
         let endpoint_override = provider_config
             .base_url
             .as_deref()
@@ -558,7 +563,7 @@ pub(crate) async fn fetch_raw_provider_model_catalog(
         match api {
             ProviderApiCompatibility::OpenAiResponses => {
                 openai_responses_provider_from_auth_store_with_provider_options(
-                    &auth_store,
+                    &credential_source,
                     &provider_config.provider_id,
                     endpoint_override,
                     &provider_config.options,
@@ -569,7 +574,7 @@ pub(crate) async fn fetch_raw_provider_model_catalog(
             }
             ProviderApiCompatibility::OpenAiChatCompletions => {
                 openai_compatible_provider_from_auth_store_with_provider_options_and_brand(
-                    &auth_store,
+                    &credential_source,
                     &provider_config.provider_id,
                     provider_config.kind == "openai",
                     endpoint_override,
@@ -581,7 +586,7 @@ pub(crate) async fn fetch_raw_provider_model_catalog(
             }
             ProviderApiCompatibility::DeepSeekChatCompletions => {
                 deepseek_chat_completions_provider_from_auth_store_with_provider_options(
-                    &auth_store,
+                    &credential_source,
                     &provider_config.provider_id,
                     endpoint_override,
                     DEFAULT_PROVIDER_TIMEOUT_MS,

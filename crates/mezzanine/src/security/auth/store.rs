@@ -1105,7 +1105,17 @@ impl AuthStore {
     /// - `leeway_seconds`: Number of seconds before token expiry that should
     ///   trigger proactive refresh.
     pub fn openai_refresh_needed_with_leeway(&self, leeway_seconds: u64) -> Result<bool> {
-        let Some(metadata) = self.read_metadata_for_provider(OPENAI_PROVIDER)? else {
+        self.provider_refresh_needed_with_leeway(OPENAI_PROVIDER, leeway_seconds)
+    }
+
+    /// Checks whether one configured ChatGPT credential profile should refresh
+    /// within a custom leeway.
+    pub fn provider_refresh_needed_with_leeway(
+        &self,
+        auth_profile: &str,
+        leeway_seconds: u64,
+    ) -> Result<bool> {
+        let Some(metadata) = self.read_metadata_for_provider(auth_profile)? else {
             return Ok(false);
         };
         Ok(openai_refresh_needed_at(
@@ -1141,7 +1151,21 @@ impl AuthStore {
         &self,
         leeway_seconds: u64,
     ) -> Result<bool> {
-        let Some(mut metadata) = self.read_metadata_for_provider(OPENAI_PROVIDER)? else {
+        self.refresh_provider_credential_if_needed_with_leeway_async(
+            OPENAI_PROVIDER,
+            leeway_seconds,
+        )
+        .await
+    }
+
+    /// Refreshes one configured ChatGPT credential profile when expiry is
+    /// within a custom leeway.
+    pub async fn refresh_provider_credential_if_needed_with_leeway_async(
+        &self,
+        auth_profile: &str,
+        leeway_seconds: u64,
+    ) -> Result<bool> {
+        let Some(mut metadata) = self.read_metadata_for_provider(auth_profile)? else {
             return Ok(false);
         };
         if !openai_refresh_needed_at(&metadata, current_unix_seconds()?, leeway_seconds) {
@@ -1169,19 +1193,13 @@ impl AuthStore {
         metadata: &mut AuthMetadata,
         credential: OpenAiProviderCredential,
     ) -> Result<()> {
-        if metadata.provider != OPENAI_PROVIDER {
-            return Err(MezError::invalid_state(format!(
-                "auth metadata is for provider `{}`",
-                metadata.provider
-            )));
-        }
         let access_reference = metadata
             .credential_store_ref
             .clone()
             .ok_or_else(|| MezError::invalid_state("auth metadata has no credential reference"))?;
         metadata.credential_store_ref = Some(self.store_secret_like_reference(
             &access_reference,
-            OPENAI_PROVIDER,
+            &metadata.provider,
             &credential.api_key,
         )?);
         metadata.credential_kind = AuthCredentialKind::ChatGpt;
@@ -1521,7 +1539,9 @@ pub(super) fn openai_refresh_needed_at(
     now_unix_seconds: u64,
     leeway_seconds: u64,
 ) -> bool {
-    if metadata.provider != OPENAI_PROVIDER || metadata.refresh_credential_store_ref.is_none() {
+    if metadata.credential_kind != AuthCredentialKind::ChatGpt
+        || metadata.refresh_credential_store_ref.is_none()
+    {
         return false;
     }
     let Some(expires_at) = metadata

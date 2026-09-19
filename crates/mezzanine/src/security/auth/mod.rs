@@ -112,6 +112,66 @@ impl mez_agent::ProviderCredentialSource for AuthStore {
     }
 }
 
+/// Restricts provider credential lookups to one configured authentication profile.
+///
+/// Provider adapters retain their configured provider identity for request
+/// ownership, while this narrow adapter selects the separately configured
+/// credential metadata and secret record.
+pub struct AuthProfileCredentialSource<'a> {
+    auth_store: &'a AuthStore,
+    auth_profile: &'a str,
+}
+
+impl<'a> AuthProfileCredentialSource<'a> {
+    /// Creates a credential source that resolves through one auth profile.
+    pub fn new(auth_store: &'a AuthStore, auth_profile: &'a str) -> Self {
+        Self {
+            auth_store,
+            auth_profile,
+        }
+    }
+}
+
+impl mez_agent::ProviderCredentialSource for AuthProfileCredentialSource<'_> {
+    type Error = crate::error::MezError;
+    type Credential = secrecy::SecretString;
+
+    fn provider_auth_metadata(
+        &self,
+        provider: &str,
+    ) -> Result<Option<mez_agent::ProviderAuthMetadata>, Self::Error> {
+        self.auth_store
+            .read_metadata_for_provider(self.credential_lookup_identity(provider))
+            .map(|metadata| {
+                metadata.map(|metadata| mez_agent::ProviderAuthMetadata {
+                    credential_kind: match metadata.credential_kind {
+                        AuthCredentialKind::ApiKey => mez_agent::ProviderCredentialKind::ApiKey,
+                        AuthCredentialKind::ChatGpt => mez_agent::ProviderCredentialKind::ChatGpt,
+                    },
+                    account_id: metadata.account_id,
+                    organization_id: metadata.organization_id,
+                })
+            })
+    }
+
+    fn provider_credential(&self, provider: &str) -> Result<Self::Credential, Self::Error> {
+        self.auth_store
+            .provider_secret(self.credential_lookup_identity(provider))
+    }
+}
+
+impl AuthProfileCredentialSource<'_> {
+    /// Preserves provider-keyed credentials for the default profile while
+    /// allowing an explicit non-default profile to be shared by providers.
+    fn credential_lookup_identity<'a>(&'a self, provider: &'a str) -> &'a str {
+        if self.auth_profile == "default" {
+            provider
+        } else {
+            self.auth_profile
+        }
+    }
+}
+
 #[cfg(test)]
 use types::SECRET_TOOL_PROGRAM;
 

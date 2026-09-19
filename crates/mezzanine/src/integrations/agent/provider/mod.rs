@@ -1133,11 +1133,6 @@ pub fn openai_responses_provider_from_auth_store_with_provider_options<T>(
             .and_then(|provider| provider.with_provider_id(provider_name))
         }
         ProviderCredentialKind::ChatGpt => {
-            if provider_name != "openai" {
-                return Err(MezError::invalid_state(format!(
-                    "OpenAI Responses-compatible provider `{provider_name}` cannot use ChatGPT browser credentials"
-                )));
-            }
             let credential = auth_store.provider_credential(provider_name)?;
             let account_id = metadata.account_id.ok_or_else(|| {
                 MezError::invalid_state(

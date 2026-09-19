@@ -5064,9 +5064,13 @@ project-scoped mutation needs a file that does not yet exist.
 
 The `providers` table MUST be a map keyed by provider identity. Each provider
 entry MUST support `kind`, `api`, `auth_profile`, `base_url` when applicable,
-`models`, `default_model`, and provider-specific options. The `kind` field MUST
-identify the provider brand/default profile, while `api` MUST identify the wire
-API compatibility implementation. Supported API compatibility identifiers are
+`models`, `default_model`, and provider-specific options. Provider identity MUST
+continue to scope request ownership, quotas, transcript continuity, and cache
+partitioning. `auth_profile` selects only credential metadata and secret lookup:
+an explicit non-default profile MAY be shared by multiple provider identities,
+while `auth_profile = "default"` MUST preserve legacy provider-keyed credential
+lookup. The `kind` field MUST identify the provider brand/default profile, while
+`api` MUST identify the wire API compatibility implementation. Supported API compatibility identifiers are
 `openai-responses`, `openai-chat-completions`, `anthropic-messages`,
 `deepseek-chat-completions`.
 The schema version 7 to version 8 migration MUST

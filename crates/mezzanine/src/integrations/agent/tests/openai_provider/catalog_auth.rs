@@ -62,6 +62,167 @@ fn openai_provider_can_be_constructed_from_auth_store_secret_reference() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// Verifies an explicitly shared auth profile supplies the credential while
+/// the configured provider identity remains the provider-facing owner.
+#[test]
+fn openai_provider_uses_explicit_shared_auth_profile() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-agent-provider-auth-profile-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let auth_store = AuthStore::new(crate::security::auth::AuthPaths::under_config_root(&root));
+    let reference = auth_store
+        .write_file_secret("shared-auth", "sk-shared-profile")
+        .unwrap();
+    let mut metadata = AuthMetadata::new("shared-auth", "default");
+    metadata.credential_store_ref = Some(reference);
+    auth_store.write_metadata(&metadata).unwrap();
+    let credential_source = AuthProfileCredentialSource::new(&auth_store, "shared-auth");
+    let request = assemble_model_request(
+        &ModelProfile {
+            provider: "echo".to_string(),
+            model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "user".to_string(),
+            content: "hello".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    let transport = FakeProviderHttpTransport {
+        requests: RefCell::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: r#"{"model":"gpt-test","output_text":"ok"}"#.to_string(),
+        },
+    };
+
+    let provider = openai_responses_provider_from_auth_store_with_provider_options(
+        &credential_source,
+        "echo",
+        None,
+        &std::collections::BTreeMap::new(),
+        120_000,
+        transport,
+    )
+    .unwrap();
+    let response = provider.send_request(&request).unwrap();
+
+    assert_eq!(response.provider, "echo");
+    assert_eq!(
+        provider.transport.requests.borrow()[0]
+            .headers
+            .get("Authorization")
+            .map(String::as_str),
+        Some("Bearer sk-shared-profile")
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Verifies a named Responses provider retains its provider identity while a
+/// shared auth profile supplies ChatGPT streaming credentials and account routing.
+#[test]
+fn openai_provider_uses_shared_chatgpt_auth_profile() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-agent-provider-chatgpt-profile-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let auth_store = AuthStore::new(crate::security::auth::AuthPaths::under_config_root(&root));
+    let reference = auth_store
+        .write_file_secret("shared-chatgpt", "chatgpt-shared-token")
+        .unwrap();
+    let mut metadata = AuthMetadata::new("shared-chatgpt", "default");
+    metadata.credential_kind = AuthCredentialKind::ChatGpt;
+    metadata.account_id = Some("acct_shared".to_string());
+    metadata.credential_store_ref = Some(reference);
+    auth_store.write_metadata(&metadata).unwrap();
+    let credential_source = AuthProfileCredentialSource::new(&auth_store, "shared-chatgpt");
+    let request = assemble_model_request(
+        &ModelProfile {
+            provider: "echo".to_string(),
+            model: "gpt-5.6-sol".to_string(),
+            model_capabilities: Default::default(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "user".to_string(),
+            content: "hello".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    let transport = FakeProviderHttpTransport {
+        requests: RefCell::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: format!(
+                "event: response.output_item.done\ndata: {}\n\nevent: response.completed\ndata: {}\n\n",
+                serde_json::json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "ok"}]
+                    }
+                }),
+                serde_json::json!({
+                    "type": "response.completed",
+                    "response": {"id": "resp_1", "model": "gpt-5.6-sol"}
+                })
+            ),
+        },
+    };
+
+    let provider = openai_responses_provider_from_auth_store_with_provider_options(
+        &credential_source,
+        "echo",
+        None,
+        &std::collections::BTreeMap::new(),
+        120_000,
+        transport,
+    )
+    .unwrap();
+    let response = provider.send_request(&request).unwrap();
+
+    assert_eq!(response.provider, "echo");
+    let sent = provider.transport.requests.borrow();
+    assert_eq!(sent[0].url, CHATGPT_RESPONSES_ENDPOINT);
+    assert_eq!(
+        sent[0]
+            .headers
+            .get(CHATGPT_ACCOUNT_ID_HEADER)
+            .map(String::as_str),
+        Some("acct_shared")
+    );
+    assert_eq!(
+        sent[0].headers.get("Authorization").map(String::as_str),
+        Some("Bearer chatgpt-shared-token")
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
 #[test]
 /// Verifies that an API-key provider built from configuration expands
 /// `base_url` before issuing requests. Without this regression coverage, a

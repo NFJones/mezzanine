@@ -24,6 +24,7 @@ use super::{
 use crate::integrations::agent::provider::anthropic_provider_from_auth_store_with_provider_options;
 use crate::runtime::config::runtime_effective_provider_options;
 use crate::runtime::{AgentRememberEvent, RenderInvalidationReason, RuntimeTransition};
+use crate::security::auth::AuthProfileCredentialSource;
 use mez_agent::memory::{MemoryKind, MemoryState, new_memory_uuid};
 use std::{fs, path::PathBuf};
 
@@ -630,10 +631,12 @@ impl RuntimeSessionService {
             .as_deref()
             .filter(|endpoint| !endpoint.is_empty());
         let provider_options = runtime_effective_provider_options(&provider_config, model_profile);
+        let credential_source =
+            AuthProfileCredentialSource::new(auth_store, &provider_config.auth_profile);
         let provider_result: Result<RuntimeAgentProviderDispatchProvider> = match api {
             ProviderApiCompatibility::OpenAiResponses => {
                 openai_responses_provider_from_auth_store_with_provider_options(
-                    auth_store,
+                    &credential_source,
                     &model_profile.provider,
                     endpoint_override,
                     &provider_options,
@@ -644,7 +647,7 @@ impl RuntimeSessionService {
             }
             ProviderApiCompatibility::OpenAiChatCompletions => {
                 openai_compatible_provider_from_auth_store_with_provider_options_and_brand(
-                    auth_store,
+                    &credential_source,
                     &model_profile.provider,
                     provider_config.kind == "openai",
                     endpoint_override,
@@ -656,7 +659,7 @@ impl RuntimeSessionService {
             }
             ProviderApiCompatibility::DeepSeekChatCompletions => {
                 deepseek_chat_completions_provider_from_auth_store_with_provider_options(
-                    auth_store,
+                    &credential_source,
                     &model_profile.provider,
                     endpoint_override,
                     DEFAULT_PROVIDER_TIMEOUT_MS,
@@ -666,7 +669,7 @@ impl RuntimeSessionService {
             }
             ProviderApiCompatibility::AnthropicMessages => {
                 anthropic_provider_from_auth_store_with_provider_options(
-                    auth_store,
+                    &credential_source,
                     &model_profile.provider,
                     endpoint_override,
                     &provider_options,

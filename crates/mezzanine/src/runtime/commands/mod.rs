@@ -48,7 +48,6 @@ use crate::runtime::config::{
     runtime_default_config_model_records, runtime_default_models_for_provider,
     runtime_recommended_model_for_provider,
 };
-use crate::security::auth::AuthCredentialKind;
 use mez_agent::ModelResponse;
 use mez_agent::model_context_text_word_count;
 use mez_agent::{

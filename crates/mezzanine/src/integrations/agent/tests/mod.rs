@@ -34,7 +34,10 @@ use super::slash::{
     execute_agent_shell_command_with_permissions,
 };
 use crate::error::Result;
-use crate::security::auth::{AuthStore, OpenAiProviderCredential};
+use crate::security::auth::{
+    AuthCredentialKind, AuthMetadata, AuthProfileCredentialSource, AuthStore,
+    OpenAiProviderCredential,
+};
 use crate::storage::transcript::AgentTranscriptStore;
 use base64::Engine;
 use mez_agent::local_action_plan;

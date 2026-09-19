@@ -30,6 +30,7 @@ use crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger;
 use crate::runtime::agent_state::RuntimeAgentCompactionTarget;
 use crate::runtime::config::runtime_effective_provider_options;
 use crate::runtime::{AgentCompactionEvent, RenderInvalidationReason, RuntimeTransition};
+use crate::security::auth::AuthProfileCredentialSource;
 use mez_agent::{
     DEFAULT_PROVIDER_RETRY_POLICY, ProviderErrorRetryClass, apply_model_context_compaction_plan,
 };
@@ -454,10 +455,12 @@ impl RuntimeSessionService {
             .filter(|endpoint| !endpoint.is_empty());
         let provider_options =
             runtime_effective_provider_options(&provider_config, &task.model_profile);
+        let credential_source =
+            AuthProfileCredentialSource::new(auth_store, &provider_config.auth_profile);
         let provider = match provider_api {
             ProviderApiCompatibility::OpenAiResponses => {
                 openai_responses_provider_from_auth_store_with_provider_options(
-                    auth_store,
+                    &credential_source,
                     &task.model_profile.provider,
                     endpoint_override,
                     &provider_options,
@@ -468,7 +471,7 @@ impl RuntimeSessionService {
             }
             ProviderApiCompatibility::OpenAiChatCompletions => {
                 openai_compatible_provider_from_auth_store_with_provider_options_and_brand(
-                    auth_store,
+                    &credential_source,
                     &task.model_profile.provider,
                     provider_config.kind == "openai",
                     endpoint_override,
@@ -480,7 +483,7 @@ impl RuntimeSessionService {
             }
             ProviderApiCompatibility::DeepSeekChatCompletions => {
                 deepseek_chat_completions_provider_from_auth_store_with_provider_options(
-                    auth_store,
+                    &credential_source,
                     &task.model_profile.provider,
                     endpoint_override,
                     DEFAULT_PROVIDER_TIMEOUT_MS,
@@ -490,7 +493,7 @@ impl RuntimeSessionService {
             }
             ProviderApiCompatibility::AnthropicMessages => {
                 anthropic_provider_from_auth_store_with_provider_options(
-                    auth_store,
+                    &credential_source,
                     &task.model_profile.provider,
                     endpoint_override,
                     &provider_options,

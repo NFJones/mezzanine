@@ -18,6 +18,16 @@ use crate::runtime::{
     RuntimeMcpDiscoveryOutcome, RuntimeMcpDiscoverySuccess, RuntimeMcpTransport,
 };
 
+/// Resolves the credential record that one configured provider contributes to
+/// proactive ChatGPT refresh work.
+fn provider_auth_refresh_identity(provider: &mez_agent::ProviderConfig) -> String {
+    if provider.auth_profile == "default" {
+        provider.provider_id.clone()
+    } else {
+        provider.auth_profile.clone()
+    }
+}
+
 impl RuntimeSessionService {
     /// Executes provider preparation I/O outside the serialized runtime actor.
     ///
@@ -32,6 +42,7 @@ impl RuntimeSessionService {
             environment,
             auth_store,
             provider_auth_refresh_leeway_seconds,
+            provider_auth_refresh_profiles,
             refresh_provider_credential,
             attempted_mcp_servers,
         } = work;
@@ -157,17 +168,28 @@ impl RuntimeSessionService {
             };
             mcp.push(RuntimeMcpDiscoveryOutcome { server_id, result });
         }
-        let provider_refresh_error =
-            if refresh_provider_credential && let Some(auth_store) = auth_store {
-                auth_store
-                    .refresh_openai_provider_credential_if_needed_with_leeway_async(
-                        provider_auth_refresh_leeway_seconds,
-                    )
-                    .await
-                    .err()
+        let provider_refresh_error = if refresh_provider_credential {
+            if let Some(auth_store) = auth_store {
+                let mut error = None;
+                for auth_profile in provider_auth_refresh_profiles {
+                    if let Err(refresh_error) = auth_store
+                        .refresh_provider_credential_if_needed_with_leeway_async(
+                            &auth_profile,
+                            provider_auth_refresh_leeway_seconds,
+                        )
+                        .await
+                    {
+                        error = Some(refresh_error);
+                        break;
+                    }
+                }
+                error
             } else {
                 None
-            };
+            }
+        } else {
+            None
+        };
         RuntimeAgentProviderPreparationOutcome {
             mcp,
             provider_refresh_error,
@@ -201,6 +223,14 @@ impl RuntimeSessionService {
         let environment = std::env::vars().collect::<BTreeMap<_, _>>();
         let auth_store = self.integration.auth_store().cloned();
         let leeway_seconds = self.provider_auth_refresh_leeway_seconds();
+        let provider_auth_refresh_profiles = self
+            .provider_registry()
+            .providers
+            .values()
+            .map(provider_auth_refresh_identity)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
         let mut registry = std::mem::take(self.integration.mcp_registry_mut());
         let result = (|| {
             let server_ids = runtime_mcp_pending_discovery_server_ids(&registry, |server| {
@@ -251,6 +281,7 @@ impl RuntimeSessionService {
                 environment,
                 auth_store,
                 provider_auth_refresh_leeway_seconds: leeway_seconds,
+                provider_auth_refresh_profiles,
                 refresh_provider_credential,
                 attempted_mcp_servers: server_ids.len(),
             })
@@ -780,5 +811,29 @@ impl RuntimeSessionService {
                 ))
             ),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::provider_auth_refresh_identity;
+
+    /// Verifies default profiles preserve provider-keyed credential refresh
+    /// while explicit profiles remain shareable across provider identities.
+    #[test]
+    fn provider_auth_refresh_identity_preserves_default_and_shared_profiles() {
+        let default = mez_agent::ProviderConfig {
+            provider_id: "named-openai".to_string(),
+            auth_profile: "default".to_string(),
+            ..Default::default()
+        };
+        let shared = mez_agent::ProviderConfig {
+            provider_id: "other-openai".to_string(),
+            auth_profile: "shared-chatgpt".to_string(),
+            ..Default::default()
+        };
+
+        assert_eq!(provider_auth_refresh_identity(&default), "named-openai");
+        assert_eq!(provider_auth_refresh_identity(&shared), "shared-chatgpt");
     }
 }
