@@ -1682,6 +1682,9 @@ impl RuntimeSessionService {
             let previous_state = parent_turn.state;
             self.agent_turn_ledger_mut()
                 .finish_turn(&parent_turn.turn_id, AgentTurnState::Failed)?;
+            self.agent
+                .agent_turn_chatgpt_routing_states
+                .remove(&parent_turn.turn_id);
             self.reconcile_active_turn_sleep_inhibition();
             self.append_agent_trace_turn_transition(
                 &parent_turn,

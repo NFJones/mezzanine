@@ -8,6 +8,7 @@ use super::{BTreeMap, ExposeSecret, MaapBatch, MezError, Result, SecretString};
 use sha2::{Digest, Sha256};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 
 /// Validates one required concrete provider-adapter field.
 fn validate_non_empty(field: &str, value: &str) -> Result<()> {
@@ -630,6 +631,24 @@ pub const OPENAI_PROJECT_HEADER: &str = "OpenAI-Project";
 pub const CHATGPT_ACCOUNT_ID_HEADER: &str = "ChatGPT-Account-ID";
 /// ChatGPT Responses cache-affinity header.
 pub const CHATGPT_SESSION_ID_HEADER: &str = "session-id";
+/// ChatGPT Responses logical-turn routing header.
+pub const CHATGPT_TURN_STATE_HEADER: &str = "x-codex-turn-state";
+
+/// Opaque ChatGPT routing token retained only for one logical turn.
+#[derive(Debug, Clone)]
+struct ChatGptTurnState {
+    turn_id: String,
+    account_id: String,
+    token: String,
+}
+
+/// Shared, runtime-owned ChatGPT routing state for one active logical turn.
+///
+/// The contents stay opaque and are never serialized into prompts or durable
+/// transcript history. Reconstructed provider workers share this handle only
+/// while the runtime retains the owning turn.
+#[derive(Debug, Clone, Default)]
+pub struct OpenAiChatGptTurnState(Arc<Mutex<Option<ChatGptTurnState>>>);
 
 /// Derives one opaque, account-isolated ChatGPT Responses session affinity id.
 fn chatgpt_responses_session_id(
@@ -884,6 +903,11 @@ pub struct OpenAiResponsesProvider<T> {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) timeout_ms: u64,
+    /// Stores the current ChatGPT logical-turn routing state.
+    ///
+    /// The runtime shares this opaque handle across providers reconstructed
+    /// for continuations of the same logical turn.
+    chatgpt_turn_state: OpenAiChatGptTurnState,
     /// Stores the transport value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -1058,8 +1082,83 @@ impl<T> OpenAiResponsesProvider<T> {
             extra_headers,
             stream,
             timeout_ms,
+            chatgpt_turn_state: OpenAiChatGptTurnState::default(),
             transport,
         })
+    }
+
+    /// Replaces the opaque runtime-owned state shared by one logical turn.
+    pub fn with_chatgpt_turn_state(mut self, state: OpenAiChatGptTurnState) -> Self {
+        self.chatgpt_turn_state = state;
+        self
+    }
+
+    /// Builds request headers, replaying only the current ChatGPT turn token.
+    fn headers_for_request(&self, request: &ModelRequest) -> BTreeMap<String, String> {
+        let mut headers = self.extra_headers.clone();
+        let is_chatgpt = headers
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case(CHATGPT_ACCOUNT_ID_HEADER));
+        if !is_chatgpt {
+            return headers;
+        }
+
+        headers.retain(|name, _| !name.eq_ignore_ascii_case(CHATGPT_TURN_STATE_HEADER));
+        let account_id = headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(CHATGPT_ACCOUNT_ID_HEADER))
+            .map(|(_, value)| value.as_str());
+        let mut state = self.chatgpt_turn_state.0.lock().unwrap();
+        match state.as_ref() {
+            Some(current)
+                if current.turn_id == request.turn_id
+                    && account_id == Some(current.account_id.as_str()) =>
+            {
+                headers.insert(CHATGPT_TURN_STATE_HEADER.to_string(), current.token.clone());
+            }
+            Some(_) => *state = None,
+            None => {}
+        }
+        headers
+    }
+
+    /// Captures the first non-empty ChatGPT turn token for its owning turn.
+    fn capture_chatgpt_turn_state(
+        &self,
+        request: &ModelRequest,
+        response_headers: &BTreeMap<String, String>,
+    ) {
+        if !self
+            .extra_headers
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case(CHATGPT_ACCOUNT_ID_HEADER))
+        {
+            return;
+        }
+        let Some(token) = response_headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(CHATGPT_TURN_STATE_HEADER))
+            .map(|(_, value)| value.trim())
+            .filter(|value| !value.is_empty())
+        else {
+            return;
+        };
+        let Some(account_id) = self
+            .extra_headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(CHATGPT_ACCOUNT_ID_HEADER))
+            .map(|(_, value)| value.as_str())
+        else {
+            return;
+        };
+        let mut state = self.chatgpt_turn_state.0.lock().unwrap();
+        if state.is_none() {
+            *state = Some(ChatGptTurnState {
+                turn_id: request.turn_id.clone(),
+                account_id: account_id.to_string(),
+                token: token.to_string(),
+            });
+        }
     }
 
     /// Returns the configured provider id guarded by this provider instance.
@@ -1497,11 +1596,12 @@ impl<T: ProviderHttpTransport> ModelProvider for OpenAiResponsesProvider<T> {
                 "OpenAI provider received a request for a different provider",
             ));
         }
+        let request_headers = self.headers_for_request(request);
         let http_request = build_openai_responses_http_request_with_headers(
             request,
             self.api_key.as_ref().map(|api_key| api_key.expose_secret()),
             &self.endpoint,
-            &self.extra_headers,
+            &request_headers,
             self.stream,
             self.timeout_ms,
         )?;
@@ -1520,6 +1620,7 @@ impl<T: ProviderHttpTransport> ModelProvider for OpenAiResponsesProvider<T> {
                 ),
             ));
         }
+        self.capture_chatgpt_turn_state(request, &response.headers);
         let (model, raw_text, usage, provider_transcript_events) =
             parse_openai_responses_provider_body(
                 &response.body,
@@ -1664,11 +1765,12 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
                     "OpenAI provider received a request for a different provider",
                 ));
             }
+            let request_headers = self.headers_for_request(request);
             let http_request = build_openai_responses_http_request_with_headers(
                 request,
                 self.api_key.as_ref().map(|api_key| api_key.expose_secret()),
                 &self.endpoint,
-                &self.extra_headers,
+                &request_headers,
                 self.stream,
                 self.timeout_ms,
             )?;
@@ -1722,6 +1824,7 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
                     ),
                 ));
             }
+            self.capture_chatgpt_turn_state(request, &response.headers);
             if let Some(error) = stream_error {
                 return Err(error.into());
             }

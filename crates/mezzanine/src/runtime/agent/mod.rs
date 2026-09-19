@@ -425,6 +425,12 @@ pub(crate) struct RuntimeAgentComponent {
     /// across worker failures and later action continuations. Other providers
     /// may be retained here without changing their request behavior.
     agent_turn_provider_request_chains: BTreeMap<String, mez_agent::ModelRequest>,
+    /// Opaque ChatGPT routing state owned by each active logical turn.
+    ///
+    /// Provider workers are reconstructed for continuations, so the handle is
+    /// retained by the actor and never enters durable chronology or prompts.
+    agent_turn_chatgpt_routing_states:
+        BTreeMap<String, crate::integrations::agent::provider::OpenAiChatGptTurnState>,
     /// Last ordinary provider request retained for each active conversation.
     ///
     /// OpenAI uses this bounded ledger to preserve the exact wire prefix when

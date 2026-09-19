@@ -408,6 +408,214 @@ fn openai_provider_from_auth_store_routes_chatgpt_credentials_to_codex_backend()
 }
 
 #[test]
+/// Verifies ChatGPT turn routing state is captured once, replayed for retries,
+/// and cleared when the logical turn changes.
+fn openai_provider_replays_chatgpt_turn_state_only_within_its_turn() {
+    let request = assemble_model_request(
+        &ModelProfile {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "user".to_string(),
+            content: "hello".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    let response = |token: Option<&str>| ProviderHttpResponse {
+        status_code: 200,
+        headers: token
+            .map(|token| {
+                std::collections::BTreeMap::from([(
+                    CHATGPT_TURN_STATE_HEADER.to_string(),
+                    token.to_string(),
+                )])
+            })
+            .unwrap_or_default(),
+        body: format!(
+            "event: response.output_item.done\ndata: {}\n\nevent: response.completed\ndata: {}\n\n",
+            serde_json::json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "ok"}]
+                }
+            }),
+            serde_json::json!({
+                "type": "response.completed",
+                "response": {"id": "resp_1", "model": "gpt-test"}
+            })
+        ),
+    };
+    let transport = SequencedFakeProviderHttpTransport::new(vec![
+        response(Some("turn-state-first")),
+        response(Some("turn-state-replacement")),
+        response(None),
+        response(None),
+    ]);
+    let provider = OpenAiResponsesProvider::with_endpoint_headers_and_stream(
+        "chatgpt-access-token",
+        CHATGPT_RESPONSES_ENDPOINT,
+        10,
+        std::collections::BTreeMap::from([(
+            CHATGPT_ACCOUNT_ID_HEADER.to_string(),
+            "account-1".to_string(),
+        )]),
+        true,
+        transport,
+    )
+    .unwrap();
+
+    provider.send_request(&request).unwrap();
+    provider.send_request(&request).unwrap();
+    provider.send_request(&request).unwrap();
+    let mut next_turn = request.clone();
+    next_turn.turn_id = "turn-2".to_string();
+    provider.send_request(&next_turn).unwrap();
+
+    let sent = provider.transport.requests.borrow();
+    assert!(!sent[0].headers.contains_key(CHATGPT_TURN_STATE_HEADER));
+    assert_eq!(
+        sent[1]
+            .headers
+            .get(CHATGPT_TURN_STATE_HEADER)
+            .map(String::as_str),
+        Some("turn-state-first")
+    );
+    assert_eq!(
+        sent[2]
+            .headers
+            .get(CHATGPT_TURN_STATE_HEADER)
+            .map(String::as_str),
+        Some("turn-state-first")
+    );
+    assert!(!sent[3].headers.contains_key(CHATGPT_TURN_STATE_HEADER));
+}
+
+#[test]
+/// Verifies a reconstructed ChatGPT provider replays the opaque routing token
+/// retained by the runtime-owned state for the same logical turn.
+fn openai_provider_replays_chatgpt_turn_state_across_reconstruction() {
+    let request = assemble_model_request(
+        &ModelProfile {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "user".to_string(),
+            content: "hello".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    let headers = std::collections::BTreeMap::from([(
+        CHATGPT_ACCOUNT_ID_HEADER.to_string(),
+        "account-1".to_string(),
+    )]);
+    let state = OpenAiChatGptTurnState::default();
+    let response = |turn_state: Option<&str>| ProviderHttpResponse {
+        status_code: 200,
+        headers: turn_state
+            .map(|value| {
+                std::collections::BTreeMap::from([(
+                    CHATGPT_TURN_STATE_HEADER.to_string(),
+                    value.to_string(),
+                )])
+            })
+            .unwrap_or_default(),
+        body: r#"{"model":"gpt-test","output_text":"ok"}"#.to_string(),
+    };
+    let first = OpenAiResponsesProvider::with_endpoint_headers_and_stream(
+        "chatgpt-access-token",
+        CHATGPT_RESPONSES_ENDPOINT,
+        10,
+        headers.clone(),
+        false,
+        FakeProviderHttpTransport {
+            requests: RefCell::new(Vec::new()),
+            response: ProviderHttpResponse {
+                status_code: 200,
+                headers: std::collections::BTreeMap::from([(
+                    CHATGPT_TURN_STATE_HEADER.to_string(),
+                    "turn-state-first".to_string(),
+                )]),
+                body: "malformed Responses body".to_string(),
+            },
+        },
+    )
+    .unwrap()
+    .with_chatgpt_turn_state(state.clone());
+    assert!(first.send_request(&request).is_err());
+    let second = OpenAiResponsesProvider::with_endpoint_headers_and_stream(
+        "chatgpt-access-token",
+        CHATGPT_RESPONSES_ENDPOINT,
+        10,
+        headers,
+        false,
+        FakeProviderHttpTransport {
+            requests: RefCell::new(Vec::new()),
+            response: response(None),
+        },
+    )
+    .unwrap()
+    .with_chatgpt_turn_state(state.clone());
+
+    second.send_request(&request).unwrap();
+
+    let third = OpenAiResponsesProvider::with_endpoint_headers_and_stream(
+        "chatgpt-access-token",
+        CHATGPT_RESPONSES_ENDPOINT,
+        10,
+        std::collections::BTreeMap::from([(
+            CHATGPT_ACCOUNT_ID_HEADER.to_string(),
+            "account-2".to_string(),
+        )]),
+        false,
+        FakeProviderHttpTransport {
+            requests: RefCell::new(Vec::new()),
+            response: response(None),
+        },
+    )
+    .unwrap()
+    .with_chatgpt_turn_state(state);
+    third.send_request(&request).unwrap();
+
+    let sent = second.transport.requests.borrow();
+    assert_eq!(
+        sent[0]
+            .headers
+            .get(CHATGPT_TURN_STATE_HEADER)
+            .map(String::as_str),
+        Some("turn-state-first")
+    );
+    assert!(
+        !third.transport.requests.borrow()[0]
+            .headers
+            .contains_key(CHATGPT_TURN_STATE_HEADER)
+    );
+}
+
+#[test]
 /// Verifies that `ModelProvider::list_models` for OpenAI issues an authenticated
 /// GET request and normalizes the response into a model catalog with any
 /// provider-reported quota usage. This is the provider-backed path consumed by

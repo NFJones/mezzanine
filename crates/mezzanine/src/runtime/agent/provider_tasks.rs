@@ -951,6 +951,20 @@ impl RuntimeSessionService {
             &model_profile,
             "provider_request",
         )?;
+        let provider = match provider {
+            RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
+                let state = self
+                    .agent
+                    .agent_turn_chatgpt_routing_states
+                    .entry(turn_id.to_string())
+                    .or_default()
+                    .clone();
+                RuntimeAgentProviderDispatchProvider::OpenAi(
+                    provider.with_chatgpt_turn_state(state),
+                )
+            }
+            provider => provider,
+        };
         let macro_judge_step_index = self.macro_judge_step_index_for_turn(turn_id);
         let macro_judge_request = macro_judge_step_index
             .map(|step_index| self.macro_judge_request_for_turn(&turn, &model_profile, step_index))
