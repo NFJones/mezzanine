@@ -277,3 +277,66 @@ fn openai_provider_stream_incomplete_output_limit_is_recoverable() {
         "max_output_tokens"
     );
 }
+
+#[test]
+/// Verifies a unary incomplete Responses body with syntactically valid native
+/// arguments is withheld from the adapter and classified for output-limit
+/// recovery instead of becoming an executable model response.
+fn openai_provider_unary_incomplete_native_output_is_recoverable() {
+    let request = assemble_model_request(
+        &ModelProfile {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "user".to_string(),
+            content: "hello".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    let transport = FakeProviderHttpTransport {
+        requests: RefCell::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: serde_json::json!({
+                "id": "resp_incomplete_unary",
+                "model": "gpt-test",
+                "status": "incomplete",
+                "incomplete_details": { "reason": "max_output_tokens" },
+                "output": [{
+                    "type": "function_call",
+                    "name": "submit_maap_action_batch",
+                    "arguments": "{\"actions\":[]}"
+                }]
+            })
+            .to_string(),
+        },
+    };
+    let provider = OpenAiResponsesProvider::with_endpoint(
+        "test-key",
+        "https://example.test/responses",
+        10,
+        transport,
+    )
+    .unwrap();
+
+    let error = provider.send_request(&request).unwrap_err();
+
+    assert!(error.message().contains("max_output_tokens"), "{error}");
+    assert!(!error.message().contains("actions"), "{error}");
+    assert_eq!(
+        crate::integrations::agent::provider::provider_error_retry_class(&error),
+        mez_agent::ProviderErrorRetryClass::OutputLimit
+    );
+}

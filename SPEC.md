@@ -10334,7 +10334,7 @@ transport interruption, even when valid progress events were already decoded.
 Mezzanine MUST discard provisional streamed presentation before scheduling the
 bounded actor-owned retry and MUST NOT reinterpret truncated terminal JSON as a
 complete provider failure or response.
-When an OpenAI-compatible stream ends with `response.incomplete` and
+When an OpenAI-compatible stream or unary response is incomplete and
 `incomplete_details.reason` is `max_output_tokens`, Mezzanine MUST classify the
 failure as output-token exhaustion rather than input context pressure. Mezzanine
 MUST preserve bounded structured safe partial state, never execute incomplete

@@ -65,6 +65,65 @@ pub fn parse_openai_responses_http_body(
         return Err(ProviderResponseError::invalid_state(message)
             .with_provider_failure_json(openai_provider_failure_event_json(&value)));
     }
+    if value.get("status").and_then(serde_json::Value::as_str) == Some("incomplete") {
+        let stop_reason = value
+            .pointer("/incomplete_details/reason")
+            .or_else(|| value.pointer("/response/incomplete_details/reason"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        let safe_stop_reason = sanitize_provider_primary_error_text(stop_reason);
+        let safe_partial_text = value
+            .get("output_text")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned)
+            .or_else(|| collect_openai_output_text(&value))
+            .unwrap_or_default();
+        let native_items = value
+            .get("output")
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|item| {
+                        item.get("type").and_then(serde_json::Value::as_str)
+                            == Some("function_call")
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+        let continuation_disposition = if native_items == 0 {
+            ProviderOutputLimitContinuationDisposition::ContinueVisibleText
+        } else {
+            ProviderOutputLimitContinuationDisposition::ReemitAtomicNativeCall
+        };
+        return Err(ProviderResponseError::invalid_state(format!(
+            "OpenAI response returned an incomplete response: {safe_stop_reason}"
+        ))
+        .with_provider_failure_json(openai_provider_failure_event_json(&value))
+        .with_output_limit_state(ProviderOutputLimitState::new(
+            "openai",
+            "responses",
+            stop_reason,
+            value
+                .get("id")
+                .or_else(|| value.pointer("/response/id"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            safe_partial_text,
+            0,
+            native_items,
+            openai_token_usage_from_response_value(&value),
+            continuation_disposition,
+        )));
+    }
+    if let Some(status) = value.get("status").and_then(serde_json::Value::as_str)
+        && status != "completed"
+    {
+        return Err(
+            ProviderResponseError::invalid_state("OpenAI response did not complete")
+                .with_provider_failure_json(openai_provider_failure_event_json(&value)),
+        );
+    }
     let model = value
         .get("model")
         .and_then(serde_json::Value::as_str)
@@ -892,6 +951,124 @@ mod tests {
             events,
             vec![ProviderTranscriptEvent::OpenAiResponseOutput { items }]
         );
+    }
+
+    /// Verifies unary incomplete Responses never promote syntactically complete
+    /// native arguments into executable output or durable provider continuity.
+    #[test]
+    fn openai_http_parser_rejects_incomplete_native_output() {
+        let body = serde_json::json!({
+            "id": "resp_cutoff",
+            "model": "gpt-test",
+            "status": "incomplete",
+            "incomplete_details": { "reason": "max_output_tokens" },
+            "usage": { "output_tokens": 12 },
+            "output": [{
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "submit_maap_action_batch",
+                "arguments": "{\"actions\":[]}"
+            }]
+        })
+        .to_string();
+
+        let error = parse_openai_responses_http_body(&body, "fallback").unwrap_err();
+
+        assert_eq!(error.kind(), ProviderResponseErrorKind::InvalidState);
+        assert!(error.message().contains("max_output_tokens"), "{error}");
+        let state = error.output_limit_state().expect("output-limit state");
+        assert_eq!(state.stop_reason, "max_output_tokens");
+        assert_eq!(state.response_id.as_deref(), Some("resp_cutoff"));
+        assert_eq!(state.complete_native_items, 0);
+        assert_eq!(state.incomplete_native_items, 1);
+        assert_eq!(
+            state.continuation_disposition,
+            ProviderOutputLimitContinuationDisposition::ReemitAtomicNativeCall
+        );
+    }
+
+    /// Verifies a truncated function-call item is reemitted atomically even
+    /// when the provider has not emitted its arguments field yet.
+    #[test]
+    fn openai_http_parser_rejects_incomplete_native_output_without_arguments() {
+        let body = serde_json::json!({
+            "id": "resp_cutoff_before_arguments",
+            "model": "gpt-test",
+            "status": "incomplete",
+            "incomplete_details": { "reason": "max_output_tokens" },
+            "output": [{
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "submit_maap_action_batch"
+            }]
+        })
+        .to_string();
+
+        let error = parse_openai_responses_http_body(&body, "fallback").unwrap_err();
+
+        let state = error.output_limit_state().expect("output-limit state");
+        assert_eq!(state.complete_native_items, 0);
+        assert_eq!(state.incomplete_native_items, 1);
+        assert_eq!(
+            state.continuation_disposition,
+            ProviderOutputLimitContinuationDisposition::ReemitAtomicNativeCall
+        );
+    }
+
+    /// Verifies unary incomplete status details cannot expose provider-authored
+    /// credential-shaped text through diagnostics or retained continuation state.
+    #[test]
+    fn openai_http_parser_sanitizes_incomplete_stop_reason() {
+        const SENTINEL: &str = "sk-proj-OPENAIUNARYINCOMPLETESENTINEL000";
+        let body = serde_json::json!({
+            "id": "resp_incomplete",
+            "model": "gpt-test",
+            "status": "incomplete",
+            "incomplete_details": {
+                "reason": format!("cutoff Bearer {SENTINEL}")
+            }
+        })
+        .to_string();
+
+        let error = parse_openai_responses_http_body(&body, "fallback").unwrap_err();
+
+        assert!(!error.message().contains(SENTINEL), "{}", error.message());
+        assert!(!format!("{error:?}").contains(SENTINEL));
+        assert!(!error.to_string().contains(SENTINEL));
+        assert_eq!(
+            error
+                .output_limit_state()
+                .expect("output-limit state")
+                .stop_reason,
+            "[REDACTED]"
+        );
+        let failure: serde_json::Value =
+            serde_json::from_str(error.provider_failure_json().unwrap()).unwrap();
+        assert!(!failure.to_string().contains(SENTINEL), "{failure}");
+    }
+
+    /// Verifies unary Responses statuses other than `completed` cannot promote
+    /// action-bearing output after a provider reports failure or remains active.
+    #[test]
+    fn openai_http_parser_rejects_nonterminal_and_failed_native_output() {
+        for status in ["failed", "cancelled", "in_progress"] {
+            let body = serde_json::json!({
+                "model": "gpt-test",
+                "status": status,
+                "output": [{
+                    "type": "function_call",
+                    "name": "submit_maap_action_batch",
+                    "arguments": "{\"actions\":[] }"
+                }]
+            })
+            .to_string();
+
+            let error = parse_openai_responses_http_body(&body, "fallback").unwrap_err();
+            assert_eq!(error.kind(), ProviderResponseErrorKind::InvalidState);
+            assert_eq!(error.message(), "OpenAI response did not complete");
+        }
     }
 
     /// Verifies streaming Responses parsing prefers the completed response
