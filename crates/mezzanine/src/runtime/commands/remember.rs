@@ -16,7 +16,7 @@ use super::{
     RuntimeSessionService, current_unix_seconds,
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
     discover_project_root, json_escape,
-    openai_compatible_provider_from_auth_store_with_provider_options,
+    openai_compatible_provider_from_auth_store_with_provider_options_and_brand,
     openai_responses_provider_from_auth_store_with_provider_options, parse_slash_command,
     resolve_provider_api, runtime_apply_persisted_config_mutation_batch,
     runtime_effective_config_value, runtime_single_mode_arg, runtime_string_array_json,
@@ -643,9 +643,10 @@ impl RuntimeSessionService {
                 .map(RuntimeAgentProviderDispatchProvider::OpenAi)
             }
             ProviderApiCompatibility::OpenAiChatCompletions => {
-                openai_compatible_provider_from_auth_store_with_provider_options(
+                openai_compatible_provider_from_auth_store_with_provider_options_and_brand(
                     auth_store,
                     &model_profile.provider,
+                    provider_config.kind == "openai",
                     endpoint_override,
                     &provider_options,
                     DEFAULT_PROVIDER_TIMEOUT_MS,

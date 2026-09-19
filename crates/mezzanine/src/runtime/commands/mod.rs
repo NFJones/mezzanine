@@ -41,7 +41,7 @@ use super::{
 use crate::integrations::agent::provider::{
     AsyncModelProvider, ReqwestProviderHttpTransport,
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
-    openai_compatible_provider_from_auth_store_with_provider_options,
+    openai_compatible_provider_from_auth_store_with_provider_options_and_brand,
     openai_responses_provider_from_auth_store_with_provider_options,
 };
 use crate::runtime::config::{

@@ -14,7 +14,7 @@ use super::{
     RuntimeSessionService,
     deepseek_chat_completions_provider_from_auth_store_with_provider_options, json_escape,
     normalize_model_catalog_values,
-    openai_compatible_provider_from_auth_store_with_provider_options,
+    openai_compatible_provider_from_auth_store_with_provider_options_and_brand,
     openai_responses_provider_from_auth_store_with_provider_options, parse_slash_command,
     resolve_provider_api, runtime_default_config_model_records,
     runtime_recommended_model_for_provider,
@@ -405,14 +405,11 @@ impl RuntimeSessionService {
                 "provider model listing requires an attached auth store",
             ));
         };
-        let metadata = auth_store
-            .read_metadata_for_provider(provider_id)?
-            .ok_or_else(|| {
-                MezError::invalid_state(format!(
-                    "provider `{provider_id}` model listing requires an authenticated provider"
-                ))
-            })?;
-        if metadata.credential_kind == AuthCredentialKind::ChatGpt {
+        let metadata = auth_store.read_metadata_for_provider(provider_id)?;
+        if metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.credential_kind == AuthCredentialKind::ChatGpt)
+        {
             self.append_credential_access_audit(
                 provider_id,
                 &provider_config.auth_profile,
@@ -440,9 +437,10 @@ impl RuntimeSessionService {
                 .map(|provider| Box::new(provider) as Box<dyn AsyncModelProvider>)
             }
             ProviderApiCompatibility::OpenAiChatCompletions => {
-                openai_compatible_provider_from_auth_store_with_provider_options(
+                openai_compatible_provider_from_auth_store_with_provider_options_and_brand(
                     auth_store,
                     provider_id,
+                    provider_config.kind == "openai",
                     endpoint_override,
                     &provider_config.options,
                     DEFAULT_PROVIDER_TIMEOUT_MS,
@@ -522,31 +520,6 @@ async fn execute_provider_info_refresh_entry(
             credential_outcome: Some("denied"),
         };
     };
-    let metadata = {
-        let auth_store = auth_store.clone();
-        let provider_id = entry.provider_id.clone();
-        tokio::task::spawn_blocking(move || auth_store.read_metadata_for_provider(&provider_id))
-            .await
-    };
-    let metadata = match metadata {
-        Ok(Ok(Some(metadata))) => metadata,
-        Ok(Ok(None) | Err(_)) | Err(_) => {
-            let fallback = entry.fallback.clone();
-            return RuntimeProviderInfoRefreshEntryOutcome {
-                entry,
-                result: Ok(fallback),
-                credential_outcome: Some("denied"),
-            };
-        }
-    };
-    if metadata.credential_kind == AuthCredentialKind::ChatGpt {
-        let fallback = entry.fallback.clone();
-        return RuntimeProviderInfoRefreshEntryOutcome {
-            entry,
-            result: Ok(fallback),
-            credential_outcome: Some("unsupported"),
-        };
-    }
     let result =
         fetch_raw_provider_model_catalog(entry.provider_config.clone(), auth_store.clone()).await;
     if result.is_err() {
@@ -561,7 +534,7 @@ async fn execute_provider_info_refresh_entry(
     RuntimeProviderInfoRefreshEntryOutcome {
         entry,
         result,
-        credential_outcome: Some("granted"),
+        credential_outcome: None,
     }
 }
 
@@ -595,9 +568,10 @@ pub(crate) async fn fetch_raw_provider_model_catalog(
                 .map(|provider| Box::new(provider) as Box<dyn AsyncModelProvider>)
             }
             ProviderApiCompatibility::OpenAiChatCompletions => {
-                openai_compatible_provider_from_auth_store_with_provider_options(
+                openai_compatible_provider_from_auth_store_with_provider_options_and_brand(
                     &auth_store,
                     &provider_config.provider_id,
+                    provider_config.kind == "openai",
                     endpoint_override,
                     &provider_config.options,
                     DEFAULT_PROVIDER_TIMEOUT_MS,

@@ -5094,7 +5094,12 @@ interpreted as a compatible API base URL; Mezzanine MUST derive the documented
 base. Compatible providers
 MUST use the named provider entry as the configuration boundary so each backend
 can declare its own base URL, auth profile, model list, default model, and
-provider-level compatibility options. The `openai-chat-completions` adapter MUST
+provider-level compatibility options. For an OpenAI-branded provider using
+`openai-chat-completions`, an empty `base_url` MUST select
+`https://api.openai.com/v1`; it MUST require direct API-key credentials, MUST
+send configured OpenAI organization/project routing headers, and MUST default
+an output budget to `max_completion_tokens`. Generic compatible providers retain
+their optional-auth and `max_tokens` defaults. The `openai-chat-completions` adapter MUST
 use a provider-neutral OpenAI-style Chat Completions dialect and MUST NOT emit
 DeepSeek thinking fields, `reasoning_content`, DeepSeek MAAP shim function
 names, or DeepSeek fallback retry policy. Generic OpenAI-compatible Chat

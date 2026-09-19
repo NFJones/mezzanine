@@ -73,7 +73,7 @@ use crate::host::power_inhibition::{
 };
 use crate::integrations::agent::provider::{
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
-    openai_compatible_provider_from_auth_store_with_provider_options,
+    openai_compatible_provider_from_auth_store_with_provider_options_and_brand,
     openai_responses_provider_from_auth_store_with_provider_options,
 };
 use crate::runtime::config::ShellMode;

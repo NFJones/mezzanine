@@ -68,6 +68,271 @@ fn chat_completions_compatible_providers_omit_auth_when_metadata_is_absent() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// Verifies the built-in OpenAI Chat Completions provider uses direct API
+/// routing, API-key headers, and the modern completion-token field by default.
+///
+/// Generic compatible providers must retain their local endpoint and
+/// `max_tokens` defaults, while the built-in OpenAI brand requires the direct
+/// REST endpoint and routing metadata for a configured API key.
+#[test]
+fn direct_openai_chat_completions_uses_api_key_routing_and_completion_budget() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-agent-provider-direct-openai-chat-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let auth_store = AuthStore::new(crate::security::auth::AuthPaths::under_config_root(&root));
+    let credential_store = auth_store.file_credential_store("openai").unwrap();
+    auth_store
+        .login_openai_api_key("default", "sk-direct-chat", &credential_store)
+        .unwrap();
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            model_capabilities: Default::default(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "user".to_string(),
+            content: "reply with one action".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request.max_output_tokens = Some(64);
+    let arguments = serde_json::json!({
+        "rationale": "reply directly",
+        "actions": [{
+            "type": "say",
+            "status": "final",
+            "content_type": "text/plain; charset=utf-8",
+            "text": "ok"
+        }]
+    })
+    .to_string();
+    let transport = FakeProviderHttpTransport {
+        requests: RefCell::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: serde_json::json!({
+                "model": "gpt-test",
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [{
+                            "id": "call_direct_openai",
+                            "type": "function",
+                            "function": {
+                                "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                                "arguments": arguments
+                            }
+                        }]
+                    }
+                }]
+            })
+            .to_string(),
+        },
+    };
+    let options = std::collections::BTreeMap::from([
+        ("organization".to_string(), "org_direct".to_string()),
+        ("project".to_string(), "proj_direct".to_string()),
+    ]);
+    let provider = openai_compatible_provider_from_auth_store_with_provider_options(
+        &auth_store,
+        "openai",
+        None,
+        &options,
+        120_000,
+        transport,
+    )
+    .unwrap();
+
+    let _ = provider.send_request(&request).unwrap();
+
+    let sent = provider.transport.requests.borrow();
+    assert_eq!(sent[0].url, "https://api.openai.com/v1/chat/completions");
+    assert_eq!(
+        sent[0].headers.get("Authorization").map(String::as_str),
+        Some("Bearer sk-direct-chat")
+    );
+    assert_eq!(
+        sent[0]
+            .headers
+            .get("OpenAI-Organization")
+            .map(String::as_str),
+        Some("org_direct")
+    );
+    assert_eq!(
+        sent[0].headers.get("OpenAI-Project").map(String::as_str),
+        Some("proj_direct")
+    );
+    let body: serde_json::Value = serde_json::from_str(&sent[0].body).unwrap();
+    assert!(body.get("max_tokens").is_none());
+    assert_eq!(body["max_completion_tokens"], 64);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Verifies direct OpenAI Chat Completions model discovery uses the direct API
+/// catalog endpoint and preserves configured organization routing metadata.
+///
+/// Chat Completions and Responses share OpenAI's `/models` catalog, so a
+/// brand-aware Chat Completions factory must not retain the generic local URL
+/// or drop non-secret direct-API routing headers during catalog refresh.
+#[test]
+fn direct_openai_chat_completions_lists_models_with_direct_routing_headers() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-agent-provider-direct-openai-chat-catalog-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let auth_store = AuthStore::new(crate::security::auth::AuthPaths::under_config_root(&root));
+    let credential_store = auth_store.file_credential_store("openai").unwrap();
+    auth_store
+        .login_openai_api_key("default", "sk-direct-catalog", &credential_store)
+        .unwrap();
+    let transport = FakeProviderHttpTransport {
+        requests: RefCell::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: r#"{"data":[{"id":"gpt-direct-catalog"}]}"#.to_string(),
+        },
+    };
+    let options = std::collections::BTreeMap::from([
+        ("organization".to_string(), "org_catalog".to_string()),
+        ("project".to_string(), "proj_catalog".to_string()),
+    ]);
+    let provider = openai_compatible_provider_from_auth_store_with_provider_options(
+        &auth_store,
+        "openai",
+        None,
+        &options,
+        120_000,
+        transport,
+    )
+    .unwrap();
+
+    let catalog = provider.list_models().unwrap();
+
+    assert_eq!(catalog.models[0].id, "gpt-direct-catalog");
+    let sent = provider.transport.requests.borrow();
+    assert_eq!(sent[0].url, OPENAI_MODELS_ENDPOINT);
+    assert_eq!(
+        sent[0].headers.get("Authorization").map(String::as_str),
+        Some("Bearer sk-direct-catalog")
+    );
+    assert_eq!(
+        sent[0]
+            .headers
+            .get("OpenAI-Organization")
+            .map(String::as_str),
+        Some("org_catalog")
+    );
+    assert_eq!(
+        sent[0].headers.get("OpenAI-Project").map(String::as_str),
+        Some("proj_catalog")
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Verifies direct OpenAI Chat Completions rejects browser credentials rather
+/// than forwarding a ChatGPT access token as a direct REST API key.
+///
+/// ChatGPT authentication remains supported by the Responses backend. This
+/// factory must fail before dispatch because Chat Completions only accepts a
+/// direct OpenAI API-key credential in the built-in provider configuration.
+#[test]
+fn direct_openai_chat_completions_rejects_chatgpt_credentials() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-agent-provider-direct-openai-chat-chatgpt-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let auth_store = AuthStore::new(crate::security::auth::AuthPaths::under_config_root(&root));
+    let credential_store = auth_store.file_credential_store("openai").unwrap();
+    auth_store
+        .login_openai_provider_credential(
+            "default",
+            OpenAiProviderCredential {
+                api_key: "chatgpt-access-token".to_string(),
+                refresh_token: Some("refresh-token".to_string()),
+                account_id: Some("acct_direct".to_string()),
+                organization_id: None,
+                token_expires_at: None,
+            },
+            &credential_store,
+        )
+        .unwrap();
+    let error = openai_compatible_provider_from_auth_store_with_provider_options(
+        &auth_store,
+        "openai",
+        None,
+        &std::collections::BTreeMap::new(),
+        120_000,
+        FakeProviderHttpTransport {
+            requests: RefCell::new(Vec::new()),
+            response: ProviderHttpResponse {
+                status_code: 200,
+                headers: Default::default(),
+                body: String::new(),
+            },
+        },
+    )
+    .unwrap_err();
+
+    assert!(error.message().contains("requires API-key credentials"));
+    assert!(error.message().contains("ChatGPT browser credentials"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Verifies direct OpenAI Chat Completions rejects missing credentials while
+/// generic compatible providers retain their unauthenticated local contract.
+///
+/// The direct OpenAI endpoint cannot safely infer whether an absent credential
+/// is intentional, whereas local compatible servers commonly permit it.
+#[test]
+fn direct_openai_chat_completions_requires_api_key_credentials() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-agent-provider-direct-openai-chat-no-auth-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let auth_store = AuthStore::new(crate::security::auth::AuthPaths::under_config_root(&root));
+    let error = openai_compatible_provider_from_auth_store_with_provider_options(
+        &auth_store,
+        "openai",
+        None,
+        &std::collections::BTreeMap::new(),
+        120_000,
+        FakeProviderHttpTransport {
+            requests: RefCell::new(Vec::new()),
+            response: ProviderHttpResponse {
+                status_code: 200,
+                headers: Default::default(),
+                body: String::new(),
+            },
+        },
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .message()
+            .contains("requires authenticated API-key credentials")
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
 #[test]
 /// Verifies duplicate OpenAI-compatible MAAP tool calls surface as malformed output.
 ///

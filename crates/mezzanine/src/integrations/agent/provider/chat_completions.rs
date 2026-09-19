@@ -176,6 +176,7 @@ pub struct ChatCompletionsProvider<T, D> {
     pub(in crate::integrations::agent) api_key: Option<SecretString>,
     pub(in crate::integrations::agent) provider_id: String,
     pub(in crate::integrations::agent) endpoint: String,
+    pub(in crate::integrations::agent) extra_headers: BTreeMap<String, String>,
     pub(in crate::integrations::agent) stream: bool,
     pub(in crate::integrations::agent) timeout_ms: u64,
     pub(in crate::integrations::agent) transport: T,
@@ -217,6 +218,7 @@ where
             api_key,
             provider_id: dialect.default_provider_id().to_string(),
             endpoint: dialect.default_chat_endpoint().to_string(),
+            extra_headers: BTreeMap::new(),
             stream: false,
             timeout_ms: DEFAULT_PROVIDER_TIMEOUT_MS,
             transport,
@@ -255,6 +257,16 @@ where
         self
     }
 
+    /// Adds non-secret provider routing headers to every request and catalog lookup.
+    pub fn with_extra_headers(mut self, extra_headers: BTreeMap<String, String>) -> Result<Self> {
+        for (name, value) in &extra_headers {
+            validate_non_empty("Chat Completions provider extra header name", name)?;
+            validate_non_empty("Chat Completions provider extra header value", value)?;
+        }
+        self.extra_headers = extra_headers;
+        Ok(self)
+    }
+
     /// Sets the request timeout in milliseconds.
     pub fn with_timeout(mut self, timeout_ms: u64) -> Self {
         self.timeout_ms = timeout_ms;
@@ -269,6 +281,15 @@ where
     /// Returns the bearer credential as a borrowed secret string.
     fn api_key_secret(&self) -> Option<&str> {
         self.api_key.as_ref().map(|api_key| api_key.expose_secret())
+    }
+
+    /// Adds provider-owned non-secret routing headers without replacing wire headers.
+    fn apply_extra_headers(&self, request: &mut ProviderHttpRequest) {
+        request.headers.extend(
+            self.extra_headers
+                .iter()
+                .map(|(name, value)| (name.clone(), value.clone())),
+        );
     }
 
     /// Builds a provider-identity mismatch error for this dialect.
@@ -356,11 +377,12 @@ where
     }
 
     fn list_models(&self) -> Result<ProviderModelCatalog> {
-        let http_request = self.dialect.build_models_request(
+        let mut http_request = self.dialect.build_models_request(
             self.api_key_secret(),
             &self.endpoint,
             self.timeout_ms,
         )?;
+        self.apply_extra_headers(&mut http_request);
         let response = self.transport.send(&http_request)?;
         if !(200..300).contains(&response.status_code) {
             return Err(self.provider_status_error("Models", &response));
@@ -372,13 +394,14 @@ where
         if request.provider != ModelProvider::provider_id(self) {
             return Err(self.provider_mismatch_error());
         }
-        let http_request = self.dialect.build_chat_request(
+        let mut http_request = self.dialect.build_chat_request(
             request,
             self.api_key_secret(),
             &self.endpoint,
             self.stream,
             self.timeout_ms,
         )?;
+        self.apply_extra_headers(&mut http_request);
         let response = self.transport.send(&http_request)?;
         if !(200..300).contains(&response.status_code) {
             return Err(self.provider_status_error("Chat Completions", &response));
@@ -397,8 +420,10 @@ where
             self.timeout_ms,
             &parsed,
         )? {
-            validate_retry_input_cap(request, &retry.request)?;
-            let retry_response = self.transport.send(&retry.request)?;
+            let mut retry_request = retry.request;
+            self.apply_extra_headers(&mut retry_request);
+            validate_retry_input_cap(request, &retry_request)?;
+            let retry_response = self.transport.send(&retry_request)?;
             if !(200..300).contains(&retry_response.status_code) {
                 return Err(self.provider_status_error("Chat Completions", &retry_response));
             }
@@ -448,11 +473,12 @@ where
         &'a self,
     ) -> Pin<Box<dyn Future<Output = Result<ProviderModelCatalog>> + Send + 'a>> {
         Box::pin(async move {
-            let http_request = self.dialect.build_models_request(
+            let mut http_request = self.dialect.build_models_request(
                 self.api_key_secret(),
                 &self.endpoint,
                 self.timeout_ms,
             )?;
+            self.apply_extra_headers(&mut http_request);
             let response = self.transport.send_async(&http_request).await?;
             if !(200..300).contains(&response.status_code) {
                 return Err(self.provider_status_error("Models", &response));
@@ -486,13 +512,14 @@ where
             if request.provider != AsyncModelProvider::provider_id(self) {
                 return Err(self.provider_mismatch_error());
             }
-            let http_request = self.dialect.build_chat_request(
+            let mut http_request = self.dialect.build_chat_request(
                 request,
                 self.api_key_secret(),
                 &self.endpoint,
                 self.stream,
                 self.timeout_ms,
             )?;
+            self.apply_extra_headers(&mut http_request);
             let effective_stream = self.dialect.effective_stream(request, self.stream);
             let mut stream_decoder = if effective_stream {
                 self.dialect.stream_decoder(request)?
@@ -606,8 +633,10 @@ where
                         .observe(request, 1, Some("provider_forced_maap"), &first_result)
                         .await;
                 }
-                validate_retry_input_cap(request, &retry.request)?;
-                let retry_response = match self.transport.send_async(&retry.request).await {
+                let mut retry_request = retry.request;
+                self.apply_extra_headers(&mut retry_request);
+                validate_retry_input_cap(request, &retry_request)?;
+                let retry_response = match self.transport.send_async(&retry_request).await {
                     Ok(response) => response,
                     Err(error) => {
                         let result = Err(error.into());

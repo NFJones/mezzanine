@@ -1035,6 +1035,13 @@ brand/defaults. Use `openai-responses` for Responses-compatible backends,
 one provider entry per backend, set `base_url` to the backend API base such as
 `https://api.example.com/v1`, and provide `models` plus `default_model` unless
 the backend's `/models` endpoint is sufficient for live catalog refresh.
+For an OpenAI-branded entry (`kind = "openai"`) using
+`api = "openai-chat-completions"`, an empty `base_url` selects OpenAI's direct
+`https://api.openai.com/v1` endpoints. It requires an API key rather than a
+ChatGPT browser/device credential, sends configured organization/project routing
+headers, and defaults output budgets to `max_completion_tokens`. Named generic
+compatible entries retain their local or explicitly configured endpoints and
+their ordinary optional-auth and `max_tokens` defaults.
 The generic `openai-chat-completions` adapter uses the canonical OpenAI-style
 function-tool surface and does not send DeepSeek thinking fields,
 `reasoning_content`, or DeepSeek MAAP shim function names. Generic compatible

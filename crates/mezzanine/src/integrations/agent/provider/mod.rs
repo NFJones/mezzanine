@@ -79,6 +79,9 @@ use openai_chat_completions::OpenAiChatCompletionsDialect;
 
 use mez_agent::{CHATGPT_RESPONSES_ENDPOINT, OPENAI_RESPONSES_ENDPOINT};
 
+/// Direct OpenAI Chat Completions endpoint used with OpenAI API-key credentials.
+const OPENAI_CHAT_COMPLETIONS_ENDPOINT: &str = "https://api.openai.com/v1/chat/completions";
+
 /// Maximum decoded `say.text` bytes delivered in one progress event.
 pub(crate) const STREAMING_SAY_TEXT_CHUNK_LIMIT_BYTES: usize = 16 * 1024;
 
@@ -1255,6 +1258,7 @@ pub fn anthropic_provider_from_auth_store_with_provider_options<T>(
 /// compatible backends can coexist while sharing the Chat Completions wire
 /// contract. Endpoint overrides are expanded to `/chat/completions` using the
 /// same compatibility rules as the DeepSeek adapter.
+#[cfg(test)]
 pub fn openai_compatible_provider_from_auth_store_with_provider_options<T>(
     auth_store: &dyn ProviderCredentialSource<Error = MezError, Credential = SecretString>,
     provider_name: &str,
@@ -1263,11 +1267,53 @@ pub fn openai_compatible_provider_from_auth_store_with_provider_options<T>(
     timeout_ms: u64,
     transport: T,
 ) -> Result<OpenAiCompatibleChatCompletionsProvider<T>> {
-    let dialect = OpenAiChatCompletionsDialect::from_provider_options(provider_options)?;
-    let api_key = if auth_store.provider_auth_metadata(provider_name)?.is_some() {
-        Some(auth_store.provider_credential(provider_name)?)
-    } else {
-        None
+    openai_compatible_provider_from_auth_store_with_provider_options_and_brand(
+        auth_store,
+        provider_name,
+        provider_name == "openai",
+        base_url_override,
+        provider_options,
+        timeout_ms,
+        transport,
+    )
+}
+
+/// Builds an OpenAI-compatible Chat Completions provider with explicit brand policy.
+///
+/// The configured provider id continues to scope credentials and request guards.
+/// `direct_openai` selects direct OpenAI REST routing for providers whose brand
+/// is OpenAI even when their configured id is not the built-in `openai` id.
+pub fn openai_compatible_provider_from_auth_store_with_provider_options_and_brand<T>(
+    auth_store: &dyn ProviderCredentialSource<Error = MezError, Credential = SecretString>,
+    provider_name: &str,
+    direct_openai: bool,
+    base_url_override: Option<&str>,
+    provider_options: &BTreeMap<String, String>,
+    timeout_ms: u64,
+    transport: T,
+) -> Result<OpenAiCompatibleChatCompletionsProvider<T>> {
+    let mut effective_options = provider_options.clone();
+    if direct_openai && !effective_options.contains_key("output_token_field") {
+        effective_options.insert(
+            "output_token_field".to_string(),
+            "max_completion_tokens".to_string(),
+        );
+    }
+    let dialect = OpenAiChatCompletionsDialect::from_provider_options(&effective_options)?;
+    let metadata = auth_store.provider_auth_metadata(provider_name)?;
+    let api_key = match metadata.as_ref().map(|metadata| metadata.credential_kind) {
+        None if direct_openai => {
+            return Err(MezError::invalid_state(
+                "direct OpenAI Chat Completions requires authenticated API-key credentials",
+            ));
+        }
+        Some(ProviderCredentialKind::ChatGpt) if direct_openai => {
+            return Err(MezError::invalid_state(
+                "direct OpenAI Chat Completions requires API-key credentials; ChatGPT browser credentials are only supported by the Responses backend",
+            ));
+        }
+        Some(_) => Some(auth_store.provider_credential(provider_name)?),
+        None => None,
     };
     let mut provider = OpenAiCompatibleChatCompletionsProvider::with_optional_auth_and_dialect(
         api_key, transport, dialect,
@@ -1276,6 +1322,15 @@ pub fn openai_compatible_provider_from_auth_store_with_provider_options<T>(
     if let Some(base_url) = base_url_override.filter(|e| !e.trim().is_empty()) {
         let endpoint = provider.chat_endpoint_for_base_url(base_url)?;
         provider = provider.with_endpoint(endpoint);
+    } else if direct_openai {
+        provider = provider.with_endpoint(OPENAI_CHAT_COMPLETIONS_ENDPOINT);
+    }
+    if direct_openai
+        && let Some(metadata) = metadata.as_ref()
+        && metadata.credential_kind == ProviderCredentialKind::ApiKey
+    {
+        provider = provider
+            .with_extra_headers(openai_direct_api_extra_headers(metadata, provider_options))?;
     }
     provider = provider.with_timeout(timeout_ms);
     Ok(provider)

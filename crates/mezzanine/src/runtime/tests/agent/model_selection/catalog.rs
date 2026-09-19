@@ -49,6 +49,84 @@ async fn runtime_agent_shell_refresh_provider_info_populates_model_catalog_cache
     assert!(service.has_cached_provider_model_catalog("openai"));
 }
 
+/// Verifies that a generic OpenAI-compatible provider can refresh its live
+/// catalog without credentials when an auth store is attached but has no
+/// provider metadata. Local-compatible servers commonly expose `/models`
+/// anonymously, so runtime refresh must let factory policy make that choice.
+#[tokio::test]
+async fn runtime_agent_shell_refresh_provider_info_discovers_unauthenticated_compatible_catalog() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        loop {
+            let read = stream.read(&mut buffer).await.unwrap();
+            assert!(read > 0, "catalog client closed before request headers");
+            request.extend_from_slice(&buffer[..read]);
+            if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 63\r\nConnection: close\r\n\r\n{\"object\":\"list\",\"data\":[{\"id\":\"local-live\",\"object\":\"model\"}]}",
+            )
+            .await
+            .unwrap();
+        String::from_utf8(request).unwrap()
+    });
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: format!(
+                "[agents]\ndefault_provider = \"local\"\ndefault_model_profile = \"default\"\n\n[providers.local]\nkind = \"openai-compatible\"\napi = \"openai-chat-completions\"\nbase_url = \"http://{address}/v1\"\ndefault_model = \"local-live\"\n"
+            ),
+        }])
+        .unwrap();
+    let auth_root = temp_root("runtime-model-list-unauthenticated-compatible");
+    service.set_auth_store(AuthStore::new(
+        crate::security::auth::AuthPaths::under_config_root(&auth_root),
+    ));
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let output = service
+        .execute_agent_shell_command_async(&primary, "/refresh-provider-info")
+        .await
+        .unwrap();
+    let request = server.await.unwrap();
+
+    assert!(
+        request.starts_with("GET /v1/models HTTP/1.1\r\n"),
+        "{request}"
+    );
+    assert!(
+        !request.to_ascii_lowercase().contains("authorization:"),
+        "{request}"
+    );
+    assert!(
+        output.contains("providers=1 refreshed=1 failed=0"),
+        "{output}"
+    );
+    assert!(output.contains("local source=provider"), "{output}");
+    assert!(service.has_cached_provider_model_catalog("local"));
+    let _ = std::fs::remove_dir_all(auth_root);
+}
+
 /// Verifies that `/model list` uses the active provider catalog surface instead
 /// of listing only manually named profiles. In this test there is no auth store
 /// attached, so the runtime must fall back to the configured provider model set

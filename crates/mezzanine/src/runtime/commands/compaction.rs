@@ -17,7 +17,7 @@ use super::{
     append_mcp_context, current_unix_seconds,
     deepseek_chat_completions_provider_from_auth_store_with_provider_options, json_escape,
     model_context_text_word_count,
-    openai_compatible_provider_from_auth_store_with_provider_options,
+    openai_compatible_provider_from_auth_store_with_provider_options_and_brand,
     openai_responses_provider_from_auth_store_with_provider_options, parse_slash_command,
     resolve_provider_api,
 };
@@ -467,9 +467,10 @@ impl RuntimeSessionService {
                 .map(RuntimeAgentProviderDispatchProvider::OpenAi)
             }
             ProviderApiCompatibility::OpenAiChatCompletions => {
-                openai_compatible_provider_from_auth_store_with_provider_options(
+                openai_compatible_provider_from_auth_store_with_provider_options_and_brand(
                     auth_store,
                     &task.model_profile.provider,
+                    provider_config.kind == "openai",
                     endpoint_override,
                     &provider_options,
                     DEFAULT_PROVIDER_TIMEOUT_MS,
