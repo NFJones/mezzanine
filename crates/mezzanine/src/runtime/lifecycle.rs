@@ -394,6 +394,7 @@ impl RuntimeSessionService {
             self.session.set_lifecycle_state(previous_state);
             return Err(error.into());
         }
+        self.agent.cancel_all_agent_commands();
         self.cancel_pane_status_provider_work();
         self.presentation.clear_mouse_resize_drag_state();
         self.stop_all_active_pane_pipes();
@@ -496,6 +497,7 @@ impl RuntimeSessionService {
         }
         self.session
             .set_lifecycle_state(RuntimeLifecycleState::Stopping);
+        self.agent.cancel_all_agent_commands();
         self.reconcile_active_turn_sleep_inhibition();
         self.session.state = mez_mux::session::SessionState::Stopping;
         self.cancel_pane_status_provider_work();

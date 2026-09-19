@@ -179,8 +179,8 @@ pub(crate) enum RuntimeSnapshotControlAsyncWorkKind {
 pub(crate) struct RuntimeAgentCommandAsyncWork {
     /// Pane whose agent shell prompt submitted the command.
     pub pane_id: String,
-    /// Primary client that submitted the command.
-    pub primary_client_id: mez_core::ids::ClientId,
+    /// Durable conversation that owned the pane when the command was accepted.
+    pub conversation_id: String,
     /// Canonical command name the disposition classifier deferred.
     pub command: String,
     /// Full prompt input including the command name and arguments.
@@ -404,12 +404,47 @@ pub(crate) struct RuntimeAgentCommandDispatch {
     pub primary_client_id: mez_core::ids::ClientId,
     /// Pane whose agent shell prompt submitted the command.
     pub pane_id: String,
+    /// Durable conversation that owns the command across client reattachment.
+    pub conversation_id: String,
     /// Canonical command name the disposition classifier deferred.
     pub command: String,
     /// Full prompt input including the command name and arguments.
     pub input: String,
     /// Actor-owned claim generation used to drop stale outcomes.
     pub claim_generation: u64,
+}
+
+/// Actor-owned phase for one accepted deferred command transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimeAgentCommandLifecyclePhase {
+    /// Accepted by the pane and waiting for a worker claim.
+    Queued,
+    /// Claimed by one worker and waiting for exactly one settlement.
+    Claimed,
+    /// Applied successfully to the owning pane conversation.
+    Completed,
+    /// Failed before execution, during execution, or while applying the result.
+    Failed,
+    /// Retired because its pane, conversation, or runtime owner ended.
+    Cancelled,
+}
+
+impl RuntimeAgentCommandLifecyclePhase {
+    /// Reports whether this phase permits a later command to replace the record.
+    pub(crate) fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+    }
+}
+
+/// Identity and phase retained while one pane owns a deferred command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeAgentCommandLifecycle {
+    /// Unique pane-local command identity.
+    pub command_id: u64,
+    /// Durable conversation that owns the result across client reattachment.
+    pub conversation_id: String,
+    /// Current non-terminal transaction phase.
+    pub phase: RuntimeAgentCommandLifecyclePhase,
 }
 
 /// One deferred record-browser refresh handed to a worker.

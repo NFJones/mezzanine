@@ -975,6 +975,7 @@ impl RuntimeSessionService {
         if let Some(AgentShellCommandOutcome::Mutated { command, .. }) = outcome.as_ref()
             && matches!(command.as_str(), "new" | "clear")
         {
+            self.agent.cancel_agent_command(&pane_id);
             if let Some(conversation_id) = replaced_conversation_id.as_deref() {
                 self.clear_agent_conversation_provider_request_chain(conversation_id);
                 let parent_agent_id = format!("agent-{pane_id}");

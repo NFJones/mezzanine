@@ -1379,6 +1379,7 @@ impl AsyncRuntimeSessionActor {
                 command,
                 input,
                 claim_generation,
+                conversation_id,
                 reply,
             } => {
                 let result = self.service.claim_agent_command_work(
@@ -1387,6 +1388,7 @@ impl AsyncRuntimeSessionActor {
                     &command,
                     &input,
                     claim_generation,
+                    &conversation_id,
                 );
                 let should_notify = result.is_ok();
                 let _ = reply.send(result);

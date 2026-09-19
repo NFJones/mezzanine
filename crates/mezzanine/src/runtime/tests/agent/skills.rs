@@ -921,6 +921,7 @@ fn runtime_agent_shell_deferred_list_skills_matches_the_pane_catalog() {
             &dispatch.command,
             &dispatch.input,
             dispatch.claim_generation,
+            &dispatch.conversation_id,
         )
         .unwrap()
         .expect("the current generation claims its work");
@@ -950,13 +951,13 @@ fn runtime_agent_shell_deferred_list_skills_matches_the_pane_catalog() {
     );
 }
 
-/// Verifies a superseded or stale deferred command cannot paint its display.
+/// Verifies a pane accepts only one deferred command transaction at a time.
 ///
-/// Submitting the same command again while the first attempt is in flight is a
-/// user asking for the newer read, so the older generation must fail to claim and
-/// must not apply; the newest generation still applies normally.
+/// A second same-pane command must report a clear conflict instead of silently
+/// superseding the first command's result. The accepted command remains
+/// claimable and settles exactly once.
 #[test]
-fn runtime_agent_shell_deferred_lane_drops_superseded_work() {
+fn runtime_agent_shell_deferred_lane_refuses_same_pane_supersession() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -970,73 +971,53 @@ fn runtime_agent_shell_deferred_lane_drops_superseded_work() {
     service
         .execute_agent_shell_command(&primary, "/list-skills")
         .unwrap();
-    service
+    let conflict = service
         .execute_agent_shell_command(&primary, "/list-skills")
-        .unwrap();
+        .expect_err("a second command cannot supersede the active transaction");
+    assert_eq!(conflict.kind(), crate::error::MezErrorKind::Conflict);
+    assert!(conflict.message().contains("already active"), "{conflict}");
     let dispatches = service.take_pending_deferred_agent_commands();
     assert_eq!(
         dispatches.len(),
-        2,
-        "each submission queues its own dispatch"
-    );
-    assert!(
-        dispatches[1].claim_generation > dispatches[0].claim_generation,
-        "a resubmission stamps a newer generation"
+        1,
+        "the refused submission must not queue another dispatch"
     );
 
-    let superseded_claim = service
+    let work = service
         .claim_agent_command_work(
             &dispatches[0].primary_client_id,
             &dispatches[0].pane_id,
             &dispatches[0].command,
             &dispatches[0].input,
             dispatches[0].claim_generation,
-        )
-        .unwrap();
-    assert!(
-        superseded_claim.is_none(),
-        "the superseded generation must not claim work"
-    );
-
-    let work = service
-        .claim_agent_command_work(
-            &dispatches[1].primary_client_id,
-            &dispatches[1].pane_id,
-            &dispatches[1].command,
-            &dispatches[1].input,
-            dispatches[1].claim_generation,
+            &dispatches[0].conversation_id,
         )
         .unwrap()
-        .expect("the newest generation claims work");
-    let stale_work = crate::runtime::RuntimeAgentCommandAsyncWork {
-        claim_generation: dispatches[0].claim_generation,
-        ..work.clone()
-    };
-    let stale_applied = service
-        .complete_agent_command_work(
-            &stale_work,
-            crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed {
-                message: "superseded".to_string(),
-                kind: crate::error::MezErrorKind::InvalidState,
-            },
-        )
-        .unwrap();
-    assert!(!stale_applied, "a stale completion must be dropped");
+        .expect("the accepted command remains claimable");
 
     let outcome = crate::runtime::RuntimeSessionService::execute_deferred_agent_command(&work);
     assert!(
         service.complete_agent_command_work(&work, outcome).unwrap(),
-        "the current generation applies its display"
+        "the accepted command applies its display"
     );
+    let duplicate = service
+        .complete_agent_command_work(
+            &work,
+            crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed {
+                message: "duplicate".to_string(),
+                kind: crate::error::MezErrorKind::InvalidState,
+            },
+        )
+        .unwrap();
+    assert!(!duplicate, "a settled command cannot settle twice");
 }
 
-/// Verifies a deferred command whose submitting primary detached cannot claim.
+/// Verifies a deferred command remains owned by its pane conversation after detach.
 ///
-/// The prompt that asked for the display is gone once its primary detaches, so the
-/// claim refuses the work instead of painting a catalog for a client that is no
-/// longer attached.
+/// Attachment identity is transport state, not command ownership. Detaching the
+/// submitter must therefore preserve the command for the same live pane/session.
 #[test]
-fn runtime_agent_shell_deferred_lane_drops_detached_submitters() {
+fn runtime_agent_shell_deferred_lane_survives_submitter_detach() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -1066,10 +1047,371 @@ fn runtime_agent_shell_deferred_lane_drops_detached_submitters() {
             &dispatch.command,
             &dispatch.input,
             dispatch.claim_generation,
+            &dispatch.conversation_id,
         )
+        .unwrap()
+        .expect("the live pane conversation still owns the command");
+    let outcome = crate::runtime::RuntimeSessionService::execute_deferred_agent_command(&claim);
+    assert!(
+        service
+            .complete_agent_command_work(&claim, outcome)
+            .unwrap(),
+        "the detached submitter does not invalidate pane-owned completion"
+    );
+}
+
+/// Verifies `/new` fences the old command before replacement work is submitted.
+///
+/// Conversation identity is part of the command owner. The authoritative
+/// replacement command must cancel old work immediately, so the fresh
+/// conversation can accept its own deferred command before a late old worker
+/// reports completion.
+#[test]
+fn runtime_agent_shell_deferred_lane_fences_replaced_conversation() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_config_root(temp_root("runtime-list-skills-replaced-conversation"));
+
+    service
+        .execute_agent_shell_command(&primary, "/list-skills")
+        .unwrap();
+    let old_dispatch = service
+        .take_pending_deferred_agent_commands()
+        .into_iter()
+        .next()
+        .expect("the old conversation queues one command");
+    let old_work = service
+        .claim_agent_command_work(
+            &old_dispatch.primary_client_id,
+            &old_dispatch.pane_id,
+            &old_dispatch.command,
+            &old_dispatch.input,
+            old_dispatch.claim_generation,
+            &old_dispatch.conversation_id,
+        )
+        .unwrap()
+        .expect("the old conversation claims its command");
+
+    let replaced = service
+        .execute_agent_shell_command(&primary, "/new")
+        .unwrap();
+    assert!(replaced.contains("new=true"), "{replaced}");
+    assert_eq!(
+        service.agent_command_lifecycle_phase_for_tests("%1"),
+        Some(crate::runtime::RuntimeAgentCommandLifecyclePhase::Cancelled)
+    );
+
+    service
+        .execute_agent_shell_command(&primary, "/list-skills")
+        .expect("the replacement conversation accepts work before stale settlement");
+    let replacement_dispatch = service
+        .take_pending_deferred_agent_commands()
+        .into_iter()
+        .next()
+        .expect("the replacement conversation queues one command");
+    let replacement_work = service
+        .claim_agent_command_work(
+            &replacement_dispatch.primary_client_id,
+            &replacement_dispatch.pane_id,
+            &replacement_dispatch.command,
+            &replacement_dispatch.input,
+            replacement_dispatch.claim_generation,
+            &replacement_dispatch.conversation_id,
+        )
+        .unwrap()
+        .expect("the replacement conversation claims its command");
+
+    let old_outcome =
+        crate::runtime::RuntimeSessionService::execute_deferred_agent_command(&old_work);
+    assert!(
+        !service
+            .complete_agent_command_work(&old_work, old_outcome)
+            .unwrap(),
+        "the replaced conversation must not receive the stale result"
+    );
+    assert!(
+        !service
+            .complete_agent_command_work(
+                &old_work,
+                crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed {
+                    message: "late stale result".to_string(),
+                    kind: crate::error::MezErrorKind::InvalidState,
+                },
+            )
+            .unwrap(),
+        "a late stale result cannot settle the replacement command"
+    );
+    let replacement_outcome =
+        crate::runtime::RuntimeSessionService::execute_deferred_agent_command(&replacement_work);
+    assert!(
+        service
+            .complete_agent_command_work(&replacement_work, replacement_outcome)
+            .unwrap(),
+        "the replacement conversation keeps its own settlement"
+    );
+}
+
+/// Verifies `/clear` and direct `/resume` cancel queued work at their actual
+/// conversation-replacement boundaries.
+///
+/// Both commands replace the pane conversation synchronously. Neither may leave
+/// the old queued transaction active long enough to reject a command submitted
+/// by the replacement conversation.
+#[test]
+fn runtime_agent_shell_replacement_commands_cancel_queued_deferred_work() {
+    for replacement in ["/clear", "/resume saved-command-owner"] {
+        let mut service = test_runtime_service();
+        let root = temp_root("runtime-command-owner-replacement");
+        let transcript_store = AgentTranscriptStore::new(root.clone());
+        transcript_store
+            .append(&mez_agent::transcript::TranscriptEntry {
+                conversation_id: "saved-command-owner".to_string(),
+                sequence: 1,
+                created_at_unix_seconds: 1,
+                role: mez_agent::transcript::TranscriptRole::User,
+                turn_id: "turn-saved-command-owner".to_string(),
+                agent_id: "agent-%9".to_string(),
+                pane_id: "%9".to_string(),
+                content: "saved prompt".to_string(),
+            })
+            .unwrap();
+        service.set_agent_transcript_store(transcript_store);
+        service.set_config_root(root.clone());
+        let primary = service
+            .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+            .unwrap();
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+
+        service
+            .execute_agent_shell_command(&primary, "/list-skills")
+            .unwrap();
+        assert_eq!(
+            service.take_pending_deferred_agent_commands().len(),
+            1,
+            "the old conversation queues one command"
+        );
+        let response = service
+            .execute_agent_shell_command(&primary, replacement)
+            .unwrap();
+        assert!(!response.contains("agent command error"), "{response}");
+        assert_eq!(
+            service.agent_command_lifecycle_phase_for_tests("%1"),
+            Some(crate::runtime::RuntimeAgentCommandLifecyclePhase::Cancelled),
+            "{replacement} must cancel the old owner"
+        );
+        service
+            .execute_agent_shell_command(&primary, "/list-skills")
+            .expect("the replacement conversation immediately accepts deferred work");
+        assert_eq!(service.take_pending_deferred_agent_commands().len(), 1);
+        let _ = fs::remove_dir_all(root);
+    }
+}
+
+/// Verifies a late `/resume` failure restores the original conversation's
+/// claimed deferred command instead of cancelling it during target setup.
+///
+/// Resume remains rollback-capable until its final checkpoint succeeds. A
+/// command owned by the prior conversation must therefore remain claimed and
+/// settle exactly once when an injected post-authority failure restores that
+/// conversation.
+#[test]
+fn runtime_agent_shell_failed_resume_preserves_claimed_deferred_work() {
+    let mut service = test_runtime_service();
+    let root = temp_root("runtime-command-owner-resume-rollback");
+    let transcript_store = AgentTranscriptStore::new(root.clone());
+    transcript_store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: "resume-rollback-target".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: mez_agent::transcript::TranscriptRole::User,
+            turn_id: "turn-resume-rollback-target".to_string(),
+            agent_id: "agent-%9".to_string(),
+            pane_id: "%9".to_string(),
+            content: "saved prompt".to_string(),
+        })
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store);
+    service.set_config_root(root.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let original_conversation = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+
+    service
+        .execute_agent_shell_command(&primary, "/list-skills")
+        .unwrap();
+    let dispatch = service
+        .take_pending_deferred_agent_commands()
+        .into_iter()
+        .next()
+        .unwrap();
+    let work = service
+        .claim_agent_command_work(
+            &dispatch.primary_client_id,
+            &dispatch.pane_id,
+            &dispatch.command,
+            &dispatch.input,
+            dispatch.claim_generation,
+            &dispatch.conversation_id,
+        )
+        .unwrap()
+        .unwrap();
+
+    service.fail_next_agent_resume_after_authority_restore_for_tests();
+    let error = service
+        .execute_agent_shell_resume_command("%1", "/resume resume-rollback-target")
+        .unwrap_err();
+    assert!(
+        error.message().contains("post-authority restoration"),
+        "{error}"
+    );
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .map(|session| session.session_id.as_str()),
+        Some(original_conversation.as_str())
+    );
+    assert_eq!(
+        service.agent_command_lifecycle_phase_for_tests("%1"),
+        Some(crate::runtime::RuntimeAgentCommandLifecyclePhase::Claimed)
+    );
+
+    let outcome = crate::runtime::RuntimeSessionService::execute_deferred_agent_command(&work);
+    assert!(service.complete_agent_command_work(&work, outcome).unwrap());
+    assert!(
+        !service
+            .complete_agent_command_work(
+                &work,
+                crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed {
+                    message: "duplicate rollback settlement".to_string(),
+                    kind: crate::error::MezErrorKind::InvalidState,
+                },
+            )
+            .unwrap()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies direct kill and graceful supervisor shutdown terminalize queued and
+/// claimed deferred commands before their worker service stops.
+#[test]
+fn runtime_deferred_commands_cancel_at_shutdown_boundaries() {
+    let mut killed = test_runtime_service();
+    let primary = killed
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    killed
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    killed.set_config_root(temp_root("runtime-command-owner-kill"));
+    killed
+        .execute_agent_shell_command(&primary, "/list-skills")
+        .unwrap();
+    killed.kill_session(&primary, true).unwrap();
+    assert_eq!(
+        killed.agent_command_lifecycle_phase_for_tests("%1"),
+        Some(crate::runtime::RuntimeAgentCommandLifecyclePhase::Cancelled)
+    );
+
+    let mut stopping = test_runtime_service();
+    let primary = stopping
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    stopping
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    stopping.set_config_root(temp_root("runtime-command-owner-stopping"));
+    stopping
+        .execute_agent_shell_command(&primary, "/list-skills")
+        .unwrap();
+    let dispatch = stopping
+        .take_pending_deferred_agent_commands()
+        .into_iter()
+        .next()
+        .unwrap();
+    stopping
+        .claim_agent_command_work(
+            &dispatch.primary_client_id,
+            &dispatch.pane_id,
+            &dispatch.command,
+            &dispatch.input,
+            dispatch.claim_generation,
+            &dispatch.conversation_id,
+        )
+        .unwrap()
         .unwrap();
     assert!(
-        claim.is_none(),
-        "a detached submitter must not claim deferred work"
+        stopping
+            .apply_supervisor_shutdown_event("graceful test shutdown", false)
+            .unwrap()
+    );
+    assert_eq!(
+        stopping.agent_command_lifecycle_phase_for_tests("%1"),
+        Some(crate::runtime::RuntimeAgentCommandLifecyclePhase::Cancelled)
+    );
+}
+
+/// Verifies removed-pane cleanup cancels an accepted deferred command.
+///
+/// A worker may still hold the old dispatch after pane removal, but cleanup must
+/// retire its actor-owned transaction so the stale dispatch cannot be claimed or
+/// later paint into a recreated prompt surface.
+#[test]
+fn runtime_agent_shell_deferred_lane_cancels_removed_pane() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_config_root(temp_root("runtime-list-skills-removed-pane"));
+
+    service
+        .execute_agent_shell_command(&primary, "/list-skills")
+        .unwrap();
+    let dispatch = service
+        .take_pending_deferred_agent_commands()
+        .into_iter()
+        .next()
+        .expect("the pane queues one command before removal");
+    service.cleanup_removed_pane_runtime_state("%1").unwrap();
+
+    assert!(
+        service
+            .claim_agent_command_work(
+                &dispatch.primary_client_id,
+                &dispatch.pane_id,
+                &dispatch.command,
+                &dispatch.input,
+                dispatch.claim_generation,
+                &dispatch.conversation_id,
+            )
+            .unwrap()
+            .is_none(),
+        "removed-pane cleanup must retire the queued command"
     );
 }

@@ -22,7 +22,8 @@ use super::{
 };
 use crate::runtime::{
     RuntimeAgentCommandAsyncOutcome, RuntimeAgentCommandAsyncWork, RuntimeAgentCommandDispatch,
-    RuntimeAgentCommandPrepared, runtime_agent_shell_deferred_command_response_json,
+    RuntimeAgentCommandLifecyclePhase, RuntimeAgentCommandPrepared,
+    runtime_agent_shell_deferred_command_response_json,
 };
 
 /// Slash commands whose store or filesystem reads already run off the actor.
@@ -105,13 +106,13 @@ impl RuntimeSessionService {
     /// The generation is stamped by the actor that dispatches the work and
     /// compared when the outcome settles, so resubmitting the same command while
     /// an earlier attempt is still in flight cannot apply a stale display.
-    pub(crate) fn begin_agent_command_claim(&mut self, pane_id: &str) -> u64 {
-        self.agent.begin_agent_command_claim(pane_id)
-    }
-
-    /// Returns the current deferred slash-command claim generation for a pane.
-    pub(crate) fn agent_command_claim_generation(&self, pane_id: &str) -> u64 {
-        self.agent.agent_command_claim_generation(pane_id)
+    pub(crate) fn begin_agent_command_claim(
+        &mut self,
+        pane_id: &str,
+        conversation_id: &str,
+    ) -> Result<u64> {
+        self.agent
+            .begin_agent_command_claim(pane_id, conversation_id)
     }
 
     /// Reports whether one prompt command may run through the deferred lane.
@@ -192,11 +193,17 @@ impl RuntimeSessionService {
         input: &str,
     ) -> Result<String> {
         self.refresh_project_config_layers_for_pane(pane_id)?;
-        let claim_generation = self.begin_agent_command_claim(pane_id);
+        let conversation_id = self
+            .agent_shell_store()
+            .get(pane_id)
+            .map(|session| session.session_id.clone())
+            .ok_or_else(|| MezError::invalid_state("agent shell session not found for pane"))?;
+        let claim_generation = self.begin_agent_command_claim(pane_id, &conversation_id)?;
         self.presentation
             .push_pending_deferred_agent_command(RuntimeAgentCommandDispatch {
                 primary_client_id: primary_client_id.clone(),
                 pane_id: pane_id.to_string(),
+                conversation_id,
                 command: command.to_string(),
                 input: input.to_string(),
                 claim_generation,
@@ -215,30 +222,42 @@ impl RuntimeSessionService {
     /// longer matches answers `None` and the worker drops the dispatch.
     pub(crate) fn claim_agent_command_work(
         &mut self,
-        primary_client_id: &mez_core::ids::ClientId,
+        _primary_client_id: &mez_core::ids::ClientId,
         pane_id: &str,
         command: &str,
         input: &str,
         claim_generation: u64,
+        conversation_id: &str,
     ) -> Result<Option<RuntimeAgentCommandAsyncWork>> {
-        if !self.session.is_attached_primary(primary_client_id) {
-            return Ok(None);
-        }
-        if self.agent_command_claim_generation(pane_id) != claim_generation {
-            return Ok(None);
-        }
-        let visible = self
+        let current_conversation = self
             .agent_shell_store()
             .get(pane_id)
-            .is_some_and(|session| session.visibility == AgentShellVisibility::Visible);
-        if !visible {
+            .filter(|session| session.visibility == AgentShellVisibility::Visible)
+            .map(|session| session.session_id.as_str());
+        if current_conversation != Some(conversation_id) {
+            self.agent
+                .cancel_matching_agent_command(pane_id, conversation_id, claim_generation);
             return Ok(None);
         }
         if !self.should_defer_agent_shell_command(command, input) {
-            return Ok(None);
+            return self.fail_agent_command_before_claim(
+                pane_id,
+                conversation_id,
+                command,
+                input,
+                claim_generation,
+                "deferred command is no longer available",
+            );
         }
         let Some(family) = off_actor_command_family(command) else {
-            return Ok(None);
+            return self.fail_agent_command_before_claim(
+                pane_id,
+                conversation_id,
+                command,
+                input,
+                claim_generation,
+                "deferred command has no worker executor",
+            );
         };
         // Each family names exactly what the worker may read; a command with no
         // family has no off-actor executor yet and keeps executing inline.
@@ -265,7 +284,14 @@ impl RuntimeSessionService {
                     .config_root()
                     .map(std::path::Path::to_path_buf)
                 else {
-                    return Ok(None);
+                    return self.fail_agent_command_before_claim(
+                        pane_id,
+                        conversation_id,
+                        command,
+                        input,
+                        claim_generation,
+                        "configured issue store is no longer available",
+                    );
                 };
                 let working_directory = self
                     .pane_current_working_directory(pane_id)
@@ -283,7 +309,14 @@ impl RuntimeSessionService {
                     .config_root()
                     .map(std::path::Path::to_path_buf)
                 else {
-                    return Ok(None);
+                    return self.fail_agent_command_before_claim(
+                        pane_id,
+                        conversation_id,
+                        command,
+                        input,
+                        claim_generation,
+                        "configured issue browser is no longer available",
+                    );
                 };
                 let working_directory = self
                     .pane_current_working_directory(pane_id)
@@ -301,7 +334,14 @@ impl RuntimeSessionService {
                     .config_root()
                     .map(std::path::Path::to_path_buf)
                 else {
-                    return Ok(None);
+                    return self.fail_agent_command_before_claim(
+                        pane_id,
+                        conversation_id,
+                        command,
+                        input,
+                        claim_generation,
+                        "configured memory browser is no longer available",
+                    );
                 };
                 RuntimeAgentCommandPrepared::MemoryBrowser {
                     config_root,
@@ -310,14 +350,28 @@ impl RuntimeSessionService {
             }
             RuntimeAgentCommandFamily::ContextBrowser => {
                 let Some(store) = self.persistence.cloned_transcript_store() else {
-                    return Ok(None);
+                    return self.fail_agent_command_before_claim(
+                        pane_id,
+                        conversation_id,
+                        command,
+                        input,
+                        claim_generation,
+                        "transcript store is no longer available",
+                    );
                 };
                 let Some(conversation_id) = self
                     .agent_shell_store()
                     .get(pane_id)
                     .map(|session| session.session_id.clone())
                 else {
-                    return Ok(None);
+                    return self.fail_agent_command_before_claim(
+                        pane_id,
+                        conversation_id,
+                        command,
+                        input,
+                        claim_generation,
+                        "owning conversation is no longer available",
+                    );
                 };
                 RuntimeAgentCommandPrepared::ContextBrowser {
                     store,
@@ -331,7 +385,14 @@ impl RuntimeSessionService {
                     .config_root()
                     .map(std::path::Path::to_path_buf)
                 else {
-                    return Ok(None);
+                    return self.fail_agent_command_before_claim(
+                        pane_id,
+                        conversation_id,
+                        command,
+                        input,
+                        claim_generation,
+                        "configured context document store is no longer available",
+                    );
                 };
                 let project = self.context_document_project_for_pane(pane_id, &config_root);
                 RuntimeAgentCommandPrepared::ContextDocument {
@@ -345,13 +406,27 @@ impl RuntimeSessionService {
                     .config_root()
                     .map(std::path::Path::to_path_buf)
                 else {
-                    return Ok(None);
+                    return self.fail_agent_command_before_claim(
+                        pane_id,
+                        conversation_id,
+                        command,
+                        input,
+                        claim_generation,
+                        "configured skill store is no longer available",
+                    );
                 };
                 RuntimeAgentCommandPrepared::BuiltinSkillSync { config_root }
             }
             RuntimeAgentCommandFamily::SavedSessionsBrowser => {
                 let Some(store) = self.persistence.cloned_transcript_store() else {
-                    return Ok(None);
+                    return self.fail_agent_command_before_claim(
+                        pane_id,
+                        conversation_id,
+                        command,
+                        input,
+                        claim_generation,
+                        "saved-session store is no longer available",
+                    );
                 };
                 let directory = self
                     .pane_current_working_directory(pane_id)
@@ -407,14 +482,52 @@ impl RuntimeSessionService {
                 }
             }
         };
+        if !self
+            .agent
+            .claim_agent_command(pane_id, conversation_id, claim_generation)
+        {
+            return Ok(None);
+        }
         Ok(Some(RuntimeAgentCommandAsyncWork {
             pane_id: pane_id.to_string(),
-            primary_client_id: primary_client_id.clone(),
+            conversation_id: conversation_id.to_string(),
             command: command.to_string(),
             input: input.to_string(),
             claim_generation,
             prepared,
         }))
+    }
+
+    /// Settles an accepted command that became unusable before worker claim.
+    fn fail_agent_command_before_claim(
+        &mut self,
+        pane_id: &str,
+        conversation_id: &str,
+        command: &str,
+        input: &str,
+        command_id: u64,
+        message: &str,
+    ) -> Result<Option<RuntimeAgentCommandAsyncWork>> {
+        if !self
+            .agent
+            .claim_agent_command(pane_id, conversation_id, command_id)
+        {
+            return Ok(None);
+        }
+        let body = agent_shell_invalid_command_response_json(
+            pane_id,
+            input,
+            &MezError::invalid_state(format!("{command}: {message}")),
+        );
+        let result = self.apply_deferred_agent_shell_response_body(pane_id, &body);
+        self.agent.settle_agent_command(
+            pane_id,
+            conversation_id,
+            command_id,
+            RuntimeAgentCommandLifecyclePhase::Failed,
+        );
+        result?;
+        Ok(None)
     }
 
     /// Executes one claimed deferred slash command off actor ownership.
@@ -770,12 +883,25 @@ impl RuntimeSessionService {
         work: &RuntimeAgentCommandAsyncWork,
         outcome: RuntimeAgentCommandAsyncOutcome,
     ) -> Result<bool> {
-        if self.agent_command_claim_generation(&work.pane_id) != work.claim_generation {
+        let current_conversation = self
+            .agent_shell_store()
+            .get(&work.pane_id)
+            .map(|session| session.session_id.as_str());
+        if current_conversation != Some(work.conversation_id.as_str()) {
+            self.agent.cancel_matching_agent_command(
+                &work.pane_id,
+                &work.conversation_id,
+                work.claim_generation,
+            );
             return Ok(false);
         }
-        // The submitting primary can detach while the worker runs; its display
-        // must not be painted for a client that is no longer attached.
-        if !self.session.is_attached_primary(&work.primary_client_id) {
+        let is_failure = matches!(outcome, RuntimeAgentCommandAsyncOutcome::Failed { .. });
+        let claimed = self.agent.agent_command_is_claimed(
+            &work.pane_id,
+            &work.conversation_id,
+            work.claim_generation,
+        );
+        if !claimed {
             return Ok(false);
         }
         let body = match outcome {
@@ -801,7 +927,28 @@ impl RuntimeSessionService {
                 body
             }
         };
-        self.apply_deferred_agent_shell_response_body(&work.pane_id, &body)?;
+        if let Err(error) = self.apply_deferred_agent_shell_response_body(&work.pane_id, &body) {
+            self.agent.settle_agent_command(
+                &work.pane_id,
+                &work.conversation_id,
+                work.claim_generation,
+                RuntimeAgentCommandLifecyclePhase::Failed,
+            );
+            return Err(error);
+        }
+        let phase = if is_failure {
+            RuntimeAgentCommandLifecyclePhase::Failed
+        } else {
+            RuntimeAgentCommandLifecyclePhase::Completed
+        };
+        if !self.agent.settle_agent_command(
+            &work.pane_id,
+            &work.conversation_id,
+            work.claim_generation,
+            phase,
+        ) {
+            return Ok(false);
+        }
         Ok(true)
     }
 
@@ -839,6 +986,7 @@ impl RuntimeSessionService {
                 &dispatch.command,
                 &dispatch.input,
                 dispatch.claim_generation,
+                &dispatch.conversation_id,
             )?
             else {
                 continue;
@@ -859,6 +1007,15 @@ impl RuntimeSessionService {
             last_body = Some(body);
         }
         Ok(last_body)
+    }
+
+    /// Returns the retained lifecycle phase for one pane in focused tests.
+    #[cfg(test)]
+    pub(crate) fn agent_command_lifecycle_phase_for_tests(
+        &self,
+        pane_id: &str,
+    ) -> Option<RuntimeAgentCommandLifecyclePhase> {
+        self.agent.agent_command_lifecycle_phase_for_tests(pane_id)
     }
 }
 
@@ -896,7 +1053,7 @@ mod tests {
     fn runtime_agent_deferred_failure_keeps_the_carried_error_kind() {
         let work = RuntimeAgentCommandAsyncWork {
             pane_id: "%1".to_string(),
-            primary_client_id: mez_core::ids::ClientId::parse('c', "c1".to_string()).unwrap(),
+            conversation_id: "conversation-1".to_string(),
             command: "auth-status".to_string(),
             input: "/auth-status".to_string(),
             claim_generation: 1,
@@ -928,7 +1085,7 @@ mod tests {
         let catalog = crate::integrations::skills::discover_skill_catalog(None, None);
         let work = RuntimeAgentCommandAsyncWork {
             pane_id: "%1".to_string(),
-            primary_client_id: mez_core::ids::ClientId::parse('c', "c1".to_string()).unwrap(),
+            conversation_id: "conversation-1".to_string(),
             command: "list-skills".to_string(),
             input: "/list-skills".to_string(),
             claim_generation: 1,

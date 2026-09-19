@@ -15,8 +15,8 @@ use super::execute_mcp_action_through_runtime;
 #[cfg(test)]
 use super::runtime_execute_auto_sizing_with_provider;
 use super::service_state::{
-    RuntimeAgentPatchRecord, RuntimeApplyPatchBatchState, RuntimePendingApplyPatchPhase,
-    RuntimePersistentSubagent,
+    RuntimeAgentCommandLifecycle, RuntimeAgentCommandLifecyclePhase, RuntimeAgentPatchRecord,
+    RuntimeApplyPatchBatchState, RuntimePendingApplyPatchPhase, RuntimePersistentSubagent,
 };
 use super::{
     ActionResult, ActionStatus, ActiveTurnSleepInhibition, AgentAction, AgentActionPayload,
@@ -300,6 +300,8 @@ pub(crate) struct RuntimeAgentComponent {
     /// is still current, and the completion drops an outcome whose generation a
     /// resubmitted command has already replaced.
     agent_command_claim_generations: BTreeMap<String, u64>,
+    /// Non-terminal deferred command transaction owned by each pane.
+    agent_command_lifecycles: BTreeMap<String, RuntimeAgentCommandLifecycle>,
     /// File modification summaries retained by pane and display path.
     agent_modified_files: BTreeMap<String, BTreeMap<String, RuntimeAgentModifiedFileSummary>>,
     /// Panes with explicit planning-mode presentation enabled.
@@ -753,13 +755,152 @@ impl RuntimeAgentComponent {
     ///
     /// Generations only move forward, so a stale worker outcome can never be
     /// confused with a live claim for the same pane and command.
-    pub(crate) fn begin_agent_command_claim(&mut self, pane_id: &str) -> u64 {
+    pub(crate) fn begin_agent_command_claim(
+        &mut self,
+        pane_id: &str,
+        conversation_id: &str,
+    ) -> Result<u64> {
+        if self
+            .agent_command_lifecycles
+            .get(pane_id)
+            .is_some_and(|lifecycle| !lifecycle.phase.is_terminal())
+        {
+            return Err(MezError::conflict(
+                "an interactive command is already active for this pane",
+            ));
+        }
         let generation = self
             .agent_command_claim_generation(pane_id)
             .saturating_add(1);
         self.agent_command_claim_generations
             .insert(pane_id.to_string(), generation);
-        generation
+        self.agent_command_lifecycles.insert(
+            pane_id.to_string(),
+            RuntimeAgentCommandLifecycle {
+                command_id: generation,
+                conversation_id: conversation_id.to_string(),
+                phase: RuntimeAgentCommandLifecyclePhase::Queued,
+            },
+        );
+        Ok(generation)
+    }
+
+    /// Claims the current queued deferred command for exactly one worker.
+    pub(crate) fn claim_agent_command(
+        &mut self,
+        pane_id: &str,
+        conversation_id: &str,
+        command_id: u64,
+    ) -> bool {
+        let Some(lifecycle) = self.agent_command_lifecycles.get_mut(pane_id) else {
+            return false;
+        };
+        if lifecycle.command_id != command_id
+            || lifecycle.conversation_id != conversation_id
+            || lifecycle.phase != RuntimeAgentCommandLifecyclePhase::Queued
+        {
+            return false;
+        }
+        lifecycle.phase = RuntimeAgentCommandLifecyclePhase::Claimed;
+        true
+    }
+
+    /// Reports whether one exact deferred command is currently worker-owned.
+    pub(crate) fn agent_command_is_claimed(
+        &self,
+        pane_id: &str,
+        conversation_id: &str,
+        command_id: u64,
+    ) -> bool {
+        self.agent_command_lifecycles
+            .get(pane_id)
+            .is_some_and(|lifecycle| {
+                lifecycle.command_id == command_id
+                    && lifecycle.conversation_id == conversation_id
+                    && lifecycle.phase == RuntimeAgentCommandLifecyclePhase::Claimed
+            })
+    }
+
+    /// Records one terminal phase for the current claimed command.
+    pub(crate) fn settle_agent_command(
+        &mut self,
+        pane_id: &str,
+        conversation_id: &str,
+        command_id: u64,
+        phase: RuntimeAgentCommandLifecyclePhase,
+    ) -> bool {
+        if !phase.is_terminal() {
+            return false;
+        }
+        let Some(lifecycle) = self.agent_command_lifecycles.get_mut(pane_id) else {
+            return false;
+        };
+        if lifecycle.command_id != command_id
+            || lifecycle.conversation_id != conversation_id
+            || lifecycle.phase != RuntimeAgentCommandLifecyclePhase::Claimed
+        {
+            return false;
+        }
+        lifecycle.phase = phase;
+        true
+    }
+
+    /// Cancels any non-terminal command whose pane has been removed.
+    pub(crate) fn cancel_agent_command(&mut self, pane_id: &str) -> bool {
+        let Some(lifecycle) = self.agent_command_lifecycles.get_mut(pane_id) else {
+            return false;
+        };
+        if lifecycle.phase.is_terminal() {
+            return false;
+        }
+        lifecycle.phase = RuntimeAgentCommandLifecyclePhase::Cancelled;
+        true
+    }
+
+    /// Cancels one exact deferred command without disturbing a newer owner.
+    pub(crate) fn cancel_matching_agent_command(
+        &mut self,
+        pane_id: &str,
+        conversation_id: &str,
+        command_id: u64,
+    ) -> bool {
+        let matches = self
+            .agent_command_lifecycles
+            .get(pane_id)
+            .is_some_and(|lifecycle| {
+                lifecycle.command_id == command_id && lifecycle.conversation_id == conversation_id
+            });
+        if matches
+            && let Some(lifecycle) = self.agent_command_lifecycles.get_mut(pane_id)
+            && !lifecycle.phase.is_terminal()
+        {
+            lifecycle.phase = RuntimeAgentCommandLifecyclePhase::Cancelled;
+            return true;
+        }
+        false
+    }
+
+    /// Cancels every deferred command during terminal runtime shutdown.
+    pub(crate) fn cancel_all_agent_commands(&mut self) -> usize {
+        let mut count = 0usize;
+        for lifecycle in self.agent_command_lifecycles.values_mut() {
+            if !lifecycle.phase.is_terminal() {
+                lifecycle.phase = RuntimeAgentCommandLifecyclePhase::Cancelled;
+                count = count.saturating_add(1);
+            }
+        }
+        count
+    }
+
+    /// Returns one pane's retained deferred-command phase for focused tests.
+    #[cfg(test)]
+    pub(crate) fn agent_command_lifecycle_phase_for_tests(
+        &self,
+        pane_id: &str,
+    ) -> Option<RuntimeAgentCommandLifecyclePhase> {
+        self.agent_command_lifecycles
+            .get(pane_id)
+            .map(|lifecycle| lifecycle.phase)
     }
 
     /// Builds agent ownership with configured provider-selection defaults.

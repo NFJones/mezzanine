@@ -965,6 +965,8 @@ pub enum RuntimeSideEffect {
         primary_client_id: mez_core::ids::ClientId,
         /// Pane whose agent shell prompt submitted the command.
         pane_id: String,
+        /// Durable conversation that owns the command across reattachment.
+        conversation_id: String,
         /// Canonical command name the disposition classifier deferred.
         command: String,
         /// Full prompt input including the command name and arguments.

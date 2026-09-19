@@ -863,6 +863,7 @@ impl AsyncRuntimeSessionHandle {
         command: String,
         input: String,
         claim_generation: u64,
+        conversation_id: String,
     ) -> Result<Option<crate::runtime::RuntimeAgentCommandAsyncWork>> {
         self.request(|reply| AsyncRuntimeRequest::ClaimAgentCommandWork {
             primary_client_id,
@@ -870,6 +871,7 @@ impl AsyncRuntimeSessionHandle {
             command,
             input,
             claim_generation,
+            conversation_id,
             reply,
         })
         .await?

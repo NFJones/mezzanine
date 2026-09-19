@@ -1361,17 +1361,19 @@ async fn async_actor_serves_steps_while_deferred_command_work_is_outstanding() {
             .await
             .unwrap();
         let effects = handle.drain_runtime_side_effects(8).await.unwrap();
-        let (pane_id, command, input, claim_generation) = effects
+        let (pane_id, conversation_id, command, input, claim_generation) = effects
             .iter()
             .find_map(|effect| match effect {
                 RuntimeSideEffect::DispatchAgentCommand {
                     pane_id,
+                    conversation_id,
                     command,
                     input,
                     claim_generation,
                     ..
                 } => Some((
                     pane_id.clone(),
+                    conversation_id.clone(),
                     command.clone(),
                     input.clone(),
                     *claim_generation,
@@ -1383,7 +1385,14 @@ async fn async_actor_serves_steps_while_deferred_command_work_is_outstanding() {
 
         // The worker claims the work and then stalls: nothing settles it here.
         let work = handle
-            .claim_agent_command_work(primary.clone(), pane_id, command, input, claim_generation)
+            .claim_agent_command_work(
+                primary.clone(),
+                pane_id,
+                command,
+                input,
+                claim_generation,
+                conversation_id,
+            )
             .await
             .unwrap()
             .expect("the current generation claims its work");

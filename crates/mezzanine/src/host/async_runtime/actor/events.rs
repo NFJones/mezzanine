@@ -934,6 +934,7 @@ impl AsyncRuntimeSessionActor {
             .map(|dispatch| RuntimeSideEffect::DispatchAgentCommand {
                 primary_client_id: dispatch.primary_client_id,
                 pane_id: dispatch.pane_id,
+                conversation_id: dispatch.conversation_id,
                 command: dispatch.command,
                 input: dispatch.input,
                 claim_generation: dispatch.claim_generation,

@@ -565,6 +565,7 @@ impl RuntimeSessionService {
             }
             self.checkpoint_agent_session_metadata()?;
             if conversation_replaced {
+                self.agent.cancel_agent_command(pane_id);
                 // The replacement is durable at this point. A late terminal
                 // cleanup failure cannot undo it, so fences remain the
                 // fail-closed authority boundary and interruption is best

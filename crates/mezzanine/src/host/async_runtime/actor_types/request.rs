@@ -858,6 +858,8 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         input: String,
         /// Actor-owned claim generation stamped when the command was dispatched.
         claim_generation: u64,
+        /// Durable conversation that owns the command across reattachment.
+        conversation_id: String,
         /// Claimed owned work, or `None` when the claim is stale or unusable.
         reply: oneshot::Sender<Result<Option<crate::runtime::RuntimeAgentCommandAsyncWork>>>,
     },

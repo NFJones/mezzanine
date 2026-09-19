@@ -20,9 +20,11 @@ use crate::integrations::agent::provider::{
     ProviderWireRequestObserver, STREAMING_SAY_TEXT_CHUNK_LIMIT_BYTES,
 };
 use crate::runtime::{
-    AgentSessionTitleEvent, AgentSessionTitleOutcome, RuntimeAgentProviderWorkerOutcome,
-    RuntimeAgentSessionTitleDispatch, RuntimeApprovedExternalActionProgress,
+    AgentSessionTitleEvent, AgentSessionTitleOutcome, RuntimeAgentCommandAsyncOutcome,
+    RuntimeAgentProviderWorkerOutcome, RuntimeAgentSessionTitleDispatch,
+    RuntimeApprovedExternalActionProgress,
 };
+use std::future::Future;
 use std::time::{Duration, Instant};
 
 /// Maximum ordered streaming events buffered between a provider and the actor.
@@ -33,6 +35,8 @@ const STREAMING_SAY_COMPLETION_BATCH_LIMIT: usize = 16;
 const STREAMING_SAY_PROJECTION_DEBOUNCE: Duration = Duration::from_millis(25);
 /// Maximum fresh generations rendered while settling a completed provider.
 const STREAMING_SAY_PROJECTION_SETTLE_LIMIT: usize = 3;
+/// Maximum time one accepted deferred command may remain worker-owned.
+const DEFERRED_AGENT_COMMAND_DEADLINE: Duration = Duration::from_secs(120);
 
 /// Reports whether one provider event changes visible projection inputs.
 fn streaming_presentation_event_changes_projection(event: &mez_agent::StreamingSayEvent) -> bool {
@@ -468,6 +472,7 @@ async fn dispatch_agent_provider_side_effects(
             RuntimeSideEffect::DispatchAgentCommand {
                 primary_client_id,
                 pane_id,
+                conversation_id,
                 command,
                 input,
                 claim_generation,
@@ -479,25 +484,29 @@ async fn dispatch_agent_provider_side_effects(
                         command,
                         input,
                         claim_generation,
+                        conversation_id,
                     )
                     .await
                 {
                     Ok(Some(work)) => work,
-                    Ok(None) | Err(_) => continue,
+                    Ok(None) => continue,
+                    Err(error) => return Err(error),
                 };
                 let handle = handle.clone();
                 workers.spawn(async move {
                     let execution_work = work.clone();
-                    let Ok(outcome) = tokio::task::spawn_blocking(move || {
-                        crate::runtime::RuntimeSessionService::execute_deferred_agent_command(
-                            &execution_work,
-                        )
-                    })
-                    .await
-                    else {
-                        return Ok(None);
-                    };
-                    let _ = handle.complete_agent_command_work(work, outcome).await;
+                    let command = work.command.clone();
+                    let outcome = bounded_deferred_agent_command_outcome(
+                        DEFERRED_AGENT_COMMAND_DEADLINE,
+                        &command,
+                        tokio::task::spawn_blocking(move || {
+                            crate::runtime::RuntimeSessionService::execute_deferred_agent_command(
+                                &execution_work,
+                            )
+                        }),
+                    )
+                    .await;
+                    handle.complete_agent_command_work(work, outcome).await?;
                     Ok(None)
                 });
             }
@@ -510,21 +519,28 @@ async fn dispatch_agent_provider_side_effects(
                     .await
                 {
                     Ok(Some(work)) => work,
-                    Ok(None) | Err(_) => continue,
+                    Ok(None) => continue,
+                    Err(error) => return Err(error),
                 };
                 let handle = handle.clone();
                 workers.spawn(async move {
                     let execution_work = work.clone();
-                    let Ok(outcome) = tokio::task::spawn_blocking(move || {
+                    let outcome = match tokio::task::spawn_blocking(move || {
                         crate::runtime::RuntimeSessionService::execute_record_browser_refresh(
                             &execution_work,
                         )
                     })
                     .await
-                    else {
-                        return Ok(None);
+                    {
+                        Ok(outcome) => outcome,
+                        Err(error) => crate::runtime::RuntimeRecordBrowserRefreshOutcome::Failed {
+                            message: format!("record browser refresh worker join failed: {error}"),
+                            kind: MezErrorKind::InvalidState,
+                        },
                     };
-                    let _ = handle.complete_record_browser_refresh(work, outcome).await;
+                    handle
+                        .complete_record_browser_refresh(work, outcome)
+                        .await?;
                     Ok(None)
                 });
             }
@@ -623,6 +639,33 @@ async fn dispatch_agent_provider_side_effects(
         }
     }
     Ok(())
+}
+
+/// Maps timeout and join failures into the command's ordinary terminal result.
+async fn bounded_deferred_agent_command_outcome<F>(
+    deadline: Duration,
+    command: &str,
+    execution: F,
+) -> RuntimeAgentCommandAsyncOutcome
+where
+    F: Future<
+        Output = std::result::Result<RuntimeAgentCommandAsyncOutcome, tokio::task::JoinError>,
+    >,
+{
+    match tokio::time::timeout(deadline, execution).await {
+        Ok(Ok(outcome)) => outcome,
+        Ok(Err(error)) => RuntimeAgentCommandAsyncOutcome::Failed {
+            message: format!("deferred command worker join failed: {error}"),
+            kind: MezErrorKind::InvalidState,
+        },
+        Err(_) => RuntimeAgentCommandAsyncOutcome::Failed {
+            message: format!(
+                "deferred command `{command}` exceeded its {} ms deadline",
+                deadline.as_millis()
+            ),
+            kind: MezErrorKind::InvalidState,
+        },
+    }
 }
 
 /// Executes one native shell action on Tokio's blocking pool.
@@ -2196,5 +2239,41 @@ mod tests {
         assert!(provider_failure_json.is_none());
         assert!(provider_raw_text.is_none());
         assert!(provider_output_limit_state.is_none());
+    }
+
+    /// Verifies a deferred command worker panic becomes a command-local failure
+    /// instead of disappearing or terminating provider-service supervision.
+    #[tokio::test]
+    async fn deferred_command_worker_panic_becomes_failed_outcome() {
+        let worker = tokio::spawn(async {
+            panic!("injected deferred command panic");
+        });
+        let outcome =
+            bounded_deferred_agent_command_outcome(Duration::from_secs(1), "list-skills", worker)
+                .await;
+
+        let RuntimeAgentCommandAsyncOutcome::Failed { message, kind } = outcome else {
+            panic!("a panicked deferred command must fail");
+        };
+        assert_eq!(kind, MezErrorKind::InvalidState);
+        assert!(message.contains("worker join failed"), "{message}");
+    }
+
+    /// Verifies a stalled deferred command reaches a bounded terminal failure
+    /// without depending on scheduler timing or a real blocking store read.
+    #[tokio::test]
+    async fn deferred_command_worker_deadline_becomes_failed_outcome() {
+        let outcome = bounded_deferred_agent_command_outcome(
+            Duration::ZERO,
+            "list-skills",
+            std::future::pending(),
+        )
+        .await;
+
+        let RuntimeAgentCommandAsyncOutcome::Failed { message, kind } = outcome else {
+            panic!("a timed-out deferred command must fail");
+        };
+        assert_eq!(kind, MezErrorKind::InvalidState);
+        assert!(message.contains("exceeded its 0 ms deadline"), "{message}");
     }
 }

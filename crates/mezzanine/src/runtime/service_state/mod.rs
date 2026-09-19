@@ -48,7 +48,7 @@ pub use interaction::{
 pub(crate) use lifecycle::RuntimeAgentPatchRecord;
 pub(crate) use lifecycle::{
     RuntimeAgentCommandAsyncOutcome, RuntimeAgentCommandAsyncWork, RuntimeAgentCommandDispatch,
-    RuntimeAgentCommandPrepared,
+    RuntimeAgentCommandLifecycle, RuntimeAgentCommandLifecyclePhase, RuntimeAgentCommandPrepared,
 };
 pub use lifecycle::{RuntimeLifecycleState, RuntimeRegistryUpdatePlan};
 pub(crate) use lifecycle::{
