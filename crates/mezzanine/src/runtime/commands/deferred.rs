@@ -185,11 +185,10 @@ impl RuntimeSessionService {
 
     /// Queues one deferred slash command for off-actor execution.
     ///
-    /// The inline lane refreshed project config layers and trust state before it
-    /// read the catalog, so that refresh stays on the actor: the catalog walk -
-    /// the read that scales with the pane's skill and macro directories - is what
-    /// moves off it, and the refresh itself can follow once its layer computation
-    /// is separable from installing the layers.
+    /// Acceptance performs only bounded ownership checks and queues worker work.
+    /// Project-layer discovery and file reads must not delay the terminal-step
+    /// acknowledgement; prompt admission and explicit configuration refreshes
+    /// remain responsible for installing current project configuration.
     pub(crate) fn dispatch_deferred_agent_shell_command(
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
@@ -197,7 +196,6 @@ impl RuntimeSessionService {
         command: &str,
         input: &str,
     ) -> Result<String> {
-        self.refresh_project_config_layers_for_pane(pane_id)?;
         let conversation_id = self
             .agent_shell_store()
             .get(pane_id)

@@ -235,6 +235,70 @@ fn runtime_agent_prompt_refreshes_project_overlay_and_project_skills_from_pane_c
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies deferred catalog acceptance does not synchronously discover or
+/// install a project overlay before handing the command to its worker.
+///
+/// Project prompt admission remains the boundary that refreshes and applies
+/// project configuration. A catalog command may still discover trusted project
+/// skills from its worker-owned roots, but its terminal-step acknowledgement
+/// must not read overlay files or mutate the actor-owned configuration layers.
+#[test]
+fn runtime_deferred_catalog_acceptance_does_not_install_project_overlay() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let root = temp_root("runtime-deferred-catalog-no-overlay-refresh");
+    let config_root = root.join("config-root");
+    let project_root = root.join("repo");
+    let nested = project_root.join("src");
+    let overlay_path = project_root.join(".mezzanine/config.toml");
+    fs::create_dir_all(project_root.join(".git")).unwrap();
+    fs::create_dir_all(&nested).unwrap();
+    fs::create_dir_all(overlay_path.parent().unwrap()).unwrap();
+    fs::write(
+        &overlay_path,
+        format!(
+            "version = {}\n[history]\nlines = 11\n",
+            crate::config::CURRENT_CONFIG_SCHEMA_VERSION
+        ),
+    )
+    .unwrap();
+    service.set_config_root(config_root);
+    service.set_project_trust_store(overlay_trust_store(&project_root, &nested, None), None);
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[history]\nlines = 3\n".to_string(),
+        }])
+        .unwrap();
+    service.set_pane_current_working_directory("%1".to_string(), nested);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let response = service
+        .execute_agent_shell_command(&primary, "/list-skills")
+        .unwrap();
+
+    assert!(response.contains(r#""body":null"#), "{response}");
+    assert_eq!(service.terminal_history_limit(), 3);
+    assert!(
+        service
+            .config_layers()
+            .iter()
+            .all(|layer| layer.path.as_ref() != Some(&overlay_path)),
+        "deferred acceptance must not install project configuration"
+    );
+    assert_eq!(service.take_pending_deferred_agent_commands().len(), 1);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Builds one project-trust store with an optional deeper nested decision.
 fn overlay_trust_store(
     project_root: &Path,
