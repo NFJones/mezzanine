@@ -102,13 +102,14 @@ fn assemble_model_request_from_context_for_api(
             })
         })
         .filter_map(|metadata| metadata.execution_group_id().cloned())
-        .filter(|group| {
-            api != Some(ProviderApiCompatibility::OpenAiChatCompletions)
-                || openai_chat_completions_native_group_is_complete(
-                    context,
-                    group,
-                    &profile.provider,
-                )
+        .filter(|group| match api {
+            Some(ProviderApiCompatibility::OpenAiChatCompletions) => {
+                openai_chat_completions_native_group_is_complete(context, group, &profile.provider)
+            }
+            Some(ProviderApiCompatibility::OpenAiResponses) => {
+                openai_responses_native_group_is_complete(context, group, &profile.provider)
+            }
+            _ => true,
         })
         .collect::<BTreeSet<_>>();
     let prompt_profile = AgentPromptProfile::for_model(&profile.model);
@@ -127,6 +128,12 @@ fn assemble_model_request_from_context_for_api(
         })?;
         if let Some(owner) = metadata.provider_owner() {
             if !api.is_some_and(|api| owner.matches_provider(api, &profile.provider)) {
+                continue;
+            }
+            if metadata
+                .execution_group_id()
+                .is_some_and(|group| !provider_native_execution_groups.contains(group))
+            {
                 continue;
             }
             messages.push(ModelMessage {
@@ -247,6 +254,58 @@ fn openai_chat_completions_native_group_is_complete(
                 ..
             } if event_provider_id == provider_id && expected_ids.is_some() => {
                 result_ids.push(tool_call_id);
+            }
+            _ => return false,
+        }
+    }
+    expected_ids.is_some_and(|expected_ids| expected_ids == result_ids)
+}
+
+/// Reports whether one Responses execution group contains one complete native
+/// output/result chain in declaration order.
+///
+/// Neutral assistant and action-result blocks are suppressed only after this
+/// check succeeds. Missing, duplicated, reordered, or foreign function-call
+/// results therefore retain the provider-neutral projection instead of being
+/// replayed as an invalid Responses history.
+fn openai_responses_native_group_is_complete(
+    context: &AgentContext,
+    group: &crate::ContextExecutionGroupId,
+    provider_id: &str,
+) -> bool {
+    let mut expected_ids = None;
+    let mut result_ids = Vec::new();
+    for (index, block) in context.blocks().iter().enumerate() {
+        let Some(metadata) = context.metadata_for_block(index) else {
+            return false;
+        };
+        if metadata.execution_group_id() != Some(group) {
+            continue;
+        }
+        let Some(owner) = metadata.provider_owner() else {
+            continue;
+        };
+        if !owner.matches_provider(ProviderApiCompatibility::OpenAiResponses, provider_id) {
+            return false;
+        }
+        let Some(event) = crate::ProviderTranscriptEvent::from_transcript_content(&block.content)
+        else {
+            return false;
+        };
+        match event {
+            crate::ProviderTranscriptEvent::OpenAiResponseOutput { .. }
+                if expected_ids.is_none() =>
+            {
+                let call_ids = event.openai_function_call_ids();
+                if call_ids.len() != call_ids.iter().collect::<BTreeSet<_>>().len() {
+                    return false;
+                }
+                expected_ids = Some(call_ids);
+            }
+            crate::ProviderTranscriptEvent::OpenAiFunctionCallOutput { call_id, .. }
+                if expected_ids.is_some() =>
+            {
+                result_ids.push(call_id);
             }
             _ => return false,
         }
@@ -630,6 +689,227 @@ mod tests {
                         .starts_with(crate::PROVIDER_TRANSCRIPT_EVENT_MARKER)
             }));
         }
+    }
+
+    /// Verifies Responses native replay fails closed for an unanswered call
+    /// while retaining neutral history, but preserves an ordered complete pair.
+    #[test]
+    fn model_request_assembly_requires_complete_responses_native_call_groups() {
+        let provider = "configured-openai";
+        let owner = crate::ProviderContinuityOwner::new(
+            ProviderApiCompatibility::OpenAiResponses,
+            provider,
+        )
+        .unwrap();
+
+        for tool_name in [
+            crate::MAAP_ACTION_BATCH_TOOL_NAME,
+            crate::OpenAiMaapToolSurface::CurrentRequest.tool_name(),
+        ] {
+            let native_call = ProviderTranscriptEvent::validated_openai_response_output(vec![
+                serde_json::json!({
+                    "type": "function_call",
+                    "id": "fc-responses-1",
+                    "call_id": "call-responses-1",
+                    "name": tool_name,
+                    "arguments": "{}"
+                }),
+            ])
+            .unwrap()
+            .to_transcript_content();
+            let native_result = ProviderTranscriptEvent::OpenAiFunctionCallOutput {
+                call_id: "call-responses-1".to_string(),
+                output: "native result".to_string(),
+            }
+            .to_transcript_content();
+            for (group_id, include_result) in [
+                ("responses-unanswered-call", false),
+                ("responses-complete-call", true),
+            ] {
+                let mut context = AgentContext::new(vec![ContextBlock::user_event(
+                    "user",
+                    "continue the provider execution",
+                )])
+                .unwrap();
+                let group =
+                    crate::ContextExecutionGroupId::new(format!("{group_id}-{tool_name}")).unwrap();
+                context
+                    .append_assistant_event("assistant", "neutral assistant", group.clone())
+                    .unwrap();
+                context
+                    .append_evidence_event(
+                        ContextSourceKind::TranscriptTool,
+                        "native response",
+                        native_call.clone(),
+                        group.clone(),
+                        Some(owner.clone()),
+                        true,
+                    )
+                    .unwrap();
+                context
+                    .append_evidence_event(
+                        ContextSourceKind::ActionResult,
+                        "action result",
+                        "neutral result",
+                        group.clone(),
+                        None,
+                        true,
+                    )
+                    .unwrap();
+                if include_result {
+                    context
+                        .append_evidence_event(
+                            ContextSourceKind::TranscriptTool,
+                            "native result",
+                            native_result.clone(),
+                            group,
+                            Some(owner.clone()),
+                            true,
+                        )
+                        .unwrap();
+                }
+
+                let request = assemble_model_request_from_context_with_api(
+                    &model_profile(provider),
+                    ProviderApiCompatibility::OpenAiResponses,
+                    ModelRequestIdentity {
+                        turn_id: "turn-1",
+                        agent_id: "agent-1",
+                        pane_id: "%1",
+                    },
+                    &context,
+                    &TestPromptAssets,
+                )
+                .unwrap();
+                assert_eq!(
+                    request
+                        .messages
+                        .iter()
+                        .any(|message| message.content == native_call),
+                    include_result
+                );
+                assert_eq!(
+                    request
+                        .messages
+                        .iter()
+                        .any(|message| message.content == native_result),
+                    include_result
+                );
+                assert_eq!(
+                    request
+                        .messages
+                        .iter()
+                        .any(|message| message.content.contains("neutral assistant")),
+                    !include_result
+                );
+                assert_eq!(
+                    request
+                        .messages
+                        .iter()
+                        .any(|message| message.content.contains("neutral result")),
+                    !include_result
+                );
+            }
+        }
+    }
+
+    /// Verifies duplicate Responses function-call results fail closed instead
+    /// of replaying a non-bijective call/result history.
+    #[test]
+    fn model_request_assembly_rejects_duplicate_responses_native_results() {
+        let provider = "configured-openai";
+        let native_call =
+            ProviderTranscriptEvent::validated_openai_response_output(vec![serde_json::json!({
+                "type": "function_call",
+                "id": "fc-responses-duplicate",
+                "call_id": "call-responses-duplicate",
+                "name": "submit_maap_action_batch",
+                "arguments": "{}"
+            })])
+            .unwrap()
+            .to_transcript_content();
+        let native_result = ProviderTranscriptEvent::OpenAiFunctionCallOutput {
+            call_id: "call-responses-duplicate".to_string(),
+            output: "native result".to_string(),
+        }
+        .to_transcript_content();
+        let owner = crate::ProviderContinuityOwner::new(
+            ProviderApiCompatibility::OpenAiResponses,
+            provider,
+        )
+        .unwrap();
+        let mut context = AgentContext::new(vec![ContextBlock::user_event(
+            "user",
+            "continue the provider execution",
+        )])
+        .unwrap();
+        let group = crate::ContextExecutionGroupId::new("responses-duplicate-result").unwrap();
+        context
+            .append_assistant_event("assistant", "neutral assistant", group.clone())
+            .unwrap();
+        context
+            .append_evidence_event(
+                ContextSourceKind::TranscriptTool,
+                "native response",
+                native_call.clone(),
+                group.clone(),
+                Some(owner.clone()),
+                true,
+            )
+            .unwrap();
+        context
+            .append_evidence_event(
+                ContextSourceKind::ActionResult,
+                "action result",
+                "neutral result",
+                group.clone(),
+                None,
+                true,
+            )
+            .unwrap();
+        for label in ["first native result", "duplicate native result"] {
+            context
+                .append_evidence_event(
+                    ContextSourceKind::TranscriptTool,
+                    label,
+                    native_result.clone(),
+                    group.clone(),
+                    Some(owner.clone()),
+                    true,
+                )
+                .unwrap();
+        }
+
+        let request = assemble_model_request_from_context_with_api(
+            &model_profile(provider),
+            ProviderApiCompatibility::OpenAiResponses,
+            ModelRequestIdentity {
+                turn_id: "turn-1",
+                agent_id: "agent-1",
+                pane_id: "%1",
+            },
+            &context,
+            &TestPromptAssets,
+        )
+        .unwrap();
+
+        assert!(
+            request.messages.iter().all(|message| {
+                message.content != native_call && message.content != native_result
+            })
+        );
+        assert!(
+            request
+                .messages
+                .iter()
+                .any(|message| message.content.contains("neutral assistant"))
+        );
+        assert!(
+            request
+                .messages
+                .iter()
+                .any(|message| message.content.contains("neutral result"))
+        );
     }
 
     /// Verifies generic Chat Completions native state is selected only for the

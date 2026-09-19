@@ -373,6 +373,7 @@ impl ProviderTranscriptEvent {
                     .and_then(Value::as_str)
                     .is_some_and(|name| {
                         name == crate::MAAP_ACTION_BATCH_TOOL_NAME
+                            || name == crate::OpenAiMaapToolSurface::CurrentRequest.tool_name()
                             || crate::OpenAiMaapToolSurface::stable_surfaces()
                                 .iter()
                                 .any(|surface| name == surface.tool_name())
