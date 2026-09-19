@@ -93,6 +93,19 @@ pub fn classify_attached_mouse_event(
             (MouseEventKind::Release, MouseButton::Left) => {
                 AttachedMouseAction::CopySelectionFinish(mouse_copy_position(event))
             }
+            // A wheel tick during a held drag scrolls the view under the
+            // selection so it can extend past the rows the drag started in; the
+            // selection keeps its anchor because the runtime owns it.
+            (MouseEventKind::Scroll, MouseButton::WheelUp) => AttachedMouseAction::ScrollHistory {
+                lines: -3,
+                position: mouse_copy_position(event),
+            },
+            (MouseEventKind::Scroll, MouseButton::WheelDown) => {
+                AttachedMouseAction::ScrollHistory {
+                    lines: 3,
+                    position: mouse_copy_position(event),
+                }
+            }
             _ => AttachedMouseAction::Ignore,
         };
     }
@@ -348,6 +361,38 @@ mod tests {
         assert_eq!(
             classify_attached_mouse_event(drag, pane_policy),
             AttachedMouseAction::ForwardToPane
+        );
+    }
+
+    /// Verifies a wheel tick during a mouse selection scrolls the view.
+    ///
+    /// The selection branch owns press, drag, and release while a drag is held
+    /// and answered every other event with `Ignore`, so the wheel never reached
+    /// the scroll path and a selection could not extend past the rows that were
+    /// visible when it started.
+    #[test]
+    fn classifies_a_wheel_during_an_active_mouse_selection() {
+        let selection_policy = MousePolicy {
+            enabled: true,
+            mouse_selection_active: true,
+            copy_mode_active: true,
+            ..MousePolicy::default()
+        };
+        let wheel_up = parse_sgr_mouse(b"\x1b[<64;5;3M").unwrap();
+        assert_eq!(
+            classify_attached_mouse_event(wheel_up, selection_policy),
+            AttachedMouseAction::ScrollHistory {
+                lines: -3,
+                position: CopyPosition { line: 2, column: 4 },
+            }
+        );
+        let wheel_down = parse_sgr_mouse(b"\x1b[<65;5;3M").unwrap();
+        assert_eq!(
+            classify_attached_mouse_event(wheel_down, selection_policy),
+            AttachedMouseAction::ScrollHistory {
+                lines: 3,
+                position: CopyPosition { line: 2, column: 4 },
+            }
         );
     }
 

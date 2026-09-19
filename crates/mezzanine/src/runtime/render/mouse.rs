@@ -533,7 +533,11 @@ impl RuntimeSessionService {
                 Ok((true, None))
             }
             MouseAction::ScrollHistory { lines, position } => {
-                self.presentation.mouse_selection_drag_state = None;
+                // A wheel tick during a held drag scrolls the view under the
+                // selection and keeps the drag anchor, so the selection can keep
+                // extending past the rows that were visible when it started. The
+                // selection actions own this state: finish clears it, and a scroll
+                // must not reset an anchor the operator is still dragging from.
                 let target = self
                     .mouse_pane_target_at(position)
                     .unwrap_or(MousePaneTarget {
@@ -546,6 +550,7 @@ impl RuntimeSessionService {
                     lines > 0 && copy_mode.is_at_bottom() && copy_mode.selection().is_none()
                 };
                 if should_exit {
+                    self.presentation.mouse_selection_drag_state = None;
                     self.clear_copy_state_for_presented_surface(target.pane_id.as_str());
                 } else {
                     self.mark_presented_surface_scrollback_copy_mode(target.pane_id.as_str());

@@ -243,6 +243,97 @@ fn runtime_mouse_history_scroll_requests_diff_refresh() {
     );
 }
 
+/// Verifies a wheel tick during a selection drag scrolls and keeps the drag.
+///
+/// A selection can only extend past the rows that were visible when it started
+/// if the view scrolls while the button is still held, and the drag anchor has to
+/// survive that scroll so the next movement still originates where the operator
+/// pressed. The scroll handler used to clear the drag state, which ended the drag
+/// on the client side and pinned the selection to its starting rows.
+#[test]
+fn runtime_mouse_wheel_scrolls_without_dropping_a_selection_drag() {
+    let mut service = test_runtime_service_with_size(Size::new(20, 4).unwrap());
+    service.set_frame_visibility_for_tests(false, false);
+    let primary = service
+        .attach_primary("primary", true, Size::new(20, 4).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 20).unwrap();
+    screen.feed(b"one\ntwo\nthree\nfour\nfive\nsix");
+    service.set_pane_screen(pane_id.clone(), screen);
+
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::HandleMouse(
+                    MouseAction::CopySelectionStart(CopyPosition { line: 0, column: 0 }),
+                )],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    assert!(
+        config.mouse_selection_active,
+        "the press starts a mouse selection drag"
+    );
+    let started_top = {
+        let copy_mode = service
+            .active_copy_mode_for_presented_surface(&pane_id)
+            .expect("the press seeds a copy buffer for the pane");
+        copy_mode.scroll_top()
+    };
+
+    let report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::HandleMouse(
+                    MouseAction::ScrollHistory {
+                        lines: -3,
+                        position: CopyPosition { line: 1, column: 1 },
+                    },
+                )],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert!(report.view_refresh_required);
+    let (scrolled_top, selection) = {
+        let copy_mode = service
+            .active_copy_mode_for_presented_surface(&pane_id)
+            .expect("the wheel keeps the copy buffer");
+        (copy_mode.scroll_top(), copy_mode.selection())
+    };
+    assert!(
+        scrolled_top < started_top,
+        "the wheel scrolls the view under the selection"
+    );
+    assert!(
+        selection.is_some(),
+        "the selection survives the scroll it was extended through"
+    );
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    assert!(
+        config.mouse_selection_active,
+        "the drag anchor survives the wheel tick"
+    );
+}
+
 /// Verifies a double-click copied-word highlight remains visible across the
 /// first render and only clears after its configured 500 ms lifetime expires.
 /// This protects the copied-word flash from disappearing immediately on the
